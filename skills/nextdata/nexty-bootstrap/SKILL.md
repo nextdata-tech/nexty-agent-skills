@@ -28,9 +28,81 @@ If this fails, run the **nxd-setup** skill first to install, configure, and auth
 
 Run these steps in order. Ask questions conversationally — one step at a time. After each step, confirm the user's answers before moving on.
 
-### Step 1: Data Product Basics
+### Step 1: Where do you want to start?
 
-Ask for:
+Ask: "Where is the data for this product coming from?" and present three options:
+
+#### Option A: Existing data
+
+The user has data they want to turn into a data product.
+
+Ask: "Is the data available locally, or is it in a remote service?"
+
+**Local data**: Ask for the file path (relative or absolute). Read the file (CSV, Parquet, JSON, etc.) and infer the schema — column names, types, and sample values. Use this to auto-generate input semantic models. Confirm with the user.
+
+**Remote data (S3, Snowflake, ADLS, Databricks)**: For v1, help the user manually download a sample or get metadata so we can understand the data shape. Walk them through it:
+
+- **S3**: Ask for the bucket name and folder/key path. Guide them:
+  ```bash
+  aws s3 cp s3://<bucket>/<path>/sample.csv ./sample-data/
+  ```
+  Then read the downloaded file to infer the schema.
+
+- **Snowflake**: Ask for the database, schema, and table name. Guide them:
+  ```bash
+  # Using snowsql or the Snowflake CLI
+  snowsql -q "DESCRIBE TABLE <database>.<schema>.<table>"
+  # Or to get a sample:
+  snowsql -q "SELECT * FROM <database>.<schema>.<table> LIMIT 10" -o output_format=csv -o output_file=sample-data/sample.csv
+  ```
+  Then use the DESCRIBE output or sample to infer the schema.
+
+- **ADLS**: Ask for the storage account, container, and blob path. Guide them:
+  ```bash
+  az storage blob download --account-name <account> --container-name <container> --name <path> --file ./sample-data/sample.csv
+  ```
+
+- **Databricks**: Ask for the catalog, schema, and table name. Guide them:
+  ```bash
+  databricks sql execute --statement "DESCRIBE TABLE <catalog>.<schema>.<table>"
+  # Or for a sample:
+  databricks sql execute --statement "SELECT * FROM <catalog>.<schema>.<table> LIMIT 10"
+  ```
+
+After obtaining the data or metadata, infer the schema and auto-generate input semantic models. Confirm with the user.
+
+#### Option B: Existing source code
+
+The user has transformation code they want to wrap as a data product.
+
+Ask for the relative path to the codebase. Read the source code to understand:
+- What data it reads (inputs) and from where
+- What transformations it performs
+- What data it produces (outputs)
+- Any existing schema definitions
+
+Use this analysis to pre-populate the input models, output models, and transform skeleton. Confirm with the user.
+
+#### Option C: Other data products
+
+The user wants to build on top of existing nextdata data products.
+
+Run:
+```bash
+nxd ls data-products
+```
+
+Show the list and ask the user to select which data products to use as inputs. For each selected product, the generated `spec.py` will use `data_product_input().source(...)` pointing to that product's output port.
+
+If the product has published semantic models, use those as the input model definitions. Otherwise, ask the user to describe the expected schema.
+
+---
+
+The user can combine options — e.g. "I have local CSV data AND I want to consume from another data product." Handle this naturally by collecting inputs from multiple sources.
+
+### Step 2: Data Product Basics
+
+Based on the previous step, suggest ideas for all the below:
 - **Name** (kebab-case, e.g. `sales-influence-insights`)
 - **Domain** (e.g. `retail/sales`, `supply-chain/inventory`)
 - **Description** (1-2 sentences explaining what this data product provides)
@@ -38,24 +110,20 @@ Ask for:
 - **Infra profile** (the nextdata environment, e.g. `ecommerce-demo`)
 - **Source repo URL** (GitHub URL where this data product lives)
 
-### Step 2: Input Sources
+Have the user confirm or edit them.
 
-Ask: "What data sources feed this product?"
+### Step 3: Input Sources & Semantic Models
 
-For each input, collect:
-- **Name** (kebab-case identifier, e.g. `store-sales-adls`)
-- **Type**: Is this from another data product (`data_product_input`) or a raw external source (`source_aligned_input`)?
-- **Source URL** (nextdata resource URL, e.g. `https://nextopia.dev/data-product/store-sales#/output/port/adls` or `https://nextopia.dev/infra-profile/my-profile#/services/my-api`)
+Based on Step 1, you should already have a good understanding of the input data shape.
 
-### Step 3: Input Semantic Models
-
-For each input source, ask the user to describe the data shape. Then define `semantic_model()` objects with:
-- Model name (snake_case)
-- Description
-- Schema: field name, data type, description for each column
+For each input source, finalize:
+- **Input name** (kebab-case identifier, e.g. `store-sales-adls`)
+- **Input type**: `data_product_input` (from another data product) or `source_aligned_input` (raw/external source)
+- **Source URL** (nextdata resource URL)
+- **Semantic model**: `semantic_model()` with name (snake_case), description, and schema with field names, data types, and descriptions
 - Available types: `string()`, `number()`, `int32()`, `int64()`, `float64()`, `boolean()`, `date32()`, `date64()`
 
-If the user provides a sample CSV or schema, infer the models automatically and confirm.
+If you inferred models from data/code in Step 1, present them for confirmation. Let the user adjust field names, types, or descriptions.
 
 ### Step 4: Output Semantic Models
 
