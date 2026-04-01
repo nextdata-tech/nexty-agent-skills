@@ -4,14 +4,6 @@ AI agent skills for building data products on the [nextdata](https://nextdata.co
 
 ## Install
 
-### Claude Code
-
-```bash
-npx skills add nextdata-tech/nexty-skills
-```
-
-### OpenAI Codex
-
 ```bash
 npx skills add nextdata-tech/nexty-skills
 ```
