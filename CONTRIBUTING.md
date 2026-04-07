@@ -6,8 +6,8 @@ Symlink skills into your Claude Code skills directory so edits are picked up imm
 
 ```bash
 # Clone the repo
-git clone https://github.com/nextdata-tech/nexty-skills.git
-cd nexty-skills
+git clone https://github.com/nextdata-tech/nexty-agent-skills.git
+cd nexty-agent-skills
 
 # Symlink each skill you're working on
 ln -s "$(pwd)/skills/nextdata/nxd-setup" ~/.claude/skills/nxd-setup
