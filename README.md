@@ -5,7 +5,7 @@ AI agent skills for building data products on the [nextdata](https://nextdata.co
 ## Install
 
 ```bash
-npx skills add nextdata-tech/nexty-skills
+npx skills add nextdata-tech/nexty-agent-skills
 ```
 
 The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right location for each agent automatically.
@@ -13,10 +13,10 @@ The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills t
 ### Manual install
 
 ```bash
-git clone https://github.com/nextdata-tech/nexty-skills.git
+git clone https://github.com/nextdata-tech/nexty-agent-skills.git
 mkdir -p ~/.claude/skills
-cp -r nexty-skills/skills/nextdata/nxd-setup ~/.claude/skills/nxd-setup
-cp -r nexty-skills/skills/nextdata/nexty-bootstrap ~/.claude/skills/nexty-bootstrap
+cp -r nexty-agent-skills/skills/nextdata/nxd-setup ~/.claude/skills/nxd-setup
+cp -r nexty-agent-skills/skills/nextdata/nexty-bootstrap ~/.claude/skills/nexty-bootstrap
 ```
 
 ## Available Skills
