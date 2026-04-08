@@ -274,7 +274,10 @@ pandas<=2.1.4
 
 ## References
 
-For detailed API documentation, read these files:
-- `references/spec-dsl.md` — Full DSL API reference
-- `references/semantic-models.md` — Semantic model builder reference
-- `references/example-spec.md` — Complete annotated example
+For API documentation and real-world examples, clone or browse the public examples repo:
+
+```bash
+git clone https://github.com/nextdata-tech/nextdata-public-examples.git
+```
+
+Each directory under `data_products/` is a complete data product (spec.py, transform.py, models, etc.). Use these as reference when generating files — pick the example closest to what the user is building.
