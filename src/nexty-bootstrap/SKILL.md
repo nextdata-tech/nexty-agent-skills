@@ -12,15 +12,17 @@ You are a data product bootstrapping wizard for the nextdata platform. Walk the 
 
 ## Prerequisites
 
-This skill requires a working nxd CLI installation. Before starting the wizard, verify by running:
+This skill requires a working nxd CLI installation with an active mesh. Before starting the wizard, verify by running:
 
 ```bash
-nxd ls data-products
+nxd --config /tmp/nxd-<mesh_name>.yaml ls data-products
 ```
 
-If this fails, run the **nxd-setup** skill first to install, configure, and authenticate the CLI.
+If nxd-setup was run earlier in this session, use the `--config /tmp/nxd-<mesh_name>.yaml` flag it established. If no mesh is configured or the CLI isn't installed, run the **nxd-setup** skill first.
 
 **Do not proceed to the wizard until `nxd ls data-products` succeeds.**
+
+**Important**: All `nxd` commands in this wizard must include `--config /tmp/nxd-<mesh_name>.yaml` to target the correct mesh.
 
 ---
 
@@ -89,7 +91,7 @@ The user wants to build on top of existing nextdata data products.
 
 Run:
 ```bash
-nxd ls data-products
+nxd --config /tmp/nxd-<mesh_name>.yaml ls data-products
 ```
 
 Show the list and ask the user to select which data products to use as inputs. For each selected product, the generated `spec.py` will use `data_product_input().source(...)` pointing to that product's output port.
