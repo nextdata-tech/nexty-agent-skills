@@ -2,10 +2,10 @@
 
 AI agent skills for building data products on the [nextdata](https://nextdata.com) platform. Built on the open [Agent Skills](https://agentskills.io) specification.
 
-## Install
+## Quick Install
 
 ```bash
-npx skills add nextdata-tech/nexty-agent-skills
+npx skills add nextdata-tech/nexty-agent-skills --all -y
 ```
 
 The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right location for each agent automatically.
@@ -17,6 +17,31 @@ git clone https://github.com/nextdata-tech/nexty-agent-skills.git
 mkdir -p .claude/skills
 cp -r nexty-agent-skills/src/nxd-setup .claude/skills/nxd-setup
 cp -r nexty-agent-skills/src/nexty-bootstrap .claude/skills/nexty-bootstrap
+```
+
+### Local development on skills
+
+To install from a local checkout for fast iteration:
+
+```bash
+npx skills add ./src --all -y
+```
+
+This installs skills from the `src/` directory in your working copy. After editing a SKILL.md, re-run the command to update.
+
+To remove and reinstall cleanly:
+
+```bash
+npx skills remove --all -y
+rm -rf .agents .claude/skills skills-lock.json
+npx skills add ./src --all -y
+```
+
+## Uninstall
+
+```bash
+npx skills remove --all -y
+rm -rf .agents .claude/skills skills-lock.json
 ```
 
 ## Available Skills
@@ -37,10 +62,15 @@ Start Claude Code in any project and invoke a skill:
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.
 
-## Contributing
+## Adding a New Skill
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to develop and test skills locally.
+1. Create a directory under `src/<skill-name>/`
+2. Add a `SKILL.md` with YAML frontmatter:
+3. Add reference docs in `references/` if needed
+4. Test locally with `npx skills add ./src --all -y`
 
-## License
+### Conventions
 
-Apache 2.0
+- Skill names: lowercase, hyphens only, 1-64 chars
+- Keep SKILL.md under 500 lines for context efficiency
+- Move detailed references to `references/` for progressive disclosure
