@@ -83,7 +83,7 @@ Ask for the relative path to the codebase. Read the source code to understand:
 - What data it produces (outputs)
 - Any existing schema definitions
 
-Use this analysis to pre-populate the input models, output models, and transform skeleton. Confirm with the user.
+Use this analysis to pre-populate items for step 2.
 
 #### Option C: Other data products
 
@@ -100,7 +100,7 @@ If the product has published semantic models, use those as the input model defin
 
 ---
 
-The user can combine options — e.g. "I have local CSV data AND I want to consume from another data product." Handle this naturally by collecting inputs from multiple sources.
+The user must pick exactly one option. Do not allow combining options.
 
 ### Step 2: Data Product Basics
 
