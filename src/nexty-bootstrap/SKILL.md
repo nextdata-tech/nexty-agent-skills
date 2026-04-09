@@ -1,6 +1,12 @@
 ---
 name: nexty-bootstrap
 description: Interactive wizard to bootstrap a new nextdata data product. Walks through inputs, semantic models, transformations, outputs, glossary links, and contracts, then generates Python spec files.
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
 metadata:
   author: nextdata
   version: 0.1.0

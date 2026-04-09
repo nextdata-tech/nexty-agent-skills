@@ -1,6 +1,9 @@
 ---
 name: nxd-setup
 description: Install, configure, and authenticate the nxd CLI. Manages mesh environments so the user can work with multiple nextdata platforms across sessions.
+allowed-tools:
+  - Bash
+  - Read
 metadata:
   author: nextdata
   version: 0.2.0
