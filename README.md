@@ -37,6 +37,13 @@ rm -rf .agents .claude/skills skills-lock.json
 npx skills add ./src --all -y
 ```
 
+or 1 liner:
+
+```
+```bash
+npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx skills add ./src --all -y
+```
+
 ## Uninstall
 
 ```bash
