@@ -9,7 +9,7 @@ i.e. if there is no CLI env configuired ask what is the URL of the mesh and regi
 
 
 2. Infra selection
-we need to know what services to use for inputs, transform and outputs. At the end of the set up we need a new skill to verify what compute and storage does the current person have access to. Look at the API auth in /Users/sina/dev/nextdata/nxd and docs in /Users/sina/dev/nextdata/nxd/docs. I THINK you can only launch the data product in domains that you have producer access to. so I feel before we start we need to ask which domain or have the user select infra profile that they have access to...but not sure what is the best way. Take a look at the
+we need to know what services to use for inputs, transform and outputs. At the end of the set up we need a new skill to verify what compute and storage does the current person have access to. Look at the API auth in /Users/sina/dev/nextdata/nxd and docs in /Users/sina/dev/nextdata/nxd/docs. I THINK you can only launch the data product in domains that you have producer access to. so I feel before we start we need to ask which domain or have the user select infra profile that they have access to...but not sure what is the best way. Take a look at the infra profile auth and how the permissionings work. What permissions should I have to launch a DP in a domain. What permissions should I have go see the infra profiles.
 
 
 
@@ -22,7 +22,9 @@ each infra service shouild be 1 input
 each file that has a unique schema should have its own input model
 all the inputs should have input model expectations
 and they should have model schema promises on the same model
-sometimes the shape of the data is partioned based on time (days, months, years, etc.) this is a good indication of how scheduler should work. i.e. daily, hourly, etc. when data is partioned by time, there should always be an expecation & promise on data freshenss based on the timliness. If the data is NOT partioned the skill should ask the user  and confirm that data is not partioned and each run should replace the whole data or is this an incremental update.
+
+sometimes the shape of the data is partioned based on time (days, months, years, etc.) this is a good indication of how scheduler should work. suggest an appropricate cron and use in the     `when` clause of the transform. i.e. daily, hourly, etc. when data is partioned by time, there should always be an expecation & promise on data freshenss based on the timliness. If the data is NOT partioned the skill should ask the user  and confirm that data is not partioned and user needs to specify how the scheduling should work.
+
 currently the skill keep asking what is the goal of the DP. in case of bootstrap from data it is a soruce aligned DP.
 currently the skill keep asking about the output but we have not got there yet. seems like our steps should be refactored so dependencies are met.
 also seems like step 1 and 3 are overlapping now.

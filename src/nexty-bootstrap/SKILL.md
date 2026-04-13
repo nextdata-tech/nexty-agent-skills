@@ -1,6 +1,12 @@
 ---
 name: nexty-bootstrap
 description: Interactive wizard to bootstrap a new nextdata data product. Walks through inputs, semantic models, transformations, outputs, glossary links, and contracts, then generates Python spec files.
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
 metadata:
   author: nextdata
   version: 0.1.0
@@ -83,7 +89,7 @@ Ask for the relative path to the codebase. Read the source code to understand:
 - What data it produces (outputs)
 - Any existing schema definitions
 
-Use this analysis to pre-populate the input models, output models, and transform skeleton. Confirm with the user.
+Use this analysis to pre-populate items for step 2.
 
 #### Option C: Other data products
 
@@ -100,28 +106,165 @@ If the product has published semantic models, use those as the input model defin
 
 ---
 
-The user can combine options — e.g. "I have local CSV data AND I want to consume from another data product." Handle this naturally by collecting inputs from multiple sources.
+The user must pick exactly one option. Do not allow combining options.
 
-### Step 2: Data Product Basics
+### Step 2: Domain, Infra Profile & Data Product Basics
 
-Based on the previous step, suggest ideas for all the below:
-- **Name** (kebab-case, e.g. `sales-influence-insights`)
-- **Domain** (e.g. `retail/sales`, `supply-chain/inventory`)
-- **Description** (1-2 sentences explaining what this data product provides)
+This step has four sub-steps that validate the user's access before collecting metadata. After this step you must know: which domain the user can launch in, which infra profile to use, what compute and storage services are available, which compute service will run transforms, which storage service(s) will hold outputs, and the DP metadata.
+
+#### Step 2a: Domain Selection
+
+> **CLI limitation**: There is NO `nxd ls domains` command. The `nxd ls` subcommands are: data-products, data-product-images, data-product-templates, infra-profiles, users, personal-access-tokens, role-assignments, contracts, policies. Do not attempt to list domains directly via the CLI.
+
+**Identify the user:**
+
+1. Run `nxd --config /tmp/nxd-<mesh_name>.yaml whoami` to get the current user's email.
+
+**Determine access level (short-circuit on first match):**
+
+2. Run `nxd --config /tmp/nxd-<mesh_name>.yaml ls role-assignments --role system:admin --format json`. Parse the JSON — each entry has `role`, optional `scope` (with `domain`), and `subjects` (with `user` emails). If the current user's email appears in any entry, they are a **system admin** with mesh-wide access. Skip to "Discover domains" below.
+
+3. Only if NOT a system:admin — run `nxd --config /tmp/nxd-<mesh_name>.yaml ls role-assignments --role domain:admin --format json`. If the user appears in an entry with no `scope` (mesh-wide domain admin), skip to "Discover domains" below. If they appear in entries with specific `scope.domain` values, collect those domain names.
+
+4. Only if NOT any admin — run `nxd --config /tmp/nxd-<mesh_name>.yaml ls role-assignments --role data-product:producer --format json`. Collect all `scope.domain` values from entries matching the user's email. If no domains are found across steps 2-4, the user cannot launch a data product anywhere — tell them to contact a domain admin for `data-product:producer` access and **stop here**.
+
+**Discover domains:**
+
+5. Retrieve the list of domains that exist on the mesh via the REST API:
+
+```bash
+API_URL=$(grep 'url:' /tmp/nxd-<mesh_name>.yaml | head -1 | awk '{print $2}')
+TOKEN=$(grep 'personal_access_token:' /tmp/nxd-<mesh_name>.yaml | awk '{print $2}')
+curl -s -H "x-nextdata-token: $TOKEN" "$API_URL/api/v1/data-products" | \
+  python3 -c "import json,sys; dps=json.load(sys.stdin)['dataProducts']; \
+  domains=sorted(set(dp['domain'] for dp in dps if dp.get('domain'))); \
+  [print(d) for d in domains]"
+```
+
+This returns every domain that has at least one data product. Domains cannot exist without data products.
+
+**Select a domain:**
+
+6. **If the user has scoped domains** (from steps 3-4): Present those as a numbered list. Also show the full domain list from step 5 for reference, noting which ones the user has access to.
+
+7. **If the user has mesh-wide access** (system:admin or unscoped domain:admin): Present the domain list from step 5 as a numbered list and ask the user to pick one. Also allow manual entry for new domains that don't have data products yet.
+
+8. After selection, run `nxd --config /tmp/nxd-<mesh_name>.yaml describe domain <selected_domain> --format json` to confirm the domain exists. Show the domain details (name, propagation, producers) for confirmation.
+
+**Edge cases:**
+- **No roles found at all** (steps 2-4 yield nothing): The user cannot launch a data product. Tell them to contact a domain admin for `data-product:producer` access. Do not proceed.
+- **User knows a domain not in the list** (permissions may be inherited from a parent domain): Allow manual entry. Validate with `nxd --config /tmp/nxd-<mesh_name>.yaml describe domain <name> --format json`.
+- **REST API call fails**: Fall back to `nxd --config /tmp/nxd-<mesh_name>.yaml ls infra-profiles | sed 's/\x1B\[[0-9;]*m//g'` and extract unique values from the DOMAIN column.
+
+#### Step 2b: Infra Profile & Service Discovery
+
+1. Run `nxd --config /tmp/nxd-<mesh_name>.yaml ls infra-profiles --domain <selected_domain> | sed 's/\x1B\[[0-9;]*m//g'` to list profiles in the chosen domain. The `sed` strips ANSI color codes from the CLI output. The result is a text table with DOMAIN, NAME, CREATED_AT, CREATED_BY columns.
+2. If no profiles are found, also try without `--domain` (root-level profiles may be shared): `nxd --config /tmp/nxd-<mesh_name>.yaml ls infra-profiles | sed 's/\x1B\[[0-9;]*m//g'`
+3. Present the available profiles as a numbered list and ask the user to pick one.
+
+**Discover services** — the CLI has no `describe infra-profile` command, so use the REST API directly:
+
+```bash
+# Extract API URL from the session config
+API_URL=$(grep 'url:' /tmp/nxd-<mesh_name>.yaml | head -1 | awk '{print $2}')
+# Read the PAT from the mesh registry
+TOKEN=$(python3 -c "
+import json, pathlib
+meshes = json.loads(pathlib.Path.home().joinpath('.nxd/meshes.json').read_text())
+for name, m in meshes.items():
+    if '<mesh_name>' in name:
+        print(m['token']); break
+")
+
+curl -s -H "x-nextdata-token: $TOKEN" \
+  "$API_URL/api/v1/infraprofiles/<PROFILE_NAME>/services?domain=<DOMAIN>"
+```
+
+**API**: `GET /api/v1/infraprofiles/{profile}/services?domain={domain}` returns a JSON array of `{name, driver, attributes}`.
+**Auth header**: `x-nextdata-token` (not `Authorization: Bearer`).
+**Permission**: requires `can_see_infra_profile_secrets`, which domain producers have.
+
+**Do not display `attributes`** — they contain credentials. Only use `name` and `driver`.
+
+**Classify each service** by parsing the `driver` field (format `nxd:<driver-name>:<version>`, extract the middle segment) using the Driver Classification Reference at the bottom of this document.
+
+Present the categorized services:
+
+```
+Infra profile "ecommerce-demo" services:
+
+COMPUTE:
+  - k8s-compute (kubernetes/compute)
+  - nxd-databricks (databricks/compute)
+
+STORAGE:
+  - s3-input (s3)
+  - s3-output (s3)
+  - nxd-snowflake (snowflake)
+  - adls (adls)
+  - nxd-databricks-storage (databricks/storage)
+
+RPC:
+  - mcp-api-service (local-python/rpc)
+
+GOVERNANCE:
+  - servicenow-user-approval (servicenow)
+```
+
+**Validate completeness:**
+- Must have at least 1 compute service. If missing, warn the user — they won't be able to run transforms.
+- Should have at least 1 storage service. If missing, note it — the user might rely solely on `data_product_input` from other DPs.
+
+**Fallback**: If the `curl` call fails (auth mismatch, network error), ask the user to list the services their infra profile contains. Most platform teams document this for their developers.
+
+**Record the service inventory** for use in later steps. For each service, track:
+- Service name (e.g. `nxd-s3`)
+- Driver name (e.g. `s3`)
+- Category (`compute` / `storage` / `rpc` / `governance`)
+- Service URL: `https://<api_url>/infra-profile/<PROFILE_NAME>#/services/<SERVICE_NAME>`
+
+#### Step 2c: Data Product Metadata
+
+Domain and infra profile are already confirmed — display them as locked values. Collect the remaining metadata with smart defaults from Steps 1, 2a, 2b:
+
+- **Name** (kebab-case, e.g. `sales-influence-insights`) — suggest from the data source or code analyzed in Step 1
+- **Domain** — already selected in 2a, display only
+- **Description** (1-2 sentences) — suggest from Step 1 context
 - **Version** (default: `0.1.0-dev`)
-- **Infra profile** (the nextdata environment, e.g. `ecommerce-demo`)
-- **Source repo URL** (GitHub URL where this data product lives)
+- **Infra profile** — already selected in 2b, display only
+- **Source repo URL** — detect from `git remote get-url origin` if in a git repo, otherwise ask
 
-Have the user confirm or edit them.
+Have the user confirm or edit name, description, version, and source repo URL.
+
+#### Step 2d: Transform Compute & Output Storage Selection
+
+Using the service inventory from Step 2b, pin two decisions that all later steps depend on:
+
+**Transform compute**: If only one compute service exists, auto-select it and confirm with the user. If multiple exist, present them as a numbered list and ask the user to choose. Record the selected compute service name and URL.
+
+**Output storage destination**: Present the available storage services as a numbered list and ask: "Where should the output data land?" If the user picks multiple destinations (e.g. S3 and Snowflake), record all of them. Record each selected storage service name, driver, and URL.
+
+After this step, summarize the locked choices:
+
+```
+Locked configuration:
+  - Input format: <from Step 1, e.g. "CSV files from S3", "Snowflake table", "Parquet on ADLS">
+  - Transform compute: <selected compute service> (<driver>)
+  - Output storage: <selected storage service(s)> (<driver(s)>)
+```
+
+These selections are final — later steps reference them, not re-ask.
 
 ### Step 3: Input Sources & Semantic Models
+
+**Use the service inventory from Step 2b.** When asking for the source URL, present the available storage services as options rather than asking for a raw URL. Construct the URL automatically: `https://<api_url>/infra-profile/<PROFILE>#/services/<SERVICE_NAME>`.
 
 Based on Step 1, you should already have a good understanding of the input data shape.
 
 For each input source, finalize:
 - **Input name** (kebab-case identifier, e.g. `store-sales-adls`)
 - **Input type**: `data_product_input` (from another data product) or `source_aligned_input` (raw/external source)
-- **Source URL** (nextdata resource URL)
+- **Source URL** — select from the storage services discovered in Step 2b
 - **Semantic model**: `semantic_model()` with name (snake_case), description, and schema with field names, data types, and descriptions
 - Available types: `string()`, `number()`, `int32()`, `int64()`, `float64()`, `boolean()`, `date32()`, `date64()`
 
@@ -129,15 +272,57 @@ If you inferred models from data/code in Step 1, present them for confirmation. 
 
 ### Step 4: Output Semantic Models
 
-Ask: "What data does this product produce?"
+Reference the locked configuration from Step 2d to frame output models concretely. The user already knows:
+- **Input data format**: from Step 1 (e.g. CSV, Parquet, JSON, Snowflake table, ADLS blob, Databricks table)
+- **Output storage**: from Step 2d (e.g. S3, Snowflake, ADLS)
 
-For each output model, collect the same as input models plus:
-- **Glossary links**: Ask if any fields should link to glossary terms (use `Predicate.GlossaryTerm`)
-- **Upstream links**: Ask if any fields trace back to input model fields (use `Predicate.SameAs`)
+Ask: "What data does this product produce?" Frame the question using the actual technologies — for example: "Given your [Parquet files from ADLS] inputs and [Snowflake] output destination, what models should this product expose?"
+
+For each output model, collect the same as input models (name, description, schema with field names, types, descriptions).
+
+Additionally:
+
+#### Glossary Term Matching (Required)
+
+This step is mandatory — always fetch glossaries and attempt matching, regardless of whether matches are expected.
+
+Fetch available glossary terms from the platform API using the same auth pattern as Step 2b:
+
+```bash
+curl -s -H "x-nextdata-token: $TOKEN" "$API_URL/api/v1/data-products/glossaries"
+```
+
+This returns a JSON array of `{name, fullName, domain, glossary}` objects, where `glossary` contains the actual terms and definitions.
+
+For each glossary in the response:
+1. Compare the glossary terms against the output model field names and descriptions
+2. Propose matches where a glossary term aligns with a field (by name similarity or semantic meaning)
+3. Present proposed matches to the user for confirmation
+
+For each confirmed match, record the link using:
+```python
+.link("field_name", Predicate.GlossaryTerm, "<glossary-dp-full-name>#/terms/<term-id>")
+```
+
+If no glossary terms match any fields, explicitly state: "No glossary term matches found for these output models" and move on. Do not skip this step.
+
+#### Upstream Links (Options B & C only)
+
+**Skip this section entirely if the user chose Option A (existing data / source-aligned) in Step 1.** For source-aligned products, outputs mirror inputs 1:1 — every field traces back to itself, making SameAs links redundant.
+
+**For Option B (existing source code) or Option C (other data products)**: Ask if any output fields trace back to specific input model fields. For each such relationship, record:
+```python
+.link("output_field", Predicate.SameAs, "<input-model>#/schema/<input-field>")
+```
+
+#### Other Output Model Properties
+
 - **Dependencies**: Does this model depend on other output models? (use `.when(all_of(...))`)
 - **Sampling method**: `SamplingMethod.Random` (default) or `SamplingMethod.Head`
 
 ### Step 5: Transform Logic
+
+The compute service was selected in Step 2d — use it for `.compute(...)` in spec.py. Do not re-ask.
 
 Ask: "Describe what the transformation does — how do inputs become outputs?"
 
@@ -148,14 +333,16 @@ Generate a `transform.py` skeleton with:
 - TODO comments for the actual transformation logic
 - Support for both full execution and subtransform (per-model) execution
 
-### Step 6: Output Ports
+### Step 6: Output Ports (Confirmation)
 
-Ask: "Where should the output data be stored?"
+The output storage destination(s) were selected in Step 2d. This step maps output models to ports.
 
-For each output port, collect:
-- **Port name** (e.g. `iceberg_on_s3`, `nxd_snowflake`)
-- **Storage URL** (nextdata infra service URL)
-- **Which models** go to this port
+Present the proposed port configuration:
+- **Port name** — auto-generate from the storage driver (e.g. `nxd_snowflake`, `iceberg_on_s3`) using the storage service(s) selected in Step 2d
+- **Storage URL** — constructed automatically: `https://<api_url>/infra-profile/<PROFILE>#/services/<SERVICE_NAME>`
+- **Model mapping** — if only one storage destination, all models go to one port; if multiple, ask which models go to which port
+
+Ask: "Here is the proposed output port configuration. Does this look right?" Let the user adjust port names or model routing if needed.
 
 ### Step 7: Data Quality (Optional)
 
@@ -168,13 +355,7 @@ If yes, offer these options:
 - **Great Expectations** — Python-based expectations (generates a `.py` file in `contracts/`)
 - **Custom** — user-defined verify function
 
-### Step 8: Glossary Links (Optional)
-
-Ask: "Should this data product link to any glossary terms?"
-
-Collect glossary term URLs for product-level links.
-
-### Step 9: Access Controls (Optional)
+### Step 8: Access Controls (Optional)
 
 Ask: "Who should have access?"
 
@@ -183,7 +364,7 @@ Collect:
 - **Data steward** email(s)
 - **Consumer access** email(s)
 
-### Step 10: Generate Files
+### Step 9: Generate Files
 
 Confirm the full configuration, then generate all files in a new directory named after the data product.
 
@@ -231,7 +412,7 @@ spec = (
     )
     # .input(...) for each input
     # .output(...) for each output
-    # .link(...) for glossary terms
+    # .link("field", Predicate.GlossaryTerm, "glossary-full-name#/terms/term-id") from Step 4
     # .control(...) for access
 )
 ```
@@ -283,3 +464,26 @@ git clone https://github.com/nextdata-tech/nextdata-public-examples.git
 ```
 
 Each directory under `data_products/` is a complete data product (spec.py, transform.py, models, etc.). Use these as reference when generating files — pick the example closest to what the user is building.
+
+## Driver Classification Reference
+
+When classifying services discovered from an infra profile, parse the driver field (format `nxd:<driver-name>:<version>`) and extract the middle segment. Use this table to categorize:
+
+| Category | Driver patterns |
+|---|---|
+| **Compute** | `kubernetes/compute`, `kubernetes/compute/streaming`, `local-python` (without `/rpc`), `databricks/compute`, `databricks/compute/streaming` |
+| **Storage** | `s3`, `adls`, `snowflake`, `databricks/storage`, `postgres`, `kafka`, `pinecone`, `minio`, `dremio`, `duckdb`, `redshift`, `bigquery`, `postgres-vector` |
+| **RPC** | `local-python/rpc`, `kubernetes/rpc` |
+| **API** | `api` (external API connectors) |
+| **Governance** | `servicenow`, `databricks/access-control`, `databricks-contract`, or anything not matching above |
+
+The driver field format may use either `nxd:` or `nxd-test:` as the scheme prefix — both are valid. Extract the middle segment between the first `:` and the version number.
+
+Examples:
+- `nxd:s3:1.0.0` → driver name `s3` → **Storage**
+- `nxd:kubernetes/compute:1.0.0` → driver name `kubernetes/compute` → **Compute**
+- `nxd:databricks/compute:1.0.0` → driver name `databricks/compute` → **Compute**
+- `nxd:databricks/storage:1.0.0` → driver name `databricks/storage` → **Storage**
+- `nxd:local-python/rpc:1.0.0` → driver name `local-python/rpc` → **RPC**
+- `nxd:api:0.1.0` → driver name `api` → **API**
+- `nxd:servicenow:1.0.0` → driver name `servicenow` → **Governance**
