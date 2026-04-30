@@ -22,7 +22,7 @@ def transform(
     pg_engine = PGEngine.from_connection_string(url=connection_string)
 
     # pg_engine.init_vectorstore_table DDL
-    # CREATE TABLE IF NOT EXISTS schema.table_name
+    # CREATE TABLE schema.table_name
     # (
     #     langchain_id uuid NOT NULL,
     #     content text COLLATE pg_catalog."default" NOT NULL,
@@ -30,6 +30,7 @@ def transform(
     #     langchain_metadata json,
     #     CONSTRAINT jira_embeddings_pkey PRIMARY KEY (langchain_id)
     # )
+    # NOTE this will fail if the table already exists, there is no exists check
     pg_engine.init_vectorstore_table(
         vector_size=<VECTOR_SIZE>,  # Based on embedding model
         table_name=table_name,

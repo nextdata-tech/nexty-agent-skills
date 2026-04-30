@@ -1,125 +1,126 @@
 ---
 name: nxd-data-product-builder
-description: Guide for creating a high-quality Nextdata OS Python-based Data Product. Use when users want to create a data product from scratch.
+description: Guide for creating, refining, and validating a Nextdata OS Python-based Data Product. Use whenever the user mentions building, scaffolding, or iterating on an `nxd` data product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do NOT use for generic Python data pipelines unrelated to Nextdata OS.
 metadata:
   author: nextdata
-  version: 0.0.1
+  version: 0.1.1
 ---
 
 # Nextdata OS Data Product Builder
 
 ## Overview
-Create and refine a Nextdata OS Python-based Data Product with guidance and clarity provided by the user.
+Support the design, planning, implementation, and refinement of a Nextdata OS Python-based data product through structured collaboration with the user. Rely on verified references and confirm decisions at every step.
 
 ## Communicating with the user
-The Nextdata OS Data Product Builder skill is aimed at technical users, someone who is familiar with technical terms and technology. Rely on the user for clarity and guidance, keeping assumptions to the minimum.
+This skill is intended for technically proficient users who are familiar with technical terms and concepts. Minimise assumptions and seek clarity from the user throughout the workflow.
 
 ---
 
 ## Prerequisites
-Before engaging with the user please first setup the environment, you should not progress untill this is complete.
+Before engaging with the user, set up the environment. Do **not** proceed until this is complete.
 
-- **Runtime**: Python **3.10**, **`uv`** for dependencies.
-- **Dependencies**: `nxd-data-product` Python package ([registry](https://registry.trynxd.com/index/))
+- **Runtime:** Python **3.10** with **`uv`** as the dependency manager.
+    - *There is no need to check for a given Python version since `uv` will manage this for us.*
+- **Dependencies:** Install the `nxd-data-product` Python package ([registry](https://registry.trynxd.com/index/)):
 
 ```
 uv init --bare --python 3.10
-uv add nxd-data-product --source nxd=https://registry.trynxd.com/index/
+uv venv --python 3.10
+uv add nxd-data-product --index nxd=https://registry.trynxd.com/index/
 ```
 
-*Critical: Do not trust internal knowledge regarding Nextdata OS and its Python packages. When utilising the `nxd` Python please verify its usage with the locally installed version.*
+*Critical: Do not rely on internal or assumed knowledge regarding Nextdata OS or its Python packages. Always verify usage against the locally installed version of the `nxd` Python package.*
 
 ---
 
-## Creating a Data Product
+## Data Product Creation Workflow
 
-### Deep Research and Planning
-Start by understanding the user's intent and the use-case for the new data product.
+### 1. Discovery and Requirements Gathering
+Start by deeply understanding the user's intent, objectives, and requirements for the proposed data product.
 
 #### Research
-The following references have been provided so a better understanding of what a Nextdata OS Data Product and how best to approach its implementation.
+Consult the following references for concepts, APIs, and best practices:
 
 * Real-world examples of implemented data products: [reference/nextdata-public-examples](reference/nextdata-public-examples/)
 * Overview of Nextdata OS concepts: [reference/concepts.md](reference/concepts.md)
-* High-level information regarding building data products: [reference/build.md](reference/build.md)
-* In-depth details regarding the critical `data_product()` function: [reference/data_product_spec.md](reference/data_product_spec.md)
-* In-depth details regarding `semantic_model()`: [reference/semantic_model_spec.md](reference/semantic_model_spec.md)
-* Nextdata OS Python spec API website: [reference/python/nxd/spec.html](https://docs.westpac.nextopia.dev/reference/python/nxd/spec.html)
-* An example of running the `transform()` function locally: [reference/local_transform.md](reference/local_transform.md)
-* Examples of how drivers (services) can be used within transformations: [reference/driver_examples.md](reference/driver_examples.md)
+* Data product structure and build process: [reference/build.md](reference/build.md)
+* In-depth details of the critical `data_product()` function: [reference/data_product_spec.md](reference/data_product_spec.md)
+* In-depth details of `semantic_model()`: [reference/semantic_model_spec.md](reference/semantic_model_spec.md)
+* Running `transform()` locally: [reference/local_transform.md](reference/local_transform.md)
+* Examples of drivers (services) used within transformations: [reference/driver_examples.md](reference/driver_examples.md)
 
 #### Interview
-Proactively ask questions about edge cases, encourage the user to provide as much information as possible since this will lead to better outcomes. Information gather should be confirmed with the user before proceeding to the next step.
+Proactively gather details from the user, including edge cases. Confirm gathered information before advancing to the next stage.
 
-1. What is the purpose of this data product?
-2. What will be the data product's inputs and outputs?
-    1. What is the expected input and output formats?
+1. What is the intended purpose and outcome of this data product?
+2. What are the data product's expected inputs and outputs?
+    1. What are the expected input and output formats?
 3. What drivers (services) will this data product need to utilise?
     1. Does Nextdata OS currently support the chosen technologies?
-    2. Can the user provide the name of the services and infrastructure profile that they belong to.
-4. How should be approach data transformation, is there any patterns or tooling the user would prefer?
-    1. Is there any documentation or third party information which can be provided to aid in creating the transformation? Documentation websites, OpenAPI specifications etc.
+    2. Can the user provide the names of the services and the infrastructure profile they belong to?
+4. How should we approach data transformation? Are there any patterns or tooling the user would prefer?
+    1. Is there any documentation or third-party information that can be provided to aid in creating the transformation (e.g. documentation websites, OpenAPI specifications)?
 
-#### Additional Research
-Depending the information provided by the user additional research is extremely likely needed to be performed, particularly is any of the following is true:
+#### Directed Research
+Based on the user's answers, perform additional research as needed, particularly if any of the following is true:
 
-* Data will be sourced or processed via an "off-mesh" service like an API, website etc.
-    * Ask the user for additional documentation like a reference website, OpenAPI specification.
-    * Is there any suitable (up-to-date, well regarded) Python libraries that could be used?
-    * Strongly suggest to the user to provide code snippets for interacting with the service, like a `request.get()` call.
-    * If not already clear from documentation or code snippets, what is the expected data structure(s)?
-* Data will be "vectorised" i.e. to be stored within a vector store like pgvector.
-    * What embedding model should be utilised?
-    * Should data be chunked and if so, what approach should be used?
-    * Is there any prefered libraries to be used?
+* Data will be sourced or processed via an "off-mesh" service such as an API or website.
+    * Request supporting documentation, such as a reference website or OpenAPI specification.
+    * Identify suitable (up-to-date, well-regarded) Python libraries that could be used.
+    * Strongly suggest that the user provides example code snippets for service integration, such as a `requests.get()` call.
+    * If the expected data structure is not clear from documentation or code snippets, confirm it with the user.
+* Data will be "vectorised" — i.e. stored within a vector store such as pgvector.
+    * Determine the preferred embedding model.
+    * Decide on a chunking strategy if required.
+    * Confirm any library preferences with the user.
 
-Since the above questions can be very specific, you may guide the user by offering recommendations and examples for them to confirm.
+Where the questions are very specific, guide the user by offering recommendations and examples for them to confirm.
 
-#### Planning
-With all the information gathered from researching and by asking the user various questions, you should have everything you need to plan the implementation of a Data Product. Ideally this plan should be simple but still achieve the users end goals.
+### 2. Planning and Design
+Use all gathered information to create a clear, actionable plan for the data product's implementation. Ideally the plan should be simple while still achieving the user's end goals.
 
-Construct your implementation plan and highlight critical areas to the user who can provide corrections and, or confirmation. Critical areas you may wish to highlight include but are not limited to:
+Highlight critical decisions, uncertainties, and options for explicit user confirmation, including:
 
-* What input and outputs drivers (services) will be used
-* An overview of the transformation, drawing particular attention to areas where you are least certain
+* The input and output drivers (services) that will be used and their configuration.
+* A high-level overview of the transformation pipeline, drawing particular attention to areas where you are least certain.
 
-### Implementation
-With a plan ready and confirmed with the users lets begin implementation.
+Share the plan for explicit user approval before moving forward.
 
-At anypoint during implementation you are free to add "TODO" entries with relevant instructions for the user if any of the following are true:
+---
+
+### 3. Implementation
+Begin implementation once the plan is finalised. Insert "TODO" markers with clear instructions wherever any of the following are true:
+
 * The user has not provided satisfactory information even after prompting.
-* There are implementation details which would greatly benefit from the user manually intervening.
+* There are implementation details that would greatly benefit from manual user intervention.
 
-#### Structure
-Refer to [reference/build.md](reference/build.md) for details on how to structure a data product. Focus on key files since not all files are quired.
+#### Project Structure
+Refer to [reference/build.md](reference/build.md) for guidance on structuring the data product. Focus on the key files described below — not all files are required.
 
 #### `spec.py`
-Refer to [reference/data_product_spec.md](reference/data_product_spec.md) for details on the critical function `data_product()` present within the `spec.py` files.
-
-Ensure the following are present, if needed prompt the user for information:
-* Infrastructure profile
-* Each driver (service) has its URL set whether it is an input (`source()`) or output (`storage()` etc.)
-
-`spec.py` can not be ran locally since they require the Nextdata OS hosted runtime.
+* Refer to [reference/data_product_spec.md](reference/data_product_spec.md) for details on implementing the mandatory `data_product()` function.
+* Ensure the infrastructure profile is included.
+* Configure each driver (service) with the appropriate URLs and settings, whether it is an input (`source()`) or an output (`storage()` etc.).
+* Note: `spec.py` cannot be run locally — it requires the Nextdata OS hosted runtime.
 
 #### `models.py`
-Refer to [reference/semantic_model_spec.md](reference/semantic_model_spec.md) for details on creation of models, specifically the `semantic_model()` function.
-
-Avoid complex types where possible due to compatibility issues.
+* Refer to [reference/semantic_model_spec.md](reference/semantic_model_spec.md) for details on `semantic_model()`.
+* Avoid complex types in semantic models where possible, due to compatibility limitations.
 
 #### `transform.py`
-Refer to [reference/nextdata-public-examples](reference/nextdata-public-examples/) for multiple examples of transformations.
+* Refer to [reference/nextdata-public-examples](reference/nextdata-public-examples/) for multiple examples of transformations.
+* Use Nextdata Contexts via explicit imports (e.g. `from nxd.core.context import context`) to pass configuration, credentials, and models for each input or output driver. Prefer explicit imports over wildcard imports.
 
-Remeber to utilise Nextdata Context's, `from nxd.core.context import *` to pass configuration, credentials and models for each given input or output driver (service).
-
-### `nxd` Library
-The `nxd` library should already be installed by this skill within the virtual environment, refer to that for specific implementation details.
-
-### Drivers
+#### Drivers
 Refer to [reference/driver_examples.md](reference/driver_examples.md) for specific examples of using drivers within Nextdata OS.
 
-#### Transformation Validation
-While the transformation function, `transform(...)` is designed to be ran within the Nextdata OS platform, it is likely worth creating an additional file which can execute the file locally - very useful for testing. Refer to [reference/local_transform.md](reference/local_transform.md) for an existing example.
+#### `nxd` Library
+The `nxd` library should already be installed in the virtual environment by the prerequisites step. Always refer to the locally installed version for implementation details rather than relying on prior knowledge.
 
-### Evaluation
-Once implementation has been completed, inform the user and like with planning highlight critical areas to the user include any parts or prompts which may need to be completed by them manually, such as "TODO" entries.
+#### Transformation Validation
+Although the `transform(...)` function is designed to run within the Nextdata OS platform, it is worth creating an additional script that can execute it locally — this is very useful for testing. See [reference/local_transform.md](reference/local_transform.md) for an existing example. Any Python libraries required only for running the transformation locally should be added as development dependencies (e.g. `uv add --dev <package>`) so they are recorded in `pyproject.toml` without being treated as runtime dependencies of the data product.
+
+---
+
+### 4. Finalisation and Handover
+Once implementation is complete, notify the user and reiterate any areas that need manual input or review. Clearly highlight any "TODO" entries or incomplete sections requiring the user's attention before the data product is considered finalised.

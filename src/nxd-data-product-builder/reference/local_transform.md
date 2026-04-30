@@ -2,7 +2,7 @@
 
 ## Example Implementation
 
-The below is only an example, you will likely to wish to alter is as required. Highlight any additional Python library requirements.
+The below is only an example, you will likely to wish to alter is as required.
 
 ```
 import logging
