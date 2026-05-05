@@ -404,7 +404,8 @@ spec = (
         code(transform)
         .when(
             any_of(
-                # Add triggers: updated("upstream-product"), scheduled("0 */8 * * *")
+                # Add triggers: updated("my-input"), scheduled("0 */8 * * *")
+                # "my-input" is the name passed to .input() — NOT the upstream DP name
             ),
             startup=True,
         )
@@ -454,6 +455,7 @@ pandas<=2.1.4
 - **Context types**: Use `AzureDataLakeStorage`, `Snowflake`, `S3Input`, `S3Output` from `nxd.data_product.context` for transform function type hints.
 - **Glossary links**: Can be at model level (`.link("field", Predicate.GlossaryTerm, url)`) or product level (`.link(Predicate.GlossaryTerm, url)`).
 - **Quality promises**: Attach to output ports via `.promise()`. Can use `soda` (YAML), `gx` (Python), or `custom` (verify function returning `VerifyResult`).
+- **`updated()` takes input name**: `updated("my-input")` matches the name from `.input("my-input", ...)`, not the upstream DP name. Passing the upstream DP name will never trigger.
 
 ## References
 
