@@ -368,7 +368,21 @@ Collect:
 - **Data steward** email(s)
 - **Consumer access** email(s)
 
+## References
+
+For API documentation and real-world examples, clone or browse the public examples repo:
+
+```bash
+git clone https://github.com/nextdata-tech/nextdata-public-examples.git
+```
+
+Each directory under `data_products/` is a complete data product (spec.py, transform.py, models, etc.). Use these as reference when generating files — pick the example closest to what the user is building.
+
 ### Step 9: Generate Files
+
+Ask: In Spec file do you want the Data Product to run when updated("upstream-product") or scheduled("0 */8 * * *")?
+
+If the user chooses any 1 then the format for when() in spec file under transform would be when(updated("upstream-product")) or when(scheduled("0 */8 * * *")) based on what user chooses. If they choose both, then the current format is correct in the template using any_of().
 
 Confirm the full configuration, then generate all files in a new directory named after the data product.
 
@@ -444,12 +458,25 @@ from nxd.spec.data_types import boolean, date32, date64, float64, int32, int64, 
 
 ### requirements.txt
 
+The base requirements always apply. Add per-driver dependencies based on
+the input and output context types selected in Step 2d.
+
+**Always include:**
+
 ```
 nxd_core>=0.0.1
 nxd_data_product>=0.0.1
 pandas
 ```
 Both packages are always required — missing either causes `ModuleNotFoundError` at runtime. Package names use underscores, not dots.
+
+**Add per context type used in transform.py:**
+
+| Context type | Add to requirements.txt |
+|---|---|
+| `S3Input` | `requests` |
+| `S3Output` | `boto3` |
+| `Snowflake` (read or write) | `snowflake-connector-python[pandas]` |
 
 ## Gotchas
 
@@ -464,16 +491,6 @@ Both packages are always required — missing either causes `ModuleNotFoundError
 - **`source_aligned_input()` vs `data_product_input()`**: Use `source_aligned_input()` for external storage (S3, Databricks, Snowflake, ADLS, Kafka); `data_product_input()` for DP-to-DP dependencies. They have different `.source()` URL patterns.
 - **Contract compute driver**: `nxd:local-python:1.0.0` is deprecated. Soda/GX checks use `nxd:kubernetes/contract:1.0.0`. No `.compute()` call needed — it auto-selects.
 - **Full pitfalls list**: [references/common-pitfalls.md](references/common-pitfalls.md)
-
-## References
-
-For API documentation and real-world examples, clone or browse the public examples repo:
-
-```bash
-git clone https://github.com/nextdata-tech/nextdata-public-examples.git
-```
-
-Each directory under `data_products/` is a complete data product (spec.py, transform.py, models, etc.). Use these as reference when generating files — pick the example closest to what the user is building.
 
 ## Driver Classification Reference
 
