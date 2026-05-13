@@ -1,3 +1,16 @@
+# Concepts
+
+## Contents
+- What is Nextdata OS? (roles, planes)
+- Autonomous data products
+- Mesh
+- Domains and subdomains
+- Input (expectations)
+- Output (promises)
+- Policies
+- Semantic model (semantic links)
+- Infra profile and data services
+
 # What is Nextdata OS?
 
 Nextdata OS is a platform for building and running autonomous data products. Nextdata OS encapsulates your entire data management, including transformation logic, infrastructure provisioning, policies-as-code, data quality, lineage, semantics and other metadata as autonomous data products, providing everything you need to produce, manage and share data, and make it useful, safe, trusted and discoverable.
@@ -17,8 +30,6 @@ It has two main planes:
 ## The power of Nextdata OS
 
 Nextdata OS lets business domains quickly develop standard data products from existing assets, using familiar tools like Python or YAML, or taking advantage of Nextdata OS generative co-pilot capabilities. Data product creation times are typically accelerated from 3-6 months to days or hours, enabling fast bootstrapping of data mesh deployment throughout complex organizations.
-
-# Concepts
 
 ## Autonomous data products
 

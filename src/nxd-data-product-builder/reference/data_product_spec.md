@@ -1,5 +1,40 @@
 # Data product spec
 
+## Contents
+- Data product (root constructor, builder methods)
+- Inputs
+  - Source-aligned inputs
+  - Data product inputs
+- Semantic models
+- Transform (script, code, sql, remote)
+- Triggers and scheduling (scheduled, updated, on_started, any_of, all_of)
+- Outputs
+  - Model output (data_product_output)
+  - RPC output (data_product_rpc_output)
+- Storage ports
+- API ports
+- Storage driver configurations
+  - Object storage formats (SupportedFormat)
+  - S3
+  - ADLS
+  - Databricks
+  - Snowflake
+  - Kafka
+  - Pinecone
+  - PgVector
+- Data contracts
+  - Schema contracts
+  - Custom contracts
+  - Quality checks (Soda, Great Expectations)
+- Control (owner, data_product_access)
+- Access approval
+- Infrastructure references
+  - Infra profile service URL
+  - Data product output port URL
+  - Glossary term URL
+  - Model attribute URL
+- Glossary
+
 The data product DSL is the primary way to define data products. A `spec.py` file declares everything about a data product: its inputs, transform, outputs, models, contracts, and access policies.
 
 Let's look at an example of a Spec file:

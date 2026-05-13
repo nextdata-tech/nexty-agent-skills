@@ -1,5 +1,12 @@
 # Semantic models
 
+## Contents
+- Model details (builder methods)
+- Linking models (Predicates)
+- Primitive types
+- Complex types
+- Field verifiers
+
 Let's start by looking at an example of a semantic model that will be used in the spec file:
 
 ```

@@ -1,8 +1,17 @@
 # Driver Examples
 
+## Contents
+- PGVector
+- API
+- Azure Data Lake Storage (ADLS)
+- ADLS with Databricks Spark
+
 ## PGVector
 
-```
+```python
+from nxd.data_product.context import PgVector
+
+
 def transform(
     ...
     pgvector: PgVector,
@@ -54,7 +63,9 @@ def transform(
 
 ## API
 
-```
+```python
+from nxd.data_product.context import API
+
 def _fetch_all_issues(api: API, project: Optional[str] = None) -> list[dict]:
     """Fetch all Jira issues via /rest/api/3/search/jql using nextPageToken pagination."""
     base_url = str(api.url).rstrip("/")
@@ -69,4 +80,86 @@ def transform(
     _logger.info("Starting EXAMPLE transform")
 
     issues = _fetch_all_issues(jira_api, project=project)
+    ...
+```
+
+## Azure Data Lake Storage - ADLS
+
+```python
+from nxd.data_product.context import AzureDataLakeStorage
+
+
+def _get_adls_client(context: AzureDataLakeStorage) -> DataLakeServiceClient:
+    credentials = ClientSecretCredential(
+        context.tenant_id,
+        context.client_id,
+        context.client_secret,
+    )
+    return DataLakeServiceClient(f"https://{context.account_name}.dfs.core.windows.net", credential=credentials)
+
+
+def parquet_to_adls(
+    context: AzureDataLakeStorage,
+    table: pa.Table,
+    file_path: str,
+) -> None:
+    client = _get_adls_client(context)
+
+    file_client = client.get_file_client(
+        file_system=context.container,
+        file_path=file_path,
+    )
+
+    buffer = BytesIO()
+    pq.write_table(table, buffer)
+    buffer.seek(0)
+
+    file_client.upload_data(buffer, overwrite=True)
+
+
+def transform(
+    ...
+    adls: AzureDataLakeStorage,
+    ...
+) -> None:
+    _logger.info("Starting EXAMPLE transform")
+    ...
+
+    parquet_to_adls(adls, pyarrow_table, adls.model_paths[example_model.name].path)
+
+    ...
+```
+
+## Azure Data Lake Storage - ADLS with Databricks Spark
+
+```python
+from nxd.data_product.context import AzureDataLakeStorage
+from pyspark.sql import SparkSession
+
+
+def spark_adls_configuration(context: AzureDataLakeStorage) -> dict[str, str]:
+    return {
+        # Disable account key authentication
+        f"fs.azure.account.auth.type.{context.account_name}.dfs.core.windows.net": "OAuth",
+        f"fs.azure.account.oauth.provider.type.{context.account_name}.dfs.core.windows.net": "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider",
+        f"fs.azure.account.oauth2.client.id.{context.account_name}.dfs.core.windows.net": context.client_id,
+        f"fs.azure.account.oauth2.client.secret.{context.account_name}.dfs.core.windows.net": context.client_secret,
+        f"fs.azure.account.oauth2.client.endpoint.{context.account_name}.dfs.core.windows.net": f"https://login.microsoftonline.com/{context.tenant_id}/oauth2/token",
+    }
+
+def transform(
+    ...
+    spark: SparkSession,
+    adls: AzureDataLakeStorage,
+    ...
+) -> None:
+    _logger.info("Starting EXAMPLE transform")
+    ...
+
+    example_model_file_path = adls.model_paths["example-model"].path
+
+    df = spark.read.format("delta").options(**spark_adls_configuration(adls)).load(
+        f"abfss://{adls.container}@{adls.account_name}.dfs.core.windows.net/{example_model_file_path}",
+    )
+    ...
 ```

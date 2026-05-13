@@ -1,5 +1,21 @@
 # Creating data products
 
+## Contents
+- Data product structure (key files)
+- Excluding files (.nxdignore)
+- Third-party package imports
+- Data product evolution (semantic model immutability)
+- Triggers
+  - Event-driven triggers
+  - Schedule-based triggers
+  - Combining event-driven and schedule-based
+- Unstructured data (beta)
+- Multimodal outputs
+  - Analytics
+  - Machine learning
+  - RAG
+  - AI agents (MCP)
+
 There are multiple experiences for data product development, from simply adding data sources to the mesh to authoring complex, customized data products. This guide provides and overview of the basics of data product development.
 
 ## Data product structure

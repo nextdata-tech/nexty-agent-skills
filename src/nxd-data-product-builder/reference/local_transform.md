@@ -2,7 +2,7 @@
 
 ## Example Implementation
 
-The below is only an example, you will likely to wish to alter is as required.
+The below is only an example, you will likely to wish to alter is as required. This will not work if the `@data_product.on_transform()` decorator is present.
 
 ```
 import logging
@@ -14,7 +14,7 @@ try:
 except ModuleNotFoundError:
     pass
 
-from nxd.core.context import API, PgVector, SecretString
+from nxd.data_product.context import API, PgVector, SecretString
 from transform import transform
 
 logging.basicConfig(
