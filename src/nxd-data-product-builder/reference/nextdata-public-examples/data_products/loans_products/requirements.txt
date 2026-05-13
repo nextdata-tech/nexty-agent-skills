@@ -1,4 +1,0 @@
-nxd.core
-nxd.data_product[spec]
-snowflake-connector-python
-databricks-sql-connector

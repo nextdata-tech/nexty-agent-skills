@@ -1,5 +1,0 @@
-
-CREATE TABLE IF NOT EXISTS WESTPAC_HOME_LOANS (
-    PortfolioId STRING,
-    Products OBJECT
-)

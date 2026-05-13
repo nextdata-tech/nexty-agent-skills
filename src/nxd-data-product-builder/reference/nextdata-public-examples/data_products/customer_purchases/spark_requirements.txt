@@ -1,4 +1,0 @@
-nxd_core
-nxd_drivers
-nxd_data_product
-databricks-sdk

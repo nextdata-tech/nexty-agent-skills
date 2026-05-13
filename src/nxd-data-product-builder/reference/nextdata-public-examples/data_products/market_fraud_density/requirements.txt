@@ -1,9 +1,0 @@
-# NXD packages — required for data product execution
-nxd.core
-nxd.drivers[rpc]
-nxd.data_product[triggers]
-
-# External dependencies
-boto3
-kagglehub
-pandas
