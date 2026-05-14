@@ -134,7 +134,7 @@ Once implementation is complete, validate the Data Product before handover. Trac
 Validation Progress:
 - [ ] Local transform script in place; imports resolve and function signatures match declared context types
 - [ ] All "TODO" markers inserted and clearly labelled
-- [ ] `nxd validate --config=/tmp/nxd-<mesh_name>.yaml <data_product_directory>` passes
+- [ ] `nxd validate --config=/tmp/nxd-<mesh_name>.yaml <data_product_directory> --debug` passes
 ```
 
 If `nxd validate` reports errors, read the output carefully, fix the issue in `spec.py`, `models.py`, or `transform.py`, and re-run until the command exits cleanly. Do not mark item 4 complete on the top-level checklist until validation passes.
