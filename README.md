@@ -17,6 +17,7 @@ git clone https://github.com/nextdata-tech/nexty-agent-skills.git
 mkdir -p .claude/skills
 cp -r nexty-agent-skills/src/nxd-setup .claude/skills/nxd-setup
 cp -r nexty-agent-skills/src/nexty-bootstrap .claude/skills/nexty-bootstrap
+cp -r nexty-agent-skills/src/nexty-mesh-bootstrap .claude/skills/nexty-mesh-bootstrap
 ```
 
 ### Local development on skills
@@ -29,6 +30,20 @@ npx skills add ./src --all -y
 
 This installs skills from the `src/` directory in your working copy. After editing a SKILL.md, re-run the command to update.
 
+To install this checkout into this workspace's agent skills for local sessions:
+
+```bash
+npx skills add ./src --all -y
+```
+
+The `nexty-mesh-bootstrap` skill writes run artifacts under `.context/mesh-bootstrap/<timestamp>/` and may generate draft data product specs there for local validation.
+
+To install from this checkout into your user-level agent skills instead:
+
+```bash
+npx skills add ./src --all -y --global
+```
+
 To remove and reinstall cleanly:
 
 ```bash
@@ -39,7 +54,6 @@ npx skills add ./src --all -y
 
 or 1 liner:
 
-```
 ```bash
 npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx skills add ./src --all -y
 ```
@@ -57,6 +71,7 @@ rm -rf .agents .claude/skills skills-lock.json
 |-------|-------------|
 | `nxd-setup` | Install, configure, and authenticate the nxd CLI |
 | `nexty-bootstrap` | Interactive wizard to bootstrap a new nextdata data product |
+| `nexty-mesh-bootstrap` | Artifact-led migration accelerator to discover assets, map a first mesh, and generate validate-ready draft data products |
 
 ## Usage
 
@@ -65,6 +80,7 @@ Start Claude Code in any project and invoke a skill:
 ```
 /nxd-setup              # Set up the nxd CLI
 /nexty-bootstrap        # Bootstrap a new data product
+/nexty-mesh-bootstrap   # Discover assets and draft a first mesh of data products
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.
@@ -72,9 +88,10 @@ Skills also activate automatically — just ask "bootstrap a new data product" a
 ## Adding a New Skill
 
 1. Create a directory under `src/<skill-name>/`
-2. Add a `SKILL.md` with YAML frontmatter:
+2. Add a `SKILL.md` with YAML frontmatter
 3. Add reference docs in `references/` if needed
-4. Test locally with `npx skills add ./src --all -y`
+4. Add small deterministic helpers in `scripts/` if needed
+5. Test locally with `npx skills add ./src --all -y`
 
 ### Conventions
 

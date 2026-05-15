@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexty Mesh Bootstrap"
+  short_description: "Discover enterprise data assets and draft a first Nextdata mesh."
+  default_prompt: "Use this skill to discover source systems, repositories, documents, and team context, then propose and generate a first wave of validate-ready Nextdata data product drafts."
