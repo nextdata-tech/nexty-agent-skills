@@ -368,7 +368,9 @@ Collect:
 - **Data steward** email(s)
 - **Consumer access** email(s)
 
-## References
+### Step 9: References
+
+Ask: Should I check for references ?
 
 For API documentation and real-world examples, clone or browse the public examples repo:
 
@@ -378,7 +380,7 @@ git clone https://github.com/nextdata-tech/nextdata-public-examples.git
 
 Each directory under `data_products/` is a complete data product (spec.py, transform.py, models, etc.). Use these as reference when generating files — pick the example closest to what the user is building.
 
-### Step 9: Generate Files
+### Step 10: Generate Files
 
 Ask: In Spec file do you want the Data Product to run when updated("upstream-product") or scheduled("0 */8 * * *")?
 
@@ -390,12 +392,25 @@ Confirm the full configuration, then generate all files in a new directory named
 
 Create these files in `<data-product-name>/`:
 
+Before Generating the files, set up the environment in the <data-product-name> folder. Do **not** proceed until this is complete.
+
+
+- **Runtime:** Python **3.10** with **`uv`** as the dependency manager.
+    - *There is no need to check for a given Python version since `uv` will manage this for us.*
+- **Dependencies:** Install the `nxd-data-product` Python package ([registry](https://registry.trynxd.com/index/)):
+
+```bash
+uv init --bare --python 3.10
+uv venv --python 3.10
+uv add nxd-data-product --index nxd=https://registry.trynxd.com/index/
+```
+
 | File | Purpose |
 |------|---------|
 | `spec.py` | Main data product definition using fluent DSL |
 | `transform.py` | Transform function with read/write skeleton |
 | `imports_spec.py` | Centralized DSL imports for spec.py |
-| `imports_models.py` | Centralized model imports for output_models |
+| `imports_models.py` | Centralized model imports for input and output models |
 | `inputs/input_models.py` | Input semantic model definitions |
 | `outputs/output_models.py` | Output semantic model definitions |
 | `requirements.txt` | Python dependencies |
@@ -429,12 +444,150 @@ spec = (
         )
         .compute("{compute_url}")
     )
-    # .input(...) for each input
-    # .output(...) for each output
+    .input(
+        "{input_port_name}",
+        source_aligned_input()  # or data_product_input() when sourcing from an upstream DP
+        .source("{input_url}")
+        .model({input_model_var}),
+    )
+    # repeat .input(...) format for each input that includes source, model etc
+    .output(
+        data_product_output()
+        .port(
+            "{output_port_name}",
+            storage("{output_url}"),
+        )
+        .model({output_model_var})
+    )
+    # repeat .output(...) format for each output that includes port, model etc
     # .link("field", Predicate.GlossaryTerm, "glossary-full-name#/terms/term-id") from Step 4
     # .control(...) for access
 )
 ```
+
+### transform.py — example: S3 (CSV) → Snowflake via external table
+
+**When to use this pattern:** input is CSV files in S3, output is Snowflake. Common shape for source-aligned data products that publish raw drops into the warehouse.
+
+**Snowflake-side prerequisites (one-time, set up outside the transform):**
+- A `STORAGE INTEGRATION` with access to the input S3 bucket
+- A `STAGE` wrapping that integration (e.g. `<DB>.RAW.S3_STAGE` over the bucket root)
+
+The transform creates its own external table each run, derived from the input semantic model — so when the user adds or renames a column in `inputs/input_models.py`, the external table picks it up on the next run with no DDL edits.
+
+```python
+import logging
+
+from nxd.data_product.context import S3Input, Snowflake
+from snowflake.connector import connect
+
+# Substitute with the actual model variable names defined in Steps 3 and 4.
+from inputs.input_models import input_model_name
+from outputs.output_models import output_model_name
+
+_logger = logging.getLogger("transform.data_product_name")
+_logger.setLevel(logging.INFO)
+
+# Snowflake-side leaf names. The stage is admin-managed and pre-provisioned in
+# STAGE_SCHEMA (typically a shared "raw" schema). The target table and the
+# external table live in the per-DP schema the platform creates at runtime —
+# that schema name comes from nxd_snowflake.schema and does NOT need to appear
+# as a literal here. Only `STAGE_SCHEMA` is hardcoded because the stage sits
+# outside the per-DP namespace.
+STAGE_SCHEMA   = "RAW"                       # admin schema housing the stage
+STAGE_NAME     = "S3_STAGE"                  # pre-provisioned stage in STAGE_SCHEMA
+STAGE_PREFIX   = "s3_prefix"                 # sub-path under the stage
+EXT_TABLE_NAME = "EXT_DATA_PRODUCT_UPPER"    # external table created by this transform
+
+CSV_FORMAT = (
+    "TYPE = CSV "
+    "SKIP_HEADER = 1 "
+    "FIELD_OPTIONALLY_ENCLOSED_BY = '\"' "
+    "NULL_IF = ('', 'NULL') "
+    "EMPTY_FIELD_AS_NULL = TRUE"
+)
+
+# Parameter names must match the input/output port names with hyphens → underscores
+# (see Gotchas section). `s3_input` / `nxd_snowflake` shown here are illustrative.
+def transform(s3_input: S3Input, nxd_snowflake: Snowflake) -> None:
+    # DB and per-DP schema come from the platform-injected Snowflake context
+    # (set from the infra-profile's Snowflake service config). Never hardcode them.
+    db = nxd_snowflake.database
+    dp_schema = nxd_snowflake.schema
+
+    ext_table_fqn = f"{db}.{dp_schema}.{EXT_TABLE_NAME}"
+    stage_path = f"@{db}.{STAGE_SCHEMA}.{STAGE_NAME}/{STAGE_PREFIX}"
+    target_table = nxd_snowflake.model_tables[output_model_name.name]
+    target_fqn = f"{db}.{dp_schema}.{target_table}"
+
+    conn = _get_snowflake_conn(nxd_snowflake)
+    try:
+        with conn.cursor() as cur:
+            # 1. (Re)build the external table from the input semantic model.
+            #    Columns come from input_model_name._attributes — the single
+            #    source of truth in inputs/input_models.py.
+            cur.execute(_external_table_ddl(input_model_name, ext_table_fqn, stage_path))
+
+            # 2. Full-refresh semantics for scheduled runs.
+            cur.execute(f"TRUNCATE TABLE {target_fqn}")
+
+            # 3. Load. For pass-through products (input schema == output schema),
+            #    SELECT * is safe. External cols are VARCHAR; Snowflake casts
+            #    them to the output model's typed columns on INSERT.
+            cur.execute(f"INSERT INTO {target_fqn} SELECT * FROM {ext_table_fqn}")
+            _logger.info("Inserted %s rows into %s", cur.rowcount, target_fqn)
+    finally:
+        conn.close()
+
+
+def _external_table_ddl(model, ext_table_fqn: str, stage_path: str) -> str:
+    """Derive CREATE OR REPLACE EXTERNAL TABLE DDL from a semantic model.
+
+    All columns declared VARCHAR at the external layer (tolerant of malformed
+    CSV); type casting happens implicitly on INSERT … SELECT into the typed
+    target table.
+    """
+    column_names = list(model._attributes.keys())  # noqa: SLF001
+    col_defs = ",\n            ".join(
+        f"{name} VARCHAR AS (VALUE:c{i}::VARCHAR)"
+        for i, name in enumerate(column_names, start=1)
+    )
+    return f"""
+        CREATE OR REPLACE EXTERNAL TABLE {ext_table_fqn} (
+            {col_defs}
+        )
+            LOCATION = {stage_path}
+            PATTERN  = '.*[.]csv'
+            FILE_FORMAT = ({CSV_FORMAT})
+            AUTO_REFRESH = FALSE
+    """
+
+def _get_snowflake_conn(ctx: Snowflake):
+    return connect(
+        user=ctx.user, password=ctx.password, account=ctx.account,
+        warehouse=ctx.warehouse, database=ctx.database,
+        schema=ctx.schema,
+    )
+```
+
+**What to substitute per bootstrap session:**
+
+| In the template | Replace with | Source |
+|---|---|---|
+| `input_model_name` | The input semantic model variable name | Step 3 |
+| `output_model_name` | The output semantic model variable name | Step 4 |
+| `s3_input`, `nxd_snowflake` | Transform parameter names (port names, hyphens → underscores) | Step 6 |
+| `data_product_name` (logger) | snake_case data product name | Step 2c |
+| `STAGE_SCHEMA` | Admin schema housing the pre-provisioned stage (e.g. `RAW`) | Snowflake infra |
+| `STAGE_NAME` | Pre-provisioned stage name inside STAGE_SCHEMA (e.g. `S3_STAGE`) | Snowflake infra |
+| `STAGE_PREFIX` (`s3_prefix`) | Sub-path under the stage where this product's files land | User input |
+| `EXT_TABLE_NAME` (`EXT_DATA_PRODUCT_UPPER`) | External-table name. Suggested convention: `EXT_<DATA_PRODUCT_UPPER>`. Lives in `nxd_snowflake.database.nxd_snowflake.schema` at runtime — no DB/schema hardcoding needed. | Naming convention |
+| `PATTERN` in DDL | `.*[.]csv` for CSV-only prefixes; tighten if other file types share the prefix | User input |
+
+**Why this pattern (principles to preserve when adapting):**
+- **Schemas live in `inputs/input_models.py` / `outputs/output_models.py`** — never duplicated as a `COLUMNS = [...]` list inside the transform.
+- **Privileged DDL stays out of the transform.** `CREATE STORAGE INTEGRATION` and `CREATE STAGE` are Snowflake-side, one-time, human-operated. Only the `CREATE OR REPLACE EXTERNAL TABLE` belongs in the transform.
+- **DB and per-DP schema come from the runtime Snowflake context, not literals.** `nxd_snowflake.database` and `nxd_snowflake.schema` are platform-injected from the infra-profile's Snowflake service config; the per-DP schema is provisioned automatically based on the DP name. Hardcoding either breaks portability across envs and means dev/prod can't share the same code. Only the **stage's** schema needs hardcoding (it lives in an admin-managed schema outside the per-DP namespace).
 
 ### imports_spec.py
 
@@ -454,6 +607,38 @@ from transform import transform
 ```python
 from nxd.spec import Predicate, SamplingMethod, all_of, semantic_model
 from nxd.spec.data_types import boolean, date32, date64, float64, int32, int64, number, string
+```
+
+### inputs/input_models.py
+
+One `semantic_model(...).schema({...})` block per input model. Schema dict values are `(type, description)` tuples — type constructors take zero args.
+
+```python
+from imports_models import *  
+
+{model_name} = semantic_model(
+    name="{model_name}",
+    description="{model_description}",
+).schema({
+    "{field_name}": ({type}(), "{field_description}"),
+    # repeat per field
+})
+```
+
+### outputs/output_models.py
+
+Same shape as input models, optionally chained with `.sample(...)`.
+
+```python
+from imports_models import *  
+
+{model_name} = semantic_model(
+    name="{model_name}",
+    description="{model_description}",
+).schema({
+    "{field_name}": ({type}(), "{field_description}"),
+    # repeat per field
+}).sampling(SamplingMethod.Random)
 ```
 
 ### requirements.txt
@@ -482,6 +667,7 @@ Both packages are always required — missing either causes `ModuleNotFoundError
 
 - **Naming**: Data product names are kebab-case (`my-product`). Python identifiers are snake_case (`my_model`).
 - **Model names in schema**: Use snake_case for semantic model names (e.g. `channel_sales_velocity`).
+- **Type constructors take zero args**: `string()`, `int64()`, `boolean()`, etc. accept no positional arguments. Descriptions attach via `.schema({name: (type(), "desc")})` tuple form, never `string("desc")` — that raises `TypeError` at import time.
 - **Import structure**: `spec.py` imports everything from `imports_spec.py` via wildcard. `imports_spec.py` imports from `nxd.spec` and local modules. `imports_models.py` imports types used in model definitions.
 - **Transform function signature**: Parameter names must match input/output port names with hyphens converted to underscores (e.g. port `iceberg-on-s3` becomes parameter `iceberg_on_s3`).
 - **Context types**: Use `AzureDataLakeStorage`, `Snowflake`, `S3Input`, `S3Output` from `nxd.data_product.context` for transform function type hints.
