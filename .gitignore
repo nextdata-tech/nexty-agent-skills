@@ -35,3 +35,14 @@
 # Skill runtime
 skills/
 skills-lock.json
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# JetBrains IDEs
+.idea/
+*.iml

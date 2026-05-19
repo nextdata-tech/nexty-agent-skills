@@ -17,6 +17,7 @@ git clone https://github.com/nextdata-tech/nexty-agent-skills.git
 mkdir -p .claude/skills
 cp -r nexty-agent-skills/src/nxd-setup .claude/skills/nxd-setup
 cp -r nexty-agent-skills/src/nexty-bootstrap .claude/skills/nexty-bootstrap
+cp -r nexty-agent-skills/src/nexty-mesh-analyzer .claude/skills/nexty-mesh-analyzer
 ```
 
 ### Local development on skills
@@ -57,6 +58,7 @@ rm -rf .agents .claude/skills skills-lock.json
 |-------|-------------|
 | `nxd-setup` | Install, configure, and authenticate the nxd CLI |
 | `nexty-bootstrap` | Interactive wizard to bootstrap a new nextdata data product |
+| `nexty-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
 
 ## Usage
 
@@ -65,6 +67,7 @@ Start Claude Code in any project and invoke a skill:
 ```
 /nxd-setup              # Set up the nxd CLI
 /nexty-bootstrap        # Bootstrap a new data product
+/nexty-mesh-analyzer    # Discover candidate data products from an infra profile
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.
