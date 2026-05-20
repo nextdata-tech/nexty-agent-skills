@@ -3,6 +3,34 @@
 ## Specification
 
 * Usage of the infrastructure profile names, `infra_profile="ecommerce"`, is preferred over URLs `infra_profile="https://nextopia.dev/infra/ecommerce"`
+* **Service URLs in `.source(...)`, `.compute(...)`, `storage(...)` are full URLs, inlined.** Use the literal `https://<mesh>/infra-profile/<profile>#/services/<service>` at each call site rather than constructing them through a private helper. Keeping them inline makes the spec greppable, mirrors the pattern in `nextdata-public-examples`, and avoids hiding the per-service binding behind indirection.
+* **The compute service name is profile-specific — read the infra profile first.** Different profiles ship different names (`k8s-compute` in some, `k8s-executor` in others, plus Databricks/SageMaker variants). Don't assume; open the infra-profile YAML and pick the service whose `driver` classifies as Compute.
+* **`spec.py` and `models.py` use `from nxd_spec import *` / `from nxd_models import *` — and those are project-local shim modules**, not packages from the `nxd` install. Create `nxd_spec.py` and `nxd_models.py` alongside `spec.py`, re-export every name the spec/models files use, and list each in `__all__`:
+
+  ```python
+  # nxd_models.py
+  from nxd.spec import semantic_model
+  from nxd.spec.data_types import string, date
+
+  __all__ = ["semantic_model", "string", "date"]
+  ```
+
+  ```python
+  # nxd_spec.py
+  from models import amazon_sales
+  from nxd.spec import (SupportedFormat, code, data_product, data_product_access,
+                        data_product_output, owner, s3_config, snowflake_config,
+                        source_aligned_input, storage)
+  from nxd.spec.conditions import scheduled
+  from transform import transform
+
+  __all__ = ["SupportedFormat", "amazon_sales", "code", "data_product",
+             "data_product_access", "data_product_output", "owner",
+             "s3_config", "scheduled", "snowflake_config", "source_aligned_input",
+             "storage", "transform"]
+  ```
+
+  Without these shims, `nxd validate` fails with `TypeError: 'StubModule' object is not iterable`.
 
 ## Transformation
 

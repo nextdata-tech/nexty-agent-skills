@@ -3,7 +3,7 @@ name: nxd-data-product-builder
 description: Guide for creating, refining, and validating a Nextdata OS Python-based Data Product. Two discovery modes — interactive interview, or spec-from-document (e.g. a candidate `#N` in a `mesh-assets-<profile>.md` report produced by `nexty-mesh-analyzer`). Use whenever the user mentions building, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
 metadata:
   author: nextdata
-  version: 0.2.0
+  version: 0.2.1
 ---
 
 # Nextdata OS Data Product Builder
@@ -152,8 +152,11 @@ Begin implementation once the plan is finalised. Insert "TODO" markers with clea
 * There are implementation details that would greatly benefit from manual user intervention.
 
 #### `spec.py`
-* Ensure the infrastructure profile is included.
+* Ensure the infrastructure profile is included (by name — `infra_profile="<name>"`).
 * Configure each driver (service) with the appropriate URLs and settings, whether it is an input (`source()`) or an output (`storage()` etc.).
+* Service URLs are full and inlined: `https://<mesh>/infra-profile/<profile>#/services/<service>` — used as-is in `.source(...)`, `storage(...)`, `.compute(...)`. Do not abstract behind a helper.
+* Read the chosen infra profile YAML to discover the correct service names; the compute service name in particular varies between profiles (`k8s-compute`, `k8s-executor`, a Databricks compute, etc.).
+* Project-local `nxd_spec.py` and `nxd_models.py` shim modules are required — the wildcard imports in `spec.py` / `models.py` resolve through these. See `reference/best_practices.md` for the template.
 * Note: `spec.py` cannot be run locally — it requires the Nextdata OS hosted runtime.
 
 #### `models.py`
