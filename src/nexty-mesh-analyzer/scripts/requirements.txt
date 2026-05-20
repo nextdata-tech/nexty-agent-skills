@@ -1,0 +1,11 @@
+# Dependencies for the nexty-mesh-analyzer inspection scripts.
+# Install into a throwaway venv before running inspect_service.py:
+#   python3 -m venv /tmp/nexty-mesh-analyzer/venv
+#   /tmp/nexty-mesh-analyzer/venv/bin/pip install -r requirements.txt
+pyyaml
+boto3                      # s3
+snowflake-connector-python # snowflake
+cryptography               # snowflake key-pair auth
+azure-identity             # adls auth
+azure-storage-blob         # adls
+pyarrow                    # parquet footer schema
