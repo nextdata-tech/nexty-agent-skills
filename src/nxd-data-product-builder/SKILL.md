@@ -1,9 +1,9 @@
 ---
 name: nxd-data-product-builder
-description: Guide for creating, refining, and validating a Nextdata OS Python-based Data Product. Use whenever the user mentions building, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+description: Guide for creating, refining, and validating a Nextdata OS Python-based Data Product. Two discovery modes — interactive interview, or spec-from-document (e.g. a candidate `#N` in a `mesh-assets-<profile>.md` report produced by `nexty-mesh-analyzer`). Use whenever the user mentions building, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
 metadata:
   author: nextdata
-  version: 0.1.1
+  version: 0.2.0
 ---
 
 # Nextdata OS Data Product Builder
@@ -39,7 +39,7 @@ Copy this checklist into your response and tick items off as you complete them:
 ```
 Data Product Build Progress:
 - [ ] 0. Prerequisites verified (NXD CLI, mesh selected, uv env, nxd-data-product installed)
-- [ ] 1. Discovery complete (interview answered, references consulted)
+- [ ] 1. Discovery complete (interview answered OR spec-from-document extracted; infra profile located; references consulted)
 - [ ] 2. Plan approved by user
 - [ ] 3. Implementation complete (spec.py, models.py, transform.py)
 - [ ] 4. Validation complete (local transform script in place, TODO markers labelled, `nxd validate` passes)
@@ -62,8 +62,52 @@ Consult the following references for concepts, APIs, and best practices:
 * Running `transform()` locally: [reference/local_transform.md](reference/local_transform.md)
 * Examples of drivers (services) used within transformations: [reference/driver_examples.md](reference/driver_examples.md)
 
+#### Discovery Source — interview or spec-from-document
+Decide once, up front, how the Data Product's requirements will be sourced. Ask the user which mode applies:
+
+* **Interactive interview** (default) — work through the questions in **Interview** below.
+* **Spec-from-document** — the user points at one or more documents that already describe the Data Product. The canonical case is a candidate `#N` in a `mesh-assets-<profile>.md` report produced by the **`nexty-mesh-analyzer`** skill, paired with its companion `mesh-assets-<profile>-models.md` for input/output schemas. Phrases like *"build the data product described by #41 in mesh-assets-daff.md"* trigger this branch.
+
+If spec-from-document is chosen, follow **Spec-from-Document** below in place of Interview. Either branch must end with the same outputs: the candidate's purpose, inputs/outputs (with locations, services, formats), drivers, and any transformation notes. Confirm the extracted answers with the user before moving on to step 2.
+
+#### Spec-from-Document
+For each document path the user supplies (file path or `http(s)://` URL), read it and extract the requirements that would otherwise come from Interview. Where the document is missing an answer, fall back to asking the user just that question.
+
+**Mesh-assets report — the primary supported format.** A `mesh-assets-<profile>.md` lists candidates grouped by domain, each numbered (`#### 41. \`<name>\``). Each candidate carries:
+
+- *Suggested data product name* — use as the Data Product name unless the user overrides.
+- *Domain*, *Infra profile*.
+- *Classification* — `source-aligned` or `transformed` (with confidence). Source-aligned + file→database typically means lift-and-shift with minimal logic; transformed means real reshaping.
+- *Input data source* — `location`, `service`, `service URL`. The service name maps to a service in the infra profile (see Infra Profile Lookup below).
+- *Output data source* — same three fields.
+- *Evidence* — schema jaccard, shared tokens, lineage signals. Read this — high jaccard + source-aligned says the transform is essentially a passthrough; a long shared-token list hints at columns to forward verbatim.
+
+Pair the report with its companion `mesh-assets-<profile>-models.md`. That file has one section per candidate (matched by number) with full input and output schemas as `| column | type |` tables. Use these to seed `models.py` semantic models.
+
+If the user refers to a candidate by number (`#41`) or by name (`top-playlists`), locate that block in both files and read it. If the user gives only the report file with no candidate selector, present the candidates grouped by domain and ask which one to build.
+
+Other document shapes — plain markdown or text describing a Data Product — are supported best-effort: read the document, extract whatever maps onto the Interview questions, then ask the user to fill any gaps.
+
+#### Infra Profile Lookup
+Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nexty-mesh-analyzer` does, then confirm with the user.
+
+Search, in order:
+
+1. Customer extension paths — `./.nxd/skills/nxd-data-product-builder/` and `~/.nxd/skills/nxd-data-product-builder/`.
+2. Working tree — `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
+
+For each candidate file, confirm with `Grep` that it has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top. Resolve **pointer files** — a file whose contents are filesystem path(s) or URI(s), one per line — by following each pointer (read file paths, fetch `http(s)://` URIs).
+
+Present every match and let the user pick one, or paste a path / URI directly. When the discovery source is a mesh-assets report, prefer the profile whose `metadata.name` matches the candidate's *Infra profile* field.
+
+**Credentials.** The chosen profile holds live secrets in plaintext. Treat it the same way `nexty-mesh-analyzer` does:
+
+- Never echo a secret value to chat or display it on a command line.
+- When the builder needs service attributes (URLs, account names, bucket names) to populate `spec.py`, read them out of the profile and put them in `spec.py` — but pull credential values (passwords, access keys, tokens, client secrets, PEM blocks) into `.env` placeholders instead, with a `TODO` marker.
+- The local transform script reads credentials from the environment, never from `spec.py`.
+
 #### Interview
-Proactively gather details from the user, including edge cases. Confirm gathered information before advancing to the next stage.
+Use this branch when discovery source is **interactive interview**. Proactively gather details from the user, including edge cases. Confirm gathered information before advancing to the next stage.
 
 1. What is the intended purpose and outcome of this Data Product?
 2. What are the Data Product's expected inputs and outputs?
