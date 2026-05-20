@@ -41,17 +41,36 @@ Where `<install_url>` is the mesh's install URL (e.g. `https://app.demo.trynxd.c
 
 ## Step 2: Discover Meshes
 
-Read the mesh registry:
+Read the mesh registry first:
 
 ```bash
 cat ~/.nxd/meshes.json 2>/dev/null || echo '{}'
 ```
 
-Branch based on what you find:
+If it lists meshes, branch on the count below. If it's missing or empty (`{}`), fall back to the **nxd CLI config** before declaring no meshes:
 
-### No meshes registered
+```bash
+cat ~/.nxd/config.yaml 2>/dev/null
+```
 
-If the file doesn't exist or is empty (`{}`), tell the user:
+`config.yaml` is the file the `nxd` binary itself reads. Two places carry mesh URLs:
+
+- A top-level `url:` — the currently-active URL the CLI uses (commented-out alternatives often sit above it).
+- A `meshes:` mapping — named URLs the user has worked with, e.g.:
+
+  ```yaml
+  meshes:
+    dev:
+      url: https://dev.trynxd.com
+    demo:
+      url: https://api.demo.trynxd.com
+  ```
+
+When `meshes.json` is empty, treat the union of these (top-level `url:` named after its subdomain, plus every entry under `meshes:`) as discovered meshes for the count branches below. Tell the user where they came from:
+
+> No `~/.nxd/meshes.json` registry yet, but I found these mesh URLs in `~/.nxd/config.yaml`: …
+
+If `config.yaml` is also missing or has neither field set, tell the user:
 
 > No meshes are registered yet. Let's set one up.
 
