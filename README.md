@@ -140,6 +140,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-setup` | Install, configure, and authenticate the nxd CLI |
 | `nexty-bootstrap` | Interactive wizard to bootstrap a new nextdata data product |
 | `nexty-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
+| `nxd-policies` | List, activate, deactivate computational policies on data products; build and deploy new WASM policies from [nextdata-tech/nxd-policies](https://github.com/nextdata-tech/nxd-policies) |
 
 ## Usage
 
