@@ -1,6 +1,71 @@
-# nextdata Agent Skills
+# Nexty AI
 
-AI agent skills for building data products on the [nextdata](https://nextdata.com) platform. Built on the open [Agent Skills](https://agentskills.io) specification.
+## AI-Assisted Development on Nextdata
+
+We have two main paths for AI-assisted data product development. Choose the one that matches your environment.
+
+<table>
+<tr>
+<td width="50%" align="center" valign="top">
+
+<br>
+
+<b>Nexty AI</b>
+
+<br><br>
+
+**First-party AI coding inside Nextdata OS**
+
+Deep native product context for low code no code experience. Ideal for "zero to one" data product bootstrapping.
+
+</td>
+<td width="50%" align="center" valign="top">
+
+<br>
+
+<b>Nexty AI Pro</b>
+
+<br><br>
+
+**Nextdata expertise, in the editor you already use**
+
+Curated by our field engineers. Brings the patterns, skills, and tools your AI assistant needs to build on Nextdata — wherever you're already coding.
+
+<br>
+
+<img src="https://img.shields.io/badge/Claude_Code-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude Code">
+<img src="https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white" alt="Cursor">
+<img src="https://img.shields.io/badge/Codex-412991?style=flat-square&logo=openai&logoColor=white" alt="Codex">
+
+<br>
+
+
+</td>
+</tr>
+<tr>
+<td align="center">
+
+<br>
+
+</td>
+<td align="center">
+
+<br>
+
+</td>
+</tr>
+</table>
+
+---
+
+## What Can I Build?
+
+- **Source alinged data products** (from S3, ADLS, Snowflake and data bricks.)
+- **Aggregate data products** (Quickly build data products from existing data product)
+- **Policies** (Quickly build computational policies)
+
+- **Mesh analyzer** (Analyze your existing ETL and data sources and create a plan for packing them as data products)
+
 
 ## Quick Install
 
