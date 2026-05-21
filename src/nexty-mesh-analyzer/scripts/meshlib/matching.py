@@ -197,6 +197,18 @@ def kebab(text):
     return re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9]+", "-", text.lower())).strip("-")
 
 
+def candidate_id(c):
+    """Stable, link-safe id for a candidate pair — used as the anchor in
+    the models sidecar and as the cross-reference key in the main report.
+    Six hex chars of an MD5 over the locator pair give a near-unique
+    suffix that survives renumbering and reordering."""
+    import hashlib
+    in_loc = c["input"]["locator"] if isinstance(c["input"], dict) else c["input"]
+    out_loc = c["output"]["locator"] if isinstance(c["output"], dict) else c["output"]
+    h = hashlib.md5(f"{in_loc}|{out_loc}".encode()).hexdigest()[:6]
+    return f"{kebab(c.get('name', 'candidate'))}-{h}"
+
+
 def classify_domain(*texts):
     """Best-effort business domain for a candidate; 'other' when unknown."""
     blob = " ".join(t for t in texts if t).lower()
@@ -244,11 +256,16 @@ TEST_SANDBOX_SEGMENTS = {
     # personal sandboxes (extend per customer)
     "billg", "bill-test", "bill-test-data-product",
     "sina-test", "james-test", "anastasia-test", "ecommerce-test-data-anastasia",
+    # personal / per-dev env paths — `my-dp/myenv/`, `mydp/`, `my-test/` are
+    # the per-developer scratch convention seen across mesh deployments.
+    "myenv", "my-dp", "mydp", "my-test", "mytest", "my-data-product",
     # generic scratch / test / template markers — match as either whole
     # segments or as sub-tokens inside a segment (`PLAYLISTS_POLICY_TEST_DEMO`
-    # matches `test`; `PLACEHOLDER_MODEL_NAME` matches `placeholder`).
+    # matches `test`; `PLACEHOLDER_MODEL_NAME` matches `placeholder`;
+    # `DEBUG_SOURCE` matches `debug`).
     "test", "tests", "testing", "tmp", "temp", "scratch", "sandbox", "sbx",
     "placeholder", "stub", "dummy", "fixture", "fixtures", "example", "examples",
+    "debug", "trace", "diag", "diagnostic", "diagnostics",
 }
 
 
@@ -257,14 +274,25 @@ def _has_test_sandbox_segment(locator):
     marker. Splits on both `/` and `.` so this catches S3 directory
     segments (`/billg/`) *and* db schema names (`PLAYLISTS_TEST.PLAYLIST`).
     Each segment is further tokenized on non-alphanumeric, so a marker
-    embedded inside (`POLICY_TEST_DEMO` → token `test`) also matches."""
+    embedded inside (`POLICY_TEST_DEMO` → token `test`) also matches.
+
+    Also catches any token that *starts with* `hello` followed by one or
+    more chars (`hellopython`, `hello0`, `hello6`, `helloincremental`) —
+    these are hello-world scaffold / tutorial variants the matcher should
+    treat the same as `helloworld`."""
     rest = locator.split("://", 1)[-1]
     segments = [s for s in re.split(r"[/.]", rest.rstrip("/.")) if s]
     for seg in segments:
-        if seg.lower() in TEST_SANDBOX_SEGMENTS:
+        low = seg.lower()
+        if low in TEST_SANDBOX_SEGMENTS:
             return True
-        sub = re.split(r"[^a-z0-9]+", seg.lower())
+        sub = re.split(r"[^a-z0-9]+", low)
         if any(t in TEST_SANDBOX_SEGMENTS for t in sub):
+            return True
+        # `hello` appearing as a substring within a longer token also catches
+        # `playlistshello`, `whatever-hello-world-py`, etc. without a single
+        # `hello` token in isolation triggering on common English words.
+        if any("hello" in t and len(t) > 5 for t in sub):
             return True
     return False
 
@@ -331,6 +359,13 @@ def load(paths, registry):
     assets = []
     for p in paths:
         data = json.load(open(p))
+        # Infer a file-level default profile from any service that has one;
+        # the profile is a property of the inventory file, not the service.
+        # Falls back here so a service missing its `profile` field (e.g. a
+        # patched / partially regenerated inventory) still surfaces the
+        # right profile in the report.
+        file_profile = next((inv.get("profile") for inv in data.values()
+                             if inv.get("profile")), "")
         for svc, inv in data.items():
             if "assets" not in inv:
                 continue
@@ -339,7 +374,7 @@ def load(paths, registry):
                 assets.append({
                     "service": svc, "store": inv.get("store", ""),
                     "driver": driver, "kind": registry.storage_kind(driver),
-                    "profile": inv.get("profile", ""),
+                    "profile": inv.get("profile") or file_profile,
                     "service_url": inv.get("service_url", ""),
                     "locator": a["locator"], "schema": a["schema"],
                     "cols": fp(a["schema"]), "ncols": len(a["schema"]),
@@ -484,6 +519,80 @@ def _flow_allows(flows, in_service, out_service):
     return any(src in in_service and dst in out_service for src, dst in flows)
 
 
+# Path segments that signal a production locator. Used by ambiguous-candidate
+# pruning to auto-drop sandbox / dev / staging variants when a stronger
+# production-signalled variant exists for the same name pair.
+PROD_MARKERS = {"prod", "production", "live", "main", "master", "release"}
+# Negative-signal markers that suggest a non-production variant — paired
+# with PROD_MARKERS, these let the matcher rank one variant strictly above
+# another. (Excludes whole test/sandbox tokens, which `_has_test_sandbox`
+# has already dropped before scoring.)
+NONPROD_MARKERS = {"staging", "stg", "stage", "dev", "development", "uat", "qa",
+                   "demo", "preview", "experiment", "exp"}
+
+
+def production_score(locator):
+    """A rough rank of how production-y a locator looks. The matcher uses
+    *relative* values within an ambiguous candidate — drop variants whose
+    score is strictly less than another variant's, leaving only the
+    strongest candidates for the user (or auto-resolving when exactly one
+    survives).
+
+    +N each `prod` / `production` / `live` segment. −N each `staging` /
+    `dev` / `demo` segment. Numbered suffixes on the final segment
+    (`_2`, `_3`) suggest test variants (−1). The absolute number doesn't
+    matter — only the ordering does."""
+    rest = locator.split("://", 1)[-1]
+    pieces = [p for p in re.split(r"[/.]", rest.rstrip("/.")) if p]
+    score = 0
+    for p in pieces:
+        for t in re.split(r"[^a-z0-9]+", p.lower()):
+            if t in PROD_MARKERS:
+                score += 3
+            elif t in NONPROD_MARKERS:
+                score -= 1
+    # Trailing `_2`, `_3`, `-v2`, etc. on the final segment usually marks
+    # a numbered test / migration copy of the canonical asset.
+    if pieces and re.search(r"(?:_|-)v?\d+$", pieces[-1].lower()):
+        score -= 2
+    return score
+
+
+def dedupe_by_production_score(pairs):
+    """Within an ambiguous candidate (pairs sharing input + output basename),
+    drop pairs that are Pareto-dominated on production-score: there exists
+    another pair whose input score is ≥ and output score is ≥ this one's,
+    with at least one of the two strictly greater. So `/prod/` strictly
+    dominates `/demo/` when their outputs tie, and clean schemas dominate
+    `_STAGING` siblings on the output side. Ambiguous candidates often
+    collapse to a single pair this way and skip the user prompt entirely.
+
+    Pairs that lead the cluster on at least one side without losing on
+    the other survive — the user still picks between the remaining."""
+    by_pair = {}
+    for idx, p in enumerate(pairs):
+        key = (asset_name(p[0]["locator"]), asset_name(p[1]["locator"]))
+        by_pair.setdefault(key, []).append((idx, p))
+    kept = [True] * len(pairs)
+    for group in by_pair.values():
+        if len(group) < 2:
+            continue
+        scores = {gi: (production_score(p[0]["locator"]),
+                       production_score(p[1]["locator"]))
+                  for gi, p in group}
+        for gi, _ in group:
+            si_in, si_out = scores[gi]
+            for gj, _ in group:
+                if gi == gj:
+                    continue
+                sj_in, sj_out = scores[gj]
+                if (sj_in >= si_in and sj_out >= si_out
+                        and (sj_in > si_in or sj_out > si_out)):
+                    kept[gi] = False
+                    break
+    return [p for k, p in zip(kept, pairs) if k]
+
+
 def dedupe_by_subsumption(pairs):
     """Within candidates sharing the same input asset, drop pairs whose
     output locator carries strictly more meaningful tokens than another
@@ -559,6 +668,7 @@ def match(inventory_paths, registry, flows=None):
             if best:
                 pairs.append(best)
     pairs = dedupe_by_subsumption(pairs)
+    pairs = dedupe_by_production_score(pairs)
     pairs.sort(key=lambda c: (rank[c[2]], -c[4]))
 
     candidates = []

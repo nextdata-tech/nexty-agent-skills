@@ -54,17 +54,32 @@ def fingerprint(schema):
     return tuple(c["name"] for c in schema)
 
 
+# Patterns that mark a path segment as a partition / batch / timestamp
+# value rather than a sibling dataset name.
+_DATE_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")          # 2024, 2024-01, 2024-01-15
+_COMPACT_DATE_RE = re.compile(r"^\d{8}$")                     # 20250714
+_COMPACT_DATETIME_RE = re.compile(r"^\d{8}[_T-]\d{4,6}$")     # 20250714_2040, 20250714T204500
+_ISO_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:?\d{2}(:?\d{2})?$"          # 2024-01-15T10:30, 2024-01-15 10:30:00
+)
+_EPOCH_RE = re.compile(r"^\d{10,19}$")                        # unix epoch (s / ms / us / ns)
+_KEY_VALUE_RE = re.compile(r"^[A-Za-z0-9_]+=")
+
+
 def partition_name(idx, values):
     """Name a varying path segment that *looks like a partition* — caller has
     already checked with ``is_partition_values``. Returns the partition key."""
     sample = next(iter(values))
-    if (re.match(r"^\d{4}-\d{2}-\d{2}$", sample)
-            or re.match(r"^\d{4}-\d{2}$", sample)
-            or re.match(r"^\d{4}$", sample)):
+    if (_DATE_RE.match(sample) or _COMPACT_DATE_RE.match(sample)
+            or _COMPACT_DATETIME_RE.match(sample) or _ISO_DATETIME_RE.match(sample)):
         return "date"
-    m = re.match(r"^([A-Za-z0-9_]+)=", sample)
-    if m and all(re.match(rf"^{m.group(1)}=", v) for v in values):
-        return m.group(1)
+    if _EPOCH_RE.match(sample):
+        return "epoch"
+    m = _KEY_VALUE_RE.match(sample)
+    if m:
+        k = sample.split("=", 1)[0]
+        if all(v.split("=", 1)[0] == k for v in values):
+            return k
     if all(v.isdigit() for v in values):
         return f"id_seg{idx}"
     return f"part_seg{idx}"  # unreachable when gated by is_partition_values
@@ -72,15 +87,33 @@ def partition_name(idx, values):
 
 def is_partition_values(values):
     """True when a varying path segment looks like partition values, not
-    sibling dataset names. Recognised patterns: `key=value`, `YYYY[-MM[-DD]]`,
-    all-digit shard ids. Mixed arbitrary names (e.g. ``podcast-source``,
-    ``musictracks``) are treated as separate datasets, not one partitioned
-    asset — caller should split along this segment instead."""
+    sibling dataset names. Recognised patterns:
+
+      * `YYYY[-MM[-DD]]`               (`2024`, `2024-01`, `2024-01-15`)
+      * compact dates                  (`20250714`)
+      * compact date-time              (`20250714_2040`, `20250714T204500`)
+      * ISO date-time                  (`2024-01-15T10:30`, `2024-01-15 10:30:00`)
+      * unix epoch                     (10–19 digits — seconds through nanoseconds)
+      * `key=value` with shared key    (`region=US` / `region=CA`)
+      * all-digit shard ids
+
+    Mixed arbitrary names (e.g. ``podcast-source``, ``musictracks``,
+    ``demo``, ``dev``) are treated as separate datasets, not one
+    partitioned asset — the caller splits along this segment instead.
+    """
     if not values:
         return False
-    if all(re.match(r"^\d{4}(-\d{2}(-\d{2})?)?$", v) for v in values):
+    if all(_DATE_RE.match(v) for v in values):
         return True
-    if all(re.match(r"^[A-Za-z0-9_]+=", v) for v in values):
+    if all(_COMPACT_DATE_RE.match(v) for v in values):
+        return True
+    if all(_COMPACT_DATETIME_RE.match(v) for v in values):
+        return True
+    if all(_ISO_DATETIME_RE.match(v) for v in values):
+        return True
+    if all(_EPOCH_RE.match(v) for v in values):
+        return True
+    if all(_KEY_VALUE_RE.match(v) for v in values):
         keys = {v.split("=", 1)[0] for v in values}
         if len(keys) == 1:
             return True

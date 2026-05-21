@@ -170,12 +170,13 @@ Run `scripts/match_assets.py <inventory.json>` over the inventory from Step 4. I
 
 ### Step 6: Report
 
-`match_assets.py` writes **two** markdown files — pass `--out mesh-assets-<profile>.md`:
+`match_assets.py` writes **three** markdown files — pass `--out mesh-assets-<profile>.md`:
 
-- **`mesh-assets-<profile>.md`** — candidate data products, **grouped by domain**. Each candidate carries: suggested data product name, domain, infra profile name, and — for both its input and its output data source — the location, the service name, and the infra-profile service URL; plus the source-aligned/transformed classification, confidence, and evidence. Also lists unmatched assets, duplicate services, and failed services.
+- **`mesh-assets-<profile>.md`** — candidate data products, **grouped by domain**. Each candidate carries: suggested data product name, domain, infra profile name, and — for both its input and its output data source — the location, the service name, and the infra-profile service URL; plus the source-aligned/transformed classification, confidence, and evidence. Also lists unmatched assets, duplicate services, and failed services. **Ambiguous candidates appear here in compact form — id + counts only, no variant locators** — to keep the main report readable for downstream consumers.
 - **`mesh-assets-<profile>-models.md`** — the input and output model schemas (columns and types) of each candidate, kept in a separate file for readability.
+- **`mesh-assets-<profile>-ambiguous.md`** — for every ambiguous candidate in the main report, the full list of input and output locator variants. The skill reads this at run-time to prompt the user; downstream skills can also load it on demand.
 
-These two files are the deliverable a downstream data-product-authoring skill consumes.
+These three files are the deliverable a downstream data-product-authoring skill consumes.
 
 **Domains.** Data products live in domain groups. `match_assets.py` classifies each candidate's domain heuristically from its naming; anything it cannot classify is filed under `other`. The infra profile file does not record domains authoritatively — prefer the customer's domains from the Step 1b user documentation when available, then review the assigned domains with the user and correct any that are wrong.
 
@@ -183,7 +184,35 @@ These two files are the deliverable a downstream data-product-authoring skill co
 
 For time-partitioned inputs (date or `dt=`-style segments), the report records the partition keys — the partition granularity implies the transform's refresh cadence.
 
-Tell the user both file paths and summarize the top candidates per domain in chat — do not paste the whole report. Finally, point the user to **nexty-bootstrap** to turn a candidate into a real data product.
+**Ambiguous candidates — prompt the user at run-time, then generalise.** When several candidate pairs share both an input basename and an output basename (e.g. `amazon-sales.csv` → `AMAZON_SALES` showing up across many demo/dev/int-test S3 paths and pointing at one or two Snowflake tables), `match_assets.py` collapses them into a single block in the main report flagged as **`ambiguous candidate`** — `#### N. \`<name>\` — **ambiguous candidate** (M inputs, K outputs, P pairs)`. The block carries the ambiguous-candidate id + counts only. Variants live in the sidecar `mesh-assets-<profile>-ambiguous.md`.
+
+Before the user is prompted, `match_assets.py` has already applied two layers of auto-pruning so the remaining candidates are the genuinely-ambiguous ones:
+
+- **Test / sandbox exclusions** drop assets whose path contains any segment in `TEST_SANDBOX_SEGMENTS` (`billg`, `sina-test`, `myenv`, `my-dp`, `placeholder`, `debug`, …) or any token starting with `hello` (`hellopython`, `hello6`, `helloincremental`, `playlistshello`). These are pre-filtered out of the candidate set entirely.
+- **Production-score Pareto dominance** inside each ambiguous candidate drops pairs that are out-ranked on both sides by another pair in the same name-pair group. `prod` / `production` / `live` segments score positive; `staging` / `stg` / `dev` / `demo` / `uat` / `qa` score negative; trailing `_2`, `_3`, `-v2` on the final segment score lower. A `/prod/` input paired with a clean schema strictly dominates a `/demo/` input paired with `_STAGING`; the demo+staging pair is dropped automatically. Pairs that lead on at least one side stay.
+
+The user still picks between any remaining variants, but the typical ambiguous candidate has already been narrowed to 2–3 genuinely-equivalent options rather than the raw 10× fan-out.
+
+For each ambiguous candidate, the skill must:
+
+1. **Open the sidecar** and read the input variants and output variants for that ambiguous-candidate id.
+2. **Show them to the user** as numbered lists, ask which input locator is the production source and which output locator is the production target. The user can almost always tell — production paths typically sit under `/prod/`, on the canonical bucket, in a non-`_TEST` / non-`_STAGING` schema, etc.
+3. **Record the pick** — the chosen input locator + output locator become the resolved pair. An ambiguous candidate with no production winner (all variants are tests / sandboxes) should be **dropped, not built**.
+4. **Learn the pattern after a few picks.** Track the user's selections across ambiguous candidates and look for recurring signals:
+    - Same **bucket** or **path prefix** on the input side (`output-data-product/prod/`, `<team>/prod/`, …).
+    - Same **database**, **schema**, or **schema prefix** on the output side (`*_PROD`, a `CORE` schema, …).
+    - Same **environment marker** (`prod` vs `demo`/`dev`/`int-test`).
+    - Same **schema-stem rule** — user prefers Snowflake schemas whose name matches a parent path segment of the input (`dwn-incremental2/` → `DWN_INCREMENTAL2`).
+    - Same **drop rule** — recurring schema patterns the user always drops (`*_STAGING`, numbered `_2` / `_3` siblings, `HELLO*` / `DEBUG_*` schemas).
+    The skill should generalise: once 2–3 picks agree on a pattern, future ambiguous candidates where exactly one variant matches that pattern can be **auto-resolved** — quote the pattern, name the auto-pick, ask only for a one-shot confirmation rather than full re-selection. Ambiguous candidates where the pattern doesn't disambiguate (no matching variant, or several) still need a full prompt.
+    Patterns the skill should always start with, before any session-specific learning kicks in:
+      - `/prod/` (or `/production/` / `/live/`) in an input path beats `/demo/` / `/dev/` / `/myenv/`.
+      - Snowflake schema with no `_STAGING` / `_TEST` / `_TMP` suffix beats one that has them.
+      - Plain schema beats one with a trailing `_<digit>` (numbered copy).
+      - Snowflake schema whose tokens overlap the input path's last meaningful segment beats one that doesn't (`DWN_INCREMENTAL2.CUSTOMER_HISTORY` beats `HELLOINCREMENTAL.CUSTOMER_HISTORY` for an input under `dwn-incremental2/`).
+5. **Never let the downstream consumer (nexty-bootstrap / nxd-data-product-builder) guess.** Pass on resolved input + output locators only.
+
+Tell the user both main + ambiguous sidecar file paths and summarize the top candidates per domain in chat — do not paste the whole report. Walk through every ambiguous candidate with the user (or via the learned pattern) before recommending next steps. Finally, point the user to **nexty-bootstrap** (or **nxd-data-product-builder**) to turn a resolved candidate into a real data product.
 
 ---
 

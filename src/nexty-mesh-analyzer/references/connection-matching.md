@@ -31,9 +31,10 @@ Some assets and pairs are never real data product inputs or outputs — drop the
 
 - **Snowflake clone tables** (per-source-type) — a table named `<table>_CLONE_<digits>` is a platform clone, not an output. Exclude the asset.
 - **hello-world test data** (generic) — any asset whose name contains `hello world` — as one word or hyphen/underscore delimited — is example/test data. Exclude the asset.
-- **personal scratch / test sandbox** (generic) — any asset whose path contains a segment matching a known scratch marker (`billg`, `sina-test`, `bill-test`, `test-data`, `tmp`, `sandbox`, …; see `TEST_SANDBOX_SEGMENTS` in `meshlib/matching.py`) is a private workspace, not a real data product. Exclude the asset.
+- **personal scratch / test sandbox** (generic) — any asset whose path contains a segment matching a known scratch marker (`billg`, `sina-test`, `bill-test`, `test-data`, `tmp`, `sandbox`, `myenv`, `my-dp`, `placeholder`, `debug`, …; see `TEST_SANDBOX_SEGMENTS` in `meshlib/matching.py`), or any token *starting with* `hello` followed by one or more chars (`hellopython`, `hello6`, `helloincremental`, `playlistshello`), is a private workspace / scaffold variant, not a real data product. Exclude the asset.
 - **Bucket/account root** (generic) — an asset whose locator is a bare bucket or account root (`s3://bucket/`, `adls://account/`) with no dataset path is not a named dataset. Exclude the asset.
 - **Plural twins** (generic) — two datasets in the same database/store whose names differ only by a trailing plural (`amazon_review` vs `amazon_reviews`) are the same dataset, not an input/output pair. Exclude the pair.
+- **Production-score Pareto dominance** (generic, ambiguous candidates) — when several pairs share the same input basename + output basename (an "ambiguous candidate"), each pair is ranked by `production_score` on input and output sides. `prod` / `production` / `live` / `main` / `master` / `release` segments score positive; `staging` / `stg` / `dev` / `demo` / `uat` / `qa` segments score negative; trailing numeric variants like `_2`, `_3`, `-v2` on the final segment score lower. A pair that is Pareto-dominated (≥ on both sides, > on at least one) by another pair in the same ambiguous candidate is dropped. Many ambiguous candidates collapse to a singleton this way without needing a user prompt.
 
 ## Replicated datasets
 
