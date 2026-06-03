@@ -32,6 +32,8 @@
 .windsurf/
 .zencoder/
 
+*.zip
+
 # Skill runtime
 skills/
 skills-lock.json
