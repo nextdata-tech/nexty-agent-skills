@@ -33,6 +33,8 @@
 .zencoder/
 
 *.zip
+.venv/
+.env.example
 
 # Skill runtime
 skills/
