@@ -48,3 +48,5 @@ __pycache__/
 # JetBrains IDEs
 .idea/
 *.iml
+
+infra-profile-ecommerce-demo.yaml
