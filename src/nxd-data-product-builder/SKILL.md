@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-builder
-description: Guide for creating, refining, and validating a Nextdata OS Python-based Data Product. Two discovery modes — interactive interview, or spec-from-document (e.g. a candidate `#N` in a `mesh-assets-<profile>.md` report produced by `nexty-mesh-analyzer`). Use whenever the user mentions building, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+description: Guide for creating, refining, and validating a Nextdata OS Python-based Data Product. Two discovery modes — interactive interview, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nexty-mesh-analyzer`). Use whenever the user mentions building, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
 metadata:
   author: nextdata
   version: 0.2.1

@@ -149,3 +149,10 @@ Skills also activate automatically — just ask "bootstrap a new data product" a
 - Skill names: lowercase, hyphens only, 1-64 chars
 - Keep SKILL.md under 500 lines for context efficiency
 - Move detailed references to `references/` for progressive disclosure
+
+### Claude Desktop packaging limits
+
+Claude Desktop rejects skills that violate either of these. Use `./build-skills.sh` to package; it strips noise and reports per-skill file counts.
+
+- **Max 200 entries per skill zip.** Counts files + directory entries. The build script passes `zip -D` to drop empty dir entries and excludes VCS/caches/lockfiles/OS junk. If a bundled examples repo pushes you over, strip per-DP housekeeping (`README.md`, `.python-version`, `pyproject.toml`, `notebooks/`, `tests/`) before code.
+- **No XML / angle-bracket tags in the SKILL.md `description` field.** Placeholders like `<DP>` or `<table>` in the frontmatter description trip the loader. Use plain wording (`a named DP`, `the table`) instead. Body content is fine; only the YAML frontmatter `description:` is parsed strictly.
