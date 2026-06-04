@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace-manifest.json",
+  "name": "nexty",
+  "owner": {
+    "name": "Nextdata"
+  },
+  "description": "Nextdata AI Pro skills for building and querying data products on Nextdata OS.",
+  "plugins": [
+    {
+      "name": "nexty-agent-skills",
+      "source": "./",
+      "displayName": "Nexty AI Pro",
+      "description": "Set up the nxd CLI, analyze your data mesh, and build/query Python data products on Nextdata OS.",
+      "version": "0.2.1",
+      "author": {
+        "name": "Nextdata"
+      }
+    }
+  ]
+}
