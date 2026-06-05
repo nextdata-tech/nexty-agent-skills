@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "argenx-edp-tutorial",
+  "displayName": "argenx EDP Tutorial",
+  "version": "0.1.0",
+  "description": "Guided, educational walkthrough that takes you from zero to a deployed Nextdata data product using the argenx EDP framework. Designed for Cowork and for first-time users who have never touched a terminal.",
+  "author": {
+    "name": "Nextdata"
+  },
+  "homepage": "https://github.com/nextdata-tech/nexty-agent-skills",
+  "repository": "https://github.com/nextdata-tech/nexty-agent-skills",
+  "keywords": ["nextdata", "nxd", "argenx", "edp", "tutorial", "data-product", "cowork"],
+  "skills": "./skills/"
+}

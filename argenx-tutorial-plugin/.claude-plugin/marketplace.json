@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace-manifest.json",
+  "name": "argenx",
+  "owner": {
+    "name": "Nextdata"
+  },
+  "description": "argenx-tailored guided experiences for building data products on Nextdata OS.",
+  "plugins": [
+    {
+      "name": "argenx-edp-tutorial",
+      "source": "./",
+      "displayName": "argenx EDP Tutorial",
+      "description": "Zero-to-deployed guided tutorial for building an argenx EDP data product. Built for Cowork and first-time users.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Nextdata"
+      }
+    }
+  ]
+}
