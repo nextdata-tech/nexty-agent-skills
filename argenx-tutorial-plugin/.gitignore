@@ -1,0 +1,4 @@
+# This plugin ships its skills as source; un-ignore the subtree the
+# repo-root .gitignore "skills/" rule would otherwise hide.
+!skills/
+!skills/**
