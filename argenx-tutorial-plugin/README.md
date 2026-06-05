@@ -15,9 +15,9 @@ One skill, `argenx-edp-tutorial`, that walks a learner from zero to a deployed d
 0. **Meet the learner** — calibrate pace/language to their comfort level and real goal.
 1. Make sure the tools are ready (`uv`, `nxd`, mesh connection).
 2. Create the project folder.
-3. Get the scaffold + **EDP library** (`edp/`): from a published argenx template if one exists,
-   otherwise **copy `edp/` from a reference DP** — both paths are explained (don't assume the
-   template is published).
+3. Scaffold from scratch + **copy the EDP library** (`edp/`) into the DP by hand — the confirmed
+   current workflow (no published template yet; one comes later). The `edp/` copy is the main
+   human hand-off.
 4. Write the spec, one explained block at a time.
 5. Write a trivial transform (end-to-end success before real logic).
 6. `nxd validate` → `nxd launch` 🚀 — then celebrate.
@@ -35,8 +35,10 @@ One skill, `argenx-edp-tutorial`, that walks a learner from zero to a deployed d
 - **Only user-facing surfaces.** References point to platform docs
   (`https://nxd.aks.argenx-dev.com/docs/#/...`, the argenx single-domain env) + nxd CLI / REST
   API / MCP tools — nothing the learner can't actually reach (no internal repos).
-- **EDP source is not assumed published.** Step 3 covers both getting it from a platform
-  template *and* copying `edp/` from a reference DP by hand (the realistic path today).
+- **From scratch + manual EDP copy is the confirmed path.** Per the field thread, there's no
+  published template yet (this team builds the template later), so Step 3 leads with a
+  from-scratch scaffold and copying `edp/` into the DP by hand; the template route is a
+  forward-looking note, not the default.
 - **Generic now, Alation-ready.** The spine is the proven NEX-582 walkthrough; the Alation
   swap is a guided final step on top of what they already understand.
 
@@ -76,8 +78,7 @@ product step by step."*
   route paths verified against the docs source. **Not yet run end-to-end against a live argenx
   mesh.**
 - Still to confirm on a real run: the package **registry index URL** (marked as a placeholder
-  in `templates.md`), the published **template name** (if any — the copy path is documented as
-  the fallback), and the **Alation** specifics (service name, ingestion API surface, object
-  schemas), all flagged in-place.
+  in `templates.md`) and the **Alation** specifics (service name, ingestion API surface, object
+  schemas), all flagged in-place. (Template question resolved: none yet, build from scratch.)
 - Could fold into `nexty-agent-skills` as a skill, or stay a standalone "argenx skills" plugin
   (Sina's framing). Kept separate for now per that direction.

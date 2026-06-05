@@ -72,12 +72,12 @@ nxd ls role-assignments --role data-product:producer --format json
 Match the learner's email (`nxd whoami`) against the `scope.domain` entries. If none, they
 must ask a domain admin for producer access before `nxd launch` will work.
 
-## Making the EDP source available (Step 3, Path B)
+## Making the EDP source available (Step 3)
 
-If no argenx template is published (`nxd ls data-product-templates` shows none), the learner
-must **copy the `edp/` library into their project from a reference data product** — the way the
-team did when building the example. The agent usually doesn't have this source either, so this
-is the most likely place to need a human hand-off. Work through it patiently:
+Right now there is **no published argenx template** — the team builds from scratch and the
+`edp/` library is **copied into the data product by hand** (confirmed current workflow, not a
+fallback). The agent usually doesn't have this source, so this is the most likely place to need
+a human hand-off. Work through it patiently:
 
 1. **Ask the learner where their team keeps the reference EDP.** Likely sources, in order:
    - a **shared drive / OneDrive / SharePoint** folder the argenx team set up,

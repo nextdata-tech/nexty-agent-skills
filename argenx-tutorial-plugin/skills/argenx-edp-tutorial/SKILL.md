@@ -132,69 +132,53 @@ If `uv sync` errors, check `references/troubleshooting.md` before retrying.
 
 ---
 
-## Step 3 — Get the starting scaffold (the **EDP library** is the key piece)
+## Step 3 — Scaffold the data product + bring in the **EDP library**
 
-**Why:** rather than writing everything by hand, you start from a scaffold that already
-includes the shared **EDP library** (`edp/`) — the argenx-specific helper code that hides the
-repetitive plumbing so you only fill in the interesting parts. The whole tutorial depends on
-having that `edp/` folder in your project.
+**Why:** the project needs two things before we write any logic — the standard data-product
+files (`spec.py`, `transform.py`), and the shared **EDP library** (`edp/`): the argenx-specific
+helper code that hides the repetitive plumbing so you only fill in the interesting parts. The
+whole tutorial depends on that `edp/` folder being in your project.
 
-There are **two ways** to get it. Check which one applies, and explain it plainly — don't
-assume the easy path is available.
+> **Current reality (confirmed):** there is **no published argenx template yet** — this team is
+> building **from scratch**, and the `edp/` library is **copied into the data product itself**.
+> That's the intended workflow right now, not a workaround. (A template will come later — see the
+> note at the end of this step.) So don't go hunting for a template; do the two steps below.
 
-### Path A — scaffold from a published argenx template (easiest, *if* it exists)
-
-First check whether the argenx team has published an EDP template to this environment:
-
-```bash
-nxd ls data-product-templates
-```
-
-If you see an argenx EDP template listed, scaffold from it:
+**1. Scaffold the plain data product** (into the folder from Step 2):
 
 ```bash
-nxd create data-product --template <argenx-template-name> --dir . my-first-dp
+nxd create data-product --template python-sdk --dir . my-first-dp
 ```
 
-That writes a complete, ready-to-edit folder — `spec.py`, the `edp/` library, and the place
-`transform.py` lives — all delivered by the platform. Reassure the learner: *"Everything came
-from the platform — you didn't set any of it up by hand."*
+This gives a standard `spec.py` / `transform.py` — no EDP yet.
 
-### Path B — bring the EDP source yourself (the realistic path today)
+**2. Copy the `edp/` library into the project** so it sits next to `spec.py`:
 
-**Don't assume a template is published.** Often it isn't yet, and the `edp/` library has to be
-**copied into the project from a reference data product** — exactly the way the team did it when
-building the example. Be honest about this with the learner; it's a normal step, not a hack:
+```bash
+cp -r <path-to-reference-dp>/edp ./my-first-dp/
+```
 
-1. Scaffold a plain data product (no EDP yet):
-   ```bash
-   nxd create data-product --template python-sdk --dir . my-first-dp
-   ```
-2. Obtain the `edp/` folder from the **reference EDP data product** and copy it into the project
-   so it sits next to `spec.py`:
-   ```bash
-   cp -r <path-to-reference-dp>/edp ./my-first-dp/
-   ```
-   Where does the reference `edp/` come from? Whatever source the argenx team has shared with
-   the learner — a shared drive, a zip, an internal repo they can access, or a colleague's
-   checkout. **You (the agent) likely don't have it either**, so *ask the learner where their
-   team keeps the reference EDP / the `salesforce_snowpipe_adls_to_snowflake` example*, and
-   help them copy the `edp/` folder from there. If they have nothing, see
-   `references/setup-fallback.md` → *making the EDP source available*. This is the spot most
-   likely to need a human hand-off — handle it patiently.
+Where does the reference `edp/` come from? Whatever source the argenx team shared with the
+learner — a shared drive, a zip, a colleague's checkout, an internal repo they can reach. **You
+(the agent) likely don't have it**, so this is the one spot that usually needs the learner: *ask
+where their team keeps the reference EDP (the `salesforce_snowpipe_adls_to_snowflake` example)*
+and help them copy just the `edp/` folder from there. On WSL, a Windows-side source is under
+`/mnt/c/...`. Details and the no-source case: `references/setup-fallback.md` → *making the EDP
+source available*. Handle this patiently — it's the most likely human hand-off.
 
-Explain the why: *"This `edp/` folder is a small shared library of argenx conventions. Today we
-copy it in; eventually the platform will ship it for you automatically."*
+Say it plainly: *"This `edp/` folder is a small shared library of argenx conventions. Right now
+we copy it in by hand; later the platform will ship it for you as a template."*
 
-### Either way — orient the learner in the folder
+**Orient the learner in the folder.** Once `edp/` is in place, show the folder and name the three
+things that matter: `spec.py` (the definition), `edp/` (the argenx plumbing, already written),
+and `transform.py` (where the work goes). Seeing the shape reduces fear.
 
-Once `edp/` is in place, show the folder and name the important files: `spec.py` (the
-definition), the `edp/` library (the argenx plumbing, already wired), and `transform.py`.
-Seeing the shape reduces fear.
-
-> Background reading, offer it: the [create-a-data-product
+> Background, offer don't impose: the [create-a-data-product
 > guide](https://nxd.aks.argenx-dev.com/docs/#/tutorials/cli/create). More links in
 > `references/links.md`.
+>
+> *(Future: once the team publishes an argenx template, this becomes a single `nxd create
+> data-product --template <name>` and the manual `edp/` copy goes away. Not available yet.)*
 
 ---
 
