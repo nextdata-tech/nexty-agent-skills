@@ -65,8 +65,10 @@ Then orient them in one short paragraph: *"We're going to build a 'data product'
 self-contained package that pulls data from a source, lands it in Snowflake, and makes it
 shareable and governed. We'll do it in about six small steps. I'll explain each one."*
 
-Link for the curious: the [tutorials index](https://docs.argenx.nextopia.dev/#/tutorials/guides/README)
-gives the foundational concepts — offer it, don't require it.
+Link for the curious: the [tutorials index](https://nxd.aks.argenx-dev.com/docs/#/tutorials/guides/README)
+gives the foundational concepts — offer it, don't require it. (Full link list in
+`references/links.md`. Throughout, **offer to go deeper** — *"want me to explain that more, or
+show you the doc?"* — rather than front-loading detail.)
 
 ---
 
@@ -115,41 +117,73 @@ uv sync   # downloads the Nextdata libraries — first run can take a minute
 Explain the wait: *"`uv` is fetching the Nextdata building blocks — this only happens once."*
 If `uv sync` errors, check `references/troubleshooting.md` before retrying.
 
-> Background: this mirrors the official [setup tutorial](https://docs.argenx.nextopia.dev/#/tutorials/cli/setup).
+> Background: this mirrors the official [setup tutorial](https://nxd.aks.argenx-dev.com/docs/#/tutorials/cli/setup).
 
 ---
 
-## Step 3 — Generate the data product from the argenx template
+## Step 3 — Get the starting scaffold (the **EDP library** is the key piece)
 
-**Why:** instead of writing everything by hand, argenx publishes a **template** to the
-platform that scaffolds a ready-to-edit data product — and crucially it brings the shared
-**EDP library** (`edp/`) with it, so the repetitive plumbing is already there. Nothing to
-clone or copy: the platform delivers it.
+**Why:** rather than writing everything by hand, you start from a scaffold that already
+includes the shared **EDP library** (`edp/`) — the argenx-specific helper code that hides the
+repetitive plumbing so you only fill in the interesting parts. The whole tutorial depends on
+having that `edp/` folder in your project.
 
-First, confirm the argenx template is available on the mesh (it's published once by the
-platform team — the learner does not publish it):
+There are **two ways** to get it. Check which one applies, and explain it plainly — don't
+assume the easy path is available.
+
+### Path A — scaffold from a published argenx template (easiest, *if* it exists)
+
+First check whether the argenx team has published an EDP template to this environment:
 
 ```bash
 nxd ls data-product-templates
 ```
 
-Look for the argenx EDP template (e.g. `salesforce-snowpipe-adls-to-snowflake`). If it's not
-listed, the platform team hasn't published it to this environment yet — see
-`references/setup-fallback.md` (don't ask the learner to publish it themselves).
-
-Then scaffold their project from it:
+If you see an argenx EDP template listed, scaffold from it:
 
 ```bash
 nxd create data-product --template <argenx-template-name> --dir . my-first-dp
 ```
 
-This writes a complete, ready-to-edit data product folder — `spec.py`, the `edp/` library,
-and the place `transform.py` lives — **all pulled from the platform**.
+That writes a complete, ready-to-edit folder — `spec.py`, the `edp/` library, and the place
+`transform.py` lives — all delivered by the platform. Reassure the learner: *"Everything came
+from the platform — you didn't set any of it up by hand."*
 
-Show them the folder now and name the important files: `spec.py` (the definition), the `edp/`
-library (the argenx plumbing, already wired), and `transform.py`. Seeing the shape reduces
-fear. Reassure them: *"Everything here came from the platform — you didn't have to set any of
-it up by hand."*
+### Path B — bring the EDP source yourself (the realistic path today)
+
+**Don't assume a template is published.** Often it isn't yet, and the `edp/` library has to be
+**copied into the project from a reference data product** — exactly the way the team did it when
+building the example. Be honest about this with the learner; it's a normal step, not a hack:
+
+1. Scaffold a plain data product (no EDP yet):
+   ```bash
+   nxd create data-product --template python-sdk --dir . my-first-dp
+   ```
+2. Obtain the `edp/` folder from the **reference EDP data product** and copy it into the project
+   so it sits next to `spec.py`:
+   ```bash
+   cp -r <path-to-reference-dp>/edp ./my-first-dp/
+   ```
+   Where does the reference `edp/` come from? Whatever source the argenx team has shared with
+   the learner — a shared drive, a zip, an internal repo they can access, or a colleague's
+   checkout. **You (the agent) likely don't have it either**, so *ask the learner where their
+   team keeps the reference EDP / the `salesforce_snowpipe_adls_to_snowflake` example*, and
+   help them copy the `edp/` folder from there. If they have nothing, see
+   `references/setup-fallback.md` → *making the EDP source available*. This is the spot most
+   likely to need a human hand-off — handle it patiently.
+
+Explain the why: *"This `edp/` folder is a small shared library of argenx conventions. Today we
+copy it in; eventually the platform will ship it for you automatically."*
+
+### Either way — orient the learner in the folder
+
+Once `edp/` is in place, show the folder and name the important files: `spec.py` (the
+definition), the `edp/` library (the argenx plumbing, already wired), and `transform.py`.
+Seeing the shape reduces fear.
+
+> Background reading, offer it: the [create-a-data-product
+> guide](https://nxd.aks.argenx-dev.com/docs/#/tutorials/cli/create). More links in
+> `references/links.md`.
 
 ---
 

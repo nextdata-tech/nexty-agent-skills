@@ -3,9 +3,10 @@
 Exact contents for the files the tutorial produces, with line-by-line explanations to read
 *to* the learner. Hand out one block at a time — never the whole file at once.
 
-> Source of truth: these mirror the published argenx EDP template and the
-> [argenx EDP guide](https://docs.argenx.nextopia.dev/#/tutorials/guides/README). If the
-> platform's generated files differ from what's here, **trust the generated files** and adapt.
+> Source of truth: these mirror the argenx EDP reference data product and the
+> [argenx EDP guide](https://nxd.aks.argenx-dev.com/docs/#/tutorials/guides/README). If the
+> scaffolded / copied files differ from what's here, **trust the actual files in the project**
+> and adapt.
 
 ---
 
@@ -28,7 +29,7 @@ dependencies = [
 
 [[tool.uv.index]]
 name = "nxd"
-url = "https://registry.argenx.nextopia.dev/index/"
+url = "<argenx-package-registry-index-url>"   # confirm from nxd-setup / the team
 
 [dependency-groups]
 dev = [
@@ -52,8 +53,9 @@ force-single-line = true
 What to say: *"This file just tells Python which Nextdata building blocks to download and
 where to get them. You'll rarely touch it again."*
 
-> The exact registry URL is environment-specific. If `uv sync` can't reach the index, confirm
-> the mesh URL from `nxd-setup` and see `references/troubleshooting.md`.
+> The exact registry index URL is environment-specific and **must be confirmed** (from the
+> `nxd-setup` flow or the argenx team) — don't invent it. If `uv sync` can't reach the index,
+> see `references/troubleshooting.md`.
 
 ---
 

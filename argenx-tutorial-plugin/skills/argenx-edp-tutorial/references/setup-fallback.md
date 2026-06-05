@@ -18,7 +18,7 @@ On the argenx VDI, do all of this **inside WSL** (see `windows-wsl.md`).
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 2. **Install the `nxd` CLI** — follow the platform's own setup doc:
-   `https://docs.argenx.nextopia.dev/#/tutorials/cli/setup`. The installer drops `nxd` in
+   `https://nxd.aks.argenx-dev.com/docs/#/tutorials/cli/setup`. The installer drops `nxd` in
    `~/.local/bin`; make sure that's on PATH.
 3. **Register / select the mesh** — point the CLI at the argenx environment URL and
    authenticate (browser login). The setup doc above covers the exact command for this
@@ -72,9 +72,34 @@ nxd ls role-assignments --role data-product:producer --format json
 Match the learner's email (`nxd whoami`) against the `scope.domain` entries. If none, they
 must ask a domain admin for producer access before `nxd launch` will work.
 
-## Locating the advanced reference DP (Step 7, "exploring" path)
+## Making the EDP source available (Step 3, Path B)
 
-The full `salesforce_snowpipe_adls_to_snowflake` reference DP lives in Nextdata's private
-examples — the learner likely can't browse it. Instead, point them at its concepts **through
-the platform**: the published template (`nxd describe data-product-template <name>`) and the
-deployed product in the catalog UI. Keep the learner inside tools they have.
+If no argenx template is published (`nxd ls data-product-templates` shows none), the learner
+must **copy the `edp/` library into their project from a reference data product** — the way the
+team did when building the example. The agent usually doesn't have this source either, so this
+is the most likely place to need a human hand-off. Work through it patiently:
+
+1. **Ask the learner where their team keeps the reference EDP.** Likely sources, in order:
+   - a **shared drive / OneDrive / SharePoint** folder the argenx team set up,
+   - a **zip** of the `salesforce_snowpipe_adls_to_snowflake` example someone sent them,
+   - an **internal repo** the learner has access to (if so, they clone it),
+   - a **colleague's checkout** they can copy from.
+2. **Copy just the `edp/` folder** into the new project so it sits next to `spec.py`:
+   ```bash
+   cp -r <reference-dp-location>/edp ./my-first-dp/
+   ```
+   On WSL, if the source is on the Windows side, reach it under `/mnt/c/...` (e.g.
+   `cp -r /mnt/c/Users/<user>/Downloads/salesforce_snowpipe_adls_to_snowflake/edp ./my-first-dp/`).
+3. **Verify it landed:** `ls my-first-dp/edp` should show `dp_specs.py`, `ingestion.py`,
+   `outputs.py`, etc. If imports later fail (`from edp...`), the copy is in the wrong place or
+   incomplete — re-copy the whole `edp/` directory.
+4. **If the learner has no source at all:** they can't proceed with the EDP path. Flag it to
+   whoever onboarded them (the argenx platform team) to either publish the template or share the
+   reference `edp/`. Don't try to reconstruct `edp/` by hand — it's a real library, not
+   boilerplate.
+
+> The full reference DP (`salesforce_snowpipe_adls_to_snowflake`) also lives in Nextdata's
+> private examples, which the learner usually can't browse directly. Where they *can* see its
+> concepts is **through the platform**: a published template (`nxd describe
+> data-product-template <name>`) and any deployed product in the catalog UI (e.g.
+> `open-meteo-loader`). Keep the learner inside tools they have.
