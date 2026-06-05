@@ -31,17 +31,27 @@ Config locations the CLI uses for `--write` (native, per-OS):
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux:** `~/.config/Claude/claude_desktop_config.json`
 
-## ⚠️ WSL ↔ Windows Desktop: the cross-boundary catch
+## ⚠️ The core problem: Desktop is on Windows, the CLI isn't runnable there
 
-On the argenx VDI the CLI runs in **WSL (Linux)** but **Claude Desktop is a Windows app.** A plain
-`nxd mcp config --target claude --write` from inside WSL does the *Linux* thing:
+This is the hardest part of the whole tutorial on the argenx VDI, and it's worth understanding
+before touching config. Claude Desktop runs as a **Windows** app, so its MCP server entry must be
+a command **Windows can launch**. But the bridge that connects to the data product is the
+`nxd` CLI — and **native `nxd.exe` is AppLocker-blocked on Windows** (see `windows-wsl.md`). The
+working CLI lives in **WSL (Linux)**. So Desktop-on-Windows can't just call `nxd` directly.
 
-1. it writes to the **Linux** config path (`~/.config/Claude/...`) — which the **Windows** Desktop
+That mismatch breaks the naive command in two ways. A plain `nxd mcp config --target claude
+--write` run *inside WSL* does the *Linux* thing:
+
+1. it writes the **Linux** config path (`~/.config/Claude/...`) — which the **Windows** Desktop
    never reads (Windows Desktop reads `%APPDATA%\Claude\claude_desktop_config.json`), and
 2. it sets the bridge `command` to the **Linux** `nxd` binary path — which a **Windows** process
-   can't launch directly.
+   can't launch.
 
-So `--write` from WSL silently wires up nothing usable. Handle it one of two ways:
+So `--write` from WSL silently wires up nothing usable. There are three ways through, in order of
+preference. **All of them need verifying on the actual VDI** — the same IT controls that block
+`nxd.exe` (AppLocker, and the **antivirus** the team has hit on these VDIs) may also restrict
+`wsl.exe` spawning or Python execution. Try A; if it's blocked, fall back to B (Python script);
+C is only for an unlocked environment.
 
 ### Option A (recommended) — generate in WSL, run the bridge through `wsl.exe`
 
@@ -76,12 +86,48 @@ the WSL bridge.
    `"args": ["-e", "/home/<user>/.local/bin/nxd", "--skip-version-check", "mcp", "client", ...]`.
 3. Restart Claude Desktop.
 
-### Option B — run the whole CLI natively on Windows
+### Option B — Python proxy-bridge fallback (no `nxd.exe` at all)
+
+Use this when Option A doesn't work — e.g. Desktop can't spawn `wsl.exe`, or WSL isn't available,
+but **Python is available on Windows** (often the case even where the CLI is blocked). The bridge
+the CLI runs is just a small **stdio ↔ streamable-HTTP MCP proxy**: it speaks MCP over stdio to
+Claude Desktop and forwards to the data product's remote MCP endpoint at `<base-url>` with the
+`x-nextdata-token: <pat>` header. That's reproducible as a standalone Python script — the field
+team has used an older Python proxy script for exactly this (connecting to the MCP gateway without
+the CLI).
+
+Wiring shape — point Desktop at the Python script directly:
+```json
+{
+  "mcpServers": {
+    "nxd-<env>": {
+      "command": "python",
+      "args": [
+        "C:\\path\\to\\nxd_mcp_proxy.py",
+        "--base-url", "<dp-url>",
+        "--token", "<pat>"
+      ]
+    }
+  }
+}
+```
+
+- **Get the script from the field team**, don't reconstruct it from scratch — ask where the
+  argenx/Nextdata MCP Python proxy lives (it has been kept under a `mcp_tools/nxd_mcp`-style
+  path). Confirm it targets *this* environment's base URL.
+- The script needs its Python deps available to whatever `python` Desktop launches (a venv or a
+  global install). If Python isn't on Windows either, this option is out — fall back to A, or get
+  IT to whitelist one of the binaries.
+- This path **avoids `nxd.exe` and `wsl.exe` entirely**, which is why it survives the strictest
+  AppLocker setups — but the antivirus on the VDI can still quarantine an unsigned `.py` or block
+  outbound HTTPS; verify on the real machine.
+
+### Option C — run the whole CLI natively on Windows
 
 Only viable if AppLocker is *not* blocking `nxd.exe` (it is, on the known argenx VDI — see
 `windows-wsl.md`). If a future environment allows native execution, `nxd mcp config --target
 claude --write` from a Windows shell just works, no bridge gymnastics. Default to Option A on the
-locked-down VDI.
+locked-down VDI, B if A is blocked.
 
 ## After wiring it
 
@@ -97,5 +143,11 @@ locked-down VDI.
   product as one of those tools, so you can just ask Desktop about your data."*
 - The PAT is a key — treat it like a password, it's going into a local config file. The
   auto-generated one expires in 30 days; that's fine for a demo.
-- If Desktop doesn't show the server: 90% of the time it's (a) didn't restart, or (b) the WSL
-  cross-boundary issue above — re-check the `command` is `wsl.exe`, not a bare Linux path.
+- If Desktop doesn't show the server: usually (a) didn't restart, (b) the WSL cross-boundary issue
+  (Option A — the `command` must be `wsl.exe`, not a bare Linux path), or (c) the launcher itself
+  (`wsl.exe` / `python`) is blocked by AppLocker or quarantined by antivirus on the VDI — try the
+  next option down (A → B → C) and, if all are blocked, get IT to whitelist one launcher.
+- This whole step depends on Desktop being able to run *some* local command. If the VDI blocks
+  every option, MCP-from-Desktop isn't possible there yet — say so plainly rather than leaving the
+  learner stuck, and note it as feedback for the platform/field team. The DP itself is still
+  deployed and usable; only the Desktop chat-with-your-data convenience is gated.

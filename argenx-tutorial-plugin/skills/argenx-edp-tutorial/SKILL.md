@@ -272,11 +272,13 @@ nxd mcp config --target claude --write
 This generates an MCP server entry and merges it into Claude Desktop's config. It uses (or offers
 to generate) a personal access token — explain it's like a password going into a local file.
 
-> **Important on the argenx VDI:** the CLI runs in **WSL** but Claude **Desktop runs on
-> Windows** — a plain `--write` from WSL writes the wrong (Linux) config and an unrunnable
-> command. **Read `references/mcp-desktop.md` before running this** — it has the WSL-aware path
-> (route the bridge through `wsl.exe` into the Windows config). Don't run the bare `--write` from
-> WSL.
+> **Important on the argenx VDI:** Claude Desktop runs on **Windows** but the CLI only runs in
+> **WSL** (native `nxd.exe` is blocked), so the connection needs a Windows-launchable bridge.
+> **Read `references/mcp-desktop.md` before running anything** — it has the three options in
+> order (A: bridge via `wsl.exe`; B: a Python proxy script with no CLI at all; C: native, only if
+> unblocked), and the antivirus/AppLocker caveats. Don't run the bare `--write` from WSL. If every
+> launcher is blocked on the VDI, say so plainly — the DP is still deployed and usable; only the
+> Desktop-chat convenience is gated.
 
 After wiring: **restart Claude Desktop**, confirm the `nxd-<env>` server appears, then have the
 learner ask something that hits a tool (e.g. *"list the regions in my data product"*). Seeing

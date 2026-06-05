@@ -26,6 +26,17 @@ Alternatives to mention only if WSL is also unavailable (these need IT and are s
 whitelist `%USERPROFILE%\.local\bin`, or publisher/hash-rule `nxd.exe` (breaks on updates), or
 an approved install location. Default to WSL.
 
+## Antivirus on the VDI (a second, separate gate)
+
+Beyond AppLocker, these VDIs have **antivirus** that can independently block or quarantine things
+— an unsigned binary, a freshly-downloaded `.py`, or even outbound HTTPS from an unexpected
+process. Symptoms look different from AppLocker: a file vanishing after download, a "blocked by
+your administrator" AV popup, or a command that hangs then fails on network. If something that
+*should* work silently doesn't, suspect AV, and treat it like AppLocker: it's IT's policy, not the
+learner's fault, and the fix is usually a whitelist request. This matters most at the Claude
+Desktop / MCP step (`references/mcp-desktop.md`), where whichever launcher you pick (`wsl.exe`,
+`python`, `nxd.exe`) has to survive *both* AppLocker and AV.
+
 ## Detecting which shell they're in
 
 ```bash
