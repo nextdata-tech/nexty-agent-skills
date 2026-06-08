@@ -3,7 +3,7 @@ from nxd_spec import *
 
 spec = (
     data_product(
-        name="jira-embeddings",
+        name="jira",
         description="Atlassian Jira issues (project NXD) retrieved via "
         "the REST API, with free-text fields (summary, description, "
         "comments) chunked, embedded with sentence-transformers "
@@ -17,25 +17,32 @@ spec = (
     .input(
         "jira",
         source_aligned_input()
-        .source("https://app.westpac.nextopia.dev/infra-profile/ecommerce-demo#/services/jira-api")
+        .source("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/jira-api")
         .model(jira_issue)
+        .expectation(jira_issue)
+        .expectation(
+            custom("Jira API Freshness")
+            .verify(code(api_source_freshness.verify))
+            .description(
+                "Jira API must be reachable and returning recent social signal data within the expected freshness window"
+            )
+        ),
     )
     .output(
         data_product_output()
-        .model(jira_issue_embedding)
-        .promise(jira_issue_embedding)
+        .model(jira_issue)
         .port(
             "pgvector",
-            storage("https://app.westpac.nextopia.dev/infra-profile/ecommerce-demo#/services/pgvector").config(
-                pg_vector_config("public").target_table(
+            storage("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/pgvector").config(
+                pg_vector_config().target_table(
                     "jira_issue_embeddings", jira_issue_embedding
                 )
-            ),
-        )
+            ).model(jira_issue_embedding),
+        ).promise(jira_issue_embeddings)
     )
     .transform(
         code(transform)
-        .compute("https://app.westpac.nextopia.dev/infra-profile/ecommerce-demo#/services/k8s-compute")
+        .compute("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/k8s-compute")
         .when(scheduled("*/10 * * * *"), startup=True)
     )
     # TODO: replace placeholder users with real owner / steward / access.

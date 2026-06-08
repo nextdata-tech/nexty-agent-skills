@@ -3,6 +3,8 @@ Retrieve data from Jira (Atlassian) via its API, chunk and "vectorise" the free 
 
 It should created within the "engineering" domain and use the "ecommerce-demo" infrastructure profile, the Nextdata instance is located at: https://app.westpac.nextopia.dev/
 
+Data product name should be jira-issues.
+
 # Input
 The best endpoint for Jira is likely "/rest/api/3/search/jql", it supports pagination via the "nextPageToken" field. There will be a NXD infrastructure profile service call "jira-api" (driver: nxd:api:0.1.0, context: API) which will hold the username, url and token used for authentication (don't worry it is suitable for Jira). I would like to filter to only retrieve specific "project" issues (ones label "NXD"). Do not include an expectation on the input.
 

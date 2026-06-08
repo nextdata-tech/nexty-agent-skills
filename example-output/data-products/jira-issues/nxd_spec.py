@@ -5,9 +5,10 @@ available at spec-evaluation time, then re-exports every spec-builder
 name through ``__all__``.
 """
 
-from models import jira_issue, jira_issue_embedding
+from models import jira_issue, jira_issue_embedding, jira_issue_embeddings
 from nxd.spec import (
     code,
+    custom,
     data_product,
     data_product_access,
     data_product_output,
@@ -18,14 +19,18 @@ from nxd.spec import (
 )
 from nxd.spec.conditions import scheduled
 from transform import transform
+import api_source_freshness
 
 __all__ = [
+    "api_source_freshness",
     "code",
+    "custom",
     "data_product",
     "data_product_access",
     "data_product_output",
     "jira_issue",
     "jira_issue_embedding",
+    "jira_issue_embeddings",
     "owner",
     "pg_vector_config",
     "scheduled",
