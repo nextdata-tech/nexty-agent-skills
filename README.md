@@ -75,6 +75,22 @@ npx skills add nextdata-tech/nexty-agent-skills --all -y
 
 The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right location for each agent automatically.
 
+### Claude Code plugin
+
+Install all skills as a Claude Code plugin:
+
+```
+/plugin marketplace add nextdata-tech/nexty-agent-skills
+/plugin install nexty-agent-skills@nexty
+```
+
+To iterate on a local checkout, point the marketplace at your clone instead:
+
+```
+/plugin marketplace add ./path/to/nexty-agent-skills
+/plugin install nexty-agent-skills@nexty
+```
+
 ### Manual install
 
 ```bash
