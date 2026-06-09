@@ -44,7 +44,7 @@ jira_issue = (
 # are not yet fully supported by NXD).
 jira_issue_embedding = (
     semantic_model(
-        name="jira_issue_embedding",
+        name="jira_issue_embeddings",
         description="One chunk of vectorised Jira free-text plus its "
         "metadata. Table shape is owned by `langchain_postgres.PGEngine."
         "init_vectorstore_table` — the model mirrors that shape.",

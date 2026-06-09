@@ -1,7 +1,7 @@
 # Data Product Overview
 Retrieve data from Jira (Atlassian) via its API, chunk and "vectorise" the free text fields like summary, comment and description which can then be stored within "pgvector" database.
 
-It should created within the "engineering" domain and use the "ecommerce-demo" infrastructure profile, the Nextdata instance is located at: https://app.westpac.nextopia.dev/
+It should created within the "engineering" domain and use the "ecommerce-demo" infrastructure profile, the Nextdata instance is located at: https://app.demo.nextopia.dev/
 
 Data product name should be jira-issues.
 

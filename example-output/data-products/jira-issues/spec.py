@@ -34,7 +34,7 @@ spec = (
         .port(
             "pgvector",
             storage("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/pgvector").config(
-                pg_vector_config().target_table(
+                pg_vector_config("public").target_table(
                     "jira_issue_embeddings", jira_issue_embedding
                 )
             ).model(jira_issue_embedding),
