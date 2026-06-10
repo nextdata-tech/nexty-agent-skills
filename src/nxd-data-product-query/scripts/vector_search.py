@@ -17,6 +17,14 @@ Supports classic-RAG extensions on the pgvector backend:
                        the caller can say "no good match".
   --id-col NAME        Primary key column for dedup in hybrid mode
                        (default: langchain_id).
+  --dedup-by FIELD     Collapse rows that share FIELD to the single best-ranked
+                       row before top-k / RRF fusion. FIELD resolves to a real
+                       result column if present, else to a key inside the
+                       metadata JSON (default column `langchain_metadata`).
+                       Generic across schemas; off by default (no dedup).
+                       Use it when a logical entity is split across many near-
+                       duplicate chunks (e.g. one Jira issue -> many rows) so a
+                       handful of entities don't crowd out the rest of top-k.
 """
 
 from __future__ import annotations
@@ -76,6 +84,47 @@ def _resolve_table_and_vector_col(cur, doc: dict, table: str | None, vector_col:
         vector_col = str(row[0])
 
     return str(table), str(vector_col)
+
+
+def _group_value(row: dict, dedup_by: str, metadata_col: str = "langchain_metadata") -> Any:
+    """Resolve the dedup group for a row. Generic across schemas:
+
+    1. a real result column named `dedup_by`, else
+    2. a key inside the metadata JSON column (`metadata_col`), which psycopg may
+       hand back as a dict or as a JSON string.
+    Returns None when the field is absent (caller keeps such rows ungrouped).
+    """
+    if dedup_by in row and row[dedup_by] is not None:
+        return row[dedup_by]
+    md = row.get(metadata_col)
+    if isinstance(md, str):
+        try:
+            md = json.loads(md)
+        except (ValueError, TypeError):
+            md = None
+    if isinstance(md, dict):
+        return md.get(dedup_by)
+    return None
+
+
+def _dedup_ordered(rows: list[dict], dedup_by: str, metadata_col: str = "langchain_metadata") -> list[dict]:
+    """Keep the first row (best rank — caller passes pre-ordered rows) per group.
+
+    Rows whose group value is None are never collapsed together — each is kept,
+    so dedup never silently drops entities that lack the field.
+    """
+    seen: set = set()
+    out: list[dict] = []
+    for row in rows:
+        g = _group_value(row, dedup_by, metadata_col)
+        if g is None:
+            out.append(row)
+            continue
+        if g in seen:
+            continue
+        seen.add(g)
+        out.append(row)
+    return out
 
 
 def _build_jsonb_filter(filter_obj: dict | None, metadata_col: str = "langchain_metadata") -> tuple[str, list[Any]]:
@@ -184,11 +233,24 @@ def _rrf_fuse(
     id_col: str,
     vector_col: str,
     k: int,
+    dedup_by: str | None = None,
+    metadata_col: str = "langchain_metadata",
 ) -> list[dict]:
-    """Reciprocal Rank Fusion. score(doc) = sum_lists 1/(RRF_K + rank)."""
+    """Reciprocal Rank Fusion. score(doc) = sum_lists 1/(RRF_K + rank).
+
+    The fusion key is `dedup_by`'s group value when set (so chunks of one entity
+    fuse into a single result), else the `id_col` primary key. Rows whose key is
+    None are dropped from fusion (no stable identity to fuse on).
+    """
+
+    def _key(row: dict) -> Any:
+        if dedup_by:
+            return _group_value(row, dedup_by, metadata_col)
+        return row.get(id_col)
+
     scored: dict[Any, dict] = {}
     for rank, row in enumerate(vec_rows, start=1):
-        doc_id = row.get(id_col)
+        doc_id = _key(row)
         if doc_id is None:
             continue
         entry = scored.setdefault(doc_id, {"row": row, "rrf": 0.0, "in_vec": False, "in_fts": False})
@@ -197,7 +259,7 @@ def _rrf_fuse(
         entry["vec_rank"] = rank
         entry["distance"] = row.get("distance")
     for rank, row in enumerate(fts_rows, start=1):
-        doc_id = row.get(id_col)
+        doc_id = _key(row)
         if doc_id is None:
             continue
         entry = scored.setdefault(doc_id, {"row": row, "rrf": 0.0, "in_vec": False, "in_fts": False})
@@ -233,6 +295,7 @@ def _pgvector(
     id_col: str,
     hybrid: bool,
     filter_obj: dict | None,
+    dedup_by: str | None = None,
 ) -> dict:
     conn = _pg_connect(doc)
     try:
@@ -246,8 +309,28 @@ def _pgvector(
                 sys.exit("--hybrid requires --query-text")
             vec_rows = _vec_candidates(cur, table, vector_col, vec_str, where_sql, where_params, candidates)
             fts_rows = _fts_candidates(cur, table, text_col, query_text, where_sql, where_params, candidates)
-            rows = _rrf_fuse(vec_rows, fts_rows, id_col, vector_col, k)
+            if dedup_by:
+                # collapse to best-ranked row per group within each list, so RRF
+                # ranks reflect distinct entities rather than duplicate chunks
+                vec_rows = _dedup_ordered(vec_rows, dedup_by)
+                fts_rows = _dedup_ordered(fts_rows, dedup_by)
+            rows = _rrf_fuse(vec_rows, fts_rows, id_col, vector_col, k, dedup_by)
             mode = "hybrid_rrf"
+        elif dedup_by:
+            # pull a candidate pool (ordered by distance), collapse per group, trim to k
+            pool = _vec_candidates(cur, table, vector_col, vec_str, where_sql, where_params, candidates)
+            pool = _dedup_ordered(pool, dedup_by)[:k]
+            rows = []
+            for r in pool:
+                row = {c: v for c, v in r.items() if c != vector_col}
+                dist = row.get("distance")
+                if dist is not None:
+                    try:
+                        row["score"] = 1.0 / (1.0 + float(dist))
+                    except (TypeError, ValueError):
+                        row["score"] = None
+                rows.append(row)
+            mode = "vector_only"
         else:
             rows = _vector_only(cur, table, vector_col, vec_str, where_sql, where_params, k)
             mode = "vector_only"
@@ -259,8 +342,9 @@ def _pgvector(
             "vector_col": vector_col,
             "text_col": text_col,
             "id_col": id_col,
+            "dedup_by": dedup_by,
             "filter": filter_obj or None,
-            "candidates_per_list": candidates if hybrid else None,
+            "candidates_per_list": candidates if (hybrid or dedup_by) else None,
             "k": k,
             "rows": rows,
         }
@@ -333,6 +417,7 @@ def main() -> None:
     p.add_argument("--vector-col", help="pgvector: vector column name")
     p.add_argument("--text-col", default="content", help="pgvector: text column (default content)")
     p.add_argument("--id-col", default="langchain_id", help="pgvector: primary-key column for hybrid dedup (default langchain_id)")
+    p.add_argument("--dedup-by", help="pgvector: collapse rows sharing this field (column or metadata-JSON key) to the best-ranked one before top-k/RRF")
     p.add_argument("--namespace", help="Pinecone: namespace")
     p.add_argument("--hybrid", action="store_true", help="pgvector: fuse kNN + Postgres FTS via RRF")
     p.add_argument("--filter", help="JSON metadata filter on langchain_metadata (equality or IN-list)")
@@ -357,6 +442,7 @@ def main() -> None:
             args.id_col,
             args.hybrid,
             filter_obj,
+            args.dedup_by,
         )
     else:
         if args.hybrid:

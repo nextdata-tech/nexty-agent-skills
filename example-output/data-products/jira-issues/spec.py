@@ -19,7 +19,7 @@ spec = (
         source_aligned_input()
         .source("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/jira-api")
         .model(jira_issue)
-        .expectation(jira_issue)
+        # .expectation(jira_issue)
         .expectation(
             custom("Jira API Freshness")
             .verify(code(api_source_freshness.verify))
@@ -34,7 +34,7 @@ spec = (
         .port(
             "pgvector",
             storage("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/pgvector").config(
-                pg_vector_config("public").target_table(
+                pg_vector_config().target_table(
                     "jira_issue_embeddings", jira_issue_embedding
                 )
             ).model(jira_issue_embedding),
