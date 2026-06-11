@@ -215,5 +215,11 @@ def transform(jira: API, pgvector: PgVector) -> None:
         table_name=table,
         schema_name=schema,
     )
-    store.add_documents(docs, ids=doc_ids)
+    # Write in batches: a single add_documents call for the whole corpus
+    # holds one giant INSERT transaction open — gentler on the server and,
+    # with deterministic ids, an interrupted run resumes idempotently.
+    batch = 500
+    for start in range(0, len(docs), batch):
+        store.add_documents(docs[start : start + batch], ids=doc_ids[start : start + batch])
+        _logger.info("Wrote chunks %d-%d of %d", start, min(start + batch, len(docs)), len(docs))
     _logger.info("Wrote %d embedded chunks to %s.%s", len(docs), schema, table)
