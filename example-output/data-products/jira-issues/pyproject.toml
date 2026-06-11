@@ -7,6 +7,7 @@ dependencies = [
     "langchain-postgres>=0.0.17",
     "langchain-text-splitters>=1.1.2",
     "nxd-data-product>=0.41.51",
+    "nxd-drivers[rpc]>=0.41.51",
     "psycopg[binary]>=3.3.4",
     "requests>=2.34.2",
     "sentence-transformers>=5.5.1",
@@ -14,6 +15,7 @@ dependencies = [
 
 [tool.uv.sources]
 nxd-data-product = { index = "nxd" }
+nxd-drivers = { index = "nxd" }
 
 [[tool.uv.index]]
 name = "nxd"

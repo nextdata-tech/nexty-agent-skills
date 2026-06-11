@@ -1,5 +1,27 @@
 # ruff: noqa: F403, F405
+import types
+
 from nxd_spec import *
+
+
+def _rpc_with_resources(port_spec, resources):
+    """Set pod resources on an RPC output port.
+
+    Workaround: `RpcOutputPortSpec` doesn't expose pod resources yet, but the
+    kubernetes/rpc driver reads a flattened `resources` key from the port
+    config. The search tool lazy-loads sentence-transformers/torch, which
+    OOMs the 512Mi default limit.
+    """
+    original = port_spec._build_config
+
+    def patched(self, scripts):
+        cfg = original(scripts)
+        cfg["resources"] = resources
+        return cfg
+
+    port_spec._build_config = types.MethodType(patched, port_spec)
+    return port_spec
+
 
 spec = (
     data_product(
@@ -55,7 +77,35 @@ spec = (
             # verifies the physical table matches the model schema after
             # each run. Must be on the port (not the output level) so the
             # pgvector driver receives the model for provisioning/verify.
-            .promise(jira_issue_embeddings),
+            #
+            # TODO(NEX-639): re-enable once nextdata-tech/nxd#6802 is
+            # released — before it, the pgvector driver cannot verify any
+            # table containing a vector column ("Unknown type USER-DEFINED")
+            # and the promise fails on every environment.
+            # .promise(jira_issue_embeddings),
+            .model(jira_issue_embeddings),
+        )
+    )
+    .output(
+        data_product_rpc_output()
+        .function(
+            rpc_function(code(search_jira_issues), search_request, search_response).description(
+                "Semantic search over the embedded Jira issues (pgvector cosine similarity)."
+            )
+        )
+        .port(
+            "mcp-api",
+            _rpc_with_resources(
+                rpc_server(
+                    "https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/mcp-api-service-k8s"
+                )
+                .enable_endpoints()
+                .mcp_path("/mcp"),
+                {
+                    "requests": {"cpu": "0.5", "memory": "512Mi"},
+                    "limits": {"memory": "3Gi"},
+                },
+            ),
         )
     )
     .transform(

@@ -13,6 +13,7 @@ metadata.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from langchain_core.documents import Document
@@ -125,20 +126,27 @@ def _metadata(issue: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _chunked_documents(issues: list[dict[str, Any]]) -> list[Document]:
+def _chunked_documents(issues: list[dict[str, Any]]) -> tuple[list[Document], list[str]]:
     """Per-issue: chunk the free-text blob and tag each chunk with the
-    issue's metadata. Returns a flat list of LangChain Documents."""
+    issue's metadata. Returns a flat list of LangChain Documents plus a
+    parallel list of DETERMINISTIC row ids (uuid5 of issue key + chunk
+    index) — without stable ids every scheduled run would re-insert the
+    same chunks under fresh random UUIDs and the table would fill with
+    duplicates; with them the ON CONFLICT upsert refreshes rows in place."""
     splitter = RecursiveCharacterTextSplitter(chunk_size=_CHUNK_SIZE)
     docs: list[Document] = []
+    ids: list[str] = []
     for issue in issues:
         blob = _extract_text_blob(issue)
         if not blob.strip():
             continue
         meta = _metadata(issue)
-        for chunk in splitter.split_text(blob):
+        issue_ref = issue.get("key") or issue.get("id") or "unknown"
+        for i, chunk in enumerate(splitter.split_text(blob)):
             docs.append(Document(page_content=chunk, metadata=meta))
+            ids.append(str(uuid.uuid5(uuid.NAMESPACE_URL, f"jira:{issue_ref}:{i}")))
     _logger.info("Built %d chunked documents from %d issues", len(docs), len(issues))
-    return docs
+    return docs, ids
 
 
 def _resolve_table(pgvector: PgVector) -> str:
@@ -165,7 +173,7 @@ def transform(jira: API, pgvector: PgVector) -> None:
     """Entrypoint bound by spec.py — input port `jira` (API) ->
     output port `pgvector` (PgVector)."""
     issues = _fetch_all_issues(jira)
-    docs = _chunked_documents(issues)
+    docs, doc_ids = _chunked_documents(issues)
     if not docs:
         _logger.info("No documents to embed; nothing to write.")
         return
@@ -207,5 +215,5 @@ def transform(jira: API, pgvector: PgVector) -> None:
         table_name=table,
         schema_name=schema,
     )
-    store.add_documents(docs)
+    store.add_documents(docs, ids=doc_ids)
     _logger.info("Wrote %d embedded chunks to %s.%s", len(docs), schema, table)

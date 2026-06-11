@@ -31,6 +31,42 @@ jira_issue = (
 )
 
 
+# MCP search tool models — request/response for `search_jira_issues`,
+# exposed via the DP's RPC output port.
+search_request = (
+    semantic_model(
+        name="search_request",
+        description="Request for semantic search over the embedded Jira issues.",
+    )
+    .schema(
+        {
+            "query": (string(), "Free-text search query."),
+            "top_k": (
+                int64(),
+                "Maximum number of chunks to return (default 5, max 25).",
+            ),
+        }
+    )
+)
+
+search_response = (
+    semantic_model(
+        name="search_response",
+        description="Semantic-search results over the embedded Jira issues.",
+    )
+    .schema(
+        {
+            "results": (
+                string(),
+                "JSON array of matches: content, issue_key, status, "
+                "updated, similarity score.",
+            ),
+            "count": (int64(), "Number of matches returned."),
+        }
+    )
+)
+
+
 # Output model — mirrors the table shape used by
 # `langchain_postgres.PGVectorStore`:
 #
