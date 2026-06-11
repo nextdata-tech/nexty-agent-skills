@@ -10,7 +10,7 @@ spec = (
         "`all-MiniLM-L6-v2`, and persisted to pgvector for semantic "
         "search. Other core fields ride along as metadata.",
         domain="engineering",
-        version="1.0.1-dev",
+        version="1.0.2-dev",
         infra_profile="ecommerce-demo",
     )
     .environment("demo")
@@ -19,7 +19,10 @@ spec = (
         source_aligned_input()
         .source("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/jira-api")
         .model(jira_issue)
-        .expectation(jira_issue)
+        # NOTE: no `.expectation(jira_issue)` — model (schema) expectations
+        # are not supported on an `nxd:api` source: the unmanaged API has no
+        # stored data or schema to verify against. The custom verifier below
+        # is the supported form.
         .expectation(
             custom("Jira API Freshness")
             .verify(code(api_source_freshness.verify))
@@ -29,20 +32,50 @@ spec = (
         ),
     )
     .output(
+        # NOTE: no output-level `.model(jira_issue)` — the input model is
+        # already catalogued via the input spec, and declaring it as an
+        # output model would make the pgvector driver provision a spurious
+        # `jira_issue` table on the port.
         data_product_output()
-        .model(jira_issue)
+        .model(jira_issue_embeddings)
         .port(
             "pgvector",
-            storage("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/pgvector").config(
-                pg_vector_config("public").target_table(
-                    "jira_issue_embeddings", jira_issue_embedding
+            storage("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/pgvector")
+            .config(
+                # Model name == physical table name: the pgvector driver
+                # provisions the table from the model (CREATE TABLE IF NOT
+                # EXISTS <model-name>), and the transform writes through
+                # langchain to the same table. The explicit target_table
+                # mapping keeps `model_tables` / `location()` accurate.
+                pg_vector_config().target_table(
+                    "jira_issue_embeddings", jira_issue_embeddings
                 )
-            ).model(jira_issue_embedding),
-        ).promise(jira_issue_embeddings)
+            )
+            # Port-level promise: registers the model on the port AND
+            # verifies the physical table matches the model schema after
+            # each run. Must be on the port (not the output level) so the
+            # pgvector driver receives the model for provisioning/verify.
+            .promise(jira_issue_embeddings),
+        )
     )
     .transform(
         code(transform)
         .compute("https://app.demo.nextopia.dev/infra-profile/ecommerce-demo#/services/k8s-compute")
+        # The venv ships torch + sentence-transformers (multi-GB):
+        # - importing torch + loading the MiniLM model blows the 512Mi
+        #   default memory limit (the pod OOMs before signalling Started,
+        #   which surfaces as a misleading "startup timeout"), and
+        # - pod init + first import can exceed the 180s default startup
+        #   timeout.
+        .config(
+            {
+                "startup_timeout_secs": 600,
+                "resources": {
+                    "requests": {"cpu": "1", "memory": "1Gi", "ephemeral-storage": "8Gi"},
+                    "limits": {"memory": "4Gi"},
+                },
+            }
+        )
         .when(scheduled("*/10 * * * *"), startup=True)
     )
     # TODO: replace placeholder users with real owner / steward / access.

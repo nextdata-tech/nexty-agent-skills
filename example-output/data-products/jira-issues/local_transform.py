@@ -52,7 +52,7 @@ if __name__ == "__main__":
         secret_password=SecretString(_require("PG_PASSWORD")),
         database=_require("PG_DATABASE"),
         schema=os.environ.get("PG_SCHEMA", "public"),
-        model_tables={"jira_issue_embedding": os.environ.get(
+        model_tables={"jira_issue_embeddings": os.environ.get(
             "PG_TABLE", "jira_issue_embeddings"
         )},
         models={},

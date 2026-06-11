@@ -20,6 +20,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_postgres import PGEngine, PGVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from nxd.data_product.context import API, PgVector
+import psycopg
 import requests
 
 _logger = logging.getLogger("transform.jira_embeddings")
@@ -27,12 +28,15 @@ _logger.setLevel(logging.INFO)
 
 
 _PROJECT = "NXD"
-_JQL = f"project = {_PROJECT} AND updated >= -PT30D"
+# NOTE: the NXD project has been quiet since 2026-04 (active work moved to
+# NEX) — a 30-day window matches nothing. 180 days keeps the product
+# non-empty; switch _PROJECT to "NEX" to track the active board.
+_JQL = f"project = {_PROJECT} AND updated >= -180d"
 _EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 _EMBEDDING_DIMS = 384            # all-MiniLM-L6-v2 output dim
 _CHUNK_SIZE = 512
 _DEFAULT_TABLE = "jira_issue_embeddings"
-_OUTPUT_MODEL_NAME = "jira_issue_embedding"
+_OUTPUT_MODEL_NAME = "jira_issue_embeddings"
 _FIELDS = "summary,description,comment,status,project,created,updated"
 
 
@@ -71,15 +75,38 @@ def _fetch_all_issues(jira: API) -> list[dict[str, Any]]:
     return issues
 
 
+def _adf_to_text(node: Any) -> str:
+    """Flatten an Atlassian Document Format (ADF) node tree to plain text.
+
+    Jira Cloud's v3 REST API returns rich-text fields (`description`,
+    comment bodies) as ADF dicts, not strings. Collect every `text` leaf,
+    joining block-level nodes with newlines.
+    """
+    if node is None:
+        return ""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "\n".join(t for t in (_adf_to_text(n) for n in node) if t)
+    if isinstance(node, dict):
+        if "text" in node and isinstance(node["text"], str):
+            return node["text"]
+        return _adf_to_text(node.get("content"))
+    return str(node)
+
+
 def _extract_text_blob(issue: dict[str, Any]) -> str:
     """Concatenate summary + description + every comment into one blob."""
     fields = issue.get("fields", {}) or {}
-    parts = [fields.get("summary") or "", fields.get("description") or ""]
+    parts = [
+        _adf_to_text(fields.get("summary")),
+        _adf_to_text(fields.get("description")),
+    ]
     comment_field = fields.get("comment") or {}
     for c in comment_field.get("comments", []) or []:
-        body = c.get("body")
+        body = _adf_to_text(c.get("body"))
         if body:
-            parts.append(body if isinstance(body, str) else str(body))
+            parts.append(body)
     return "\n\n".join(p for p in parts if p)
 
 
@@ -118,6 +145,22 @@ def _resolve_table(pgvector: PgVector) -> str:
     return (pgvector.model_tables or {}).get(_OUTPUT_MODEL_NAME, _DEFAULT_TABLE)
 
 
+def _ensure_unique_id_index(pgvector: PgVector, schema: str, table: str) -> None:
+    """Create the unique index on ``langchain_id`` if it is missing."""
+    with psycopg.connect(
+        host=str(pgvector.host),
+        port=int(str(pgvector.port)),
+        user=str(pgvector.user),
+        password=str(pgvector.password),
+        dbname=str(pgvector.database),
+        autocommit=True,
+    ) as conn:
+        conn.execute(
+            f'CREATE UNIQUE INDEX IF NOT EXISTS "{table}_langchain_id_key" '
+            f'ON "{schema}"."{table}" (langchain_id);'
+        )
+
+
 def transform(jira: API, pgvector: PgVector) -> None:
     """Entrypoint bound by spec.py — input port `jira` (API) ->
     output port `pgvector` (PgVector)."""
@@ -139,7 +182,9 @@ def transform(jira: API, pgvector: PgVector) -> None:
 
     # `init_vectorstore_table` is a no-op-style DDL on subsequent runs
     # only because the table already exists — the call will *raise* if
-    # it does. Wrap so a re-run on an existing table doesn't break.
+    # it does. The NXD pgvector driver provisions the table from the
+    # output model before the first run, so this normally raises and is
+    # skipped. Wrap so either creation order works.
     try:
         pg_engine.init_vectorstore_table(
             vector_size=_EMBEDDING_DIMS,
@@ -149,6 +194,11 @@ def transform(jira: API, pgvector: PgVector) -> None:
         _logger.info("Initialised vectorstore table %s.%s", schema, table)
     except Exception as exc:                                  # noqa: BLE001
         _logger.info("init_vectorstore_table skipped (likely exists): %s", exc)
+
+    # PGVectorStore.add_documents upserts with ON CONFLICT (langchain_id),
+    # which requires a unique index. langchain's own DDL creates it as a
+    # PRIMARY KEY, but the NXD-provisioned table has no key — ensure it.
+    _ensure_unique_id_index(pgvector, schema, table)
 
     embeddings = HuggingFaceEmbeddings(model_name=_EMBEDDING_MODEL)
     store = PGVectorStore.create_sync(
