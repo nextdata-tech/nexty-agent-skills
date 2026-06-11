@@ -32,7 +32,11 @@ spec = (
         "`all-MiniLM-L6-v2`, and persisted to pgvector for semantic "
         "search. Other core fields ride along as metadata.",
         domain="engineering",
-        version="1.0.2-dev",
+        # NOTE: kept at the previously published dev version on purpose —
+        # dev images overwrite in place WITHOUT the schema-evolution check.
+        # A new version number would be validated against the old image's
+        # models (which this rework removes/retypes) and 409.
+        version="1.0.1-dev",
         infra_profile="ecommerce-demo",
     )
     .environment("demo")
