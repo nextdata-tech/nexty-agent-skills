@@ -73,7 +73,13 @@ spec = (
                 # EXISTS <model-name>), and the transform writes through
                 # langchain to the same table. The explicit target_table
                 # mapping keeps `model_tables` / `location()` accurate.
-                pg_vector_config().target_table(
+                #
+                # Schema pinned to "public": the pgvector EXTENSION lives in
+                # the `public` schema and the driver sets `search_path` to
+                # the configured schema only — provisioning a vector column
+                # under any other schema fails with `type "vector" does not
+                # exist` (42704).
+                pg_vector_config("public").target_table(
                     "jira_issue_embeddings", jira_issue_embeddings
                 )
             )
