@@ -61,54 +61,12 @@ first run) can also exceed the default startup timeout without any OOM.
 ```
 
 Rule of thumb: anything importing torch/transformers needs at least a 2–4Gi
-limit. Also batch large writes (see §6) — peak memory scales with the largest
+limit. Also batch large writes (see §4) — peak memory scales with the largest
 in-flight batch.
 
 ---
 
-## 2. Error reads "Failed to abort transaction: ..."
-
-**Symptom:**
-
-```
-Internal error happened at compute
-Caused by: Failed to abort transaction: ...
-```
-
-**Meaning:** a *different* error failed the run first; the platform then tried
-to roll back the open storage transaction and that rollback also failed.
-Recent platform versions always surface the original error; if you see the
-abort error as the top-level reason, you are on an older version — scroll
-**up** in the Data Product logs (`nxd logs <dp>`): the genuine failure is
-logged before the abort attempt.
-
----
-
-## 3. Vector-column verification or provisioning errors (pgvector)
-
-Two related symptoms on pgvector-backed output ports:
-
-- Promise/verify fails with `Unknown type USER-DEFINED for column <name>` —
-  older platform versions could not verify any table containing a `vector`
-  column.
-- Provisioning fails with `type "vector" does not exist` (SQLSTATE 42704) when
-  the port is configured with a non-`public` schema — the pgvector extension
-  lives in one schema per database (normally `public`), and older versions did
-  not keep `public` on the search path.
-
-Both are fixed in current platform versions. If the target environment still
-shows them:
-
-- For the verify failure: keep the model registered on the port with
-  `.model(my_model)` but temporarily comment out `.promise(my_model)`, with a
-  TODO to re-enable after the platform upgrade. Do NOT delete the embedding
-  column from the model or split the model in two — that desyncs the catalog
-  from the physical table.
-- For the 42704: pin the port schema to public — `pg_vector_config("public")`.
-
----
-
-## 4. Spec validation errors — exact messages and what they actually mean
+## 2. Spec validation errors — exact messages and what they actually mean
 
 | Error | Real meaning | Fix |
 |---|---|---|
@@ -125,7 +83,7 @@ intended physical table name.
 
 ---
 
-## 5. RPC output port (MCP/API serving) crashes
+## 3. RPC output port (MCP/API serving) crashes
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -135,7 +93,7 @@ intended physical table name.
 
 ---
 
-## 6. Transform runs but writes wrong / zero / duplicate data
+## 4. Transform runs but writes wrong / zero / duplicate data
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -147,7 +105,7 @@ intended physical table name.
 
 ---
 
-## 7. Custom expectation fails: contract pod stuck in Pending
+## 5. Custom expectation fails: contract pod stuck in Pending
 
 **Symptom:**
 
@@ -181,10 +139,10 @@ or free node capacity.
    `GET https://dp.<domain>/<dp>/api/v1/status?include_reason=true&include_details=true`
    (header `x-nextdata-token: <PAT>`, or `Authorization: Bearer` on
    multi-domain environments).
-3. `nxd logs <dp>` — read from the FIRST error, not the last (see §2).
+3. `nxd logs <dp>` — read from the FIRST error, not the last — later errors are often cleanup fallout from the first one.
 4. With cluster access: `kubectl get pods -n dps` + `kubectl describe pod` on
    anything not Running — exit code 137 = out of memory (§1), Pending =
-   scheduling (§7).
+   scheduling (§5).
 5. Re-launch with `--debug-mode` before concluding anything from a single
    WARN line — the default log level hides most INFO.
 6. After a fix, confirm data: row counts + a sample query against the output
