@@ -61,6 +61,7 @@ Consult the following references for concepts, APIs, and best practices:
 * In-depth details of `semantic_model()`: [reference/semantic_model_spec.md](reference/semantic_model_spec.md)
 * Running `transform()` locally: [reference/local_transform.md](reference/local_transform.md)
 * Examples of drivers (services) used within transformations: [reference/driver_examples.md](reference/driver_examples.md)
+* Debugging a deployed Data Product (symptom → root cause → fix): [reference/troubleshooting.md](reference/troubleshooting.md)
 
 #### Discovery Source — interview or spec-from-document
 Decide once, up front, how the Data Product's requirements will be sourced. Ask the user which mode applies:
@@ -201,5 +202,10 @@ Finalisation (user to complete):
 - [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=/tmp/nxd-<mesh_name>.yaml`
 - [ ] Verify the first platform run: transform completes, outputs land at configured ports, promises/expectations pass
 ```
+
+If the launched Data Product fails or behaves unexpectedly, work through
+[reference/troubleshooting.md](reference/troubleshooting.md) — it maps the
+platform's error messages (which are often misleading, e.g. OOM reported as
+"startup timeout") to root causes and fixes.
 
 In the handover summary, call out any items needing particular attention — deferred TODOs, missing inputs, areas where assumptions were made, or sections that may require manual review.
