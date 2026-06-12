@@ -87,13 +87,7 @@ spec = (
             # verifies the physical table matches the model schema after
             # each run. Must be on the port (not the output level) so the
             # pgvector driver receives the model for provisioning/verify.
-            #
-            # TODO(NEX-639): re-enable once nextdata-tech/nxd#6802 is
-            # released — before it, the pgvector driver cannot verify any
-            # table containing a vector column ("Unknown type USER-DEFINED")
-            # and the promise fails on every environment.
-            # .promise(jira_issue_embeddings),
-            .model(jira_issue_embeddings),
+            .promise(jira_issue_embeddings),
         )
     )
     .output(
