@@ -55,7 +55,8 @@ spec = (
         domain="retail/sales",
         description="Sales Influence ...",
         version="0.1.1-dev",
-        infra_profile="https://nextopia.dev/infra/ecommerce",
+        # infra_profile: profile NAME chosen in discovery (e.g. from `nxd ls infra-profiles`)
+        infra_profile="<profile>",
         source_repo_url="https://github.com/nxd/sales-influence-insights",
     )
     .transform(
@@ -65,7 +66,8 @@ spec = (
     .input(
         "adls",
         data_product_input()
-        .source("https://nextopia.dev/data-product/store-sales#/output/port/adls")
+        # <app_url> = active mesh app host (mesh config); upstream DP from `nxd ls data-products`
+        .source("https://<app_url>/data-product/store-sales#/output/port/adls")
     )
     .output(
         data_product_output()
@@ -73,7 +75,7 @@ spec = (
             "snowflake",
             storage("#/services/demand-sales-snowflake-aws")
         )
-    .control("owner", owner().user("hello@nextdata.com"))
+    .control("owner", owner().user("<owner-email>"))   # elicit from the user
 )
 ```
 
@@ -110,11 +112,12 @@ spec = (
   .input(
       "store-sales-adls",
       data_product_input()
-      .source("https://nextopia.dev/data-product/store-sales#/output/port/adls")
+      # <app_url> = active mesh app host (mesh config), resolved not hardcoded
+      .source("https://<app_url>/data-product/store-sales#/output/port/adls")
   )
   .input(
       "twitter",
-      source_aligned_input().source("https://nextopia.dev/infra-profile/ecommerce-demo#/services/twitter-api"),
+      source_aligned_input().source("https://<app_url>/infra-profile/<profile>#/services/twitter-api"),
   )
   ...
   .output(...)
@@ -164,7 +167,7 @@ sales = (
   .link(
       "product_id",
       Predicate.SameAs,
-      "https://nextopia.dev/product#/models/catalog/attributes/product_code",
+      "https://<app_url>/product#/models/catalog/attributes/product_code",
   )
   .verify_field("product_id", greater_than(0))
   .verify_field("sales_channel", match_regex("[a-zA-Z0-9_\-]"))

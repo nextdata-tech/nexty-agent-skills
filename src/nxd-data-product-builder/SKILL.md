@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-builder
-description: Guide for creating, refining, and validating a Nextdata OS Python-based Data Product. Two discovery modes — interactive interview, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nexty-mesh-analyzer`). Use whenever the user mentions building, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-mesh-analyzer`). Use whenever the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
 metadata:
   author: nextdata
   version: 0.2.1
@@ -19,9 +19,10 @@ This Skill is intended for technically proficient users who are familiar with te
 Before engaging with the user, set up the environment. Do **not** proceed until this is complete.
 
 - **NXD CLI:** Ensure the NXD CLI is installed and the correct mesh is selected, this should be set up and verified by the "nxd-setup" Skill. *Confirm the correct mesh has been selected before continuing.*
+- **Active mesh + its hosts (elicit-or-derive, do not hardcode):** every service URL, doc link, and `nxd ... --config` flag in this skill depends on which mesh is active. `nxd-setup` owns mesh selection and writes the per-mesh config to `/tmp/nxd-<mesh>.yaml`. Confirm the active mesh **name** with the user (or read it from `~/.nxd/meshes.json` — the selected entry), and from that same mesh entry take its `app_url`/`api_url` host. These are the host you substitute into `https://<app_url>/infra-profile/<profile>#/services/<service>` URLs and into the docs base below. Never paste a demo host (`example.com`, `nextopia.dev`, `nextdata.com`) as if it were canonical — those only appear as clearly-marked illustrative placeholders.
 - **Runtime:** Python **3.10** with **`uv`** as the dependency manager.
     - *There is no need to check for a given Python version since `uv` will manage this for us.*
-- **Dependencies:** Install the `nxd-data-product` Python package ([registry](https://registry.trynxd.com/index/)):
+- **Dependencies:** Install the `nxd-data-product` Python package from the mesh's package registry index (commonly `https://registry.trynxd.com/index/`; if your mesh config specifies a different index, use that):
 
 ```
 uv init --bare --python 3.10
@@ -30,6 +31,18 @@ uv add nxd-data-product --index nxd=https://registry.trynxd.com/index/
 ```
 
 *Critical: Do not rely on internal or assumed knowledge regarding Nextdata OS or its Python packages. Always verify usage against the locally installed version of the `nxd` Python package.*
+
+### Platform docs (per-mesh)
+Docs are served **per-mesh** from the active mesh's app host — there is no single global docs URL. Resolve the base from mesh config (the `app_url` of the selected mesh in `~/.nxd/meshes.json`, exactly as `nxd-setup` records it), then build links as `<app_url>/docs/#/<path>` (docsify hash routing — keep the `#/`, no `.md` extension). The doc paths most relevant to *building* a Data Product:
+
+| Topic | Path (append to `<app_url>/docs/#/`) |
+|---|---|
+| CLI setup / mesh + auth | `tutorials/cli/setup` |
+| Create a Data Product (CLI) | `tutorials/cli/create` |
+| Inputs | `tutorials/guides/04-inputs` |
+| Outputs | `tutorials/guides/02-outputs` |
+
+Hand these out **inline and contextually** at the matching step below (full path table in [reference/platform-docs.md](reference/platform-docs.md)). If a deep link 404s, open the docs home `<app_url>/docs/#/` or the in-app Learn tab rather than guessing paths. Prefer **showing** live with `nxd` over linking where you can.
 
 ---
 
@@ -46,27 +59,39 @@ Data Product Build Progress:
 - [ ] 5. Handover summary and finalisation checklist delivered to the user
 ```
 
+For a longer or multi-session build, you may keep an optional lightweight ledger
+(`state.json` + `open-todos.md`) under `.context/dp-build/<timestamp>/` so the
+build can be paused and resumed without losing context. On startup, check whether
+`.context/dp-build/` already holds a prior run and offer to resume it. See
+[reference/state-and-resume.md](reference/state-and-resume.md) for the resume
+protocol and ledger format.
+
 ### 1. Discovery and Requirements Gathering
 Start by deeply understanding the user's intent, objectives, and requirements for the proposed Data Product.
 
 #### Research
 Consult the following references for concepts, APIs, and best practices:
 
-* Real-world examples of implemented Data Products: [reference/nextdata-public-examples](reference/nextdata-public-examples/)
+* Real-world examples of implemented Data Products — bundled as a submodule at [reference/nextdata-public-examples/](reference/nextdata-public-examples/); see [reference/examples-guide.md](reference/examples-guide.md) for selection and drafting rules.
     * Ignore the single-import rule present within examples, it does not apply to newly built Data Products.
 * Information regarding best practices, preferred approaches and more: [reference/best_practices.md](reference/best_practices.md)
 * Overview of Nextdata OS concepts: [reference/concepts.md](reference/concepts.md)
 * Data Product structure and build process: [reference/build.md](reference/build.md)
 * In-depth details of the critical `data_product()` function: [reference/data_product_spec.md](reference/data_product_spec.md)
 * In-depth details of `semantic_model()`: [reference/semantic_model_spec.md](reference/semantic_model_spec.md)
+* Storage config helpers, source-URL patterns, and transform context types per driver: [reference/storage-configs.md](reference/storage-configs.md)
+* Concrete file templates (`spec.py`, `transform.py`, models, requirements) and the driver-classification table: [reference/file-templates.md](reference/file-templates.md)
 * Running `transform()` locally: [reference/local_transform.md](reference/local_transform.md)
 * Examples of drivers (services) used within transformations: [reference/driver_examples.md](reference/driver_examples.md)
+* Authoring-time pitfalls (triggers, requirements, naming, types): [reference/common-pitfalls.md](reference/common-pitfalls.md)
+* Debugging a deployed Data Product (symptom → root cause → fix): [reference/troubleshooting.md](reference/troubleshooting.md)
+* Classifying a candidate into a data product type, with evidence discipline: [reference/product-taxonomy.md](reference/product-taxonomy.md)
 
 #### Discovery Source — interview or spec-from-document
 Decide once, up front, how the Data Product's requirements will be sourced. Ask the user which mode applies:
 
 * **Interactive interview** (default) — work through the questions in **Interview** below.
-* **Spec-from-document** — the user points at one or more documents that already describe the Data Product. The canonical case is a candidate `#N` in a `mesh-assets-<profile>.md` report produced by the **`nexty-mesh-analyzer`** skill, paired with its companion `mesh-assets-<profile>-models.md` for input/output schemas. Phrases like *"build the data product described by #41 in mesh-assets-daff.md"* trigger this branch.
+* **Spec-from-document** — the user points at one or more documents that already describe the Data Product. The canonical case is a candidate `#N` in a `mesh-assets-<profile>.md` report produced by the **`nxd-mesh-analyzer`** skill, paired with its companion `mesh-assets-<profile>-models.md` for input/output schemas. Phrases like *"build the data product described by #41 in mesh-assets-daff.md"* trigger this branch.
 
 If spec-from-document is chosen, follow **Spec-from-Document** below in place of Interview. Either branch must end with the same outputs: the candidate's purpose, inputs/outputs (with locations, services, formats), drivers, and any transformation notes. Confirm the extracted answers with the user before moving on to step 2.
 
@@ -91,12 +116,13 @@ Other document shapes — plain markdown or text describing a Data Product — a
 **Build a doc-claim checklist before any code.** Before writing `spec.py` / `models.py` / `transform.py`, enumerate every concrete claim from the input doc as a flat list: Data Product name, domain, infra profile, mesh URL, each input port (service + driver + filters + expectations), **each output port** (service + driver + schema + table + model + format), transform constraints (chunk sizes, embedding models, library choices), schedule, model count and shape, validation expectations. Treat each paragraph of a section like *Output* as a potential standalone claim — sections often carry N facts, not one. After scaffolding, walk the checklist and mark which file/line implements each claim. Anything unmapped = revisit before reporting done. When a claim conflicts with a similar reference example, **the doc wins**.
 
 #### Infra Profile Lookup
-Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nexty-mesh-analyzer` does, then confirm with the user.
+Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nxd-mesh-analyzer` does, then confirm with the user.
 
-Search, in order:
+The infra profile must be **derived from the active mesh or elicited from the user — never hardcoded** (do not assume `ecommerce`, `ecommerce-demo`, or any demo name). Search, in order:
 
 1. Customer extension paths — `./.nxd/skills/nxd-data-product-builder/` and `~/.nxd/skills/nxd-data-product-builder/`.
 2. Working tree — `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
+3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=/tmp/nxd-<mesh>.yaml` and let the user choose from the returned names. Likewise list available services for a chosen profile from the mesh when no local YAML exists (the profile name selected here is the value you place in `infra_profile="..."` and in service URLs).
 
 For each candidate file, confirm with `Grep` that it has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top. Resolve **pointer files** — a file whose contents are filesystem path(s) or URI(s), one per line — by following each pointer (read file paths, fetch `http(s)://` URIs).
 
@@ -104,23 +130,109 @@ Present every match and let the user pick one, or paste a path / URI directly. W
 
 **Mesh URL = active nxd config, not the doc default.** Service URLs in `spec.py` (`.source(...)`, `storage(...)`, `.compute(...)`) must point at the user's **active mesh** — the un-commented `url:` line at the top of `~/.nxd/config.yaml`. If the input doc / mesh-assets report names a different mesh host, **flag the mismatch and ask the user which mesh to target** before generating files; don't silently use either. Reference examples may carry whatever mesh their author used — treat the host as a template, not a value to copy verbatim. Once chosen, confirm the named services (`<input-service>`, output service, compute) actually exist in the chosen mesh's infra profile by grepping the profile YAML; missing services will fail `nxd validate` / `nxd launch` later.
 
-**Credentials.** The chosen profile holds live secrets in plaintext. Treat it the same way `nexty-mesh-analyzer` does:
+**Credentials.** The chosen profile holds live secrets in plaintext. Treat it the same way `nxd-mesh-analyzer` does:
 
 - Never echo a secret value to chat or display it on a command line.
 - When the builder needs service attributes (URLs, account names, bucket names) to populate `spec.py`, read them out of the profile and put them in `spec.py` — but pull credential values (passwords, access keys, tokens, client secrets, PEM blocks) into `.env` placeholders instead, with a `TODO` marker.
 - The local transform script reads credentials from the environment, never from `spec.py`.
 
 #### Interview
-Use this branch when discovery source is **interactive interview**. Proactively gather details from the user, including edge cases. Confirm gathered information before advancing to the next stage.
+Use this branch when discovery source is **interactive interview** — the
+guided bootstrap path for a brand-new product (replaces the former
+`nexty-bootstrap` wizard). Ask conversationally, one topic at a time, and
+confirm each answer before advancing. The numbered prompts below are concrete
+starting questions; adapt wording to the user's context.
 
-1. What is the intended purpose and outcome of this Data Product?
-2. What are the Data Product's expected inputs and outputs?
-    1. What are the expected input and output formats?
-3. What drivers (services) will this Data Product need to utilise?
-    1. Does Nextdata OS currently support the chosen technologies?
-    2. Can the user provide the names of the services and the infrastructure profile they belong to?
-4. How should we approach data transformation? Are there any patterns or tooling the user would prefer?
-    1. Is there any documentation or third-party information that can be provided to aid in creating the transformation (e.g. documentation websites, OpenAPI specifications)?
+**a. Where does the data come from?** "Where is the data for this product
+coming from?" Steer to exactly one of:
+* **Existing data** — a file or a remote service (S3, Snowflake, ADLS,
+  Databricks). For a local file, read it and infer the schema (columns, types,
+  sample values). For a remote service, help the user pull a small sample or
+  `DESCRIBE`/metadata, then infer the schema. Confirm the inferred input model.
+* **Existing source code** — read the codebase to learn what it reads
+  (inputs), what it transforms, and what it produces (outputs); pre-populate
+  models from it.
+* **Other data products** — `nxd ls data-products`; the user picks upstream
+  products and each becomes a `data_product_input().source(...)` pointing at
+  that product's output port. Reuse the upstream's published semantic models
+  as inputs where available.
+
+**b. Domain, infra profile, and basics.** Elicit-or-derive — none of these are
+hardcoded defaults. **Domain:** confirm the domain the user may launch in
+(elicit it, or derive launchable domains from the active mesh; the heavier
+CLI/REST role/domain walk-through lives in `nxd-mesh-analyzer`). **Infra
+profile:** locate or enumerate it via **Infra Profile Lookup** above (local
+YAML, else `nxd ls infra-profiles` against the active mesh) and confirm with
+the user. From the profile, identify the available services and classify each
+as compute / storage / rpc / governance (driver-classification table in
+[reference/file-templates.md](reference/file-templates.md)); when only the
+mesh (no local YAML) lists services, take service names from there. *Doc:
+the end-to-end CLI scaffolding flow is at `<app_url>/docs/#/tutorials/cli/create`.*
+Then pin the
+basics: **name** (kebab-case, suggested from the source), **description**,
+**version** (default `0.1.0-dev`), **source repo URL** (detect via
+`git remote get-url origin` when in a repo). Pin **transform compute** (auto-
+select if only one) and **output storage destination(s)** — these are
+referenced, not re-asked, later.
+
+**c. Inputs and semantic models.** For each input: a kebab-case name, the
+input type (`source_aligned_input()` for raw/external storage, or
+`data_product_input()` for an upstream DP), the source URL selected from the
+profile's storage services, and a `semantic_model()` (snake_case name,
+description, typed schema). Present any models inferred in (a) for the user to
+adjust. *Docs: `<app_url>/docs/#/tutorials/guides/04-inputs` (source vs DP
+inputs); for depending on another team's DP,
+`<app_url>/docs/#/tutorials/guides/consumer-tutorial`; semantic-model rules at
+`<app_url>/docs/#/tutorials/guides/01-semantic-model`.*
+
+**d. Outputs and semantic models.** "What data does this product produce?" —
+frame it concretely using the locked input format and output storage (e.g.
+"given Parquet on ADLS in and Snowflake out, what models should this expose?").
+Collect each output model the same way. Then:
+* **Glossary matching (always do this):** fetch available glossary terms and
+  propose matches against output field names/descriptions; record confirmed
+  ones via `.link("field", Predicate.GlossaryTerm, "<glossary-full-name>#/terms/<id>")`.
+  If none match, say so explicitly and move on.
+* **Upstream links (source-code or DP-input products only):** where an output
+  field traces to an input field, record
+  `.link("output_field", Predicate.SameAs, "<input-model>#/schema/<input-field>")`.
+  Skip for pure source-aligned products — outputs mirror inputs 1:1.
+
+*Docs: output ports at `<app_url>/docs/#/tutorials/guides/02-outputs`.*
+
+**e. Transform logic.** "Describe what the transformation does — how do inputs
+become outputs?" Use the compute service already chosen. The transform reads
+each input via its context type, writes each output port, and carries clearly
+labelled TODO markers for the real logic.
+
+**f. Output ports.** Map output models to ports. Auto-name each port from its
+storage driver (e.g. `nxd_snowflake`, `iceberg_on_s3`); with one storage
+destination all models share a port, with several ask which models route where.
+*For an RPC/MCP output port, see `<app_url>/docs/#/tutorials/guides/07-mcp`.*
+
+**g. Quality, access, trigger.** Optional but offer them:
+* **Data quality** — completeness, PII detection, Soda (YAML in `contracts/`),
+  Great Expectations (Python in `contracts/`), or a custom verify function.
+  *Promises/contracts: `<app_url>/docs/#/tutorials/guides/03-promises`;
+  input expectations: `<app_url>/docs/#/tutorials/guides/05-expectations`.*
+* **Access** — **elicit** the owner / data-steward / consumer email addresses
+  from the user; these are environment-specific identities, not defaults. Do
+  not copy any `@nextdata.com` / `@example.com` address from reference
+  examples — those are placeholders only.
+* **Trigger** — should it run when an input updates (`updated("my-input")`,
+  where the argument is the `.input()` name, **not** the upstream DP name) or
+  on a schedule (`scheduled("0 */8 * * *")`)? If a time-partitioned input
+  implies a cadence, seed that cron. Both is fine via `any_of(...)`.
+  *Scheduling: `<app_url>/docs/#/tutorials/guides/06-scheduling`.*
+
+Also cover the underlying technical questions for any path:
+
+1. Intended purpose and outcome of this Data Product.
+2. Expected inputs and outputs, and their formats.
+3. Drivers (services) needed, whether Nextdata OS supports them, and the
+   service names + infra profile they belong to.
+4. Transformation approach — preferred patterns or tooling, plus any docs or
+   third-party material (documentation sites, OpenAPI specs) to aid it.
 
 #### Directed Research
 Based on the user's answers, perform additional research as needed, particularly if any of the following is true:
@@ -145,12 +257,42 @@ Highlight critical decisions, uncertainties, and options for explicit user confi
 * The input and output drivers (services) that will be used and their configuration.
 * A high-level overview of the transformation pipeline, drawing particular attention to areas where you are least certain.
 
+**Generate-it-right rules — bake these into the plan:**
+
+* **Source-aligned is the default.** Unless the user is genuinely reshaping
+  data, model the product as source-aligned (output mirrors input). Only treat
+  it as transformed when there is real logic — reshaping, joins, aggregation,
+  enrichment.
+* **One input per service.** Keep the input inventory aligned to how Nextdata
+  models inputs — one `.input(...)` per source service, not per file.
+* **One semantic model per unique schema.** Don't duplicate a model that
+  already describes a schema; reuse it across inputs/outputs that share it.
+* **Contracts: expectations on inputs, promises on outputs.** Attach
+  `.expectation(model)` at the input and `.promise(...)` at the **port** for
+  the output (port-level, not output-level — see common-pitfalls.md).
+* **Time-partitioned input → cron in `.when()`.** If an input is partitioned
+  by time, the partition granularity implies the refresh cadence (daily
+  partitions → a daily `scheduled(...)`); otherwise prefer
+  `updated("<input-name>")` triggers.
+
 Share the plan for explicit user approval before moving forward.
 
 ---
 
 ### 3. Implementation
-Begin implementation once the plan is finalised. Insert "TODO" markers with clear instructions wherever any of the following are true:
+Begin implementation once the plan is finalised. To pick the closest public
+example to adapt — by infrastructure and capability — and for on-demand cloning
+guidance and drafting rules, see [reference/examples-guide.md](reference/examples-guide.md).
+
+When no example fits cleanly, scaffold from the concrete templates in
+[reference/file-templates.md](reference/file-templates.md) — `spec.py`,
+`transform.py` (incl. an S3-CSV → Snowflake external-table pattern), the
+`inputs/`/`outputs/` model files, `requirements.txt` (with per-driver
+dependencies), the generated-file layout, and the driver-classification table.
+For storage `.config(...)` helpers and per-driver transform context types, see
+[reference/storage-configs.md](reference/storage-configs.md).
+
+Insert "TODO" markers with clear instructions wherever any of the following are true:
 
 * The user has not provided satisfactory information even after prompting.
 * There are implementation details that would greatly benefit from manual user intervention.
@@ -158,7 +300,7 @@ Begin implementation once the plan is finalised. Insert "TODO" markers with clea
 #### `spec.py`
 * Ensure the infrastructure profile is included (by name — `infra_profile="<name>"`).
 * Configure each driver (service) with the appropriate URLs and settings, whether it is an input (`source()`) or an output (`storage()` etc.).
-* Service URLs are full and inlined: `https://<mesh>/infra-profile/<profile>#/services/<service>` — used as-is in `.source(...)`, `storage(...)`, `.compute(...)`. Do not abstract behind a helper.
+* Service URLs are full and inlined: `https://<app_url>/infra-profile/<profile>#/services/<service>` — used as-is in `.source(...)`, `storage(...)`, `.compute(...)`. Do not abstract behind a helper. `<app_url>` is the active mesh's app host **resolved from mesh config** (see Prerequisites), `<profile>` is the infra profile chosen in discovery, and `<service>` is a real service name from that profile — none of these are hardcoded demo hosts/names.
 * Read the chosen infra profile YAML to discover the correct service names; the compute service name in particular varies between profiles (`k8s-compute`, `k8s-executor`, a Databricks compute, etc.).
 * Project-local `nxd_spec.py` and `nxd_models.py` shim modules are required — the wildcard imports in `spec.py` / `models.py` resolve through these. See `reference/best_practices.md` for the template.
 * Note: `spec.py` cannot be run locally — it requires the Nextdata OS hosted runtime.
@@ -220,5 +362,10 @@ Finalisation (user to complete):
 - [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=/tmp/nxd-<mesh_name>.yaml`
 - [ ] Verify the first platform run: transform completes, outputs land at configured ports, promises/expectations pass
 ```
+
+If the launched Data Product fails or behaves unexpectedly, work through
+[reference/troubleshooting.md](reference/troubleshooting.md) — it maps the
+platform's error messages (which are often misleading, e.g. OOM reported as
+"startup timeout") to root causes and fixes.
 
 In the handover summary, call out any items needing particular attention — deferred TODOs, missing inputs, areas where assumptions were made, or sections that may require manual review.

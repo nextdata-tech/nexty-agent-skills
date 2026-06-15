@@ -31,6 +31,8 @@ class Mesh:
     api_url: str
     token: str | None
     source: str
+    app_url: str | None = None
+    install_url: str | None = None
 
 
 def _read_json(path: Path) -> dict:
@@ -52,9 +54,16 @@ def _read_yaml(path: Path) -> dict:
 
 
 def _name_from_url(url: str) -> str:
+    """Last-resort mesh name from a URL host.
+
+    Only used for ``config.yaml`` entries that carry no explicit key/name.
+    The authoritative mesh name is the ``meshes.json`` key — prefer that.
+    This strips a leading service label (api/app/dp/auth) when present and
+    returns the next label; it is a heuristic, not a contract.
+    """
     host = urlparse(url).hostname or url
     parts = host.split(".")
-    if parts and parts[0] in ("api", "app", "dp", "auth"):
+    if len(parts) > 1 and parts[0] in ("api", "app", "dp", "auth"):
         parts = parts[1:]
     return parts[0] if parts else host
 
@@ -64,6 +73,10 @@ def discover_meshes() -> list[Mesh]:
 
     Sources, in order: ~/.nxd/meshes.json (registry the nxd-setup skill writes),
     then the top-level url: + meshes: mapping in ~/.nxd/config.yaml.
+
+    Mesh name comes from the meshes.json key (authoritative). app_url /
+    install_url come from the registry entry when present — never reconstructed
+    from the api host by label-count heuristics.
     """
     out: list[Mesh] = []
     seen: set[str] = set()
@@ -72,7 +85,16 @@ def discover_meshes() -> list[Mesh]:
         url = entry.get("api_url") or entry.get("url")
         if not url:
             continue
-        out.append(Mesh(name=name, api_url=url, token=entry.get("token"), source="meshes.json"))
+        out.append(
+            Mesh(
+                name=name,
+                api_url=url,
+                token=entry.get("token"),
+                source="meshes.json",
+                app_url=entry.get("app_url"),
+                install_url=entry.get("install_url") or entry.get("auth_url"),
+            )
+        )
         seen.add(url)
 
     cfg = _read_yaml(CONFIG_YAML)
@@ -90,15 +112,32 @@ def discover_meshes() -> list[Mesh]:
     return out
 
 
-def _token_for(api_url: str) -> str | None:
+def _token_for(api_url: str, mesh: "Mesh | None" = None) -> str | None:
     """Find a bearer token for `api_url` in ~/.nxd/tokens.json.
 
-    `nxd login` writes tokens keyed by OAuth auth host (e.g. `auth.westpac.nextopia.dev`).
-    Match against the api host's parent domain.
+    `nxd login` writes tokens keyed by the OAuth auth host (e.g.
+    `auth.<mesh>.<domain>`). Prefer the auth/install host carried by the mesh
+    registry entry (install_url / auth_url) — that is the authoritative source.
+    Only when the registry has no such field do we fall back to a domain-suffix
+    match against the api host (which assumes auth and api share a parent
+    domain — a heuristic that breaks for 2- or 4-label mesh domains).
     """
     toks = _read_json(TOKENS_JSON)
     if not toks:
         return None
+
+    # Preferred: match the auth/install host from the mesh registry entry.
+    auth_host = None
+    if mesh is not None:
+        auth_ref = mesh.install_url
+        if auth_ref:
+            auth_host = urlparse(auth_ref).hostname or auth_ref
+    if auth_host:
+        for key, entry in toks.items():
+            if key == auth_host or key.endswith(auth_host) or auth_host in key:
+                return entry.get("access_token")
+
+    # Fallback heuristic: api host's parent domain (last 3 labels).
     host = urlparse(api_url).hostname or ""
     suffix = ".".join(host.split(".")[-3:])
     for key, entry in toks.items():
@@ -116,13 +155,13 @@ def resolve_mesh(name: str | None = None) -> Mesh:
         for m in meshes:
             if m.name == name:
                 if not m.token:
-                    m.token = _token_for(m.api_url)
+                    m.token = _token_for(m.api_url, m)
                 return m
         sys.exit(f"no mesh named {name!r}; available: {', '.join(m.name for m in meshes)}")
     if len(meshes) == 1:
         m = meshes[0]
         if not m.token:
-            m.token = _token_for(m.api_url)
+            m.token = _token_for(m.api_url, m)
         return m
     # Ambiguous — caller must pass --mesh
     print(

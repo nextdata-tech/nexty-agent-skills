@@ -1,5 +1,5 @@
 ---
-name: nexty-mesh-analyzer
+name: nxd-mesh-analyzer
 description: Inspect data-bearing services in a nextdata infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects to selected storage services (S3, Snowflake, ADLS, Databricks, BigQuery, Postgres, Kafka, Pinecone, and more) with their connection parameters, inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product.
 allowed-tools:
   - Bash
@@ -27,7 +27,26 @@ Given an infra profile file, this skill connects to the data-bearing services it
 - **Connected** — two assets belong to the same candidate data product when one appears to feed the other: similar schema, related naming, matching partitioning, and output written after input.
 - **Source-aligned data product** — reads from one source and writes to another with *minimal transformation*, keeping a near-identical data model (rename, reformat, repartition — not reshape). Contrast with a *transformed* product that aggregates, joins, or restructures.
 
-This skill discovers candidates only — it does not generate data product specs. Hand the results to **nexty-bootstrap** to scaffold a data product.
+This skill discovers candidates only — it does not generate data product specs. Hand the results to **nxd-data-product-builder** to scaffold a data product.
+
+---
+
+## Platform docs
+
+Docs are served **per-mesh** from the active mesh's app host — there is no single global docs URL. Resolve the base from `~/.nxd/meshes.json`: read the **selected / active** mesh entry and take its `app_url`. Doc pages are then `<app_url>/docs/#/<path>` (docsify hash routing — keep the `#/`, append the path with no `.md` extension). If a deep link 404s or shows a blank page, do not guess paths — open the docs home `<app_url>/docs/#/` and navigate the sidebar, or re-confirm `app_url` from the mesh config.
+
+Hand out these paths inline when the matching step comes up (drop the link at the step, don't wait to be asked):
+
+| Topic | Path (append to `<app_url>/docs/#/`) | Surface at |
+|---|---|---|
+| Getting started | `tutorials/guides/getting-started` | Step 1 — no profile/active mesh found; orient the user |
+| Inputs | `tutorials/guides/04-inputs` | Step 4 — one-service-one-input / one-schema-one-model convention |
+| Outputs | `tutorials/guides/02-outputs` | Step 5/6 — source-aligned vs transformed output classification |
+| Semantic model | `tutorials/guides/01-semantic-model` | Step 6 — how inferred schemas become input/output models |
+| Scheduling | `tutorials/guides/06-scheduling` | Step 6 — mapping partition granularity to a transform `when` |
+| Create a DP (CLI) | `tutorials/cli/create` | Closing handoff to nxd-data-product-builder |
+
+`app_url` is owned by nxd-setup, which persists it in `~/.nxd/meshes.json` and writes the active session config to `/tmp/nxd-<mesh_name>.yaml`. Prefer **showing** live state (`nxd ls data-products`, `nxd ls infra-profiles`) over linking a page when it answers the question.
 
 ---
 
@@ -36,8 +55,8 @@ This skill discovers candidates only — it does not generate data product specs
 The skill ships a small Python package under `scripts/`. Run the entrypoints with a Python that has the dependencies in `scripts/requirements.txt` — install into a throwaway venv:
 
 ```bash
-python3 -m venv /tmp/nexty-mesh-analyzer/venv
-/tmp/nexty-mesh-analyzer/venv/bin/pip install -r scripts/requirements.txt
+python3 -m venv /tmp/nxd-mesh-analyzer/venv
+/tmp/nxd-mesh-analyzer/venv/bin/pip install -r scripts/requirements.txt
 ```
 
 **Entrypoints** (run as `python scripts/<name>.py`):
@@ -47,6 +66,7 @@ python3 -m venv /tmp/nexty-mesh-analyzer/venv
 | `classify_profile.py <profile>` | Parse the profile, classify every service, list the inspectable (Storage/API) ones. |
 | `inspect_service.py <profile> <service>... --out FILE` | Connect read-only, inventory each service with schema-fingerprint grouping, de-duplicate shared stores, write inventory JSON. |
 | `match_assets.py <inventory.json>... [--flow SRC:DST]` | Match candidate input/output pairs, classify, and write the report + models markdown. `--flow` (repeatable) scopes matching to declared architecture flows. |
+| `profile_tabular.py <path>` | Read-only local-file profiler for CSV/JSON/JSONL/Parquet sources that aren't live services. Prints an inferred schema (types, nullability, sample values, partition/freshness hints) as JSON. Used by the offline discovery pass. |
 
 **Layout** — service-type code is isolated from generic code:
 
@@ -61,8 +81,8 @@ To support another service type, add `scripts/drivers/<name>.py` exposing a `DRI
 
 This skill ships generically to many customer environments. Environment-specific inputs — infra profiles and user documentation — live in **customer-owned paths outside the skill**, so they survive skill updates (an update overwrites the skill directory, never these paths):
 
-- `./.nxd/skills/nexty-mesh-analyzer/` — per-project, in the working tree
-- `~/.nxd/skills/nexty-mesh-analyzer/` — per-machine / per-environment
+- `./.nxd/skills/nxd-mesh-analyzer/` — per-project, in the working tree
+- `~/.nxd/skills/nxd-mesh-analyzer/` — per-machine / per-environment
 
 Step 1 searches both paths. Each may hold:
 
@@ -80,20 +100,37 @@ Run the steps in order. Inspect read-only at every step — never create, write,
 
 **Consult the user.** The person running this skill has domain knowledge of their environment. When a decision is genuinely ambiguous — which catalog owns a table, which copy of a replicated dataset is the source of truth, which of two services is the input — ask them rather than guessing.
 
+**Offline mode.** When live inspection is not possible (no network to the services, credentials withheld, or the user prefers to share evidence by hand), run an optional read-only collection pass instead of (or alongside) live inspection — Snowflake `SHOW`/`DESCRIBE` output, Git repo inspection, and local file profiling via `scripts/profile_tabular.py`. The evidence feeds the same candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md` report. See [references/offline-discovery.md](references/offline-discovery.md).
+
+### Step 0: Resolve the active mesh (do this first)
+
+This skill is **mesh-aware** — the mesh determines the app/api host that anchors every service URL in the report, the doc base for the links above, and which infra profiles / data products exist. Resolve it **before** anything else; do not leave the host as an unstated assumption that downstream consumers must guess.
+
+1. Read `~/.nxd/meshes.json` and find the **selected / active** mesh entry. From it derive:
+   - `app_url` — the UI / docs base (`<app_url>/docs/#/<path>`); record which mesh this run belongs to.
+   - `api_url` — the base host for absolute infra-profile service URLs (feeds `--api-url`, Step 6).
+2. nxd-setup owns this registry and writes the active session config to `/tmp/nxd-<mesh_name>.yaml`. If that file is present, pass `--config /tmp/nxd-<mesh_name>.yaml` to any `nxd` command below.
+3. **If no active mesh / no `meshes.json`:** point the user at **nxd-setup** to select and configure a mesh first, and link `<app_url>/docs/#/tutorials/cli/setup` (or `getting-started`) if you can resolve any `app_url`. Discovery against a real mesh cannot run until a mesh is selected. The skill can still run in **offline mode** on local files (Step 1b / offline-discovery) with service URLs left relative.
+
+Carry `api_url` and `app_url` through the whole run. Never substitute a demo host (e.g. `app.<mesh>.example`) for the real one — those forms below are **illustrative placeholders only**, not canonical hosts.
+
 ### Step 1: Locate inputs — infra profile and user documentation
 
 Gather two inputs. For each, search the **customer extension paths** above plus the working tree, resolve any pointer files, and also let the user supply a path or URI directly at the prompt.
 
 #### Step 1a: Infra profile
 
-Search, in order:
+An infra profile belongs to a mesh — prefer **deriving** the available profiles from the active mesh (Step 0) over relying only on locally-globbed files, so a fresh environment with no local profile file does not dead-end.
 
-1. The customer extension paths — `./.nxd/skills/nexty-mesh-analyzer/` and `~/.nxd/skills/nexty-mesh-analyzer/`.
-2. The working tree — Glob `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
+Search / derive, in order:
+
+1. **Derive from the active mesh** — enumerate profiles with `nxd ls infra-profiles` (pass `--config /tmp/nxd-<mesh_name>.yaml` if present). Let the user pick one; pull its YAML to a temp path under `/tmp/nxd-mesh-analyzer/`.
+2. The customer extension paths — `./.nxd/skills/nxd-mesh-analyzer/` and `~/.nxd/skills/nxd-mesh-analyzer/`.
+3. The working tree — Glob `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
 
 For each candidate: an infra profile file has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top — confirm with Grep. A **pointer file** (contents are a path or URI) is followed to the real profile — fetch `http(s)://` URIs, read file paths.
 
-Present every candidate found and let the user confirm which to use — or paste a path/URI of their own. Read the chosen file.
+Present every candidate found (from the mesh and from local paths) and let the user confirm which to use — or paste a path/URI of their own. Read the chosen file. If neither the mesh nor local paths yield a profile, link `<app_url>/docs/#/tutorials/cli/setup` and point the user at **nxd-setup** to configure the mesh / extension paths before discovery can run.
 
 #### Step 1b: User documentation
 
@@ -123,7 +160,7 @@ The infra profile file contains **live credentials in plaintext**. Before inspec
 - Tell the user the file holds real secrets and that inspection will connect to live services.
 - Never echo a secret value into the chat or into a displayed command line.
 - Inspect via short Python scripts that read the profile file **directly** and pass credentials in-process — do not interpolate secrets into shell command arguments (they would appear in the displayed command and tool output).
-- Write inspection scripts under a temp path (e.g. `/tmp/nexty-mesh-analyzer/`). Delete them when done.
+- Write inspection scripts under a temp path (e.g. `/tmp/nxd-mesh-analyzer/`). Delete them when done.
 
 ### Step 4: Inspect each selected service
 
@@ -138,6 +175,8 @@ Build an **asset inventory** for the service. For every data asset record:
 - **Partitioning** — partition keys or `key=value` / date-style path segments, if any.
 - **Size** — object/row count and total bytes where cheap to obtain.
 - **Last modified** — most recent write timestamp.
+
+The inventory must honor the nextdata **one service = one input** and **one unique schema = one input model** convention — this is what makes the results map cleanly onto nxd-data-product-builder. For the model behind it, link `<app_url>/docs/#/tutorials/guides/04-inputs` (resolve `<app_url>` per Step 0 / Platform docs).
 
 **Group file-based storage by schema fingerprint, not by directory path.** Path-based grouping fails both ways: a bucket laid out as `<data-product>/<port>/...` collapses a whole product into one asset, while a raw partitioned export explodes one dataset into one fragment per partition. Instead — infer each file's schema, then group files that share an identical schema and format into one logical asset. Path segments that *vary within a group* are **partition keys** (`key=value`, date segments, numeric ids) — record them as partitioning, do not split on them. Per the nextdata convention, treat **one infra service as one input** and **each unique schema as its own input model**.
 
@@ -159,7 +198,7 @@ Run `scripts/match_assets.py <inventory.json>` over the inventory from Step 4. I
 - Set aside **replicated datasets** — a dataset copied verbatim across 3+ stores. These are not an N×N grid of products; they go to a separate report section (see below).
 - Pair the rest by schema similarity, related naming (`input`/`output`, `raw`/`curated`, `bronze`/`silver`/`gold`), matching asset names, partitioning carried through, and output-modified-after-input.
 - Infer direction (which asset is the input, which is the output).
-- Classify each candidate product as **source-aligned** (near-identical model, minimal transform; canonically file storage → database) or **transformed** (aggregated/joined/reshaped). A same-service pair is at most low-confidence source-aligned.
+- Classify each candidate product as **source-aligned** (near-identical model, minimal transform; canonically file storage → database) or **transformed** (aggregated/joined/reshaped). A same-service pair is at most low-confidence source-aligned. For how these candidates feed an output model, link `<app_url>/docs/#/tutorials/guides/02-outputs`.
 - Score confidence; report **high/medium** confidence pairs as candidates and list **low** confidence ones separately as "possible".
 
 **Replicated datasets — ask the user.** The report's "Replicated Datasets" section lists each dataset that appears identically across 3+ stores. For each, prompt the user: *"`<dataset>` is replicated across [list of locations]. Which is the source of truth (the input)?"* The user has the domain knowledge to answer. Once they pick the canonical source, the source → each other location is a source-aligned candidate; record those.
@@ -172,17 +211,19 @@ Run `scripts/match_assets.py <inventory.json>` over the inventory from Step 4. I
 
 `match_assets.py` writes **three** markdown files — pass `--out mesh-assets-<profile>.md`:
 
-- **`mesh-assets-<profile>.md`** — candidate data products, **grouped by domain**. Each candidate carries: suggested data product name, domain, infra profile name, and — for both its input and its output data source — the location, the service name, and the infra-profile service URL; plus the source-aligned/transformed classification, confidence, and evidence. Also lists unmatched assets, duplicate services, and failed services. **Ambiguous candidates appear here in compact form — id + counts only, no variant locators** — to keep the main report readable for downstream consumers.
+- **`mesh-assets-<profile>.md`** — candidate data products, **grouped by domain**. Each candidate carries: suggested data product name, domain, infra profile name, and — for both its input and its output data source — the location, the service name, and the infra-profile service URL (absolute, anchored to the active mesh's `api_url` — see **Service URLs** below); plus the source-aligned/transformed classification, confidence, and evidence. Also lists unmatched assets, duplicate services, and failed services. **Ambiguous candidates appear here in compact form — id + counts only, no variant locators** — to keep the main report readable for downstream consumers.
 - **`mesh-assets-<profile>-models.md`** — the input and output model schemas (columns and types) of each candidate, kept in a separate file for readability.
 - **`mesh-assets-<profile>-ambiguous.md`** — for every ambiguous candidate in the main report, the full list of input and output locator variants. The skill reads this at run-time to prompt the user; downstream skills can also load it on demand.
 
 These three files are the deliverable a downstream data-product-authoring skill consumes.
 
-**Domains.** Data products live in domain groups. `match_assets.py` classifies each candidate's domain heuristically from its naming; anything it cannot classify is filed under `other`. The infra profile file does not record domains authoritatively — prefer the customer's domains from the Step 1b user documentation when available, then review the assigned domains with the user and correct any that are wrong.
+The model schemas in `*-models.md` are what become the candidate's input/output **semantic models** downstream — link `<app_url>/docs/#/tutorials/guides/01-semantic-model` when walking the user through them.
 
-**Service URLs.** A service URL has the form `infra-profile/<profile>#/services/<service>`. Pass `--api-url <mesh-api-url>` to `inspect_service.py` to make it absolute; without it the URL is relative and the consumer prepends the base. Ask the user for the mesh API URL if they have one.
+**Domains.** Data products live in domain groups. `match_assets.py` classifies each candidate's domain heuristically from its naming; anything it cannot classify is filed under `other`. The infra profile file does not record domains authoritatively, so **derive-or-elicit** the real domain set rather than inventing `other`: prefer the customer's domains from the Step 1b user documentation; otherwise derive the vocabulary from the active mesh's existing data products (`nxd ls data-products`, with `--config /tmp/nxd-<mesh_name>.yaml` if present) and the profile's service/namespace names. Then review the assigned domains with the user and correct any that are wrong.
 
-For time-partitioned inputs (date or `dt=`-style segments), the report records the partition keys — the partition granularity implies the transform's refresh cadence.
+**Service URLs.** A service URL has the form `infra-profile/<profile>#/services/<service>`. Its host must be **anchored to the active mesh** — pass `--api-url <api_url>` (the `api_url` derived from the active mesh in Step 0) to `inspect_service.py` so the emitted URL is absolute and points at the mesh the profile belongs to. Do **not** elicit the host blind or leave it relative: a relative ref forces downstream consumers to assume a base, which can silently mismatch the mesh. If Step 0 found no active mesh (offline run), say so explicitly in the report — the URLs are relative and must be resolved against whichever mesh the profile came from.
+
+For time-partitioned inputs (date or `dt=`-style segments), the report records the partition keys — the partition granularity implies the transform's refresh cadence. To turn that into a transform `when`/cron downstream, link `<app_url>/docs/#/tutorials/guides/06-scheduling`.
 
 **Ambiguous candidates — prompt the user at run-time, then generalise.** When several candidate pairs share both an input basename and an output basename (e.g. `amazon-sales.csv` → `AMAZON_SALES` showing up across many demo/dev/int-test S3 paths and pointing at one or two Snowflake tables), `match_assets.py` collapses them into a single block in the main report flagged as **`ambiguous candidate`** — `#### N. \`<name>\` — **ambiguous candidate** (M inputs, K outputs, P pairs)`. The block carries the ambiguous-candidate id + counts only. Variants live in the sidecar `mesh-assets-<profile>-ambiguous.md`.
 
@@ -210,9 +251,9 @@ For each ambiguous candidate, the skill must:
       - Snowflake schema with no `_STAGING` / `_TEST` / `_TMP` suffix beats one that has them.
       - Plain schema beats one with a trailing `_<digit>` (numbered copy).
       - Snowflake schema whose tokens overlap the input path's last meaningful segment beats one that doesn't (`DWN_INCREMENTAL2.CUSTOMER_HISTORY` beats `HELLOINCREMENTAL.CUSTOMER_HISTORY` for an input under `dwn-incremental2/`).
-5. **Never let the downstream consumer (nexty-bootstrap / nxd-data-product-builder) guess.** Pass on resolved input + output locators only.
+5. **Never let the downstream consumer (nxd-data-product-builder) guess.** Pass on resolved input + output locators only.
 
-Tell the user both main + ambiguous sidecar file paths and summarize the top candidates per domain in chat — do not paste the whole report. Walk through every ambiguous candidate with the user (or via the learned pattern) before recommending next steps. Finally, point the user to **nexty-bootstrap** (or **nxd-data-product-builder**) to turn a resolved candidate into a real data product.
+Tell the user both main + ambiguous sidecar file paths and summarize the top candidates per domain in chat — do not paste the whole report. Walk through every ambiguous candidate with the user (or via the learned pattern) before recommending next steps. Finally, point the user to **nxd-data-product-builder** to turn a resolved candidate into a real data product, and link `<app_url>/docs/#/tutorials/cli/create` for how a resolved candidate becomes a real data product on the mesh.
 
 ---
 
@@ -237,4 +278,4 @@ If a `driver` string is malformed or its `name` and `driver` fields look swapped
 - **Cost** — prefer metadata (`INFORMATION_SCHEMA`, object listings, table stats) over full scans. Sample with `LIMIT` / single-object reads to infer schema.
 - **Client libraries** — recipes need driver-specific clients (`boto3`, `snowflake-connector-python`, etc.). Install on demand into a temp venv; prefer a CLI already on PATH.
 - **Multiple credentials, one store** — a profile may list several services pointing at the same store with different auth (e.g. `nxd-snowflake`, `nxd-snowflake-keypair`, `nxd-snowflake-pat`). Inspect one; note the others are duplicates.
-- **One service = one input** — keep the inventory aligned to how nextdata models inputs, so results map cleanly onto nexty-bootstrap.
+- **One service = one input** — keep the inventory aligned to how nextdata models inputs, so results map cleanly onto nxd-data-product-builder.

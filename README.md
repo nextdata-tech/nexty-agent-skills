@@ -97,8 +97,8 @@ To iterate on a local checkout, point the marketplace at your clone instead:
 git clone https://github.com/nextdata-tech/nexty-agent-skills.git
 mkdir -p .claude/skills
 cp -r nexty-agent-skills/src/nxd-setup .claude/skills/nxd-setup
-cp -r nexty-agent-skills/src/nexty-bootstrap .claude/skills/nexty-bootstrap
-cp -r nexty-agent-skills/src/nexty-mesh-analyzer .claude/skills/nexty-mesh-analyzer
+cp -r nexty-agent-skills/src/nxd-data-product-builder .claude/skills/nxd-data-product-builder
+cp -r nexty-agent-skills/src/nxd-mesh-analyzer .claude/skills/nxd-mesh-analyzer
 ```
 
 ### Local development on skills
@@ -138,17 +138,19 @@ rm -rf .agents .claude/skills skills-lock.json
 | Skill | Description |
 |-------|-------------|
 | `nxd-setup` | Install, configure, and authenticate the nxd CLI |
-| `nexty-bootstrap` | Interactive wizard to bootstrap a new nextdata data product |
-| `nexty-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
+| `nxd-data-product-builder` | Create, bootstrap, scaffold, refine, and validate a Nextdata OS Python data product — interactive interview or spec-from-document (replaces the former `nexty-bootstrap` wizard) |
+| `nxd-data-product-query` | Query a deployed data product's output ports (SQL, file fetch, vector similarity, or MCP/RPC) via its REST API |
+| `nxd-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
+| `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
 
 ## Usage
 
 Start Claude Code in any project and invoke a skill:
 
 ```
-/nxd-setup              # Set up the nxd CLI
-/nexty-bootstrap        # Bootstrap a new data product
-/nexty-mesh-analyzer    # Discover candidate data products from an infra profile
+/nxd-setup                  # Set up the nxd CLI
+/nxd-data-product-builder   # Build / bootstrap a new data product
+/nxd-mesh-analyzer        # Discover candidate data products from an infra profile
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.

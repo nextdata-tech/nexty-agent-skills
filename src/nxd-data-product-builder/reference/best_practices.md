@@ -2,8 +2,8 @@
 
 ## Specification
 
-* Usage of the infrastructure profile names, `infra_profile="ecommerce"`, is preferred over URLs `infra_profile="https://nextopia.dev/infra/ecommerce"`
-* **Service URLs in `.source(...)`, `.compute(...)`, `storage(...)` are full URLs, inlined.** Use the literal `https://<mesh>/infra-profile/<profile>#/services/<service>` at each call site rather than constructing them through a private helper. Keeping them inline makes the spec greppable, mirrors the pattern in `nextdata-public-examples`, and avoids hiding the per-service binding behind indirection.
+* Usage of the infrastructure profile **name**, `infra_profile="<profile>"` (the profile chosen in discovery — e.g. a name returned by `nxd ls infra-profiles` against the active mesh), is preferred over the URL form `infra_profile="https://<app_url>/infra/<profile>"`. The profile name is elicited/derived, never a hardcoded demo name.
+* **Service URLs in `.source(...)`, `.compute(...)`, `storage(...)` are full URLs, inlined.** Use the literal `https://<app_url>/infra-profile/<profile>#/services/<service>` at each call site rather than constructing them through a private helper. `<app_url>` resolves to the **active mesh's `app_url`** from mesh config (`~/.nxd/meshes.json`; see SKILL.md Prerequisites) — it is not a placeholder you leave literal or fill with a demo host. Keeping the URLs inline makes the spec greppable, mirrors the pattern in `nextdata-public-examples`, and avoids hiding the per-service binding behind indirection.
 * **The compute service name is profile-specific — read the infra profile first.** Different profiles ship different names (`k8s-compute` in some, `k8s-executor` in others, plus Databricks/SageMaker variants). Don't assume; open the infra-profile YAML and pick the service whose `driver` classifies as Compute.
 * **`spec.py` and `models.py` use `from nxd_spec import *` / `from nxd_models import *` — and those are project-local shim modules**, not packages from the `nxd` install. Create `nxd_spec.py` and `nxd_models.py` alongside `spec.py`, re-export every name the spec/models files use, and list each in `__all__`:
 
