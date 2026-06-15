@@ -235,7 +235,7 @@ Report the active mesh configuration:
 
 **Important**: For the rest of this session, always pass `--config /tmp/nxd-<mesh_name>.yaml` to every `nxd` command. This ensures all operations target the selected mesh.
 
-If the user came here from another skill (e.g. `nexty-bootstrap`), let them know they can proceed.
+If the user came here from another skill (e.g. `nxd-data-product-builder`), let them know they can proceed.
 
 ---
 
