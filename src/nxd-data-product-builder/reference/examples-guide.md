@@ -4,13 +4,26 @@ Use `https://github.com/nextdata-tech/nextdata-public-examples` as the reference
 
 ## How to Use Examples
 
-Do not embed the whole examples repo in the skill. Clone or browse it on demand:
+The examples repo is bundled with this skill as a git submodule at:
 
-```bash
-git clone https://github.com/nextdata-tech/nextdata-public-examples.git .context/dp-build/<timestamp>/nextdata-public-examples
+```
+reference/nextdata-public-examples/data_products/<example>/
 ```
 
-Use `data_products/feature_matrix_table.md` to pick the closest example by infrastructure and capability.
+Read the spec/transform/model files there directly. If the submodule directory is
+empty (a shallow clone that skipped submodules), populate it once:
+
+```bash
+git submodule update --init reference/nextdata-public-examples
+# or browse the live repo: https://github.com/nextdata-tech/nextdata-public-examples
+```
+
+Use `reference/nextdata-public-examples/data_products/feature_matrix_table.md` to pick the
+closest example by infrastructure and capability.
+
+> Note: Claude Desktop packages a **curated subset** of these DPs (the ones listed below) to
+> stay under the per-skill file cap; the full corpus is available in Claude Code and in the
+> live repo.
 
 ## Example Selection
 

@@ -59,7 +59,7 @@ Start by deeply understanding the user's intent, objectives, and requirements fo
 #### Research
 Consult the following references for concepts, APIs, and best practices:
 
-* Real-world examples of implemented Data Products — cloned on demand from the live public repo; see [reference/examples-guide.md](reference/examples-guide.md) for selection and drafting rules.
+* Real-world examples of implemented Data Products — bundled as a submodule at [reference/nextdata-public-examples/](reference/nextdata-public-examples/); see [reference/examples-guide.md](reference/examples-guide.md) for selection and drafting rules.
     * Ignore the single-import rule present within examples, it does not apply to newly built Data Products.
 * Information regarding best practices, preferred approaches and more: [reference/best_practices.md](reference/best_practices.md)
 * Overview of Nextdata OS concepts: [reference/concepts.md](reference/concepts.md)
