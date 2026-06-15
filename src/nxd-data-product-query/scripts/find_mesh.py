@@ -40,11 +40,15 @@ def main() -> None:
         out_path.write_text(m.token)
         os.chmod(out_path, 0o600)
 
+    docs_base = f"{m.app_url.rstrip('/')}/docs/#/" if m.app_url else None
+
     print(
         json.dumps(
             {
                 "mesh_name": m.name,
                 "api_url": m.api_url,
+                "app_url": m.app_url,
+                "docs_base": docs_base,
                 "source": m.source,
                 "token_available": bool(m.token),
                 "token_file": str(out_path) if m.token else None,

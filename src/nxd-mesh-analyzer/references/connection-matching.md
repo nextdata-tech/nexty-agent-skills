@@ -71,7 +71,7 @@ When an input is time-partitioned, the partition granularity implies the transfo
 
 ## Domain
 
-Every data product belongs to a **domain** — a business grouping such as sales, finance, customer, or product. Classify each candidate's domain by keyword-matching its suggested name, namespaces, asset names, and service names against a domain vocabulary; the domain with the most hits wins. When nothing matches, file the candidate under `other`. Domains are not recorded in the infra profile, so this is a best-effort guess — surface it for the user to confirm or correct, and group the report's candidates by domain.
+Every data product belongs to a **domain** — a business grouping such as sales, finance, customer, or product. Classify each candidate's domain by keyword-matching its suggested name, namespaces, asset names, and service names against a domain vocabulary; the domain with the most hits wins. Domains are not recorded in the infra profile, so **derive-or-elicit** the real vocabulary rather than inventing `other`: prefer the customer's domains from the Step 1b user documentation, otherwise derive it from the active mesh's existing data products (`nxd ls data-products`). Only when neither yields a match, file the candidate under `other`. Either way, surface the assigned domains for the user to confirm or correct, and group the report's candidates by domain.
 
 ## Suggested data product name
 
@@ -79,4 +79,4 @@ Give each candidate a kebab-case data product name, **biased to the output datas
 
 ## Required report fields
 
-A downstream skill authors data products from this report, so each candidate must carry: the suggested data product name, the domain, the infra profile name, and — for both the input and the output — the data source location and its infra-profile service URL. Carry every one of these through from the inventory into the report. Keep the input/output model schemas in the companion `*-models.md` file.
+A downstream skill authors data products from this report, so each candidate must carry: the suggested data product name, the domain, the infra profile name, and — for both the input and the output — the data source location and its infra-profile service URL (absolute, anchored to the active mesh's `api_url`; never a bare relative ref with an assumed base). Carry every one of these through from the inventory into the report. Keep the input/output model schemas in the companion `*-models.md` file.

@@ -46,7 +46,7 @@ spec = (
         domain="retail/sales",
         description="Sales Influence Insights uncovers...",
         version="0.1.1-dev",
-        infra_profile="ecommerce-demo",
+        infra_profile="<profile>",   # profile NAME chosen in discovery (e.g. from `nxd ls infra-profiles`); not a demo name
         source_repo_url="https://github.com/nextdata-tech/sales-influence-insights",
     )
     .transform(
@@ -59,12 +59,12 @@ spec = (
             ),
             startup=True,
         )
-        .compute("<instance-url>/infra-profile/ecommerce#/services/databricks-aws")
+        .compute("<app_url>/infra-profile/<profile>#/services/databricks-aws")
     )
     .input(
         "store-sales",
         data_product_input()
-        .source("<instance-url>/data-product/store-sales#/output/port/adls/pos-sell-out")
+        .source("<app_url>/data-product/store-sales#/output/port/adls/pos-sell-out")
         .expectation(
             custom("promotion_participation")
             .verify(code(expectation_store_sales.verify))
@@ -75,7 +75,7 @@ spec = (
     .input(
         "pos-transactions",
         source_aligned_input()
-            .source("<instance-url>/infra-profile/ecommerce#/services/nxd-s3")
+            .source("<app_url>/infra-profile/<profile>#/services/nxd-s3")
             .model(pos_transactions)
             .config(s3_config(SupportedFormat.PARQUET).target_file("input/pos_transactions.parquet", pos_transactions))
     )
@@ -83,7 +83,7 @@ spec = (
         data_product_output()
         .port(
             "BI_on_snowflake",
-            storage("<instance-url>/infra-profile/ecommerce#/services/snowflake-aws")
+            storage("<app_url>/infra-profile/<profile>#/services/snowflake-aws")
             .promise(trending_sales)
             .promise(
                 quality(soda, "./contracts/trending_sales_checks.yaml")
@@ -94,7 +94,7 @@ spec = (
         )
         .port(
             "vector_embedding_pinecone",
-            storage("<instance-url>/infra-profile/ecommerce#/services/pinecone").config(
+            storage("<app_url>/infra-profile/<profile>#/services/pinecone").config(
                 pinecone_config(
                     namespace="default",
                     region_name="us-east",
@@ -103,7 +103,7 @@ spec = (
         )
         .model(emerging_products)
         .access_approval(
-            access_approval_config("<instance-url>/infra-profile/ecommerce#/services/servicenow")
+            access_approval_config("<app_url>/infra-profile/<profile>#/services/servicenow")
         )
     )
     .output(
@@ -117,17 +117,17 @@ spec = (
         )
         .port(
             "mcp-api",
-            rpc_server("<instance-url>/infra-profile/ecommerce#/services/mcp-api")
+            rpc_server("<app_url>/infra-profile/<profile>#/services/mcp-api")
             .enable_endpoints()
             .mcp_path("/mcp"),
         )
     )
     .link(
         Predicate.GlossaryTerm,
-        "<instance-url>/data-product/demo/ecommerce-glossary#/terms/region/Europe",
+        "<app_url>/data-product/demo/ecommerce-glossary#/terms/region/Europe",
     )
-    .control("data-product-access", data_product_access().user("joe@nextdata.com"))
-    .control("owner", owner().user("alice@nextdata.com"))
+    .control("data-product-access", data_product_access().user("<consumer-email>"))
+    .control("owner", owner().user("<owner-email>"))
 )
 ```
 
@@ -171,7 +171,7 @@ spec = (
     .input(
         "pos-transactions",
         source_aligned_input()
-        .source("<instance-url>/infra-profile/ecommerce#/services/nxd-s3")
+        .source("<app_url>/infra-profile/<profile>#/services/nxd-s3")
         .model(pos_transactions)
         .config(s3_config(SupportedFormat.PARQUET).target_file("input/pos_transactions.parquet", pos_sell_out))
         .expectation(pos_transactions)
@@ -197,7 +197,7 @@ spec = (
     .input(
         "store-sales",
         data_product_input()
-        .source("<instance-url>/data-product/store-sales#/output/port/adls/pos-sell-out")
+        .source("<app_url>/data-product/store-sales#/output/port/adls/pos-sell-out")
         .expectation(pos_sell_out)
         .environment("demo")
     )
@@ -239,7 +239,7 @@ spec = (
     .transform(
         script("transform.py")
         .when(scheduled("0 */8 * * *"), startup=True)
-        .compute("<instance-url>/infra-profile/ecommerce#/services/databricks-aws")
+        .compute("<app_url>/infra-profile/<profile>#/services/databricks-aws")
     )
 )
 ```
@@ -284,11 +284,11 @@ spec = (
         .model(trending_sales)
         .port(
             "BI_on_snowflake",
-            storage("<instance-url>/infra-profile/ecommerce#/services/snowflake-aws").config(
+            storage("<app_url>/infra-profile/<profile>#/services/snowflake-aws").config(
                 snowflake_config("RETAIL").target_table("TRENDING_SALES", trending_sales)
             ),
         )
-        .port("s3", storage("<instance-url>/infra-profile/ecommerce#/services/nxd-s3").config(s3_config(SupportedFormat.PARQUET)))
+        .port("s3", storage("<app_url>/infra-profile/<profile>#/services/nxd-s3").config(s3_config(SupportedFormat.PARQUET)))
         .promise(trending_sales)
     )
 )
@@ -325,7 +325,7 @@ spec = (
         )
         .port(
             "mcp-api",
-            rpc_server("<instance-url>/infra-profile/ecommerce#/services/mcp-api")
+            rpc_server("<app_url>/infra-profile/<profile>#/services/mcp-api")
             .enable_endpoints()
             .mcp_path("/mcp"),
         )
@@ -344,7 +344,7 @@ A storage port connects an output to a storage service. Created with `storage()`
 
 ```
 port = (
-    storage("<instance-url>/infra-profile/ecommerce#/services/snowflake-aws")
+    storage("<app_url>/infra-profile/<profile>#/services/snowflake-aws")
     .config(snowflake_config("RETAIL").target_table("TRENDING_SALES", trending_sales))
     .promise(trending_sales)
     .managed_access()
@@ -372,7 +372,7 @@ An API port exposes RPC functions over a network endpoint. Created with `rpc_ser
 
 ```
 port = (
-    rpc_server("<instance-url>/infra-profile/ecommerce#/services/mcp-api")
+    rpc_server("<app_url>/infra-profile/<profile>#/services/mcp-api")
     .enable_endpoints()
     .mcp_path("/mcp")
 )
@@ -524,7 +524,7 @@ from nxd.spec import custom, code, script
 # Inline function verification
 custom("promotion_participation").verify(
     code(expectation_store_sales.verify)
-    .compute("<instance-url>/infra-profile/ecommerce#/services/databricks-aws")
+    .compute("<app_url>/infra-profile/<profile>#/services/databricks-aws")
 ).model(pos_sell_out)
 
 # Script-based verification
@@ -576,9 +576,9 @@ from nxd.spec import data_product_access, owner
 
 spec = (
     data_product(...)
-    .control("owner", owner().user("alice@nextdata.com").description("Sales Influence Insights"))
-    .control("data-product-access", data_product_access().user("joe@nextdata.com").description("Retail analytics consumer"))
-    .control("steward", data_product_access().user("bob@example.com").description("Data steward"))
+    .control("owner", owner().user("<owner-email>").description("Sales Influence Insights"))
+    .control("data-product-access", data_product_access().user("<consumer-email>").description("Retail analytics consumer"))
+    .control("steward", data_product_access().user("<steward-email>").description("Data steward"))
 )
 ```
 
@@ -601,9 +601,9 @@ spec = (
     .output(
         data_product_output()
         .model(emerging_products, is_public=False)
-        .port("BI_on_snowflake", storage("<instance-url>/infra-profile/ecommerce#/services/snowflake-aws").config(...))
+        .port("BI_on_snowflake", storage("<app_url>/infra-profile/<profile>#/services/snowflake-aws").config(...))
         .access_approval(
-            access_approval_config("<instance-url>/infra-profile/ecommerce#/services/servicenow")
+            access_approval_config("<app_url>/infra-profile/<profile>#/services/servicenow")
             .approval_group("data-stewards")
         )
     )
@@ -624,12 +624,14 @@ spec = (
 
 Infrastructure services, data product ports, and glossary terms are referenced by URL.
 
+In every pattern below, `<app_url>` is **the active mesh's app host, resolved from mesh config** (the selected mesh's `app_url` in `~/.nxd/meshes.json`; `nxd-setup` writes the per-mesh config to `/tmp/nxd-<mesh>.yaml` — see SKILL.md Prerequisites). `<profile-name>` is the infra profile chosen in discovery (local profile YAML, or `nxd ls infra-profiles` against the mesh). Neither is a literal placeholder left in the spec, and neither is a demo host/name — both are resolved before writing `spec.py`. Service/DP/glossary names likewise come from the profile or from `nxd ls data-products` against the active mesh.
+
 ### Infra profile service URL
 
 References a service defined in an infra profile:
 
 ```
-<instance-url>/infra-profile/<profile-name>#/services/<service-name>
+<app_url>/infra-profile/<profile-name>#/services/<service-name>
 ```
 
 Used in: `.source()`, `.compute()`, `storage()`, `rpc_server()`
@@ -639,13 +641,13 @@ Used in: `.source()`, `.compute()`, `storage()`, `rpc_server()`
 References another data product's output port:
 
 ```
-<instance-url>/data-product/<dp-name>#/output/port/<port-name>
+<app_url>/data-product/<dp-name>#/output/port/<port-name>
 ```
 
 Or with domain:
 
 ```
-<instance-url>/data-product/<domain>/<dp-name>#/output/port/<port-name>
+<app_url>/data-product/<domain>/<dp-name>#/output/port/<port-name>
 ```
 
 Used in: `data_product_input().source()`
@@ -655,7 +657,7 @@ Used in: `data_product_input().source()`
 References a term in a glossary data product:
 
 ```
-<instance-url>/data-product/<glossary-dp-name>#/terms/<term-name>
+<app_url>/data-product/<glossary-dp-name>#/terms/<term-name>
 ```
 
 Used in: `.link(Predicate.GlossaryTerm, url)`
@@ -665,7 +667,7 @@ Used in: `.link(Predicate.GlossaryTerm, url)`
 References a specific attribute in another data product's model:
 
 ```
-<instance-url>/data-product/<dp-name>#/models/<model-name>/attributes/<attribute-name>
+<app_url>/data-product/<dp-name>#/models/<model-name>/attributes/<attribute-name>
 ```
 
 Used in: `.link(field, Predicate.SameAs, url)`
@@ -683,7 +685,7 @@ spec = (
         domain="finance",
         version="1.0.0-dev",
         description="Finance domain glossary",
-        infra_profile="my-profile",
+        infra_profile="<profile>",
     )
     .glossary("glossary.yaml")
 )
@@ -695,6 +697,6 @@ Other data products link to glossary terms using `.link()`:
 trending_sales = (
     semantic_model("trending_sales")
     .schema({"revenue": float64()})
-    .link(Predicate.GlossaryTerm, "<instance-url>/data-product/demo/ecommerce-glossary#/terms/revenue")
+    .link(Predicate.GlossaryTerm, "<app_url>/data-product/demo/ecommerce-glossary#/terms/revenue")
 )
 ```

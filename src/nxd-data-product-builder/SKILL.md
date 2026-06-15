@@ -19,9 +19,10 @@ This Skill is intended for technically proficient users who are familiar with te
 Before engaging with the user, set up the environment. Do **not** proceed until this is complete.
 
 - **NXD CLI:** Ensure the NXD CLI is installed and the correct mesh is selected, this should be set up and verified by the "nxd-setup" Skill. *Confirm the correct mesh has been selected before continuing.*
+- **Active mesh + its hosts (elicit-or-derive, do not hardcode):** every service URL, doc link, and `nxd ... --config` flag in this skill depends on which mesh is active. `nxd-setup` owns mesh selection and writes the per-mesh config to `/tmp/nxd-<mesh>.yaml`. Confirm the active mesh **name** with the user (or read it from `~/.nxd/meshes.json` — the selected entry), and from that same mesh entry take its `app_url`/`api_url` host. These are the host you substitute into `https://<app_url>/infra-profile/<profile>#/services/<service>` URLs and into the docs base below. Never paste a demo host (`example.com`, `nextopia.dev`, `nextdata.com`) as if it were canonical — those only appear as clearly-marked illustrative placeholders.
 - **Runtime:** Python **3.10** with **`uv`** as the dependency manager.
     - *There is no need to check for a given Python version since `uv` will manage this for us.*
-- **Dependencies:** Install the `nxd-data-product` Python package ([registry](https://registry.trynxd.com/index/)):
+- **Dependencies:** Install the `nxd-data-product` Python package from the mesh's package registry index (commonly `https://registry.trynxd.com/index/`; if your mesh config specifies a different index, use that):
 
 ```
 uv init --bare --python 3.10
@@ -30,6 +31,18 @@ uv add nxd-data-product --index nxd=https://registry.trynxd.com/index/
 ```
 
 *Critical: Do not rely on internal or assumed knowledge regarding Nextdata OS or its Python packages. Always verify usage against the locally installed version of the `nxd` Python package.*
+
+### Platform docs (per-mesh)
+Docs are served **per-mesh** from the active mesh's app host — there is no single global docs URL. Resolve the base from mesh config (the `app_url` of the selected mesh in `~/.nxd/meshes.json`, exactly as `nxd-setup` records it), then build links as `<app_url>/docs/#/<path>` (docsify hash routing — keep the `#/`, no `.md` extension). The doc paths most relevant to *building* a Data Product:
+
+| Topic | Path (append to `<app_url>/docs/#/`) |
+|---|---|
+| CLI setup / mesh + auth | `tutorials/cli/setup` |
+| Create a Data Product (CLI) | `tutorials/cli/create` |
+| Inputs | `tutorials/guides/04-inputs` |
+| Outputs | `tutorials/guides/02-outputs` |
+
+Hand these out **inline and contextually** at the matching step below (full path table in [reference/platform-docs.md](reference/platform-docs.md)). If a deep link 404s, open the docs home `<app_url>/docs/#/` or the in-app Learn tab rather than guessing paths. Prefer **showing** live with `nxd` over linking where you can.
 
 ---
 
@@ -103,10 +116,11 @@ Other document shapes — plain markdown or text describing a Data Product — a
 #### Infra Profile Lookup
 Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nxd-mesh-analyzer` does, then confirm with the user.
 
-Search, in order:
+The infra profile must be **derived from the active mesh or elicited from the user — never hardcoded** (do not assume `ecommerce`, `ecommerce-demo`, or any demo name). Search, in order:
 
 1. Customer extension paths — `./.nxd/skills/nxd-data-product-builder/` and `~/.nxd/skills/nxd-data-product-builder/`.
 2. Working tree — `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
+3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=/tmp/nxd-<mesh>.yaml` and let the user choose from the returned names. Likewise list available services for a chosen profile from the mesh when no local YAML exists (the profile name selected here is the value you place in `infra_profile="..."` and in service URLs).
 
 For each candidate file, confirm with `Grep` that it has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top. Resolve **pointer files** — a file whose contents are filesystem path(s) or URI(s), one per line — by following each pointer (read file paths, fetch `http(s)://` URIs).
 
@@ -139,13 +153,18 @@ coming from?" Steer to exactly one of:
   that product's output port. Reuse the upstream's published semantic models
   as inputs where available.
 
-**b. Domain, infra profile, and basics.** Confirm the domain the user may
-launch in and the infra profile to use (locate the profile via **Infra
-Profile Lookup** above; for domain/role discovery the heavier CLI/REST
-walk-through lives in `nxd-mesh-analyzer`). From the profile, identify the
-available services and classify each as compute / storage / rpc / governance
-(driver-classification table in
-[reference/file-templates.md](reference/file-templates.md)). Then pin the
+**b. Domain, infra profile, and basics.** Elicit-or-derive — none of these are
+hardcoded defaults. **Domain:** confirm the domain the user may launch in
+(elicit it, or derive launchable domains from the active mesh; the heavier
+CLI/REST role/domain walk-through lives in `nxd-mesh-analyzer`). **Infra
+profile:** locate or enumerate it via **Infra Profile Lookup** above (local
+YAML, else `nxd ls infra-profiles` against the active mesh) and confirm with
+the user. From the profile, identify the available services and classify each
+as compute / storage / rpc / governance (driver-classification table in
+[reference/file-templates.md](reference/file-templates.md)); when only the
+mesh (no local YAML) lists services, take service names from there. *Doc:
+the end-to-end CLI scaffolding flow is at `<app_url>/docs/#/tutorials/cli/create`.*
+Then pin the
 basics: **name** (kebab-case, suggested from the source), **description**,
 **version** (default `0.1.0-dev`), **source repo URL** (detect via
 `git remote get-url origin` when in a repo). Pin **transform compute** (auto-
@@ -157,7 +176,10 @@ input type (`source_aligned_input()` for raw/external storage, or
 `data_product_input()` for an upstream DP), the source URL selected from the
 profile's storage services, and a `semantic_model()` (snake_case name,
 description, typed schema). Present any models inferred in (a) for the user to
-adjust.
+adjust. *Docs: `<app_url>/docs/#/tutorials/guides/04-inputs` (source vs DP
+inputs); for depending on another team's DP,
+`<app_url>/docs/#/tutorials/guides/consumer-tutorial`; semantic-model rules at
+`<app_url>/docs/#/tutorials/guides/01-semantic-model`.*
 
 **d. Outputs and semantic models.** "What data does this product produce?" —
 frame it concretely using the locked input format and output storage (e.g.
@@ -172,6 +194,8 @@ Collect each output model the same way. Then:
   `.link("output_field", Predicate.SameAs, "<input-model>#/schema/<input-field>")`.
   Skip for pure source-aligned products — outputs mirror inputs 1:1.
 
+*Docs: output ports at `<app_url>/docs/#/tutorials/guides/02-outputs`.*
+
 **e. Transform logic.** "Describe what the transformation does — how do inputs
 become outputs?" Use the compute service already chosen. The transform reads
 each input via its context type, writes each output port, and carries clearly
@@ -180,15 +204,22 @@ labelled TODO markers for the real logic.
 **f. Output ports.** Map output models to ports. Auto-name each port from its
 storage driver (e.g. `nxd_snowflake`, `iceberg_on_s3`); with one storage
 destination all models share a port, with several ask which models route where.
+*For an RPC/MCP output port, see `<app_url>/docs/#/tutorials/guides/07-mcp`.*
 
 **g. Quality, access, trigger.** Optional but offer them:
 * **Data quality** — completeness, PII detection, Soda (YAML in `contracts/`),
   Great Expectations (Python in `contracts/`), or a custom verify function.
-* **Access** — owner / data-steward / consumer emails.
+  *Promises/contracts: `<app_url>/docs/#/tutorials/guides/03-promises`;
+  input expectations: `<app_url>/docs/#/tutorials/guides/05-expectations`.*
+* **Access** — **elicit** the owner / data-steward / consumer email addresses
+  from the user; these are environment-specific identities, not defaults. Do
+  not copy any `@nextdata.com` / `@example.com` address from reference
+  examples — those are placeholders only.
 * **Trigger** — should it run when an input updates (`updated("my-input")`,
   where the argument is the `.input()` name, **not** the upstream DP name) or
   on a schedule (`scheduled("0 */8 * * *")`)? If a time-partitioned input
   implies a cadence, seed that cron. Both is fine via `any_of(...)`.
+  *Scheduling: `<app_url>/docs/#/tutorials/guides/06-scheduling`.*
 
 Also cover the underlying technical questions for any path:
 
@@ -265,7 +296,7 @@ Insert "TODO" markers with clear instructions wherever any of the following are 
 #### `spec.py`
 * Ensure the infrastructure profile is included (by name — `infra_profile="<name>"`).
 * Configure each driver (service) with the appropriate URLs and settings, whether it is an input (`source()`) or an output (`storage()` etc.).
-* Service URLs are full and inlined: `https://<mesh>/infra-profile/<profile>#/services/<service>` — used as-is in `.source(...)`, `storage(...)`, `.compute(...)`. Do not abstract behind a helper.
+* Service URLs are full and inlined: `https://<app_url>/infra-profile/<profile>#/services/<service>` — used as-is in `.source(...)`, `storage(...)`, `.compute(...)`. Do not abstract behind a helper. `<app_url>` is the active mesh's app host **resolved from mesh config** (see Prerequisites), `<profile>` is the infra profile chosen in discovery, and `<service>` is a real service name from that profile — none of these are hardcoded demo hosts/names.
 * Read the chosen infra profile YAML to discover the correct service names; the compute service name in particular varies between profiles (`k8s-compute`, `k8s-executor`, a Databricks compute, etc.).
 * Project-local `nxd_spec.py` and `nxd_models.py` shim modules are required — the wildcard imports in `spec.py` / `models.py` resolve through these. See `reference/best_practices.md` for the template.
 * Note: `spec.py` cannot be run locally — it requires the Nextdata OS hosted runtime.

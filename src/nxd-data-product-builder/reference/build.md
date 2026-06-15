@@ -184,7 +184,7 @@ Here is an example of configuration from an "off-mesh" data asset on S3:
       data_product()
       .input("my_source",
           source_aligned_input()
-          .source("service://mesh-name/infra-profile/s3-service-name")
+          .source("service://<mesh>/infra-profile/<s3-service-name>")  # <mesh>/service resolved from mesh config + chosen profile
           .update_trigger(
               object_storage_data_trigger()  # Triggers when new data arrives
           )
@@ -223,7 +223,7 @@ spec = (
       data_product(name="my-data-product")
       .input("upstream_orders",
           data_product_input()
-          .source("https://nextdata.com/data-product/orders#/output/snowflake")
+          .source("https://<app_url>/data-product/orders#/output/snowflake")  # <app_url> = active mesh app host
       )
       .input("raw_inventory",
           source_aligned_input()
@@ -347,7 +347,7 @@ spec = (
         data_product_output()
         .port(
             "BI_on_snowflake",
-            storage("https://nextopia.dev/infra-profile/ecommerce-demo#/services/nxd-snowflake-aws")
+            storage("https://<app_url>/infra-profile/<profile>#/services/nxd-snowflake-aws")
         )
 )
 ```
@@ -364,7 +364,7 @@ spec = (
         data_product_output()
         .port(
             "iceberg_on_s3",
-            storage("https://nextopia.dev/infra-profile/ecommerce-demo#/services/s3-output")
+            storage("https://<app_url>/infra-profile/<profile>#/services/s3-output")
             ...
         )
 )
@@ -382,7 +382,7 @@ spec = (
         data_product_output()
         .port(
             "vector_embedding_pinecone",
-            storage("https://nextopia.dev/infra-profile/ecommerce-demo#/services/nxd-pinecone")
+            storage("https://<app_url>/infra-profile/<profile>#/services/nxd-pinecone")
             .config(pinecone_config(
                     namespace="default",
                     region_name="us-east")
@@ -409,7 +409,7 @@ spec = (
         .port(
             "mcp-api",
             rpc_server(
-                "https://nextopia.dev/infra-profile/ecommerce-demo#/services/mcp-api-service-k8s"
+                "https://<app_url>/infra-profile/<profile>#/services/mcp-api-service-k8s"
             )
             .enable_endpoints()
             .mcp_path("/mcp"),

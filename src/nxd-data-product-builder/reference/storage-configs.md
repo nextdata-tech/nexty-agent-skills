@@ -2,19 +2,21 @@
 
 ## Service URL pattern
 
-Always construct service URLs from the infra profile. Store the profile name as a constant:
+Always construct service URLs from the infra profile. Two parts are **resolved, not hardcoded**: the host (`<app_url>`) comes from the active mesh's config (see SKILL.md Prerequisites — the selected mesh's `app_url` in `~/.nxd/meshes.json`), and the profile name comes from the infra profile chosen in discovery (`nxd ls infra-profiles` against the mesh, or a local profile YAML). Store the resolved profile name as a constant:
 
 ```python
-INFRA_PROFILE = "ecommerce-demo"
+# INFRA_PROFILE: substitute the profile chosen in discovery — NOT a demo name.
+INFRA_PROFILE = "<profile>"          # e.g. the value from `nxd ls infra-profiles`
+# APP_URL host below is the active mesh's app_url, resolved from mesh config.
 
 # Storage service
-f"https://example.com/infra-profile/{INFRA_PROFILE}#/services/nxd-databricks-storage"
+f"https://<app_url>/infra-profile/{INFRA_PROFILE}#/services/nxd-databricks-storage"
 
 # Compute service
-f"https://example.com/infra-profile/{INFRA_PROFILE}#/services/k8s-compute"
+f"https://<app_url>/infra-profile/{INFRA_PROFILE}#/services/k8s-compute"
 ```
 
-The `<service-name>` must match a service name returned by the infra profile API (Step 2b).
+The `<service-name>` must match a service name returned by the infra profile (the local profile YAML, or `nxd ls infra-profiles` against the active mesh — see SKILL.md "Infra Profile Lookup").
 
 ---
 
@@ -23,20 +25,22 @@ The `<service-name>` must match a service name returned by the infra profile API
 | Use | Input type | `.source()` value |
 |-----|-----------|------------------|
 | External storage (S3, Databricks, Snowflake, ADLS, Kafka) | `source_aligned_input()` | Infra profile service URL |
-| Another data product's output port | `data_product_input()` | `https://example.com/data-product/<dp-name>/output/<port-name>` |
+| Another data product's output port | `data_product_input()` | `https://<app_url>/data-product/<dp-name>/output/<port-name>` |
+
+`<app_url>` is the active mesh's app host (mesh config), not a literal. To find upstream DP names/ports, list them from the active mesh with `nxd ls data-products` (see SKILL.md "Other data products" and `<app_url>/docs/#/tutorials/guides/consumer-tutorial`).
 
 ```python
-# External storage
+# External storage  (<app_url> = active mesh app host, INFRA_PROFILE = chosen profile)
 .input("store-sales",
     source_aligned_input()
-    .source(f"https://example.com/infra-profile/{INFRA_PROFILE}#/services/nxd-databricks-storage")
+    .source(f"https://<app_url>/infra-profile/{INFRA_PROFILE}#/services/nxd-databricks-storage")
     .config(databricks_config().target_table("sales", sales_model))
 )
 
 # DP-to-DP
 .input("upstream",
     data_product_input()
-    .source("https://example.com/data-product/upstream-dp-name/output/s3")
+    .source("https://<app_url>/data-product/upstream-dp-name/output/s3")
 )
 ```
 
