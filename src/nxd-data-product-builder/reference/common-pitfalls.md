@@ -93,12 +93,12 @@ GX requires `nxd_core[gx]` in requirements.txt. Soda requires `nxd_core[soda]`. 
 ## Infra / service issues
 
 **Invented service names**
-Service names in `.source()` URLs must match actual names from the infra profile (discovered in Step 2b). Made-up names cause `service not found` errors at deploy time.
+Service names in `.source()` URLs must match actual names from the infra profile — read them from the chosen profile YAML, or list them from the active mesh (`nxd ls infra-profiles`; see SKILL.md "Infra Profile Lookup"). Made-up names cause `service not found` errors at deploy time.
 
 **K8s compute missing `image_pull_policy` for local dev**
 When running against a local cluster with locally-built images, add `"image_pull_policy": "Never"` to the compute config. Without it, k8s tries to pull from a remote registry and fails or uses a stale image.
 ```python
-.compute(f"https://example.com/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+.compute(f"https://<app_url>/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")  # <app_url> = active mesh app host
 .config({
     "resources": {"requests": {"cpu": "0.5", "memory": "512Mi"}},
     "image_pull_policy": "Never",   # required for local dev

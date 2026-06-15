@@ -37,7 +37,7 @@ closest example by infrastructure and capability.
 
 ## Drafting Rules
 
-- Match file layout and imports to the closest current example, then adapt names, domains, infra profiles, and services.
+- Match file layout and imports to the closest current example, then adapt names, domains, infra profiles, and services. The host, infra-profile name, and service names in any example URL are **placeholders** — replace them with values for the active mesh: the `<app_url>` host from mesh config, the profile chosen in discovery (`nxd ls infra-profiles`), and that profile's real service names. Do not carry an example's demo host/profile (e.g. `nextopia.dev`, `ecommerce-demo`) into the user's product.
 - Keep draft products local under `.context/dp-build/<timestamp>/draft-products/`.
 - Do not launch. Validation is local only.
 - Preserve source shape for source-aligned products.

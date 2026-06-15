@@ -13,9 +13,37 @@ metadata:
 
 Ensure the user's environment is ready to work with the nextdata platform. This skill manages mesh environments — named platform instances (e.g. dev, staging, prod) — so the user can register, select, and switch between them across sessions.
 
-Mesh configurations are persisted in `~/.nxd/meshes.json`. Each mesh stores an API URL, authentication token, and install URL. At session start, a temporary config file is generated from the registry so the CLI can target the correct platform.
+Mesh configurations are persisted in `~/.nxd/meshes.json`. Each mesh stores an **app URL**, an **API URL**, an authentication token, and an install URL. At session start, a temporary config file is generated from the registry so the CLI can target the correct platform.
+
+The host shape varies per mesh: a `trynxd.com` cloud mesh follows the `app.<sub>.trynxd.com` / `api.<sub>.trynxd.com` convention, but self-hosted or custom-domain meshes (e.g. an apex domain) may not. **Do not assume the convention** — elicit or confirm hosts with the user when they don't match (see Step 3).
+
+This skill owns mesh selection. Its outputs are consumed by every other nxd skill:
+
+- the active mesh's session config at `/tmp/nxd-<mesh_name>.yaml`, and
+- the mesh's `app_url`, which is the **doc base**: per-mesh docs are served at `<app_url>/docs/#/<path>` (see "Platform docs" below). Capturing `app_url` is what lets any skill build doc links for the selected mesh.
 
 Run each step in order. Do not proceed past a failing step.
+
+---
+
+## Platform docs
+
+Docs are served **per-mesh** from the active mesh's `app_url`. There is no global docs URL — resolve the host from the selected mesh (`app_url` in `~/.nxd/meshes.json`), do not hardcode it. The docs site uses docsify hash routing, so a page is:
+
+```
+<app_url>/docs/#/<path>
+```
+
+Append the path **without** a `.md` extension. The paths most relevant to setup:
+
+| Topic | Path (append to `<app_url>/docs/#/`) |
+|---|---|
+| CLI setup (install / env / auth) | `tutorials/cli/setup` |
+| Quick start | `tutorials/guides/quick-start` |
+| Create a Data Product | `tutorials/cli/create` |
+| Consuming other DPs | `tutorials/guides/consumer-tutorial` |
+
+Hand these out inline at the relevant step rather than waiting to be asked. If a deep link 404s, open the docs home (`<app_url>/docs/#/`) and navigate the sidebar, or re-confirm `app_url` from the mesh config.
 
 ---
 
@@ -35,7 +63,9 @@ If not found, you need a mesh URL to install the CLI. Skip ahead to Step 2 to di
 curl -sL <install_url> | bash
 ```
 
-Where `<install_url>` is the mesh's install URL (e.g. `https://app.demo.trynxd.com/cli/install`). Verify the install succeeded by re-running `nxd --version`.
+Where `<install_url>` is the mesh's install URL — the real value comes from the registered mesh (Step 3 derives it). *(Example form only, not a default: `https://app.<mesh>.example.com/cli/install`.)* Verify the install succeeded by re-running `nxd --version`.
+
+For install/troubleshooting guidance, once `app_url` is known you can point the user at the per-mesh CLI setup docs at `<app_url>/docs/#/tutorials/cli/setup` (see "Platform docs" below).
 
 ---
 
@@ -56,14 +86,14 @@ cat ~/.nxd/config.yaml 2>/dev/null
 `config.yaml` is the file the `nxd` binary itself reads. Two places carry mesh URLs:
 
 - A top-level `url:` — the currently-active URL the CLI uses (commented-out alternatives often sit above it).
-- A `meshes:` mapping — named URLs the user has worked with, e.g.:
+- A `meshes:` mapping — named URLs the user has worked with. *(Example shape only — hosts vary per mesh; do not treat these as defaults.)*
 
   ```yaml
   meshes:
-    dev:
-      url: https://dev.trynxd.com
-    demo:
-      url: https://api.demo.trynxd.com
+    <mesh-a>:
+      url: https://api.<mesh-a>.example.com
+    <mesh-b>:
+      url: https://<mesh-b>.example.org
   ```
 
 When `meshes.json` is empty, treat the union of these (top-level `url:` named after its subdomain, plus every entry under `meshes:`) as discovered meshes for the count branches below. Tell the user where they came from:
@@ -78,20 +108,20 @@ Go to **Step 3** to register a new mesh.
 
 ### One mesh registered
 
-Present it for confirmation:
+Present it for confirmation, substituting the real mesh name and API URL from the registry/config:
 
-> I found one registered mesh: **demo** (https://api.demo.trynxd.com). Should we use this one, or would you like to register a different mesh?
+> I found one registered mesh: **`<mesh_name>`** (`<api_url>`). Should we use this one, or would you like to register a different mesh?
 
 If confirmed, set it as the active mesh and proceed to **Step 4**.
 If they want a different one, go to **Step 3**.
 
 ### Multiple meshes registered
 
-Present the list and let the user pick:
+Present the list and let the user pick, using the real names and URLs from the registry/config:
 
 > Available meshes:
-> 1. demo — https://api.demo.trynxd.com
-> 2. staging — https://api.trynxd.com
+> 1. `<mesh_name_1>` — `<api_url_1>`
+> 2. `<mesh_name_2>` — `<api_url_2>`
 >
 > Which mesh would you like to use? Or type "new" to register a new one.
 
@@ -102,15 +132,39 @@ If "new", go to **Step 3**.
 
 ## Step 3: Register a New Mesh
 
-Ask the user for their mesh URL. Accept any of these formats and derive the API URL and install URL:
+Ask the user for their mesh URL (the app URL or API URL they use to reach the platform).
 
-| User provides | API URL | Install URL |
-|---|---|---|
-| Install URL: `https://app.demo.trynxd.com/cli/install` | Replace `app.` with `api.`, drop `/cli/install` → `https://api.demo.trynxd.com` | As given |
-| App URL: `https://app.demo.trynxd.com` | Replace `app.` with `api.` → `https://api.demo.trynxd.com` | Append `/cli/install` → `https://app.demo.trynxd.com/cli/install` |
-| API URL: `https://api.demo.trynxd.com` | As given | Replace `api.` with `app.`, append `/cli/install` → `https://app.demo.trynxd.com/cli/install` |
+First, determine the **mesh kind**, because it decides whether you may derive hosts or must ask:
 
-Next, suggest a mesh name from the URL subdomain (e.g. `demo` from `api.demo.trynxd.com`). Ask the user to confirm or customize the name.
+- **Cloud (`trynxd.com`) mesh** — hosts follow the `app.<sub>.trynxd.com` / `api.<sub>.trynxd.com` convention, differing only by the `app`/`api` prefix. Here you may derive the other host by swapping the prefix.
+- **Self-hosted / custom-domain mesh** — the app and API hosts may NOT differ by just an `app`/`api` prefix (e.g. an apex domain, or a single combined host). **Do not derive — ELICIT.**
+
+If the host doesn't clearly match the `app./api.<sub>.trynxd.com` pattern, treat it as custom-domain and ask the user directly for the missing host(s). Otherwise, derive per the table below and **confirm the derived host with the user before saving** — do not silently transform.
+
+You need three values: `app_url`, `api_url`, and `install_url`. Derive (cloud) or elicit (custom) as follows. The example uses `<mesh>` / `example.com` placeholders — substitute the real host:
+
+| User provides | app_url | api_url | install_url |
+|---|---|---|---|
+| Install URL: `https://app.<mesh>.example.com/cli/install` | Drop `/cli/install` → `https://app.<mesh>.example.com` | Swap `app.`→`api.`, drop `/cli/install` | As given |
+| App URL: `https://app.<mesh>.example.com` | As given | Swap `app.`→`api.` | Append `/cli/install` to app_url |
+| API URL: `https://api.<mesh>.example.com` | Swap `api.`→`app.` | As given | app_url + `/cli/install` |
+
+For a custom-domain mesh where the swap doesn't apply, ask the user for the app host and the API host explicitly (and the install URL if it isn't `<app_url>/cli/install`).
+
+**Capture `app_url`** — it is stored in the registry and is the per-mesh doc base (`<app_url>/docs/#/<path>`). Do not discard it.
+
+Next, suggest a mesh name. For a cloud mesh, the subdomain is a good default (the `<sub>` in `api.<sub>.trynxd.com`); for an apex/custom domain there may be no obvious subdomain, so propose the bare host or ask the user. Ask the user to confirm or customize the name.
+
+### Discover infra-profile, domain, and services (optional but recommended)
+
+Setup is the natural place to surface these so downstream skills don't each re-discover them. After the config exists (below) and auth succeeds (Step 4), you can derive them and offer to record a default:
+
+```bash
+nxd --config /tmp/nxd-<mesh_name>.yaml ls infra-profiles
+nxd --config /tmp/nxd-<mesh_name>.yaml ls data-products
+```
+
+Ask the user which infra-profile and domain they work in (don't assume), and note the available services/data-products for the active mesh. If the user picks defaults, you may record `infra_profile` and `domain` alongside the mesh entry in the registry (see Registry Format).
 
 If the nxd CLI is not installed yet (Step 1 failed), install it now:
 
@@ -190,12 +244,17 @@ Update the JSON to include the mesh entry:
 ```json
 {
   "<mesh_name>": {
+    "app_url": "<app_url>",
     "api_url": "<api_url>",
     "token": "<nxdpat_token>",
-    "install_url": "<install_url>"
+    "install_url": "<install_url>",
+    "infra_profile": "<infra_profile>",
+    "domain": "<domain>"
   }
 }
 ```
+
+`app_url` is required (it is the per-mesh doc base). `infra_profile` and `domain` are optional — include them only if the user chose defaults in Step 3.
 
 Ensure the `~/.nxd/` directory exists and write the updated registry:
 
@@ -215,7 +274,7 @@ Confirm the CLI can reach the platform and list data products:
 nxd --config /tmp/nxd-<mesh_name>.yaml ls data-products
 ```
 
-If this succeeds, the environment is ready.
+If this succeeds, the environment is ready. To help the user understand what to do with the listed data products, point them at `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (see "Platform docs").
 
 If it fails, help the user debug:
 - Wrong URL → re-run Step 3 to re-register
@@ -226,16 +285,23 @@ If it fails, help the user debug:
 
 ## Step 6: Done
 
-Report the active mesh configuration:
+Report the active mesh configuration, using the real values for the selected mesh:
 
 > Environment is ready!
-> - **Mesh**: demo
-> - **API URL**: https://api.demo.trynxd.com
-> - **User**: user@example.com
+> - **Mesh**: `<mesh_name>`
+> - **App URL**: `<app_url>`
+> - **API URL**: `<api_url>`
+> - **User**: `<whoami email>`
 
 **Important**: For the rest of this session, always pass `--config /tmp/nxd-<mesh_name>.yaml` to every `nxd` command. This ensures all operations target the selected mesh.
 
-If the user came here from another skill (e.g. `nxd-data-product-builder`), let them know they can proceed.
+Now that `app_url` is known, surface the canonical environment-ready reference: `<app_url>/docs/#/tutorials/cli/setup`. The mesh's `app_url` is also the **doc base** other skills use to build `<app_url>/docs/#/<path>` links.
+
+If the user came here from (or is heading to) another skill, point them onward with the relevant per-mesh doc link:
+
+- **`nxd-data-product-builder`** (build the first DP) → `<app_url>/docs/#/tutorials/cli/create`
+- **MCP wiring** (mesh into an MCP client) → `<app_url>/docs/#/tutorials/guides/07-mcp`
+- **Consuming data products** → `<app_url>/docs/#/tutorials/guides/consumer-tutorial`
 
 ---
 
@@ -243,19 +309,27 @@ If the user came here from another skill (e.g. `nxd-data-product-builder`), let 
 
 The mesh registry at `~/.nxd/meshes.json` stores all registered meshes:
 
+The hosts below are **example placeholders** — real values vary per mesh (cloud meshes use `trynxd.com`, self-hosted/custom meshes do not):
+
 ```json
 {
-  "mesh-name": {
-    "api_url": "https://api.mesh-name.trynxd.com",
+  "<mesh_name>": {
+    "app_url": "https://app.<mesh_name>.example.com",
+    "api_url": "https://api.<mesh_name>.example.com",
     "token": "nxdpat_...",
-    "install_url": "https://app.mesh-name.trynxd.com/cli/install"
+    "install_url": "https://app.<mesh_name>.example.com/cli/install",
+    "infra_profile": "<infra_profile>",
+    "domain": "<domain>"
   }
 }
 ```
 
+- `app_url` — the app/UI host; also the per-mesh **doc base** (`<app_url>/docs/#/<path>`)
 - `api_url` — the platform API endpoint
 - `token` — a personal access token (PAT) for authentication (30-day expiry)
 - `install_url` — the URL used to install the CLI for this mesh
+- `infra_profile` *(optional)* — the user's default infra-profile for this mesh
+- `domain` *(optional)* — the user's default domain for this mesh
 
 ---
 

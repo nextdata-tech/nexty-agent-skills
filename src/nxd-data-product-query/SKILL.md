@@ -23,6 +23,8 @@ Query a deployed Nextdata OS Data Product through its public Data Product REST A
 4. Fetches the port's location and a leased credential from the DP API.
 5. Routes the query by output-port driver type, then runs it.
 
+The public Data Product REST API contract this skill drives is documented per-mesh at `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (resolve `<app_url>` in Step 1; see **Platform docs**).
+
 For **vector stores** and **MCP / RPC ports**, this skill consults the LLM (Claude — the conversation itself) to turn the user's natural-language question into a concrete query (vector similarity expression, MCP call payload) before executing.
 
 This skill is read-only. It never writes to a data product's output store.
@@ -33,13 +35,17 @@ This skill is read-only. It never writes to a data product's output store.
 
 The user may pass any of these in the request — collect the rest interactively:
 
-- **Data Product** — `fullName` (e.g. `jira-embeddings-demo`). If missing, prompt with the list returned by `/api/v1/data-products`.
-- **Output port** — port `name` (e.g. `pgvector`, `adls`, `snowflake-out`). If missing, prompt with the list returned by `/api/v1/outputs` on that DP.
+- **Mesh** — which configured mesh to query. nxd-setup owns mesh selection; the active mesh + its api/app host come from `~/.nxd` (see Step 1). Do not hardcode a mesh host — derive it.
+- **Data Product** — `fullName` (illustrative example: `<dp-name>`, e.g. an embeddings DP). If missing, prompt with the list returned by `/api/v1/data-products`. You can also scope by **domain** (the `domain` field in the DP list) when many DPs span domains — ask the user to narrow by domain rather than scrolling a long list.
+- **Output port** — port `name` (illustrative examples: a `pgvector` port, an `adls` file port, a relational `*-out` port). If missing, prompt with the list returned by `/api/v1/outputs` on that DP.
+- **Infra-profile** — only needed when a port's `connect` returns `unsupported` (Step 5). Derive it from the port / mesh — `nxd ls infra-profiles` against the active mesh — or ask the user; do not assume a local file (see Step 5).
 - **Query** — natural-language question, or a SQL string, or a vector-search description, or an MCP function + args. If missing, ask.
 
 ---
 
-## Step 1: Locate mesh + auth
+## Step 1: Locate mesh + auth (do this first)
+
+Mesh/env selection is the **first** thing this skill resolves — everything else (api host, doc links, infra-profile lookups) derives from it. nxd-setup owns this config; this skill only reads it.
 
 Read the user's local nxd settings. The mesh URL is needed to list Data Products; the bearer token is needed to call the per-DP API.
 
@@ -47,14 +53,38 @@ Read the user's local nxd settings. The mesh URL is needed to list Data Products
 python3 scripts/find_mesh.py
 ```
 
-`find_mesh.py` returns JSON `{ "api_url": "...", "token": "..." }`:
+`find_mesh.py` returns JSON `{ "api_url": "...", "app_url": "...", "docs_base": "...", "token": "..." }`:
 
-- Reads `~/.nxd/meshes.json` first (the registry the nxd-setup skill maintains).
+- Reads `~/.nxd/meshes.json` first (the registry the nxd-setup skill maintains). The mesh **name**, `api_url`, `app_url`, and the auth/install host all come from the registry **entry** — never reconstructed from the host by label-count guesses.
 - Falls back to `~/.nxd/config.yaml` — top-level `url:` and entries under `meshes:`.
 - If multiple meshes are present, prints them and exits non-zero with a list. **Never guess the mesh** — do not infer it from the Data Product name or from where a DP "likely" lives. Resolve it two ways only: (1) if the config marks one mesh active (`config.yaml (active)`), use that one and re-run with `--mesh <name>`; (2) otherwise ask the user which one (use `AskUserQuestion`) and re-run with `--mesh <name>`.
-- Token comes from the registry entry first; if absent, reads `~/.nxd/tokens.json` (the file `nxd login` writes). Tokens there are keyed by the OAuth auth domain — `find_mesh.py` resolves the right entry by matching the api host.
+- Token comes from the registry entry first; if absent, reads `~/.nxd/tokens.json` (the file `nxd login` writes). Tokens there are keyed by the OAuth auth host (`auth.<mesh>.<domain>`) — `find_mesh.py` matches the auth/install host carried by the mesh registry entry, falling back to an api-host domain match only when the registry omits it.
 
-If neither file is present or no usable token is found, tell the user to run the **nxd-setup** skill first.
+If neither file is present or no usable token is found, tell the user to run the **nxd-setup** skill first — and point them at the per-mesh setup docs at `<app_url>/docs/#/tutorials/cli/setup` (resolve `<app_url>` from `find_mesh.py`'s `app_url`; see **Platform docs** below).
+
+### Platform docs (per-mesh)
+
+Docs are served **per-mesh** from the active mesh's app host — there is no single global docs URL. Resolve the base from the mesh config (the `docs_base` / `app_url` that `find_mesh.py` prints), then append a path:
+
+```
+<app_url>/docs/#/<path>
+```
+
+It is a **docsify** site with hash (`#/`) routing — keep the `#/`, append the path **without** a `.md` extension. If a deep link 404s or shows a blank page, don't guess alternate paths: open the docs home `<app_url>/docs/#/` and navigate its sidebar, use the in-app Learn tab, or re-confirm the host from the mesh config. The doc paths most relevant to **querying / consuming** a Data Product:
+
+| Topic | Path to append to `<app_url>/docs/#/` |
+|---|---|
+| Consuming another team's DP (REST API contract) | `tutorials/guides/consumer-tutorial` |
+| Output ports | `tutorials/guides/02-outputs` |
+| Semantic model (attributes / data types) | `tutorials/guides/01-semantic-model` |
+| Inputs (request-model field semantics) | `tutorials/guides/04-inputs` |
+| Promises & data quality | `tutorials/guides/03-promises` |
+| Expectations (access / approval, DQ) | `tutorials/guides/05-expectations` |
+| MCP (rpc-outputs / `nxd mcp client`) | `tutorials/guides/07-mcp` |
+| CLI setup (mesh / auth) | `tutorials/cli/setup` |
+| Create a DP & its infra-profile | `tutorials/cli/create` |
+
+Prefer **showing** over linking — a live `nxd ls …` / REST call against the user's mesh usually beats pointing at a page. Use the links to orient and fill gaps.
 
 ---
 
@@ -66,9 +96,11 @@ If the user named one, validate it against the list. Otherwise present the list:
 python3 scripts/list_dps.py --api-url "$API_URL"
 ```
 
-Outputs one row per DP: `fullName`, `domain`, `version`, `baseUrl`. Use `AskUserQuestion` (single-select) when there are many.
+Outputs one row per DP: `fullName`, `domain`, `version`, `baseUrl`. Use `AskUserQuestion` (single-select) when there are many. When DPs span several `domain` values, first ask the user which **domain** to narrow to (or confirm the one they named), then present only that domain's DPs — don't make them scroll an unscoped list.
 
 The script reads the bearer token from stdin (see **Credentials on the command line** below).
+
+Docs: the consumer REST API contract these calls follow is at `<app_url>/docs/#/tutorials/guides/consumer-tutorial`.
 
 ---
 
@@ -86,6 +118,8 @@ Also fetch RPC ports at `<baseUrl>/api/v1/rpc-outputs` — those are MCP/RPC end
 
 If only one port exists, confirm it and proceed. Otherwise prompt the user.
 
+Docs: output-port semantics (`/api/v1/outputs`, `/api/v1/rpc-outputs`) at `<app_url>/docs/#/tutorials/guides/02-outputs`.
+
 ---
 
 ## Step 4: Show the port's model attributes
@@ -100,6 +134,8 @@ Resolves the port's models in this order: `port.model_names` → `port.promises.
 
 Render the attributes back to the user as a compact table (model → columns + types) and only then ask for the query. For natural-language queries against vector / RPC ports, also call out which column holds the text payload (vector store) or which `request_model` fields the query must populate (RPC).
 
+Docs: to help the user interpret attributes / data types see `<app_url>/docs/#/tutorials/guides/01-semantic-model`; for request-model (input) field semantics see `<app_url>/docs/#/tutorials/guides/04-inputs`; the `port.promises.model[].model` resolution is explained at `<app_url>/docs/#/tutorials/guides/03-promises`.
+
 ---
 
 ## Step 5: Get port location + credentials
@@ -113,8 +149,12 @@ python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_UR
 - `location` — the result of `GET /api/v1/outputs/{port}/location`. Carries the data location (host/database/schema for SQL stores, account/container/model_paths for ADLS, bucket/prefix for S3, etc.).
 - `connect` — the result of `POST /api/v1/outputs/{port}/connect` with `{"ttl":"<ttl>"}` (default `PT1H`). Returns one of:
   - `status: "connected"` with `leased_credential` (presigned URLs, DB creds, etc.).
-  - `status: "approval_pending"` with an approval form — surface the message and `tracking_url` to the user and stop.
-  - `status: "unsupported"` — driver does not lease credentials. Fall back to using the **infra-profile service** named in the port (`infra_profile_name` / `infra_service_name`) to construct auth out-of-band: read the infra-profile YAML the user has on disk (search `infra-profiles/`, `./.nxd/skills/nxd-data-product-builder/`, `~/.nxd/skills/nxd-data-product-builder/`) and pull the matching service's attributes. Ask the user to confirm the file before reading credentials from it.
+  - `status: "approval_pending"` with an approval form — surface the message and `tracking_url` to the user and stop. The access / approval and data-quality expectation model is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
+  - `status: "unsupported"` — driver does not lease credentials. You then need an **infra-profile** to construct auth out-of-band. **Derive or elicit it — do not assume a local file exists:**
+    1. Read the `infra_profile_name` / `infra_service_name` the port declares (from `list_outputs.py` in Step 3).
+    2. Resolve the profile against the **active mesh** — `nxd ls infra-profiles` (and `nxd ls infra-services` if available) lists what the mesh actually has; confirm the matching profile/service with the user.
+    3. Only if the user genuinely has a working-tree copy from the **nxd-data-product-builder** skill, you may read the infra-profile YAML on disk — but **ask the user to confirm the path first**, don't grep assumed directories. How DPs and their infra-profiles are defined is documented at `<app_url>/docs/#/tutorials/cli/create`.
+    4. If neither resolves, ask the user for the infra-profile name (`AskUserQuestion`) rather than guessing.
 
 **Never echo credentials to the chat.** Read `/tmp/nxd-port.json` with `Read`, but only render the location fields back to the user. Pass the file path to the query scripts that need credentials; they read it themselves.
 
@@ -122,7 +162,7 @@ python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_UR
 
 ## Step 6: Route the query by driver and execute
 
-The infra-service driver (from the port's `infra_service_name` in the infra profile, or from the `leased_credential.details.type_hint` when present) decides which path runs.
+The infra-service driver (from the port's `infra_service_name` in the infra profile, or from the `leased_credential.details.type_hint` when present) decides which path runs. If **neither** is present, do not assume a driver — resolve the service from the mesh (`nxd ls infra-profiles` / `nxd ls infra-services` against the active mesh) or ask the user which service the port targets (`AskUserQuestion`).
 
 ### 6a. Relational SQL — Snowflake, Postgres, BigQuery, Redshift, Databricks-SQL, DuckDB
 
@@ -172,13 +212,13 @@ Run each candidate through steps 3–5 and fuse results (dedup by primary key, s
 
 If the user's question carries obvious filters (e.g. "in the NXD project", "resolved tickets only", "from last quarter"), apply them as a `WHERE` on the metadata JSON before the similarity search. This is faster and more accurate than letting the vector search return cross-project chunks you then have to discard.
 
-Pass `--filter '<json>'` to `vector_search.py`:
+Pass `--filter '<json>'` to `vector_search.py`. The keys/values are whatever metadata fields the port's models actually carry (discovered in Step 4) — the shape below is an **illustrative example**, not a fixed schema:
 
 ```json
-{"project": "NXD", "status": ["Done", "Closed"]}
+{"<metadata_field>": "<value>", "<status_field>": ["<value-a>", "<value-b>"]}
 ```
 
-Equality for scalars, IN-list for arrays. Translates to `langchain_metadata->>'project' = 'NXD' AND langchain_metadata->>'status' IN ('Done','Closed')`.
+Equality for scalars, IN-list for arrays. Translates to e.g. `langchain_metadata->>'<field>' = '<value>' AND langchain_metadata->>'<status_field>' IN ('<value-a>','<value-b>')`.
 
 **Step 4 — Retrieve (vector-only or hybrid).**
 
@@ -216,7 +256,7 @@ Then retrieve. Two modes:
 
 **Step 5 — Abstain on low confidence (optional).**
 
-Pass `--min-score <f>` to set a floor on the best result's score (RRF score for hybrid, `1/(1+L2)` for vector-only). If no result clears the bar, the script returns `"abstain": true` with empty `rows`. When that fires, **tell the user "no good match in the DP"** rather than hallucinating from weak chunks.
+Pass `--min-score <f>` to set a floor on the best result's score (RRF score for hybrid, `1/(1+L2)` for vector-only). If no result clears the bar, the script returns `"abstain": true` with empty `rows`. When that fires, **tell the user "no good match in the DP"** rather than hallucinating from weak chunks. The data-quality / expectation model that governs when to trust a port's data is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
 
 Reasonable starting thresholds:
 - vector-only: `0.45` (≈ L2 distance ≤ 1.2 for normalised embeddings),
@@ -260,7 +300,7 @@ user question
 
 ### 6d. RPC / MCP port
 
-RPC ports are listed at `/api/v1/rpc-outputs`. Each port declares `functions: [{name, request_model, response_model, description}]`.
+RPC ports are listed at `/api/v1/rpc-outputs`. Each port declares `functions: [{name, request_model, response_model, description}]`. The MCP client and rpc-outputs contract are documented at `<app_url>/docs/#/tutorials/guides/07-mcp`.
 
 **Consult the LLM.** The user's natural-language question maps onto one of the declared functions:
 
@@ -322,8 +362,8 @@ Each script writes secrets only to `--out` files (never stdout) and reads tokens
 
 ## Gotchas
 
-- **Token expiry** — `tokens.json` carries an `expiry`. If a 401 comes back, ask the user to re-run `nxd login` (or the **nxd-setup** skill) and retry.
-- **`connect` returns `unsupported`** — fall back to the infra profile file on disk for credentials, as in `nxd-data-product-builder`. Ask the user to confirm the file path before reading.
+- **Token expiry** — `tokens.json` carries an `expiry`. If a 401 comes back, ask the user to re-run `nxd login` (or the **nxd-setup** skill) and retry. Per-mesh auth/PAT setup is documented at `<app_url>/docs/#/tutorials/cli/setup`.
+- **`connect` returns `unsupported`** — derive the infra-profile from the active mesh (`nxd ls infra-profiles`) or ask the user; only read an on-disk infra-profile YAML if the user confirms they have a working-tree copy (e.g. from `nxd-data-product-builder`) and confirms the path. Do not grep assumed directories. See `<app_url>/docs/#/tutorials/cli/create`.
 - **`connect` returns `approval_pending`** — stop and surface the `message` / `tracking_url` to the user. Do not poll.
 - **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `/tmp/nxd-port.json` for the session; re-request if the TTL passes.
 - **Vector store embedding model mismatch** — querying with a different embedding model from the one the DP used to index gives nonsense results. Always confirm the model from the DP's `description` / `/v1/info` before computing the query vector.

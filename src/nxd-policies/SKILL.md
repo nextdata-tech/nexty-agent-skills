@@ -15,26 +15,35 @@ Manage computational policies on Nextdata data products. Three operations: **lis
 
 ## Prerequisites
 
-- `nxd` CLI installed and a mesh selected (see `nxd-setup` skill if not).
-- You know the data product name (e.g. `sales-influence-insights`) and target environment (e.g. `demo`).
-- For **activation**, you know the policy's full configuration: policy type, validation contract name, filter, consequence. These usually live in the repo under `<dp>/policies/create.sh` — read that file first instead of inventing values.
+- `nxd` CLI installed and a mesh **selected and configured** (the `nxd-setup` skill owns this; run it first if no mesh is active).
+- **Target the selected mesh on every command.** `nxd-setup` writes a per-session config to `/tmp/nxd-<mesh_name>.yaml`; pass `--config /tmp/nxd-<mesh_name>.yaml` to **every** `nxd` invocation below so policies are toggled on the intended platform. The mesh host (app/api URL) comes from `~/.nxd/meshes.json` via that config — never hardcode a host. Every command in this skill shows `--config /tmp/nxd-<mesh_name>.yaml`; substitute the active mesh name.
+
+**Elicit or derive these up front** (do not assume values — confirm before running any mutating command):
+
+- **Environment (`--env`)** — required by `ls` and `activate`. A single mesh may host multiple envs, so the env is not implied by the mesh. Ask the user which env, or derive it from the selected mesh; do not default to a specific name.
+- **Data product name** — ask the user, or derive via `nxd --config /tmp/nxd-<mesh_name>.yaml ls data-products`.
+- **Domain** (only for domain-wide filters) — ask the user, or derive via `nxd --config /tmp/nxd-<mesh_name>.yaml ls domains`.
+- **Infra-profile** (if creating/activating a contract on the mesh requires one) — ask the user, or derive via `nxd --config /tmp/nxd-<mesh_name>.yaml ls infra-profiles`.
+- For **activation**, you also need the policy's full configuration: policy type, validation contract name, filter, consequence, output ports. These usually live in the repo under `<dp>/policies/create.sh` — read that file first instead of inventing values. **If that file is absent, elicit each value from the user** rather than guessing.
+
+> **Platform docs.** Docs are served per-mesh at `<app_url>/docs/#/<path>`, where `<app_url>` is the active mesh's app host from `~/.nxd/meshes.json` (resolve it, do not hardcode; the `#/` hash route is required, omit any `.md`). Hand these out inline when the user is stuck on a concept. Most relevant here: `tutorials/cli/data_quality` (data quality / contracts), `tutorials/guides/03-promises` (promise enforcement), `tutorials/guides/05-expectations` (expectations / what a policy enforces), `tutorials/cli/setup` (confirming mesh/auth/config). If a deep link 404s, open `<app_url>/docs/#/` and navigate the sidebar.
 
 ---
 
 ## List policies for a data product
 
 ```bash
-nxd ls policies --dp <dp-name> --env <env>
+nxd --config /tmp/nxd-<mesh_name>.yaml ls policies --dp <dp-name> --env <env>
 ```
 
 - Use `--dp <name>`, **not** `data-product policies --name <name>` (older docs are wrong).
 - Add `--show-inactive` to include deactivated policies.
 - Output shows each activation's `ID`, `Policy` type, `Name`, `Consequence`, and `DP Activation ID`.
 
-Example:
+Example (placeholders `<mesh_name>`, `<dp-name>`, `<env>` — substitute the active mesh, the DP from `nxd ls data-products`, and the elicited env; the names below are illustrative, not canonical):
 
 ```bash
-nxd ls policies --dp sales-influence-insights --env demo
+nxd --config /tmp/nxd-<mesh_name>.yaml ls policies --dp <dp-name> --env <env>
 ```
 
 ---
@@ -42,25 +51,25 @@ nxd ls policies --dp sales-influence-insights --env demo
 ## Deactivate a policy
 
 ```bash
-nxd deactivate policy --skip-version-check --name <policy-name>
+nxd --config /tmp/nxd-<mesh_name>.yaml deactivate policy --skip-version-check --name <policy-name>
 ```
 
 - **Do not pass `--env`** — `nxd deactivate policy` does not accept it. Deactivation is global by policy name.
 - The contract behind the policy is **not** deleted, so you can reactivate later without recreating it.
 - Use `--id <activation-id>` instead of `--name` if you have the numeric ID from the list step.
 
-Example:
+Example (substitute `<mesh_name>` and the real policy name from the list step):
 
 ```bash
-nxd deactivate policy --skip-version-check --name data_completeness_90_percent
+nxd --config /tmp/nxd-<mesh_name>.yaml deactivate policy --skip-version-check --name <policy-name>
 ```
 
 For a **full teardown** (delete the policy and contract, not just deactivate):
 
 ```bash
-nxd deactivate policy --skip-version-check --name <policy-name>
-nxd delete policy     --skip-version-check --name <policy-name>
-nxd delete contract   --skip-version-check --yes <contract-name>
+nxd --config /tmp/nxd-<mesh_name>.yaml deactivate policy --skip-version-check --name <policy-name>
+nxd --config /tmp/nxd-<mesh_name>.yaml delete policy     --skip-version-check --name <policy-name>
+nxd --config /tmp/nxd-<mesh_name>.yaml delete contract   --skip-version-check --yes <contract-name>
 ```
 
 ---
@@ -72,7 +81,7 @@ nxd delete contract   --skip-version-check --yes <contract-name>
 ### DataQualityCompliance (contract-driven)
 
 ```bash
-nxd activate policy --skip-version-check \
+nxd --config /tmp/nxd-<mesh_name>.yaml activate policy --skip-version-check \
   --name <policy-name> \
   --policy DataQualityCompliance \
   --validation-url <contract-name> \
@@ -83,10 +92,13 @@ nxd activate policy --skip-version-check \
   --env <env>
 ```
 
+- `--promise-enforced` ties the policy to the DP's promise. Docs: `<app_url>/docs/#/tutorials/guides/03-promises` (promise semantics) and `<app_url>/docs/#/tutorials/cli/data_quality` (data-quality contracts). Resolve `<app_url>` from the active mesh config.
+- `--output-ports at-least-one` controls which output ports the policy targets. Docs: `<app_url>/docs/#/tutorials/guides/02-outputs`.
+
 ### SensitivityCompliance (parameters-driven)
 
 ```bash
-nxd activate policy --skip-version-check \
+nxd --config /tmp/nxd-<mesh_name>.yaml activate policy --skip-version-check \
   --name <policy-name> \
   --policy user:SensitivityCompliancePolicy \
   --parameters-file ./sensitivity-policy.json \
@@ -97,28 +109,33 @@ nxd activate policy --skip-version-check \
 
 Notes:
 
-- `--env` **is** required for activation (unlike deactivate).
+- `--env` **is** required for activation (unlike deactivate). Elicit/derive it as described in Prerequisites — do not assume a default env.
 - `--parameters-file` is a relative path — `cd` into the data product directory before running, or use an absolute path.
-- If the contract does not yet exist, create it first: `nxd create contract --skip-version-check --name <contract-name> --code ./contracts/<file>.py --description "..."`.
+- If the contract does not yet exist, create it first against the **same mesh config**:
+  ```bash
+  nxd --config /tmp/nxd-<mesh_name>.yaml create contract --skip-version-check \
+    --name <contract-name> --code ./contracts/<file>.py --description "..."
+  ```
+  Contract/policy creation reference: `<app_url>/docs/#/tutorials/cli/create`. What a computational policy enforces: `<app_url>/docs/#/tutorials/guides/05-expectations`.
 
 ---
 
 ## Canonical verify-toggle-verify sequence
 
-Use this when the user wants to demo turning a policy off and on. Substitute `<dp>`, `<policy>`, `<contract>`, `<env>`.
+Use this when the user wants to demo turning a policy off and on. Substitute `<mesh_name>` (active mesh), `<dp>`, `<policy>`, `<contract>`, `<env>` — all elicited/derived per Prerequisites, none assumed.
 
 ```bash
 # 1. list (baseline)
-nxd ls policies --dp <dp> --env <env>
+nxd --config /tmp/nxd-<mesh_name>.yaml ls policies --dp <dp> --env <env>
 
 # 2. deactivate
-nxd deactivate policy --skip-version-check --name <policy>
+nxd --config /tmp/nxd-<mesh_name>.yaml deactivate policy --skip-version-check --name <policy>
 
 # 3. list (verify it dropped)
-nxd ls policies --dp <dp> --env <env>
+nxd --config /tmp/nxd-<mesh_name>.yaml ls policies --dp <dp> --env <env>
 
 # 4. activate (cd into the DP dir if --parameters-file paths are relative)
-nxd activate policy --skip-version-check \
+nxd --config /tmp/nxd-<mesh_name>.yaml activate policy --skip-version-check \
   --name <policy> \
   --policy DataQualityCompliance \
   --validation-url <contract> \
@@ -129,18 +146,20 @@ nxd activate policy --skip-version-check \
   --env <env>
 
 # 5. list (verify it returned)
-nxd ls policies --dp <dp> --env <env>
+nxd --config /tmp/nxd-<mesh_name>.yaml ls policies --dp <dp> --env <env>
 ```
 
 Always **run step 1 first** before handing the chain to the user. It confirms env reachability, the exact policy name, and surfaces any further CLI drift.
+
+Toggling a policy directly changes what consumers of the DP see — for how policy state affects downstream consumers, see `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (resolve `<app_url>` from the active mesh config).
 
 ---
 
 ## Common gotchas
 
-- **Redeploy re-applies policies.** A deploy pipeline that re-applies a data product's declared policies will **overwrite manual deactivations** on the next deploy. Warn the user when toggling a policy for a demo — re-check with `ls policies` after any redeploy.
+- **Redeploy re-applies policies.** A deploy pipeline that re-applies a data product's declared policies will **overwrite manual deactivations** on the next deploy. Warn the user when toggling a policy for a demo — re-check with `ls policies` after any redeploy. How that state change reaches consumers: `<app_url>/docs/#/tutorials/guides/consumer-tutorial`.
 - **`--env` only on `ls` and `activate`.** Not on `deactivate`, not on `delete policy`, not on `delete contract`.
 - **`--skip-version-check`** is conventional on every mutating command in Nextdata repos; include it to match repo scripts.
-- **Filter syntax is `jq`-style:** `.name == "<dp>"` for a single DP, `.domain == "retail/sales"` for a domain-wide policy.
+- **Filter syntax is `jq`-style:** `.name == "<dp>"` for a single DP, or `.domain == "<domain>"` for a domain-wide policy. The `<domain>` value is mesh/env-specific taxonomy — **elicit it from the user or derive it** via `nxd --config /tmp/nxd-<mesh_name>.yaml ls domains`; do not hardcode a domain string. For the DP/domain fields these selectors match against, see `<app_url>/docs/#/tutorials/guides/01-semantic-model`.
 - **Policy name vs contract name** are usually the same string in convention but conceptually distinct — `--validation-url` always references the contract.
 

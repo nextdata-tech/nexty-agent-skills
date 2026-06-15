@@ -35,6 +35,8 @@ Prerequisites).
 
 ## spec.py
 
+The `{...}` fields are filled from discovery. In particular `{infra_profile}` is the profile **name chosen/derived in discovery** (local profile YAML, or `nxd ls infra-profiles` against the active mesh — see SKILL.md "Infra Profile Lookup"), and any service URLs use `https://<app_url>/infra-profile/<profile>#/services/<service>` where `<app_url>` is the active mesh's app host from mesh config. None of these are hardcoded demo values.
+
 ```python
 # ruff: noqa: F403, F405
 from imports_spec import *

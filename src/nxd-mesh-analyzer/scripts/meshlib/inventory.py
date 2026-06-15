@@ -4,8 +4,15 @@ from .profile import parse_services
 
 
 def make_service_url(api_url, profile, service):
-    """Infra-profile service reference for downstream skills. Absolute when
-    api_url is given, otherwise a relative reference the consumer prefixes."""
+    """Infra-profile service reference for downstream skills.
+
+    `api_url` MUST be the active mesh's api_url (resolved from
+    ~/.nxd/meshes.json by the caller / SKILL.md Step 0) so the URL host is
+    anchored to the mesh the profile belongs to. When given, the result is
+    absolute. When empty (offline / no active mesh) the ref is left relative
+    and the report must state which mesh it resolves against — there is no
+    assumed default base.
+    """
     ref = f"infra-profile/{profile}#/services/{service}"
     return f"{api_url.rstrip('/')}/{ref}" if api_url else ref
 
