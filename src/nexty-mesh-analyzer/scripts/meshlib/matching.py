@@ -35,7 +35,7 @@ DOMAIN_KEYWORDS = {
     "people": ["employee", "payroll", "recruit", "headcount", "lattice", "performance"],
     "operations": ["logistics", "supply", "shipment", "warehouse", "fulfillment", "delivery"],
     "market-intelligence": ["competitor", "market", "intelligence", "benchmark", "growth"],
-    "regulatory": ["regulatory", "compliance", "veeva", "deviation", "submission",
+    "regulatory": ["regulatory", "compliance", "deviation", "submission",
                    "clinical", "trial", "audit"],
     "content": ["document", "content", "embedding", "knowledge", "article", "doc"],
 }

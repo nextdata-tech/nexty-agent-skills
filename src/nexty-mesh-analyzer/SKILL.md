@@ -47,6 +47,7 @@ python3 -m venv /tmp/nexty-mesh-analyzer/venv
 | `classify_profile.py <profile>` | Parse the profile, classify every service, list the inspectable (Storage/API) ones. |
 | `inspect_service.py <profile> <service>... --out FILE` | Connect read-only, inventory each service with schema-fingerprint grouping, de-duplicate shared stores, write inventory JSON. |
 | `match_assets.py <inventory.json>... [--flow SRC:DST]` | Match candidate input/output pairs, classify, and write the report + models markdown. `--flow` (repeatable) scopes matching to declared architecture flows. |
+| `profile_tabular.py <path>` | Read-only local-file profiler for CSV/JSON/JSONL/Parquet sources that aren't live services. Prints an inferred schema (types, nullability, sample values, partition/freshness hints) as JSON. Used by the offline discovery pass. |
 
 **Layout** — service-type code is isolated from generic code:
 
@@ -79,6 +80,8 @@ The skill only reads these paths — never writes to them.
 Run the steps in order. Inspect read-only at every step — never create, write, or delete data on a service.
 
 **Consult the user.** The person running this skill has domain knowledge of their environment. When a decision is genuinely ambiguous — which catalog owns a table, which copy of a replicated dataset is the source of truth, which of two services is the input — ask them rather than guessing.
+
+**Offline mode.** When live inspection is not possible (no network to the services, credentials withheld, or the user prefers to share evidence by hand), run an optional read-only collection pass instead of (or alongside) live inspection — Snowflake `SHOW`/`DESCRIBE` output, Git repo inspection, and local file profiling via `scripts/profile_tabular.py`. The evidence feeds the same candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md` report. See [references/offline-discovery.md](references/offline-discovery.md).
 
 ### Step 1: Locate inputs — infra profile and user documentation
 
