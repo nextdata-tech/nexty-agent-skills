@@ -1,5 +1,5 @@
 ---
-name: nexty-mesh-analyzer
+name: nxd-mesh-analyzer
 description: Inspect data-bearing services in a nextdata infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects to selected storage services (S3, Snowflake, ADLS, Databricks, BigQuery, Postgres, Kafka, Pinecone, and more) with their connection parameters, inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product.
 allowed-tools:
   - Bash
@@ -36,8 +36,8 @@ This skill discovers candidates only — it does not generate data product specs
 The skill ships a small Python package under `scripts/`. Run the entrypoints with a Python that has the dependencies in `scripts/requirements.txt` — install into a throwaway venv:
 
 ```bash
-python3 -m venv /tmp/nexty-mesh-analyzer/venv
-/tmp/nexty-mesh-analyzer/venv/bin/pip install -r scripts/requirements.txt
+python3 -m venv /tmp/nxd-mesh-analyzer/venv
+/tmp/nxd-mesh-analyzer/venv/bin/pip install -r scripts/requirements.txt
 ```
 
 **Entrypoints** (run as `python scripts/<name>.py`):
@@ -62,8 +62,8 @@ To support another service type, add `scripts/drivers/<name>.py` exposing a `DRI
 
 This skill ships generically to many customer environments. Environment-specific inputs — infra profiles and user documentation — live in **customer-owned paths outside the skill**, so they survive skill updates (an update overwrites the skill directory, never these paths):
 
-- `./.nxd/skills/nexty-mesh-analyzer/` — per-project, in the working tree
-- `~/.nxd/skills/nexty-mesh-analyzer/` — per-machine / per-environment
+- `./.nxd/skills/nxd-mesh-analyzer/` — per-project, in the working tree
+- `~/.nxd/skills/nxd-mesh-analyzer/` — per-machine / per-environment
 
 Step 1 searches both paths. Each may hold:
 
@@ -91,7 +91,7 @@ Gather two inputs. For each, search the **customer extension paths** above plus 
 
 Search, in order:
 
-1. The customer extension paths — `./.nxd/skills/nexty-mesh-analyzer/` and `~/.nxd/skills/nexty-mesh-analyzer/`.
+1. The customer extension paths — `./.nxd/skills/nxd-mesh-analyzer/` and `~/.nxd/skills/nxd-mesh-analyzer/`.
 2. The working tree — Glob `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
 
 For each candidate: an infra profile file has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top — confirm with Grep. A **pointer file** (contents are a path or URI) is followed to the real profile — fetch `http(s)://` URIs, read file paths.
@@ -126,7 +126,7 @@ The infra profile file contains **live credentials in plaintext**. Before inspec
 - Tell the user the file holds real secrets and that inspection will connect to live services.
 - Never echo a secret value into the chat or into a displayed command line.
 - Inspect via short Python scripts that read the profile file **directly** and pass credentials in-process — do not interpolate secrets into shell command arguments (they would appear in the displayed command and tool output).
-- Write inspection scripts under a temp path (e.g. `/tmp/nexty-mesh-analyzer/`). Delete them when done.
+- Write inspection scripts under a temp path (e.g. `/tmp/nxd-mesh-analyzer/`). Delete them when done.
 
 ### Step 4: Inspect each selected service
 

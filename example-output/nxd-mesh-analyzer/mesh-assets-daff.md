@@ -1,6 +1,6 @@
 # Mesh Assets Report
 
-_Generated 2026-05-20 from /tmp/nexty-mesh-analyzer/inventory-daff.json_
+_Generated 2026-05-20 from /tmp/nxd-mesh-analyzer/inventory-daff.json_
 
 - **Infra profile:** `daff-demo-infra-profile`
 - **Services inspected:** 2
@@ -10,7 +10,7 @@ _Generated 2026-05-20 from /tmp/nexty-mesh-analyzer/inventory-daff.json_
 - **Duplicate services:** 0 | **Failed services:** 1
 - **Matched within architecture flows:** daff-s3→nxd-snowflake
 
-Model schemas for each candidate are in `example-output/nexty-mesh-analyzer/mesh-assets-daff-models.md`.
+Model schemas for each candidate are in `example-output/nxd-mesh-analyzer/mesh-assets-daff-models.md`.
 
 ## Candidate Data Products
 
