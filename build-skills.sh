@@ -41,6 +41,31 @@ EXCLUDES=(
   '*/data_products/*/tests/*'
 )
 
+# The bundled nextdata-public-examples submodule carries ~26 DPs (~280 files),
+# which blows the Claude Desktop 200-entry zip cap. For packaging we keep only
+# the curated set that reference/examples-guide.md actually points at; the full
+# submodule stays checked out for Claude Code (which has no such cap).
+# To change the curated set, edit examples-guide.md and this list together.
+EXAMPLES_KEEP=(
+  company_dividends competitor_growth_analysis credit_card_tx customer_purchases
+  example_mcp financial_statements income_statements loans_products
+  market_fraud_density product_competitiveness public_disclosures stock_history
+  taxi-trip-metrics jira_issues
+)
+
+# Build an exclude for every example DP NOT in the keep list. We enumerate the
+# DP dirs present in each skill's bundled submodule at package time.
+examples_prune_args() {
+  local skill_dir="$1" dp_root="$skill_dir/reference/nextdata-public-examples/data_products"
+  [[ -d "$dp_root" ]] || return 0
+  local keep_re; keep_re="^($(IFS='|'; echo "${EXAMPLES_KEEP[*]}"))$"
+  for dp in "$dp_root"/*/; do
+    local name; name="$(basename "$dp")"
+    [[ "$name" =~ $keep_re ]] && continue
+    printf '%s\0' "-x" "*/nextdata-public-examples/data_products/$name/*"
+  done
+}
+
 # Build the -x argv once
 ZIP_EXCLUDE_ARGS=()
 for p in "${EXCLUDES[@]}"; do ZIP_EXCLUDE_ARGS+=("-x" "$p"); done
@@ -54,9 +79,13 @@ for skill_dir in "$SRC_DIR"/*/; do
   zip_path="$OUT_DIR/${skill}.zip"
   rm -f "$zip_path"
 
+  # Per-skill prune of non-curated example DPs (no-op for skills without the submodule)
+  prune_args=()
+  while IFS= read -r -d '' a; do prune_args+=("$a"); done < <(examples_prune_args "$skill_dir")
+
   (
     cd "$skill_dir"
-    zip -qrD "$zip_path" . "${ZIP_EXCLUDE_ARGS[@]}"
+    zip -qrD "$zip_path" . "${ZIP_EXCLUDE_ARGS[@]}" "${prune_args[@]}"
   )
 
   files="$(unzip -l "$zip_path" | awk 'NR>3 && $NF!~/\/$/' | wc -l | tr -d ' ')"
