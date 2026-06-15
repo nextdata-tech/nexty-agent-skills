@@ -5,15 +5,19 @@ available at spec-evaluation time, then re-exports every spec-builder
 name through ``__all__``.
 """
 
-from models import jira_issue, jira_issue_embedding, jira_issue_embeddings
+from mcp_tools import search_jira_issues
+from models import jira_issue, jira_issue_embeddings, search_request, search_response
 from nxd.spec import (
     code,
     custom,
     data_product,
     data_product_access,
     data_product_output,
+    data_product_rpc_output,
     owner,
     pg_vector_config,
+    rpc_function,
+    rpc_server,
     source_aligned_input,
     storage,
 )
@@ -28,12 +32,17 @@ __all__ = [
     "data_product",
     "data_product_access",
     "data_product_output",
+    "data_product_rpc_output",
     "jira_issue",
-    "jira_issue_embedding",
     "jira_issue_embeddings",
     "owner",
     "pg_vector_config",
+    "rpc_function",
+    "rpc_server",
     "scheduled",
+    "search_jira_issues",
+    "search_request",
+    "search_response",
     "source_aligned_input",
     "storage",
     "transform",
