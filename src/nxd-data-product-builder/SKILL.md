@@ -46,6 +46,13 @@ Data Product Build Progress:
 - [ ] 5. Handover summary and finalisation checklist delivered to the user
 ```
 
+For a longer or multi-session build, you may keep an optional lightweight ledger
+(`state.json` + `open-todos.md`) under `.context/dp-build/<timestamp>/` so the
+build can be paused and resumed without losing context. On startup, check whether
+`.context/dp-build/` already holds a prior run and offer to resume it. See
+[reference/state-and-resume.md](reference/state-and-resume.md) for the resume
+protocol and ledger format.
+
 ### 1. Discovery and Requirements Gathering
 Start by deeply understanding the user's intent, objectives, and requirements for the proposed Data Product.
 
@@ -62,6 +69,7 @@ Consult the following references for concepts, APIs, and best practices:
 * Running `transform()` locally: [reference/local_transform.md](reference/local_transform.md)
 * Examples of drivers (services) used within transformations: [reference/driver_examples.md](reference/driver_examples.md)
 * Debugging a deployed Data Product (symptom → root cause → fix): [reference/troubleshooting.md](reference/troubleshooting.md)
+* Classifying a candidate into a data product type, with evidence discipline: [reference/product-taxonomy.md](reference/product-taxonomy.md)
 
 #### Discovery Source — interview or spec-from-document
 Decide once, up front, how the Data Product's requirements will be sourced. Ask the user which mode applies:
@@ -147,7 +155,11 @@ Share the plan for explicit user approval before moving forward.
 ---
 
 ### 3. Implementation
-Begin implementation once the plan is finalised. Insert "TODO" markers with clear instructions wherever any of the following are true:
+Begin implementation once the plan is finalised. To pick the closest public
+example to adapt — by infrastructure and capability — and for on-demand cloning
+guidance and drafting rules, see [reference/examples-guide.md](reference/examples-guide.md).
+
+Insert "TODO" markers with clear instructions wherever any of the following are true:
 
 * The user has not provided satisfactory information even after prompting.
 * There are implementation details that would greatly benefit from manual user intervention.
