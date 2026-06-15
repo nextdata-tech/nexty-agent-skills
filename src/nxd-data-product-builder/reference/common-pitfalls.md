@@ -111,3 +111,25 @@ When running against a local cluster with locally-built images, add `"image_pull
 
 **Methods directly on `SourceAlignedInputSpec`**
 Don't use `.schema()`, `.resource_name()`, `.target_file()`, `.target_table()` directly on a `source_aligned_input()`. Use `.config(storage_config.target_table(...))` instead.
+
+---
+
+## Naming, types, imports
+
+**kebab-case vs snake_case**
+Data product names are kebab-case (`my-product`). Python identifiers — including semantic model variable names — are snake_case (`my_model`, `channel_sales_velocity`).
+
+**Type constructors take zero args**
+`string()`, `int64()`, `boolean()`, etc. accept no positional arguments. Descriptions attach via the schema tuple form `.schema({name: (type(), "desc")})`, never `string("desc")` — that raises `TypeError` at import time.
+
+**Context type import location**
+Import context classes (`AzureDataLakeStorage`, `Snowflake`, `S3Input`, `S3Output`, …) from `nxd.data_product.context` for transform parameter type hints. `nxd.core.context` re-exports the same types; prefer `nxd.data_product.context`.
+
+**Import structure (centralized-imports variant)**
+If using `imports_spec.py` / `imports_models.py`: `spec.py` wildcard-imports everything from `imports_spec.py`; `imports_spec.py` imports from `nxd.spec` plus local modules; `imports_models.py` imports the types used in model definitions. (With the `nxd_spec.py` / `nxd_models.py` shim variant, the same names must be re-exported via `__all__` — see best_practices.md.)
+
+**Glossary links — model level vs product level**
+`.link("field", Predicate.GlossaryTerm, url)` links a single field; `.link(Predicate.GlossaryTerm, url)` links the whole model. Both are valid; pick the level the term describes.
+
+**Quality promises attach to the port**
+Output quality checks attach via `.promise()` on the `.port(...)`, not at the output level (a port-level promise is the only one the storage driver sees). Promises can use `soda` (YAML), `gx` (Python), or `custom` (a verify function returning `VerifyResult`).

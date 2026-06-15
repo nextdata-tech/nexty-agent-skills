@@ -67,7 +67,7 @@ A transform may take several inputs (a join) or write several outputs. Group all
 
 ## Scheduling hint
 
-When an input is time-partitioned, the partition granularity implies the transform's refresh cadence — daily partitions → a daily cron, hourly → hourly. Record this so nexty-bootstrap can seed the transform's `when` schedule. If an input is **not** partitioned by time, the cadence is unknown — flag it for the user to decide.
+When an input is time-partitioned, the partition granularity implies the transform's refresh cadence — daily partitions → a daily cron, hourly → hourly. Record this so nxd-data-product-builder can seed the transform's `when` schedule. If an input is **not** partitioned by time, the cadence is unknown — flag it for the user to decide.
 
 ## Domain
 

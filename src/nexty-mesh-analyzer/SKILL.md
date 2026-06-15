@@ -27,7 +27,7 @@ Given an infra profile file, this skill connects to the data-bearing services it
 - **Connected** — two assets belong to the same candidate data product when one appears to feed the other: similar schema, related naming, matching partitioning, and output written after input.
 - **Source-aligned data product** — reads from one source and writes to another with *minimal transformation*, keeping a near-identical data model (rename, reformat, repartition — not reshape). Contrast with a *transformed* product that aggregates, joins, or restructures.
 
-This skill discovers candidates only — it does not generate data product specs. Hand the results to **nexty-bootstrap** to scaffold a data product.
+This skill discovers candidates only — it does not generate data product specs. Hand the results to **nxd-data-product-builder** to scaffold a data product.
 
 ---
 
@@ -213,9 +213,9 @@ For each ambiguous candidate, the skill must:
       - Snowflake schema with no `_STAGING` / `_TEST` / `_TMP` suffix beats one that has them.
       - Plain schema beats one with a trailing `_<digit>` (numbered copy).
       - Snowflake schema whose tokens overlap the input path's last meaningful segment beats one that doesn't (`DWN_INCREMENTAL2.CUSTOMER_HISTORY` beats `HELLOINCREMENTAL.CUSTOMER_HISTORY` for an input under `dwn-incremental2/`).
-5. **Never let the downstream consumer (nexty-bootstrap / nxd-data-product-builder) guess.** Pass on resolved input + output locators only.
+5. **Never let the downstream consumer (nxd-data-product-builder) guess.** Pass on resolved input + output locators only.
 
-Tell the user both main + ambiguous sidecar file paths and summarize the top candidates per domain in chat — do not paste the whole report. Walk through every ambiguous candidate with the user (or via the learned pattern) before recommending next steps. Finally, point the user to **nexty-bootstrap** (or **nxd-data-product-builder**) to turn a resolved candidate into a real data product.
+Tell the user both main + ambiguous sidecar file paths and summarize the top candidates per domain in chat — do not paste the whole report. Walk through every ambiguous candidate with the user (or via the learned pattern) before recommending next steps. Finally, point the user to **nxd-data-product-builder** to turn a resolved candidate into a real data product.
 
 ---
 
@@ -240,4 +240,4 @@ If a `driver` string is malformed or its `name` and `driver` fields look swapped
 - **Cost** — prefer metadata (`INFORMATION_SCHEMA`, object listings, table stats) over full scans. Sample with `LIMIT` / single-object reads to infer schema.
 - **Client libraries** — recipes need driver-specific clients (`boto3`, `snowflake-connector-python`, etc.). Install on demand into a temp venv; prefer a CLI already on PATH.
 - **Multiple credentials, one store** — a profile may list several services pointing at the same store with different auth (e.g. `nxd-snowflake`, `nxd-snowflake-keypair`, `nxd-snowflake-pat`). Inspect one; note the others are duplicates.
-- **One service = one input** — keep the inventory aligned to how nextdata models inputs, so results map cleanly onto nexty-bootstrap.
+- **One service = one input** — keep the inventory aligned to how nextdata models inputs, so results map cleanly onto nxd-data-product-builder.
