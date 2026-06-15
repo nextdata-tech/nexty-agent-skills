@@ -101,6 +101,31 @@ cp -r nexty-agent-skills/src/nexty-bootstrap .claude/skills/nexty-bootstrap
 cp -r nexty-agent-skills/src/nexty-mesh-analyzer .claude/skills/nexty-mesh-analyzer
 ```
 
+### Local development on skills
+
+To install from a local checkout for fast iteration:
+
+```bash
+npx skills add ./src --all -y
+```
+
+This installs skills from the `src/` directory in your working copy. After editing a SKILL.md, re-run the command to update.
+
+To remove and reinstall cleanly:
+
+```bash
+npx skills remove --all -y
+rm -rf .agents .claude/skills skills-lock.json
+npx skills add ./src --all -y
+```
+
+or 1 liner:
+
+```
+```bash
+npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx skills add ./src --all -y
+```
+
 ## Uninstall
 
 ```bash

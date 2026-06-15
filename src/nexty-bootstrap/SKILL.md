@@ -382,9 +382,9 @@ Each directory under `data_products/` is a complete data product (spec.py, trans
 
 ### Step 10: Generate Files
 
-Ask: In Spec file do you want the Data Product to run when updated("upstream-product") or scheduled("0 */8 * * *")?
+Ask: In the spec file, do you want the Data Product to run when an input updates (`updated("my-input")`) or on a schedule (`scheduled("0 */8 * * *")`)?
 
-If the user chooses any 1 then the format for when() in spec file under transform would be when(updated("upstream-product")) or when(scheduled("0 */8 * * *")) based on what user chooses. If they choose both, then the current format is correct in the template using any_of().
+If the user chooses one, the `when()` clause in the transform becomes `when(updated("my-input"))` or `when(scheduled("0 */8 * * *"))` accordingly. The argument to `updated()` is the name from `.input("my-input", ...)` — not the upstream DP name (see Gotchas). If they choose both, keep the template's `any_of()` form.
 
 Confirm the full configuration, then generate all files in a new directory named after the data product.
 
