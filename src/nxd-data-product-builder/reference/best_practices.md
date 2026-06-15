@@ -32,6 +32,45 @@
 
   Without these shims, `nxd validate` fails with `TypeError: 'StubModule' object is not iterable`.
 
+## Packaging for `nxd launch`
+
+The platform's init container installs the Data Product as a Python package via `pip`, which uses `setuptools` for package discovery. A flat layout with multiple top-level `.py` files breaks auto-discovery (`error: Multiple top-level modules discovered in a flat-layout: [...]`) and the launch fails at `Installing dependencies`.
+
+* **Declare every shipped module explicitly in `pyproject.toml`**:
+
+  ```toml
+  [tool.setuptools]
+  py-modules = ["spec", "models", "nxd_spec", "nxd_models", "transform"]
+  ```
+
+  Add contract module names too if the product ships them. The list is the source of truth for what gets packaged.
+
+* **Ship a `.nxdignore`** in the project root that keeps local-only files out of the deployment bundle. Local-execution files often hold credentials wired in for testing or use dev-only dependencies the platform doesn't see:
+
+  ```
+  # Version control
+  .git/**
+  # IDE / editor
+  .vscode/**
+  .idea/**
+  # OS
+  .DS_Store
+  # Build artifacts
+  build/**
+  dist/**
+  # Python
+  __pycache__/**
+  *.pyc
+  .venv/**
+  # Local execution only — never deployed
+  .env
+  .env.example
+  local_transform.py
+  test_*.py
+  ```
+
+  Add any other local-only smoke-test or fixture files to the same block.
+
 ## Transformation
 
 * `@data_product.on_transform()` should be avoided when creating Python based Data Products. *Thus the usage of `.transform(code(transform_fn))` is also preferred within `spec.py` file(s)*.

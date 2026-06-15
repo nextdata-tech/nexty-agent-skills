@@ -88,6 +88,8 @@ If the user refers to a candidate by number (`#41`) or by name (`top-playlists`)
 
 Other document shapes — plain markdown or text describing a Data Product — are supported best-effort: read the document, extract whatever maps onto the Interview questions, then ask the user to fill any gaps.
 
+**Build a doc-claim checklist before any code.** Before writing `spec.py` / `models.py` / `transform.py`, enumerate every concrete claim from the input doc as a flat list: Data Product name, domain, infra profile, mesh URL, each input port (service + driver + filters + expectations), **each output port** (service + driver + schema + table + model + format), transform constraints (chunk sizes, embedding models, library choices), schedule, model count and shape, validation expectations. Treat each paragraph of a section like *Output* as a potential standalone claim — sections often carry N facts, not one. After scaffolding, walk the checklist and mark which file/line implements each claim. Anything unmapped = revisit before reporting done. When a claim conflicts with a similar reference example, **the doc wins**.
+
 #### Infra Profile Lookup
 Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nexty-mesh-analyzer` does, then confirm with the user.
 
@@ -99,6 +101,8 @@ Search, in order:
 For each candidate file, confirm with `Grep` that it has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top. Resolve **pointer files** — a file whose contents are filesystem path(s) or URI(s), one per line — by following each pointer (read file paths, fetch `http(s)://` URIs).
 
 Present every match and let the user pick one, or paste a path / URI directly. When the discovery source is a mesh-assets report, prefer the profile whose `metadata.name` matches the candidate's *Infra profile* field.
+
+**Mesh URL = active nxd config, not the doc default.** Service URLs in `spec.py` (`.source(...)`, `storage(...)`, `.compute(...)`) must point at the user's **active mesh** — the un-commented `url:` line at the top of `~/.nxd/config.yaml`. If the input doc / mesh-assets report names a different mesh host, **flag the mismatch and ask the user which mesh to target** before generating files; don't silently use either. Reference examples may carry whatever mesh their author used — treat the host as a template, not a value to copy verbatim. Once chosen, confirm the named services (`<input-service>`, output service, compute) actually exist in the chosen mesh's infra profile by grepping the profile YAML; missing services will fail `nxd validate` / `nxd launch` later.
 
 **Credentials.** The chosen profile holds live secrets in plaintext. Treat it the same way `nexty-mesh-analyzer` does:
 
@@ -172,6 +176,14 @@ The `nxd` library should already be installed in the virtual environment by the 
 #### Transformation Validation
 Although the `transform(...)` function is designed to run within the Nextdata OS platform, it is worth creating an additional script that can execute it locally — this is very useful for testing. Any Python libraries required only for running the transformation locally should be added as development dependencies (e.g. `uv add --dev <package>`) so they are recorded in `pyproject.toml` without being treated as runtime dependencies of the Data Product, *including `python-dotenv` if used*.
 
+**Exercise the full pipeline, not just the I/O boundary.** A local test that only confirms "did the input fetch succeed" passes happily while the transform breaks at parse time — real-world APIs often return fields in shapes the naive code path doesn't anticipate (nested document trees instead of strings, optional containers, vendor-specific encodings). The local test must walk every internal stage the transform walks: fetch → parse / extract → chunk / aggregate / shape → (write is fine to stub if the sink is hard to reach locally). Run it against real upstream data when credentials are available; assert that each stage produces non-empty output across the full sample, not just the first record. Stage failures should report with the stage name (`FAIL[parse]: …`) so the breakpoint is obvious.
+
+#### Packaging for `nxd launch`
+The platform's init container installs the Data Product as a Python package via `pip`, which uses `setuptools` for discovery. A flat directory with multiple top-level `.py` files (`spec.py`, `models.py`, `transform.py`, plus the `nxd_spec` / `nxd_models` shims) breaks auto-discovery and the launch fails at `Installing dependencies` with `Multiple top-level modules discovered in a flat-layout`. Two things prevent this:
+
+* **Declare `py-modules` explicitly in `pyproject.toml`** (see `reference/best_practices.md` for the snippet). List every `.py` module that should ship — typically `spec`, `models`, `nxd_spec`, `nxd_models`, `transform`, plus contract files if any.
+* **Ship a `.nxdignore`** that excludes everything local-only from the deployment bundle: `.env*`, `local_transform.py` (and any other local runner / smoke-test script), `.venv/`, `__pycache__/`, build artifacts, IDE / VCS noise. Local-execution files have credentials wired in or use development-only dependencies the platform shouldn't see.
+
 ---
 
 ### 4. Validation
@@ -187,6 +199,13 @@ Validation Progress:
 If `nxd validate` reports errors, read the output carefully, fix the issue in `spec.py`, `models.py`, or `transform.py`, and re-run until the command exits cleanly. Do not mark item 4 complete on the top-level checklist until validation passes.
 
 Note: `nxd validate` checks structural correctness of the spec and parsed models — it does not execute the transform against real services. End-to-end runtime validation is performed by the user in the Finalisation step.
+
+**Watch for semantic-model removal across versions at launch time.** The platform protects downstream consumers from breaking changes: if a previously launched version of the same Data Product declared a semantic model that the new launch no longer declares, `nxd launch` aborts with HTTP `409` and a message like `The following model(s) are no longer available: [<model_name>]`. This commonly happens when the model is renamed during scaffolding (e.g. an unintended pluralisation / casing change) — the rename looks local but the server sees deletion. Two resolutions:
+
+* **Rename the model to match the prior name** in `models.py`, `spec.py`, `nxd_spec.py`'s `__all__`, the `target_table(...)` model argument, and any model-name string constants in `transform.py`. Re-run launch.
+* **Bump `manifest.version` and launch with `--versioned`** so the previous version coexists.
+
+If you're not sure which model name the deployed version uses, `nxd describe data-product <name>` (or the DP REST `/api/v1/models` endpoint) lists them.
 
 ---
 
