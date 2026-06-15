@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-builder
-description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nexty-mesh-analyzer`). Use whenever the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-mesh-analyzer`). Use whenever the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
 metadata:
   author: nextdata
   version: 0.2.1
@@ -78,7 +78,7 @@ Consult the following references for concepts, APIs, and best practices:
 Decide once, up front, how the Data Product's requirements will be sourced. Ask the user which mode applies:
 
 * **Interactive interview** (default) — work through the questions in **Interview** below.
-* **Spec-from-document** — the user points at one or more documents that already describe the Data Product. The canonical case is a candidate `#N` in a `mesh-assets-<profile>.md` report produced by the **`nexty-mesh-analyzer`** skill, paired with its companion `mesh-assets-<profile>-models.md` for input/output schemas. Phrases like *"build the data product described by #41 in mesh-assets-daff.md"* trigger this branch.
+* **Spec-from-document** — the user points at one or more documents that already describe the Data Product. The canonical case is a candidate `#N` in a `mesh-assets-<profile>.md` report produced by the **`nxd-mesh-analyzer`** skill, paired with its companion `mesh-assets-<profile>-models.md` for input/output schemas. Phrases like *"build the data product described by #41 in mesh-assets-daff.md"* trigger this branch.
 
 If spec-from-document is chosen, follow **Spec-from-Document** below in place of Interview. Either branch must end with the same outputs: the candidate's purpose, inputs/outputs (with locations, services, formats), drivers, and any transformation notes. Confirm the extracted answers with the user before moving on to step 2.
 
@@ -101,7 +101,7 @@ If the user refers to a candidate by number (`#41`) or by name (`top-playlists`)
 Other document shapes — plain markdown or text describing a Data Product — are supported best-effort: read the document, extract whatever maps onto the Interview questions, then ask the user to fill any gaps.
 
 #### Infra Profile Lookup
-Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nexty-mesh-analyzer` does, then confirm with the user.
+Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nxd-mesh-analyzer` does, then confirm with the user.
 
 Search, in order:
 
@@ -112,7 +112,7 @@ For each candidate file, confirm with `Grep` that it has `kind: Profile` and `ap
 
 Present every match and let the user pick one, or paste a path / URI directly. When the discovery source is a mesh-assets report, prefer the profile whose `metadata.name` matches the candidate's *Infra profile* field.
 
-**Credentials.** The chosen profile holds live secrets in plaintext. Treat it the same way `nexty-mesh-analyzer` does:
+**Credentials.** The chosen profile holds live secrets in plaintext. Treat it the same way `nxd-mesh-analyzer` does:
 
 - Never echo a secret value to chat or display it on a command line.
 - When the builder needs service attributes (URLs, account names, bucket names) to populate `spec.py`, read them out of the profile and put them in `spec.py` — but pull credential values (passwords, access keys, tokens, client secrets, PEM blocks) into `.env` placeholders instead, with a `TODO` marker.
@@ -142,7 +142,7 @@ coming from?" Steer to exactly one of:
 **b. Domain, infra profile, and basics.** Confirm the domain the user may
 launch in and the infra profile to use (locate the profile via **Infra
 Profile Lookup** above; for domain/role discovery the heavier CLI/REST
-walk-through lives in `nexty-mesh-analyzer`). From the profile, identify the
+walk-through lives in `nxd-mesh-analyzer`). From the profile, identify the
 available services and classify each as compute / storage / rpc / governance
 (driver-classification table in
 [reference/file-templates.md](reference/file-templates.md)). Then pin the
