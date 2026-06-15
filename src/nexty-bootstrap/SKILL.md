@@ -257,6 +257,8 @@ These selections are final — later steps reference them, not re-ask.
 
 ### Step 3: Input Sources & Semantic Models
 
+> See [references/storage-configs.md](references/storage-configs.md) for all storage config helpers, source URL patterns, and context types per driver.
+
 **Use the service inventory from Step 2b.** When asking for the source URL, present the available storage services as options rather than asking for a raw URL. Construct the URL automatically: `https://<api_url>/infra-profile/<PROFILE>#/services/<SERVICE_NAME>`.
 
 Based on Step 1, you should already have a good understanding of the input data shape.
@@ -321,6 +323,8 @@ If no glossary terms match any fields, explicitly state: "No glossary term match
 - **Sampling method**: `SamplingMethod.Random` (default) or `SamplingMethod.Head`
 
 ### Step 5: Transform Logic
+
+> See [references/data-types.md](references/data-types.md) for complex types (timestamp, decimal, vector_embeddings, struct, list, map).
 
 The compute service was selected in Step 2d — use it for `.compute(...)` in spec.py. Do not re-ask.
 
@@ -404,7 +408,8 @@ spec = (
         code(transform)
         .when(
             any_of(
-                # Add triggers: updated("upstream-product"), scheduled("0 */8 * * *")
+                # Add triggers: updated("my-input"), scheduled("0 */8 * * *")
+                # "my-input" is the name passed to .input() — NOT the upstream DP name
             ),
             startup=True,
         )
@@ -440,10 +445,11 @@ from nxd.spec.data_types import boolean, date32, date64, float64, int32, int64, 
 ### requirements.txt
 
 ```
-nxd.core
-nxd.data_product[spec]
-pandas<=2.1.4
+nxd_core>=0.0.1
+nxd_data_product>=0.0.1
+pandas
 ```
+Both packages are always required — missing either causes `ModuleNotFoundError` at runtime. Package names use underscores, not dots.
 
 ## Gotchas
 
@@ -454,6 +460,10 @@ pandas<=2.1.4
 - **Context types**: Use `AzureDataLakeStorage`, `Snowflake`, `S3Input`, `S3Output` from `nxd.data_product.context` for transform function type hints.
 - **Glossary links**: Can be at model level (`.link("field", Predicate.GlossaryTerm, url)`) or product level (`.link(Predicate.GlossaryTerm, url)`).
 - **Quality promises**: Attach to output ports via `.promise()`. Can use `soda` (YAML), `gx` (Python), or `custom` (verify function returning `VerifyResult`).
+- **`updated()` takes input name**: `updated("my-input")` matches the name from `.input("my-input", ...)`, not the upstream DP name. Passing the upstream DP name will never trigger.
+- **`source_aligned_input()` vs `data_product_input()`**: Use `source_aligned_input()` for external storage (S3, Databricks, Snowflake, ADLS, Kafka); `data_product_input()` for DP-to-DP dependencies. They have different `.source()` URL patterns.
+- **Contract compute driver**: `nxd:local-python:1.0.0` is deprecated. Soda/GX checks use `nxd:kubernetes/contract:1.0.0`. No `.compute()` call needed — it auto-selects.
+- **Full pitfalls list**: [references/common-pitfalls.md](references/common-pitfalls.md)
 
 ## References
 
