@@ -1,6 +1,15 @@
 ---
 name: nxd-data-product-builder
 description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-mesh-analyzer`). Use whenever the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - MultiEdit
+  - Glob
+  - Grep
+  - AskUserQuestion
 metadata:
   author: nextdata
   version: 0.2.1
@@ -19,7 +28,7 @@ This Skill is intended for technically proficient users who are familiar with te
 Before engaging with the user, set up the environment. Do **not** proceed until this is complete.
 
 - **NXD CLI:** Ensure the NXD CLI is installed and the correct mesh is selected, this should be set up and verified by the "nxd-setup" Skill. *Confirm the correct mesh has been selected before continuing.*
-- **Active mesh + its hosts (elicit-or-derive, do not hardcode):** every service URL, doc link, and `nxd ... --config` flag in this skill depends on which mesh is active. `nxd-setup` owns mesh selection and writes the per-mesh config to `/tmp/nxd-<mesh>.yaml`. Confirm the active mesh **name** with the user (or read it from `~/.nxd/meshes.json` — the selected entry), and from that same mesh entry take its `app_url`/`api_url` host. These are the host you substitute into `https://<app_url>/infra-profile/<profile>#/services/<service>` URLs and into the docs base below. Never paste a demo host (`example.com`, `nextopia.dev`, `nextdata.com`) as if it were canonical — those only appear as clearly-marked illustrative placeholders.
+- **Active mesh + its hosts (elicit-or-derive, do not hardcode):** every service URL, doc link, and `nxd ... --config` flag in this skill depends on which mesh is active. `nxd-setup` owns mesh selection and writes the per-mesh config to `<session_config>` (`/tmp/...` on POSIX/WSL, `$env:TEMP\...` on Windows PowerShell). Confirm the active mesh **name** with the user (or read it from the nxd registry — the selected entry), and from that same mesh entry take its `app_url`/`api_url` host. These are the host you substitute into `https://<app_url>/infra-profile/<profile>#/services/<service>` URLs and into the docs base below. Never paste a demo host (`example.com`, `nextopia.dev`, `nextdata.com`) as if it were canonical — those only appear as clearly-marked illustrative placeholders.
 - **Runtime:** Python **3.10** with **`uv`** as the dependency manager.
     - *There is no need to check for a given Python version since `uv` will manage this for us.*
 - **Dependencies:** Install the `nxd-data-product` Python package from the mesh's package registry index (commonly `https://registry.trynxd.com/index/`; if your mesh config specifies a different index, use that):
@@ -122,7 +131,7 @@ The infra profile must be **derived from the active mesh or elicited from the us
 
 1. Customer extension paths — `./.nxd/skills/nxd-data-product-builder/` and `~/.nxd/skills/nxd-data-product-builder/`.
 2. Working tree — `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
-3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=/tmp/nxd-<mesh>.yaml` and let the user choose from the returned names. Likewise list available services for a chosen profile from the mesh when no local YAML exists (the profile name selected here is the value you place in `infra_profile="..."` and in service URLs).
+3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=<session_config>` and let the user choose from the returned names. Likewise list available services for a chosen profile from the mesh when no local YAML exists (the profile name selected here is the value you place in `infra_profile="..."` and in service URLs).
 
 For each candidate file, confirm with `Grep` that it has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top. Resolve **pointer files** — a file whose contents are filesystem path(s) or URI(s), one per line — by following each pointer (read file paths, fetch `http(s)://` URIs).
 
@@ -335,7 +344,7 @@ Once implementation is complete, validate the Data Product before handover. Trac
 Validation Progress:
 - [ ] Local transform script in place; imports resolve and function signatures match declared context types
 - [ ] All "TODO" markers inserted and clearly labelled
-- [ ] `nxd validate --config=/tmp/nxd-<mesh_name>.yaml <data_product_directory> --debug` passes
+- [ ] `nxd validate --config=<session_config> <data_product_directory> --debug` passes
 ```
 
 If `nxd validate` reports errors, read the output carefully, fix the issue in `spec.py`, `models.py`, or `transform.py`, and re-run until the command exits cleanly. Do not mark item 4 complete on the top-level checklist until validation passes.
@@ -359,7 +368,7 @@ Finalisation (user to complete):
 - [ ] Review all "TODO" markers; resolve or explicitly defer each
 - [ ] Populate `.env` (or equivalent) with credentials and configuration for local execution
 - [ ] Run the local transform script and confirm it completes end-to-end
-- [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=/tmp/nxd-<mesh_name>.yaml`
+- [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=<session_config>`
 - [ ] Verify the first platform run: transform completes, outputs land at configured ports, promises/expectations pass
 ```
 

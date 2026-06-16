@@ -4,8 +4,8 @@ Reads ~/.nxd/meshes.json and ~/.nxd/config.yaml (see nxd-setup skill for the
 file format) and ~/.nxd/tokens.json (the file `nxd login` writes).
 
 Prints JSON: {api_url, mesh_name, token_available}. The token itself is
-written only to --out (default /tmp/nxd-data-product-query/token.txt with mode
-600), never to stdout — so the rest of the skill can pipe / --token-file it
+written only to --out (default under the OS temp directory with mode 600), never
+to stdout — so the rest of the skill can pipe / --token-file it
 into the other scripts without it leaking into chat.
 
 Exit 0 on success. Exit 2 with a JSON list of meshes when --mesh is omitted
@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from nxd_api import resolve_mesh
@@ -27,7 +28,7 @@ def main() -> None:
     p.add_argument("--mesh", help="Mesh name when multiple are configured")
     p.add_argument(
         "--out",
-        default="/tmp/nxd-data-product-query/token.txt",
+        default=str(Path(tempfile.gettempdir()) / "nxd-data-product-query" / "token.txt"),
         help="Where to write the bearer token (mode 600). Default keeps the token off stdout.",
     )
     args = p.parse_args()

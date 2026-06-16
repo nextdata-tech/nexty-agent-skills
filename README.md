@@ -60,7 +60,7 @@ Curated by our field engineers. Brings the patterns, skills, and tools your AI a
 
 ## What Can I Build?
 
-- **Source alinged data products** (from S3, ADLS, Snowflake and data bricks.)
+- **Source-aligned data products** (from S3, ADLS, Snowflake, and Databricks)
 - **Aggregate data products** (Quickly build data products from existing data product)
 - **Policies** (Quickly build computational policies)
 
@@ -74,6 +74,12 @@ npx skills add nextdata-tech/nexty-agent-skills --all -y
 ```
 
 The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right location for each agent automatically.
+
+For Windows PowerShell, run the same command in PowerShell:
+
+```powershell
+npx skills add nextdata-tech/nexty-agent-skills --all -y
+```
 
 ### Claude Code plugin
 
@@ -94,11 +100,9 @@ To iterate on a local checkout, point the marketplace at your clone instead:
 ### Manual install
 
 ```bash
-git clone https://github.com/nextdata-tech/nexty-agent-skills.git
+git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
 mkdir -p .claude/skills
-cp -r nexty-agent-skills/src/nxd-setup .claude/skills/nxd-setup
-cp -r nexty-agent-skills/src/nxd-data-product-builder .claude/skills/nxd-data-product-builder
-cp -r nexty-agent-skills/src/nxd-mesh-analyzer .claude/skills/nxd-mesh-analyzer
+cp -R nexty-agent-skills/src/* .claude/skills/
 ```
 
 ### Local development on skills
@@ -119,9 +123,8 @@ rm -rf .agents .claude/skills skills-lock.json
 npx skills add ./src --all -y
 ```
 
-or 1 liner:
+or one line:
 
-```
 ```bash
 npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx skills add ./src --all -y
 ```
@@ -139,6 +142,12 @@ rm -rf .agents .claude/skills skills-lock.json
 |-------|-------------|
 | `nxd-setup` | Install, configure, and authenticate the nxd CLI |
 | `nxd-data-product-builder` | Create, bootstrap, scaffold, refine, and validate a Nextdata OS Python data product — interactive interview or spec-from-document (replaces the former `nexty-bootstrap` wizard) |
+| `nxd-adding-inputs` | Add or repair inputs, input semantic models, transform parameters, and input expectations |
+| `nxd-adding-outputs` | Add or repair output models, output ports, storage mappings, transform output parameters, and output promises |
+| `nxd-adding-expectations-promises` | Add or repair input expectations and output promises |
+| `nxd-adding-policy` | Add contracts and activate computational policies with current CLI syntax |
+| `nxd-complying-with-failing-policy` | Diagnose policy violations and update the data product to comply |
+| `nxd-debugging-data-products` | Diagnose failed data products from describe/logs/init logs/verify output |
 | `nxd-data-product-query` | Query a deployed data product's output ports (SQL, file fetch, vector similarity, or MCP/RPC) via its REST API |
 | `nxd-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
 | `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
@@ -150,7 +159,12 @@ Start Claude Code in any project and invoke a skill:
 ```
 /nxd-setup                  # Set up the nxd CLI
 /nxd-data-product-builder   # Build / bootstrap a new data product
-/nxd-mesh-analyzer        # Discover candidate data products from an infra profile
+/nxd-adding-inputs          # Add inputs to an existing data product
+/nxd-adding-outputs         # Add output ports and promises
+/nxd-debugging-data-products # Debug a failed deployed data product
+/nxd-data-product-query     # Query output ports from deployed data products
+/nxd-mesh-analyzer          # Discover candidate data products from an infra profile
+/nxd-policies               # List, activate, and deactivate policies
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.

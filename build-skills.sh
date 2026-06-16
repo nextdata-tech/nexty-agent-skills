@@ -85,7 +85,11 @@ for skill_dir in "$SRC_DIR"/*/; do
 
   (
     cd "$skill_dir"
-    zip -qrD "$zip_path" . "${ZIP_EXCLUDE_ARGS[@]}" "${prune_args[@]}"
+    zip_args=(. "${ZIP_EXCLUDE_ARGS[@]}")
+    if [[ "${#prune_args[@]}" -gt 0 ]]; then
+      zip_args+=("${prune_args[@]}")
+    fi
+    zip -qrD "$zip_path" "${zip_args[@]}"
   )
 
   files="$(unzip -l "$zip_path" | awk 'NR>3 && $NF!~/\/$/' | wc -l | tr -d ' ')"

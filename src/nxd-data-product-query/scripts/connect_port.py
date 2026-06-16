@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +55,7 @@ def main() -> None:
     p.add_argument("--token-file")
     p.add_argument(
         "--out",
-        default="/tmp/nxd-data-product-query/port.json",
+        default=str(Path(tempfile.gettempdir()) / "nxd-data-product-query" / "port.json"),
         help="Where to write the full leased-credential document (mode 600).",
     )
     args = p.parse_args()
