@@ -6,7 +6,7 @@ allowed-tools:
   - Read
 metadata:
   author: nextdata
-  version: 0.2.0
+  version: 0.2.1
 ---
 
 # nxd Setup
@@ -240,13 +240,19 @@ Run browser-based login:
 nxd --config <session_config> login
 ```
 
-This opens a browser for authentication. Tell the user to complete the login flow in their browser, then wait for them to confirm.
+This opens a browser for authentication. In agent contexts where the model
+cannot complete the browser flow itself, hand the exact command to the user
+(Claude Code users can run it as `! nxd --config <session_config> login`) and
+wait for confirmation.
 
 Verify login succeeded:
 
 ```bash
 nxd --config <session_config> whoami
 ```
+
+Do not trust exit code alone; if `whoami` prints `Not logged in`, auth is not
+ready even if the shell exit code is `0`.
 
 ### Create a PAT for persistence
 

@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # NXD Expectations and Promises
@@ -51,7 +51,76 @@ Use expectations to protect inputs before transform execution, and promises to v
 8. Run:
 
 ```bash
+nxd --config <session_config> whoami
 nxd validate --config <session_config> <data_product_directory> --debug
+```
+
+`nxd validate` imports and validates the spec, but it does not execute custom
+verify functions against live data. Verify functions run as platform contracts
+at the relevant expectation/promise phase.
+
+## Custom Input Expectation Template
+
+Use this when an input must be checked by calling the upstream source or
+inspecting its driver context. The parameter name must match the `.input(...)`
+name after Python normalization: `"jira-api"` becomes `jira_api`.
+
+```python
+# spec.py
+from contracts import jira_input_format
+
+.input(
+    "jira-api",
+    source_aligned_input()
+    .source(JIRA_API_URL)
+    .model(jira_issue)
+    .expectation(
+        custom("jira_input_format").verify(code(jira_input_format.verify))
+    ),
+)
+```
+
+```python
+# contracts/jira_input_format.py
+from nxd.data_product.context import API, Model, VerifyResult, VerifyResultEnum
+
+
+def verify(jira_api: API, models: dict[str, Model]) -> VerifyResult:
+    failures: list[str] = []
+    # Use jira_api.url / jira_api.username / jira_api.token, but never echo
+    # secrets into logs, exceptions, or the returned context.
+
+    if failures:
+        return VerifyResult(
+            VerifyResultEnum.FAILED,
+            {"failures": failures},
+        )
+
+    return VerifyResult(
+        VerifyResultEnum.PASS,
+        {"checked": True},
+    )
+```
+
+Known `VerifyResultEnum` values include `PASS`, `WARNING`, and `FAILED`; use
+`FAILED`, not `FAIL`. Return `WARNING` only for soft conditions that should be
+visible but not blocking under the active policy consequence.
+
+## Custom Output Promise Template
+
+Promises attach to an output **port**, not to the `.output(...)` wrapper or the
+model declaration:
+
+```python
+.output(
+    data_product_output()
+    .port(
+        "pgvector",
+        storage(PGVECTOR_URL).config(pg_vector_config()),
+    )
+    .promise(custom("row_count").verify(code(row_count.verify)).model(jira_embeddings))
+    .model(jira_embeddings)
+)
 ```
 
 ## Guardrails
@@ -60,3 +129,4 @@ nxd validate --config <session_config> <data_product_directory> --debug
 - Do not attach input expectations to output ports.
 - Do not disable a policy because a contract is missing; add the required contract or explain the missing artifact.
 - Do not expose sample rows with sensitive values in the final answer.
+- Do not put secrets, tokens, or raw sensitive sample rows in `VerifyResult.context`; return counts, issue keys, field names, or redacted snippets only.

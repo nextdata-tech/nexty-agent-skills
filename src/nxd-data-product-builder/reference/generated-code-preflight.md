@@ -3,6 +3,8 @@
 ## Contents
 - Purpose
 - Required review
+- Offline spec-build check
+- Validation result clarity
 - README and checklist updates
 - What not to claim
 
@@ -28,6 +30,10 @@ Check at least:
   every DSL name used, `contracts/` is a package when imported as a package,
   `pyproject.toml` ships every module/package needed by `spec.py`, and
   `.nxdignore` excludes only local-only files.
+- **Lazy import integrity:** `transform.py` avoids top-level imports for heavy
+  runtime-only dependencies such as Spark, torch, sentence-transformers,
+  langchain embedding/vector integrations, browser clients, and vendor SDKs not
+  needed to build the spec. `nxd validate` imports `transform.py`.
 - **Output/pgvector integrity:** if using pgvector, prefer explicit vector
   config from `storage-configs.md`, keep one model per pgvector port, keep the
   model name aligned with the intended table, and record whether the table is
@@ -43,13 +49,51 @@ Check at least:
 - **Policy readiness:** if a mesh policy may require output promises, add a
   port-level promise or mark that missing promise as an explicit launch risk.
 
+## Offline spec-build check
+
+Before mesh validation, run the same package-loader path that `nxd validate`
+uses to import and build the data product spec:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from nxd.spec.fs.package_loader import data_product_spec_from_file_at_path
+data_product_spec_from_file_at_path(Path("spec.py"), Path("."))
+print("offline spec-build: PASS")
+PY
+```
+
+This catches broken shims, bad model imports, missing contract packages, bad
+DSL chains, and heavy top-level imports without requiring mesh auth. It does
+not resolve live infra-profile services or execute the transform body.
+
+## Validation result clarity
+
+Before handoff, make validation status impossible to misread:
+
+- Confirm auth with `nxd --config=<session_config> whoami`; do not trust exit
+  code alone if the output says `Not logged in`.
+- Remember that `nxd validate` connects to the `--config` mesh and resolves
+  infra-profile services. It is not purely offline/structural.
+- Run `nxd validate` and capture the shell exit code immediately after it returns.
+- If `--debug` output is noisy or has no final success line, also run the same
+  validate command without `--debug` and capture the exit code.
+- Record `PASS`, `FAIL`, or `NOT RUN` in the README, never a vague phrase like
+  "validate looked okay".
+- Include one line of evidence: `exit 0; no validation errors printed`,
+  `Service jira-api not found`, `not authenticated`, or similar.
+- Treat only the chosen target mesh as target validation evidence. Cross-mesh
+  probes are discovery/debug context. If target validation later exits `0`,
+  remove or demote stale cross-mesh blockers so the README does not say
+  validation cannot pass when it just did.
+
 ## README and checklist updates
 
 The README status block must reflect the preflight result:
 
 - `Project files`: local absolute path or artifact-only handoff.
 - `Local smoke test`: exact command and PASS/FAIL/NOT RUN.
-- `nxd validate`: exact command and PASS/FAIL/NOT RUN.
+- `nxd validate`: exact command, exit code, and PASS/FAIL/NOT RUN.
 - `nxd launch`: normally NOT RUN unless the user explicitly approved launch.
 - `Runtime resources`: CREATED, NOT CREATED, or UNKNOWN with evidence.
 

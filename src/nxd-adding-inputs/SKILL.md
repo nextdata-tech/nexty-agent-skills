@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # NXD Adding Inputs
@@ -28,6 +28,9 @@ Add inputs to an existing Nextdata OS Python data product without disturbing unr
   - `<app_url>/docs/#/tutorials/guides/05-expectations`
   - `<app_url>/docs/#/tutorials/guides/consumer-tutorial`
 - On Windows PowerShell, translate `<session_config>` and temp paths using `nxd-setup` conventions.
+- If no local infra-profile YAML is available, list profiles with
+  `nxd ls infra-profiles --config=<session_config>` and list a chosen profile's
+  services with `nxd --config=<session_config> rest -u /api/v1/infraprofiles/<profile-name>/services`.
 
 ## Workflow
 
@@ -40,13 +43,19 @@ Add inputs to an existing Nextdata OS Python data product without disturbing unr
 4. Add or update the semantic model. Prefer one semantic model per unique schema; avoid complex types when a string representation is safer for the platform.
 5. Add the input declaration in `spec.py`. Use the real active mesh app host in service URLs; examples from public repos are templates, not values to copy.
 6. Update `transform.py`. The transform parameter name must match the input name after Python normalization: hyphens become underscores.
-7. If the input needs a contract, add an input expectation, not an output promise. Schema or custom expectations belong on the input side.
+7. If the input needs a contract, add an input expectation, not an output promise. Schema or custom expectations belong on the input side; use `nxd-adding-expectations-promises` for the custom verify template and `VerifyResultEnum` values.
 8. Update local validation so it exercises fetch, parse, and shape logic. Do not stop at "the source is reachable."
 9. Run validation:
 
 ```bash
+nxd --config <session_config> whoami
 nxd validate --config <session_config> <data_product_directory> --debug
+echo "nxd validate exit code: $?"
 ```
+
+`nxd validate` resolves infra-profile services against the `--config` mesh. If
+`whoami` prints `Not logged in`, record validation as `NOT RUN` even if the
+shell exit code is `0`.
 
 ## Guardrails
 

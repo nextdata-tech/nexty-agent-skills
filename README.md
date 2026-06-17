@@ -218,14 +218,51 @@ If you need a real project folder that you can inspect with `ls`, commit to git,
 
 Claude Code is the recommended path for a real data product build because it starts in a local working directory and can create files, inspect them, and run safe validation commands.
 
-#### 1. Update the skill pack
+You can use Claude Code in two ways:
+
+- **Claude Code CLI:** run `claude` from a terminal.
+- **Claude Code VS Code extension:** open the Claude Code panel inside VS Code.
+
+If `claude` returns `command not found`, you have the VS Code extension but not the CLI binary on your shell `PATH`. Either install the CLI or use the VS Code extension flow below.
+
+#### 1. Check or install Claude Code CLI
+
+If you want to use the terminal flow, first check whether the CLI is installed:
+
+```bash
+command -v claude
+claude --version
+```
+
+If it is missing, install Claude Code with one of the official install options:
+
+```bash
+# macOS, Linux, or WSL
+curl -fsSL https://claude.ai/install.sh | bash
+
+# macOS Homebrew alternative
+brew install --cask claude-code
+
+# npm alternative; do not use sudo
+npm install -g @anthropic-ai/claude-code
+```
+
+Restart your terminal after installing, then run:
+
+```bash
+claude
+```
+
+The first launch prompts you to log in.
+
+#### 2. Update the skill pack
 
 ```bash
 cd ~/src/nexty-agent-skills
 git pull --ff-only
 python3 scripts/validate_skills.py
 ./build-skills.sh
-npx skills add ./src --all -y
+npx skills add ./src -g -a claude-code -s '*' -y
 ```
 
 You should see output similar to:
@@ -235,7 +272,11 @@ Found 11 skills
 Installed 11 skills
 ```
 
-#### 2. Start Claude Code from the target project directory
+The `-g` flag installs the skills globally for your user, so Claude Code can use them from any project directory. The `-a claude-code` flag targets Claude Code only. If you use `--all -g`, the Skills CLI may also try agents that do not support global installs and print unrelated failures such as `PromptScript does not support global skill installation`.
+
+#### 3. Start Claude Code from the target project directory
+
+##### Option A: terminal CLI
 
 ```bash
 mkdir -p ~/src/jira-issues-dp-test
@@ -249,7 +290,26 @@ Everything Claude builds should now be written under:
 ~/src/jira-issues-dp-test
 ```
 
-#### 3. Ask Claude Code to build from the example requirement
+##### Option B: VS Code extension
+
+If you only have the VS Code extension:
+
+```bash
+mkdir -p ~/src/jira-issues-dp-test
+code ~/src/jira-issues-dp-test
+```
+
+If `code` is not available on your shell `PATH`, open VS Code manually and choose `File > Open Folder...`, then select `~/src/jira-issues-dp-test`.
+
+Then in VS Code:
+
+1. Open the Claude Code panel with the Spark icon, or press `Cmd+Shift+P` and search for `Claude Code`.
+2. Start a new Claude Code conversation from that workspace.
+3. Use the same prompt below.
+
+Claude should treat the opened VS Code folder as the project workspace. Ask it to state the exact project directory before writing files.
+
+#### 4. Ask Claude Code to build from the example requirement
 
 Paste this prompt into the new Claude Code conversation:
 
@@ -276,7 +336,9 @@ Important:
 - Create REQUIREMENTS_CHECKLIST.md.
 - Run generated-code preflight before handoff.
 - Run safe local checks.
+- Run the offline spec-build check with `data_product_spec_from_file_at_path(...)`.
 - Run nxd validate only if nxd is configured and available.
+- When running nxd validate, capture the command output and exit code, then summarize PASS, FAIL, or NOT RUN.
 - If nxd validate cannot run, mark it as NOT RUN with the exact blocker and command to run next.
 ```
 
@@ -289,7 +351,7 @@ cd $HOME\src\nexty-agent-skills
 git pull --ff-only
 python scripts\validate_skills.py
 bash ./build-skills.sh
-npx skills add ./src --all -y
+npx skills add ./src -g -a claude-code -s '*' -y
 
 New-Item -ItemType Directory -Force $HOME\src\jira-issues-dp-test
 cd $HOME\src\jira-issues-dp-test
@@ -298,7 +360,7 @@ claude
 
 `build-skills.sh` is a Bash script, so Windows users should run it from WSL, Git Bash, or PowerShell with `bash` available.
 
-#### 4. Verify what was built
+#### 5. Verify what was built
 
 After Claude finishes, check the real local folder:
 
@@ -325,7 +387,7 @@ The generated `README.md` should clearly show:
 - the project directory,
 - whether files were created on disk,
 - which local tests passed,
-- whether `nxd validate` passed, failed, or was not run,
+- whether `nxd validate` passed, failed, or was not run, including the exit code if it ran,
 - whether anything was launched,
 - the remaining TODOs before launch.
 
@@ -411,7 +473,9 @@ Important:
 - Create REQUIREMENTS_CHECKLIST.md.
 - Run generated-code preflight before handoff.
 - Run only safe local checks available in this chat environment.
+- Run the offline spec-build check if the local nxd package is available.
 - Mark nxd validate as PASS, FAIL, or NOT RUN.
+- If nxd validate runs, include the exit code and the first actionable error, if any.
 - If nxd validate cannot run, include the exact blocker and command to run next.
 ```
 
@@ -439,8 +503,15 @@ python3 -m compileall .
 If `nxd` is configured and the generated README says TODOs are resolved, run:
 
 ```bash
+nxd --config=<session_config> whoami
 nxd validate --config=<session_config> . --debug
+echo "nxd validate exit code: $?"
 ```
+
+If `--debug` output is noisy or has no final success line, run the same command
+again without `--debug` and check the exit code. Treat validation as PASS only
+when auth is confirmed, the validate command exits `0`, and no validation error
+or traceback is printed.
 
 Only run launch after validation passes and a human approves it:
 

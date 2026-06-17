@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # NXD Data Product Debugging
@@ -47,7 +47,9 @@ nxd --config <session_config> logs <dp-name> --mcp --debug-logs
 For local source and service preflight:
 
 ```bash
+nxd --config <session_config> whoami
 nxd validate --config <session_config> <data_product_directory> --debug
+echo "nxd validate exit code: $?"
 nxd --config <session_config> verify dp --dir <data_product_directory> --json
 ```
 
@@ -60,6 +62,11 @@ nxd --config <session_config> verify dp --dir <data_product_directory> --json
 - Output write failure: check driver context, service credentials, table/path/index names, schema settings, and promise code.
 - Policy or contract failure: switch to `nxd-complying-with-failing-policy`.
 - Removed semantic model: restore the deployed model name or launch a versioned product.
+- `nxd validate` returns to prompt with little/no output: first check `whoami`.
+  If auth says `Not logged in`, validation is NOT RUN even if exit code is 0.
+  If auth is valid, rerun without `--debug` and capture the exit code. Treat
+  `Service <name> not found` as an infra-profile/service mismatch, not a
+  transform bug.
 
 ## Patch And Verify
 
@@ -85,4 +92,5 @@ nxd launch --dir <data_product_directory> --config <session_config>
 - Do not jump from a generic startup timeout to a code patch without reading init and debug logs.
 - Do not invent `nxd retry` or `nxd reset`; use `nxd run --retry`.
 - Do not hide failed validation behind a handover checklist.
+- Do not mark `nxd validate` PASS unless `whoami` confirmed auth, validate exited 0, and no validation error/traceback was printed.
 - Do not print secrets from logs, profiles, or leased credentials.

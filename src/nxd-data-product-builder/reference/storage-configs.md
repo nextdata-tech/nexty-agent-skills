@@ -25,6 +25,12 @@ f"https://<app_url>/infra-profile/{INFRA_PROFILE}#/services/k8s-compute"
 
 The `<service-name>` must match a service name returned by the infra profile (the local profile YAML, or `nxd ls infra-profiles` against the active mesh — see SKILL.md "Infra Profile Lookup").
 
+`nxd validate` resolves services against the mesh selected by
+`--config=<session_config>` using the infra-profile name and service fragment.
+Do not rely on a copied host from a reference example as proof you targeted the
+right mesh. Still render service URLs with the chosen mesh's real `app_url` so
+the spec is readable and links point at the right UI.
+
 ---
 
 ## `source_aligned_input()` vs `data_product_input()`

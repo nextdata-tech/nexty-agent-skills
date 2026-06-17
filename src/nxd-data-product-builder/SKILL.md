@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.3
+  version: 0.2.5
 ---
 
 # Nextdata OS Data Product Builder
@@ -147,7 +147,7 @@ The infra profile must be **derived from the active mesh or elicited from the us
 
 1. Customer extension paths — `./.nxd/skills/nxd-data-product-builder/` and `~/.nxd/skills/nxd-data-product-builder/`.
 2. Working tree — `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
-3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=<session_config>` and let the user choose from the returned names. Likewise list available services for a chosen profile from the mesh when no local YAML exists (the profile name selected here is the value you place in `infra_profile="..."` and in service URLs).
+3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=<session_config>` and let the user choose from the returned names. To list services for a chosen profile, use `nxd --config=<session_config> rest -u /api/v1/infraprofiles/<profile-name>/services` (spelling is `infraprofiles`, no hyphen). The profile name selected here is the value you place in `infra_profile="..."` and in service URLs.
 
 For each candidate file, confirm with `Grep` that it has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top. Resolve **pointer files** — a file whose contents are filesystem path(s) or URI(s), one per line — by following each pointer (read file paths, fetch `http(s)://` URIs).
 
@@ -349,13 +349,14 @@ and the command to re-run after fixing it.
 * Service URLs are full and inlined: `https://<app_url>/infra-profile/<profile>#/services/<service>` — used as-is in `.source(...)`, `storage(...)`, `.compute(...)`. Do not abstract behind a helper. `<app_url>` is the active mesh's app host **resolved from mesh config** (see Prerequisites), `<profile>` is the infra profile chosen in discovery, and `<service>` is a real service name from that profile — none of these are hardcoded demo hosts/names.
 * Read the chosen infra profile YAML to discover the correct service names; the compute service name in particular varies between profiles (`k8s-compute`, `k8s-executor`, a Databricks compute, etc.).
 * Project-local `nxd_spec.py` and `nxd_models.py` shim modules are required — the wildcard imports in `spec.py` / `models.py` resolve through these. See `reference/best_practices.md` for the template.
-* Note: `spec.py` cannot be run locally — it requires the Nextdata OS hosted runtime.
+* Do not run `python spec.py` directly. For a local pre-validate import/build check, use the package-loader command in the Validation section; it injects the expected filesystem root the DSL needs.
 
 #### `models.py`
 * Avoid complex types in semantic models where possible, due to compatibility limitations.
 
 #### `transform.py`
 * Use Nextdata Contexts via explicit imports (e.g. `from nxd.data_product.context import AzureDataLakeStorage`) to pass configuration, credentials, and models for each input or output driver. Prefer explicit imports over wildcard imports within the transformation file(s).
+* Keep heavy runtime dependencies (Spark, torch, sentence-transformers, langchain embedding/vector integrations, browser clients) out of top-level imports. `nxd validate` imports `spec.py`, which imports `transform.py`; heavy top-level imports can make validation fail before the transform runs. Import heavy libraries inside `transform()` or helper functions.
 * Parameter names in the `transform(...)` signature must match the input and output-port names declared in `spec.py`. For example, `.input("comp_public", source_aligned_input()...)` binds to `def transform(comp_public: API, ...)`, and `.port("adls", storage(...))` binds to `adls: AzureDataLakeStorage`. Hyphens in spec names are normalised to underscores in the Python signature (e.g. `"s3-source"` → `s3_source`).
 
 #### `nxd` Library
@@ -389,8 +390,29 @@ Validation Progress:
 - [ ] Local transform script in place; imports resolve and function signatures match declared context types
 - [ ] All "TODO" markers inserted and clearly labelled
 - [ ] Local smoke test run, or recorded as NOT RUN with a concrete blocker
+- [ ] Offline spec-build check run with `data_product_spec_from_file_at_path(...)`
 - [ ] `nxd validate --config=<session_config> <data_product_directory> --debug` passes
 ```
+
+Run the offline spec-build check before mesh validation:
+
+```
+python - <<'PY'
+from pathlib import Path
+from nxd.spec.fs.package_loader import data_product_spec_from_file_at_path
+data_product_spec_from_file_at_path(Path("spec.py"), Path("."))
+print("offline spec-build: PASS")
+PY
+```
+
+Then validate against the chosen target mesh. `nxd validate` imports the bundle,
+connects to the `--config` mesh, resolves the infra profile/services, and may
+fail on missing services or auth. It does not execute the transform body. Do
+not leave the user to interpret raw output: run `nxd --config=<session_config>
+whoami`, run validate, capture `$?` or `$LASTEXITCODE`, and summarize `PASS`,
+`FAIL`, or `NOT RUN`. If `whoami` prints `Not logged in`, treat validation as
+`NOT RUN` even if the command exits `0`. If a cross-mesh probe fails but target
+validation later exits `0`, remove stale cross-mesh blockers from the README.
 
 If `nxd validate` reports errors, read the output carefully, fix the issue in `spec.py`, `models.py`, or `transform.py`, and re-run until the command exits cleanly. Do not mark item 4 complete on the top-level checklist until validation passes.
 
@@ -399,7 +421,7 @@ Record it as `NOT RUN` in the README status block, the final response, and the
 handover checklist, with the exact blocker and the exact command the user should
 run next.
 
-Note: `nxd validate` checks structural correctness of the spec and parsed models — it does not execute the transform against real services. End-to-end runtime validation is performed by the user in the Finalisation step.
+End-to-end runtime validation is performed by the user in the Finalisation step.
 
 **Watch for semantic-model removal across versions at launch time.** The platform protects downstream consumers from breaking changes: if a previously launched version of the same Data Product declared a semantic model that the new launch no longer declares, `nxd launch` aborts with HTTP `409` and a message like `The following model(s) are no longer available: [<model_name>]`. This commonly happens when the model is renamed during scaffolding (e.g. an unintended pluralisation / casing change) — the rename looks local but the server sees deletion. Two resolutions:
 

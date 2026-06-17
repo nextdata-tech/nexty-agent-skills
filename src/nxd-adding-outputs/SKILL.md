@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.1
+  version: 0.1.2
 ---
 
 # NXD Adding Outputs
@@ -52,6 +52,27 @@ nxd validate --config <session_config> <data_product_directory> --debug
 - For pgvector, confirm embedding dimension, text column, metadata shape, and whether the platform or library owns table creation. Prefer explicit vector config, for example `pg_vector_config(schema="public").vector("embedding", PgVectorType.VECTOR)`, unless the user or current SDK validation proves it must be omitted. Keep one model per pgvector port and align the model name with the intended physical table name.
 - For scheduled pgvector writes, choose an idempotency strategy before launch: deterministic document IDs/upsert, truncate-then-write, or an explicitly approved append-only table. Do not catch every database exception and treat it as "table already exists"; check the specific error.
 - For RPC/MCP outputs, inspect function request/response models and use the MCP docs path before editing.
+
+### Scheduled pgvector full-refresh recipe
+
+Use this pattern when the product rebuilds a rolling window on a schedule:
+
+1. Resolve the target table from `pgvector.model_tables[output_model.name]`,
+   falling back only when the context omits it.
+2. Build the SQLAlchemy URL with URL-encoded username/password
+   (`urllib.parse.quote_plus`) because service passwords may contain `@`, `/`,
+   `:`, or spaces.
+3. Before writing, check table existence with `to_regclass` or equivalent.
+4. If the table exists, `TRUNCATE` it for full-refresh semantics.
+5. If it does not exist, call `PGEngine.init_vectorstore_table(...)` with the
+   known embedding dimension.
+6. Use deterministic document IDs, for example `uuid.uuid5(namespace,
+   stable_source_key)`, so reruns are inspectable and append/upsert variants can
+   be added later.
+
+Do not wrap `init_vectorstore_table` in a broad `except Exception` and assume
+the table exists. That hides bad credentials, schema mistakes, and connection
+failures.
 
 ## Guardrails
 
