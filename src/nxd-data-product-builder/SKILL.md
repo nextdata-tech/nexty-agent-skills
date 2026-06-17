@@ -211,10 +211,17 @@ destination all models share a port, with several ask which models route where.
 *For an RPC/MCP output port, see `<app_url>/docs/#/tutorials/guides/07-mcp`.*
 
 **g. Quality, access, trigger.** Optional but offer them:
-* **Data quality** — completeness, PII detection, Soda (YAML in `contracts/`),
-  Great Expectations (Python in `contracts/`), or a custom verify function.
-  *Promises/contracts: `<app_url>/docs/#/tutorials/guides/03-promises`;
-  input expectations: `<app_url>/docs/#/tutorials/guides/05-expectations`.*
+* **Data quality** — choose one or more promise types for outputs, or expectations for inputs:
+  - **Great Expectations**: Python file in `contracts/` with `configure() -> list`; wire with
+    `quality(gx, "contracts/<file>.py").name(...).model(model)` on the port.
+    Requires `nxd_data_product[gx]` in requirements.txt.
+  - **Soda**: YAML file in `contracts/` with `checks for TABLE_NAME:`; wire with
+    `quality(soda, "contracts/<file>.yml").name(...).model(model)` on the port.
+    Requires `nxd_data_product[soda]` in requirements.txt.
+  - **Custom**: Python file with `verify(snowflake, ctx, models, triggered_by) -> VerifyResult`;
+    wire with `custom("name").model(model).verify(code(fn))` at the output level.
+  Omit `.model(model)` on GE/Soda to run against all canonical output models.
+  See [reference/promises-contracts.md](reference/promises-contracts.md) for templates.
 * **Access** — **elicit** the owner / data-steward / consumer email addresses
   from the user; these are environment-specific identities, not defaults. Do
   not copy any `@nextdata.com` / `@example.com` address from reference
@@ -268,8 +275,10 @@ Highlight critical decisions, uncertainties, and options for explicit user confi
 * **One semantic model per unique schema.** Don't duplicate a model that
   already describes a schema; reuse it across inputs/outputs that share it.
 * **Contracts: expectations on inputs, promises on outputs.** Attach
-  `.expectation(model)` at the input and `.promise(...)` at the **port** for
-  the output (port-level, not output-level — see common-pitfalls.md).
+  `.expectation(...)` at the input. For outputs: GE and Soda promises attach at
+  the **port** (`storage(...).promise(quality(...))`); custom promises attach at
+  the **output** (`data_product_output().promise(custom(...).verify(code(fn)))`).
+  See [reference/promises-contracts.md](reference/promises-contracts.md).
 * **Time-partitioned input → cron in `.when()`.** If an input is partitioned
   by time, the partition granularity implies the refresh cadence (daily
   partitions → a daily `scheduled(...)`); otherwise prefer
