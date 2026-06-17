@@ -81,21 +81,55 @@ For Windows PowerShell, run the same command in PowerShell:
 npx skills add nextdata-tech/nexty-agent-skills --all -y
 ```
 
-### Claude Code plugin
+### Claude Code plugin distribution
 
-Install all skills as a Claude Code plugin:
+This repository also includes Claude Code plugin metadata:
+
+- `.claude-plugin/plugin.json` describes the plugin itself.
+- `.claude-plugin/marketplace.json` describes a small marketplace named `nexty`.
+- `src/` remains the source of truth for the skills loaded by the plugin.
+
+Use this path when you want customers or field engineers to install the whole Nexty skill pack through Claude Code's plugin flow instead of copying individual skill folders.
+
+#### Own marketplace
+
+This is the lowest-friction customer-sharing option. The marketplace lives in this repository, so users can add this repo as a Claude Code marketplace and install the plugin from it:
 
 ```
 /plugin marketplace add nextdata-tech/nexty-agent-skills
 /plugin install nexty-agent-skills@nexty
 ```
 
-To iterate on a local checkout, point the marketplace at your clone instead:
+To iterate on a local checkout, point Claude Code at your clone instead:
 
 ```
 /plugin marketplace add ./path/to/nexty-agent-skills
 /plugin install nexty-agent-skills@nexty
 ```
+
+Before sharing marketplace install instructions with a customer, validate the plugin:
+
+```bash
+claude plugin validate . --strict
+```
+
+Keep the plugin self-contained. Do not require files outside this repository path, and do not include customer-specific artifacts, private evals, local credentials, or generated data product outputs in the marketplace package.
+
+#### Community marketplace
+
+The Anthropic community marketplace is a future distribution step, not required for private customer sharing. Use it only after the pack is stable enough for broader public discovery.
+
+Before submitting to the community marketplace:
+
+- Make the repository public or otherwise accessible for review.
+- Keep `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` valid.
+- Run `claude plugin validate . --strict` and fix every warning/error.
+- Confirm all skills are agent-neutral, customer-safe, and free of private customer names, secrets, internal URLs, or scenario-specific artifacts.
+- Keep private evals under `evals/private/`; do not publish customer HCP/publication/CurseSMA artifacts.
+- Include clear install, usage, uninstall, validation, and support instructions in this README.
+- Treat community listing as a reviewed submission: Anthropic may reject plugins that fail validation, include unsafe behavior, or are not self-contained.
+
+The official Anthropic & Partners directory is separate from the community marketplace and should be treated as a later partner/curation conversation.
 
 ### Manual install
 
@@ -168,6 +202,264 @@ Start Claude Code in any project and invoke a skill:
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.
+
+## Tutorial: Build a Data Product
+
+Use this tutorial to test whether the skills can help an agent build a Nextdata OS data product from a requirement. The same skill pack can be used from Claude Code or Claude Desktop, but the output behavior is different.
+
+| Interface | Best for | Output location |
+|-----------|----------|-----------------|
+| Claude Code | Real implementation work, terminal checks, `nxd validate`, repo commits | Real files in the current terminal directory |
+| Claude Desktop | Reviewing the workflow, producing downloadable starter files, demos without terminal setup | Usually downloadable artifacts from the chat |
+
+If you need a real project folder that you can inspect with `ls`, commit to git, and validate with `nxd`, use Claude Code.
+
+### Claude Code path
+
+Claude Code is the recommended path for a real data product build because it starts in a local working directory and can create files, inspect them, and run safe validation commands.
+
+#### 1. Update the skill pack
+
+```bash
+cd ~/src/nexty-agent-skills
+git pull --ff-only
+python3 scripts/validate_skills.py
+./build-skills.sh
+npx skills add ./src --all -y
+```
+
+You should see output similar to:
+
+```text
+Found 11 skills
+Installed 11 skills
+```
+
+#### 2. Start Claude Code from the target project directory
+
+```bash
+mkdir -p ~/src/jira-issues-dp-test
+cd ~/src/jira-issues-dp-test
+claude
+```
+
+Everything Claude builds should now be written under:
+
+```text
+~/src/jira-issues-dp-test
+```
+
+#### 3. Ask Claude Code to build from the example requirement
+
+Paste this prompt into the new Claude Code conversation:
+
+```text
+Use the Nexty skills to build a Nextdata OS Python data product from this requirement:
+
+~/src/nexty-agent-skills/example-input/jira-data-product.md
+
+Use nxd-data-product-builder as the main skill. Use supporting workflow skills when needed:
+- nxd-setup
+- nxd-adding-inputs
+- nxd-adding-outputs
+- nxd-adding-expectations-promises
+- nxd-debugging-data-products
+
+Important:
+- Build inside the current directory.
+- Before writing code, state the exact project directory.
+- Do not use Claude Desktop artifacts; write real files to disk.
+- Do not use demo mesh values unless I explicitly confirm them.
+- Do not launch anything.
+- Do not create runtime resources unless I explicitly approve.
+- Create README.md with a Build Status table.
+- Create REQUIREMENTS_CHECKLIST.md.
+- Run generated-code preflight before handoff.
+- Run safe local checks.
+- Run nxd validate only if nxd is configured and available.
+- If nxd validate cannot run, mark it as NOT RUN with the exact blocker and command to run next.
+```
+
+To use a customer requirement instead, replace the example file path with the pasted requirement text or with the path to the customer's requirement document.
+
+On Windows PowerShell, use the same flow with Windows paths:
+
+```powershell
+cd $HOME\src\nexty-agent-skills
+git pull --ff-only
+python scripts\validate_skills.py
+bash ./build-skills.sh
+npx skills add ./src --all -y
+
+New-Item -ItemType Directory -Force $HOME\src\jira-issues-dp-test
+cd $HOME\src\jira-issues-dp-test
+claude
+```
+
+`build-skills.sh` is a Bash script, so Windows users should run it from WSL, Git Bash, or PowerShell with `bash` available.
+
+#### 4. Verify what was built
+
+After Claude finishes, check the real local folder:
+
+```bash
+pwd
+ls -la
+```
+
+Expected starter files usually include:
+
+```text
+spec.py
+models.py
+transform.py
+README.md
+REQUIREMENTS_CHECKLIST.md
+requirements.txt
+pyproject.toml
+.nxdignore
+```
+
+The generated `README.md` should clearly show:
+
+- the project directory,
+- whether files were created on disk,
+- which local tests passed,
+- whether `nxd validate` passed, failed, or was not run,
+- whether anything was launched,
+- the remaining TODOs before launch.
+
+If `nxd validate` was not run, the README must include the exact blocker and the next command to run.
+
+### Claude Desktop path
+
+Claude Desktop is useful for testing the skill behavior and generating downloadable starter artifacts. It is not the cleanest path for proving a data product was built in a local folder, because Desktop conversations often return files as artifacts/downloads instead of writing into your terminal's current directory.
+
+#### 1. Build the ZIP files
+
+```bash
+cd ~/src/nexty-agent-skills
+git pull --ff-only
+python3 scripts/validate_skills.py
+./build-skills.sh
+```
+
+This creates one ZIP per skill at the repository root, for example:
+
+```text
+nxd-data-product-builder.zip
+nxd-setup.zip
+nxd-adding-inputs.zip
+nxd-adding-outputs.zip
+nxd-adding-expectations-promises.zip
+nxd-debugging-data-products.zip
+```
+
+#### 2. Install the ZIPs in Claude Desktop
+
+Claude Desktop does not use `npx skills add ./src --all -y` for this flow. Install the generated ZIP files through the Desktop UI.
+
+In Claude Desktop:
+
+1. Open `Customize`.
+2. Open `Skills`.
+3. Click `+`.
+4. Choose `Create skill`.
+5. Choose `Upload a skill`.
+6. Upload each `nxd-*.zip` file you want to test.
+7. Confirm the skills are enabled.
+
+For a full data product build test, install at least:
+
+- `nxd-data-product-builder.zip`
+- `nxd-setup.zip`
+- `nxd-adding-inputs.zip`
+- `nxd-adding-outputs.zip`
+- `nxd-adding-expectations-promises.zip`
+- `nxd-debugging-data-products.zip`
+
+If your organization uses Team or Enterprise skill provisioning, an admin can upload the ZIPs once through organization settings instead of every user uploading them individually.
+
+#### 3. Start a new Claude Desktop chat
+
+Attach or paste the requirement. For the bundled smoke test, use:
+
+```text
+example-input/jira-data-product.md
+```
+
+Then paste this prompt:
+
+```text
+Use the Nexty skills to build a Nextdata OS Python data product from the attached requirement.
+
+Use nxd-data-product-builder as the main skill. Use supporting workflow skills when needed:
+- nxd-setup
+- nxd-adding-inputs
+- nxd-adding-outputs
+- nxd-adding-expectations-promises
+- nxd-debugging-data-products
+
+Important:
+- If you cannot write to a real local filesystem path, say that clearly before generating files.
+- If you produce downloadable artifacts, state: "Local filesystem path: Not created until Download all."
+- Do not claim the data product was built in a local directory unless you actually created files there.
+- Do not use demo mesh values unless I explicitly confirm them.
+- Do not launch anything.
+- Do not create runtime resources unless I explicitly approve.
+- Create README.md with a Build Status table.
+- Create REQUIREMENTS_CHECKLIST.md.
+- Run generated-code preflight before handoff.
+- Run only safe local checks available in this chat environment.
+- Mark nxd validate as PASS, FAIL, or NOT RUN.
+- If nxd validate cannot run, include the exact blocker and command to run next.
+```
+
+#### 4. Download and inspect artifacts
+
+If Claude Desktop returns downloadable files, click `Download all` and unzip them into a local project folder, for example:
+
+```bash
+mkdir -p ~/src/jira-issues-dp-test
+cd ~/src/jira-issues-dp-test
+# unzip or move the downloaded files here
+ls -la
+```
+
+Then inspect `README.md` and `REQUIREMENTS_CHECKLIST.md` before running any launch command.
+
+#### 5. Validate locally after download
+
+Once the files are in a real local folder, run safe checks yourself:
+
+```bash
+python3 -m compileall .
+```
+
+If `nxd` is configured and the generated README says TODOs are resolved, run:
+
+```bash
+nxd validate --config=<session_config> . --debug
+```
+
+Only run launch after validation passes and a human approves it:
+
+```bash
+nxd launch --dir . --config=<session_config>
+```
+
+### Expected status language
+
+Every generated data product handoff should distinguish these states:
+
+- **Built locally:** source files exist in a real filesystem directory.
+- **Generated as artifacts:** files exist only as downloadable chat artifacts until downloaded.
+- **Validated:** `nxd validate` actually ran and passed.
+- **Not validated:** `nxd validate` did not run; the blocker and next command are documented.
+- **Launched:** `nxd launch` actually ran.
+- **Not launched:** no runtime resources were created.
+
+Do not treat generated source files as a deployed data product. A data product is not running on a mesh until it has been validated, launched, and confirmed in the target environment.
 
 ## Adding a New Skill
 
