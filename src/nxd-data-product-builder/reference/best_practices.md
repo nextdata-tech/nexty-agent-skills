@@ -1,5 +1,12 @@
 # Best Practices
 
+## Contents
+- Specification
+- Packaging for `nxd launch`
+- Transformation
+- Models
+- Contracts
+
 ## Specification
 
 * Usage of the infrastructure profile **name**, `infra_profile="<profile>"` (the profile chosen in discovery — e.g. a name returned by `nxd ls infra-profiles` against the active mesh), is preferred over the URL form `infra_profile="https://<app_url>/infra/<profile>"`. The profile name is elicited/derived, never a hardcoded demo name.

@@ -1,5 +1,14 @@
 # Common Pitfalls
 
+## Contents
+- Spec / trigger issues
+- requirements.txt issues
+- Transform issues
+- Data quality issues
+- Infra / service issues
+- Deprecated patterns
+- Naming, types, imports
+
 Known failure modes when writing nextdata data products. Check these before declaring a DP ready.
 
 ---

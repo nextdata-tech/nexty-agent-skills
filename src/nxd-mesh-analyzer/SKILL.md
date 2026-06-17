@@ -1,6 +1,6 @@
 ---
 name: nxd-mesh-analyzer
-description: Inspect data-bearing services in a nextdata infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects to selected storage services (S3, Snowflake, ADLS, Databricks, BigQuery, Postgres, Kafka, Pinecone, and more) with their connection parameters, inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product.
+description: Inspect data-bearing services in a nextdata infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects to selected storage services (S3, Snowflake, ADLS, Databricks, BigQuery, Postgres, Kafka, Pinecone, and more), inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product. Use when discovering candidate data products from infra profiles, mesh assets, service schemas, or offline evidence.
 allowed-tools:
   - Bash
   - Read

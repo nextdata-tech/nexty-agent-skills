@@ -1,5 +1,12 @@
 # Storage Configs Reference
 
+## Contents
+- Service URL pattern
+- `source_aligned_input()` vs `data_product_input()`
+- Storage config helpers
+- Transform context types by driver
+- Databricks: three connection patterns
+
 ## Service URL pattern
 
 Always construct service URLs from the infra profile. Two parts are **resolved, not hardcoded**: the host (`<app_url>`) comes from the active mesh's config (see SKILL.md Prerequisites — the selected mesh's `app_url` in `~/.nxd/meshes.json`), and the profile name comes from the infra profile chosen in discovery (`nxd ls infra-profiles` against the mesh, or a local profile YAML). Store the resolved profile name as a constant:

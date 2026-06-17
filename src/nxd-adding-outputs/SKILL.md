@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # NXD Adding Outputs
@@ -49,7 +49,8 @@ nxd validate --config <session_config> <data_product_directory> --debug
 
 - For Snowflake, Postgres, BigQuery, Databricks, and similar table stores, confirm database/schema/table behavior from the infra profile and docs before writing.
 - For S3, ADLS, MinIO, and GCS, confirm format and partition path. Do not assume Parquet unless the user or existing product establishes it.
-- For pgvector, confirm embedding dimension, text column, metadata shape, and whether the platform or library owns table creation. Do not add a schema when the user explicitly says not to.
+- For pgvector, confirm embedding dimension, text column, metadata shape, and whether the platform or library owns table creation. Prefer explicit vector config, for example `pg_vector_config(schema="public").vector("embedding", PgVectorType.VECTOR)`, unless the user or current SDK validation proves it must be omitted. Keep one model per pgvector port and align the model name with the intended physical table name.
+- For scheduled pgvector writes, choose an idempotency strategy before launch: deterministic document IDs/upsert, truncate-then-write, or an explicitly approved append-only table. Do not catch every database exception and treat it as "table already exists"; check the specific error.
 - For RPC/MCP outputs, inspect function request/response models and use the MCP docs path before editing.
 
 ## Guardrails

@@ -179,8 +179,11 @@ Skills also activate automatically — just ask "bootstrap a new data product" a
 ### Conventions
 
 - Skill names: lowercase, hyphens only, 1-64 chars
-- Keep SKILL.md under 500 lines for context efficiency
-- Move detailed references to `references/` for progressive disclosure
+- Descriptions must be specific, stay under 1024 characters, and include a clear `Use when ...` trigger clause
+- Keep `SKILL.md` under 500 lines for context efficiency
+- Move detailed references to `reference/` or `references/` for progressive disclosure
+- Add a `## Contents` section near the top of reference files longer than 100 lines
+- Run `python3 scripts/validate_skills.py` and `./build-skills.sh` before sharing updated ZIPs
 
 ### Claude Desktop packaging limits
 

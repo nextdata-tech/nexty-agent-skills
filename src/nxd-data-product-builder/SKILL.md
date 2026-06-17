@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-builder
-description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-mesh-analyzer`). Use whenever the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-mesh-analyzer`). Use when the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
 allowed-tools:
   - Bash
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.1
+  version: 0.2.3
 ---
 
 # Nextdata OS Data Product Builder
@@ -63,10 +63,26 @@ Data Product Build Progress:
 - [ ] 0. Prerequisites verified (NXD CLI, mesh selected, uv env, nxd-data-product installed)
 - [ ] 1. Discovery complete (interview answered OR spec-from-document extracted; infra profile located; references consulted)
 - [ ] 2. Plan approved by user
-- [ ] 3. Implementation complete (spec.py, models.py, transform.py)
-- [ ] 4. Validation complete (local transform script in place, TODO markers labelled, `nxd validate` passes)
-- [ ] 5. Handover summary and finalisation checklist delivered to the user
+- [ ] 3. Implementation complete (files written to a real project directory OR delivered as downloadable artifacts)
+- [ ] 4. Validation complete (`nxd validate` result recorded as PASS, FAIL, or NOT RUN with reason)
+- [ ] 5. README, requirements checklist, and handover summary make location/status/next steps explicit
 ```
+
+### Project Location and Delivery Mode
+Before writing code, decide and state the `data_product_directory`. Prefer a
+real local directory with an absolute path. If the execution environment cannot
+write to the user's filesystem and only supports chat artifacts/downloads, say
+that explicitly before generating files and record:
+
+```
+Project location: Claude Desktop conversation artifacts only
+Local filesystem path: Not created until the user clicks Download all
+Recommended local path after download: <absolute-path>
+```
+
+Never claim "built in `<directory>`" unless you have created or inspected that
+directory in the current environment. If files are delivered as downloadable
+artifacts, call them "downloadable artifacts", not a local project directory.
 
 For a longer or multi-session build, you may keep an optional lightweight ledger
 (`state.json` + `open-todos.md`) under `.context/dp-build/<timestamp>/` so the
@@ -306,6 +322,27 @@ Insert "TODO" markers with clear instructions wherever any of the following are 
 * The user has not provided satisfactory information even after prompting.
 * There are implementation details that would greatly benefit from manual user intervention.
 
+Always create `README.md` and `REQUIREMENTS_CHECKLIST.md` alongside the code.
+The README must start with a short status block before any architecture detail:
+
+```
+# <data-product-name>
+
+## Build Status
+| Item | Status | Evidence / next action |
+|---|---|---|
+| Project files | CREATED / ARTIFACTS ONLY | <directory path or download instruction> |
+| Local smoke test | PASS / FAIL / NOT RUN | <exact command and result> |
+| nxd validate | PASS / FAIL / NOT RUN | <exact command, output summary, or blocker> |
+| nxd launch | NOT RUN / PASS / FAIL | <must say if launch was intentionally skipped> |
+| Runtime resources | CREATED / NOT CREATED / UNKNOWN | tables, buckets, vector indexes, schedules |
+```
+
+Then include: layout, how to run local tests, how to run `nxd validate`, how to
+launch only after approval, and a direct pointer to `REQUIREMENTS_CHECKLIST.md`.
+The checklist must map every open TODO to the file to edit, the decision needed,
+and the command to re-run after fixing it.
+
 #### `spec.py`
 * Ensure the infrastructure profile is included (by name — `infra_profile="<name>"`).
 * Configure each driver (service) with the appropriate URLs and settings, whether it is an input (`source()`) or an output (`storage()` etc.).
@@ -335,6 +372,12 @@ The platform's init container installs the Data Product as a Python package via 
 * **Declare `py-modules` explicitly in `pyproject.toml`** (see `reference/best_practices.md` for the snippet). List every `.py` module that should ship — typically `spec`, `models`, `nxd_spec`, `nxd_models`, `transform`, plus contract files if any.
 * **Ship a `.nxdignore`** that excludes everything local-only from the deployment bundle: `.env*`, `local_transform.py` (and any other local runner / smoke-test script), `.venv/`, `__pycache__/`, build artifacts, IDE / VCS noise. Local-execution files have credentials wired in or use development-only dependencies the platform shouldn't see.
 
+#### Generated-Code Preflight
+Before handing files to the user, run the checklist in
+[reference/generated-code-preflight.md](reference/generated-code-preflight.md).
+Fix what you can, and record every unresolved launch or validation risk in both
+`README.md` and `REQUIREMENTS_CHECKLIST.md`.
+
 ---
 
 ### 4. Validation
@@ -342,12 +385,19 @@ Once implementation is complete, validate the Data Product before handover. Trac
 
 ```
 Validation Progress:
+- [ ] Generated-code preflight completed; unresolved risks recorded in README/checklist
 - [ ] Local transform script in place; imports resolve and function signatures match declared context types
 - [ ] All "TODO" markers inserted and clearly labelled
+- [ ] Local smoke test run, or recorded as NOT RUN with a concrete blocker
 - [ ] `nxd validate --config=<session_config> <data_product_directory> --debug` passes
 ```
 
 If `nxd validate` reports errors, read the output carefully, fix the issue in `spec.py`, `models.py`, or `transform.py`, and re-run until the command exits cleanly. Do not mark item 4 complete on the top-level checklist until validation passes.
+
+If `nxd validate` cannot be run, do not leave the user to infer that from prose.
+Record it as `NOT RUN` in the README status block, the final response, and the
+handover checklist, with the exact blocker and the exact command the user should
+run next.
 
 Note: `nxd validate` checks structural correctness of the spec and parsed models — it does not execute the transform against real services. End-to-end runtime validation is performed by the user in the Finalisation step.
 
@@ -361,12 +411,20 @@ If you're not sure which model name the deployed version uses, `nxd describe dat
 ---
 
 ### 5. Finalisation and Handover
-Once implementation is complete, deliver a handover summary to the user and include the following checklist for them to work through:
+Once implementation is complete, deliver a handover summary to the user. The
+first lines must answer: where the files are, whether they are local files or
+downloadable artifacts, what has passed, what has not run, and whether anything
+exists in the target mesh yet.
+
+Include the following checklist for them to work through:
 
 ```
 Finalisation (user to complete):
+- [ ] If files were delivered as artifacts, click Download all and move/extract them into the named local directory
 - [ ] Review all "TODO" markers; resolve or explicitly defer each
 - [ ] Populate `.env` (or equivalent) with credentials and configuration for local execution
+- [ ] Run the local smoke test command shown in README.md
+- [ ] Run validation: `nxd validate --config=<session_config> <data_product_directory> --debug`
 - [ ] Run the local transform script and confirm it completes end-to-end
 - [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=<session_config>`
 - [ ] Verify the first platform run: transform completes, outputs land at configured ports, promises/expectations pass
@@ -377,4 +435,8 @@ If the launched Data Product fails or behaves unexpectedly, work through
 platform's error messages (which are often misleading, e.g. OOM reported as
 "startup timeout") to root causes and fixes.
 
-In the handover summary, call out any items needing particular attention — deferred TODOs, missing inputs, areas where assumptions were made, or sections that may require manual review.
+In the handover summary, call out any items needing particular attention —
+deferred TODOs, missing inputs, areas where assumptions were made, or sections
+that may require manual review. Do not describe a running scheduled Data Product,
+created vector table, or deployed mesh resource unless the command that created
+or verified it actually ran successfully.

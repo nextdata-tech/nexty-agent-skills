@@ -1,6 +1,6 @@
 ---
 name: nxd-setup
-description: Install, configure, and authenticate the nxd CLI. Manages mesh environments so the user can work with multiple nextdata platforms across sessions.
+description: Install, configure, and authenticate the nxd CLI. Manages mesh environments so the user can work with multiple nextdata platforms across sessions. Use when setting up nxd, selecting a mesh, refreshing authentication, or producing the session config path used by other Nextdata skills.
 allowed-tools:
   - Bash
   - Read

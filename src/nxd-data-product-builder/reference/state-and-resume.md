@@ -1,5 +1,14 @@
 # State, Resume, and Open-TODO Ledger
 
+## Contents
+- state.json
+- open-todos.md
+- Resume protocol
+- Revisiting a completed step
+- Append-a-TODO from anywhere
+- Placeholder conventions
+- Finalize check
+
 A Data Product build can span multiple sessions. A user may finish discovery in
 one sitting, come back later, and pick up at implementation. They may also leave
 open questions ("come back to the embedding model choice"). This document defines

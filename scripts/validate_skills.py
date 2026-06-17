@@ -11,6 +11,10 @@ from pathlib import Path
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TAG_RE = re.compile(r"<[^>\n]+>")
+USE_WHEN_RE = re.compile(r"\buse when\b", re.IGNORECASE)
+MAX_DESCRIPTION_CHARS = 1024
+REFERENCE_TOC_LINE_THRESHOLD = 100
+REFERENCE_TOC_SCAN_LINES = 20
 
 
 def _strip_quotes(value: str) -> str:
@@ -62,6 +66,13 @@ def validate_skill(skill_dir: Path, max_lines: int) -> list[str]:
         errors.append(f"{skill_md}: invalid skill name {name!r}")
     if not description:
         errors.append(f"{skill_md}: missing description")
+    elif len(description) > MAX_DESCRIPTION_CHARS:
+        errors.append(
+            f"{skill_md}: description has {len(description)} chars; "
+            f"maximum is {MAX_DESCRIPTION_CHARS}"
+        )
+    elif not USE_WHEN_RE.search(description):
+        errors.append(f"{skill_md}: description should include a 'Use when ...' trigger clause")
     if TAG_RE.search(description):
         errors.append(f"{skill_md}: description must not contain angle-bracket placeholders")
 
@@ -69,6 +80,28 @@ def validate_skill(skill_dir: Path, max_lines: int) -> list[str]:
     if line_count > max_lines:
         errors.append(f"{skill_md}: {line_count} lines exceeds {max_lines}")
 
+    return errors
+
+
+def validate_reference_tocs(root: Path) -> list[str]:
+    errors: list[str] = []
+    src = root / "src"
+    reference_files = [
+        *src.glob("*/reference/*.md"),
+        *src.glob("*/references/*.md"),
+    ]
+    for reference_file in sorted(reference_files):
+        if "nextdata-public-examples" in reference_file.parts:
+            continue
+        lines = reference_file.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= REFERENCE_TOC_LINE_THRESHOLD:
+            continue
+        preview = "\n".join(lines[:REFERENCE_TOC_SCAN_LINES])
+        if "Contents" not in preview and "Table of Contents" not in preview:
+            errors.append(
+                f"{reference_file}: {len(lines)} lines; add a top-level Contents section "
+                f"in the first {REFERENCE_TOC_SCAN_LINES} lines"
+            )
     return errors
 
 
@@ -153,6 +186,7 @@ def main() -> int:
 
     if not args.skip_submodule_check:
         errors.extend(validate_submodules(root))
+    errors.extend(validate_reference_tocs(root))
     errors.extend(validate_evals(root))
 
     if errors:

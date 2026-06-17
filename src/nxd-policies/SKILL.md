@@ -1,6 +1,6 @@
 ---
 name: nxd-policies
-description: List, activate, and deactivate Nextdata computational policies on a data product via the public nxd CLI. Use whenever the user asks to list policies for a data product, or to toggle / deactivate / activate / reactivate a policy on a mesh. Covers CLI flag quirks that differ from older documentation, plus the canonical verify-toggle-verify sequence.
+description: List, activate, and deactivate Nextdata computational policies on a data product via the public nxd CLI. Use when the user asks to list policies for a data product, or to toggle, deactivate, activate, or reactivate a policy on a mesh. Covers CLI flag quirks that differ from older documentation, plus the canonical verify-toggle-verify sequence.
 allowed-tools:
   - Bash
   - Read
