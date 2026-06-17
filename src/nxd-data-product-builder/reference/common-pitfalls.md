@@ -85,8 +85,23 @@ checks for raw_users:   # must match DB, not spec
 **Deprecated contract compute driver**
 `nxd:local-python:1.0.0` is deprecated. Contract compute (Soda, GX) uses `nxd:kubernetes/contract:1.0.0`. No explicit `.compute()` call is needed — the platform auto-selects the correct driver.
 
-**Great Expectations missing extras**
-GX requires `nxd_core[gx]` in requirements.txt. Soda requires `nxd_core[soda]`. Using plain `nxd_core` without the extra causes import errors.
+**Missing or wrong GX / Soda extras**
+GX and Soda extras must be present and on the right package. Both `nxd validate` and spec import succeed silently — the crash only happens at runtime when the promise runs.
+
+```
+# Wrong — wrong package
+nxd_core[gx]
+nxd_core[soda]
+
+# Wrong — extra missing entirely (plain nxd_data_product validates fine, crashes at runtime)
+nxd_data_product
+
+# Correct
+nxd_data_product[gx]
+nxd_data_product[soda]
+```
+
+Always add the extra at the same time you add the promise — never rely on validate to catch it.
 
 ---
 
