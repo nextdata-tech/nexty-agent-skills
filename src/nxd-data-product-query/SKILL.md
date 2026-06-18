@@ -374,6 +374,43 @@ Call these functions exactly like any other RPC port (`rpc_call.py` above, or
 
 The location is a URL; the leased credential is whatever the upstream API needs (bearer, basic, key). Build the HTTP call from the model schema, run it via `curl` or `python -m requests`.
 
+### 6f. Semantic query layer — the intent gate
+
+Builds on §6d's discover→select→run protocol for the three semantic tools, adding
+the **intent gate** between selection and execution (rationale: [reference/semantic-intent-validation.md](reference/semantic-intent-validation.md)).
+The compiler is deterministic and fan-out-safe, so once the **selection**
+(`{measures, dimensions, filters}`, §6d) is right the number is right; the only
+remaining risk is whether it captured what the user asked. The gate confirms that
+first, reading only `describe_model` metadata (`metrics` with
+`compatible_dimensions`, `dimensions` with PII flags, `joins` with
+`reaches_dimensions`) — no extra server surface.
+
+**Intent gate (REQUIRED before `run_semantic_query`).** Run all three:
+
+1. **Critic (catalog-aware).** From the *verbatim* question + selection +
+   `describe_model` metadata, return a verdict (`ok` / `ambiguous` / `likely-wrong`)
+   and suspect concepts. Check each metric's `description` matches intent (e.g.
+   `sales_calls`, not `call_count`), and each chosen dimension is in the metric's
+   `compatible_dimensions` **or** a join's `reaches_dimensions` (neither → the
+   compiler rejects it; catch it here).
+2. **Echo (round-trip restatement).** Restate the selection in plain language from
+   `describe_model` — *"<metric.description>, per <dimension.description>, filtered
+   where <dimension.description> <op> <value>"* — using each metric's `description`
+   as-is (don't re-prefix the raw `aggregation`). PII-flagged dimension → note it's
+   governed / maskable. Deterministic: same selection → same echo.
+3. **Clarify (don't guess).** Critic `ambiguous` / `likely-wrong`, **or** a chosen
+   dimension neither `compatible` nor reachable → `AskUserQuestion` listing the real
+   candidates from `list_models` / `describe_model`; do **not** execute until
+   resolved. Abstain beats a confident wrong number.
+
+**Execute** only after the gate passes (critic `ok` / user confirmed). The response
+carries `compiled_sql`, `rows`, `row_count`, `truncated`, `error`; on non-empty `error`, map via the troubleshooting table (mixed-grain → one query per model), don't retry blindly.
+
+> **Not built here:** self-consistency vote (deferred) and value-linking
+> (server-side — grounding a filter *value* to its stored form needs a warehouse
+> `DISTINCT` read, not reachable from the three tools). See the [README](README.md)
+> for both; the value-mismatch symptom is the table row below.
+
 ---
 
 ## Credentials on the command line
@@ -454,6 +491,8 @@ confirm which before changing the query.
 | SQL query against a pgvector port returns 0 rows | Querying the metadata table by the wrong table name, or the DP hasn't run yet (no data). | Confirm the physical table name (model name, lowercased) and that the DP reached `STARTED` with a successful run. |
 | RPC call fails to connect / 404 | Wrong RPC path or trailing-slash mismatch on the MCP endpoint; or the RPC port is unhealthy. | Verify the port path from `list_outputs.py`; if the port itself is failing, debug the DP with **nxd-debugging-data-products**. |
 | `run_semantic_query` returns "metrics span multiple grains" | Metrics from two different-grain models were combined in one call (chasm-trap guard) — correct governance, not a transient error. | Do NOT retry the same combined call. Call `describe_model` on each model to confirm grain membership, then issue one `run_semantic_query` per model sharing a compatible dimension; present the result sets separately. See §6d "Semantic-layer MCP ports". |
+| `run_semantic_query` returns `error: "dimension X is not compatible with metric Y"` | The dimension can't slice that metric (not in `compatible_dimensions`, no join reaching it). | Re-pick from `describe_model`'s `compatible_dimensions` / `joins.reaches_dimensions`; re-run the §6f gate. |
+| Filtered semantic query returns 0 rows, but the unfiltered query returns rows | Likely a **value mismatch** — the NL literal (`"California"`) doesn't match the stored encoding (`"CA"`); structural validation can't catch it (the dimension exists, only the value diverges). | Surface to the user; ask for the stored form or drop the filter. Do **NOT** retry with invented encodings. Durable fix is server-side value-linking (§6f "Not yet built"). |
 
 When the failure is the Data Product itself (port unhealthy, no data produced,
 RPC pod crashing) rather than the query, switch to the

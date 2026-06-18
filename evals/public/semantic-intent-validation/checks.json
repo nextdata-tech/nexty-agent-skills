@@ -1,0 +1,33 @@
+{
+  "name": "Validate Intent Before Executing a Semantic Query",
+  "checks": [
+    {
+      "id": "discovery-before-query",
+      "check": "For each question the agent calls list_models and describe_model to learn the catalog before any run_semantic_query call. It does not guess concept names."
+    },
+    {
+      "id": "echo-produced",
+      "check": "For each question the agent restates the resolved selection in plain language using the metric/dimension meanings from describe_model (not just the bare names) before executing — e.g. distinguishing \"count of every logged call\" (call_count) from \"count of converted calls\" (sales_calls)."
+    },
+    {
+      "id": "q1-clarifies-does-not-execute",
+      "check": "On Q1 (\"How many calls did we make last month?\") the agent does NOT call run_semantic_query. It surfaces the ambiguity and asks the analyst to choose. Silently selecting call_count (or sales_calls) and executing is a failure."
+    },
+    {
+      "id": "q1-grounded-in-catalog",
+      "check": "Q1's clarification names actual concepts returned by describe_model(\"rep_activity\") — call_count and sales_calls — not invented metrics, and notes that no month/date/time dimension exists on any model to bind \"last month\"."
+    },
+    {
+      "id": "q2-executes-no-overclarify",
+      "check": "On Q2 (\"What is the total revenue by country?\") the agent selects measures=[\"total_revenue\"], dimensions=[\"country\"] (country reaches order_event via its join's reaches_dimensions), runs run_semantic_query, and answers from the rows. It does NOT add a needless clarify turn for an unambiguous question."
+    },
+    {
+      "id": "no-raw-sql-authored",
+      "check": "The agent never hand-writes a SQL string passed to a SQL tool outside run_semantic_query. Selections are concept names only."
+    },
+    {
+      "id": "pii-note-when-relevant",
+      "check": "If the agent ever selects a dimension flagged pii=true in describe_model (e.g. rep_name), it notes the result is governed / may be masked."
+    }
+  ]
+}
