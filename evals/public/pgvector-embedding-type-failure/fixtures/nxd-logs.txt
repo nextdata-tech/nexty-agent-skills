@@ -1,0 +1,13 @@
+$ nxd logs support-articles-vectors --stage write
+
+[09:12:01] transform: read 42 articles from articles-api
+[09:12:02] transform: produced 318 chunks
+[09:12:03] transform: embedded 318 chunks (dim=384)
+[09:12:03] write: connecting to pgvector service "pgvector"
+[09:12:04] write: target table SUPPORT_DOCUMENTS
+[09:12:04] write: ERROR while inserting into langchain_pg_embedding
+[09:12:04] write: psycopg2.errors.DatatypeMismatch: column "embedding" is of type
+                  text but expression is of type vector
+[09:12:04] write: langchain_community.vectorstores.pgvector: Embedding column is
+                  not type Vector
+[09:12:04] write: FAILED — 0 rows written

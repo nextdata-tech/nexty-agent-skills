@@ -1,0 +1,16 @@
+$ nxd logs session-rollups
+
+[11:32:06] scheduler: accepted run run-2026-06-18T11:42:07Z for session-rollups
+[11:32:06] scheduler: provisioning k8s worker (memory=2Gi, cpu=1000m)
+[11:32:09] orchestrator: pod session-rollups-w-7f4c2 created
+[11:32:11] orchestrator: pod session-rollups-w-7f4c2 phase=Pending
+[11:32:14] orchestrator: pod session-rollups-w-7f4c2 phase=Running (init in progress)
+[11:32:14] orchestrator: waiting for worker readiness probe on /healthz
+[11:37:14] orchestrator: readiness probe not yet satisfied (300s elapsed)
+[11:42:07] orchestrator: readiness probe not satisfied after 601s — startup timeout
+[11:42:07] orchestrator: tearing down pod session-rollups-w-7f4c2
+[11:42:08] scheduler: run run-2026-06-18T11:42:07Z marked FAILED (stage=startup)
+
+(no transform output captured — worker process never reported ready)
+Note: dependency install / environment build runs before the transform
+process starts. See `nxd logs session-rollups --init`.

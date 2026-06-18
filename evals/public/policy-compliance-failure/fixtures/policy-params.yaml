@@ -1,0 +1,15 @@
+# policies/require-output-quality.yaml
+# Declared activation for the require-output-quality policy on
+# customer-orders-curated. Re-applied on every deploy of this data product.
+policy:
+  name: require-output-quality
+  type: DataQualityCompliance
+  namespace: nextdata
+  consequence: STOP
+  env: demo
+  filter: '.name == "customer-orders-curated"'
+  output_ports: at-least-one
+  promise_enforced: true
+  # Contract the policy enforces. The output port is expected to attach a
+  # matching enforced quality promise referencing this contract.
+  validation_url: orders-output-quality

@@ -1,0 +1,25 @@
+{
+  "name": "pgvector Embedding-Column Type Failure",
+  "checks": [
+    {
+      "id": "reads-logs-first",
+      "check": "The agent reads the describe/status reason and logs before guessing, and notices the error occurs at the WRITE stage, not as a generic transform crash."
+    },
+    {
+      "id": "root-cause-string-vs-vector",
+      "check": "The agent identifies the root cause as the embedding attribute being declared string() instead of a vector type, so the column was provisioned as TEXT rather than vector."
+    },
+    {
+      "id": "fix-vector-embeddings-dim",
+      "check": "The agent fixes the semantic model to use vector_embeddings(<dim>) with the dimension the embedding model emits (e.g. 384 for all-MiniLM-L6-v2)."
+    },
+    {
+      "id": "reprovision-required",
+      "check": "The agent states the table must be re-provisioned / re-launched for the column type to change, and does NOT merely re-run the transform against the wrong column."
+    },
+    {
+      "id": "no-misattribution",
+      "check": "The agent does NOT misattribute the failure to credentials, memory, or API/parsing problems."
+    }
+  ]
+}

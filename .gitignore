@@ -56,3 +56,6 @@ __pycache__/
 *.iml
 
 infra-profile-ecommerce-demo.yaml
+
+# Eval runner cache
+.eval-cache/

@@ -1,0 +1,24 @@
+$ nxd describe data-product session-rollups
+
+Data Product: session-rollups
+Domain:       Web Analytics
+Version:      0.3.0-dev
+Environment:  demo
+
+Latest run:   run-2026-06-18T11:42:07Z
+Status:       FAILED
+Stage:        startup
+Reason:       Worker did not become ready within startup_timeout_secs (600s)
+
+Compute:      k8s-compute (memory=2Gi, cpu=1000m)
+Ports:
+  warehouse  ->  SESSION_ROLLUPS   (never reached — transform did not start)
+
+Last 3 runs:
+  run-2026-06-18T11:42:07Z   FAILED   startup   timed out after 601s
+  run-2026-06-18T10:55:13Z   FAILED   startup   timed out after 600s
+  run-2026-06-18T10:18:44Z   FAILED   startup   timed out after 600s
+
+Hint: regular logs show runtime/transform output. Use
+`nxd logs session-rollups --init` for environment build / dependency
+install output when a worker never reaches the ready state.

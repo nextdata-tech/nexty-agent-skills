@@ -1,0 +1,46 @@
+$ nxd activate policy --help
+
+Activate (or re-activate) a computational policy on the selected mesh.
+Re-uses an existing validation contract; it does not create one.
+
+Usage:
+  nxd activate policy [flags]
+
+Flags:
+      --name string             Policy activation name (required)
+      --policy string           Policy type, e.g. DataQualityCompliance,
+                                SensitivityCompliance. See `nxd ls policy-types`.
+      --namespace string        Policy namespace: "nextdata" or "user"
+                                (default "nextdata")
+      --filter string           jq-style selector for matched data products,
+                                e.g. '.name == "my-dp"' or '.domain == "Commerce"'
+      --consequence string      Action on violation: STOP | WARN  (default "STOP")
+      --env string              Environment to activate in (required)
+
+  DataQualityCompliance flags:
+      --validation-url string   Name of the validation contract to enforce
+      --output-ports string     Which output ports must satisfy the policy:
+                                all | at-least-one  (default "at-least-one")
+      --promise-enforced        Tie the policy to the data product's enforced
+                                output promise(s)
+
+  SensitivityCompliance flags:
+      --parameters-file string  Path to a JSON parameters file for the policy
+      --param KEY=VALUE         Inline policy parameter; repeatable
+
+  Common:
+      --skip-version-check      Skip the client/server version compatibility check
+      --config string           Path to the session mesh config
+  -h, --help                    Help for activate policy
+
+Examples:
+  # Data-quality policy bound to an enforced output promise
+  nxd activate policy --skip-version-check \
+    --name require-output-quality \
+    --policy DataQualityCompliance \
+    --validation-url orders-output-quality \
+    --output-ports at-least-one \
+    --filter '.name == "customer-orders-curated"' \
+    --consequence STOP \
+    --promise-enforced \
+    --env demo

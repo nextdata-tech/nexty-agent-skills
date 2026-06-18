@@ -1,0 +1,96 @@
+name: evals
+
+# Runs the skill-pack eval suite (evals/run.py): drives a headless agent over
+# each scenario with a chosen skill-set and grades it with an LLM judge.
+#
+# DISABLED BY DEFAULT. This workflow is manual-only (workflow_dispatch) and is
+# not wired to push/PR. It needs a working Claude credential in CI; until that
+# is provisioned the suite is run locally (see evals/README.md). Tracking issue:
+# enabling automated eval execution in CI.
+on:
+  workflow_dispatch:
+    inputs:
+      skill_set:
+        description: "Skill set to run: no_skills | current_pack | candidate_pack (blank = all)."
+        required: false
+        type: string
+        default: ""
+      scenario:
+        description: "Single scenario name to run (omit for the whole suite)."
+        required: false
+        type: string
+      agent_model:
+        description: "Model for the agent under test."
+        required: false
+        type: string
+        default: sonnet
+      judge_model:
+        description: "Model for the LLM judge."
+        required: false
+        type: string
+        default: opus
+      docs_base:
+        description: "Public platform docs base URL (fetchable .md base) given to every run."
+        required: false
+        type: string
+        default: "https://docs.demo.nextopia.dev/"
+      concurrency:
+        description: "How many scenario cells run at once."
+        required: false
+        type: string
+        default: "4"
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive   # example data products the scenarios reference
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run eval suite
+        env:
+          # Same credential the other Claude workflows use. The name is a
+          # historical misnomer: it holds an OAuth token from `claude
+          # setup-token`, consumed by the CLI as CLAUDE_CODE_OAUTH_TOKEN.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Bind workflow inputs as env vars (not inline ${{ }} in the script)
+          # so a crafted input cannot break out of its intended shell argument.
+          AGENT_MODEL: ${{ inputs.agent_model }}
+          JUDGE_MODEL: ${{ inputs.judge_model }}
+          DOCS_BASE: ${{ inputs.docs_base }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          SKILL_SET: ${{ inputs.skill_set }}
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          set -euo pipefail
+          args=(--suite public --report eval-report.json
+                --agent-model "$AGENT_MODEL"
+                --judge-model "$JUDGE_MODEL"
+                --docs-base "$DOCS_BASE"
+                --concurrency "$CONCURRENCY")
+          if [ -n "$SKILL_SET" ]; then
+            args+=(--skill-set "$SKILL_SET")
+          fi
+          if [ -n "$SCENARIO" ]; then
+            args+=(--scenario "$SCENARIO")
+          fi
+          python3 evals/run.py "${args[@]}"
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval-report.json
+          if-no-files-found: warn

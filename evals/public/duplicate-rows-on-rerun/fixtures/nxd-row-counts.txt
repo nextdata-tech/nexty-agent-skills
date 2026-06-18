@@ -1,0 +1,10 @@
+Output-port row counts for kb-articles-vectors (port: pgvector, table: KB_DOCUMENTS)
+
+$ nxd describe data-product kb-articles-vectors --runs 2
+
+run-2026-06-16T06:00:03Z   Status: SUCCEEDED   output rows: 318
+run-2026-06-17T06:00:02Z   Status: SUCCEEDED   output rows: 636
+run-2026-06-18T06:00:04Z   Status: SUCCEEDED   output rows: 954
+
+Source: articles-api returns the same ~42 articles each day (slowly changing).
+Each run reports green. Downstream search now returns 3 copies of every chunk.

@@ -1,0 +1,25 @@
+{
+  "name": "Comply With A Failing Policy (Missing Output Quality Promise)",
+  "checks": [
+    {
+      "id": "identifies-policy-type-first",
+      "check": "Before editing any file, the agent identifies the failing policy's TYPE as DataQualityCompliance (namespace nextdata, name require-output-quality) by reading the nxd describe output / policy status, rather than jumping straight to spec edits."
+    },
+    {
+      "id": "distinguishes-input-expectation-from-output-promise",
+      "check": "The agent distinguishes the existing input expectation (the Soda check attached to source_aligned_input via .expectation(quality(soda, ...))) from the MISSING output promise, and correctly states the fix belongs on the OUTPUT port (storage(...).promise(quality(...))), not on the input."
+    },
+    {
+      "id": "adds-output-quality-promise-not-disable",
+      "check": "The agent's fix ADDS an enforced data-quality promise (Great Expectations or Soda) to the snowflake output port via storage(...).promise(quality(gx|soda, \"contracts/...\")), and authors/declares the corresponding contract file. It does NOT merely add a schema-only .promise(model) and does NOT disable, deactivate, weaken the consequence to WARN, or delete the policy to make it 'pass'."
+    },
+    {
+      "id": "uses-current-activate-policy-flags",
+      "check": "Any activate/verify command the agent gives uses the flag shape from nxd activate policy --help (e.g. --name, --policy DataQualityCompliance, --validation-url, --output-ports at-least-one, --filter, --consequence, --promise-enforced, --env) and does NOT invent flags that are absent from the help output."
+    },
+    {
+      "id": "gives-exact-verify-commands",
+      "check": "The final answer includes the exact verify commands needed to prove compliance after the fix (at minimum re-running nxd describe data-product customer-orders-curated --env demo to confirm policy STATUS is no longer FAILED, and/or nxd ls policies / re-running the data product so the promise executes), with concrete data-product name and env, not vague guidance."
+    }
+  ]
+}
