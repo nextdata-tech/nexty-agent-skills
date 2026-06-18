@@ -334,6 +334,37 @@ python3 scripts/rpc_call.py --dp <fullName> --port <port> --function <fn> --args
 
 `rpc_call.py` reads the token from stdin and writes the response to stdout (or to `--out` if `--out` is supplied — preferred for large payloads).
 
+#### Semantic-layer MCP ports (`list_metrics` / `run_semantic_query`)
+
+A DP built with the **nxd-semantic-data-product** skill exposes a governed
+text-to-SQL surface as four RPC functions: `list_metrics`, `list_dimensions`,
+`describe_metric`, `run_semantic_query`. Treat them as a tiny discover→select→run
+protocol, not as free-form SQL:
+
+1. **Discover first.** Call `list_metrics` and `list_dimensions` (or
+   `describe_metric` for one metric) BEFORE composing a query. Never guess
+   concept names — `describe_metric` also returns which dimensions are
+   compatible with a given metric (they share a grain).
+2. **Select by concept name, never SQL.** `run_semantic_query` takes a
+   `{measures, dimensions, filters}` payload of concept names (e.g.
+   `{"measures": ["total_revenue"], "dimensions": ["country"]}`). Do NOT pass a
+   `sql` key or a raw SQL string — the DP compiles the selection itself and
+   returns the `compiled_sql` (aggregated, read-only, row-capped) plus rows. The
+   point of the port is that the consumer never authors SQL.
+3. **Respect grain — the chasm-trap guard.** Metrics live at different grains
+   (e.g. a customer-grain `churned_customer_count` vs an order-grain
+   `total_revenue`). Selecting metrics from two grains in ONE
+   `run_semantic_query` returns a `CompileError` whose message contains
+   "metrics span multiple grains". This is **correct governance, not a transient
+   error** — do not retry the same combined call. Recover by issuing one
+   `run_semantic_query` per grain (same shared dimension on each, e.g.
+   `country`) and presenting the result sets separately. Combining them in a
+   hand-written join would double-count via fan-out; the split is what keeps the
+   numbers right.
+
+Call these functions exactly like any other RPC port (`rpc_call.py` above, or
+`nxd mcp client` for an MCP-stdio port).
+
 ### 6e. External API ports — `driver: api`
 
 The location is a URL; the leased credential is whatever the upstream API needs (bearer, basic, key). Build the HTTP call from the model schema, run it via `curl` or `python -m requests`.
@@ -417,6 +448,7 @@ confirm which before changing the query.
 | Vector search errors with a dimension mismatch | Query vector dimension ≠ the indexed column dimension. | Match the embedding model so dimensions agree (e.g. 384 vs 1536). |
 | SQL query against a pgvector port returns 0 rows | Querying the metadata table by the wrong table name, or the DP hasn't run yet (no data). | Confirm the physical table name (model name, lowercased) and that the DP reached `STARTED` with a successful run. |
 | RPC call fails to connect / 404 | Wrong RPC path or trailing-slash mismatch on the MCP endpoint; or the RPC port is unhealthy. | Verify the port path from `list_outputs.py`; if the port itself is failing, debug the DP with **nxd-debugging-data-products**. |
+| `run_semantic_query` returns "metrics span multiple grains" | Selected metrics live at different grains (chasm-trap guard) — correct governance, not a transient error. | Do NOT retry the same combined call. Split into one `run_semantic_query` per grain, sharing the dimension; present the result sets separately. See §6d "Semantic-layer MCP ports". |
 
 When the failure is the Data Product itself (port unhealthy, no data produced,
 RPC pod crashing) rather than the query, switch to the
