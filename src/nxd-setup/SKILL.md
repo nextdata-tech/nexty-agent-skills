@@ -30,8 +30,8 @@ Before running commands, identify the user's shell:
 
 | Shell | Registry path | `<session_config>` path | Install command |
 |---|---|---|---|
-| macOS/Linux Bash/Zsh | `~/.nxd/meshes.json` | `/tmp/nxd-<mesh_name>.yaml` | `curl -fsSL <install_url> \| sh -` |
-| WSL Bash/Zsh | `~/.nxd/meshes.json` inside WSL | `/tmp/nxd-<mesh_name>.yaml` inside WSL | `curl -fsSL <install_url> \| sh -` |
+| macOS/Linux Bash/Zsh | `~/.nxd/meshes.json` | `/tmp/nxd-<mesh_name>.yaml` | `curl -fsSL <install_url> \| bash` |
+| WSL Bash/Zsh | `~/.nxd/meshes.json` inside WSL | `/tmp/nxd-<mesh_name>.yaml` inside WSL | `curl -fsSL <install_url> \| bash` |
 | Windows PowerShell | `$env:USERPROFILE\.nxd\meshes.json` | `$env:TEMP\nxd-<mesh_name>.yaml` | `iwr <install_url> \| iex` |
 
 All downstream nxd skills use `<session_config>` instead of hardcoding `/tmp`. When showing a command to a Windows PowerShell user, translate POSIX path examples to the PowerShell form above. If a customer VDI blocks native installers or shell execution, route them to WSL and clearly say the paths/config live inside WSL.
@@ -72,7 +72,7 @@ If found, proceed to Step 2.
 If not found, you need a mesh URL to install the CLI. Skip ahead to Step 2 to discover or register a mesh (which gives you an install URL), then come back here to install:
 
 ```bash
-curl -fsSL <install_url> | sh -
+curl -fsSL <install_url> | bash
 ```
 
 ```powershell
@@ -193,7 +193,7 @@ Ask the user which infra-profile and domain they work in (don't assume), and not
 If the nxd CLI is not installed yet (Step 1 failed), install it now:
 
 ```bash
-curl -fsSL <install_url> | sh -
+curl -fsSL <install_url> | bash
 ```
 
 ```powershell

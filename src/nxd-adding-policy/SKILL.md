@@ -39,6 +39,8 @@ Add computational policy enforcement without guessing CLI flags, env names, doma
 5. For parameters-driven policies, create or inspect the parameters JSON file. Keep it in the data-product repo when that matches local convention.
 6. If a computational contract is needed, register it first:
 
+> **`--skip-version-check`** bypasses the CLI-vs-mesh version compatibility check. It is shown here only to keep these examples runnable across mesh versions during authoring. Drop it for normal use; add it back **only** when the CLI blocks on a version mismatch you have confirmed is safe to ignore.
+
 ```bash
 nxd --config <session_config> create contract --skip-version-check \
   --name <contract-name> --code ./contracts/<file-or-dir> --description "<description>"

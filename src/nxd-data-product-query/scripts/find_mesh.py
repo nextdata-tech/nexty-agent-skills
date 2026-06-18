@@ -23,6 +23,18 @@ from pathlib import Path
 from nxd_api import resolve_mesh
 
 
+def _write_private(path: Path, text: str) -> None:
+    """Write text to a 0600 file, created with restrictive perms from the start.
+
+    Using os.open with mode 0o600 (instead of write_text + chmod) closes the
+    window where the token file would briefly be readable by group/other under
+    the active umask on a shared host.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--mesh", help="Mesh name when multiple are configured")
@@ -38,8 +50,7 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if m.token:
-        out_path.write_text(m.token)
-        os.chmod(out_path, 0o600)
+        _write_private(out_path, m.token)
 
     docs_base = f"{m.app_url.rstrip('/')}/docs/#/" if m.app_url else None
 

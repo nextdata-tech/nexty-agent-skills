@@ -125,7 +125,7 @@ Before submitting to the community marketplace:
 - Keep `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` valid.
 - Run `claude plugin validate . --strict` and fix every warning/error.
 - Confirm all skills are agent-neutral, customer-safe, and free of private customer names, secrets, internal URLs, or scenario-specific artifacts.
-- Keep private evals under `evals/private/`; do not publish customer HCP/publication/CurseSMA artifacts.
+- Keep private evals under `evals/private/`; do not publish any customer names, schemas, transcripts, or commercial-demo artifacts.
 - Include clear install, usage, uninstall, validation, and support instructions in this README.
 - Treat community listing as a reviewed submission: Anthropic may reject plugins that fail validation, include unsafe behavior, or are not self-contained.
 

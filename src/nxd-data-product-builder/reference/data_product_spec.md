@@ -624,7 +624,7 @@ spec = (
 
 Infrastructure services, data product ports, and glossary terms are referenced by URL.
 
-In every pattern below, `<app_url>` is **the active mesh's app host, resolved from mesh config** (the selected mesh's `app_url` in the nxd registry; `nxd-setup` writes the per-mesh config to `<session_config>` — see SKILL.md Prerequisites). `<profile-name>` is the infra profile chosen in discovery (local profile YAML, or `nxd ls infra-profiles` against the mesh). Neither is a literal placeholder left in the spec, and neither is a demo host/name — both are resolved before writing `spec.py`. Service/DP/glossary names likewise come from the profile or from `nxd ls data-products` against the active mesh.
+In every pattern below, `<app_url>` is **the active mesh's app host, resolved from mesh config** (the selected mesh's `app_url` in the nxd registry at `~/.nxd/meshes.json`; `nxd-setup` writes the per-mesh config to `<session_config>` — see SKILL.md Prerequisites). `<profile-name>` is the infra profile chosen in discovery (local profile YAML, or `nxd ls infra-profiles` against the mesh). Neither is a literal placeholder left in the spec, and neither is a demo host/name — both are resolved before writing `spec.py`. Service/DP/glossary names likewise come from the profile or from `nxd ls data-products` against the active mesh.
 
 ### Infra profile service URL
 
