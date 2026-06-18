@@ -23,7 +23,7 @@ on:
         description: "Model for the agent under test."
         required: false
         type: string
-        default: opus
+        default: sonnet
       judge_model:
         description: "Model for the LLM judge."
         required: false
@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: "https://app.demo.trynxd.com/docs/#/"
+      concurrency:
+        description: "How many scenario cells run at once."
+        required: false
+        type: string
+        default: "4"
 
 permissions:
   contents: read
@@ -64,7 +69,8 @@ jobs:
           args=(--suite public --report eval-report.json
                 --agent-model "${{ inputs.agent_model }}"
                 --judge-model "${{ inputs.judge_model }}"
-                --docs-base "${{ inputs.docs_base }}")
+                --docs-base "${{ inputs.docs_base }}"
+                --concurrency "${{ inputs.concurrency }}")
           if [ -n "${{ inputs.skill_set }}" ]; then
             args+=(--skill-set "${{ inputs.skill_set }}")
           fi

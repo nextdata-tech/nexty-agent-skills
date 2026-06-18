@@ -24,10 +24,13 @@ purpose-built reader (the file shape is fixed); per-scenario checks are JSON.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 import tempfile
 import time
@@ -39,10 +42,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EVALS_DIR = REPO_ROOT / "evals"
 SKILL_SETS_FILE = EVALS_DIR / "skill-sets.yaml"
 
-# Models. The agent under test mirrors what ships to users; the judge is a
-# separate, cheaper-but-capable grader. Override on the CLI.
-DEFAULT_AGENT_MODEL = "opus"
+# Models. The agent under test runs on sonnet (the cheaper model we measure);
+# the judge runs on opus because grading is the call we want to trust most.
+# Override either on the CLI.
+DEFAULT_AGENT_MODEL = "sonnet"
 DEFAULT_JUDGE_MODEL = "opus"
+
+# Reasoning effort. The agent under test mirrors a real session (medium); the
+# judge is a constrained grading task so it stays at medium too. Override on the
+# CLI. Set to "" to leave it to the CLI default.
+DEFAULT_AGENT_EFFORT = "medium"
+DEFAULT_JUDGE_EFFORT = "medium"
+
+# How many (skill-set x scenario) cells run concurrently. Each cell is an
+# independent subprocess; the cap bounds local load and API rate.
+DEFAULT_CONCURRENCY = 4
 
 # A scenario run is wall-clock bounded so a stuck agent never hangs CI.
 DEFAULT_AGENT_TIMEOUT_S = 1200
@@ -243,7 +257,8 @@ def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool)
 
 
 def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
-              extra_dirs: list[Path] | None = None) -> tuple[bool, str, dict]:
+              extra_dirs: list[Path] | None = None,
+              effort: str = "") -> tuple[bool, str, dict]:
     """Run the headless agent in the workspace. Returns (ok, transcript, metrics)."""
     cmd = [
         "claude", "-p", prompt,
@@ -255,6 +270,8 @@ def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
         "--allowedTools", AGENT_ALLOWED_TOOLS,
         "--add-dir", str(ws),
     ]
+    if effort:
+        cmd += ["--effort", effort]
     for d in extra_dirs or []:
         cmd += ["--add-dir", str(d)]
     try:
@@ -318,7 +335,7 @@ Respond with ONE JSON object and nothing else, in this exact shape:
 
 
 def run_judge(scenario_dir: Path, checks: dict, transcript: str, model: str,
-              timeout_s: int) -> dict:
+              timeout_s: int, effort: str = "") -> dict:
     prompt = build_judge_prompt(scenario_dir, checks, transcript)
     cmd = [
         "claude", "-p", prompt,
@@ -328,6 +345,8 @@ def run_judge(scenario_dir: Path, checks: dict, transcript: str, model: str,
         "--append-system-prompt", JUDGE_SYSTEM,
         "--allowedTools", "",   # judge reasons over given text; no tools
     ]
+    if effort:
+        cmd += ["--effort", effort]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -365,6 +384,37 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def _fixtures_fingerprint(scenario_dir: Path) -> str:
+    """Hash the scenario fixtures so a fixture edit invalidates the cache."""
+    h = hashlib.sha256()
+    fixtures = scenario_dir / "fixtures"
+    if fixtures.is_dir():
+        for f in sorted(fixtures.rglob("*")):
+            if f.is_file():
+                h.update(f.relative_to(scenario_dir).as_posix().encode())
+                h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
+                     model: str, effort: str) -> str:
+    """Cache key for an agent run. Independent of the judge / checks.json, so
+    iterating on grading reuses the expensive agent transcript."""
+    h = hashlib.sha256()
+    for part in (
+        skill_set.name,
+        ",".join(sorted(skill_set.skills)),
+        scenario_dir.name,
+        prompt,
+        model,
+        effort,
+        _fixtures_fingerprint(scenario_dir),
+    ):
+        h.update(part.encode())
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
 def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     name = scenario_dir.name
     res = RunResult(skill_set=skill_set.name, scenario=name, ok=False)
@@ -382,26 +432,58 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     extra_dirs = [EXAMPLES_DIR] if EXAMPLES_DIR.is_dir() else []
     prompt = build_agent_prompt(agent_task, args.docs_base, bool(extra_dirs))
 
-    with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
+    # Agent step (cacheable). The agent run is the slow/expensive part; cache it
+    # keyed on everything that affects the transcript so judge-only iteration is
+    # cheap. The judge is never cached (it's cheap and the rubric changes often).
+    cache_dir = Path(args.cache_dir) if args.cache_dir else None
+    cache_file = None
+    if cache_dir:
+        key = _agent_cache_key(
+            skill_set, scenario_dir, prompt, args.agent_model, args.agent_effort
+        )
+        cache_file = cache_dir / f"agent-{key}.json"
+
+    cached = None
+    if cache_file and cache_file.exists():
         try:
-            ws = build_workspace(Path(tmp), skill_set, scenario_dir)
-        except FileNotFoundError as exc:
-            res.error = str(exc)
-            return res
+            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            cached = None
 
-        ok, transcript, metrics = run_agent(
-            ws, prompt, args.agent_model, args.agent_timeout, extra_dirs=extra_dirs
-        )
-        res.transcript = transcript
-        res.metrics = metrics
-        if not ok:
-            res.error = str(metrics.get("error", "agent run failed"))
-            return res
+    if cached:
+        transcript = cached["transcript"]
+        metrics = cached["metrics"]
+        metrics = {**metrics, "cached": True}
+        ok = True
+    else:
+        with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
+            try:
+                ws = build_workspace(Path(tmp), skill_set, scenario_dir)
+            except FileNotFoundError as exc:
+                res.error = str(exc)
+                return res
+            ok, transcript, metrics = run_agent(
+                ws, prompt, args.agent_model, args.agent_timeout,
+                extra_dirs=extra_dirs, effort=args.agent_effort,
+            )
+        if ok and cache_file:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(
+                json.dumps({"transcript": transcript, "metrics": metrics}),
+                encoding="utf-8",
+            )
 
-        res.verdict = run_judge(
-            scenario_dir, checks, transcript, args.judge_model, args.judge_timeout
-        )
-        res.ok = True
+    res.transcript = transcript
+    res.metrics = metrics
+    if not ok:
+        res.error = str(metrics.get("error", "agent run failed"))
+        return res
+
+    res.verdict = run_judge(
+        scenario_dir, checks, transcript, args.judge_model, args.judge_timeout,
+        effort=args.judge_effort,
+    )
+    res.ok = True
     return res
 
 
@@ -415,8 +497,18 @@ def main() -> int:
                         help="Scenario name(s) to run; repeatable. Default: all.")
     parser.add_argument("--agent-model", default=DEFAULT_AGENT_MODEL)
     parser.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
+    parser.add_argument("--agent-effort", default=DEFAULT_AGENT_EFFORT,
+                        help="Reasoning effort for the agent (low|medium|high|"
+                             "xhigh|max; '' = CLI default).")
+    parser.add_argument("--judge-effort", default=DEFAULT_JUDGE_EFFORT,
+                        help="Reasoning effort for the judge.")
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S)
     parser.add_argument("--judge-timeout", type=int, default=DEFAULT_JUDGE_TIMEOUT_S)
+    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY,
+                        help="How many scenario cells run at once (default 4).")
+    parser.add_argument("--cache-dir", default=None,
+                        help="Cache agent transcripts here; reuse on re-run when "
+                             "skills/task/fixtures/model are unchanged.")
     parser.add_argument("--docs-base", default=DEFAULT_DOCS_BASE,
                         help="Public platform docs base URL given to every run.")
     parser.add_argument("--report", type=Path,
@@ -457,20 +549,44 @@ def main() -> int:
         print("No scenarios selected.", file=sys.stderr)
         return 2
 
-    results: list[RunResult] = []
+    cells = [(ss, sc) for ss in selected_sets for sc in scenarios]
+    total = len(cells)
     started = time.time()
-    for skill_set in selected_sets:
-        for scenario_dir in scenarios:
-            label = f"{skill_set.name} :: {scenario_dir.name}"
-            print(f"▶ {label}", file=sys.stderr)
-            res = run_one(skill_set, scenario_dir, args)
-            results.append(res)
+    print_lock = threading.Lock()
+    done = [0]
+
+    def emit(res: RunResult) -> None:
+        with print_lock:
+            done[0] += 1
+            label = f"{res.skill_set} :: {res.scenario}"
             if not res.ok:
-                print(f"  ✗ run failed: {res.error}", file=sys.stderr)
+                line = f"✗ ERROR — {res.error}"
             else:
                 passed = res.verdict.get("overall_pass")
+                cached = " (cached)" if res.metrics.get("cached") else ""
                 mark = "✓ PASS" if passed else "✗ FAIL"
-                print(f"  {mark} — {res.verdict.get('summary', '')}", file=sys.stderr)
+                line = f"{mark}{cached} — {res.verdict.get('summary', '')}"
+            print(f"[{done[0]}/{total}] {label}\n    {line}", file=sys.stderr, flush=True)
+
+    results: list[RunResult] = []
+    workers = max(1, min(args.concurrency, total))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(run_one, ss, sc, args): (ss, sc) for ss, sc in cells
+        }
+        for fut in as_completed(futures):
+            ss, sc = futures[fut]
+            try:
+                res = fut.result()
+            except Exception as exc:  # never let one cell kill the run
+                res = RunResult(skill_set=ss.name, scenario=sc.name, ok=False,
+                                error=f"unexpected: {exc}")
+            results.append(res)
+            emit(res)
+
+    # Deterministic order in the summary/report regardless of completion order.
+    order = {(ss.name, sc.name): i for i, (ss, sc) in enumerate(cells)}
+    results.sort(key=lambda r: order.get((r.skill_set, r.scenario), 0))
 
     print_summary(results)
 
@@ -479,6 +595,9 @@ def main() -> int:
             "elapsed_s": round(time.time() - started, 1),
             "agent_model": args.agent_model,
             "judge_model": args.judge_model,
+            "agent_effort": args.agent_effort,
+            "judge_effort": args.judge_effort,
+            "concurrency": workers,
             "results": [
                 {
                     "skill_set": r.skill_set,

@@ -65,7 +65,19 @@ python3 evals/run.py --report eval-report.json
 # Cheaper smoke run.
 python3 evals/run.py --skill-set current_pack \
   --agent-model sonnet --judge-model sonnet
+
+# Faster: run cells in parallel and cache agent transcripts so re-runs that
+# only change checks.json / the judge skip the expensive agent step.
+python3 evals/run.py --concurrency 4 --cache-dir .eval-cache --report eval-report.json
 ```
+
+Defaults: agent `sonnet`, judge `opus`, effort `medium` for both, concurrency
+`4`. The agent under test is the cheaper model we measure; the judge runs on the
+stronger model because its grading is the call we most want to trust. Override
+any of these with `--agent-model` / `--judge-model` / `--agent-effort` /
+`--judge-effort` / `--concurrency`. The agent cache is keyed on the skill-set,
+the agent-facing task, the fixtures, and the agent model — a fixture or skill
+edit invalidates it; a grading-only change does not.
 
 `run.py` exits non-zero only on infrastructure failures (a run that could not be
 graded). A graded `FAIL` is a measured signal, not a CI break — pass rates are
