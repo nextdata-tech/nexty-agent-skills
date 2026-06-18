@@ -35,7 +35,58 @@ Record these metrics for every run:
 | `success` | Whether the scenario-specific checks pass |
 | `variance_notes` | Differences between repeated runs of the same variant |
 
-## Running a scenario
+## Running the suite (automated)
+
+`run.py` runs the whole loop — install a skill-set, drive a headless agent over
+each scenario with its `fixtures/`, then grade the transcript with an LLM judge
+against the scenario's `checks.json`. The same command runs locally and in CI.
+
+Prerequisite: the `claude` CLI must be installed and authenticated (`claude
+setup-token` or an API key). The runner sets no credentials of its own.
+
+```sh
+# List skill sets and scenarios.
+python3 evals/run.py --list
+
+# Run one scenario with one skill-set (fast iteration).
+python3 evals/run.py --skill-set current_pack \
+  --scenario pgvector-embedding-type-failure
+
+# Run the full public suite across all skill-sets, write a JSON report.
+python3 evals/run.py --report eval-report.json
+
+# Cheaper smoke run.
+python3 evals/run.py --skill-set current_pack \
+  --agent-model sonnet --judge-model sonnet
+```
+
+`run.py` exits non-zero only on infrastructure failures (a run that could not be
+graded). A graded `FAIL` is a measured signal, not a CI break — pass rates are
+tracked, not gated.
+
+### Authoring a scenario
+
+Each scenario directory holds:
+
+- `prompt.md` — the task shown to the agent. **Never leak the expected fix or
+  known failure mode here.**
+- `fixtures/` — the artifacts a real session would have: mock `nxd` CLI output
+  (`*.txt`) and any source `data_product/` directory. Copied into the agent's
+  workspace. These are agent-visible, so they must read like raw artifacts, not
+  hints.
+- `checks.json` — the structured success checks the judge grades against
+  (`{"name": ..., "checks": [{"id", "check"}]}`). **Judge-only; never shown to
+  the agent.** This is where expected reasoning is spelled out.
+
+### CI
+
+`.github/workflows/evals.yml` runs this suite, but is **disabled by default**
+(manual `workflow_dispatch` only, not wired to push/PR) until a Claude
+credential is provisioned in CI. Run the suite locally meanwhile.
+
+## Running a scenario (manual reference)
+
+The manual loop the runner automates, for reference:
 
 1. Start from a clean checkout or temporary working directory.
 2. Install the selected skill set from `skill-sets.yaml`.

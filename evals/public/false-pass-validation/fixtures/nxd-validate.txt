@@ -1,0 +1,5 @@
+$ nxd validate ./store-inventory --debug
+[2026-06-18T14:07:31Z] DEBUG nxd.cli: loading config from ~/.nxd/config.toml
+[2026-06-18T14:07:31Z] DEBUG nxd.cli: no active session token found
+$ echo "exit code: $?"
+exit code: 0

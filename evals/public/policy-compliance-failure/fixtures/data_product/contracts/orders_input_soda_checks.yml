@@ -1,0 +1,7 @@
+checks for ORDERS_RAW:
+  - missing_count(order_id) = 0:
+      name: "order_id is not null"
+  - missing_count(customer_id) = 0:
+      name: "customer_id is not null"
+  - row_count > 0:
+      name: "Source has at least one order"

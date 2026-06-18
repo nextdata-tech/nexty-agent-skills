@@ -1,0 +1,16 @@
+$ nxd describe data-product support-articles-vectors
+
+Data Product: support-articles-vectors
+Domain:       Support
+Version:      0.1.0-dev
+Environment:  demo
+
+Latest run:   run-2026-06-18T09:12:04Z
+Status:       FAILED
+Stage:        write (output port "pgvector")
+Reason:       Embedding column is not type Vector
+
+Ports:
+  pgvector  ->  SUPPORT_DOCUMENTS   (write failed)
+
+Hint: see `nxd logs support-articles-vectors --stage write` for details.

@@ -1,0 +1,31 @@
+$ nxd --config /tmp/nxd-commerce.yaml describe data-product customer-orders-curated --env demo
+
+Data Product: customer-orders-curated
+Domain:       Commerce
+Version:      0.3.0-dev
+Environment:  demo
+
+Output ports:
+  snowflake  ->  CURATED.ORDERS_CURATED
+
+Policy compliance:
+  STATUS: FAILED
+
+  Policy:        require-output-quality
+  Type:          DataQualityCompliance  (namespace: nextdata)
+  Consequence:   STOP
+  Filter:        .name == "customer-orders-curated"
+  Output ports:  at-least-one
+  Promise mode:  enforced
+
+  Reason: output port "snowflake" carries no enforced data-quality promise.
+          DataQualityCompliance with --promise-enforced requires at least one
+          output port to attach a quality contract (Great Expectations or Soda)
+          via storage(...).promise(quality(...)). The model promise
+          .promise(orders_curated_model) satisfies schema validation only, not
+          the data-quality contract this policy enforces.
+
+  Evaluated: 2026-06-18T10:42:17Z
+
+Hint: list the policy with `nxd ls policies --dp customer-orders-curated --env demo`
+      and inspect its activation with `nxd activate policy --help`.

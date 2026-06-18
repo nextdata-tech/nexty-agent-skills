@@ -1,0 +1,76 @@
+name: evals
+
+# Runs the skill-pack eval suite (evals/run.py): drives a headless agent over
+# each scenario with a chosen skill-set and grades it with an LLM judge.
+#
+# DISABLED BY DEFAULT. This workflow is manual-only (workflow_dispatch) and is
+# not wired to push/PR. It needs a working Claude credential in CI; until that
+# is provisioned the suite is run locally (see evals/README.md). Tracking issue:
+# enabling automated eval execution in CI.
+on:
+  workflow_dispatch:
+    inputs:
+      skill_set:
+        description: "Skill set to run: no_skills | current_pack | candidate_pack (blank = all)."
+        required: false
+        type: string
+        default: ""
+      scenario:
+        description: "Single scenario name to run (omit for the whole suite)."
+        required: false
+        type: string
+      agent_model:
+        description: "Model for the agent under test."
+        required: false
+        type: string
+        default: opus
+      judge_model:
+        description: "Model for the LLM judge."
+        required: false
+        type: string
+        default: opus
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive   # example data products the scenarios reference
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run eval suite
+        env:
+          # Same credential the other Claude workflows use. The name is a
+          # historical misnomer: it holds an OAuth token from `claude
+          # setup-token`, consumed by the CLI as CLAUDE_CODE_OAUTH_TOKEN.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          args=(--suite public --report eval-report.json
+                --agent-model "${{ inputs.agent_model }}"
+                --judge-model "${{ inputs.judge_model }}")
+          if [ -n "${{ inputs.skill_set }}" ]; then
+            args+=(--skill-set "${{ inputs.skill_set }}")
+          fi
+          if [ -n "${{ inputs.scenario }}" ]; then
+            args+=(--scenario "${{ inputs.scenario }}")
+          fi
+          python3 evals/run.py "${args[@]}"
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval-report.json
+          if-no-files-found: warn
