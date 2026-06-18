@@ -15,6 +15,8 @@ Ensure the user's environment is ready to work with the nextdata platform. This 
 
 Mesh configurations are persisted in the user's nxd home (`~/.nxd/meshes.json` on POSIX/WSL, `$env:USERPROFILE\.nxd\meshes.json` on Windows PowerShell). Each mesh stores an **app URL**, an **API URL**, an authentication token, and an install URL. At session start, a temporary config file is generated from the registry so the CLI can target the correct platform.
 
+> **`meshes.json` is a registry this skill maintains — the nxd CLI does not write it.** The CLI's own live state is `~/.nxd/config.yaml` (the single active mesh: `url`, `skipversioncheck`) plus `~/.nxd/tokens.json` (bearer tokens keyed by auth host). This skill layers `meshes.json` on top to track *multiple* named meshes and their `app_url`/`api_url` so the agent can switch between them. Treat `config.yaml` as the source of truth for what the CLI is currently pointed at, and `meshes.json` as this skill's multi-mesh address book; if it is absent, fall back to discovering meshes from `config.yaml` (Step 0 below already does this).
+
 The host shape varies per mesh: a `trynxd.com` cloud mesh follows the `app.<sub>.trynxd.com` / `api.<sub>.trynxd.com` convention, but self-hosted or custom-domain meshes (e.g. an apex domain) may not. **Do not assume the convention** — elicit or confirm hosts with the user when they don't match (see Step 3).
 
 This skill owns mesh selection. Its outputs are consumed by every other nxd skill:
@@ -30,8 +32,8 @@ Before running commands, identify the user's shell:
 
 | Shell | Registry path | `<session_config>` path | Install command |
 |---|---|---|---|
-| macOS/Linux Bash/Zsh | `~/.nxd/meshes.json` | `/tmp/nxd-<mesh_name>.yaml` | `curl -fsSL <install_url> \| sh -` |
-| WSL Bash/Zsh | `~/.nxd/meshes.json` inside WSL | `/tmp/nxd-<mesh_name>.yaml` inside WSL | `curl -fsSL <install_url> \| sh -` |
+| macOS/Linux Bash/Zsh | `~/.nxd/meshes.json` | `/tmp/nxd-<mesh_name>.yaml` | `curl -fsSL <install_url> \| bash` |
+| WSL Bash/Zsh | `~/.nxd/meshes.json` inside WSL | `/tmp/nxd-<mesh_name>.yaml` inside WSL | `curl -fsSL <install_url> \| bash` |
 | Windows PowerShell | `$env:USERPROFILE\.nxd\meshes.json` | `$env:TEMP\nxd-<mesh_name>.yaml` | `iwr <install_url> \| iex` |
 
 All downstream nxd skills use `<session_config>` instead of hardcoding `/tmp`. When showing a command to a Windows PowerShell user, translate POSIX path examples to the PowerShell form above. If a customer VDI blocks native installers or shell execution, route them to WSL and clearly say the paths/config live inside WSL.
@@ -72,7 +74,7 @@ If found, proceed to Step 2.
 If not found, you need a mesh URL to install the CLI. Skip ahead to Step 2 to discover or register a mesh (which gives you an install URL), then come back here to install:
 
 ```bash
-curl -fsSL <install_url> | sh -
+curl -fsSL <install_url> | bash
 ```
 
 ```powershell
@@ -193,7 +195,7 @@ Ask the user which infra-profile and domain they work in (don't assume), and not
 If the nxd CLI is not installed yet (Step 1 failed), install it now:
 
 ```bash
-curl -fsSL <install_url> | sh -
+curl -fsSL <install_url> | bash
 ```
 
 ```powershell

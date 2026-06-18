@@ -34,8 +34,9 @@ Check at least:
   runtime-only dependencies such as Spark, torch, sentence-transformers,
   langchain embedding/vector integrations, browser clients, and vendor SDKs not
   needed to build the spec. `nxd validate` imports `transform.py`.
-- **Output/pgvector integrity:** if using pgvector, prefer explicit vector
-  config from `storage-configs.md`, keep one model per pgvector port, keep the
+- **Output/pgvector integrity:** if using pgvector, prefer an explicit vector
+  config (declare the embedding attribute as `vector_embeddings(<dim>)`, not
+  `string()`), keep one model per pgvector port, keep the
   model name aligned with the intended table, and record whether the table is
   platform-provisioned or transform-created.
 - **Scheduled-write idempotency:** scheduled reruns must have an idempotency
