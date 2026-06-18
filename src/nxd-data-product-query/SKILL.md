@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-query
-description: Query a Nextdata OS Data Product through its REST API. Discovers the active mesh from the user's local nxd settings, lists Data Products and their output ports, fetches each port's location and a leased credential from the Data Product's REST API, then runs the user's query against the port using credentials returned by the platform. Routes by service type — SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, pgvector metadata), presigned-URL fetch for file storage (S3, ADLS), vector similarity for vector stores (pgvector, Pinecone), and MCP/RPC calls for RPC ports — and consults the LLM (Claude) to translate natural-language questions into the right query for vector stores and MCP endpoints. Also supports a strict MCP-only mode that disables direct-store access, discovers DP MCP endpoints through the mesh MCP gateway, builds a plan from semantic_model relationships, runs the plan through an independent validator, and only executes if validation passes. Use when the user asks to "query a data product", "read from an output port", "search a named DP", "fetch the latest rows from a named DP", "use strict mode", "MCP-only", or similar.
+description: Query a deployed Nextdata OS Data Product through its public REST API. Discovers the active mesh from the user's local nxd settings, lists Data Products and their output ports, fetches each port's location and a leased credential, then runs the query against the port using those credentials. Routes by output-port driver — SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone), and MCP/RPC calls for RPC ports — and turns natural-language questions into concrete queries for vector and MCP endpoints. Also supports an opt-in strict MCP-only mode that disables direct-store access, builds a plan from semantic_model relationships, and gates execution on an independent validator. Use when the user asks to "query a data product", "read from an output port", "search a named DP", "use strict mode", or "MCP-only".
 allowed-tools:
   - Bash
   - Read
@@ -46,141 +46,13 @@ The user may pass any of these in the request — collect the rest interactively
 
 ## Strict mode (MCP-only, plan-verified)
 
-A locked-down mode for queries that must demonstrably go through MCP and nothing else. The rules below are declarative — satisfy them however the flow works out per request; do not treat the list as execution order.
+A locked-down mode for queries that must demonstrably go through MCP and nothing else. Data access only via DP MCP endpoints (discovered through the mesh MCP gateway); cross-DP relationships only via the `semantic_model` MCP endpoint on each DP; every query produces a human-readable plan that an **independent validator** checks before execution; if validation fails, the query fails — no fallback to direct-store routing in the same run.
 
-### Rules
-1. **Data access only via MCP endpoints exposed by Data Products.** Do not authenticate against or call any underlying data source directly (no Snowflake/Postgres/pgvector dial, no presigned-URL fetch, no external API call). Discover available DP MCP endpoints through the **mesh-level MCP gateway** — a per-mesh endpoint that lists every DP MCP server registered on the mesh and the functions each exposes. Resolve its URL from the mesh config the same way Step 1 resolves the api/app host (see `mcp_gateway.py`).
-2. **Semantic relationships only via the `semantic_model` MCP endpoints.** Some DPs expose a `semantic_model` MCP function that returns model attributes plus typed relationships to models in **other** DPs (foreign keys, derived-from, joins-on). For any cross-DP reasoning use **only** these endpoints; never infer relationships from column-name heuristics, embedding-space similarity, or memory.
+**When to use.** The user explicitly asks for "strict mode", "MCP-only", or "no direct access", or passes the `--strict` flag. Otherwise default to the Step-6 routing below.
 
-> **Only `semantic_model` is standard.** Every other MCP tool name on a DP — search, get, scan, top-k, custom RPCs — is author-defined and may change. The skill must learn every non-`semantic_model` tool from a **live** gateway call, never from a hard-coded list, doc reference, or prior run.
+**The full strict-mode contract** — five rules, two-stage discovery, plan JSON shape, the five concrete validation checks, generator-↔-validator retry loop, abstain rules, output shape, and known limitations — lives in [reference/strict-mode.md](reference/strict-mode.md). Read it before running a strict-mode query and again whenever the supporting scripts change.
 
-> **Re-fetch every query.** The set of DPs, their MCP endpoints, and the tools each one publishes can change at any time (new DP launched, schema rev, breaker flips, redeploy). Run `mcp_gateway.py` and `semantic_relations.py` again **for every user query** — do not reuse a catalogue from an earlier conversation, an earlier turn, or any on-disk cache older than the current question. If a previous file is on disk, delete it or overwrite it; treat the catalogue as session-scoped, query-scoped data.
-3. **Plan-first, human-readable.** Process every user question by first building a written **query plan** that covers the full execution — including multi-DP / multi-endpoint paths — and the **provenance** of each step: which MCP function the step calls, which `semantic_model` response justified each join / projection / filter, and which user-question phrase mapped onto each parameter. The plan is text the user can read end-to-end before anything runs.
-4. **Validated before execution.** Every plan goes through an independent **plan validator** that checks (a) every relationship asserted in the plan is present in at least one `semantic_model` MCP response collected this session, (b) every data-fetching step targets an MCP endpoint listed by the gateway, and (c) no step calls a non-MCP path (raw SQL against a port, direct presigned-URL fetch, direct HTTP to an external API).
-5. **Execute only if validation passes.** On pass: run the plan via MCP calls and return `{plan, validation_report, results}` to the user. On fail: return the plan, the validation failures, and a short explanation — **do not run any step**.
-
-### Discovering MCP functions per DP (two-stage)
-
-The gateway tells you which DP MCP **endpoints** exist on the mesh; it does **not** tell you which functions each endpoint exposes. To learn the per-DP function list, do this two-stage discovery — every query, no cache.
-
-**Stage 1 — endpoint list (CLI).** Run `nxd mcp health --format json`. It wraps `GET /health/dps` on mcp-proxy-api and returns one row per registered DP MCP endpoint with URL, `derived_state`, breaker state, and a reported `tool_count` — **not** the tool names. Skip rows whose `derived_state` is `Broken` (breaker Open) unless explicitly probing.
-
-```bash
-nxd mcp health --format json
-```
-
-**Don't pass `--mesh` blindly.** When `~/.nxd/config.yaml` has a name that appears both top-level (the `url:` field) and inside the `meshes:` block, `nxd mcp health --mesh <name>` picks the entry under `meshes:` — which may not be the active one — and silently queries the wrong proxy host. The robust recipe is to **omit** `--mesh` in the default case so the CLI uses the top-level active `url:`. Only pass `--mesh <name>` when the user has explicitly asked for a non-active mesh and the name resolves unambiguously. `mcp_gateway.py` already follows this rule: it propagates `--mesh` only when the caller passed one.
-
-**Stage 2 — tool names + schemas (MCP Streamable-HTTP).** For each healthy endpoint URL from Stage 1, open a short MCP session and call `tools/list`. The CLI doesn't expose this, so `scripts/mcp_http.py` does the minimal protocol:
-
-1. `POST <endpoint>/` with JSON-RPC `initialize` → `200` + `Mcp-Session-Id` response header.
-2. `POST` `notifications/initialized` (no id) → `202` ack.
-3. `POST` JSON-RPC `tools/list` with `Mcp-Session-Id` header → returns `[{name, description, inputSchema}, …]`.
-
-Bearer: PAT from `~/.nxd/tokens.json` (written by `nxd login`). The same token works against the proxy host since auth + proxy share a parent domain.
-
-**Glue:** `scripts/mcp_gateway.py` runs Stage 1 via subprocess, then loops the endpoints calling Stage 2 via `mcp_http.McpClient`, and writes one catalogue JSON with `endpoints[*].tools[*].{name, description, input_schema}` plus a flat `function_index` of `(dp, tool)` pairs.
-
-```bash
-python3 scripts/mcp_gateway.py --token-file /tmp/strict-tok.txt --out /tmp/strict-gw.json
-```
-
-**What the catalogue gives you, by function class:**
-
-| Class | How to identify it in the catalogue | What it returns | Use it for |
-|---|---|---|---|
-| **(a) Data-returning functions** | Any tool whose name does **not** match `^semantic[_-]?models?$` — search/get/scan/top-k/custom RPCs the DP author defined | Domain data (rows, ranked chunks, aggregates, summaries). Shape is whatever the DP author published | Plan steps that fetch data |
-| **(b) Semantic-model functions** | Tool whose name matches `^semantic[_-]?models?$` | A list of model attributes plus typed relationships / links to models in **other** DPs (`SameAs`, `Derived`, `joins_on`, `fk`) | Plan Validation Rule 2 / Rule 4 — every cross-DP join / projection / filter must trace back to an entry returned here. Run via `scripts/semantic_relations.py` |
-
-Only the **(b)** name is standard. Everything in **(a)** is author-defined and may change between runs — that is why both stages are re-fetched per query.
-
-### Flow (one shape that satisfies the rules)
-
-1. **Discover MCP surface.** Call the mesh MCP gateway to enumerate DP MCP endpoints and their declared functions. Cache the gateway response per session.
-   ```bash
-   python3 scripts/mcp_gateway.py --api-url "$API_URL" --out /tmp/nxd-mcp-gateway.json
-   ```
-2. **Collect semantic models.** For each candidate DP that exposes a `semantic_model` MCP function, call it and collect the returned model attributes + cross-DP relationships into a single relations bundle. Candidates are the DPs whose descriptions / function names plausibly relate to the user's question — narrow by domain when there are many.
-   ```bash
-   python3 scripts/semantic_relations.py --gateway /tmp/nxd-mcp-gateway.json --dps <fullName>,<fullName>,… --out /tmp/nxd-relations.json
-   ```
-3. **Draft the plan (LLM, in the conversation).** Using the gateway + relations bundle, write a human-readable plan with these sections:
-   - **Question** — the user's question, verbatim.
-   - **Candidate sources** — which DP MCP endpoints are relevant and why (one line each, citing the gateway entry / `semantic_model` response that justified inclusion).
-   - **Steps** — ordered execution steps. Each step lists: DP `fullName`, MCP function name, request payload, expected response shape, and which relations bundle entry (if any) justified the join/projection/filter.
-   - **Joins & relationships** — every cross-DP join or relationship the plan relies on, with a pointer to the `semantic_model` MCP response (DP + path) that declares it.
-   - **Provenance** — for each step, which phrase of the user question mapped onto which parameter.
-   - **Open questions / assumptions** — anything the relations bundle didn't fully cover.
-4. **Validate the plan.** Run the validator over the plan + the cached gateway + relations bundle:
-   ```bash
-   python3 scripts/plan_validator.py --plan /tmp/nxd-plan.json --gateway /tmp/nxd-mcp-gateway.json --relations /tmp/nxd-relations.json --out /tmp/nxd-validation.json
-   ```
-   The validator emits `{passed: bool, checks: [...], failures: [...]}`. Failures categorise as `unknown_relationship`, `non_mcp_step`, `unknown_endpoint`, `unknown_function`, `unsupported_param`.
-5. **Execute or abstain.**
-   - If `passed=true`: walk the plan and run each step via `rpc_call.py --mcp …` (or the gateway client). Collect responses and return `{plan, validation_report, results}` to the user.
-   - If `passed=false`: return `{plan, validation_report}` with each failure named and the rule it violated (Rule 1 / 2 / 4). **Stop.** Do not retry the underlying query through a non-MCP path; if the user wants to relax strict mode, they pass `--strict=false` (or "drop strict mode") and the skill falls back to the default Step-6 routing.
-
-### Plan format (shape on disk)
-
-`/tmp/nxd-plan.json`:
-
-```json
-{
-  "question": "…verbatim user question…",
-  "candidate_sources": [
-    {"dp": "<fullName>", "mcp_function": "<fn>", "reason": "…", "evidence": {"gateway_entry": "…"}}
-  ],
-  "steps": [
-    {
-      "id": "s1",
-      "dp": "<fullName>",
-      "mcp_function": "<fn>",
-      "request": {"…": "…"},
-      "expected_response_shape": "…model name or schema ref…",
-      "depends_on": [],
-      "join_basis": null
-    }
-  ],
-  "relationships_used": [
-    {"from_dp": "<A>", "from_model": "<m1>", "to_dp": "<B>", "to_model": "<m2>", "kind": "fk|derived|joins_on", "evidence": {"semantic_model_dp": "<A>", "path": "relationships[0]"}}
-  ],
-  "provenance": [{"step_id": "s1", "param": "from", "phrase": "…", "source": "user_question"}],
-  "assumptions": ["…"]
-}
-```
-
-### Plan Validation
-
-The validator runs **independently** of the plan generator. Treat plan generation and plan validation as two separate actors with separate inputs:
-
-- **Generator inputs** — the user question, the gateway catalogue, the relations bundle, prior conversation context, scratch notes, embedding-space hunches, anything Claude reasoned through to pick steps. Generator emits the plan JSON; that JSON is the **only** thing the validator may consume from the generator.
-- **Validator inputs** — the emitted plan JSON, and a *fresh* read of the gateway catalogue + relations bundle from disk. The validator must **not** read the generator's chain of thought, the prior turn's notes, any LLM reasoning, or anything else the generator used to build the plan. If a fact does not survive serialisation into the plan, it does not exist for the validator.
-- **Same files, fresh load.** The validator opens `gateway.json` / `relations.json` itself rather than receiving them from the generator. This catches generator drift: a plan that referenced a tool the generator "remembered" but never wrote into the plan, or a relationship the generator inferred but never recorded under `relationships_used`, will fail validation here.
-
-Concrete checks the validator runs:
-
-- For every `relationships_used[*]`: an entry must exist in `relations.json` whose `from_dp/from_model/to_dp/to_model/kind` matches; the `evidence.semantic_model_dp` must be the DP that returned it.
-- For every `steps[*]`: `dp + mcp_function` must appear in `gateway.json`'s function index.
-- No step may carry a `direct_sql`, `presigned_url`, or `http_request` field — those tag non-MCP paths and fail the run.
-- Every `steps[*].request` field must reference either (a) a literal from `provenance`, (b) the output of a `depends_on` step, or (c) a value drawn from `relationships_used`. Unbound params fail.
-
-**Generator ↔ validator retry loop.** On `passed=false`, surface the structured `failures[]` back to the generator with each entry's `check`, `step_id`, and `detail`. The generator rewrites the plan to address the named gaps — add a missing `relationships_used[*]` and back it with a real `relations.json` entry, swap an unknown tool for one in the gateway, bind an unbound param, drop a non-MCP field — and the validator re-runs over the new plan. Cap the loop at **3 attempts** to bound cost.
-
-**Hard fail if no valid plan is reachable.** If the generator cannot produce a plan that the validator passes within the retry cap, **the query fails**. Do not run any step. Return to the user: the final attempted plan, the validator's failure list from the last attempt, and a short explanation that points to whichever of these is the root cause: (a) the gateway catalogue has no tool that can answer the question, (b) `relations.json` lacks a relationship the question requires, (c) the question needs data not exposed by any reachable DP. Tell the user what would have to change on the mesh side (add a tool, publish a relationship in a `semantic_model` response, fix a Broken endpoint) for the same question to succeed next time.
-
-**Known limitation — structural only.** Plan Validation verifies that declared relationships *exist* in `semantic_model` responses; it does **not** verify that the underlying values on the two sides of a relationship actually intersect at runtime. A `SameAs` between `A.x` and `B.y` can pass validation while every per-row fan-out returns zero because the identifier encodings diverge or the value sets are disjoint. Symptom during execution: per-row queries return empty / zero while the same tool called without that filter returns non-zero — that's the data-level mismatch fingerprint.
-
-When that pattern appears in results, surface it explicitly to the user; do not retry with alternate encodings (that's hallucination). The fix lives on the mesh side: either correct the `semantic_model` link (e.g. `SameAs` → `Derived` with the actual transform), or fix one side's stored values. The skill may optionally implement a Rule-6 runtime probe that, before fan-out execution, samples N distinct values from each side of a relationship via the available data tools, intersects them, and abstains when the intersection is empty — this catches the class of bug at plan-time rather than after a fruitless execution. Implement only when the source DP exposes a tool that returns distinct values cheaply.
-
-### Abstain rules
-
-- Mesh MCP gateway not reachable → strict mode cannot run. Tell the user; do not silently fall through.
-- No candidate DP exposes a `semantic_model` MCP function for the model the user is asking about → cross-DP reasoning is not possible in strict mode. Return the gateway + relations bundle gathered so far and stop.
-- Plan needs a step that is not declared in any DP's MCP function list → validation fails with `unknown_function`; do not invent.
-
-### Output the user sees
-
-A single response with three parts, in order: the **plan** (human-readable, the text of the JSON above rendered as prose + a table of steps), the **validation report** (pass/fail + each check), and, if validation passed, the **results** (one block per step, with MCP function + response excerpt). If validation failed, the third part is replaced by an "Execution skipped" notice citing the rule numbers that were violated.
+**Strict-mode scripts** (all under `scripts/`, all per-query and cache-free): `mcp_gateway.py` (Stage 1+2 discovery), `semantic_relations.py` (harvest `semantic_model` responses into a relations bundle), `plan_validator.py` (pure local five-check validator), `mcp_call.py` (one-shot MCP `tools/call` from a validated plan step), `mcp_http.py` (minimal MCP Streamable-HTTP client used by the others).
 
 ---
 
@@ -510,6 +382,7 @@ py -3 -m venv .nxd-data-product-query-venv
 | `mcp_gateway.py` | (Strict mode) Wraps `nxd mcp health --format json` for endpoint discovery; calls `tools/list` per healthy DP MCP endpoint to capture the tool catalogue. **Re-run every query** — the DP set + tools are not stable |
 | `semantic_relations.py` | (Strict mode) For each gateway DP whose tools include a name matching `^semantic[_-]?models?$` (regex overridable), calls that tool and merges the response into a single relations bundle. **Re-run every query** |
 | `plan_validator.py` | (Strict mode) Pure local plan validator. Checks the plan against the gateway catalogue + relations bundle. Emits `{passed, checks, failures}`. Network-free — caller must keep the catalogue + relations fresh |
+| `mcp_call.py` | (Strict mode) One-shot CLI over `mcp_http.call_tool_one_shot` — opens an MCP session, calls one tool, writes the unwrapped result to `--out`. Use this to execute each step of a validated plan (Rule 5). Replaces the non-existent `rpc_call.py --mcp` form |
 
 Each script writes secrets only to `--out` files (never stdout) and reads tokens via `--token-file` or stdin.
 
