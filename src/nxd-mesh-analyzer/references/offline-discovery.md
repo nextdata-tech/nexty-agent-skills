@@ -1,5 +1,14 @@
 # Offline Discovery (read-only collection pass)
 
+## Contents
+- Opening Prompts
+- Warehouse / Database (read-only)
+- Git Repositories
+- Local Data Samples
+- Documents, Diagrams, and Images
+- Domain & Ownership Context
+- Feeding the candidate match
+
 This is an **optional** offline collection pass. When live service inspection is
 not possible — no network access to the services, credentials withheld, or the
 user prefers to share evidence by hand — collect the same kinds of evidence

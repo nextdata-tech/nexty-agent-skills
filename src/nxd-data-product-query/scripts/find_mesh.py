@@ -4,8 +4,8 @@ Reads ~/.nxd/meshes.json and ~/.nxd/config.yaml (see nxd-setup skill for the
 file format) and ~/.nxd/tokens.json (the file `nxd login` writes).
 
 Prints JSON: {api_url, mesh_name, token_available}. The token itself is
-written only to --out (default /tmp/nxd-data-product-query/token.txt with mode
-600), never to stdout — so the rest of the skill can pipe / --token-file it
+written only to --out (default under the OS temp directory with mode 600), never
+to stdout — so the rest of the skill can pipe / --token-file it
 into the other scripts without it leaking into chat.
 
 Exit 0 on success. Exit 2 with a JSON list of meshes when --mesh is omitted
@@ -17,9 +17,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from nxd_api import resolve_mesh
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write text to a 0600 file, created with restrictive perms from the start.
+
+    Using os.open with mode 0o600 (instead of write_text + chmod) closes the
+    window where the token file would briefly be readable by group/other under
+    the active umask on a shared host.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
 
 
 def main() -> None:
@@ -27,7 +40,7 @@ def main() -> None:
     p.add_argument("--mesh", help="Mesh name when multiple are configured")
     p.add_argument(
         "--out",
-        default="/tmp/nxd-data-product-query/token.txt",
+        default=str(Path(tempfile.gettempdir()) / "nxd-data-product-query" / "token.txt"),
         help="Where to write the bearer token (mode 600). Default keeps the token off stdout.",
     )
     args = p.parse_args()
@@ -37,8 +50,7 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if m.token:
-        out_path.write_text(m.token)
-        os.chmod(out_path, 0o600)
+        _write_private(out_path, m.token)
 
     docs_base = f"{m.app_url.rstrip('/')}/docs/#/" if m.app_url else None
 

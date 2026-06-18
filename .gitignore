@@ -40,6 +40,10 @@
 skills/
 skills-lock.json
 
+# Private eval artifacts
+evals/private/*
+!evals/private/README.md
+
 # Python
 __pycache__/
 *.pyc

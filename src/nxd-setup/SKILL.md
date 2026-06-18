@@ -1,28 +1,42 @@
 ---
 name: nxd-setup
-description: Install, configure, and authenticate the nxd CLI. Manages mesh environments so the user can work with multiple nextdata platforms across sessions.
+description: Install, configure, and authenticate the nxd CLI. Manages mesh environments so the user can work with multiple nextdata platforms across sessions. Use when setting up nxd, selecting a mesh, refreshing authentication, or producing the session config path used by other Nextdata skills.
 allowed-tools:
   - Bash
   - Read
 metadata:
   author: nextdata
-  version: 0.2.0
+  version: 0.2.1
 ---
 
 # nxd Setup
 
 Ensure the user's environment is ready to work with the nextdata platform. This skill manages mesh environments — named platform instances (e.g. dev, staging, prod) — so the user can register, select, and switch between them across sessions.
 
-Mesh configurations are persisted in `~/.nxd/meshes.json`. Each mesh stores an **app URL**, an **API URL**, an authentication token, and an install URL. At session start, a temporary config file is generated from the registry so the CLI can target the correct platform.
+Mesh configurations are persisted in the user's nxd home (`~/.nxd/meshes.json` on POSIX/WSL, `$env:USERPROFILE\.nxd\meshes.json` on Windows PowerShell). Each mesh stores an **app URL**, an **API URL**, an authentication token, and an install URL. At session start, a temporary config file is generated from the registry so the CLI can target the correct platform.
+
+> **`meshes.json` is a registry this skill maintains — the nxd CLI does not write it.** The CLI's own live state is `~/.nxd/config.yaml` (the single active mesh: `url`, `skipversioncheck`) plus `~/.nxd/tokens.json` (bearer tokens keyed by auth host). This skill layers `meshes.json` on top to track *multiple* named meshes and their `app_url`/`api_url` so the agent can switch between them. Treat `config.yaml` as the source of truth for what the CLI is currently pointed at, and `meshes.json` as this skill's multi-mesh address book; if it is absent, fall back to discovering meshes from `config.yaml` (Step 0 below already does this).
 
 The host shape varies per mesh: a `trynxd.com` cloud mesh follows the `app.<sub>.trynxd.com` / `api.<sub>.trynxd.com` convention, but self-hosted or custom-domain meshes (e.g. an apex domain) may not. **Do not assume the convention** — elicit or confirm hosts with the user when they don't match (see Step 3).
 
 This skill owns mesh selection. Its outputs are consumed by every other nxd skill:
 
-- the active mesh's session config at `/tmp/nxd-<mesh_name>.yaml`, and
+- the active mesh's session config at `<session_config>`, resolved per OS below, and
 - the mesh's `app_url`, which is the **doc base**: per-mesh docs are served at `<app_url>/docs/#/<path>` (see "Platform docs" below). Capturing `app_url` is what lets any skill build doc links for the selected mesh.
 
 Run each step in order. Do not proceed past a failing step.
+
+## Cross-platform command conventions
+
+Before running commands, identify the user's shell:
+
+| Shell | Registry path | `<session_config>` path | Install command |
+|---|---|---|---|
+| macOS/Linux Bash/Zsh | `~/.nxd/meshes.json` | `/tmp/nxd-<mesh_name>.yaml` | `curl -fsSL <install_url> \| bash` |
+| WSL Bash/Zsh | `~/.nxd/meshes.json` inside WSL | `/tmp/nxd-<mesh_name>.yaml` inside WSL | `curl -fsSL <install_url> \| bash` |
+| Windows PowerShell | `$env:USERPROFILE\.nxd\meshes.json` | `$env:TEMP\nxd-<mesh_name>.yaml` | `iwr <install_url> \| iex` |
+
+All downstream nxd skills use `<session_config>` instead of hardcoding `/tmp`. When showing a command to a Windows PowerShell user, translate POSIX path examples to the PowerShell form above. If a customer VDI blocks native installers or shell execution, route them to WSL and clearly say the paths/config live inside WSL.
 
 ---
 
@@ -60,7 +74,11 @@ If found, proceed to Step 2.
 If not found, you need a mesh URL to install the CLI. Skip ahead to Step 2 to discover or register a mesh (which gives you an install URL), then come back here to install:
 
 ```bash
-curl -sL <install_url> | bash
+curl -fsSL <install_url> | bash
+```
+
+```powershell
+iwr <install_url> | iex
 ```
 
 Where `<install_url>` is the mesh's install URL — the real value comes from the registered mesh (Step 3 derives it). *(Example form only, not a default: `https://app.<mesh>.example.com/cli/install`.)* Verify the install succeeded by re-running `nxd --version`.
@@ -77,10 +95,18 @@ Read the mesh registry first:
 cat ~/.nxd/meshes.json 2>/dev/null || echo '{}'
 ```
 
+```powershell
+if (Test-Path "$env:USERPROFILE\.nxd\meshes.json") { Get-Content "$env:USERPROFILE\.nxd\meshes.json" } else { "{}" }
+```
+
 If it lists meshes, branch on the count below. If it's missing or empty (`{}`), fall back to the **nxd CLI config** before declaring no meshes:
 
 ```bash
 cat ~/.nxd/config.yaml 2>/dev/null
+```
+
+```powershell
+if (Test-Path "$env:USERPROFILE\.nxd\config.yaml") { Get-Content "$env:USERPROFILE\.nxd\config.yaml" }
 ```
 
 `config.yaml` is the file the `nxd` binary itself reads. Two places carry mesh URLs:
@@ -160,8 +186,8 @@ Next, suggest a mesh name. For a cloud mesh, the subdomain is a good default (th
 Setup is the natural place to surface these so downstream skills don't each re-discover them. After the config exists (below) and auth succeeds (Step 4), you can derive them and offer to record a default:
 
 ```bash
-nxd --config /tmp/nxd-<mesh_name>.yaml ls infra-profiles
-nxd --config /tmp/nxd-<mesh_name>.yaml ls data-products
+nxd --config <session_config> ls infra-profiles
+nxd --config <session_config> ls data-products
 ```
 
 Ask the user which infra-profile and domain they work in (don't assume), and note the available services/data-products for the active mesh. If the user picks defaults, you may record `infra_profile` and `domain` alongside the mesh entry in the registry (see Registry Format).
@@ -169,7 +195,11 @@ Ask the user which infra-profile and domain they work in (don't assume), and not
 If the nxd CLI is not installed yet (Step 1 failed), install it now:
 
 ```bash
-curl -sL <install_url> | bash
+curl -fsSL <install_url> | bash
+```
+
+```powershell
+iwr <install_url> | iex
 ```
 
 Verify with `nxd --version`.
@@ -177,7 +207,7 @@ Verify with `nxd --version`.
 Create a temporary session config (without a token — we'll authenticate next):
 
 ```bash
-nxd create config --url=<api_url> --config=/tmp/nxd-<mesh_name>.yaml
+nxd create config --url=<api_url> --config=<session_config>
 ```
 
 Proceed to **Step 4** to authenticate. The token will be saved to the registry after login.
@@ -191,13 +221,13 @@ Proceed to **Step 4** to authenticate. The token will be saved to the registry a
 If the mesh already has a `token` in `~/.nxd/meshes.json`, generate a config with it:
 
 ```bash
-nxd create config --url=<api_url> --personal-access-token=<token> --config=/tmp/nxd-<mesh_name>.yaml
+nxd create config --url=<api_url> --personal-access-token=<token> --config=<session_config>
 ```
 
 Check if the token is still valid:
 
 ```bash
-nxd --config /tmp/nxd-<mesh_name>.yaml whoami
+nxd --config <session_config> whoami
 ```
 
 If `whoami` succeeds, proceed to **Step 5**.
@@ -209,23 +239,33 @@ If it fails (expired token), fall through to the login flow below.
 Run browser-based login:
 
 ```bash
-nxd --config /tmp/nxd-<mesh_name>.yaml login
+nxd --config <session_config> login
 ```
 
-This opens a browser for authentication. Tell the user to complete the login flow in their browser, then wait for them to confirm.
+This opens a browser for authentication. In agent contexts where the model
+cannot complete the browser flow itself, hand the exact command to the user
+(Claude Code users can run it as `! nxd --config <session_config> login`) and
+wait for confirmation.
 
 Verify login succeeded:
 
 ```bash
-nxd --config /tmp/nxd-<mesh_name>.yaml whoami
+nxd --config <session_config> whoami
 ```
+
+Do not trust exit code alone; if `whoami` prints `Not logged in`, auth is not
+ready even if the shell exit code is `0`.
 
 ### Create a PAT for persistence
 
 Create a personal access token so future sessions don't require browser login:
 
 ```bash
-nxd --config /tmp/nxd-<mesh_name>.yaml create personal-access-token --name claude-code-$(date +%s) --expires P30D
+nxd --config <session_config> create personal-access-token --name claude-code-$(date +%s) --expires P30D
+```
+
+```powershell
+nxd --config <session_config> create personal-access-token --name "claude-code-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" --expires P30D
 ```
 
 Extract the `nxdpat_...` token from the command output.
@@ -237,6 +277,10 @@ Read the current registry, add/update the mesh entry, and write it back:
 ```bash
 # Read current registry
 cat ~/.nxd/meshes.json 2>/dev/null || echo '{}'
+```
+
+```powershell
+if (Test-Path "$env:USERPROFILE\.nxd\meshes.json") { Get-Content "$env:USERPROFILE\.nxd\meshes.json" } else { "{}" }
 ```
 
 Update the JSON to include the mesh entry:
@@ -262,6 +306,10 @@ Ensure the `~/.nxd/` directory exists and write the updated registry:
 mkdir -p ~/.nxd
 ```
 
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.nxd"
+```
+
 Write the updated JSON to `~/.nxd/meshes.json`. Use atomic write patterns — write to a temp file first, then move it into place.
 
 ---
@@ -271,7 +319,7 @@ Write the updated JSON to `~/.nxd/meshes.json`. Use atomic write patterns — wr
 Confirm the CLI can reach the platform and list data products:
 
 ```bash
-nxd --config /tmp/nxd-<mesh_name>.yaml ls data-products
+nxd --config <session_config> ls data-products
 ```
 
 If this succeeds, the environment is ready. To help the user understand what to do with the listed data products, point them at `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (see "Platform docs").
@@ -293,7 +341,7 @@ Report the active mesh configuration, using the real values for the selected mes
 > - **API URL**: `<api_url>`
 > - **User**: `<whoami email>`
 
-**Important**: For the rest of this session, always pass `--config /tmp/nxd-<mesh_name>.yaml` to every `nxd` command. This ensures all operations target the selected mesh.
+**Important**: For the rest of this session, always pass `--config <session_config>` to every `nxd` command. Use the OS-specific path from "Cross-platform command conventions." This ensures all operations target the selected mesh.
 
 Now that `app_url` is known, surface the canonical environment-ready reference: `<app_url>/docs/#/tutorials/cli/setup`. The mesh's `app_url` is also the **doc base** other skills use to build `<app_url>/docs/#/<path>` links.
 
@@ -307,7 +355,7 @@ If the user came here from (or is heading to) another skill, point them onward w
 
 ## Registry Format
 
-The mesh registry at `~/.nxd/meshes.json` stores all registered meshes:
+The mesh registry at `~/.nxd/meshes.json` on POSIX/WSL, or `$env:USERPROFILE\.nxd\meshes.json` on Windows PowerShell, stores all registered meshes:
 
 The hosts below are **example placeholders** — real values vary per mesh (cloud meshes use `trynxd.com`, self-hosted/custom meshes do not):
 
@@ -342,7 +390,7 @@ Re-run Step 4. The login flow will create a new PAT and update the registry.
 Re-run Step 2 to pick a different mesh or register a new one.
 
 ### CLI not found after install
-Check that `~/.local/bin` is in your PATH. The install script places the binary there by default.
+On POSIX/WSL, check that `~/.local/bin` is in your PATH. On Windows PowerShell, check that the installer-added nxd directory is on the user PATH, then restart the shell.
 
 ### Registry corrupted
-Delete `~/.nxd/meshes.json` and re-register meshes from scratch.
+Delete `~/.nxd/meshes.json` on POSIX/WSL, or `$env:USERPROFILE\.nxd\meshes.json` on Windows PowerShell, and re-register meshes from scratch.

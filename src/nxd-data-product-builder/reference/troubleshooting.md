@@ -1,5 +1,13 @@
 # Troubleshooting deployed Data Products
 
+## Contents
+- Startup timeout / OOM diagnosis
+- Spec validation errors
+- RPC output port crashes
+- Transform writes wrong, zero, or duplicate data
+- Custom expectation pod Pending
+- Debugging workflow
+
 Symptom → diagnosis → fix reference for Data Products that fail after
 `nxd launch`. Each entry gives the error as the platform reports it, the
 likely root cause (sometimes different from what the error text suggests),

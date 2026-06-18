@@ -103,6 +103,12 @@ __pycache__/**
 
 Your transform code can import third-party packages (e.g., `pandas`, `pyspark`) that aren't installed locally. The CLI automatically stubs these imports during spec parsing so your data product can be built without installing all dependencies locally.
 
+Even with import stubbing, prefer lazy imports for heavy runtime-only packages
+inside `transform()` or helper functions. `nxd validate` and the offline
+spec-build check still import `spec.py` and `transform.py`; top-level imports
+for torch, sentence-transformers, Spark, browser clients, or vector-store SDKs
+can make validation slow or fail before the transform body runs.
+
 To allow specific packages through the sandbox (e.g., if you need them to be actually imported during spec parsing), set `NXD_SANDBOX_ALLOWLIST` to a comma-separated list of package names:
 
 ```

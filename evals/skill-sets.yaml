@@ -1,0 +1,29 @@
+skill_sets:
+  no_skills:
+    description: "Baseline with no Nexty skills installed."
+    skills: []
+
+  current_pack:
+    description: "Current customer-facing skill pack."
+    skills:
+      - "src/nxd-setup"
+      - "src/nxd-data-product-builder"
+      - "src/nxd-data-product-query"
+      - "src/nxd-mesh-analyzer"
+      - "src/nxd-policies"
+
+  candidate_pack:
+    description: "Current pack plus workflow primitive skills."
+    skills:
+      - "src/nxd-setup"
+      - "src/nxd-data-product-builder"
+      - "src/nxd-data-product-query"
+      - "src/nxd-mesh-analyzer"
+      - "src/nxd-policies"
+      - "src/nxd-adding-inputs"
+      - "src/nxd-adding-outputs"
+      - "src/nxd-adding-expectations-promises"
+      - "src/nxd-adding-policy"
+      - "src/nxd-complying-with-failing-policy"
+      - "src/nxd-debugging-data-products"
+
