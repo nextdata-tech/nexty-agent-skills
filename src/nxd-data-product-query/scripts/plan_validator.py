@@ -80,7 +80,7 @@ def _check_endpoints(plan: dict, gateway: dict) -> list[dict]:
                 {
                     "check": "unknown_endpoint",
                     "step_id": step.get("id"),
-                    "detail": f"dp {dp!r} has no healthy MCP endpoint in the gateway",
+                    "detail": f"dp {dp!r} has no reachable MCP endpoint in the gateway",
                 }
             )
     return fails
@@ -145,16 +145,25 @@ def _check_relationships(plan: dict, relations: dict) -> list[dict]:
                 }
             )
             continue
+        # Cross-check evidence.semantic_model_dp against the DPs actually
+        # visited by `semantic_relations.py`. A plan citing a declaring DP
+        # that wasn't visited (or didn't return the relationship) fails;
+        # but the declaring DP may legitimately be a third party — DP A's
+        # semantic_models can declare a relationship between B and C, so
+        # we do NOT require sm_dp to be one of the two sides.
         ev = rel.get("evidence") or {}
         sm_dp = ev.get("semantic_model_dp")
-        if sm_dp and sm_dp != key[0] and sm_dp != key[2]:
+        visited_dps = {v.get("dp") for v in relations.get("visited") or [] if v.get("dp")}
+        if sm_dp and visited_dps and sm_dp not in visited_dps:
             fails.append(
                 {
                     "check": "unknown_relationship",
                     "step_id": f"relationships_used[{idx}]",
                     "detail": (
-                        f"evidence.semantic_model_dp={sm_dp!r} is neither side of the "
-                        f"relationship ({key[0]!r}, {key[2]!r})"
+                        f"evidence.semantic_model_dp={sm_dp!r} is not in the relations "
+                        f"bundle's visited DPs ({sorted(visited_dps)}). The plan asserts "
+                        "this relationship was discovered via a DP that the bundle never "
+                        "visited."
                     ),
                 }
             )
