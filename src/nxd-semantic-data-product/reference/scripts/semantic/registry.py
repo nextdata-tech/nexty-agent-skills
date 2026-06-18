@@ -5,7 +5,7 @@ support in the NXD spec and kernel. Public names are intentionally aligned with
 ADR-026 so the migration is mechanical (Agg, Cardinality, Dimension, Metric,
 Model, Join map directly to the proposed spec DSL).
 
-See: docs/architecture/adrs/026-semantic-layer-first-class.md
+See: (ADR under review in nxd PR #6893: docs/architecture/adrs/026-semantic-layer-first-class.md)
 Convergence target: nxd.spec.measure / nxd.spec.dimension (ADR-026 first-class
 support).
 """
@@ -27,6 +27,12 @@ class Agg(str, Enum):
     AVG = "avg"
     MIN = "min"
     MAX = "max"
+
+
+#: Aggregations that require a real column name (``column="*"`` is invalid).
+#: ``Agg.COUNT`` is the only agg that accepts ``column="*"`` (→ ``COUNT(*)``).
+#: Hoisted to module level so ``build()`` does not rebuild the set on every call.
+_AGGS_REQUIRING_COLUMN: frozenset[Agg] = frozenset({Agg.COUNT_DISTINCT, Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX})
 
 
 class Cardinality(str, Enum):
@@ -312,12 +318,14 @@ class SemanticRegistry:
             Name of the owning model (must be declared before ``build()``).
         agg:
             Aggregation function.  ``Agg.COUNT`` with ``column="*"`` renders
-            ``COUNT(*)``; all other aggregations (SUM, AVG, MIN, MAX) require a
-            real column name — ``build()`` rejects ``column="*"`` for those aggs.
+            ``COUNT(*)`` — the only aggregation that accepts ``column="*"``.
+            All other aggregations (``COUNT_DISTINCT``, ``SUM``, ``AVG``,
+            ``MIN``, ``MAX``) require a real column name — ``build()`` rejects
+            ``column="*"`` for those aggs.
         column:
             Physical column to aggregate.  Defaults to ``"*"`` which is only
-            valid for ``COUNT`` (and accepted silently for ``COUNT_DISTINCT``
-            where the column is required).
+            valid for ``COUNT`` — ``build()`` rejects ``column="*"`` for all
+            other aggregations including ``COUNT_DISTINCT``.
         description:
             Plain-language meaning surfaced in ``list_metrics``.
         boolean:
@@ -496,16 +504,16 @@ class SemanticRegistry:
                 raise ValueError(f"Model {m.name!r} must declare a non-empty grain (the entity key column).")
 
         # ---- column="*" guard for aggregations that require a real column ------
-        # COUNT(*) is intentionally valid; SUM/AVG/MIN/MAX against "*" would
-        # emit invalid SQL that only fails at query time — catch it here.
-        _aggs_requiring_column = {Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX}
+        # COUNT(*) is intentionally valid; COUNT_DISTINCT/SUM/AVG/MIN/MAX
+        # against "*" would emit invalid SQL (COUNT(DISTINCT *) / SUM(*) etc.)
+        # that only fails at query time — catch it here at build() time.
         for mt in self._metrics:
-            if mt.agg in _aggs_requiring_column and mt.column == "*":
+            if mt.agg in _AGGS_REQUIRING_COLUMN and mt.column == "*":
                 raise ValueError(
                     f"Metric {mt.name!r} uses agg={mt.agg.value!r} with column='*'. "
                     f"{mt.agg.value.upper()} requires a real column name — pass "
-                    f"column='<column>' to .metric() (e.g. column='REVENUE'). "
-                    "Only COUNT and COUNT_DISTINCT accept column='*'."
+                    f"column='<column>' to .metric() (e.g. column='ORDER_ID'). "
+                    "Only COUNT accepts column='*'."
                 )
 
         # ---- referential integrity -------------------------------------------

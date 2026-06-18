@@ -39,7 +39,7 @@ Do NOT accumulate the result as a bare ``tools = build_semantic_tools(REGISTRY)`
 list passed to nothing — that exposes zero MCP tools. The list is only useful
 when iterated and wired via ``rpc_function`` as shown above.
 
-See: docs/architecture/adrs/026-semantic-layer-first-class.md
+See: (ADR under review in nxd PR #6893: docs/architecture/adrs/026-semantic-layer-first-class.md)
 """
 
 from __future__ import annotations

@@ -6,7 +6,8 @@ intentionally aligned with ADR-026 so the later kernel migration is mechanical.
 
 ADR-026 convergence target: ``nxd.spec.measure`` / ``nxd.spec.dimension`` and a
 kernel-driven Snowflake semantic-view capability (see
-``docs/architecture/adrs/026-semantic-layer-first-class.md``).
+``docs/architecture/adrs/026-semantic-layer-first-class.md``,
+ADR under review in nxd PR #6893).
 
 Importable without the ``rpc`` extra (compiler + registry work standalone).
 ``build_semantic_tools`` requires the ``rpc`` extra and is guarded accordingly.

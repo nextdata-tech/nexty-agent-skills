@@ -6,7 +6,7 @@ generation. :py:class:`SnowflakeDialect` implements the Snowflake backend,
 lifting the exact SQL grammar verified live against a real Snowflake account
 (NEX-620 PoC ``semantic_compile.py``).
 
-See: docs/architecture/adrs/026-semantic-layer-first-class.md
+See: (ADR under review in nxd PR #6893: docs/architecture/adrs/026-semantic-layer-first-class.md)
 """
 
 from __future__ import annotations
@@ -243,8 +243,8 @@ class SnowflakeDialect:
         :py:exc:`~nxd.experimental.semantic.compiler.CompileError` before any
         SQL is emitted.
         """
-        from .compiler import CompileError
-        from .compiler import _render_predicate
+        from ._predicates import CompileError
+        from ._predicates import _render_predicate
 
         sv_name = self._resolve_view_name(registry)
 

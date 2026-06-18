@@ -2,7 +2,7 @@
 
 Source path (in the nxd monorepo): `components/nxd_py/data_product/nxd/experimental/semantic/`
 
-Source commit: `587a1a26e` — `fix(nxd_py): address PR #6902 review — close native-view filter injection + harden semantic module (NEX-620)` (branch `feat/nex-620-experimental-semantic`, PR nextdata-tech/nxd#6902). Re-vendored 2026-06-18.
+Source commit: `91b2e2da2` — `fix(nxd_py): address PR #6902 second review — COUNT_DISTINCT guard + predicate leaf (NEX-620)` (branch `feat/nex-620-experimental-semantic`, PR nextdata-tech/nxd#6902). Re-vendored 2026-06-18.
 
 This snapshot is byte-identical to the committed source modulo the import-root
 rewrite documented below. To check for drift, diff the committed source against
@@ -15,6 +15,7 @@ Files vendored:
 - `compiler.py`
 - `mcp_tools.py`
 - `__init__.py`
+- `_predicates.py` (neutral leaf: CompileError, _lit, _ALLOWED_OPS, _render_predicate)
 
 Import adjustment: cross-module imports changed from
 `from nxd.experimental.semantic.X import ...` to relative `from .X import ...`
@@ -61,6 +62,18 @@ Changes relative to the previous vendor snapshot (`36dee1470d734b1f6c948f81b2e37
      together; tool descriptions defined once; `with conn.cursor()`.
    - ADR citations renumbered 020 → 026 (the ADR was renumbered to avoid
      collision with `020-event-store.md`; nxd PR #6893).
+
+8. **PR #6902 second review fixes** (commit `91b2e2da2`):
+   - **registry.py** — the `column="*"` build guard now includes
+     `COUNT_DISTINCT` (was SUM/AVG/MIN/MAX only): `COUNT(DISTINCT *)` is
+     invalid SQL, only plain `COUNT` accepts `column="*"`. Guard set hoisted
+     to module-level `_AGGS_REQUIRING_COLUMN` frozenset; message + `.metric()`
+     docstring corrected.
+   - **_predicates.py** (new leaf) — `CompileError`, `_lit`, `_ALLOWED_OPS`,
+     `_render_predicate` moved here so the dialect no longer imports from the
+     compiler. `CompileError` re-exported from `compiler.py`, so the public
+     path `nxd.experimental.semantic.CompileError` is identity-preserved.
+   - ADR citations note the ADR is in-flight (nxd PR #6893) until merged.
 
 This is a verbatim build-time snapshot. Never hand-edit the vendored files in
 this skill or in any generated DP. Report bugs to the `nxd_py` monorepo and
