@@ -12,9 +12,35 @@ from pathlib import Path
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TAG_RE = re.compile(r"<[^>\n]+>")
 USE_WHEN_RE = re.compile(r"\buse when\b", re.IGNORECASE)
+SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 MAX_DESCRIPTION_CHARS = 1024
 REFERENCE_TOC_LINE_THRESHOLD = 100
 REFERENCE_TOC_SCAN_LINES = 20
+
+# Canonical Claude Code tool names a skill may list under `allowed-tools`.
+# Keep in sync with the harness tool set; entries are case-sensitive.
+KNOWN_TOOLS = frozenset(
+    {
+        "Bash",
+        "Read",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "Glob",
+        "Grep",
+        "AskUserQuestion",
+        "Agent",
+        "Task",
+        "TodoWrite",
+        "WebFetch",
+        "WebSearch",
+        "NotebookEdit",
+    }
+)
+
+# Canonical spelling for a skill's reference directory. The other spelling
+# (`references/`) is rejected so the pack stays consistent.
+CANONICAL_REFERENCE_DIR = "reference"
 
 
 def _strip_quotes(value: str) -> str:
@@ -24,7 +50,15 @@ def _strip_quotes(value: str) -> str:
     return value
 
 
-def _frontmatter(skill_md: Path) -> dict[str, str]:
+def _frontmatter(skill_md: Path) -> dict[str, object]:
+    """Parse SKILL.md frontmatter into a flat mapping.
+
+    Returns scalar top-level keys as strings, the `allowed-tools` block as a
+    list of tool names under key ``"allowed-tools"``, and a nested
+    ``metadata: version:`` value under key ``"metadata.version"``. This is a
+    deliberately small hand-rolled parser (no pyyaml dependency); it handles
+    only the shapes the skill pack actually uses.
+    """
     text = skill_md.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
         raise ValueError("SKILL.md must start with YAML frontmatter")
@@ -33,12 +67,33 @@ def _frontmatter(skill_md: Path) -> dict[str, str]:
     except IndexError as exc:
         raise ValueError("SKILL.md frontmatter is not closed") from exc
 
-    fields: dict[str, str] = {}
+    fields: dict[str, object] = {}
+    current_list: str | None = None  # top-level key whose list items we're collecting
+    current_map: str | None = None  # top-level mapping key (e.g. `metadata`) we're nested under
     for line in block.splitlines():
+        if not line.strip():
+            continue
+        list_item = re.match(r"^[ \t]+-[ \t]+(.*\S)\s*$", line)
+        if list_item and current_list is not None:
+            fields.setdefault(current_list, []).append(_strip_quotes(list_item.group(1)))
+            continue
+        nested = re.match(r"^[ \t]+(\S[^:]*?):[ \t]*(.*)$", line)
+        if nested and current_map is not None:
+            fields[f"{current_map}.{nested.group(1).strip()}"] = _strip_quotes(nested.group(2))
+            continue
         if line.startswith((" ", "\t", "-")) or ":" not in line:
             continue
+        # A top-level key resets any list/map context.
+        current_list = current_map = None
         key, value = line.split(":", 1)
-        fields[key.strip()] = _strip_quotes(value)
+        key = key.strip()
+        if not value.strip():
+            # Bare `key:` opens either a list (next lines are `- item`) or a
+            # mapping (next lines are indented `subkey: value`).
+            current_list = key
+            current_map = key
+            continue
+        fields[key] = _strip_quotes(value)
     return fields
 
 
@@ -59,6 +114,8 @@ def validate_skill(skill_dir: Path, max_lines: int) -> list[str]:
 
     name = fields.get("name", "")
     description = fields.get("description", "")
+    allowed_tools = fields.get("allowed-tools", [])
+    version = fields.get("metadata.version", "")
 
     if name != skill_dir.name:
         errors.append(f"{skill_md}: name {name!r} must match directory {skill_dir.name!r}")
@@ -76,10 +133,37 @@ def validate_skill(skill_dir: Path, max_lines: int) -> list[str]:
     if TAG_RE.search(description):
         errors.append(f"{skill_md}: description must not contain angle-bracket placeholders")
 
+    if not allowed_tools:
+        errors.append(f"{skill_md}: allowed-tools is missing or empty")
+    else:
+        unknown = [t for t in allowed_tools if t not in KNOWN_TOOLS]
+        if unknown:
+            errors.append(
+                f"{skill_md}: unknown allowed-tools entr"
+                f"{'y' if len(unknown) == 1 else 'ies'}: {', '.join(sorted(unknown))}"
+            )
+
+    if version and not SEMVER_RE.fullmatch(version):
+        errors.append(f"{skill_md}: metadata.version {version!r} is not semver (X.Y.Z)")
+
     line_count = sum(1 for _ in skill_md.open(encoding="utf-8"))
     if line_count > max_lines:
         errors.append(f"{skill_md}: {line_count} lines exceeds {max_lines}")
 
+    return errors
+
+
+def validate_reference_dirs(root: Path) -> list[str]:
+    errors: list[str] = []
+    src = root / "src"
+    if not src.is_dir():
+        return errors
+    for skill_dir in _skill_dirs(src):
+        stray = skill_dir / "references"
+        if stray.is_dir():
+            errors.append(
+                f"{stray}: use '{CANONICAL_REFERENCE_DIR}/' (singular), not 'references/'"
+            )
     return errors
 
 
@@ -186,6 +270,7 @@ def main() -> int:
 
     if not args.skip_submodule_check:
         errors.extend(validate_submodules(root))
+    errors.extend(validate_reference_dirs(root))
     errors.extend(validate_reference_tocs(root))
     errors.extend(validate_evals(root))
 

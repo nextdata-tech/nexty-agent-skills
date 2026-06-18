@@ -78,7 +78,7 @@ py -3 -m venv .nxd-mesh-analyzer-venv
 - `scripts/meshlib/` — generic core: profile parsing, schema-fingerprint grouping, the plugin registry, inspection orchestration, matching, report writing. Imports **no** service SDK.
 - `scripts/drivers/` — one module per service type (`s3.py`, `snowflake.py`), each owning its SDK imports (boto3, snowflake-connector) and any per-source-type rules. An entrypoint builds a registry from these and injects it into `meshlib`.
 
-To support another service type, add `scripts/drivers/<name>.py` exposing a `DRIVER` (see `meshlib/registry.py` and the recipes in `references/service-inspection.md`), then add it to `ALL` in `drivers/__init__.py`. The scripts read credentials from the profile in-process and never print secret values.
+To support another service type, add `scripts/drivers/<name>.py` exposing a `DRIVER` (see `meshlib/registry.py` and the recipes in `reference/service-inspection.md`), then add it to `ALL` in `drivers/__init__.py`. The scripts read credentials from the profile in-process and never print secret values.
 
 ---
 
@@ -105,7 +105,7 @@ Run the steps in order. Inspect read-only at every step — never create, write,
 
 **Consult the user.** The person running this skill has domain knowledge of their environment. When a decision is genuinely ambiguous — which catalog owns a table, which copy of a replicated dataset is the source of truth, which of two services is the input — ask them rather than guessing.
 
-**Offline mode.** When live inspection is not possible (no network to the services, credentials withheld, or the user prefers to share evidence by hand), run an optional read-only collection pass instead of (or alongside) live inspection — Snowflake `SHOW`/`DESCRIBE` output, Git repo inspection, and local file profiling via `scripts/profile_tabular.py`. The evidence feeds the same candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md` report. See [references/offline-discovery.md](references/offline-discovery.md).
+**Offline mode.** When live inspection is not possible (no network to the services, credentials withheld, or the user prefers to share evidence by hand), run an optional read-only collection pass instead of (or alongside) live inspection — Snowflake `SHOW`/`DESCRIBE` output, Git repo inspection, and local file profiling via `scripts/profile_tabular.py`. The evidence feeds the same candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md` report. See [reference/offline-discovery.md](reference/offline-discovery.md).
 
 ### Step 0: Resolve the active mesh (do this first)
 
@@ -169,7 +169,7 @@ The infra profile file contains **live credentials in plaintext**. Before inspec
 
 ### Step 4: Inspect each selected service
 
-Run `scripts/inspect_service.py <profile> <service>... --out <file>` — it connects read-only, inventories each service with schema-fingerprint grouping, de-duplicates shared stores, and writes the inventory JSON. Driver plugins for `s3` and `snowflake` ship under `scripts/drivers/`; for any other driver, follow the matching per-service recipe in `references/services/<type>.md` (indexed by `references/service-inspection.md`) and add a new `scripts/drivers/<name>.py` module.
+Run `scripts/inspect_service.py <profile> <service>... --out <file>` — it connects read-only, inventories each service with schema-fingerprint grouping, de-duplicates shared stores, and writes the inventory JSON. Driver plugins for `s3` and `snowflake` ship under `scripts/drivers/`; for any other driver, follow the matching per-service recipe in `reference/services/<type>.md` (indexed by `reference/service-inspection.md`) and add a new `scripts/drivers/<name>.py` module.
 
 Build an **asset inventory** for the service. For every data asset record:
 
@@ -197,9 +197,9 @@ If a connection fails (bad credentials, network, missing client library), report
 
 **First, confirm flow directionality with the user.** Using the data-architecture documentation (Step 1b) and the actual databases, buckets, and tables discovered in Step 4, derive the candidate service→service flows. Present each to the user and have them **confirm or correct its direction** — which service is the input (source) and which is the output. Do not infer direction from naming: an `_az` / `_azure` / region / environment suffix does **not** tell you which side is upstream — only the architecture and the user do. Pass the confirmed flows as `--flow <input-service>:<output-service>` to `match_assets.py`.
 
-Run `scripts/match_assets.py <inventory.json>` over the inventory from Step 4. It applies the heuristics in `references/connection-matching.md` to find connected pairs:
+Run `scripts/match_assets.py <inventory.json>` over the inventory from Step 4. It applies the heuristics in `reference/connection-matching.md` to find connected pairs:
 
-- Drop assets and pairs that the exclusion rules reject — Snowflake clone tables, hello-world test data, same-database plural twins, bucket/account-root assets (see `references/connection-matching.md`).
+- Drop assets and pairs that the exclusion rules reject — Snowflake clone tables, hello-world test data, same-database plural twins, bucket/account-root assets (see `reference/connection-matching.md`).
 - Set aside **replicated datasets** — a dataset copied verbatim across 3+ stores. These are not an N×N grid of products; they go to a separate report section (see below).
 - Pair the rest by schema similarity, related naming (`input`/`output`, `raw`/`curated`, `bronze`/`silver`/`gold`), matching asset names, partitioning carried through, and output-modified-after-input.
 - Infer direction (which asset is the input, which is the output).

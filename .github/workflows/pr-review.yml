@@ -1,0 +1,99 @@
+name: pr-review
+
+# Claude reviews skill PRs against the pack's authoring conventions
+# (README.md §Conventions) + Anthropic skill best practices. Advisory only —
+# never blocks merge. Ported from the nxd repo's claude-code-action pattern,
+# minus the Codex job, with an inline prompt (this repo has no /pr-review skill).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    # Advisory only — review failures must never block merge. Do not mark this a required check.
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write       # action posts progress comments via the issues API
+      id-token: write     # mint a claude[bot] App token via OIDC so the review
+                          # posts under Claude's identity, not github-actions[bot]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # full history for git diff inside the review
+          submodules: recursive   # validator needs the examples submodule
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - id: claude
+        uses: anthropics/claude-code-action@v1
+        continue-on-error: true
+        with:
+          # No github_token input — let the action mint a claude[bot] App token
+          # via OIDC. The secret holds an OAuth token from `claude setup-token`
+          # (not an Anthropic API key); the name is a historical misnomer shared
+          # with the nxd repo.
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: true
+          prompt: |
+            Review this PR to the nexty-agent-skills pack.
+            PR #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
+            Base: ${{ github.event.pull_request.base.sha }}
+            Head: ${{ github.event.pull_request.head.sha }}
+
+            1. Run: python3 scripts/validate_skills.py --root .
+               Report any failures as findings (each is a hard convention violation).
+            2. Review the diff against the authoring conventions in README.md
+               (§Conventions) and Anthropic skill best practices:
+               - description: specific, under 1024 chars, includes a "Use when"
+                 trigger clause, and contains no angle-bracket placeholders
+               - SKILL.md stays under 500 lines; detailed content lives in reference/
+               - reference files over 100 lines have a Contents section in the
+                 first 20 lines
+               - allowed-tools is minimal, valid, and non-empty
+               - metadata.version is semver (X.Y.Z)
+               - no private/customer material added under evals/ outside evals/private/
+            3. Post ONE structured review via
+               gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews
+               Use REQUEST_CHANGES for any high-severity finding, COMMENT
+               otherwise. APPROVE is unavailable to GitHub Apps and silently
+               degrades to COMMENT, so do not request it. If clean, post a
+               minimal COMMENT "✅ No findings."
+
+            Posting shape for inline comments (MANDATORY when you have any):
+            The action's per-prefix Bash permission engine rejects compound
+            shell — heredocs, pipes, and `--input -` all fail. Materialize the
+            review JSON with the Write tool, then POST with a LITERAL file path:
+              Step 1 (Bash, its own call, no `&&`): mkdir -p .claude-pr
+              Step 2 (Write tool): write the payload to .claude-pr/review-payload.json
+                Shape: {"event": "REQUEST_CHANGES"|"COMMENT", "body": "...",
+                        "comments": [{"path": "...", "line": N, "side": "RIGHT", "body": "..."}]}
+              Step 3 (Bash, one call): gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --method POST --input .claude-pr/review-payload.json
+            Do NOT use `echo > file`, `printf > file`, `cat <<EOF`, or `--input -`.
+          claude_args: |
+            --model opus
+            --effort high
+            --allowedTools "Bash(gh api:*),Bash(gh pr:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(python3:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(ls:*),Bash(wc:*),Bash(mkdir:*),Read,Write,Grep,Glob,Agent"
+
+      # Fallback: continue-on-error swallows a failed action step, leaving the PR
+      # with no review. Post a visible comment so reviewers know the bot didn't run.
+      - name: Post fallback comment on action failure
+        if: steps.claude.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          BODY=$(printf '⚠️ Claude review did not run. The action step failed — most often a rate limit, auth failure, or SDK error. See the [workflow run](%s) for details. Push a new commit to retry once cleared.' "$RUN_URL")
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
