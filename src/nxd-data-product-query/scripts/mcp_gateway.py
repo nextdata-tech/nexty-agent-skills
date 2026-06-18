@@ -43,6 +43,35 @@ from nxd_api import read_token, resolve_mesh
 
 
 def _run_nxd_mcp_health(mesh: str | None) -> dict:
+    """Invoke ``nxd mcp health --format json`` and assert the shape this
+    script depends on.
+
+    Verified CLI output shape (as of `nxd mcp` wrapping mcp-proxy-api's
+    ``GET /health/dps``):
+
+        {
+          "service": "mcp-proxy-api",
+          "version": "...",
+          "summary": {"total": int, "healthy": int, ...},
+          "discovery_stream": {...},
+          "data_products": [
+            {
+              "endpoint": "https://.../<dp>/rpcs/<port>/mcp/",
+              "derived_state": "Healthy|Degraded|Broken|Unknown",
+              "http": {"healthy": bool, ...},
+              "mcp": {"tool_count": int, "breaker": {"state": "Closed|Open|..."}, ...}
+            },
+            ...
+          ]
+        }
+
+    If the top-level ``data_products`` key disappears or is renamed, this
+    function exits loudly rather than letting the rest of the script
+    silently parse zero endpoints and report a successful empty
+    catalogue. Same for ``data_products[*].mcp`` — its absence in any
+    row falls through to ``tool_count`` 0 and is recorded per-row, not
+    treated as a fatal mismatch (a single misshapen row should not kill
+    the whole discovery)."""
     cmd = ["nxd", "mcp", "health", "--format", "json"]
     if mesh:
         cmd.extend(["--mesh", mesh])
@@ -53,9 +82,28 @@ def _run_nxd_mcp_health(mesh: str | None) -> dict:
     if p.returncode != 0:
         sys.exit(f"nxd mcp health failed (exit {p.returncode}): {p.stderr.strip()[:500]}")
     try:
-        return json.loads(p.stdout)
+        parsed = json.loads(p.stdout)
     except json.JSONDecodeError as exc:
         sys.exit(f"nxd mcp health emitted invalid JSON: {exc}; first 200 chars: {p.stdout[:200]!r}")
+
+    if not isinstance(parsed, dict):
+        sys.exit(
+            f"nxd mcp health returned a non-object top-level value ({type(parsed).__name__}); "
+            f"expected an object with a 'data_products' key"
+        )
+    if "data_products" not in parsed:
+        sys.exit(
+            "nxd mcp health output is missing the 'data_products' key — the CLI output schema "
+            "appears to have changed. Top-level keys present: "
+            f"{sorted(parsed.keys())}. Update mcp_gateway.py to match the new shape "
+            "(see the docstring on _run_nxd_mcp_health for the verified shape)."
+        )
+    if not isinstance(parsed["data_products"], list):
+        sys.exit(
+            "nxd mcp health: 'data_products' is "
+            f"{type(parsed['data_products']).__name__}, expected a list"
+        )
+    return parsed
 
 
 def _dp_and_port(endpoint: str) -> tuple[str, str]:
@@ -106,7 +154,17 @@ def main() -> None:
     fn_index: list[dict] = []
     errors: list[dict] = []
 
-    for dp in health.get("data_products") or []:
+    # `_run_nxd_mcp_health` already asserted `data_products` is a list,
+    # so a missing/renamed key would have exited at parse time rather
+    # than producing a silent empty catalogue here.
+    for dp in health["data_products"]:
+        # Per-row fields per the verified shape in _run_nxd_mcp_health:
+        #   endpoint:       str — proxy URL
+        #   derived_state:  str — Healthy / Degraded / Broken / Unknown
+        #   mcp.tool_count: int — number of tools reported by the DP
+        # Missing-row-field defaults (e.g. ``mcp`` absent) record as
+        # tool_count=0 rather than killing the whole discovery; a single
+        # ragged row should not erase the rest of the catalogue.
         endpoint_raw = dp.get("endpoint") or ""
         endpoint = normalise_endpoint(endpoint_raw) if endpoint_raw else ""
         state = dp.get("derived_state") or "Unknown"
