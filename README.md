@@ -536,16 +536,21 @@ Do not treat generated source files as a deployed data product. A data product i
 
 1. Create a directory under `src/<skill-name>/`
 2. Add a `SKILL.md` with YAML frontmatter:
-3. Add reference docs in `references/` if needed
+3. Add reference docs in `reference/` if needed
 4. Test locally with `npx skills add ./src --all -y`
 
 ### Conventions
 
-- Skill names: lowercase, hyphens only, 1-64 chars
-- Descriptions must be specific, stay under 1024 characters, and include a clear `Use when ...` trigger clause
+These are enforced by `scripts/validate_skills.py` in CI (`.github/workflows/ci.yml`). A skill fails the build unless:
+
+- Skill names: lowercase, hyphens only, 1-64 chars, and the `name:` field **must match the directory name**
+- Descriptions must be specific, stay under 1024 characters, include a clear `Use when ...` trigger clause, and contain **no angle-bracket placeholders** (e.g. `<DP>`)
+- `allowed-tools` must be present and non-empty, listing only known Claude Code tools (`Bash`, `Read`, `Write`, `Edit`, `MultiEdit`, `Glob`, `Grep`, `AskUserQuestion`, `Agent`, `Task`, `TodoWrite`, `WebFetch`, `WebSearch`, `NotebookEdit`)
+- `metadata.version`, if set, must be semver (`X.Y.Z`)
 - Keep `SKILL.md` under 500 lines for context efficiency
-- Move detailed references to `reference/` or `references/` for progressive disclosure
+- Move detailed references to `reference/` (singular only — `references/` is rejected) for progressive disclosure
 - Add a `## Contents` section near the top of reference files longer than 100 lines
+- Each skill zip stays under the 200-entry Claude Desktop cap (enforced via `build-skills.sh` in CI)
 - Run `python3 scripts/validate_skills.py` and `./build-skills.sh` before sharing updated ZIPs
 
 ### Claude Desktop packaging limits
