@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-query
-description: Query a Nextdata OS Data Product through its REST API. Discovers the active mesh from the user's local nxd settings, lists Data Products and their output ports, fetches each port's location and a leased credential from the Data Product's REST API, then runs the user's query against the port using credentials returned by the platform. Routes by service type — SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, pgvector metadata), presigned-URL fetch for file storage (S3, ADLS), vector similarity for vector stores (pgvector, Pinecone), and MCP/RPC calls for RPC ports — and consults the LLM (Claude) to translate natural-language questions into the right query for vector stores and MCP endpoints. Use when the user asks to "query a data product", "read from an output port", "search jira-embeddings", "fetch the latest rows from a named DP", or similar.
+description: Query a deployed Nextdata OS Data Product through its public REST API. Discovers the active mesh from the user's local nxd settings, lists Data Products and their output ports, fetches each port's location and a leased credential, then runs the query against the port using those credentials. Routes by output-port driver — SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone), and MCP/RPC calls for RPC ports — and turns natural-language questions into concrete queries for vector and MCP endpoints. Also supports an opt-in strict MCP-only mode that disables direct-store access, builds a plan from semantic_model relationships, and gates execution on an independent validator. Use when the user asks to "query a data product", "read from an output port", "search a named DP", "use strict mode", or "MCP-only".
 allowed-tools:
   - Bash
   - Read
@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # nxd Data Product Query
@@ -40,6 +40,19 @@ The user may pass any of these in the request — collect the rest interactively
 - **Output port** — port `name` (illustrative examples: a `pgvector` port, an `adls` file port, a relational `*-out` port). If missing, prompt with the list returned by `/api/v1/outputs` on that DP.
 - **Infra-profile** — only needed when a port's `connect` returns `unsupported` (Step 5). Derive it from the port / mesh — `nxd ls infra-profiles` against the active mesh — or ask the user; do not assume a local file (see Step 5).
 - **Query** — natural-language question, or a SQL string, or a vector-search description, or an MCP function + args. If missing, ask.
+- **Strict mode** (`--strict`) — opt-in MCP-only mode. When the user asks for "strict mode", "MCP-only", "no direct access", or passes the flag explicitly, follow **Strict Mode** below instead of the default routing in Step 6. Strict mode disables every data-source-direct path (SQL, presigned-URL fetch, pgvector dial, external API) and only allows mediated access via MCP.
+
+---
+
+## Strict mode (MCP-only, plan-verified)
+
+A locked-down mode for queries that must demonstrably go through MCP and nothing else. Data access only via DP MCP endpoints (discovered through the mesh MCP gateway); cross-DP relationships only via the `semantic_model` MCP endpoint on each DP; every query produces a human-readable plan that an **independent validator** checks before execution; if validation fails, the query fails — no fallback to direct-store routing in the same run.
+
+**When to use.** The user explicitly asks for "strict mode", "MCP-only", or "no direct access", or passes the `--strict` flag. Otherwise default to the Step-6 routing below.
+
+**The full strict-mode contract** — five rules, two-stage discovery, plan JSON shape, the five concrete validation checks, generator-↔-validator retry loop, abstain rules, output shape, and known limitations — lives in [reference/strict-mode.md](reference/strict-mode.md). Read it before running a strict-mode query and again whenever the supporting scripts change.
+
+**Strict-mode scripts** (all under `scripts/`, all per-query and cache-free): `mcp_gateway.py` (Stage 1+2 discovery), `semantic_relations.py` (harvest `semantic_model` responses into a relations bundle), `plan_validator.py` (pure local five-check validator), `mcp_call.py` (one-shot MCP `tools/call` from a validated plan step), `mcp_http.py` (minimal MCP Streamable-HTTP client used by the others).
 
 ---
 
@@ -62,6 +75,8 @@ python3 scripts/find_mesh.py
 - Use the emitted `token_file` path as `$TOKEN_FILE` in later commands. The default token-file directory is the OS temp directory (`/tmp/...` on POSIX/WSL, `%TEMP%\...` on Windows), so do not hardcode `/tmp`.
 
 If neither file is present or no usable token is found, tell the user to run the **nxd-setup** skill first — and point them at the per-mesh setup docs at `<app_url>/docs/#/tutorials/cli/setup` (resolve `<app_url>` from `find_mesh.py`'s `app_url`; see **Platform docs** below).
+
+**Token lifecycle / 401 recovery.** PATs in `~/.nxd/tokens.json` carry an `expiry`. The nxd CLI itself auto-refreshes the entry when any `nxd` command runs (e.g. `nxd whoami`); the skill's scripts only **read** the file, they do not refresh it. If a per-DP call returns `401 Unauthorized`, fail fast with a message telling the user to run any `nxd` CLI command (the simplest is `nxd whoami`) to refresh, then re-pull the catalogue. Do not silently drop endpoints that 401 — that turns into ghost data. The fix is one line: token file is regenerated from `~/.nxd/tokens.json` after the refresh and passed via `--token-file` to the next call.
 
 ### Platform docs (per-mesh)
 
@@ -164,6 +179,8 @@ python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_UR
 ## Step 6: Route the query by driver and execute
 
 The infra-service driver (from the port's `infra_service_name` in the infra profile, or from the `leased_credential.details.type_hint` when present) decides which path runs. If **neither** is present, do not assume a driver — resolve the profile from the mesh (`nxd ls infra-profiles` against the active mesh) or ask the user which service the port targets (`AskUserQuestion`).
+
+> **Strict mode skips this entire section.** If the user opted into **Strict Mode** (above), do not run any of 6a–6e. Strict mode allows only MCP-mediated access via the mesh MCP gateway + a plan-validation pass. To leave strict mode, the user must explicitly drop the flag.
 
 ### 6a. Relational SQL — Snowflake, Postgres, BigQuery, Redshift, Databricks-SQL, DuckDB
 
@@ -361,6 +378,11 @@ py -3 -m venv .nxd-data-product-query-venv
 | `embed_query.py` | Compute an embedding for a query string using a named model |
 | `vector_search.py` | Vector similarity search against pgvector / Pinecone |
 | `rpc_call.py` | Invoke a function on an RPC output port |
+| `mcp_http.py` | (Strict mode) Minimal MCP Streamable-HTTP client used by the strict-mode scripts — handles `initialize`, session id, `tools/list`, `tools/call` |
+| `mcp_gateway.py` | (Strict mode) Wraps `nxd mcp health --format json` for endpoint discovery; calls `tools/list` per healthy DP MCP endpoint to capture the tool catalogue. **Re-run every query** — the DP set + tools are not stable |
+| `semantic_relations.py` | (Strict mode) For each gateway DP whose tools include a name matching `^semantic[_-]?models?$` (regex overridable), calls that tool and merges the response into a single relations bundle. **Re-run every query** |
+| `plan_validator.py` | (Strict mode) Pure local plan validator. Checks the plan against the gateway catalogue + relations bundle. Emits `{passed, checks, failures}`. Network-free — caller must keep the catalogue + relations fresh |
+| `mcp_call.py` | (Strict mode) One-shot CLI over `mcp_http.call_tool_one_shot` — opens an MCP session, calls one tool, writes the unwrapped result to `--out`. Use this to execute each step of a validated plan (Rule 5). Replaces the non-existent `rpc_call.py --mcp` form |
 
 Each script writes secrets only to `--out` files (never stdout) and reads tokens via `--token-file` or stdin.
 
@@ -374,6 +396,8 @@ Each script writes secrets only to `--out` files (never stdout) and reads tokens
 - **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `<port_credentials_file>` for the session; re-request if the TTL passes.
 - **Vector store embedding model mismatch** — querying with a different embedding model from the one the DP used to index gives nonsense results. Always confirm the model from the DP's `description` / `/v1/info` before computing the query vector.
 - **MCP vs HTTP RPC** — the same DP may expose its RPC port via both. Prefer HTTP when running one-shot; use `nxd mcp client` only when the user explicitly wants interactive MCP.
+- **Strict mode validation failures are terminal** — when `plan_validator.py` returns `passed=false`, do **not** fall back to default routing in the same run. Return the failure to the user and stop. Falling back silently would defeat the rule. If the user wants the fallback, they must explicitly drop strict mode.
+- **Strict mode + unknown relationships** — if a join the question seems to need is not present in any `semantic_model` MCP response, the right answer is "I can't do this in strict mode" — not "I'll guess from column names". Add the missing relationship to the source DP's `semantic_model` and redeploy, or ask the user to drop strict mode.
 
 ---
 
