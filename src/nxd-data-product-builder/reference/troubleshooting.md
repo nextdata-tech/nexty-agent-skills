@@ -6,6 +6,7 @@
 - RPC output port crashes
 - Transform writes wrong, zero, or duplicate data
 - Custom expectation pod Pending
+- Stuck in PROVISIONING / PENDING
 - Debugging workflow
 
 Symptom → diagnosis → fix reference for Data Products that fail after
@@ -13,10 +14,25 @@ Symptom → diagnosis → fix reference for Data Products that fail after
 likely root cause (sometimes different from what the error text suggests),
 how to confirm, and the fix.
 
-**General rule: the first error you see is not always the root cause.**
-Where you have cluster access, work through the pod-level evidence
-(`kubectl describe pod`, container exit codes, previous-container logs)
-before concluding from the summary error alone.
+**General rule: the first error you see is not always the root cause.** Work
+the evidence before patching: the platform status reason
+(`GET /api/v1/status?include_reason=true&include_details=true`) and `nxd logs`
+read from the FIRST error are enough to root-cause most failures with only the
+public CLI. Where you also have cluster access, pod-level evidence
+(`kubectl describe pod`, container exit codes, previous-container logs) can
+confirm a hypothesis — but it is a deepening, not a prerequisite.
+
+**Diagnose before you patch — discriminate, don't guess.** When two causes
+explain the same symptom, run the one cheap read that tells them apart before
+changing any code:
+
+| Symptom | Competing causes | Discriminating read |
+|---|---|---|
+| "startup timeout" | OOM during import vs genuinely slow start | status reason / `Last State: OOMKilled` exit 137 → OOM; clean exit + long init log → slow start (§1) |
+| green run, no data | empty source window vs broken write path | row count at source for the queried window before blaming the transform (§4) |
+| `nxd validate` exits 0, no output | actually passed vs not authenticated | `nxd whoami` — `Not logged in` ⇒ validation NOT RUN (see [common-pitfalls.md](common-pitfalls.md)) |
+| pgvector write refused | wrong column type vs dimension mismatch | exact error text — `not type Vector` ⇒ declared `string()`; `expected N got M` ⇒ wrong `vector_embeddings(dim)` (§4) |
+| contract pod never runs | code error vs scheduling | pod phase — `Pending` ⇒ scheduling, the container never ran (§5) |
 
 ---
 
@@ -110,6 +126,8 @@ intended physical table name.
 | `ON CONFLICT` / upsert errors from langchain `PGVectorStore` | Provisioned tables have no PK or unique index; langchain upserts on `langchain_id` | `CREATE UNIQUE INDEX IF NOT EXISTS ... ON <table> (langchain_id)` at transform start. |
 | Row count multiplies on every run | Chunk ids generated with random UUIDs → every run inserts fresh rows | Deterministic ids: `uuid.uuid5(uuid.NAMESPACE_URL, f"<source>:{record_key}:{chunk_index}")` makes reruns idempotent upserts. |
 | Backing Postgres restarts / `server closed the connection unexpectedly` mid-write | One giant write spikes DB memory (small instances can kill their backends) | Batch writes (e.g. 500 docs per `add_documents` call). |
+| Write fails with `Embedding column is not type Vector` (or langchain refuses to write to the pgvector table) | The embedding attribute was declared `string()` in the semantic model. The pgvector driver provisions the table FROM the model, so a `string()` attribute becomes a `TEXT` column — langchain/pgvector then refuses to store vectors in it. The error surfaces at write time, far from the spec, so it reads as a transform bug. | Declare the embedding attribute as `vector_embeddings(<dim>)` with the dimension your embedding model emits (e.g. `vector_embeddings(384)` for `all-MiniLM-L6-v2`, `vector_embeddings(1536)` for OpenAI `text-embedding-3-small`). Re-launch so the table is re-provisioned as a `vector` column. |
+| Write fails with a dimension-mismatch error (`expected N dimensions, got M`) | The declared `vector_embeddings(N)` dimension does not match what the embedding model actually returns | Align the declared dimension with the model output; if the model changed, the table must be re-provisioned (drop/relaunch) so the column width matches. |
 
 ---
 
@@ -140,18 +158,50 @@ or free node capacity.
 
 ---
 
+## 6. Stuck in `PROVISIONING` / `PENDING`
+
+A Data Product that never reaches `STARTED` is reporting a *state*, not yet an
+error. Read the state before reading code:
+
+| State | Meaning | First check |
+|---|---|---|
+| `PROVISIONING` | Installing the Python environment | Dependency install is failing — a package name, an unavailable version, or a registry that can't be reached. Inspect the init logs and `requirements.txt`. |
+| `PENDING` | Waiting to start | Usually transient; if it never advances, the compute can't be scheduled (see §5 for the contract-pod analogue). |
+| `FAILED` | Transform or model error | Read the status reason (workflow step 2) and `nxd logs`. |
+| `STARTED` | Healthy | — |
+
+`ModuleNotFoundError: No module named 'nxd.data_product'` (or a missing-bindings
+error) during `PROVISIONING` means `requirements.txt` is missing the SDK.
+**Both `nxd_core` and `nxd_data_product` are always required** — see
+[common-pitfalls.md](common-pitfalls.md).
+
+---
+
 ## Debugging workflow (do this in order)
 
-1. `nxd ls data-products` — state.
-2. Status with reasons:
+The CLI/REST steps below need only the public `nxd` CLI and a PAT — no cluster
+access. The pod-level steps are an *optional* deepening for when you do have
+cluster access; never block on them.
+
+1. `nxd ls data-products` — state (see §6 for what each state means).
+2. Status with reasons (the single highest-value read — structured failure
+   reason without logs):
    `GET https://dp.<domain>/<dp>/api/v1/status?include_reason=true&include_details=true`
    (header `x-nextdata-token: <PAT>`, or `Authorization: Bearer` on
-   multi-domain environments).
+   multi-domain environments). Mint a PAT with
+   `nxd create personal-access-token --name debug --expires "1 day"`.
 3. `nxd logs <dp>` — read from the FIRST error, not the last — later errors are often cleanup fallout from the first one.
-4. With cluster access: `kubectl get pods -n dps` + `kubectl describe pod` on
-   anything not Running — exit code 137 = out of memory (§1), Pending =
-   scheduling (§5).
-5. Re-launch with `--debug-mode` before concluding anything from a single
-   WARN line — the default log level hides most INFO.
-6. After a fix, confirm data: row counts + a sample query against the output
+4. Re-launch with `--debug-mode` before concluding anything from a single
+   WARN line — the default log level hides most INFO. A lone WARN
+   (e.g. `Queuing run since initial policies are not evaluated yet`) is often a
+   transient race that resolves in milliseconds, not a bug.
+5. *(Optional — cluster access only.)* `kubectl get pods -n dps` +
+   `kubectl describe pod` on anything not Running — exit code 137 = out of
+   memory (§1), Pending = scheduling (§5). The public status reason in step 2
+   already reports OOM/scheduling causes for most failures.
+6. If only some models in a multi-model DP failed, retry just those rather than
+   relaunching the whole product:
+   `nxd run <dp> --retry --follow`. (There is no `nxd retry` / `nxd reset` —
+   use `nxd run --retry`.)
+7. After a fix, confirm data: row counts + a sample query against the output
    port, not just a green state.

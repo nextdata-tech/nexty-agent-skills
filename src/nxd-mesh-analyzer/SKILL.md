@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.0
+  version: 0.2.1
 ---
 
 # Nexty Mesh Assets
@@ -284,3 +284,25 @@ If a `driver` string is malformed or its `name` and `driver` fields look swapped
 - **Client libraries** — recipes need driver-specific clients (`boto3`, `snowflake-connector-python`, etc.). Install on demand into a temp venv; prefer a CLI already on PATH.
 - **Multiple credentials, one store** — a profile may list several services pointing at the same store with different auth (e.g. `nxd-snowflake`, `nxd-snowflake-keypair`, `nxd-snowflake-pat`). Inspect one; note the others are duplicates.
 - **One service = one input** — keep the inventory aligned to how nextdata models inputs, so results map cleanly onto nxd-data-product-builder.
+
+---
+
+## Troubleshooting inspection failures
+
+Symptom → cause → fix for failures hit while inspecting services. A connection
+failure is usually a credential, scope, or reachability problem in the infra
+profile — not a bug in the analyzer. Confirm which before retrying.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Connect fails with auth error (`401`/`403`/`Access denied`/`InvalidAccessKeyId`) | The service's credentials in the infra profile are expired, revoked, or for a different account. | Verify the credentials in the profile; confirm the account/tenant matches. Treat it as a profile problem, not an analyzer bug. |
+| `PERMISSION_DENIED` / wrong-catalog on a warehouse | The infra-profile catalog/schema doesn't match what the credentials can see. | Align the catalog/schema in the profile with the credential's grants. |
+| Connect times out / host unreachable | The service endpoint isn't reachable from where the analyzer runs (network, VPN, allowlist). | Confirm reachability from the current host; this is environment, not data. |
+| Service classified wrong / `driver` and `name` look swapped | Some profiles carry malformed or swapped driver fields. | Ask the user how to classify rather than guessing (see driver-classification table above). |
+| `service not found` for a name the report referenced | The service name was invented or belongs to a different profile/mesh. | List real services for the chosen profile from the active mesh; never assume a name. |
+| Inventory returns zero tables/files for a service that should have data | Wrong container/bucket/schema in the profile, or the credential's scope excludes the data. | Confirm the container/bucket/schema attribute in the profile and that the credential can list it. |
+
+Never echo a secret value from a profile while diagnosing — inspect attributes
+in-process, report only the field names. When a service is reachable but a
+*deployed Data Product* built on it is failing, switch to
+**nxd-debugging-data-products**.
