@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mcp_http import McpClient, McpError
+from mcp_http import McpClient, McpError, with_retry
 from nxd_api import read_token, resolve_mesh
 
 
@@ -117,7 +117,9 @@ def main() -> None:
 
     try:
         with McpClient(endpoint=args.endpoint, token=token, timeout=args.timeout) as c:
-            raw = c.tools_call(args.tool, arguments)
+            # Retry transient 5xx — cold DP proxies frequently 503 the first
+            # tools/call after a wake-up; subsequent calls warm up.
+            raw = with_retry(lambda: c.tools_call(args.tool, arguments))
     except McpError as exc:
         sys.exit(f"MCP error {exc.code} at {exc.endpoint}: {exc.message}")
     except Exception as exc:  # noqa: BLE001

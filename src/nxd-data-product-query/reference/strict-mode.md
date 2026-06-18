@@ -21,7 +21,7 @@ A locked-down mode for queries that must demonstrably go through MCP and nothing
 
 > **Only `semantic_model` is standard.** Every other MCP tool name on a DP — search, get, scan, top-k, custom RPCs — is author-defined and may change. The skill must learn every non-`semantic_model` tool from a **live** gateway call, never from a hard-coded list, doc reference, or prior run.
 
-> **Re-fetch every query.** The set of DPs, their MCP endpoints, and the tools each one publishes can change at any time (new DP launched, schema rev, breaker flips, redeploy). Run `mcp_gateway.py` and `semantic_relations.py` again **for every user query** — do not reuse a catalogue from an earlier conversation, an earlier turn, or any on-disk cache older than the current question. If a previous file is on disk, delete it or overwrite it; treat the catalogue as session-scoped, query-scoped data.
+> **Re-fetch every query.** The set of DPs, their MCP endpoints, and the tools each one publishes can change at any time (new DP launched, schema rev, breaker flips, redeploy). Run `mcp_gateway.py` and `semantic_relations.py` again **for every user query** — do not reuse a catalogue from an earlier conversation, an earlier turn, or any on-disk cache older than the current question. If a previous file is on disk, delete it or overwrite it; the catalogue is **query-scoped** — fresh per question, discarded after the response.
 
 3. **Plan-first, human-readable.** Process every user question by first building a written **query plan** that covers the full execution — including multi-DP / multi-endpoint paths — and the **provenance** of each step: which MCP function the step calls, which `semantic_model` response justified each join / projection / filter, and which user-question phrase mapped onto each parameter. The plan is text the user can read end-to-end before anything runs.
 4. **Validated before execution.** Every plan goes through an independent **plan validator** that checks (a) every relationship asserted in the plan is present in at least one `semantic_model` MCP response collected this session, (b) every data-fetching step targets an MCP endpoint listed by the gateway, and (c) no step calls a non-MCP path (raw SQL against a port, direct presigned-URL fetch, direct HTTP to an external API).
@@ -64,7 +64,7 @@ Only the **(b)** name is standard. Everything in **(a)** is author-defined and m
 
 ## Flow (one shape that satisfies the rules)
 
-1. **Discover MCP surface.** Call the mesh MCP gateway to enumerate DP MCP endpoints and their declared functions. Cache the gateway response per session.
+1. **Discover MCP surface.** Call the mesh MCP gateway to enumerate DP MCP endpoints and their declared functions. Reuse this catalogue **only within the current query run** — never across queries (see Rule 3 above). The next user question must start with a fresh `mcp_gateway.py` invocation.
    ```bash
    python3 scripts/mcp_gateway.py --token-file /tmp/strict-tok.txt --out /tmp/nxd-mcp-gateway.json
    ```
@@ -80,7 +80,7 @@ Only the **(b)** name is standard. Everything in **(a)** is author-defined and m
    - **Joins & relationships** — every cross-DP join or relationship the plan relies on, with a pointer to the `semantic_model` MCP response (DP + path) that declares it.
    - **Provenance** — for each step, which phrase of the user question mapped onto which parameter.
    - **Open questions / assumptions** — anything the relations bundle didn't fully cover.
-4. **Validate the plan.** Run the validator over the plan + the cached gateway + relations bundle:
+4. **Validate the plan.** Run the validator over the plan + the gateway + relations bundle pulled for **this** query (steps 1-2):
    ```bash
    python3 scripts/plan_validator.py --plan /tmp/nxd-plan.json --gateway /tmp/nxd-mcp-gateway.json --relations /tmp/nxd-relations.json --out /tmp/nxd-validation.json
    ```

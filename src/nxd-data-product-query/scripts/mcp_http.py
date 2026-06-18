@@ -179,21 +179,10 @@ def _parse_jsonrpc_response(r: requests.Response) -> dict[str, Any]:
     return r.json()
 
 
-def call_tool_one_shot(
-    endpoint: str,
-    token: str,
-    name: str,
-    arguments: dict[str, Any] | None = None,
-    *,
-    timeout: float = 30.0,
-) -> dict[str, Any]:
-    """Convenience: open a session, call one tool, close. Returns the tool result."""
-    with McpClient(endpoint=endpoint, token=token, timeout=timeout) as c:
-        return c.tools_call(name, arguments or {})
-
-
-# Small backoff for transient 503s from cold MCP servers.
-def with_retry(fn, *, attempts: int = 3, backoff: float = 1.0):  # pragma: no cover - thin wrapper
+# Small exponential backoff for transient 5xx from cold MCP servers
+# (proxy spins up the DP container on first hit; subsequent calls are warm).
+# Retries only on 502 / 503 / 504; any other ``McpError`` raises through.
+def with_retry(fn, *, attempts: int = 3, backoff: float = 0.5):
     last: Exception | None = None
     for i in range(attempts):
         try:
@@ -205,3 +194,21 @@ def with_retry(fn, *, attempts: int = 3, backoff: float = 1.0):  # pragma: no co
             time.sleep(backoff * (2 ** i))
     assert last is not None
     raise last
+
+
+def call_tool_one_shot(
+    endpoint: str,
+    token: str,
+    name: str,
+    arguments: dict[str, Any] | None = None,
+    *,
+    timeout: float = 30.0,
+    retry_attempts: int = 3,
+) -> dict[str, Any]:
+    """Convenience: open a session, call one tool, close. Returns the tool result.
+
+    The ``tools/call`` invocation is wrapped in ``with_retry`` so transient
+    5xx from a cold DP proxy auto-recover. Session ``initialize`` itself
+    is not retried — that fails fast for clearer error surface."""
+    with McpClient(endpoint=endpoint, token=token, timeout=timeout) as c:
+        return with_retry(lambda: c.tools_call(name, arguments or {}), attempts=retry_attempts)

@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mcp_http import McpClient, McpError
+from mcp_http import McpClient, McpError, with_retry
 from nxd_api import read_token, resolve_mesh
 
 
@@ -195,9 +195,11 @@ def main() -> None:
     )
     p.add_argument(
         "--tool-pattern",
-        default=r"^semantic[_-]?models?$|^get[_-]?semantic[_-]?models?$",
+        default=r"^semantic[_-]?models?$",
         help="Regex to match the semantic-model tool name on each DP (case-insensitive). "
-        "Matches singular or plural; override if a DP uses a non-standard name.",
+        "Default matches the contracted standard `^semantic[_-]?models?$` (singular or "
+        "plural, with underscore or hyphen). Override if a DP author uses a non-standard "
+        "name (e.g. `get_semantic_models`): `--tool-pattern '^(get_)?semantic_models?$'`.",
     )
     p.add_argument(
         "--call-args",
@@ -248,7 +250,9 @@ def main() -> None:
             visited.append({"dp": dp, "tool": tool_name})
             try:
                 with McpClient(endpoint=endpoint, token=token, timeout=args.timeout) as c:
-                    raw = c.tools_call(tool_name, call_args)
+                    # Retry transient 5xx on the semantic-model call — cold DP
+                    # proxies sometimes 503 the first request after a redeploy.
+                    raw = with_retry(lambda: c.tools_call(tool_name, call_args))
             except McpError as exc:
                 errors.append({"dp": dp, "tool": tool_name, "reason": f"{exc.code}: {exc.message}"})
                 continue

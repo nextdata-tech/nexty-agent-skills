@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-from mcp_http import McpClient, McpError, normalise_endpoint
+from mcp_http import McpClient, McpError, normalise_endpoint, with_retry
 from nxd_api import read_token, resolve_mesh
 
 
@@ -192,7 +192,9 @@ def main() -> None:
 
         try:
             with McpClient(endpoint=endpoint, token=token, timeout=args.timeout) as c:
-                tools = c.tools_list()
+                # Retry transient 5xx — cold DP proxies often need a warm-up hit
+                # before the underlying MCP server reports its tool list.
+                tools = with_retry(c.tools_list)
         except McpError as exc:
             entry["error"] = f"{exc.code}: {exc.message}"
             errors.append({"endpoint": endpoint, "reason": entry["error"]})
