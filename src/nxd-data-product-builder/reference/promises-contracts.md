@@ -3,12 +3,13 @@
 Copy-paste reference for wiring output promises and input expectations into an NXD data product.
 
 ## Contents
-- Overview
-- requirements.txt extras
-- Spec wiring — all three promises
-- nxd_spec.py additions
-- Contract file templates
-- Input expectations (pre-checks on source data)
+
+- [Overview](#overview)
+- [requirements.txt extras](#requirementstxt-extras)
+- [Spec wiring — all three promises](#spec-wiring--all-three-promises)
+- [nxd_spec.py additions](#nxd_specpy-additions)
+- [Contract file templates](#contract-file-templates)
+- [Input expectations (pre-checks on source data)](#input-expectations-pre-checks-on-source-data)
 
 ---
 
