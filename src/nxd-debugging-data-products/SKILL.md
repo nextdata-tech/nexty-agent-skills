@@ -89,7 +89,8 @@ nxd --config <session_config> verify dp --dir <data_product_directory> --json
   If auth says `Not logged in`, validation is NOT RUN even if exit code is 0.
   If auth is valid, rerun without `--debug` and capture the exit code. Treat
   `Service <name> not found` as an infra-profile/service mismatch, not a
-  transform bug.
+  transform bug — list the profile's real services and match the name exactly
+  (see troubleshooting.md §7 for the verify/list commands).
 
 ## Patch And Verify
 

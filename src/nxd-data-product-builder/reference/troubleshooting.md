@@ -7,6 +7,7 @@
 - Transform writes wrong, zero, or duplicate data
 - Custom expectation pod Pending
 - Stuck in PROVISIONING / PENDING
+- Infra-profile / service resolution failures
 - Debugging workflow
 
 Symptom → diagnosis → fix reference for Data Products that fail after
@@ -33,6 +34,7 @@ changing any code:
 | `nxd validate` exits 0, no output | actually passed vs not authenticated | `nxd whoami` — `Not logged in` ⇒ validation NOT RUN (see [common-pitfalls.md](common-pitfalls.md)) |
 | pgvector write refused | wrong column type vs dimension mismatch | exact error text — `not type Vector` ⇒ declared `string()`; `expected N got M` ⇒ wrong `vector_embeddings(dim)` (§4) |
 | contract pod never runs | code error vs scheduling | pod phase — `Pending` ⇒ scheduling, the container never ran (§5) |
+| `Service <name> not found` at validate/launch | service-name typo vs wrong infra profile vs service absent from mesh | list the profile's real services (`nxd --config=<session_config> rest -u /api/v1/infraprofiles/<profile>/services`) and compare to the name in `.source(...)`/`storage(...)` — it is a profile/service problem, NOT a transform bug (§7) |
 
 ---
 
@@ -174,6 +176,41 @@ error. Read the state before reading code:
 error) during `PROVISIONING` means `requirements.txt` is missing the SDK.
 **Both `nxd_core` and `nxd_data_product` are always required** — see
 [common-pitfalls.md](common-pitfalls.md).
+
+---
+
+## 7. Infra-profile / service resolution failures
+
+A service URL in `.source(...)`, `storage(...)`, or `.compute(...)` is resolved
+against the **active mesh's infra profile** when you `nxd validate` / `nxd launch`
+— `nxd validate` is NOT offline-only (see [common-pitfalls.md](common-pitfalls.md)).
+A name that doesn't resolve fails here, far from the transform code, so it reads
+like a build bug. It isn't: **`Service <name> not found` and friends are
+profile/service-wiring problems, never transform-runtime problems.**
+
+**Verify the name before you trust the spec.** Don't guess service names — list
+what the chosen profile actually offers and match exactly:
+
+```bash
+# Profiles available on the active mesh:
+nxd ls infra-profiles --config=<session_config>
+
+# Services declared in a chosen profile (spelling is "infraprofiles", no hyphen):
+nxd --config=<session_config> rest -u /api/v1/infraprofiles/<profile>/services
+
+# Spec + live source/service preflight in one shot:
+nxd --config=<session_config> verify dp --dir <data_product_directory> --json
+```
+
+| Symptom | Real cause | Confirm | Fix |
+|---|---|---|---|
+| `Service <name> not found` | The name in `.source(...)`/`storage(...)`/`.compute(...)` doesn't match any service in the chosen profile — typo, wrong profile selected, or service genuinely absent from this mesh | List the profile's services (above); the name is missing or spelled differently | Use the exact name from the listing. Compute service names vary by profile (`k8s-compute`, `k8s-executor`, a Databricks compute) — read it, don't assume. |
+| `infra profile <name> not found` / profile won't resolve | `infra_profile="..."` names a profile that doesn't exist on the active mesh (often a hardcoded demo name like `ecommerce`) | `nxd ls infra-profiles` — the name isn't in the list | Set `infra_profile` to a real profile from the list; never hardcode a demo name. |
+| Validate/launch hits the wrong host or 401s on a service that "exists" | Service URL host points at a different mesh than the active `--config` | Compare the `<app_url>` host in the URL to the active mesh's `app_url` (`~/.nxd/meshes.json` selected entry) | Rebuild URLs from the active mesh host: `https://<app_url>/infra-profile/<profile>#/services/<service>`. |
+| Service resolves but read/write is refused (auth/permission) | The service exists, but the leased credential lacks access, or the profile points at the wrong account/catalog | `nxd verify dp ... --json` reports the per-service failure; check the credential type and the service's target account in the profile YAML | Fix the profile's service config / request access; this is an environment problem, not a spec problem. |
+
+`nxd validate` exiting `0` with a service problem still pending means auth wasn't
+confirmed — run `nxd whoami` first (anti-false-PASS, see common-pitfalls.md).
 
 ---
 
