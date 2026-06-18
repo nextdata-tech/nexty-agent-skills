@@ -30,10 +30,10 @@ on:
         type: string
         default: opus
       docs_base:
-        description: "Public platform docs base URL given to every run."
+        description: "Public platform docs base URL (fetchable .md base) given to every run."
         required: false
         type: string
-        default: "https://app.demo.trynxd.com/docs/#/"
+        default: "https://docs.demo.nextopia.dev/"
       concurrency:
         description: "How many scenario cells run at once."
         required: false
@@ -64,18 +64,26 @@ jobs:
           # historical misnomer: it holds an OAuth token from `claude
           # setup-token`, consumed by the CLI as CLAUDE_CODE_OAUTH_TOKEN.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Bind workflow inputs as env vars (not inline ${{ }} in the script)
+          # so a crafted input cannot break out of its intended shell argument.
+          AGENT_MODEL: ${{ inputs.agent_model }}
+          JUDGE_MODEL: ${{ inputs.judge_model }}
+          DOCS_BASE: ${{ inputs.docs_base }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          SKILL_SET: ${{ inputs.skill_set }}
+          SCENARIO: ${{ inputs.scenario }}
         run: |
           set -euo pipefail
           args=(--suite public --report eval-report.json
-                --agent-model "${{ inputs.agent_model }}"
-                --judge-model "${{ inputs.judge_model }}"
-                --docs-base "${{ inputs.docs_base }}"
-                --concurrency "${{ inputs.concurrency }}")
-          if [ -n "${{ inputs.skill_set }}" ]; then
-            args+=(--skill-set "${{ inputs.skill_set }}")
+                --agent-model "$AGENT_MODEL"
+                --judge-model "$JUDGE_MODEL"
+                --docs-base "$DOCS_BASE"
+                --concurrency "$CONCURRENCY")
+          if [ -n "$SKILL_SET" ]; then
+            args+=(--skill-set "$SKILL_SET")
           fi
-          if [ -n "${{ inputs.scenario }}" ]; then
-            args+=(--scenario "${{ inputs.scenario }}")
+          if [ -n "$SCENARIO" ]; then
+            args+=(--scenario "$SCENARIO")
           fi
           python3 evals/run.py "${args[@]}"
 

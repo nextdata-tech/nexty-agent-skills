@@ -23,7 +23,6 @@ documents_model = (
             "chunk_id": (string(), "Unique id for this chunk"),
             "article_id": (string(), "Source article id"),
             "content": (string(), "The chunk text"),
-            # NOTE: the embedding is declared as a string column.
             "embedding": (string(), "Vector embedding for the chunk"),
         }
     )

@@ -68,11 +68,15 @@ DEFAULT_JUDGE_TIMEOUT_S = 300
 # variable between skill-sets is the curated skills themselves.
 AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch"
 
-# Public platform docs base. Per-mesh docs are served at <app_url>/docs/#/<path>;
-# CI/local runs point at the public demo mesh. Every run (baseline included) is
-# told this base so the comparison is "skills vs. equally-informed agent", not
-# "skills vs. ignorance". Override with --docs-base.
-DEFAULT_DOCS_BASE = "https://app.demo.trynxd.com/docs/#/"
+# Public platform docs base. The docs site is a docsify SPA: the human viewer
+# lives at https://docs.demo.nextopia.dev/#/<path>, but the *fetchable* markdown
+# is served without the hash fragment at <docs-base><path>.md (e.g.
+# https://docs.demo.nextopia.dev/tutorials/cli/setup.md). WebFetch must use the
+# .md form — a "#/..." fragment is client-side only and returns the empty SPA
+# shell. Every run (baseline included) is told this base so the comparison is
+# "skills vs. equally-informed agent", not "skills vs. ignorance". Override with
+# --docs-base (e.g. a local mesh like http://nxd.nxd.local/docs/ for testing).
+DEFAULT_DOCS_BASE = "https://docs.demo.nextopia.dev/"
 
 # The public examples repo (spec.py/transform.py/contracts for real data
 # products), vendored as a submodule under the builder skill. Every run gets it
@@ -242,8 +246,14 @@ def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool)
         "You are working on a Nextdata OS (nxd) data-product task.",
         "",
         "Available context (the same for every run):",
-        f"- Public platform docs are served under {docs_base}<path> — use the "
-        "WebFetch tool to read them when you need nxd CLI or spec/DSL reference.",
+        f"- Public platform docs: fetch markdown pages with WebFetch at "
+        f"{docs_base}<path>.md (e.g. {docs_base}dp_development/debugging.md). "
+        f"Start from the index {docs_base}_sidebar.md to find the right page. "
+        "Use the .md URLs directly — the docs viewer's #/ links are not fetchable.",
+        "- Your workspace contains the files for this task. Inspect them first: "
+        "any `nxd-*.txt` files are pre-captured output of nxd CLI commands that "
+        "were already run for you (read them — do not try to run `nxd`, it is not "
+        "installed), and any `data_product/` directory is the product source.",
     ]
     if has_examples:
         lines.append(
@@ -256,13 +266,76 @@ def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool)
     return "\n".join(lines)
 
 
+# Cap each tool-result block fed to the judge so a huge file read doesn't blow
+# up the judge prompt; the head is enough to see what the agent inspected.
+TOOL_RESULT_HEAD_CHARS = 1500
+
+
+def _trace_from_stream(stdout: str) -> tuple[str, dict]:
+    """Parse stream-json lines into a readable trace + the final metrics.
+
+    The trace interleaves the agent's reasoning text, each tool call (name +
+    input), and a truncated tool result — so the judge can see *what the agent
+    inspected*, not just its final answer. Process checks ("read the logs before
+    concluding") are only gradeable from this.
+    """
+    parts: list[str] = []
+    final_answer = ""
+    metrics: dict = {"is_error": False}
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        typ = d.get("type")
+        if typ == "assistant":
+            for block in d.get("message", {}).get("content", []):
+                if block.get("type") == "text" and block.get("text", "").strip():
+                    parts.append(f"[assistant] {block['text'].strip()}")
+                elif block.get("type") == "tool_use":
+                    inp = json.dumps(block.get("input", {}), ensure_ascii=False)
+                    parts.append(f"[tool_use:{block.get('name')}] {inp[:600]}")
+        elif typ == "user":
+            for block in d.get("message", {}).get("content", []):
+                if block.get("type") == "tool_result":
+                    content = block.get("content", "")
+                    if isinstance(content, list):
+                        content = " ".join(
+                            c.get("text", "") for c in content if isinstance(c, dict)
+                        )
+                    content = str(content)[:TOOL_RESULT_HEAD_CHARS]
+                    parts.append(f"[tool_result] {content}")
+        elif typ == "result":
+            final_answer = d.get("result", "")
+            usage = d.get("usage", {}) or {}
+            metrics = {
+                "num_turns": d.get("num_turns"),
+                "duration_ms": d.get("duration_ms"),
+                "total_cost_usd": d.get("total_cost_usd"),
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+                "is_error": d.get("is_error", False),
+            }
+    trace = "\n".join(parts)
+    return trace, {"final_answer": final_answer, **metrics}
+
+
 def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
               extra_dirs: list[Path] | None = None,
               effort: str = "") -> tuple[bool, str, dict]:
-    """Run the headless agent in the workspace. Returns (ok, transcript, metrics)."""
+    """Run the headless agent. Returns (ok, trace, metrics).
+
+    The trace (full tool-call transcript) is what the judge grades; the final
+    answer and run metrics ride along in ``metrics`` (metrics["final_answer"]).
+    """
     cmd = [
         "claude", "-p", prompt,
-        "--output-format", "json",
+        # stream-json + verbose emits per-step events so we can reconstruct the
+        # tool-call trace, not just the final answer.
+        "--output-format", "stream-json", "--verbose",
         "--model", model,
         # Isolate to the workspace project so user/global skills don't leak in
         # and confound the no_skills baseline.
@@ -282,22 +355,11 @@ def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
         return False, "", {"error": f"agent timed out after {timeout_s}s"}
     if proc.returncode != 0:
         return False, "", {"error": f"claude exited {proc.returncode}: {proc.stderr[-2000:]}"}
-    try:
-        data = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return False, "", {"error": f"non-JSON agent output: {proc.stdout[-2000:]}"}
 
-    transcript = data.get("result", "")
-    usage = data.get("usage", {}) or {}
-    metrics = {
-        "num_turns": data.get("num_turns"),
-        "duration_ms": data.get("duration_ms"),
-        "total_cost_usd": data.get("total_cost_usd"),
-        "input_tokens": usage.get("input_tokens"),
-        "output_tokens": usage.get("output_tokens"),
-        "is_error": data.get("is_error"),
-    }
-    return not data.get("is_error", False), transcript, metrics
+    trace, metrics = _trace_from_stream(proc.stdout)
+    if not trace and not metrics.get("final_answer"):
+        return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}"}
+    return not metrics.get("is_error", False), trace, metrics
 
 
 JUDGE_SYSTEM = (
@@ -309,7 +371,8 @@ JUDGE_SYSTEM = (
 )
 
 
-def build_judge_prompt(scenario_dir: Path, checks: dict, transcript: str) -> str:
+def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
+                       final_answer: str) -> str:
     prompt_md = (scenario_dir / "prompt.md").read_text(encoding="utf-8")
     check_lines = "\n".join(
         f'  {i + 1}. [id={c["id"]}] {c["check"]}' for i, c in enumerate(checks["checks"])
@@ -322,21 +385,28 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, transcript: str) -> str
 --- SUCCESS CHECKS (grade each one) ---
 {check_lines}
 
---- AGENT FINAL ANSWER (transcript to grade) ---
-{transcript}
+--- AGENT RUN TRACE (what the agent actually did: reasoning, tool calls, and
+    truncated tool results — use this to grade process checks like "read the
+    logs before concluding") ---
+{trace}
+
+--- AGENT FINAL ANSWER ---
+{final_answer}
 
 --- INSTRUCTIONS ---
 Grade every check as pass or fail with a one-sentence justification grounded in
-the transcript. Then give an overall pass only if ALL checks pass.
+the trace and final answer. A "did the agent inspect X" check passes only if the
+trace shows the corresponding tool call/result. Give an overall pass only if ALL
+checks pass.
 
 Respond with ONE JSON object and nothing else, in this exact shape:
 {{"checks": [{{"id": "<id>", "pass": true|false, "why": "<one sentence>"}}],
   "overall_pass": true|false, "summary": "<one sentence>"}}"""
 
 
-def run_judge(scenario_dir: Path, checks: dict, transcript: str, model: str,
-              timeout_s: int, effort: str = "") -> dict:
-    prompt = build_judge_prompt(scenario_dir, checks, transcript)
+def run_judge(scenario_dir: Path, checks: dict, trace: str, final_answer: str,
+              model: str, timeout_s: int, effort: str = "") -> dict:
+    prompt = build_judge_prompt(scenario_dir, checks, trace, final_answer)
     cmd = [
         "claude", "-p", prompt,
         "--output-format", "json",
@@ -446,14 +516,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     cached = None
     if cache_file and cache_file.exists():
         try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            loaded = json.loads(cache_file.read_text(encoding="utf-8"))
+            if "trace" in loaded and "metrics" in loaded:
+                cached = loaded
         except json.JSONDecodeError:
             cached = None
 
     if cached:
-        transcript = cached["transcript"]
-        metrics = cached["metrics"]
-        metrics = {**metrics, "cached": True}
+        trace = cached["trace"]
+        metrics = {**cached["metrics"], "cached": True}
         ok = True
     else:
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
@@ -462,26 +533,27 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             except FileNotFoundError as exc:
                 res.error = str(exc)
                 return res
-            ok, transcript, metrics = run_agent(
+            ok, trace, metrics = run_agent(
                 ws, prompt, args.agent_model, args.agent_timeout,
                 extra_dirs=extra_dirs, effort=args.agent_effort,
             )
         if ok and cache_file:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
-                json.dumps({"transcript": transcript, "metrics": metrics}),
+                json.dumps({"trace": trace, "metrics": metrics}),
                 encoding="utf-8",
             )
 
-    res.transcript = transcript
+    res.transcript = trace
     res.metrics = metrics
     if not ok:
         res.error = str(metrics.get("error", "agent run failed"))
         return res
 
+    final_answer = metrics.get("final_answer", "")
     res.verdict = run_judge(
-        scenario_dir, checks, transcript, args.judge_model, args.judge_timeout,
-        effort=args.judge_effort,
+        scenario_dir, checks, trace, final_answer,
+        args.judge_model, args.judge_timeout, effort=args.judge_effort,
     )
     res.ok = True
     return res

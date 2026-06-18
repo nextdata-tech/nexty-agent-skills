@@ -19,7 +19,6 @@ def transform(articles, ctx):
         for chunk in _SPLITTER.split_text(article["body"]):
             rows.append(
                 {
-                    # A fresh random id every run.
                     "chunk_id": str(uuid.uuid4()),
                     "article_id": article["article_id"],
                     "content": chunk,
