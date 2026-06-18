@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,18 @@ SECRET_HINTS = (
     "private",
     "pem",
 )
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write text to a 0600 file, created with restrictive perms from the start.
+
+    Using os.open with mode 0o600 (instead of write_text + chmod) closes the
+    window where the credential file would briefly be readable by group/other
+    under the active umask on a shared host.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
 
 
 def _redact_keys(obj: Any) -> Any:
@@ -54,7 +67,7 @@ def main() -> None:
     p.add_argument("--token-file")
     p.add_argument(
         "--out",
-        default="/tmp/nxd-data-product-query/port.json",
+        default=str(Path(tempfile.gettempdir()) / "nxd-data-product-query" / "port.json"),
         help="Where to write the full leased-credential document (mode 600).",
     )
     args = p.parse_args()
@@ -76,8 +89,7 @@ def main() -> None:
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(doc, indent=2))
-    os.chmod(out_path, 0o600)
+    _write_private(out_path, json.dumps(doc, indent=2))
 
     summary = {
         "out_file": str(out_path),

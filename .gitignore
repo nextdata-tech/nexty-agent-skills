@@ -40,6 +40,10 @@
 skills/
 skills-lock.json
 
+# Private eval artifacts
+evals/private/*
+!evals/private/README.md
+
 # Python
 __pycache__/
 *.pyc
@@ -52,3 +56,6 @@ __pycache__/
 *.iml
 
 infra-profile-ecommerce-demo.yaml
+
+# Eval runner cache
+.eval-cache/

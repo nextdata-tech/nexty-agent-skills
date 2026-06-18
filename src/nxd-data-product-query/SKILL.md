@@ -194,12 +194,13 @@ Read the user's local nxd settings. The mesh URL is needed to list Data Products
 python3 scripts/find_mesh.py
 ```
 
-`find_mesh.py` returns JSON `{ "api_url": "...", "app_url": "...", "docs_base": "...", "token": "..." }`:
+`find_mesh.py` returns JSON like `{ "mesh_name": "...", "api_url": "...", "app_url": "...", "docs_base": "...", "token_available": true, "token_file": "..." }`. The token is written only to `token_file`, never stdout:
 
 - Reads `~/.nxd/meshes.json` first (the registry the nxd-setup skill maintains). The mesh **name**, `api_url`, `app_url`, and the auth/install host all come from the registry **entry** — never reconstructed from the host by label-count guesses.
 - Falls back to `~/.nxd/config.yaml` — top-level `url:` and entries under `meshes:`.
 - If multiple meshes are present, prints them and exits non-zero with a list. **Never guess the mesh** — do not infer it from the Data Product name or from where a DP "likely" lives. Resolve it two ways only: (1) if the config marks one mesh active (`config.yaml (active)`), use that one and re-run with `--mesh <name>`; (2) otherwise ask the user which one (use `AskUserQuestion`) and re-run with `--mesh <name>`.
 - Token comes from the registry entry first; if absent, reads `~/.nxd/tokens.json` (the file `nxd login` writes). Tokens there are keyed by the OAuth auth host (`auth.<mesh>.<domain>`) — `find_mesh.py` matches the auth/install host carried by the mesh registry entry, falling back to an api-host domain match only when the registry omits it.
+- Use the emitted `token_file` path as `$TOKEN_FILE` in later commands. The default token-file directory is the OS temp directory (`/tmp/...` on POSIX/WSL, `%TEMP%\...` on Windows), so do not hardcode `/tmp`.
 
 If neither file is present or no usable token is found, tell the user to run the **nxd-setup** skill first — and point them at the per-mesh setup docs at `<app_url>/docs/#/tutorials/cli/setup` (resolve `<app_url>` from `find_mesh.py`'s `app_url`; see **Platform docs** below).
 
@@ -236,7 +237,7 @@ Prefer **showing** over linking — a live `nxd ls …` / REST call against the 
 If the user named one, validate it against the list. Otherwise present the list:
 
 ```bash
-python3 scripts/list_dps.py --api-url "$API_URL"
+python3 scripts/list_dps.py --api-url "$API_URL" --token-file "$TOKEN_FILE"
 ```
 
 Outputs one row per DP: `fullName`, `domain`, `version`, `baseUrl`. Use `AskUserQuestion` (single-select) when there are many. When DPs span several `domain` values, first ask the user which **domain** to narrow to (or confirm the one they named), then present only that domain's DPs — don't make them scroll an unscoped list.
@@ -252,7 +253,7 @@ Docs: the consumer REST API contract these calls follow is at `<app_url>/docs/#/
 Each DP exposes its output ports at `<baseUrl>/api/v1/outputs`. List them:
 
 ```bash
-python3 scripts/list_outputs.py --dp <fullName> --api-url "$API_URL"
+python3 scripts/list_outputs.py --dp <fullName> --api-url "$API_URL" --token-file "$TOKEN_FILE"
 ```
 
 Output per port: `name`, `infra_profile_name`, `infra_service_name`, `model_names`.
@@ -270,7 +271,7 @@ Docs: output-port semantics (`/api/v1/outputs`, `/api/v1/rpc-outputs`) at `<app_
 Before the user submits a query, surface the column schema of the port's models so they can frame the question against real fields:
 
 ```bash
-python3 scripts/port_models.py --dp <fullName> --port <port> --api-url "$API_URL"
+python3 scripts/port_models.py --dp <fullName> --port <port> --api-url "$API_URL" --token-file "$TOKEN_FILE"
 ```
 
 Resolves the port's models in this order: `port.model_names` → `port.promises.model[].model` → DP-level `model_names`. Then fetches `/api/v1/models` and emits each matching model's `name`, `description`, and full `attributes` list (`name`, `data_type`, `description`).
@@ -284,7 +285,7 @@ Docs: to help the user interpret attributes / data types see `<app_url>/docs/#/t
 ## Step 5: Get port location + credentials
 
 ```bash
-python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_URL" --out /tmp/nxd-port.json
+python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_URL" --token-file "$TOKEN_FILE" --out <port_credentials_file>
 ```
 
 `connect_port.py` writes to `--out` (never stdout) a JSON document with two keys:
@@ -295,17 +296,17 @@ python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_UR
   - `status: "approval_pending"` with an approval form — surface the message and `tracking_url` to the user and stop. The access / approval and data-quality expectation model is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
   - `status: "unsupported"` — driver does not lease credentials. You then need an **infra-profile** to construct auth out-of-band. **Derive or elicit it — do not assume a local file exists:**
     1. Read the `infra_profile_name` / `infra_service_name` the port declares (from `list_outputs.py` in Step 3).
-    2. Resolve the profile against the **active mesh** — `nxd ls infra-profiles` (and `nxd ls infra-services` if available) lists what the mesh actually has; confirm the matching profile/service with the user.
+    2. Resolve the profile against the **active mesh** — `nxd ls infra-profiles` lists what the mesh actually has; confirm the matching profile with the user.
     3. Only if the user genuinely has a working-tree copy from the **nxd-data-product-builder** skill, you may read the infra-profile YAML on disk — but **ask the user to confirm the path first**, don't grep assumed directories. How DPs and their infra-profiles are defined is documented at `<app_url>/docs/#/tutorials/cli/create`.
     4. If neither resolves, ask the user for the infra-profile name (`AskUserQuestion`) rather than guessing.
 
-**Never echo credentials to the chat.** Read `/tmp/nxd-port.json` with `Read`, but only render the location fields back to the user. Pass the file path to the query scripts that need credentials; they read it themselves.
+**Never echo credentials to the chat.** Read `<port_credentials_file>` with `Read`, but only render the location fields back to the user. Pass the file path to the query scripts that need credentials; they read it themselves.
 
 ---
 
 ## Step 6: Route the query by driver and execute
 
-The infra-service driver (from the port's `infra_service_name` in the infra profile, or from the `leased_credential.details.type_hint` when present) decides which path runs. If **neither** is present, do not assume a driver — resolve the service from the mesh (`nxd ls infra-profiles` / `nxd ls infra-services` against the active mesh) or ask the user which service the port targets (`AskUserQuestion`).
+The infra-service driver (from the port's `infra_service_name` in the infra profile, or from the `leased_credential.details.type_hint` when present) decides which path runs. If **neither** is present, do not assume a driver — resolve the profile from the mesh (`nxd ls infra-profiles` against the active mesh) or ask the user which service the port targets (`AskUserQuestion`).
 
 > **Strict mode skips this entire section.** If the user opted into **Strict Mode** (above), do not run any of 6a–6e. Strict mode allows only MCP-mediated access via the mesh MCP gateway + a plan-validation pass. To leave strict mode, the user must explicitly drop the flag.
 
@@ -314,7 +315,7 @@ The infra-service driver (from the port's `infra_service_name` in the infra prof
 The leased credential carries `username`, `password` / `private_key`, plus the location's `host`, `port`, `database`, `schema`. Run SQL via:
 
 ```bash
-python3 scripts/query_sql.py --creds /tmp/nxd-port.json --sql "<SQL>"
+python3 scripts/query_sql.py --creds <port_credentials_file> --sql "<SQL>"
 ```
 
 If the user asked in natural language, **you (Claude)** generate the SQL from the port's `model_names` plus a `DESCRIBE`-style probe — fetch the model schemas from `<baseUrl>/api/v1/models` and embed them into the SQL you draft. Show the user the SQL you intend to run before running it; only run after they confirm. Cap rows with `LIMIT` and only read the schema/table the location names.
@@ -324,7 +325,7 @@ If the user asked in natural language, **you (Claude)** generate the SQL from th
 The leased credential includes `model_urls` (presigned URLs, per model) — one per output model. The location lists `model_paths` with the on-disk format (`parquet`, `csv`, `json`, …).
 
 ```bash
-python3 scripts/fetch_file.py --creds /tmp/nxd-port.json --model <model_name> --limit 50
+python3 scripts/fetch_file.py --creds <port_credentials_file> --model <model_name> --limit 50
 ```
 
 `fetch_file.py` downloads the presigned URL into memory, parses the file by format, and writes a small preview JSON to stdout (head + schema). For a real query (filter / aggregate / project), generate SQL and run it via `duckdb` against the downloaded file — `fetch_file.py` supports a `--sql` flag that loads the file as a DuckDB table and executes the SQL.
@@ -370,7 +371,7 @@ Equality for scalars, IN-list for arrays. Translates to e.g. `langchain_metadata
 Compute the query embedding once per candidate query:
 
 ```bash
-python3 scripts/embed_query.py --model <model-id> --query "<text>" --out /tmp/qvec.json
+python3 scripts/embed_query.py --model <model-id> --query "<text>" --out <query_vector_file>
 ```
 
 Then retrieve. Two modes:
@@ -379,8 +380,8 @@ Then retrieve. Two modes:
 
   ```bash
   python3 scripts/vector_search.py \
-    --backend pgvector --creds /tmp/nxd-port.json \
-    --query-vector /tmp/qvec.json --k 5 \
+    --backend pgvector --creds <port_credentials_file> \
+    --query-vector <query_vector_file> --k 5 \
     [--filter '<json>']
   ```
 
@@ -388,8 +389,8 @@ Then retrieve. Two modes:
 
   ```bash
   python3 scripts/vector_search.py \
-    --backend pgvector --creds /tmp/nxd-port.json \
-    --query-vector /tmp/qvec.json \
+    --backend pgvector --creds <port_credentials_file> \
+    --query-vector <query_vector_file> \
     --query-text "<original query text>" \
     --hybrid --candidates 50 --k 5 \
     [--filter '<json>']
@@ -456,7 +457,7 @@ RPC ports are listed at `/api/v1/rpc-outputs`. Each port declares `functions: [{
 5. Show the response to the user; for natural-language answers, synthesise from the response payload.
 
 ```bash
-python3 scripts/rpc_call.py --dp <fullName> --port <port> --function <fn> --args '<json>' --api-url "$API_URL"
+python3 scripts/rpc_call.py --dp <fullName> --port <port> --function <fn> --args '<json>' --api-url "$API_URL" --token-file "$TOKEN_FILE"
 ```
 
 `rpc_call.py` reads the token from stdin and writes the response to stdout (or to `--out` if `--out` is supplied — preferred for large payloads).
@@ -472,8 +473,8 @@ The location is a URL; the leased credential is whatever the upstream API needs 
 **Never put a bearer token or password on a command line.** The scripts read secrets from one of:
 
 - `stdin` — pipe the token in: `echo "$TOK" | python3 scripts/list_dps.py …`
-- `--token-file <path>` — a file containing the token (write to a `/tmp/` file with `chmod 600`).
-- A JSON credentials file (`--creds /tmp/nxd-port.json`) — the leased credential blob produced by `connect_port.py`.
+- `--token-file <path>` — a file containing the token. Prefer the `token_file` emitted by `find_mesh.py`.
+- A JSON credentials file (`--creds <port_credentials_file>`) — the leased credential blob produced by `connect_port.py`.
 
 The skill itself never prints tokens, presigned URLs, or DB passwords back to the chat. When showing the user what was leased, show the *fields available* (e.g. `presigned_url`, `database`, `schema`) — not the values.
 
@@ -484,8 +485,13 @@ The skill itself never prints tokens, presigned URLs, or DB passwords back to th
 The skill ships small Python entrypoints under `scripts/`. Install dependencies into a throwaway venv:
 
 ```bash
-python3 -m venv /tmp/nxd-data-product-query/venv
-/tmp/nxd-data-product-query/venv/bin/pip install -r scripts/requirements.txt
+python3 -m venv .nxd-data-product-query-venv
+.nxd-data-product-query-venv/bin/pip install -r scripts/requirements.txt
+```
+
+```powershell
+py -3 -m venv .nxd-data-product-query-venv
+.\.nxd-data-product-query-venv\Scripts\pip.exe install -r scripts\requirements.txt
 ```
 
 | Script | Purpose |
@@ -514,8 +520,31 @@ Each script writes secrets only to `--out` files (never stdout) and reads tokens
 - **Token expiry** — `tokens.json` carries an `expiry`. If a 401 comes back, ask the user to re-run `nxd login` (or the **nxd-setup** skill) and retry. Per-mesh auth/PAT setup is documented at `<app_url>/docs/#/tutorials/cli/setup`.
 - **`connect` returns `unsupported`** — derive the infra-profile from the active mesh (`nxd ls infra-profiles`) or ask the user; only read an on-disk infra-profile YAML if the user confirms they have a working-tree copy (e.g. from `nxd-data-product-builder`) and confirms the path. Do not grep assumed directories. See `<app_url>/docs/#/tutorials/cli/create`.
 - **`connect` returns `approval_pending`** — stop and surface the `message` / `tracking_url` to the user. Do not poll.
-- **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `/tmp/nxd-port.json` for the session; re-request if the TTL passes.
+- **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `<port_credentials_file>` for the session; re-request if the TTL passes.
 - **Vector store embedding model mismatch** — querying with a different embedding model from the one the DP used to index gives nonsense results. Always confirm the model from the DP's `description` / `/v1/info` before computing the query vector.
 - **MCP vs HTTP RPC** — the same DP may expose its RPC port via both. Prefer HTTP when running one-shot; use `nxd mcp client` only when the user explicitly wants interactive MCP.
 - **Strict mode validation failures are terminal** — when `plan_validator.py` returns `passed=false`, do **not** fall back to default routing in the same run. Return the failure to the user and stop. Falling back silently would defeat the rule. If the user wants the fallback, they must explicitly drop strict mode.
 - **Strict mode + unknown relationships** — if a join the question seems to need is not present in any `semantic_model` MCP response, the right answer is "I can't do this in strict mode" — not "I'll guess from column names". Add the missing relationship to the source DP's `semantic_model` and redeploy, or ask the user to drop strict mode.
+
+---
+
+## Troubleshooting query-time failures
+
+Symptom → cause → fix for failures hit while querying a port. Diagnose before
+retrying: the same symptom (e.g. an empty result) has more than one cause, so
+confirm which before changing the query.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `401 Unauthorized` from a port call | Leased credential or PAT expired (`tokens.json` `expiry` passed), or the wrong auth header. DP REST uses `x-nextdata-token`, NOT `Authorization: Bearer`. | Re-run `nxd login` (or **nxd-setup**) and re-request `connect`; send the PAT as `x-nextdata-token`. |
+| `403` / `SignatureDoesNotMatch` fetching a file URL | The presigned URL TTL elapsed mid-session (they are short-lived). | Re-request `connect` for a fresh URL; don't reuse a cached one past its TTL. |
+| `connect` returns `unsupported` | The port's driver has no query recipe wired, or the infra profile couldn't be resolved. | Resolve the infra profile from the active mesh; confirm the port's driver type via `list_outputs.py`. |
+| `connect` returns `approval_pending` | Access requires a pending approval. | Stop. Surface the `message` / `tracking_url` to the user. Do NOT poll. |
+| Vector search returns nonsense / irrelevant hits | Query embedded with a different model than the DP indexed with. | Read the index model from the DP `description` / `/v1/info`; embed the query with that exact model. |
+| Vector search errors with a dimension mismatch | Query vector dimension ≠ the indexed column dimension. | Match the embedding model so dimensions agree (e.g. 384 vs 1536). |
+| SQL query against a pgvector port returns 0 rows | Querying the metadata table by the wrong table name, or the DP hasn't run yet (no data). | Confirm the physical table name (model name, lowercased) and that the DP reached `STARTED` with a successful run. |
+| RPC call fails to connect / 404 | Wrong RPC path or trailing-slash mismatch on the MCP endpoint; or the RPC port is unhealthy. | Verify the port path from `list_outputs.py`; if the port itself is failing, debug the DP with **nxd-debugging-data-products**. |
+
+When the failure is the Data Product itself (port unhealthy, no data produced,
+RPC pod crashing) rather than the query, switch to the
+**nxd-debugging-data-products** skill.

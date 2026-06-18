@@ -1,0 +1,5 @@
+nxd.core
+nxd.data_product[spec]
+pandas==2.2.2
+numpy==1.21.0
+pyarrow==17.0.0

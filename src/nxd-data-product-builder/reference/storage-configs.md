@@ -1,5 +1,12 @@
 # Storage Configs Reference
 
+## Contents
+- Service URL pattern
+- `source_aligned_input()` vs `data_product_input()`
+- Storage config helpers
+- Transform context types by driver
+- Databricks: three connection patterns
+
 ## Service URL pattern
 
 Always construct service URLs from the infra profile. Two parts are **resolved, not hardcoded**: the host (`<app_url>`) comes from the active mesh's config (see SKILL.md Prerequisites — the selected mesh's `app_url` in `~/.nxd/meshes.json`), and the profile name comes from the infra profile chosen in discovery (`nxd ls infra-profiles` against the mesh, or a local profile YAML). Store the resolved profile name as a constant:
@@ -17,6 +24,12 @@ f"https://<app_url>/infra-profile/{INFRA_PROFILE}#/services/k8s-compute"
 ```
 
 The `<service-name>` must match a service name returned by the infra profile (the local profile YAML, or `nxd ls infra-profiles` against the active mesh — see SKILL.md "Infra Profile Lookup").
+
+`nxd validate` resolves services against the mesh selected by
+`--config=<session_config>` using the infra-profile name and service fragment.
+Do not rely on a copied host from a reference example as proof you targeted the
+right mesh. Still render service URLs with the chosen mesh's real `app_url` so
+the spec is readable and links point at the right UI.
 
 ---
 

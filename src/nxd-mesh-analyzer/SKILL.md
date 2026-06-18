@@ -1,6 +1,6 @@
 ---
 name: nxd-mesh-analyzer
-description: Inspect data-bearing services in a nextdata infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects to selected storage services (S3, Snowflake, ADLS, Databricks, BigQuery, Postgres, Kafka, Pinecone, and more) with their connection parameters, inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product.
+description: Inspect data-bearing services in a nextdata infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects to selected storage services (S3, Snowflake, ADLS, Databricks, BigQuery, Postgres, Kafka, Pinecone, and more), inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product. Use when discovering candidate data products from infra profiles, mesh assets, service schemas, or offline evidence.
 allowed-tools:
   - Bash
   - Read
@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.0
+  version: 0.2.1
 ---
 
 # Nexty Mesh Assets
@@ -46,7 +46,7 @@ Hand out these paths inline when the matching step comes up (drop the link at th
 | Scheduling | `tutorials/guides/06-scheduling` | Step 6 — mapping partition granularity to a transform `when` |
 | Create a DP (CLI) | `tutorials/cli/create` | Closing handoff to nxd-data-product-builder |
 
-`app_url` is owned by nxd-setup, which persists it in `~/.nxd/meshes.json` and writes the active session config to `/tmp/nxd-<mesh_name>.yaml`. Prefer **showing** live state (`nxd ls data-products`, `nxd ls infra-profiles`) over linking a page when it answers the question.
+`app_url` is owned by nxd-setup, which persists it in the nxd registry and writes the active session config to `<session_config>` (`/tmp/...` on POSIX/WSL, `$env:TEMP\...` on Windows PowerShell). Prefer **showing** live state (`nxd ls data-products`, `nxd ls infra-profiles`) over linking a page when it answers the question.
 
 ---
 
@@ -55,8 +55,13 @@ Hand out these paths inline when the matching step comes up (drop the link at th
 The skill ships a small Python package under `scripts/`. Run the entrypoints with a Python that has the dependencies in `scripts/requirements.txt` — install into a throwaway venv:
 
 ```bash
-python3 -m venv /tmp/nxd-mesh-analyzer/venv
-/tmp/nxd-mesh-analyzer/venv/bin/pip install -r scripts/requirements.txt
+python3 -m venv .nxd-mesh-analyzer-venv
+.nxd-mesh-analyzer-venv/bin/pip install -r scripts/requirements.txt
+```
+
+```powershell
+py -3 -m venv .nxd-mesh-analyzer-venv
+.\.nxd-mesh-analyzer-venv\Scripts\pip.exe install -r scripts\requirements.txt
 ```
 
 **Entrypoints** (run as `python scripts/<name>.py`):
@@ -73,7 +78,7 @@ python3 -m venv /tmp/nxd-mesh-analyzer/venv
 - `scripts/meshlib/` — generic core: profile parsing, schema-fingerprint grouping, the plugin registry, inspection orchestration, matching, report writing. Imports **no** service SDK.
 - `scripts/drivers/` — one module per service type (`s3.py`, `snowflake.py`), each owning its SDK imports (boto3, snowflake-connector) and any per-source-type rules. An entrypoint builds a registry from these and injects it into `meshlib`.
 
-To support another service type, add `scripts/drivers/<name>.py` exposing a `DRIVER` (see `meshlib/registry.py` and the recipes in `references/service-inspection.md`), then add it to `ALL` in `drivers/__init__.py`. The scripts read credentials from the profile in-process and never print secret values.
+To support another service type, add `scripts/drivers/<name>.py` exposing a `DRIVER` (see `meshlib/registry.py` and the recipes in `reference/service-inspection.md`), then add it to `ALL` in `drivers/__init__.py`. The scripts read credentials from the profile in-process and never print secret values.
 
 ---
 
@@ -100,7 +105,7 @@ Run the steps in order. Inspect read-only at every step — never create, write,
 
 **Consult the user.** The person running this skill has domain knowledge of their environment. When a decision is genuinely ambiguous — which catalog owns a table, which copy of a replicated dataset is the source of truth, which of two services is the input — ask them rather than guessing.
 
-**Offline mode.** When live inspection is not possible (no network to the services, credentials withheld, or the user prefers to share evidence by hand), run an optional read-only collection pass instead of (or alongside) live inspection — Snowflake `SHOW`/`DESCRIBE` output, Git repo inspection, and local file profiling via `scripts/profile_tabular.py`. The evidence feeds the same candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md` report. See [references/offline-discovery.md](references/offline-discovery.md).
+**Offline mode.** When live inspection is not possible (no network to the services, credentials withheld, or the user prefers to share evidence by hand), run an optional read-only collection pass instead of (or alongside) live inspection — Snowflake `SHOW`/`DESCRIBE` output, Git repo inspection, and local file profiling via `scripts/profile_tabular.py`. The evidence feeds the same candidate-matching (Step 5) and lands in the same `mesh-assets-<profile>.md` report. See [reference/offline-discovery.md](reference/offline-discovery.md).
 
 ### Step 0: Resolve the active mesh (do this first)
 
@@ -109,7 +114,7 @@ This skill is **mesh-aware** — the mesh determines the app/api host that ancho
 1. Read `~/.nxd/meshes.json` and find the **selected / active** mesh entry. From it derive:
    - `app_url` — the UI / docs base (`<app_url>/docs/#/<path>`); record which mesh this run belongs to.
    - `api_url` — the base host for absolute infra-profile service URLs (feeds `--api-url`, Step 6).
-2. nxd-setup owns this registry and writes the active session config to `/tmp/nxd-<mesh_name>.yaml`. If that file is present, pass `--config /tmp/nxd-<mesh_name>.yaml` to any `nxd` command below.
+2. nxd-setup owns this registry and writes the active session config to `<session_config>`. If that file is present, pass `--config <session_config>` to any `nxd` command below.
 3. **If no active mesh / no `meshes.json`:** point the user at **nxd-setup** to select and configure a mesh first, and link `<app_url>/docs/#/tutorials/cli/setup` (or `getting-started`) if you can resolve any `app_url`. Discovery against a real mesh cannot run until a mesh is selected. The skill can still run in **offline mode** on local files (Step 1b / offline-discovery) with service URLs left relative.
 
 Carry `api_url` and `app_url` through the whole run. Never substitute a demo host (e.g. `app.<mesh>.example`) for the real one — those forms below are **illustrative placeholders only**, not canonical hosts.
@@ -124,7 +129,7 @@ An infra profile belongs to a mesh — prefer **deriving** the available profile
 
 Search / derive, in order:
 
-1. **Derive from the active mesh** — enumerate profiles with `nxd ls infra-profiles` (pass `--config /tmp/nxd-<mesh_name>.yaml` if present). Let the user pick one; pull its YAML to a temp path under `/tmp/nxd-mesh-analyzer/`.
+1. **Derive from the active mesh** — enumerate profiles with `nxd ls infra-profiles` (pass `--config <session_config>` if present). Let the user pick one; pull its YAML to an OS temp path such as `$TMPDIR/nxd-mesh-analyzer/` on POSIX/WSL or `$env:TEMP\nxd-mesh-analyzer\` on Windows PowerShell.
 2. The customer extension paths — `./.nxd/skills/nxd-mesh-analyzer/` and `~/.nxd/skills/nxd-mesh-analyzer/`.
 3. The working tree — Glob `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
 
@@ -160,11 +165,11 @@ The infra profile file contains **live credentials in plaintext**. Before inspec
 - Tell the user the file holds real secrets and that inspection will connect to live services.
 - Never echo a secret value into the chat or into a displayed command line.
 - Inspect via short Python scripts that read the profile file **directly** and pass credentials in-process — do not interpolate secrets into shell command arguments (they would appear in the displayed command and tool output).
-- Write inspection scripts under a temp path (e.g. `/tmp/nxd-mesh-analyzer/`). Delete them when done.
+- Write inspection scripts under an OS temp path. Delete them when done.
 
 ### Step 4: Inspect each selected service
 
-Run `scripts/inspect_service.py <profile> <service>... --out <file>` — it connects read-only, inventories each service with schema-fingerprint grouping, de-duplicates shared stores, and writes the inventory JSON. Driver plugins for `s3` and `snowflake` ship under `scripts/drivers/`; for any other driver, follow the matching per-service recipe in `references/services/<type>.md` (indexed by `references/service-inspection.md`) and add a new `scripts/drivers/<name>.py` module.
+Run `scripts/inspect_service.py <profile> <service>... --out <file>` — it connects read-only, inventories each service with schema-fingerprint grouping, de-duplicates shared stores, and writes the inventory JSON. Driver plugins for `s3` and `snowflake` ship under `scripts/drivers/`; for any other driver, follow the matching per-service recipe in `reference/services/<type>.md` (indexed by `reference/service-inspection.md`) and add a new `scripts/drivers/<name>.py` module.
 
 Build an **asset inventory** for the service. For every data asset record:
 
@@ -192,9 +197,9 @@ If a connection fails (bad credentials, network, missing client library), report
 
 **First, confirm flow directionality with the user.** Using the data-architecture documentation (Step 1b) and the actual databases, buckets, and tables discovered in Step 4, derive the candidate service→service flows. Present each to the user and have them **confirm or correct its direction** — which service is the input (source) and which is the output. Do not infer direction from naming: an `_az` / `_azure` / region / environment suffix does **not** tell you which side is upstream — only the architecture and the user do. Pass the confirmed flows as `--flow <input-service>:<output-service>` to `match_assets.py`.
 
-Run `scripts/match_assets.py <inventory.json>` over the inventory from Step 4. It applies the heuristics in `references/connection-matching.md` to find connected pairs:
+Run `scripts/match_assets.py <inventory.json>` over the inventory from Step 4. It applies the heuristics in `reference/connection-matching.md` to find connected pairs:
 
-- Drop assets and pairs that the exclusion rules reject — Snowflake clone tables, hello-world test data, same-database plural twins, bucket/account-root assets (see `references/connection-matching.md`).
+- Drop assets and pairs that the exclusion rules reject — Snowflake clone tables, hello-world test data, same-database plural twins, bucket/account-root assets (see `reference/connection-matching.md`).
 - Set aside **replicated datasets** — a dataset copied verbatim across 3+ stores. These are not an N×N grid of products; they go to a separate report section (see below).
 - Pair the rest by schema similarity, related naming (`input`/`output`, `raw`/`curated`, `bronze`/`silver`/`gold`), matching asset names, partitioning carried through, and output-modified-after-input.
 - Infer direction (which asset is the input, which is the output).
@@ -219,7 +224,7 @@ These three files are the deliverable a downstream data-product-authoring skill 
 
 The model schemas in `*-models.md` are what become the candidate's input/output **semantic models** downstream — link `<app_url>/docs/#/tutorials/guides/01-semantic-model` when walking the user through them.
 
-**Domains.** Data products live in domain groups. `match_assets.py` classifies each candidate's domain heuristically from its naming; anything it cannot classify is filed under `other`. The infra profile file does not record domains authoritatively, so **derive-or-elicit** the real domain set rather than inventing `other`: prefer the customer's domains from the Step 1b user documentation; otherwise derive the vocabulary from the active mesh's existing data products (`nxd ls data-products`, with `--config /tmp/nxd-<mesh_name>.yaml` if present) and the profile's service/namespace names. Then review the assigned domains with the user and correct any that are wrong.
+**Domains.** Data products live in domain groups. `match_assets.py` classifies each candidate's domain heuristically from its naming; anything it cannot classify is filed under `other`. The infra profile file does not record domains authoritatively, so **derive-or-elicit** the real domain set rather than inventing `other`: prefer the customer's domains from the Step 1b user documentation; otherwise derive the vocabulary from the active mesh's existing data products (`nxd ls data-products`, with `--config <session_config>` if present) and the profile's service/namespace names. Then review the assigned domains with the user and correct any that are wrong.
 
 **Service URLs.** A service URL has the form `infra-profile/<profile>#/services/<service>`. Its host must be **anchored to the active mesh** — pass `--api-url <api_url>` (the `api_url` derived from the active mesh in Step 0) to `inspect_service.py` so the emitted URL is absolute and points at the mesh the profile belongs to. Do **not** elicit the host blind or leave it relative: a relative ref forces downstream consumers to assume a base, which can silently mismatch the mesh. If Step 0 found no active mesh (offline run), say so explicitly in the report — the URLs are relative and must be resolved against whichever mesh the profile came from.
 
@@ -279,3 +284,25 @@ If a `driver` string is malformed or its `name` and `driver` fields look swapped
 - **Client libraries** — recipes need driver-specific clients (`boto3`, `snowflake-connector-python`, etc.). Install on demand into a temp venv; prefer a CLI already on PATH.
 - **Multiple credentials, one store** — a profile may list several services pointing at the same store with different auth (e.g. `nxd-snowflake`, `nxd-snowflake-keypair`, `nxd-snowflake-pat`). Inspect one; note the others are duplicates.
 - **One service = one input** — keep the inventory aligned to how nextdata models inputs, so results map cleanly onto nxd-data-product-builder.
+
+---
+
+## Troubleshooting inspection failures
+
+Symptom → cause → fix for failures hit while inspecting services. A connection
+failure is usually a credential, scope, or reachability problem in the infra
+profile — not a bug in the analyzer. Confirm which before retrying.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Connect fails with auth error (`401`/`403`/`Access denied`/`InvalidAccessKeyId`) | The service's credentials in the infra profile are expired, revoked, or for a different account. | Verify the credentials in the profile; confirm the account/tenant matches. Treat it as a profile problem, not an analyzer bug. |
+| `PERMISSION_DENIED` / wrong-catalog on a warehouse | The infra-profile catalog/schema doesn't match what the credentials can see. | Align the catalog/schema in the profile with the credential's grants. |
+| Connect times out / host unreachable | The service endpoint isn't reachable from where the analyzer runs (network, VPN, allowlist). | Confirm reachability from the current host; this is environment, not data. |
+| Service classified wrong / `driver` and `name` look swapped | Some profiles carry malformed or swapped driver fields. | Ask the user how to classify rather than guessing (see driver-classification table above). |
+| `service not found` for a name the report referenced | The service name was invented or belongs to a different profile/mesh. | List real services for the chosen profile from the active mesh; never assume a name. |
+| Inventory returns zero tables/files for a service that should have data | Wrong container/bucket/schema in the profile, or the credential's scope excludes the data. | Confirm the container/bucket/schema attribute in the profile and that the credential can list it. |
+
+Never echo a secret value from a profile while diagnosing — inspect attributes
+in-process, report only the field names. When a service is reachable but a
+*deployed Data Product* built on it is failing, switch to
+**nxd-debugging-data-products**.

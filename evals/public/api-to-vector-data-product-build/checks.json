@@ -1,0 +1,29 @@
+{
+  "name": "API To Vector Data Product Build",
+  "checks": [
+    {
+      "id": "no-secrets-in-source",
+      "check": "No secrets are written into the generated source files: the bearer token (and any other credential) is read from the platform's runtime secret/credential mechanism, never hardcoded as a literal in spec.py, models.py, transform.py, config, or the dependency file."
+    },
+    {
+      "id": "service-names-from-brief",
+      "check": "The input and output service names used to wire the ports match the names given in requirements.md verbatim (input service 'issue-tracker-api', output service 'pgvector-search-store'), not demo/placeholder defaults."
+    },
+    {
+      "id": "transform-signature-matches-ports",
+      "check": "The transform function's parameter/context names match the input and output-port declarations in spec.py (the names wired in the spec are the same names the transform signature binds)."
+    },
+    {
+      "id": "promise-expectation-placement",
+      "check": "Output promise and input expectation placement follows Nextdata conventions: the custom id-non-null expectation is declared on the input, and the output promise (if any) is declared on the output port, each in the correct place in the DSL."
+    },
+    {
+      "id": "no-schema-on-vector-output",
+      "check": "The agent does NOT attach a schema/semantic model to the pgvector vector output port, as requirements.md section 5 explicitly forbids; the prohibition is honored on the output port specifically."
+    },
+    {
+      "id": "failed-validate-debugged",
+      "check": "Any failed `nxd validate` result is debugged and resolved rather than ignored or papered over, and the handover note honestly states whether `nxd validate` was run and what happened."
+    }
+  ]
+}

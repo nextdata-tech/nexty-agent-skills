@@ -1,9 +1,18 @@
 ---
 name: nxd-data-product-builder
-description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-mesh-analyzer`). Use whenever the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-mesh-analyzer`). Use when the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - MultiEdit
+  - Glob
+  - Grep
+  - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.1
+  version: 0.2.5
 ---
 
 # Nextdata OS Data Product Builder
@@ -19,7 +28,7 @@ This Skill is intended for technically proficient users who are familiar with te
 Before engaging with the user, set up the environment. Do **not** proceed until this is complete.
 
 - **NXD CLI:** Ensure the NXD CLI is installed and the correct mesh is selected, this should be set up and verified by the "nxd-setup" Skill. *Confirm the correct mesh has been selected before continuing.*
-- **Active mesh + its hosts (elicit-or-derive, do not hardcode):** every service URL, doc link, and `nxd ... --config` flag in this skill depends on which mesh is active. `nxd-setup` owns mesh selection and writes the per-mesh config to `/tmp/nxd-<mesh>.yaml`. Confirm the active mesh **name** with the user (or read it from `~/.nxd/meshes.json` — the selected entry), and from that same mesh entry take its `app_url`/`api_url` host. These are the host you substitute into `https://<app_url>/infra-profile/<profile>#/services/<service>` URLs and into the docs base below. Never paste a demo host (`example.com`, `nextopia.dev`, `nextdata.com`) as if it were canonical — those only appear as clearly-marked illustrative placeholders.
+- **Active mesh + its hosts (elicit-or-derive, do not hardcode):** every service URL, doc link, and `nxd ... --config` flag in this skill depends on which mesh is active. `nxd-setup` owns mesh selection and writes the per-mesh config to `<session_config>` (`/tmp/...` on POSIX/WSL, `$env:TEMP\...` on Windows PowerShell). Confirm the active mesh **name** with the user (or read it from the nxd registry at `~/.nxd/meshes.json` — the selected entry), and from that same mesh entry take its `app_url`/`api_url` host. These are the host you substitute into `https://<app_url>/infra-profile/<profile>#/services/<service>` URLs and into the docs base below. Never paste a demo host (`example.com`, `nextopia.dev`, `nextdata.com`) as if it were canonical — those only appear as clearly-marked illustrative placeholders.
 - **Runtime:** Python **3.10** with **`uv`** as the dependency manager.
     - *There is no need to check for a given Python version since `uv` will manage this for us.*
 - **Dependencies:** Install the `nxd-data-product` Python package from the mesh's package registry index (commonly `https://registry.trynxd.com/index/`; if your mesh config specifies a different index, use that):
@@ -54,10 +63,26 @@ Data Product Build Progress:
 - [ ] 0. Prerequisites verified (NXD CLI, mesh selected, uv env, nxd-data-product installed)
 - [ ] 1. Discovery complete (interview answered OR spec-from-document extracted; infra profile located; references consulted)
 - [ ] 2. Plan approved by user
-- [ ] 3. Implementation complete (spec.py, models.py, transform.py)
-- [ ] 4. Validation complete (local transform script in place, TODO markers labelled, `nxd validate` passes)
-- [ ] 5. Handover summary and finalisation checklist delivered to the user
+- [ ] 3. Implementation complete (files written to a real project directory OR delivered as downloadable artifacts)
+- [ ] 4. Validation complete (`nxd validate` result recorded as PASS, FAIL, or NOT RUN with reason)
+- [ ] 5. README, requirements checklist, and handover summary make location/status/next steps explicit
 ```
+
+### Project Location and Delivery Mode
+Before writing code, decide and state the `data_product_directory`. Prefer a
+real local directory with an absolute path. If the execution environment cannot
+write to the user's filesystem and only supports chat artifacts/downloads, say
+that explicitly before generating files and record:
+
+```
+Project location: Claude Desktop conversation artifacts only
+Local filesystem path: Not created until the user clicks Download all
+Recommended local path after download: <absolute-path>
+```
+
+Never claim "built in `<directory>`" unless you have created or inspected that
+directory in the current environment. If files are delivered as downloadable
+artifacts, call them "downloadable artifacts", not a local project directory.
 
 For a longer or multi-session build, you may keep an optional lightweight ledger
 (`state.json` + `open-todos.md`) under `.context/dp-build/<timestamp>/` so the
@@ -122,7 +147,7 @@ The infra profile must be **derived from the active mesh or elicited from the us
 
 1. Customer extension paths — `./.nxd/skills/nxd-data-product-builder/` and `~/.nxd/skills/nxd-data-product-builder/`.
 2. Working tree — `infra-profiles/*.yaml`, `infra-profiles/*.yml`, `*.yaml`, `*.yml`.
-3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=/tmp/nxd-<mesh>.yaml` and let the user choose from the returned names. Likewise list available services for a chosen profile from the mesh when no local YAML exists (the profile name selected here is the value you place in `infra_profile="..."` and in service URLs).
+3. The active mesh itself — when no local YAML resolves the profile, enumerate what the mesh actually offers with `nxd ls infra-profiles --config=<session_config>` and let the user choose from the returned names. To list services for a chosen profile, use `nxd --config=<session_config> rest -u /api/v1/infraprofiles/<profile-name>/services` (spelling is `infraprofiles`, no hyphen). The profile name selected here is the value you place in `infra_profile="..."` and in service URLs.
 
 For each candidate file, confirm with `Grep` that it has `kind: Profile` and `apiVersion: infra.nextdata.com/...` near the top. Resolve **pointer files** — a file whose contents are filesystem path(s) or URI(s), one per line — by following each pointer (read file paths, fetch `http(s)://` URIs).
 
@@ -211,10 +236,17 @@ destination all models share a port, with several ask which models route where.
 *For an RPC/MCP output port, see `<app_url>/docs/#/tutorials/guides/07-mcp`.*
 
 **g. Quality, access, trigger.** Optional but offer them:
-* **Data quality** — completeness, PII detection, Soda (YAML in `contracts/`),
-  Great Expectations (Python in `contracts/`), or a custom verify function.
-  *Promises/contracts: `<app_url>/docs/#/tutorials/guides/03-promises`;
-  input expectations: `<app_url>/docs/#/tutorials/guides/05-expectations`.*
+* **Data quality** — choose one or more promise types for outputs, or expectations for inputs:
+  - **Great Expectations**: Python file in `contracts/` with `configure() -> list`; wire with
+    `quality(gx, "contracts/<file>.py").name(...).model(model)` on the port.
+    Requires `nxd_data_product[gx]` in requirements.txt.
+  - **Soda**: YAML file in `contracts/` with `checks for TABLE_NAME:`; wire with
+    `quality(soda, "contracts/<file>.yml").name(...).model(model)` on the port.
+    Requires `nxd_data_product[soda]` in requirements.txt.
+  - **Custom**: Python file with `verify(snowflake, ctx, models, triggered_by) -> VerifyResult`;
+    wire with `custom("name").model(model).verify(code(fn))` at the output level.
+  Omit `.model(model)` on GE/Soda to run against all canonical output models.
+  See [reference/promises-contracts.md](reference/promises-contracts.md) for templates.
 * **Access** — **elicit** the owner / data-steward / consumer email addresses
   from the user; these are environment-specific identities, not defaults. Do
   not copy any `@nextdata.com` / `@example.com` address from reference
@@ -268,8 +300,10 @@ Highlight critical decisions, uncertainties, and options for explicit user confi
 * **One semantic model per unique schema.** Don't duplicate a model that
   already describes a schema; reuse it across inputs/outputs that share it.
 * **Contracts: expectations on inputs, promises on outputs.** Attach
-  `.expectation(model)` at the input and `.promise(...)` at the **port** for
-  the output (port-level, not output-level — see common-pitfalls.md).
+  `.expectation(...)` at the input. For outputs: GE and Soda promises attach at
+  the **port** (`storage(...).promise(quality(...))`); custom promises attach at
+  the **output** (`data_product_output().promise(custom(...).verify(code(fn)))`).
+  See [reference/promises-contracts.md](reference/promises-contracts.md).
 * **Time-partitioned input → cron in `.when()`.** If an input is partitioned
   by time, the partition granularity implies the refresh cadence (daily
   partitions → a daily `scheduled(...)`); otherwise prefer
@@ -297,19 +331,41 @@ Insert "TODO" markers with clear instructions wherever any of the following are 
 * The user has not provided satisfactory information even after prompting.
 * There are implementation details that would greatly benefit from manual user intervention.
 
+Always create `README.md` and `REQUIREMENTS_CHECKLIST.md` alongside the code.
+The README must start with a short status block before any architecture detail:
+
+```
+# <data-product-name>
+
+## Build Status
+| Item | Status | Evidence / next action |
+|---|---|---|
+| Project files | CREATED / ARTIFACTS ONLY | <directory path or download instruction> |
+| Local smoke test | PASS / FAIL / NOT RUN | <exact command and result> |
+| nxd validate | PASS / FAIL / NOT RUN | <exact command, output summary, or blocker> |
+| nxd launch | NOT RUN / PASS / FAIL | <must say if launch was intentionally skipped> |
+| Runtime resources | CREATED / NOT CREATED / UNKNOWN | tables, buckets, vector indexes, schedules |
+```
+
+Then include: layout, how to run local tests, how to run `nxd validate`, how to
+launch only after approval, and a direct pointer to `REQUIREMENTS_CHECKLIST.md`.
+The checklist must map every open TODO to the file to edit, the decision needed,
+and the command to re-run after fixing it.
+
 #### `spec.py`
 * Ensure the infrastructure profile is included (by name — `infra_profile="<name>"`).
 * Configure each driver (service) with the appropriate URLs and settings, whether it is an input (`source()`) or an output (`storage()` etc.).
 * Service URLs are full and inlined: `https://<app_url>/infra-profile/<profile>#/services/<service>` — used as-is in `.source(...)`, `storage(...)`, `.compute(...)`. Do not abstract behind a helper. `<app_url>` is the active mesh's app host **resolved from mesh config** (see Prerequisites), `<profile>` is the infra profile chosen in discovery, and `<service>` is a real service name from that profile — none of these are hardcoded demo hosts/names.
 * Read the chosen infra profile YAML to discover the correct service names; the compute service name in particular varies between profiles (`k8s-compute`, `k8s-executor`, a Databricks compute, etc.).
 * Project-local `nxd_spec.py` and `nxd_models.py` shim modules are required — the wildcard imports in `spec.py` / `models.py` resolve through these. See `reference/best_practices.md` for the template.
-* Note: `spec.py` cannot be run locally — it requires the Nextdata OS hosted runtime.
+* Do not run `python spec.py` directly. For a local pre-validate import/build check, use the package-loader command in the Validation section; it injects the expected filesystem root the DSL needs.
 
 #### `models.py`
 * Avoid complex types in semantic models where possible, due to compatibility limitations.
 
 #### `transform.py`
 * Use Nextdata Contexts via explicit imports (e.g. `from nxd.data_product.context import AzureDataLakeStorage`) to pass configuration, credentials, and models for each input or output driver. Prefer explicit imports over wildcard imports within the transformation file(s).
+* Keep heavy runtime dependencies (Spark, torch, sentence-transformers, langchain embedding/vector integrations, browser clients) out of top-level imports. `nxd validate` imports `spec.py`, which imports `transform.py`; heavy top-level imports can make validation fail before the transform runs. Import heavy libraries inside `transform()` or helper functions.
 * Parameter names in the `transform(...)` signature must match the input and output-port names declared in `spec.py`. For example, `.input("comp_public", source_aligned_input()...)` binds to `def transform(comp_public: API, ...)`, and `.port("adls", storage(...))` binds to `adls: AzureDataLakeStorage`. Hyphens in spec names are normalised to underscores in the Python signature (e.g. `"s3-source"` → `s3_source`).
 
 #### `nxd` Library
@@ -326,6 +382,12 @@ The platform's init container installs the Data Product as a Python package via 
 * **Declare `py-modules` explicitly in `pyproject.toml`** (see `reference/best_practices.md` for the snippet). List every `.py` module that should ship — typically `spec`, `models`, `nxd_spec`, `nxd_models`, `transform`, plus contract files if any.
 * **Ship a `.nxdignore`** that excludes everything local-only from the deployment bundle: `.env*`, `local_transform.py` (and any other local runner / smoke-test script), `.venv/`, `__pycache__/`, build artifacts, IDE / VCS noise. Local-execution files have credentials wired in or use development-only dependencies the platform shouldn't see.
 
+#### Generated-Code Preflight
+Before handing files to the user, run the checklist in
+[reference/generated-code-preflight.md](reference/generated-code-preflight.md).
+Fix what you can, and record every unresolved launch or validation risk in both
+`README.md` and `REQUIREMENTS_CHECKLIST.md`.
+
 ---
 
 ### 4. Validation
@@ -333,14 +395,42 @@ Once implementation is complete, validate the Data Product before handover. Trac
 
 ```
 Validation Progress:
+- [ ] Generated-code preflight completed; unresolved risks recorded in README/checklist
 - [ ] Local transform script in place; imports resolve and function signatures match declared context types
 - [ ] All "TODO" markers inserted and clearly labelled
-- [ ] `nxd validate --config=/tmp/nxd-<mesh_name>.yaml <data_product_directory> --debug` passes
+- [ ] Local smoke test run, or recorded as NOT RUN with a concrete blocker
+- [ ] Offline spec-build check run with `data_product_spec_from_file_at_path(...)`
+- [ ] `nxd validate --config=<session_config> <data_product_directory> --debug` passes
 ```
+
+Run the offline spec-build check before mesh validation:
+
+```
+python - <<'PY'
+from pathlib import Path
+from nxd.spec.fs.package_loader import data_product_spec_from_file_at_path
+data_product_spec_from_file_at_path(Path("spec.py"), Path("."))
+print("offline spec-build: PASS")
+PY
+```
+
+Then validate against the chosen target mesh. `nxd validate` imports the bundle,
+connects to the `--config` mesh, resolves the infra profile/services, and may
+fail on missing services or auth. It does not execute the transform body. Do
+not leave the user to interpret raw output: run `nxd --config=<session_config>
+whoami`, run validate, capture `$?` or `$LASTEXITCODE`, and summarize `PASS`,
+`FAIL`, or `NOT RUN`. If `whoami` prints `Not logged in`, treat validation as
+`NOT RUN` even if the command exits `0`. If a cross-mesh probe fails but target
+validation later exits `0`, remove stale cross-mesh blockers from the README.
 
 If `nxd validate` reports errors, read the output carefully, fix the issue in `spec.py`, `models.py`, or `transform.py`, and re-run until the command exits cleanly. Do not mark item 4 complete on the top-level checklist until validation passes.
 
-Note: `nxd validate` checks structural correctness of the spec and parsed models — it does not execute the transform against real services. End-to-end runtime validation is performed by the user in the Finalisation step.
+If `nxd validate` cannot be run, do not leave the user to infer that from prose.
+Record it as `NOT RUN` in the README status block, the final response, and the
+handover checklist, with the exact blocker and the exact command the user should
+run next.
+
+End-to-end runtime validation is performed by the user in the Finalisation step.
 
 **Watch for semantic-model removal across versions at launch time.** The platform protects downstream consumers from breaking changes: if a previously launched version of the same Data Product declared a semantic model that the new launch no longer declares, `nxd launch` aborts with HTTP `409` and a message like `The following model(s) are no longer available: [<model_name>]`. This commonly happens when the model is renamed during scaffolding (e.g. an unintended pluralisation / casing change) — the rename looks local but the server sees deletion. Two resolutions:
 
@@ -352,14 +442,22 @@ If you're not sure which model name the deployed version uses, `nxd describe dat
 ---
 
 ### 5. Finalisation and Handover
-Once implementation is complete, deliver a handover summary to the user and include the following checklist for them to work through:
+Once implementation is complete, deliver a handover summary to the user. The
+first lines must answer: where the files are, whether they are local files or
+downloadable artifacts, what has passed, what has not run, and whether anything
+exists in the target mesh yet.
+
+Include the following checklist for them to work through:
 
 ```
 Finalisation (user to complete):
+- [ ] If files were delivered as artifacts, click Download all and move/extract them into the named local directory
 - [ ] Review all "TODO" markers; resolve or explicitly defer each
 - [ ] Populate `.env` (or equivalent) with credentials and configuration for local execution
+- [ ] Run the local smoke test command shown in README.md
+- [ ] Run validation: `nxd validate --config=<session_config> <data_product_directory> --debug`
 - [ ] Run the local transform script and confirm it completes end-to-end
-- [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=/tmp/nxd-<mesh_name>.yaml`
+- [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=<session_config>`
 - [ ] Verify the first platform run: transform completes, outputs land at configured ports, promises/expectations pass
 ```
 
@@ -368,4 +466,8 @@ If the launched Data Product fails or behaves unexpectedly, work through
 platform's error messages (which are often misleading, e.g. OOM reported as
 "startup timeout") to root causes and fixes.
 
-In the handover summary, call out any items needing particular attention — deferred TODOs, missing inputs, areas where assumptions were made, or sections that may require manual review.
+In the handover summary, call out any items needing particular attention —
+deferred TODOs, missing inputs, areas where assumptions were made, or sections
+that may require manual review. Do not describe a running scheduled Data Product,
+created vector table, or deployed mesh resource unless the command that created
+or verified it actually ran successfully.

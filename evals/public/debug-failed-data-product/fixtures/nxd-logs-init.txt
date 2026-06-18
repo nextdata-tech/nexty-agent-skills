@@ -1,0 +1,21 @@
+$ nxd logs session-rollups --init
+
+[11:32:14] init: starting environment build for session-rollups
+[11:32:14] init: python 3.11.9 (cpython)
+[11:32:14] init: resolver backend = uv 0.5.11
+[11:32:14] init: reading requirements.txt (5 direct dependencies)
+[11:32:15] init: uv pip install -r requirements.txt --strict
+[11:32:15] init:   Resolving dependencies...
+[11:32:17] init:   Downloaded metadata for nxd.core, nxd.data_product, pandas, numpy, pyarrow
+[11:32:18] init: error: No solution found when resolving dependencies:
+[11:32:18] init:   ╰─▶ Because pandas==2.2.2 depends on numpy>=1.22.4 and you require
+[11:32:18] init:       numpy==1.21.0, we can conclude that your requirements are
+[11:32:18] init:       unsatisfiable.
+[11:32:18] init:
+[11:32:18] init:       hint: pandas 2.2.2 requires numpy>=1.22.4 (>=1.26.0 on Python
+[11:32:18] init:       3.12). Pin a compatible numpy or remove the numpy pin so the
+[11:32:18] init:       resolver can select one.
+[11:32:18] init: environment build FAILED (exit code 1)
+[11:32:18] init: worker entrypoint will not be executed; no virtualenv was created
+[11:32:18] init: the orchestrator will continue waiting on the readiness probe until
+[11:32:18] init: startup_timeout_secs elapses, then report a startup timeout

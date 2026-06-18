@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive   # nextdata-public-examples is required by the validator
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate skills
+        run: python3 scripts/validate_skills.py --root .
+
+      # build-skills.sh only prints an "OVER CAP" status column; it does not
+      # exit non-zero. Capture its output and fail if any skill is over cap.
+      - name: Build skill zips and enforce the 200-entry cap
+        run: |
+          set -euo pipefail
+          out="$(bash ./build-skills.sh)"
+          echo "$out"
+          if grep -q "OVER CAP" <<<"$out"; then
+            echo "::error::one or more skills exceed the 200-entry Claude Desktop cap"
+            exit 1
+          fi

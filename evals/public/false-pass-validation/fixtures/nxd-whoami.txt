@@ -1,0 +1,7 @@
+$ nxd whoami
+
+Not logged in.
+
+Run `nxd login` to authenticate, or `nxd-setup` to configure a new profile.
+$ echo "exit code: $?"
+exit code: 0

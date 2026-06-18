@@ -1,5 +1,16 @@
 # File Templates and Generated Layout
 
+## Contents
+- Generated files
+- spec.py
+- transform.py example: S3 (CSV) to Snowflake via external table
+- imports_spec.py
+- imports_models.py
+- inputs/input_models.py
+- outputs/output_models.py
+- requirements.txt
+- Driver Classification Reference
+
 Concrete scaffolding for a new Data Product. Use these as starting points
 during the **Implementation** phase, then adapt names, models, and drivers to
 the user's plan. Prefer matching the closest public example
@@ -270,19 +281,18 @@ from imports_models import *
 
 ## requirements.txt
 
-The base requirements always apply. Add per-driver dependencies based on the
-input and output context types used in `transform.py`.
+Add runtime dependencies based on the imports actually needed by the platform
+bundle. Keep dev-only local test dependencies out of the deployment bundle.
 
-**Always include:**
+**Always include the Nextdata runtime packages:**
 
 ```
 nxd_core>=0.0.1
 nxd_data_product>=0.0.1
-pandas
 ```
 
-Both packages are always required — missing either causes `ModuleNotFoundError`
-at runtime. Package names use underscores, not dots.
+Package names use underscores, not dots. Add `pandas` only when the transform
+or a driver dependency path actually imports it.
 
 **Add per context type used in transform.py:**
 

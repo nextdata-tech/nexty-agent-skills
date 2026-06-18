@@ -1,0 +1,25 @@
+{
+  "name": "Duplicate Rows on Every Re-run",
+  "checks": [
+    {
+      "id": "recognizes-idempotency",
+      "check": "The agent recognizes that a green run with a growing row count is an idempotency problem, not a crash to investigate via failure logs."
+    },
+    {
+      "id": "root-cause-random-uuid",
+      "check": "The agent identifies the random-UUID chunk-id generation as the cause of non-idempotent inserts."
+    },
+    {
+      "id": "fix-deterministic-ids",
+      "check": "The agent proposes deterministic ids (e.g. uuid.uuid5(...) keyed on source + record key + chunk index) so re-runs upsert instead of insert."
+    },
+    {
+      "id": "unique-index-for-upsert",
+      "check": "The agent notes that langchain/pgvector upserts need a unique index (e.g. CREATE UNIQUE INDEX ... (langchain_id)) for ON CONFLICT to work."
+    },
+    {
+      "id": "no-delete-all-or-blame-schedule",
+      "check": "The agent does NOT propose deleting all rows before each run as the only fix, and does NOT blame the schedule itself."
+    }
+  ]
+}

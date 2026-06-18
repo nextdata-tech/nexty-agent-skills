@@ -1,5 +1,15 @@
 # Common Pitfalls
 
+## Contents
+- Spec / trigger issues
+- Validation / auth issues
+- requirements.txt issues
+- Transform issues
+- Data quality issues
+- Infra / service issues
+- Deprecated patterns
+- Naming, types, imports
+
 Known failure modes when writing nextdata data products. Check these before declaring a DP ready.
 
 ---
@@ -29,6 +39,26 @@ source_aligned_input().when(scheduled("* * * * *"))
 
 **`source_aligned_input()` vs `data_product_input()` confusion**
 Use `source_aligned_input()` for external storage (S3, Databricks, Snowflake, ADLS, Kafka). Use `data_product_input()` for DP-to-DP dependencies only. They have different `.source()` URL formats.
+
+---
+
+## Validation / auth issues
+
+**`nxd validate` exits `0` but did not validate**
+Always run `nxd --config <session_config> whoami` before validation. If
+`whoami` prints `Not logged in`, treat `nxd validate` as `NOT RUN` even if the
+shell exit code is `0`; re-run login, then validate again.
+
+**`nxd validate --debug` has no friendly PASS line**
+Debug output may end after launching the Python validator. If auth is confirmed,
+rerun the same command without `--debug` and print the exit code. Mark
+validation `PASS` only when auth is confirmed, validate exits `0`, and no
+validation error or traceback is printed.
+
+**Assuming validate is offline-only**
+`nxd validate` imports the bundle locally, then connects to the mesh selected by
+`--config` and resolves the infra profile/services. Missing services are target
+mesh or infra-profile problems, not transform runtime problems.
 
 ---
 
@@ -85,15 +115,30 @@ checks for raw_users:   # must match DB, not spec
 **Deprecated contract compute driver**
 `nxd:local-python:1.0.0` is deprecated. Contract compute (Soda, GX) uses `nxd:kubernetes/contract:1.0.0`. No explicit `.compute()` call is needed — the platform auto-selects the correct driver.
 
-**Great Expectations missing extras**
-GX requires `nxd_core[gx]` in requirements.txt. Soda requires `nxd_core[soda]`. Using plain `nxd_core` without the extra causes import errors.
+**Missing or wrong GX / Soda extras**
+GX and Soda extras must be present and on the right package. Both `nxd validate` and spec import succeed silently — the crash only happens at runtime when the promise runs.
+
+```
+# Wrong — wrong package
+nxd_core[gx]
+nxd_core[soda]
+
+# Wrong — extra missing entirely (plain nxd_data_product validates fine, crashes at runtime)
+nxd_data_product
+
+# Correct
+nxd_data_product[gx]
+nxd_data_product[soda]
+```
+
+Always add the extra at the same time you add the promise — never rely on validate to catch it.
 
 ---
 
 ## Infra / service issues
 
 **Invented service names**
-Service names in `.source()` URLs must match actual names from the infra profile — read them from the chosen profile YAML, or list them from the active mesh (`nxd ls infra-profiles`; see SKILL.md "Infra Profile Lookup"). Made-up names cause `service not found` errors at deploy time.
+Service names in `.source()` URLs must match actual names from the infra profile — read them from the chosen profile YAML, or list profiles from the active mesh with `nxd ls infra-profiles --config=<session_config>` and list a chosen profile's services with `nxd --config=<session_config> rest -u /api/v1/infraprofiles/<profile-name>/services`. Made-up names cause `service not found` errors at validate or deploy time.
 
 **K8s compute missing `image_pull_policy` for local dev**
 When running against a local cluster with locally-built images, add `"image_pull_policy": "Never"` to the compute config. Without it, k8s tries to pull from a remote registry and fails or uses a stale image.

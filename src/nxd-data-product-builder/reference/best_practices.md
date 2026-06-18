@@ -1,5 +1,12 @@
 # Best Practices
 
+## Contents
+- Specification
+- Packaging for `nxd launch`
+- Transformation
+- Models
+- Contracts
+
 ## Specification
 
 * Usage of the infrastructure profile **name**, `infra_profile="<profile>"` (the profile chosen in discovery — e.g. a name returned by `nxd ls infra-profiles` against the active mesh), is preferred over the URL form `infra_profile="https://<app_url>/infra/<profile>"`. The profile name is elicited/derived, never a hardcoded demo name.
@@ -86,6 +93,21 @@ The platform's init container installs the Data Product as a Python package via 
 ## Contracts
 
 * `@data_product.on_verify()` should be avoided when creating Python based Data Products. *Thus the usage of `.verify(code(verify_fn))` is also preferred within `spec.py` file(s)*.
+    * Input expectations attach to `.input(...)` declarations:
+    * ```python
+      from contracts import input_format
+
+      .input(
+          "api-source",
+          source_aligned_input()
+          .source(api_service_url)
+          .model(input_model)
+          .expectation(custom("input_format").verify(code(input_format.verify))),
+      )
+      ```
+    * The verify parameter name matches the input or port name after hyphen-to-underscore normalization (`"api-source"` -> `api_source`). A typical signature is `def verify(api_source: API, models: dict[str, Model]) -> VerifyResult:`.
+    * `VerifyResultEnum` values include `PASS`, `WARNING`, and `FAILED`; use `FAILED`, not `FAIL`. Custom verify bodies are imported during `nxd validate` but do not execute during validate.
+    * Output promises attach to output ports:
     * ```python
       # example spec.py
       from contracts import example_contract 

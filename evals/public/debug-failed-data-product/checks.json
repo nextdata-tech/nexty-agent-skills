@@ -1,0 +1,25 @@
+{
+  "name": "Debug Failed Data Product (startup timeout caused by dependency install failure)",
+  "checks": [
+    {
+      "id": "gathers-describe-logs-init-before-guessing",
+      "check": "The agent gathers all three artifacts — the describe output, the regular runtime logs, and the init/environment-build logs (nxd logs --init) — before concluding, rather than guessing from the misleading 'startup timeout' status alone. The true root cause is only visible in the init logs."
+    },
+    {
+      "id": "separates-failure-categories",
+      "check": "The agent reasons across the candidate categories (memory/resource pressure, dependency install failure, bad transform import, invalid service config, policy/contract failure) and rules out the others, concluding it is a dependency install failure rather than a real readiness timeout, OOM, transform crash, config error, or policy failure."
+    },
+    {
+      "id": "identifies-numpy-pandas-conflict",
+      "check": "The agent identifies the concrete root cause as an unsatisfiable dependency resolution in requirements.txt — numpy==1.21.0 conflicts with pandas==2.2.2 (which requires numpy>=1.22.4) — so the environment build fails, the worker is never created, and that surfaces upstream as the generic startup timeout."
+    },
+    {
+      "id": "retry-uses-run-retry",
+      "check": "If the agent mentions retrying, it uses `nxd run --retry` as the retry mechanism and does NOT invent a nonexistent dedicated retry command."
+    },
+    {
+      "id": "fix-is-dependency-change",
+      "check": "The agent explains that the correct fix is a dependency change (relax/remove the numpy==1.21.0 pin or bump it to a numpy compatible with pandas 2.2.2, e.g. numpy>=1.22.4) and that a code change, resource/memory increase, or policy change is NOT what is needed here."
+    }
+  ]
+}
