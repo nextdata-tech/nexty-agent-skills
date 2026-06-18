@@ -1,0 +1,56 @@
+"""spec.py RPC-output wiring template for a semantic-layer data product.
+
+Copy the `data_product_rpc_output()` block below into your spec.py, filling in
+the infra-profile service ref and data product name.  The PoC reference is
+examples_private/argenx/hcp-poc/spec.py — consult it for exact call shapes.
+
+Required imports (add to your spec.py):
+    from nxd.spec import data_product_rpc_output, rpc_function, rpc_server, code
+
+The semantic kit imports (add to your spec.py):
+    from semantic import build_semantic_tools
+    from registry import REGISTRY
+
+WIRING PATTERN — the only correct way to expose MCP tools in NXD:
+
+    _rpc = data_product_rpc_output()
+    for _t in build_semantic_tools(REGISTRY):
+        _rpc = _rpc.function(
+            rpc_function(code(_t.fn), _t.request_model, _t.response_model)
+            .description(_t.description)
+        )
+    _rpc = _rpc.port(
+        "mcp-api",
+        rpc_server("{{infra_profile_mcp_service_ref}}")
+        .enable_endpoints()
+        .mcp_path("/mcp"),
+    )
+
+    spec = (
+        data_product(
+            name="{{dp_name}}",
+            domain="{{domain}}",
+            description="{{description}}",
+            version="0.1.0",
+            infra_profile="{{infra_profile}}",
+        )
+        .output(_rpc)
+        # Add inputs, transforms, storage outputs, etc. as needed.
+    )
+
+SERVICE REF FORM:
+    "/infra-profile/<INFRA_PROFILE_NAME>#/services/<service-name>"
+    e.g. "/infra-profile/ecommerce-demo#/services/snowflake-mcp"
+
+IMPORTANT:
+- `data_product_rpc_output()` is the ONLY supported MCP delivery mechanism.
+- `rpc_function(code(t.fn), t.request_model, t.response_model)` requires ALL
+  THREE positional arguments — omitting request_model or response_model raises
+  a TypeError at spec-build time.
+- `.description(t.description)` is chainable on rpc_function and sets the MCP
+  tool description visible to agents.
+- `.enable_endpoints()` publishes the HTTP+MCP endpoint on the rpc_server.
+- `.mcp_path("/mcp")` sets the MCP mount path.
+- Never pass the SemanticTool list to anything else — it is only meaningful when
+  iterated and wired via rpc_function as shown above.
+"""

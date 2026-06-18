@@ -1,0 +1,13 @@
+# This file is NOT the MCP entry point for the NXD DP runtime.
+#
+# NXD exposes MCP tools via spec.py — NOT via a module-level `tools` list.
+# See the spec_rpc_output snippet below and SKILL.md Step 5 for the correct
+# wiring.  This template is kept as a reminder of what NOT to do.
+#
+# WRONG (exposes zero MCP tools — the runtime never reads `tools`):
+#   from semantic import build_semantic_tools
+#   from registry import REGISTRY
+#   tools = build_semantic_tools(REGISTRY)   # <-- dead code
+#
+# CORRECT: wire in spec.py via data_product_rpc_output() — see
+# reference/scripts/templates/spec_rpc_output.py.tmpl

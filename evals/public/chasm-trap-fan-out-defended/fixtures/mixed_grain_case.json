@@ -1,0 +1,44 @@
+{
+  "description": "A natural-language question that tempts mixing a customer-grain metric with an order-grain metric in one query. The correct answer requires two separate queries.",
+  "nl_question": "By country, how many customers have churned AND what is the total revenue?",
+  "tempting_mixed_selection": {
+    "measures": ["churned_customer_count", "total_revenue"],
+    "dimensions": ["country"],
+    "filters": [],
+    "why_wrong": "churned_customer_count lives on customer_profile (customer grain); total_revenue lives on order_event (order grain). Mixing them forces a join that fans out the customer-grain metric by order count — a chasm trap. The compiler must reject this."
+  },
+  "expected_compile_error_contains": "metrics span multiple grains",
+  "correct_approach": {
+    "query_1": {
+      "description": "Customer-grain query: churned customers by country",
+      "selection": {
+        "measures": ["churned_customer_count"],
+        "dimensions": ["country"],
+        "filters": []
+      },
+      "expected_sql_shape": {
+        "aggregated": true,
+        "from_table": "customer_profile",
+        "join_required": false,
+        "group_by_columns": ["COUNTRY"]
+      }
+    },
+    "query_2": {
+      "description": "Order-grain query: total revenue by country",
+      "selection": {
+        "measures": ["total_revenue"],
+        "dimensions": ["country"],
+        "filters": []
+      },
+      "expected_sql_shape": {
+        "aggregated": true,
+        "from_table": "CUSTOMER_PROFILE_SEMANTIC",
+        "join_required": false,
+        "compile_path": "view",
+        "group_by_columns": ["COUNTRY"],
+        "comment": "cross-model (view path): use_view=True (the default in run_semantic_query) compiles against the pre-joined CUSTOMER_PROFILE_SEMANTIC view. join_required=true only applies under use_view=False."
+      }
+    }
+  },
+  "final_answer_hint": "Present two separate result tables and explain that they cannot be combined in one query because the metrics have different grains (one row per customer vs one row per order)."
+}
