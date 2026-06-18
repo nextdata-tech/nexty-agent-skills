@@ -1,0 +1,41 @@
+{
+  "name": "Generate a Semantic-Layer Data Product from a Schema",
+  "checks": [
+    {
+      "id": "registry-grains-correct",
+      "check": "The SemanticRegistry declares customer_profile with grain=\"CUSTOMER_ID\" and order_event with grain=\"ORDER_ID\"."
+    },
+    {
+      "id": "aggregations-correct",
+      "check": "total_revenue uses Agg.SUM on AMOUNT_USD; order_count uses Agg.COUNT_DISTINCT on ORDER_ID."
+    },
+    {
+      "id": "boolean-flag-metrics-correct",
+      "check": "churned_customer_count and first_order_count set boolean=True so the compiler emits a boolean CASE-sum rather than a numeric cast, instead of treating the flag column as a numeric SUM."
+    },
+    {
+      "id": "cardinality-declared",
+      "check": "The join from order_event to customer_profile is declared with cardinality many_to_one (Cardinality.MANY_TO_ONE)."
+    },
+    {
+      "id": "pii-flagged",
+      "check": "The EMAIL and FULL_NAME dimensions are registered with pii=True, and no other dimension is marked pii=True."
+    },
+    {
+      "id": "compiler-not-re-authored",
+      "check": "The agent vendored the experimental/semantic kit (copied compile_selection / build_semantic_tools) into the project rather than hand-writing compile_selection or the filter/aggregation logic. The DP's registry module contains only SemanticRegistry authoring and imports the compiler + tool factory from the kit."
+    },
+    {
+      "id": "mcp-tools-wired",
+      "check": "The spec.py registers the four tool functions returned by build_semantic_tools(registry) as MCP-exposed tools via data_product_rpc_output()/rpc_function/rpc_server().mcp_path(\"/mcp\") — not via a non-existent module-level tools list."
+    },
+    {
+      "id": "dependencies-present",
+      "check": "The project's dependency file (requirements.txt or pyproject.toml) lists the kit package / vendored path and any transitive requirements the kit declares."
+    },
+    {
+      "id": "no-raw-sql-in-handler",
+      "check": "The run_semantic_query tool handler contains no hand-written SQL strings; it delegates to compile_selection from the kit."
+    }
+  ]
+}

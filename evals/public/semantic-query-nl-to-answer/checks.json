@@ -1,0 +1,37 @@
+{
+  "name": "Answer a Natural-Language Analytics Question via Semantic MCP Tools",
+  "checks": [
+    {
+      "id": "discovery-before-query",
+      "check": "The agent calls list_metrics and/or list_dimensions (or describe_metric) before issuing run_semantic_query. Jumping straight to run_semantic_query with guessed concept names is a failure."
+    },
+    {
+      "id": "selection-uses-concept-names",
+      "check": "The run_semantic_query call passes a {measures, dimensions, filters} dict with concept names (e.g. \"total_revenue\", \"country\") — not a raw SQL string or a sql key."
+    },
+    {
+      "id": "correct-measure-selected",
+      "check": "The selection's measures list contains \"total_revenue\" (the SUM of AMOUNT_USD), not order_count or another metric."
+    },
+    {
+      "id": "correct-dimension-selected",
+      "check": "The selection's dimensions list contains \"country\"."
+    },
+    {
+      "id": "compiled-sql-aggregated",
+      "check": "The compiled_sql field in the tool response contains a GROUP BY clause and an aggregate function (SUM, COUNT, etc.) — not a flat row-level SELECT."
+    },
+    {
+      "id": "compiled-sql-read-only",
+      "check": "The compiled_sql does not contain INSERT, UPDATE, DELETE, CREATE, DROP, MERGE, or TRUNCATE."
+    },
+    {
+      "id": "answer-delivered",
+      "check": "The agent produces a final natural-language answer referencing the result rows (e.g. a table or bullet list of country to revenue), not just \"the query ran successfully.\""
+    },
+    {
+      "id": "no-raw-sql-authored",
+      "check": "The agent's messages do not contain a hand-written SQL string passed to a SQL execution tool outside of run_semantic_query."
+    }
+  ]
+}
