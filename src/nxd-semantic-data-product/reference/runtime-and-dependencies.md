@@ -15,12 +15,12 @@ The `semantic/` kit is currently vendored by copying the files into each DP's
 (see `reference/overview.md`) and the vendoring pattern keeps each DP
 self-contained with no transient dependency resolution at runtime.
 
-In a future release, once ADR-020 lands, the kit will be absorbed into
+In a future release, once ADR-026 lands, the kit will be absorbed into
 `nxd.spec` and `nxd.drivers.rpc`. At that point the import paths in `spec.py`
 will change from `from semantic import ...` to the first-class spec DSL (e.g.
 `nxd.spec.measure` / `nxd.spec.dimension`), and the vendored files can be
 removed. The migration will be mechanical because all public names are
-pre-aligned with ADR-020.
+pre-aligned with ADR-026.
 
 **Do not import from `nxd.experimental.semantic` directly in a generated DP.**
 That package path (`nxd.experimental.semantic`) is internal to the `nxd_py`

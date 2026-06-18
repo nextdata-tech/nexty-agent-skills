@@ -39,7 +39,7 @@ Do NOT accumulate the result as a bare ``tools = build_semantic_tools(REGISTRY)`
 list passed to nothing — that exposes zero MCP tools. The list is only useful
 when iterated and wired via ``rpc_function`` as shown above.
 
-See: docs/architecture/adrs/020-semantic-layer-first-class.md
+See: docs/architecture/adrs/026-semantic-layer-first-class.md
 """
 
 from __future__ import annotations
@@ -179,12 +179,62 @@ def build_semantic_tools(
         from .dialect import SnowflakeDialect
 
         dialect = SnowflakeDialect(view_name=view_name or "")
-    elif view_name is not None and hasattr(dialect, "_view_name"):
-        # allow overriding view_name even on a caller-supplied dialect
-        object.__setattr__(dialect, "_view_name", view_name)
+    elif view_name is not None:
+        raise ValueError(
+            "Provide either 'view_name' or a pre-configured 'dialect', not both. "
+            "To override the view name on a custom dialect, set it when constructing "
+            "the dialect (e.g. SnowflakeDialect(view_name='MY_VIEW')) and pass only "
+            "the dialect argument."
+        )
 
     # Derive human-readable table list for tool descriptions.
     model_summary = "; ".join(f"{m.name} (grain: {m.grain})" for m in registry.models)
+
+    # ---------------------------------------------------------------------------
+    # Tool descriptions — defined ONCE; referenced in both @mcp.tool and the
+    # SemanticTool descriptor returned to the caller.  This avoids the drift
+    # risk of keeping two copies in sync.
+    # ---------------------------------------------------------------------------
+
+    _list_metrics_desc = (
+        "List the metrics (measures) this data product can compute — each "
+        "with its aggregation, home grain, and a plain-language description. "
+        "Use these names as the 'measures' argument to run_semantic_query. "
+        "This is the curated semantic vocabulary; prefer it over writing raw SQL."
+    )
+    _list_dimensions_desc = (
+        "List the dimensions this data product can group or filter by — each "
+        "with its logical type, a PII flag, and a description. PII dimensions "
+        "are governed: a query grouping by them may be masked or rejected "
+        "depending on the caller's access. Use these names as the 'dimensions' "
+        "argument (or in 'filters') of run_semantic_query."
+    )
+    _describe_metric_desc = (
+        "Describe a single metric: its aggregation, the grain it lives at, "
+        "and the exact set of dimensions it can be sliced by (its own model's "
+        "plus any reachable through a documented join). Call this before "
+        "run_semantic_query to pick a valid metric+dimension combination."
+    )
+    _run_semantic_query_desc = (
+        "THE DEFAULT, SAFE way to answer a question about this data product. "
+        "Name CONCEPTS and the data product writes correct, governed SQL — "
+        "you never write SQL on this path.\n\n"
+        f"Data models: {model_summary}.\n\n"
+        "ARGS:\n"
+        "- measures (REQUIRED): list of metric names from list_metrics.\n"
+        "- dimensions (optional): list of dimension names from list_dimensions "
+        "to group by. OMIT IT (or pass []) for a grand total.\n"
+        '- filters (optional): list of {"dimension": <name>, "op": <symbol>, '
+        "\"value\": <val>}. The 'op' field (named 'op', NOT 'operator') MUST be "
+        "one of these EXACT symbols: '=', '!=', '>', '>=', '<', '<=', 'IN', "
+        "'LIKE', 'ILIKE' — use the symbol '=', NOT the word 'eq'/'equals'. "
+        'Example: {"dimension": "status", "op": "=", "value": "Active"}.\n\n'
+        "It DETERMINISTICALLY compiles the selection into a safe, aggregated, "
+        "read-only query against the curated semantic view, runs it under "
+        "governance, and returns the rows plus the compiled SQL. "
+        "Use list_metrics / list_dimensions / describe_metric to discover "
+        "valid concepts. Do not mix metrics from different models in one call."
+    )
 
     # ---------------------------------------------------------------------------
     # list_metrics
@@ -217,12 +267,7 @@ def build_semantic_tools(
     @function(name="list_metrics")
     @mcp.tool(
         name="list_metrics",
-        description=(
-            "List the metrics (measures) this data product can compute — each "
-            "with its aggregation, home grain, and a plain-language description. "
-            "Use these names as the 'measures' argument to run_semantic_query. "
-            "This is the curated semantic vocabulary; prefer it over writing raw SQL."
-        ),
+        description=_list_metrics_desc,
     )
     def list_metrics(request: Request) -> Response:
         out: list[dict[str, object]] = []
@@ -270,13 +315,7 @@ def build_semantic_tools(
     @function(name="list_dimensions")
     @mcp.tool(
         name="list_dimensions",
-        description=(
-            "List the dimensions this data product can group or filter by — each "
-            "with its logical type, a PII flag, and a description. PII dimensions "
-            "are governed: a query grouping by them may be masked or rejected "
-            "depending on the caller's access. Use these names as the 'dimensions' "
-            "argument (or in 'filters') of run_semantic_query."
-        ),
+        description=_list_dimensions_desc,
     )
     def list_dimensions(request: Request) -> Response:
         out: list[dict[str, object]] = []
@@ -326,12 +365,7 @@ def build_semantic_tools(
     @function(name="describe_metric")
     @mcp.tool(
         name="describe_metric",
-        description=(
-            "Describe a single metric: its aggregation, the grain it lives at, "
-            "and the exact set of dimensions it can be sliced by (its own model's "
-            "plus any reachable through a documented join). Call this before "
-            "run_semantic_query to pick a valid metric+dimension combination."
-        ),
+        description=_describe_metric_desc,
     )
     def describe_metric(request: Request) -> Response:
         name = request.get("name") or ""
@@ -433,26 +467,7 @@ def build_semantic_tools(
     @function(name="run_semantic_query")
     @mcp.tool(
         name="run_semantic_query",
-        description=(
-            "THE DEFAULT, SAFE way to answer a question about this data product. "
-            "Name CONCEPTS and the data product writes correct, governed SQL — "
-            "you never write SQL on this path.\n\n"
-            f"Data models: {model_summary}.\n\n"
-            "ARGS:\n"
-            "- measures (REQUIRED): list of metric names from list_metrics.\n"
-            "- dimensions (optional): list of dimension names from list_dimensions "
-            "to group by. OMIT IT (or pass []) for a grand total.\n"
-            '- filters (optional): list of {"dimension": <name>, "op": <symbol>, '
-            "\"value\": <val>}. The 'op' field (named 'op', NOT 'operator') MUST be "
-            "one of these EXACT symbols: '=', '!=', '>', '>=', '<', '<=', 'IN', "
-            "'LIKE', 'ILIKE' — use the symbol '=', NOT the word 'eq'/'equals'. "
-            'Example: {"dimension": "status", "op": "=", "value": "Active"}.\n\n'
-            "It DETERMINISTICALLY compiles the selection into a safe, aggregated, "
-            "read-only query against the curated semantic view, runs it under "
-            "governance, and returns the rows plus the compiled SQL. "
-            "Use list_metrics / list_dimensions / describe_metric to discover "
-            "valid concepts. Do not mix metrics from different models in one call."
-        ),
+        description=_run_semantic_query_desc,
     )
     def run_semantic_query(snowflake: Any, request: Request) -> Response:
         from snowflake import connector  # type: ignore[import-not-found]
@@ -500,36 +515,33 @@ def build_semantic_tools(
                 **snowflake.connector_params(),  # pyright: ignore[reportUnknownMemberType]
             )
             try:
-                cur: Any = conn.cursor()
-                # Prefer NATIVE Snowflake semantic view when provisioned;
-                # fall back to compiled base-table / plain-view path.
-                try:
-                    native = dialect.supports_native_semantic_view(cur, fqn=fqn)
-                except Exception:
-                    native = False
-                try:
-                    if native:
-                        sql = semantic_view_query(selection, registry=registry, dialect=dialect, fqn=fqn)
-                    else:
-                        sql = compile_selection(
-                            selection,
-                            registry=registry,
-                            dialect=dialect,
-                            fqn=fqn,
-                            use_view=True,
-                        )
-                except CompileError as e:
-                    cur.close()
-                    return _error(f"Invalid selection: {e}")
-                except Exception as e:
-                    cur.close()
-                    return _error(f"Compile failed: {e}")
+                with conn.cursor() as cur:
+                    # Prefer NATIVE Snowflake semantic view when provisioned;
+                    # fall back to compiled base-table / plain-view path.
+                    try:
+                        native = dialect.supports_native_semantic_view(cur, fqn=fqn)
+                    except Exception:
+                        native = False
+                    try:
+                        if native:
+                            sql = semantic_view_query(selection, registry=registry, dialect=dialect, fqn=fqn)
+                        else:
+                            sql = compile_selection(
+                                selection,
+                                registry=registry,
+                                dialect=dialect,
+                                fqn=fqn,
+                                use_view=True,
+                            )
+                    except CompileError as e:
+                        return _error(f"Invalid selection: {e}")
+                    except Exception as e:
+                        return _error(f"Compile failed: {e}")
 
-                wrapped = f"SELECT * FROM (\n{sql}\n) AS _capped LIMIT {cap + 1}"
-                cur.execute(wrapped)
-                rows: list[Any] = list(cur.fetchall())
-                columns: list[str] = [str(c[0]) for c in cur.description]
-                cur.close()
+                    wrapped = f"SELECT * FROM (\n{sql}\n) AS _capped LIMIT {cap + 1}"
+                    cur.execute(wrapped)
+                    rows: list[Any] = list(cur.fetchall())
+                    columns: list[str] = [str(c[0]) for c in cur.description]
             finally:
                 conn.close()
         except Exception as e:
@@ -549,46 +561,6 @@ def build_semantic_tools(
                 "error": "",
             }
         )
-
-    _list_metrics_desc = (
-        "List the metrics (measures) this data product can compute — each "
-        "with its aggregation, home grain, and a plain-language description. "
-        "Use these names as the 'measures' argument to run_semantic_query. "
-        "This is the curated semantic vocabulary; prefer it over writing raw SQL."
-    )
-    _list_dimensions_desc = (
-        "List the dimensions this data product can group or filter by — each "
-        "with its logical type, a PII flag, and a description. PII dimensions "
-        "are governed: a query grouping by them may be masked or rejected "
-        "depending on the caller's access. Use these names as the 'dimensions' "
-        "argument (or in 'filters') of run_semantic_query."
-    )
-    _describe_metric_desc = (
-        "Describe a single metric: its aggregation, the grain it lives at, "
-        "and the exact set of dimensions it can be sliced by (its own model's "
-        "plus any reachable through a documented join). Call this before "
-        "run_semantic_query to pick a valid metric+dimension combination."
-    )
-    _run_semantic_query_desc = (
-        "THE DEFAULT, SAFE way to answer a question about this data product. "
-        "Name CONCEPTS and the data product writes correct, governed SQL — "
-        "you never write SQL on this path.\n\n"
-        f"Data models: {model_summary}.\n\n"
-        "ARGS:\n"
-        "- measures (REQUIRED): list of metric names from list_metrics.\n"
-        "- dimensions (optional): list of dimension names from list_dimensions "
-        "to group by. OMIT IT (or pass []) for a grand total.\n"
-        '- filters (optional): list of {"dimension": <name>, "op": <symbol>, '
-        "\"value\": <val>}. The 'op' field (named 'op', NOT 'operator') MUST be "
-        "one of these EXACT symbols: '=', '!=', '>', '>=', '<', '<=', 'IN', "
-        "'LIKE', 'ILIKE' — use the symbol '=', NOT the word 'eq'/'equals'. "
-        'Example: {"dimension": "status", "op": "=", "value": "Active"}.\n\n'
-        "It DETERMINISTICALLY compiles the selection into a safe, aggregated, "
-        "read-only query against the curated semantic view, runs it under "
-        "governance, and returns the rows plus the compiled SQL. "
-        "Use list_metrics / list_dimensions / describe_metric to discover "
-        "valid concepts. Do not mix metrics from different models in one call."
-    )
 
     return [
         SemanticTool(

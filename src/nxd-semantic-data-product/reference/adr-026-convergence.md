@@ -1,24 +1,24 @@
-# ADR-020 convergence
+# ADR-026 convergence
 
 ## Contents
-- What ADR-020 proposes
-- Mapping table: today's registry calls to ADR-020 spec DSL
+- What ADR-026 proposes
+- Mapping table: today's registry calls to ADR-026 spec DSL
 - extra_dimensions divergence note
 - Migration path
 
 ---
 
-## What ADR-020 proposes
+## What ADR-026 proposes
 
-ADR-020 (`docs/architecture/adrs/020-semantic-layer-first-class.md` in the
+ADR-026 (`docs/architecture/adrs/026-semantic-layer-first-class.md` in the
 `nxd` monorepo) defines first-class `measure` / `dimension` / `grain` /
 `cardinality` support in `nxd.spec` and the NXD kernel, replacing the stopgap
 `SemanticRegistry` builder with native spec DSL.
 
-Under ADR-020, a data product author will write:
+Under ADR-026, a data product author will write:
 
 ```python
-# Future ADR-020 spec DSL (not yet available)
+# Future ADR-026 spec DSL (not yet available)
 from nxd.spec import data_product, grain, measure, dimension, join
 
 spec = (
@@ -35,9 +35,9 @@ The kernel will own SQL generation and MCP tool exposure natively.
 
 ---
 
-## Mapping table: today's registry calls to ADR-020 spec DSL
+## Mapping table: today's registry calls to ADR-026 spec DSL
 
-| Today (SemanticRegistry) | ADR-020 (nxd.spec, future) | Notes |
+| Today (SemanticRegistry) | ADR-026 (nxd.spec, future) | Notes |
 |--------------------------|---------------------------|-------|
 | `.model(name, grain=..., description=...)` | `.grain(name, key=..., description=...)` | `grain` replaces `model` as the primary entity |
 | `.dimension(name, model=..., column=..., type=..., pii=...)` | `.dimension(name, on=..., column=..., type=..., pii=...)` | `on` replaces `model` for the owning entity |
@@ -49,7 +49,7 @@ The kernel will own SQL generation and MCP tool exposure natively.
 | `build_semantic_tools(registry)` | kernel-native MCP tool exposure | Concept names and tool signatures unchanged |
 
 Public types (`Agg`, `Cardinality`, `Dimension`, `Metric`, `Model`, `Join`,
-`CompiledRegistry`) are intentionally named to match ADR-020 so the migration
+`CompiledRegistry`) are intentionally named to match ADR-026 so the migration
 is a rename of the call site, not a semantic redesign.
 
 ---
@@ -57,7 +57,7 @@ is a rename of the call site, not a semantic redesign.
 ## extra_dimensions divergence note
 
 The stopgap registry exposes `extra_dimensions` as an explicit override on
-`Metric`. ADR-020 derives cross-model dimension reach **exclusively** from the
+`Metric`. ADR-026 derives cross-model dimension reach **exclusively** from the
 cardinality-annotated join — there is no per-metric explicit override in the
 proposed spec DSL.
 
@@ -65,24 +65,24 @@ This means:
 
 - In the stopgap, an explicit `extra_dimensions=("some_dim",)` overrides
   auto-derivation entirely for that metric.
-- Under ADR-020, all reach is derived from joins. There will be no per-metric
+- Under ADR-026, all reach is derived from joins. There will be no per-metric
   override knob.
 
 **Recommendation**: do not use `extra_dimensions` in new registries unless
 the auto-derived set is genuinely wrong and cannot be fixed by correcting the
 join. Code using `extra_dimensions` will require a manual review pass during
-the ADR-020 migration to verify that the correct reach is expressed via joins
+the ADR-026 migration to verify that the correct reach is expressed via joins
 instead.
 
 ---
 
 ## Migration path
 
-When ADR-020 lands:
+When ADR-026 lands:
 
 1. Replace `from semantic.registry import SemanticRegistry, Agg, Cardinality`
    with `from nxd.spec import grain, measure, dimension, join` (names TBD per
-   ADR-020 final spec).
+   ADR-026 final spec).
 2. Replace `.model(...)` calls with `.grain(...)`.
 3. Replace `.metric(...)` calls with `.measure(...)`.
 4. Replace `.dimension(..., model=...)` with `.dimension(..., on=...)`.

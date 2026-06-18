@@ -188,6 +188,6 @@ See `reference/runtime-and-dependencies.md` for version-skew notes.
 | `reference/registry-authoring.md` | Full fluent API + worked generic example |
 | `reference/compiler-and-routing.md` | Three compile paths + chasm-trap |
 | `reference/runtime-and-dependencies.md` | Requirements, version-skew notes |
-| `reference/adr-020-convergence.md` | ADR-020 migration table |
+| `reference/adr-026-convergence.md` | ADR-026 migration table |
 | `reference/scripts/semantic/` | Vendored kit — copy verbatim into each DP |
 | `reference/scripts/scaffold_semantic_dp.py` | Scaffold automation |

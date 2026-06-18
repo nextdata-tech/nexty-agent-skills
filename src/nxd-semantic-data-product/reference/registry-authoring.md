@@ -123,7 +123,7 @@ class Agg(str, Enum):
 ```
 
 No custom aggregation functions. These six values are the closed vocabulary,
-intentionally aligned with ADR-020.
+intentionally aligned with ADR-026.
 
 ---
 

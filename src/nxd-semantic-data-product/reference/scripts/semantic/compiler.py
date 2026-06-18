@@ -18,7 +18,7 @@ Chasm-trap defence is the load-bearing correctness property: metrics from
 different fact grains in one selection raise :py:exc:`CompileError` with an
 actionable message telling the caller to split into separate queries.
 
-See: docs/architecture/adrs/020-semantic-layer-first-class.md
+See: docs/architecture/adrs/026-semantic-layer-first-class.md
 """
 
 from __future__ import annotations
@@ -58,8 +58,54 @@ def _lit(v: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Filter rendering
+# Filter rendering (shared predicate renderer)
 # ---------------------------------------------------------------------------
+
+#: Closed allowlist of permitted filter operators.  Both the base-table path
+#: (``_filter_sql``) and the native semantic-view path
+#: (``SnowflakeDialect.native_view_query``) call ``_render_predicate`` so the
+#: same allowlist governs both — closing the injection gap where the native
+#: path previously accepted arbitrary ``op`` strings after only ``.upper()``.
+_ALLOWED_OPS: frozenset[str] = frozenset({"=", "!=", "<>", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN", "NOT IN"})
+
+
+def _render_predicate(col_or_name: str, op: str, val: Any) -> str:
+    """Render a single filter predicate after operator allowlist enforcement.
+
+    Parameters
+    ----------
+    col_or_name:
+        The column reference or dimension name to use on the left-hand side of
+        the predicate.  For base-table queries this is the physical column name;
+        for native semantic-view queries this is the semantic dimension name.
+    op:
+        The operator string, already ``.upper()``-ed by the caller.
+    val:
+        The right-hand value.  Lists/tuples are valid only for ``IN``/``NOT IN``.
+
+    Raises
+    ------
+    CompileError
+        If *op* is not in :py:data:`_ALLOWED_OPS`, or if ``IN``/``NOT IN`` is
+        used with a scalar value.
+    """
+    if op not in _ALLOWED_OPS:
+        raise CompileError(
+            f"unsupported filter op {op!r}. op MUST be one of these EXACT symbols: "
+            "'=', '!=', '<>', '>', '>=', '<', '<=', 'LIKE', 'ILIKE', 'IN', 'NOT IN'."
+        )
+    if op in ("IN", "NOT IN"):
+        if not isinstance(val, (list, tuple)):
+            raise CompileError(
+                f"filter op {op!r} requires a list value, got {type(val).__name__!r}. "
+                'Pass a list of values, e.g. ["A", "B"].'
+            )
+        from typing import cast
+
+        val_seq: list[Any] = cast(list[Any], val)
+        rendered = ", ".join(_lit(v) for v in val_seq)
+        return f"{col_or_name} {op} ({rendered})"
+    return f"{col_or_name} {op} {_lit(val)}"
 
 
 def _filter_sql(f: dict[str, Any], registry: CompiledRegistry) -> str:
@@ -76,18 +122,7 @@ def _filter_sql(f: dict[str, Any], registry: CompiledRegistry) -> str:
     if dim is None:
         raise CompileError(f"unknown filter dimension {dim_name!r}")
     col = dim.column
-    if op in ("IN", "NOT IN") and isinstance(val, (list, tuple)):
-        from typing import cast
-
-        val_seq: list[Any] = cast(list[Any], val)
-        rendered = ", ".join(_lit(v) for v in val_seq)
-        return f"{col} {op} ({rendered})"
-    if op in ("=", "!=", "<>", ">", ">=", "<", "<=", "LIKE", "ILIKE"):
-        return f"{col} {op} {_lit(val)}"
-    raise CompileError(
-        f"unsupported filter op {op!r}. op MUST be one of these EXACT symbols: "
-        "'=', '!=', '<>', '>', '>=', '<', '<=', 'LIKE', 'ILIKE', 'IN', 'NOT IN'."
-    )
+    return _render_predicate(col, op, val)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +166,7 @@ def _validate_selection(
     - A dimension incompatible with any selected metric.
     - Dimensions spanning more than one foreign model (star-schema fan-out guard).
       The single N:1 join case (all foreign dims from ONE other model) is allowed.
-      See ADR-020 line ~229 ("the fallback join path must enforce it in the
+      See ADR-026 line ~229 ("the fallback join path must enforce it in the
       compiler"). Full multi-join generalisation is future work.
     """
     metric_models = {m.model for m in mets}
@@ -286,11 +321,7 @@ def _compile_against_view(
 
 def _plain_view_name(dialect: Dialect, registry: CompiledRegistry) -> str:
     """Derive the plain-view name consistently across compile paths."""
-    if hasattr(dialect, "_resolve_view_name"):
-        return dialect._resolve_view_name(registry)  # type: ignore[attr-defined]
-    if registry.models:
-        return f"{registry.models[0].name.upper()}_SEMANTIC"
-    return "SEMANTIC_VIEW"
+    return dialect.view_name(registry)
 
 
 # ---------------------------------------------------------------------------

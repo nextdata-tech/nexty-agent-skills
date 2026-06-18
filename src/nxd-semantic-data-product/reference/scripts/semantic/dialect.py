@@ -6,7 +6,7 @@ generation. :py:class:`SnowflakeDialect` implements the Snowflake backend,
 lifting the exact SQL grammar verified live against a real Snowflake account
 (NEX-620 PoC ``semantic_compile.py``).
 
-See: docs/architecture/adrs/020-semantic-layer-first-class.md
+See: docs/architecture/adrs/026-semantic-layer-first-class.md
 """
 
 from __future__ import annotations
@@ -53,6 +53,15 @@ class Dialect(Protocol):
         session and can be queried."""
         ...
 
+    def view_name(self, registry: CompiledRegistry) -> str:
+        """Return the view / semantic-view name to use for *registry*.
+
+        Used by :py:func:`~nxd.experimental.semantic.compiler._plain_view_name`
+        so that cross-compile-path name derivation never calls a private
+        ``_resolve_view_name`` method via ``hasattr`` + ``type: ignore``.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Snowflake implementation
@@ -90,6 +99,13 @@ class SnowflakeDialect:
             base = registry.models[0].name.upper()
             return f"{base}_SEMANTIC"
         return "SEMANTIC_VIEW"
+
+    def view_name(self, registry: CompiledRegistry) -> str:
+        """Return the semantic / plain view name for *registry*.
+
+        Implements :py:meth:`~nxd.experimental.semantic.dialect.Dialect.view_name`.
+        """
+        return self._resolve_view_name(registry)
 
     # -- aggregation expressions ----------------------------------------------
 
@@ -220,8 +236,15 @@ class SnowflakeDialect:
 
         Validation (mixed-grain / incompatible-dimension) is performed by the
         compiler *before* calling this method; this method only renders SQL.
+
+        Filter ``op`` values are validated against the same closed allowlist used
+        by the base-table path (``_ALLOWED_OPS`` / ``_render_predicate`` in
+        ``compiler.py``) — unknown operators raise
+        :py:exc:`~nxd.experimental.semantic.compiler.CompileError` before any
+        SQL is emitted.
         """
-        from .compiler import _lit
+        from .compiler import CompileError
+        from .compiler import _render_predicate
 
         sv_name = self._resolve_view_name(registry)
 
@@ -251,15 +274,13 @@ class SnowflakeDialect:
             preds: list[str] = []
             for f in filters:
                 dim_name = f.get("dimension") or f.get("name") or ""
+                if not dim_name:
+                    raise CompileError("filter is missing 'dimension' key")
                 op = (f.get("op") or "=").upper()
                 val = f.get("value")
-                if op in ("IN", "NOT IN") and isinstance(val, (list, tuple)):
-                    from typing import cast
-
-                    val_seq: list[Any] = cast(list[Any], val)
-                    preds.append(f"{dim_name} {op} ({', '.join(_lit(v) for v in val_seq)})")
-                else:
-                    preds.append(f"{dim_name} {op} {_lit(val)}")
+                # _render_predicate enforces the allowlist — raises CompileError on
+                # unknown op or IN/NOT IN with a scalar value.
+                preds.append(_render_predicate(dim_name, op, val))
             parts.append("WHERE " + " AND ".join(preds))
 
         sv_args = " ".join(parts)

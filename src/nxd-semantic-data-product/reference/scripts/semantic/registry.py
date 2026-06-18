@@ -1,12 +1,12 @@
 """Semantic registry builder for the NXD semantic-layer stopgap (NEX-620).
 
-This module is a **stopgap** until ADR-020 lands first-class measure/dimension
+This module is a **stopgap** until ADR-026 lands first-class measure/dimension
 support in the NXD spec and kernel. Public names are intentionally aligned with
-ADR-020 so the migration is mechanical (Agg, Cardinality, Dimension, Metric,
+ADR-026 so the migration is mechanical (Agg, Cardinality, Dimension, Metric,
 Model, Join map directly to the proposed spec DSL).
 
-See: docs/architecture/adrs/020-semantic-layer-first-class.md
-Convergence target: nxd.spec.measure / nxd.spec.dimension (ADR-020 first-class
+See: docs/architecture/adrs/026-semantic-layer-first-class.md
+Convergence target: nxd.spec.measure / nxd.spec.dimension (ADR-026 first-class
 support).
 """
 
@@ -19,7 +19,7 @@ from typing import Any
 
 
 class Agg(str, Enum):
-    """Closed aggregation vocabulary — mirrors ADR-020 § Spec DSL."""
+    """Closed aggregation vocabulary — mirrors ADR-026 § Spec DSL."""
 
     COUNT = "count"
     COUNT_DISTINCT = "count_distinct"
@@ -32,7 +32,7 @@ class Agg(str, Enum):
 class Cardinality(str, Enum):
     """Join cardinality. MANY_TO_ONE is the N:1 case that makes cross-model
     dimension slicing safe (the MANY side metric grain is preserved through the
-    join). ADR-020 § manifest schema."""
+    join). ADR-026 § manifest schema."""
 
     ONE_TO_ONE = "one_to_one"
     ONE_TO_MANY = "one_to_many"
@@ -232,6 +232,18 @@ class SemanticRegistry:
     # -- builder methods -------------------------------------------------------
 
     def model(self, name: str, *, grain: str, description: str = "") -> SemanticRegistry:
+        """Register a physical table / semantic-model entity.
+
+        Parameters
+        ----------
+        name:
+            Unique model name (must match the table name in the warehouse).
+        grain:
+            Column (or comma-separated columns) that uniquely identifies one row
+            — the entity key.  Required; ``build()`` rejects an empty grain.
+        description:
+            Optional human-readable description surfaced in tool catalogs.
+        """
         self._models.append(Model(name=name, grain=grain, description=description))
         return self
 
@@ -245,6 +257,28 @@ class SemanticRegistry:
         description: str = "",
         pii: bool = False,
     ) -> SemanticRegistry:
+        """Register a slicing / filtering axis on *model*.
+
+        Parameters
+        ----------
+        name:
+            Unique concept name used in ``compile_selection`` / MCP tool args.
+        model:
+            Name of the owning model (must be declared before ``build()``).
+        column:
+            Physical column name in the warehouse table.
+        type:
+            Logical type hint (e.g. ``"string"``, ``"boolean"``, ``"date"``).
+            Informational only — not validated against the warehouse schema.
+        description:
+            Plain-language meaning surfaced in ``list_dimensions``.
+        pii:
+            When ``True`` this dimension is a governance target.  PII dimensions
+            are included in ``compatible_dimensions()`` but the query layer may
+            mask or reject queries that select them depending on the caller's
+            access level.  PII dimensions are excluded from the
+            auto-derived cross-model dimension reachability sets.
+        """
         self._dimensions.append(
             Dimension(
                 name=name,
@@ -268,6 +302,34 @@ class SemanticRegistry:
         boolean: bool = False,
         extra_dimensions: tuple[str, ...] = (),
     ) -> SemanticRegistry:
+        """Register a named, aggregated measure on *model*.
+
+        Parameters
+        ----------
+        name:
+            Unique concept name used in ``compile_selection`` / MCP tool args.
+        model:
+            Name of the owning model (must be declared before ``build()``).
+        agg:
+            Aggregation function.  ``Agg.COUNT`` with ``column="*"`` renders
+            ``COUNT(*)``; all other aggregations (SUM, AVG, MIN, MAX) require a
+            real column name — ``build()`` rejects ``column="*"`` for those aggs.
+        column:
+            Physical column to aggregate.  Defaults to ``"*"`` which is only
+            valid for ``COUNT`` (and accepted silently for ``COUNT_DISTINCT``
+            where the column is required).
+        description:
+            Plain-language meaning surfaced in ``list_metrics``.
+        boolean:
+            When ``True`` SUM uses a CASE expression robust to
+            BOOLEAN/VARCHAR physical types (counts rows where the column is
+            truthy).
+        extra_dimensions:
+            Explicit override of the auto-derived cross-model dimension set.
+            Leave empty (default) to let :py:meth:`build` derive it from N:1
+            joins.  Pass an explicit tuple to pin the reachable dimension set
+            for this metric regardless of join topology.
+        """
         self._metrics.append(
             Metric(
                 name=name,
@@ -292,10 +354,10 @@ class SemanticRegistry:
         boolean: bool = False,
         extra_dimensions: tuple[str, ...] = (),
     ) -> SemanticRegistry:
-        """Alias for :py:meth:`metric` using the ADR-020-convergent verb name.
+        """Alias for :py:meth:`metric` using the ADR-026-convergent verb name.
 
-        ADR-020's spec DSL uses ``measure(name, agg, column, ...)``; this alias
-        makes code written against the ADR-020 vocabulary work without changes.
+        ADR-026's spec DSL uses ``measure(name, agg, column, ...)``; this alias
+        makes code written against the ADR-026 vocabulary work without changes.
         ``.metric()`` is kept for backwards compatibility.
         """
         return self.metric(
@@ -316,6 +378,22 @@ class SemanticRegistry:
         on: tuple[tuple[str, str], ...],
         cardinality: Cardinality = Cardinality.MANY_TO_ONE,
     ) -> SemanticRegistry:
+        """Register a join between two models.
+
+        Parameters
+        ----------
+        left:
+            Name of the left-hand (typically MANY-side) model.
+        right:
+            Name of the right-hand (typically ONE-side) model.
+        on:
+            Tuple of ``(left_col, right_col)`` pairs — the equi-join predicate.
+        cardinality:
+            Join cardinality.  ``MANY_TO_ONE`` (default) is the safe case that
+            preserves the MANY side's grain and unlocks cross-model dimension
+            slicing.  ``MANY_TO_MANY`` joins are recorded but not used by the
+            compiler's dimension-reachability logic.
+        """
         self._joins.append(Join(left=left, right=right, on=on, cardinality=cardinality))
         return self
 
@@ -416,6 +494,19 @@ class SemanticRegistry:
         for m in self._models:
             if not m.grain:
                 raise ValueError(f"Model {m.name!r} must declare a non-empty grain (the entity key column).")
+
+        # ---- column="*" guard for aggregations that require a real column ------
+        # COUNT(*) is intentionally valid; SUM/AVG/MIN/MAX against "*" would
+        # emit invalid SQL that only fails at query time — catch it here.
+        _aggs_requiring_column = {Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX}
+        for mt in self._metrics:
+            if mt.agg in _aggs_requiring_column and mt.column == "*":
+                raise ValueError(
+                    f"Metric {mt.name!r} uses agg={mt.agg.value!r} with column='*'. "
+                    f"{mt.agg.value.upper()} requires a real column name — pass "
+                    f"column='<column>' to .metric() (e.g. column='REVENUE'). "
+                    "Only COUNT and COUNT_DISTINCT accept column='*'."
+                )
 
         # ---- referential integrity -------------------------------------------
         for d in self._dimensions:

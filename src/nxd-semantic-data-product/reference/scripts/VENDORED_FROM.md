@@ -2,7 +2,7 @@
 
 Source path (in the nxd monorepo): `components/nxd_py/data_product/nxd/experimental/semantic/`
 
-Source commit: `045906949` — `feat(nxd_py): experimental.semantic module — registry/compiler/dialect/MCP factory (NEX-620)` (branch `feat/nex-620-experimental-semantic`, PR nextdata-tech/nxd#6902). Re-vendored 2026-06-18.
+Source commit: `587a1a26e` — `fix(nxd_py): address PR #6902 review — close native-view filter injection + harden semantic module (NEX-620)` (branch `feat/nex-620-experimental-semantic`, PR nextdata-tech/nxd#6902). Re-vendored 2026-06-18.
 
 This snapshot is byte-identical to the committed source modulo the import-root
 rewrite documented below. To check for drift, diff the committed source against
@@ -35,7 +35,7 @@ Changes relative to the previous vendor snapshot (`36dee1470d734b1f6c948f81b2e37
 3. **__init__.py** — exports `SemanticTool` alongside `build_semantic_tools` in
    the `try` block; `__all__` extended accordingly.
 
-4. **registry.py** — added `.measure()` alias for `.metric()` (ADR-020 convergence
+4. **registry.py** — added `.measure()` alias for `.metric()` (ADR-026 convergence
    vocabulary; allows code written against the future spec DSL to work unchanged).
 
 5. **dialect.py** — no logic changes; import paths adjusted to relative form only.
@@ -44,6 +44,23 @@ Changes relative to the previous vendor snapshot (`36dee1470d734b1f6c948f81b2e37
    commit time (parameter/return types, `cast` on filter-value iteration,
    `# pyright: ignore` only at the untyped Snowflake-connector boundary in
    `mcp_tools.py`). No runtime-behavior or public-API change; goldens unchanged.
+
+7. **PR #6902 review fixes** (commit `587a1a26e`):
+   - **compiler.py / dialect.py** — SECURITY: the native-view path
+     (`dialect.native_view_query`) previously interpolated the LLM-supplied
+     filter `op` after only `.upper()`, skipping the operator allowlist the
+     base path enforced (predicate-injection bypass). Both paths now route
+     through one `_render_predicate` / `_ALLOWED_OPS` renderer in
+     `compiler.py`; invalid/injected ops raise `CompileError`. `IN`/`NOT IN`
+     with a scalar value now raises an actionable `CompileError`.
+   - **registry.py** — `build()` rejects SUM/AVG/MIN/MAX with `column="*"`;
+     builder methods documented.
+   - **dialect.py** — `view_name(registry)` promoted onto the `Dialect`
+     Protocol (no more `hasattr` probe).
+   - **mcp_tools.py** — `build_semantic_tools` rejects `view_name`+`dialect`
+     together; tool descriptions defined once; `with conn.cursor()`.
+   - ADR citations renumbered 020 → 026 (the ADR was renumbered to avoid
+     collision with `020-event-store.md`; nxd PR #6893).
 
 This is a verbatim build-time snapshot. Never hand-edit the vendored files in
 this skill or in any generated DP. Report bugs to the `nxd_py` monorepo and

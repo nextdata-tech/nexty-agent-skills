@@ -3,7 +3,7 @@
 ## Contents
 - What this kit provides
 - Two-layer design
-- Stopgap status and ADR-020 convergence
+- Stopgap status and ADR-026 convergence
 
 ---
 
@@ -77,15 +77,15 @@ nothing.
 
 ---
 
-## Stopgap status and ADR-020 convergence
+## Stopgap status and ADR-026 convergence
 
 This kit is **module-named `nxd.experimental.semantic`** in the `nxd_py` monorepo to
-signal that it is a stopgap. ADR-020 (`docs/architecture/adrs/020-semantic-layer-first-class.md`)
+signal that it is a stopgap. ADR-026 (`docs/architecture/adrs/026-semantic-layer-first-class.md`)
 defines the convergence target: first-class `measure` / `dimension` / `grain` in
 `nxd.spec` with kernel-driven Snowflake semantic-view capability.
 
 Every public name in the kit (`Agg`, `Cardinality`, `Dimension`, `Metric`,
-`Model`, `Join`) is intentionally aligned with ADR-020 so the migration from
+`Model`, `Join`) is intentionally aligned with ADR-026 so the migration from
 `SemanticRegistry.build()` calls to native spec DSL calls is mechanical.
 
-See `reference/adr-020-convergence.md` for the mapping table.
+See `reference/adr-026-convergence.md` for the mapping table.

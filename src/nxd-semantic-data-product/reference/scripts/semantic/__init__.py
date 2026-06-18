@@ -1,12 +1,12 @@
 """Semantic-layer stopgap for NXD data products (NEX-620).
 
-This package is a **stopgap** until ADR-020 lands first-class
+This package is a **stopgap** until ADR-026 lands first-class
 measure/dimension support in the NXD spec and kernel. Every public name is
-intentionally aligned with ADR-020 so the later kernel migration is mechanical.
+intentionally aligned with ADR-026 so the later kernel migration is mechanical.
 
-ADR-020 convergence target: ``nxd.spec.measure`` / ``nxd.spec.dimension`` and a
+ADR-026 convergence target: ``nxd.spec.measure`` / ``nxd.spec.dimension`` and a
 kernel-driven Snowflake semantic-view capability (see
-``docs/architecture/adrs/020-semantic-layer-first-class.md``).
+``docs/architecture/adrs/026-semantic-layer-first-class.md``).
 
 Importable without the ``rpc`` extra (compiler + registry work standalone).
 ``build_semantic_tools`` requires the ``rpc`` extra and is guarded accordingly.
