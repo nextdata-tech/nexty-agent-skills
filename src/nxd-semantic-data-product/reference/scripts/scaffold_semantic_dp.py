@@ -34,7 +34,6 @@ The scaffold prints the correct spec.py block:
     # then: .output(_rpc) on the data_product(...) spec
 
 Reference: reference/scripts/templates/spec_rpc_output.py.tmpl
-PoC example: examples_private/argenx/hcp-poc/spec.py
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Source path (in the nxd monorepo): `components/nxd_py/data_product/nxd/experimental/semantic/`
 
-Source commit: `91b2e2da2` — `fix(nxd_py): address PR #6902 second review — COUNT_DISTINCT guard + predicate leaf (NEX-620)` (branch `feat/nex-620-experimental-semantic`, PR nextdata-tech/nxd#6902). Re-vendored 2026-06-18.
+Source commit: `faeb4d945` — `docs(nxd_py): drop customer-domain term from semantic mcp_tools docstring (NEX-620)` (branch `feat/nex-620-experimental-semantic`, PR nextdata-tech/nxd#6902). Re-vendored 2026-06-18.
 
 This snapshot is byte-identical to the committed source modulo the import-root
 rewrite documented below. To check for drift, diff the committed source against

@@ -14,7 +14,7 @@ This module imports ``nxd.drivers.rpc`` (``Request``, ``Response``, ``function``
 the existing ``rpc`` extra — importing :py:mod:`nxd.experimental.semantic` without
 that extra still works (the ``__init__`` guards this import in a try/except).
 
-Tool descriptions are generic (no HCP-specifics). Concepts and table names are
+Tool descriptions are generic (no domain-specifics). Concepts and table names are
 derived from the registry at build time.
 
 :py:func:`build_semantic_tools` returns a ``list[SemanticTool]`` — NOT a list of
