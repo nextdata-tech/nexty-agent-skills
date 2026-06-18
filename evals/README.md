@@ -8,9 +8,16 @@ The target comparison is:
 
 | Variant | Purpose |
 |---|---|
-| `no_skills` | Baseline: general agent with repo/docs only |
+| `no_skills` | Baseline: general agent with the public docs + examples, no curated skills |
 | `current_pack` | Existing shipped skills |
 | `candidate_pack` | Existing skills plus proposed workflow primitives |
+
+The baseline is deliberately **not** a blind agent. Every run — baseline
+included — is given the public platform docs (via `WebFetch` against
+`<docs-base>`, default the public demo mesh) and a read-only copy of the
+`nextdata-public-examples` repo. The only thing that varies between variants is
+the curated skill set, so a measured lift is attributable to the skills, not to
+withholding context from the baseline.
 
 ## Directory layout
 

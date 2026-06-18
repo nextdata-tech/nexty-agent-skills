@@ -29,6 +29,11 @@ on:
         required: false
         type: string
         default: opus
+      docs_base:
+        description: "Public platform docs base URL given to every run."
+        required: false
+        type: string
+        default: "https://app.demo.trynxd.com/docs/#/"
 
 permissions:
   contents: read
@@ -58,7 +63,8 @@ jobs:
           set -euo pipefail
           args=(--suite public --report eval-report.json
                 --agent-model "${{ inputs.agent_model }}"
-                --judge-model "${{ inputs.judge_model }}")
+                --judge-model "${{ inputs.judge_model }}"
+                --docs-base "${{ inputs.docs_base }}")
           if [ -n "${{ inputs.skill_set }}" ]; then
             args+=(--skill-set "${{ inputs.skill_set }}")
           fi

@@ -48,9 +48,25 @@ DEFAULT_JUDGE_MODEL = "opus"
 DEFAULT_AGENT_TIMEOUT_S = 1200
 DEFAULT_JUDGE_TIMEOUT_S = 300
 
-# Tools the agent under test may use. Read/write/inspect the workspace and run
-# the (mocked) shell; no network beyond what the skills themselves drive.
-AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite"
+# Tools the agent under test may use. Read/write/inspect the workspace, run the
+# (mocked) shell, and fetch the public platform docs. WebFetch is what lets the
+# no_skills baseline reach the same public docs a real user has, so the only
+# variable between skill-sets is the curated skills themselves.
+AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch"
+
+# Public platform docs base. Per-mesh docs are served at <app_url>/docs/#/<path>;
+# CI/local runs point at the public demo mesh. Every run (baseline included) is
+# told this base so the comparison is "skills vs. equally-informed agent", not
+# "skills vs. ignorance". Override with --docs-base.
+DEFAULT_DOCS_BASE = "https://app.demo.trynxd.com/docs/#/"
+
+# The public examples repo (spec.py/transform.py/contracts for real data
+# products), vendored as a submodule under the builder skill. Every run gets it
+# read-only via --add-dir — it is the public GitHub examples a user starts from.
+EXAMPLES_DIR = (
+    REPO_ROOT
+    / "src" / "nxd-data-product-builder" / "reference" / "nextdata-public-examples"
+)
 
 
 @dataclass
@@ -163,7 +179,71 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> Path:
     return ws
 
 
-def run_agent(ws: Path, prompt: str, model: str, timeout_s: int) -> tuple[bool, str, dict]:
+def agent_task_from_prompt(prompt_md: str) -> str:
+    """Extract only the agent-facing task from a scenario prompt.md.
+
+    Scenario prompt.md files are authored as specs: an intro that may state the
+    root cause, a "Task for the agent:" block, then "Required artifacts ..." and
+    "Success checks:" sections that describe setup and the grading rubric. Only
+    the task is safe to show the agent — the intro and success checks would hand
+    it the answer and the rubric (the judge sees the full spec separately).
+
+    Strategy: take the text under "Task for the agent:" up to the next section
+    header. If there's no such header (build-brief style prompts), fall back to
+    everything before "Success checks:" — which still strips the rubric.
+    """
+    lines = prompt_md.splitlines()
+    section_re = re.compile(
+        r"^\s*(Required artifacts|Success checks|Constraints|Expected final)",
+        re.IGNORECASE,
+    )
+    task_start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*Task for the agent:\s*$", line, re.IGNORECASE):
+            task_start = i + 1
+            break
+
+    if task_start is not None:
+        body = []
+        for line in lines[task_start:]:
+            if section_re.match(line):
+                break
+            body.append(line)
+        task = "\n".join(body).strip()
+        if task:
+            return task
+
+    # Fallback: drop everything from "Success checks:" onward.
+    cut = len(lines)
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*Success checks:\s*$", line, re.IGNORECASE):
+            cut = i
+            break
+    return "\n".join(lines[:cut]).strip()
+
+
+def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool) -> str:
+    """Prepend the shared context every skill-set gets (docs + examples)."""
+    lines = [
+        "You are working on a Nextdata OS (nxd) data-product task.",
+        "",
+        "Available context (the same for every run):",
+        f"- Public platform docs are served under {docs_base}<path> — use the "
+        "WebFetch tool to read them when you need nxd CLI or spec/DSL reference.",
+    ]
+    if has_examples:
+        lines.append(
+            "- A read-only copy of the public example data products is mounted "
+            "alongside your workspace (a `nextdata-public-examples` directory with "
+            "real spec.py / models.py / transform.py / contracts). Read it for "
+            "working patterns."
+        )
+    lines += ["", "--- TASK ---", scenario_prompt]
+    return "\n".join(lines)
+
+
+def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
+              extra_dirs: list[Path] | None = None) -> tuple[bool, str, dict]:
     """Run the headless agent in the workspace. Returns (ok, transcript, metrics)."""
     cmd = [
         "claude", "-p", prompt,
@@ -175,6 +255,8 @@ def run_agent(ws: Path, prompt: str, model: str, timeout_s: int) -> tuple[bool, 
         "--allowedTools", AGENT_ALLOWED_TOOLS,
         "--add-dir", str(ws),
     ]
+    for d in extra_dirs or []:
+        cmd += ["--add-dir", str(d)]
     try:
         proc = subprocess.run(
             cmd, cwd=ws, capture_output=True, text=True, timeout=timeout_s
@@ -292,7 +374,13 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         res.error = "missing checks.json"
         return res
     checks = json.loads(checks_file.read_text(encoding="utf-8"))
-    prompt = (scenario_dir / "prompt.md").read_text(encoding="utf-8")
+    prompt_md = (scenario_dir / "prompt.md").read_text(encoding="utf-8")
+    # Only the task section is agent-facing; the intro + success checks would
+    # leak the answer and the rubric. The judge still sees the full prompt.md.
+    agent_task = agent_task_from_prompt(prompt_md)
+
+    extra_dirs = [EXAMPLES_DIR] if EXAMPLES_DIR.is_dir() else []
+    prompt = build_agent_prompt(agent_task, args.docs_base, bool(extra_dirs))
 
     with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
         try:
@@ -302,7 +390,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             return res
 
         ok, transcript, metrics = run_agent(
-            ws, prompt, args.agent_model, args.agent_timeout
+            ws, prompt, args.agent_model, args.agent_timeout, extra_dirs=extra_dirs
         )
         res.transcript = transcript
         res.metrics = metrics
@@ -329,6 +417,8 @@ def main() -> int:
     parser.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S)
     parser.add_argument("--judge-timeout", type=int, default=DEFAULT_JUDGE_TIMEOUT_S)
+    parser.add_argument("--docs-base", default=DEFAULT_DOCS_BASE,
+                        help="Public platform docs base URL given to every run.")
     parser.add_argument("--report", type=Path,
                         help="Write a JSON report to this path.")
     parser.add_argument("--list", action="store_true",
@@ -347,9 +437,18 @@ def main() -> int:
             print(f"  {sc.name}")
         return 0
 
-    selected_sets = (
-        [sets[n] for n in args.skill_sets] if args.skill_sets else list(sets.values())
-    )
+    if args.skill_sets:
+        unknown = [n for n in args.skill_sets if n not in sets]
+        if unknown:
+            print(
+                f"Unknown skill set(s): {', '.join(unknown)}. "
+                f"Known sets: {', '.join(sets)}.",
+                file=sys.stderr,
+            )
+            return 2
+        selected_sets = [sets[n] for n in args.skill_sets]
+    else:
+        selected_sets = list(sets.values())
     if args.scenarios:
         want = set(args.scenarios)
         scenarios = [sc for sc in scenarios if sc.name in want]
