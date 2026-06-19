@@ -174,6 +174,35 @@ class CompiledRegistry:
     def pii_dimensions(self) -> tuple[Dimension, ...]:
         return tuple(d for d in self.dimensions if d.pii)
 
+    def metrics_of(self, model_name: str) -> tuple[Metric, ...]:
+        """Metrics whose owning model is model_name (declaration order)."""
+        return tuple(m for m in self.metrics if m.model == model_name)
+
+    def dimensions_of(self, model_name: str) -> tuple[Dimension, ...]:
+        """Dimensions physically owned by model_name (declaration order).
+
+        Own dims only; join-reachable dims surface via joins_of().
+        """
+        return tuple(d for d in self.dimensions if d.model == model_name)
+
+    def joins_of(self, model_name: str) -> tuple[tuple[Join, tuple[str, ...]], ...]:
+        """Joins where model_name is the left (MANY-side) endpoint.
+
+        Returns (join, reached_dim_names) pairs. reached_dim_names = non-PII
+        dims on the right (ONE-side) model for MANY_TO_ONE joins (matches
+        build()'s auto-derived reach); () for other cardinalities.
+        """
+        out: list[tuple[Join, tuple[str, ...]]] = []
+        for j in self.joins:
+            if j.left != model_name:
+                continue
+            if j.cardinality == Cardinality.MANY_TO_ONE:
+                reached = tuple(d.name for d in self.dimensions if d.model == j.right and not d.pii)
+            else:
+                reached = ()
+            out.append((j, reached))
+        return tuple(out)
+
     def column_description(self, model: str, column: str, fallback: str = "") -> str:
         """Description for a physical column.
 

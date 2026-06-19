@@ -1,11 +1,12 @@
 """MCP tool factory for the NXD semantic-layer stopgap (NEX-620).
 
-Exposes four governed MCP tools over a
+Exposes three governed MCP tools over a
 :py:class:`~nxd.experimental.semantic.registry.CompiledRegistry`:
 
-- ``list_metrics``       — enumerate available metrics with grain + description.
-- ``list_dimensions``    — enumerate slicing axes with PII flags.
-- ``describe_metric``    — detail one metric: agg, grain, compatible dimensions.
+- ``list_models``        — enumerate available semantic models (grains) with
+                           metric/dimension counts and join topology.
+- ``describe_model``     — detail one model: all its metrics (with compatible
+                           dimensions), own dimensions, and join-reachable dims.
 - ``run_semantic_query`` — THE default path: name concepts → deterministic SQL
                            → governed execution → rows (200-row cap).
 
@@ -80,7 +81,7 @@ class SemanticTool:
     Attributes
     ----------
     name:
-        The MCP tool name (e.g. ``"list_metrics"``).
+        The MCP tool name (e.g. ``"list_models"``).
     fn:
         The ``@function`` / ``@mcp.tool``-decorated callable.  Pass to
         ``code(t.fn)`` when wiring via ``rpc_function``.
@@ -136,7 +137,7 @@ def build_semantic_tools(
     view_name: str | None = None,
     dialect: Dialect | None = None,
 ) -> list[SemanticTool]:
-    """Build and return four :py:class:`SemanticTool` descriptors for *registry*.
+    """Build and return three :py:class:`SemanticTool` descriptors for *registry*.
 
     Each descriptor carries the decorated callable (``.fn``), its
     ``request_model`` and ``response_model`` :py:class:`~nxd.spec.SemanticModelSpec`
@@ -156,8 +157,8 @@ def build_semantic_tools(
     Returns
     -------
     list[SemanticTool]
-        Four :py:class:`SemanticTool` descriptors (in order):
-        ``[list_metrics, list_dimensions, describe_metric, run_semantic_query]``.
+        Three :py:class:`SemanticTool` descriptors (in order):
+        ``[list_models, describe_model, run_semantic_query]``.
 
         Wire them in a ``spec.py`` via::
 
@@ -196,24 +197,30 @@ def build_semantic_tools(
     # risk of keeping two copies in sync.
     # ---------------------------------------------------------------------------
 
-    _list_metrics_desc = (
-        "List the metrics (measures) this data product can compute — each "
-        "with its aggregation, home grain, and a plain-language description. "
-        "Use these names as the 'measures' argument to run_semantic_query. "
-        "This is the curated semantic vocabulary; prefer it over writing raw SQL."
+    _list_models_desc = (
+        "List every semantic model (grain) this data product exposes — each with "
+        "its grain definition, metric count, dimension count, and join topology. "
+        "A MODEL is the fundamental unit: every metric and every dimension lives "
+        "under exactly one model, and a model corresponds to one grain (what "
+        "one row represents, e.g. 'one person', 'one event'). "
+        "Call this first to orient yourself: which models exist, how many metrics "
+        "each has, and which models are join-reachable from which. "
+        "Then call describe_model on the model whose grain matches your question."
     )
-    _list_dimensions_desc = (
-        "List the dimensions this data product can group or filter by — each "
-        "with its logical type, a PII flag, and a description. PII dimensions "
-        "are governed: a query grouping by them may be masked or rejected "
-        "depending on the caller's access. Use these names as the 'dimensions' "
-        "argument (or in 'filters') of run_semantic_query."
-    )
-    _describe_metric_desc = (
-        "Describe a single metric: its aggregation, the grain it lives at, "
-        "and the exact set of dimensions it can be sliced by (its own model's "
-        "plus any reachable through a documented join). Call this before "
-        "run_semantic_query to pick a valid metric+dimension combination."
+    _describe_model_desc = (
+        "Describe a single semantic model in full: its grain, every metric it "
+        "owns (with aggregation, description, and the exact set of dimensions "
+        "each metric can be sliced by), every own dimension (type, PII flag, "
+        "description), and every documented join with the set of dimensions "
+        "it makes reachable. "
+        "This replaces the need for separate list_metrics / list_dimensions / "
+        "describe_metric calls — all vocabulary for one grain is returned together. "
+        "CHASM-TRAP RULE: metrics from two different models must NEVER be combined "
+        "in one run_semantic_query call. This tool makes that structural: you must "
+        "call describe_model separately for each grain, which surfaces the "
+        "incompatibility before you attempt the query. "
+        "Call describe_model before run_semantic_query to pick a valid "
+        "metric + dimension combination from the same model."
     )
     _run_semantic_query_desc = (
         "THE DEFAULT, SAFE way to answer a question about this data product. "
@@ -221,8 +228,8 @@ def build_semantic_tools(
         "you never write SQL on this path.\n\n"
         f"Data models: {model_summary}.\n\n"
         "ARGS:\n"
-        "- measures (REQUIRED): list of metric names from list_metrics.\n"
-        "- dimensions (optional): list of dimension names from list_dimensions "
+        "- measures (REQUIRED): list of metric names from describe_model.\n"
+        "- dimensions (optional): list of dimension names from describe_model "
         "to group by. OMIT IT (or pass []) for a grand total.\n"
         '- filters (optional): list of {"dimension": <name>, "op": <symbol>, '
         "\"value\": <val>}. The 'op' field (named 'op', NOT 'operator') MUST be "
@@ -232,167 +239,203 @@ def build_semantic_tools(
         "It DETERMINISTICALLY compiles the selection into a safe, aggregated, "
         "read-only query against the curated semantic view, runs it under "
         "governance, and returns the rows plus the compiled SQL. "
-        "Use list_metrics / list_dimensions / describe_metric to discover "
-        "valid concepts. Do not mix metrics from different models in one call."
+        "Use list_models / describe_model to discover valid models, metrics, "
+        "and dimensions. Do not mix metrics from different models in one call."
     )
 
     # ---------------------------------------------------------------------------
-    # list_metrics
+    # list_models
     # ---------------------------------------------------------------------------
 
-    _list_metrics_request = semantic_model(
-        name="list_metrics_request",
-        description="No arguments; lists every metric the data product exposes.",
+    _list_models_request = semantic_model(
+        name="list_models_request",
+        description="No arguments; lists every semantic model the data product exposes.",
     ).schema({})
 
-    _list_metrics_response = semantic_model(
-        name="list_metrics_response",
-        description="The metrics (measures) available on this data product.",
+    _list_models_response = semantic_model(
+        name="list_models_response",
+        description="The semantic models (grains) available on this data product.",
     ).schema(
         {
-            "metrics": _row_list(
-                "metrics",
+            "models": _row_list(
+                "models",
                 [
-                    _field("name", string(), "Concept name to use in run_semantic_query."),
-                    _field("model", string(), "Owning semantic model / table."),
-                    _field("aggregation", string(), "How the metric is aggregated."),
-                    _field("grain", string(), "One-row-per grain of the owning model."),
-                    _field("description", string(), "What the metric means."),
+                    _field("name", string(), "Semantic model name."),
+                    _field("grain", string(), "One-row-per grain of this model."),
+                    _field("description", string(), "What the model represents."),
+                    _field("metric_count", int64(), "Number of metrics owned by this model."),
+                    _field("dimension_count", int64(), "Number of dimensions owned by this model."),
+                    _field(
+                        "joins",
+                        _list(
+                            _field(
+                                "joins",
+                                struct(
+                                    [
+                                        _field("to", string(), "Right-side model name."),
+                                        _field("cardinality", string(), "Join cardinality."),
+                                    ]
+                                ),
+                            )
+                        ),
+                        "Joins where this model is the left (MANY-side) endpoint.",
+                    ),
                 ],
-                "One row per metric.",
+                "One row per semantic model.",
             )
         }
     )
 
-    @function(name="list_metrics")
+    @function(name="list_models")
     @mcp.tool(
-        name="list_metrics",
-        description=_list_metrics_desc,
+        name="list_models",
+        description=_list_models_desc,
     )
-    def list_metrics(request: Request) -> Response:
+    def list_models(request: Request) -> Response:
         out: list[dict[str, object]] = []
-        for m in registry.metrics:
-            model_obj = registry.model_of(m.model)
+        for m in registry.models:
+            joins: list[dict[str, object]] = [
+                {"to": j.right, "cardinality": j.cardinality.value} for (j, _reached) in registry.joins_of(m.name)
+            ]
             out.append(
                 {
                     "name": m.name,
-                    "model": m.model,
-                    "aggregation": m.agg.value,
-                    "grain": model_obj.grain if model_obj else "",
-                    "description": registry.metric_description(m),
+                    "grain": m.grain,
+                    "description": m.description,
+                    "metric_count": len(registry.metrics_of(m.name)),
+                    "dimension_count": len(registry.dimensions_of(m.name)),
+                    "joins": joins,
                 }
             )
-        return Response({"metrics": out})
+        return Response({"models": out})
 
     # ---------------------------------------------------------------------------
-    # list_dimensions
+    # describe_model
     # ---------------------------------------------------------------------------
 
-    _list_dimensions_request = semantic_model(
-        name="list_dimensions_request",
-        description="No arguments; lists every dimension the data product exposes.",
-    ).schema({})
-
-    _list_dimensions_response = semantic_model(
-        name="list_dimensions_response",
-        description="The dimensions available to group/filter by on this data product.",
+    _describe_model_request = semantic_model(
+        name="describe_model_request",
+        description="The model to describe.",
     ).schema(
         {
+            "name": (string(), "Model name (see list_models)."),
+        }
+    )
+
+    _describe_model_response = semantic_model(
+        name="describe_model_response",
+        description=(
+            "Full detail for one semantic model: grain, metrics (each with "
+            "compatible dimensions), own dimensions, and join topology."
+        ),
+    ).schema(
+        {
+            "name": (string(), "Semantic model name."),
+            "grain": (string(), "One-row-per grain of this model."),
+            "description": (string(), "What the model represents."),
+            "metrics": _row_list(
+                "metrics",
+                [
+                    _field("name", string(), "Metric concept name."),
+                    _field("aggregation", string(), "Aggregation applied."),
+                    _field("description", string(), "Plain-language meaning."),
+                    _field(
+                        "compatible_dimensions",
+                        _list(_field("compatible_dimensions", string())),
+                        "Dimension names this metric can be grouped/filtered by.",
+                    ),
+                ],
+                "Metrics owned by this model.",
+            ),
             "dimensions": _row_list(
                 "dimensions",
                 [
-                    _field("name", string(), "Concept name to use in run_semantic_query."),
-                    _field("model", string(), "Owning semantic model / table."),
+                    _field("name", string(), "Dimension concept name."),
                     _field("type", string(), "Logical type."),
                     _field("pii", boolean(), "True if this dimension is PII (governed)."),
                     _field("description", string(), "What the dimension means."),
                 ],
-                "One row per dimension.",
-            )
+                "Dimensions physically owned by this model.",
+            ),
+            "joins": _row_list(
+                "joins",
+                [
+                    _field("to", string(), "Right-side model name."),
+                    _field("cardinality", string(), "Join cardinality."),
+                    _field(
+                        "reaches_dimensions",
+                        _list(_field("reaches_dimensions", string())),
+                        "Non-PII dimension names on the right model unlocked by this join "
+                        "(a structural property of the join itself). For the authoritative, "
+                        "per-metric slice list use each metric's compatible_dimensions above — "
+                        "a metric with an explicit extra_dimensions override may reach a "
+                        "narrower set than the join structurally unlocks.",
+                    ),
+                ],
+                "Joins where this model is the left (MANY-side) endpoint.",
+            ),
+            "error": (string(), "Set if the model is unknown; empty otherwise."),
         }
     )
 
-    @function(name="list_dimensions")
+    @function(name="describe_model")
     @mcp.tool(
-        name="list_dimensions",
-        description=_list_dimensions_desc,
+        name="describe_model",
+        description=_describe_model_desc,
     )
-    def list_dimensions(request: Request) -> Response:
-        out: list[dict[str, object]] = []
-        for d in registry.dimensions:
-            out.append(
+    def describe_model(request: Request) -> Response:
+        name = request.get("name") or ""
+        model_obj = registry.model_of(name)
+        if model_obj is None:
+            known = ", ".join(m.name for m in registry.models)
+            return Response(
+                {
+                    "name": name,
+                    "grain": "",
+                    "description": "",
+                    "metrics": [],
+                    "dimensions": [],
+                    "joins": [],
+                    "error": f"unknown model {name!r}. Known models: {known}.",
+                }
+            )
+        metrics_out: list[dict[str, object]] = []
+        for met in registry.metrics_of(name):
+            metrics_out.append(
+                {
+                    "name": met.name,
+                    "aggregation": met.agg.value,
+                    "description": registry.metric_description(met),
+                    "compatible_dimensions": [d.name for d in registry.compatible_dimensions(met)],
+                }
+            )
+        dimensions_out: list[dict[str, object]] = []
+        for d in registry.dimensions_of(name):
+            dimensions_out.append(
                 {
                     "name": d.name,
-                    "model": d.model,
                     "type": d.type,
                     "pii": bool(d.pii),
                     "description": registry.column_description(d.model, d.column, d.description),
                 }
             )
-        return Response({"dimensions": out})
-
-    # ---------------------------------------------------------------------------
-    # describe_metric
-    # ---------------------------------------------------------------------------
-
-    _describe_metric_request = semantic_model(
-        name="describe_metric_request",
-        description="The metric to describe.",
-    ).schema(
-        {
-            "name": (string(), "Metric concept name (see list_metrics)."),
-        }
-    )
-
-    _describe_metric_response = semantic_model(
-        name="describe_metric_response",
-        description=("Details for one metric: aggregation, grain, and the dimensions it can legally be sliced by."),
-    ).schema(
-        {
-            "name": (string(), "Metric concept name."),
-            "model": (string(), "Owning model / table."),
-            "aggregation": (string(), "Aggregation applied."),
-            "grain": (string(), "One-row-per grain of the owning model."),
-            "description": (string(), "Plain-language meaning."),
-            "compatible_dimensions": (
-                _list(_field("compatible_dimensions", string())),
-                "Dimension names this metric can be grouped/filtered by.",
-            ),
-            "error": (string(), "Set if the metric is unknown; empty otherwise."),
-        }
-    )
-
-    @function(name="describe_metric")
-    @mcp.tool(
-        name="describe_metric",
-        description=_describe_metric_desc,
-    )
-    def describe_metric(request: Request) -> Response:
-        name = request.get("name") or ""
-        m = registry.find_metric(name)
-        if m is None:
-            known = ", ".join(x.name for x in registry.metrics)
-            return Response(
+        joins_out: list[dict[str, object]] = []
+        for j, reached in registry.joins_of(name):
+            joins_out.append(
                 {
-                    "name": name,
-                    "model": "",
-                    "aggregation": "",
-                    "grain": "",
-                    "description": "",
-                    "compatible_dimensions": [],
-                    "error": f"unknown metric {name!r}. Known metrics: {known}.",
+                    "to": j.right,
+                    "cardinality": j.cardinality.value,
+                    "reaches_dimensions": list(reached),
                 }
             )
-        model_obj = registry.model_of(m.model)
-        dims = [d.name for d in registry.compatible_dimensions(m)]
         return Response(
             {
-                "name": m.name,
-                "model": m.model,
-                "aggregation": m.agg.value,
-                "grain": model_obj.grain if model_obj else "",
-                "description": registry.metric_description(m),
-                "compatible_dimensions": dims,
+                "name": model_obj.name,
+                "grain": model_obj.grain,
+                "description": model_obj.description,
+                "metrics": metrics_out,
+                "dimensions": dimensions_out,
+                "joins": joins_out,
                 "error": "",
             }
         )
@@ -413,7 +456,7 @@ def build_semantic_tools(
             # measures is the only required field.
             "measures": (
                 _list(_field("measures", string())),
-                "Metric concept names to compute (see list_metrics). Required.",
+                "Metric concept names to compute (see describe_model). Required.",
             ),
             # dimensions / filters are OPTIONAL. They are marked nullable AND left
             # without a field-level description on purpose: the RPC->pydantic
@@ -492,7 +535,7 @@ def build_semantic_tools(
             "filters": request.get("filters") or [],
         }
         if not selection["measures"]:
-            return _error("No measures selected. Provide at least one metric name from list_metrics in 'measures'.")
+            return _error("No measures selected. Provide at least one metric name from describe_model in 'measures'.")
 
         if snowflake is None:
             return _error("No Snowflake connection is available.")
@@ -564,25 +607,18 @@ def build_semantic_tools(
 
     return [
         SemanticTool(
-            name="list_metrics",
-            fn=list_metrics,
-            request_model=_list_metrics_request,
-            response_model=_list_metrics_response,
-            description=_list_metrics_desc,
+            name="list_models",
+            fn=list_models,
+            request_model=_list_models_request,
+            response_model=_list_models_response,
+            description=_list_models_desc,
         ),
         SemanticTool(
-            name="list_dimensions",
-            fn=list_dimensions,
-            request_model=_list_dimensions_request,
-            response_model=_list_dimensions_response,
-            description=_list_dimensions_desc,
-        ),
-        SemanticTool(
-            name="describe_metric",
-            fn=describe_metric,
-            request_model=_describe_metric_request,
-            response_model=_describe_metric_response,
-            description=_describe_metric_desc,
+            name="describe_model",
+            fn=describe_model,
+            request_model=_describe_model_request,
+            response_model=_describe_model_response,
+            description=_describe_model_desc,
         ),
         SemanticTool(
             name="run_semantic_query",

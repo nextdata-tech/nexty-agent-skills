@@ -197,8 +197,8 @@ See `reference/runtime-and-dependencies.md` for version-skew notes.
 ## Consuming the deployed DP
 
 This skill is the **producer** side — it builds the semantic-layer DP and its
-four MCP tools. To **query** a deployed one (natural-language question → concept
+three MCP tools. To **query** a deployed one (natural-language question → concept
 selection → governed SQL), use the **nxd-data-product-query** skill: its §6d
-"Semantic-layer MCP ports" drives the `list_metrics` / `describe_metric` /
+"Semantic-layer MCP ports" drives the `list_models` / `describe_model` /
 `run_semantic_query` discover→select→run protocol and the grain-safety (chasm-trap)
 recovery against a live mesh.

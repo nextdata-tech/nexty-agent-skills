@@ -60,15 +60,15 @@ Declares a physical table.
 
 Declares a slicing / filtering axis.
 
-- `name` — unique concept name used in `run_semantic_query` and returned by
-  `list_dimensions`.
+- `name` — unique concept name used in `run_semantic_query` and surfaced in a
+  model's `describe_model` `dimensions` list.
 - `model` — must match a declared model name.
 - `column` — physical column name in the table (case-insensitive at query time).
 - `type` — logical type hint: `"string"`, `"date"`, `"number"`, etc. Informational
   only; does not affect SQL generation.
 - `description` — plain-language description for the agent.
 - `pii=True` — marks the dimension as a governance target. PII dimensions appear
-  in `list_dimensions` with a flag; the query layer may mask or reject them
+  in `describe_model` with a flag; the query layer may mask or reject them
   depending on the caller's access level.
 
 ### `.metric(name, *, model, agg, column, description, boolean, extra_dimensions)`

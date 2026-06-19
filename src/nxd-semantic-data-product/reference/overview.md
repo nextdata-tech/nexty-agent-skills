@@ -10,15 +10,20 @@
 ## What this kit provides
 
 The `semantic/` kit is a self-contained Python library that turns a
-**curated semantic registry** (models, dimensions, metrics, joins) into four
-governed MCP tools exposed by a Nextdata OS data product:
+**curated semantic registry** (models, dimensions, metrics, joins) into three
+governed, **model-oriented** MCP tools exposed by a Nextdata OS data product:
 
 | Tool | Purpose |
 |------|---------|
-| `list_metrics` | Enumerate named measures with aggregation + grain |
-| `list_dimensions` | Enumerate slicing axes with PII flags |
-| `describe_metric` | Show one metric's aggregation, grain, compatible dimensions |
+| `list_models` | Enumerate the semantic models (entities) with grain, metric/dimension counts, and joins |
+| `describe_model` | Full detail for one model: its metrics (each with the dimensions it can be sliced by), its own dimensions (with PII flags), and its joins (each naming the reached model and unlocked dimensions) |
 | `run_semantic_query` | Compile a concept selection to SQL, run it, return rows |
+
+`describe_model` merges what flat `list_metrics` / `list_dimensions` /
+`describe_metric` tools exposed, organised by grain. Because every metric and
+dimension lives under one model (one grain), the chasm-trap rule — never combine
+metrics from two grains in a single query — is **structural**: you cannot see two
+grains' metrics without two `describe_model` calls.
 
 An AI agent interacts only with concept names. It never writes SQL. The
 compiler enforces correctness (chasm-trap, dimension compatibility) and the

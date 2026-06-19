@@ -2,7 +2,7 @@
 
 Source path (in the nxd monorepo): `components/nxd_py/data_product/nxd/experimental/semantic/`
 
-Source commit: `faeb4d945` — `docs(nxd_py): drop customer-domain term from semantic mcp_tools docstring (NEX-620)` (branch `feat/nex-620-experimental-semantic`, PR nextdata-tech/nxd#6902). Re-vendored 2026-06-18.
+Source commit: `3c1986488ca2ae7dbdfb8ac381237955d811542f` — Re-vendored 2026-06-19.
 
 This snapshot is byte-identical to the committed source modulo the import-root
 rewrite documented below. To check for drift, diff the committed source against
@@ -74,6 +74,21 @@ Changes relative to the previous vendor snapshot (`36dee1470d734b1f6c948f81b2e37
      compiler. `CompileError` re-exported from `compiler.py`, so the public
      path `nxd.experimental.semantic.CompileError` is identity-preserved.
    - ADR citations note the ADR is in-flight (nxd PR #6893) until merged.
+
+9. **model-oriented tool surface** (commit `3c1986488ca2ae7dbdfb8ac381237955d811542f`):
+   - **mcp_tools.py** — `list_models` + `describe_model` replace the flat
+     `list_metrics` / `list_dimensions` / `describe_metric` tools (NEX-620).
+     `build_semantic_tools` now returns three descriptors instead of four.
+     `describe_model` returns a model's full grain, all owned metrics (each with
+     their compatible dimensions), all owned dimensions, and join topology in a
+     single call — eliminating the need for separate list/describe round-trips.
+     `list_models` returns metric/dimension counts + join topology for each model
+     to orient the caller before selecting a grain.
+   - **registry.py** — `CompiledRegistry` gains `metrics_of` / `dimensions_of` /
+     `joins_of` helpers backing the model-oriented tools. `joins_of`'s reach
+     matches `build()`'s auto-derived `extra_dim_sets` (non-PII, MANY_TO_ONE only);
+     `describe_model`'s `reaches_dimensions` documents that explicit per-metric
+     `extra_dimensions` overrides may narrow the authoritative slice set.
 
 This is a verbatim build-time snapshot. Never hand-edit the vendored files in
 this skill or in any generated DP. Report bugs to the `nxd_py` monorepo and
