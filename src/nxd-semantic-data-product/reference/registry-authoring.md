@@ -18,7 +18,7 @@
 A **registry** is a frozen description of your semantic model: which tables
 exist, which columns are dimensions or metrics, and how tables relate. The
 registry is authored once per data product and passed to `build_semantic_tools()`
-to produce the four MCP tools.
+to produce the three MCP tools (`list_models`, `describe_model`, `run_semantic_query`).
 
 The registry has four element types:
 
@@ -34,7 +34,7 @@ The registry has four element types:
 ## SemanticRegistry fluent API
 
 ```python
-from semantic.registry import Agg, Cardinality, SemanticRegistry
+from nxd.experimental.semantic import Agg, Cardinality, SemanticRegistry
 
 registry = (
     SemanticRegistry()
@@ -167,7 +167,7 @@ This example uses a two-model registry (people + activity events) with no
 domain-specific names.
 
 ```python
-from semantic.registry import Agg, Cardinality, SemanticRegistry
+from nxd.experimental.semantic import Agg, Cardinality, SemanticRegistry
 
 REGISTRY = (
     SemanticRegistry()

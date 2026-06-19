@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Scaffold a semantic-layer data product.
 
-Copies the vendored semantic/ kit into <target_dir>/transform/semantic/,
-writes a placeholder registry.py, and prints the spec.py rpc-output wiring
-block and the requirements.txt lines the DP needs.
+Creates <target_dir>/transform/, writes a placeholder registry.py, and prints
+the spec.py rpc-output wiring block and the requirements.txt lines the DP needs.
+
+The compiler, dialect, and MCP tool factory are provided by the installed
+nxd.data_product wheel (module nxd.experimental.semantic) — imported, not
+vendored. The DP only authors the registry and wires spec.py.
 
 Usage:
     uv run python scaffold_semantic_dp.py <target_dir>
@@ -38,13 +41,9 @@ Reference: reference/scripts/templates/spec_rpc_output.py.tmpl
 
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 
-
-SKILL_ROOT = Path(__file__).parent
-SEMANTIC_SRC = SKILL_ROOT / "semantic"
 
 REQUIREMENTS_LINES = [
     "nxd.data_product[spec]",
@@ -62,7 +61,7 @@ from nxd.spec import (
     rpc_server,
     code,
 )
-from semantic import build_semantic_tools
+from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 
 # ── RPC output wiring (the ONLY supported MCP delivery mechanism) ─────────────
@@ -91,13 +90,7 @@ spec = (
 def scaffold(target_dir: Path) -> None:
     transform_dir = target_dir / "transform"
     transform_dir.mkdir(parents=True, exist_ok=True)
-
-    semantic_dest = transform_dir / "semantic"
-    if semantic_dest.exists():
-        print(f"  [skip] {semantic_dest} already exists — not overwriting.")
-    else:
-        shutil.copytree(SEMANTIC_SRC, semantic_dest)
-        print(f"  [copy] semantic/ kit -> {semantic_dest}")
+    print(f"  [ok] transform/ dir ready: {transform_dir}")
 
     registry_py = transform_dir / "registry.py"
     if not registry_py.exists():
@@ -105,7 +98,7 @@ def scaffold(target_dir: Path) -> None:
             "# TODO: author your SemanticRegistry here.\n"
             "# See reference/registry-authoring.md for the full API.\n"
             "#\n"
-            "# from semantic.registry import Agg, Cardinality, SemanticRegistry\n"
+            "# from nxd.experimental.semantic import Agg, Cardinality, SemanticRegistry\n"
             "#\n"
             "# REGISTRY = (\n"
             "#     SemanticRegistry()\n"
@@ -118,6 +111,8 @@ def scaffold(target_dir: Path) -> None:
         )
         registry_py.write_text(placeholder, encoding="utf-8")
         print(f"  [write] {registry_py} (placeholder — fill in your registry)")
+    else:
+        print(f"  [skip] {registry_py} already exists — not overwriting.")
 
     print()
     print("Add these lines to requirements.txt:")

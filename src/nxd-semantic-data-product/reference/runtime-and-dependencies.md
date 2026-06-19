@@ -1,31 +1,38 @@
 # Runtime and dependencies
 
 ## Contents
-- Vendored-files approach vs future nxd[rpc] extra
+- How the semantic module is delivered
 - Exact requirements.txt lines
-- Version-skew note
+- Pip-registry version requirement
 - How the DP runtime discovers the MCP tools
 
 ---
 
-## Vendored-files approach vs future nxd[rpc] extra
+## How the semantic module is delivered
 
-The `semantic/` kit is currently vendored by copying the files into each DP's
-`transform/semantic/` directory. This is intentional: the kit is a stopgap
-(see `reference/overview.md`) and the vendoring pattern keeps each DP
-self-contained with no transient dependency resolution at runtime.
+The compiler, dialect, and MCP tool factory (`build_semantic_tools`) are
+provided by the installed `nxd.data_product` wheel as the importable package
+`nxd.experimental.semantic`. The DP does **not** copy or embed the kit — it
+imports it from the environment at runtime, exactly like any other library.
 
-In a future release, once ADR-026 lands, the kit will be absorbed into
-`nxd.spec` and `nxd.drivers.rpc`. At that point the import paths in `spec.py`
-will change from `from semantic import ...` to the first-class spec DSL (e.g.
-`nxd.spec.measure` / `nxd.spec.dimension`), and the vendored files can be
-removed. The migration will be mechanical because all public names are
-pre-aligned with ADR-026.
+The `experimental` namespace signals a stopgap: once ADR-026 lands, the public
+names will migrate into the first-class `nxd.spec` DSL. When that happens the
+import paths in `spec.py` will change mechanically (all public names are already
+pre-aligned with ADR-026). Until then, import from `nxd.experimental.semantic`.
 
-**Do not import from `nxd.experimental.semantic` directly in a generated DP.**
-That package path (`nxd.experimental.semantic`) is internal to the `nxd_py`
-monorepo. Import from the vendored `semantic` package inside the DP instead
-(`from semantic.registry import ...`, `from semantic import build_semantic_tools`).
+Import examples:
+
+```python
+from nxd.experimental.semantic import (
+    Agg, Cardinality, Dimension, Metric, Model, Join,
+    SemanticRegistry, CompiledRegistry, CompileError,
+    compile_selection, build_semantic_tools, SemanticTool,
+    SnowflakeDialect, Dialect,
+)
+```
+
+All public names listed above are re-exported from the package root; you never
+need to import from submodules.
 
 ---
 
@@ -41,7 +48,7 @@ pandas
 ```
 
 - `nxd.data_product[spec]` — the NXD Python SDK spec extras (semantic_model,
-  data_types, script, storage, etc.).
+  data_types, script, storage, etc.). Also ships `nxd.experimental.semantic`.
 - `nxd.drivers[rpc]` — the `nxd.drivers.rpc` module that `mcp_tools.py`
   imports (`Request`, `Response`, `function`, `mcp`).
 - `snowflake-connector-python[pandas]` — the Snowflake Python connector with
@@ -55,19 +62,21 @@ add only the remaining three lines. Do not duplicate entries.
 
 ---
 
-## Version-skew note
+## Pip-registry version requirement
 
-The vendored `semantic/` files are a **build-time snapshot** of the
-`nxd_py` monorepo at a specific commit (recorded in
-`reference/scripts/VENDORED_FROM.md`). If `nxd.drivers[rpc]` or
-`nxd.data_product[spec]` is bumped to a version that changes the `Request`,
-`Response`, `function`, or `mcp` APIs, re-vendor the kit from the updated
-monorepo source before deploying.
+`nxd.experimental.semantic` shipped in **`nxd_data_product >= 0.41.90`**.
 
-To check for skew: compare the VENDORED_FROM commit against the installed
-`nxd.data_product` version in the DP's running environment. A mismatch
-manifests as an `ImportError` or `AttributeError` at DP boot (not at query
-time).
+Before deploying a semantic DP, confirm the environment's pip registry serves a
+wheel at or above that version:
+
+```bash
+# Check what the registry serves (substitute your registry URL):
+pip index versions nxd.data_product --index-url <pip-registry-url>
+```
+
+If the registry is older than 0.41.90, the `import nxd.experimental.semantic`
+will fail at DP install time (not at query time). Promote or refresh the pip
+registry to a wheel `>= 0.41.90` before launching the DP.
 
 ---
 
@@ -82,7 +91,7 @@ The correct wiring in `spec.py`:
 
 ```python
 from nxd.spec import data_product_rpc_output, rpc_function, rpc_server, code
-from semantic import build_semantic_tools
+from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 
 _rpc = data_product_rpc_output()

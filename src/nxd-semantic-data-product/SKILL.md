@@ -1,6 +1,6 @@
 ---
 name: nxd-semantic-data-product
-description: Builds a governed text-to-SQL / metrics / semantic-layer data product on Nextdata OS, exposing curated metrics and dimensions over MCP so an AI agent can answer natural-language questions without writing raw SQL. Use when the task is to create or extend a data product that lets agents query business metrics by name (e.g. order_count, revenue) sliced by dimensions (e.g. region, product_category), when you need NL-to-SQL governance over a Snowflake data product, or when exposing a semantic layer as an MCP server tool set. The skill generates only the per-DP registry; the shared compiler and MCP tool factory are vendored — never re-authored.
+description: Builds a governed text-to-SQL / metrics / semantic-layer data product on Nextdata OS, exposing curated metrics and dimensions over MCP so an AI agent can answer natural-language questions without writing raw SQL. Use when the task is to create or extend a data product that lets agents query business metrics by name (e.g. order_count, revenue) sliced by dimensions (e.g. region, product_category), when you need NL-to-SQL governance over a Snowflake data product, or when exposing a semantic layer as an MCP server tool set. The skill generates only the per-DP registry; the shared compiler and MCP tool factory are provided by the installed nxd.data_product wheel (nxd.experimental.semantic) — imported, not vendored.
 allowed-tools:
   - Bash
   - Read
@@ -25,8 +25,9 @@ compiles a correct, governed SQL query and returns rows — no raw SQL escapes t
 DP boundary.
 
 **The registry is the only artifact you author.** The compiler, SQL dialect, and
-MCP tool factory are vendored shared code (`semantic/` kit) that you copy
-verbatim into every DP. The scaffold script automates the copy.
+MCP tool factory are provided by the installed `nxd.data_product` wheel as the
+`nxd.experimental.semantic` module — imported, not vendored. Every DP that
+depends on `nxd.data_product[spec]` already has the module available.
 
 See `reference/overview.md` for the two-layer design.
 
@@ -61,7 +62,7 @@ builder. See `reference/registry-authoring.md` for the full API and a worked
 generic example.
 
 ```python
-from semantic.registry import Agg, Cardinality, SemanticRegistry
+from nxd.experimental.semantic import Agg, Cardinality, SemanticRegistry
 
 REGISTRY = (
     SemanticRegistry()
@@ -84,24 +85,17 @@ REGISTRY = (
 `build()` validates referential integrity, checks for duplicate names, and
 auto-derives which dimensions each metric can be sliced by from the N:1 joins.
 
-### Step 3 — Copy the vendored semantic/ kit
-
-Copy `reference/scripts/semantic/` verbatim into `<dp-dir>/transform/semantic/`.
-Use the scaffold script to do this automatically (step 4). Never edit the kit
-files inside the DP — all fixes go to the canonical source in
-`reference/scripts/semantic/` first.
-
-### Step 4 — Run the scaffold script
+### Step 3 — Run the scaffold script
 
 ```bash
 uv run python reference/scripts/scaffold_semantic_dp.py <dp-dir>
 ```
 
-The scaffold copies `semantic/` into `<dp-dir>/transform/semantic/`, writes a
-placeholder `registry.py`, and prints the spec.py wiring block and the
-requirements lines you need.
+The scaffold creates `<dp-dir>/transform/`, writes a placeholder `registry.py`
+(with the correct `nxd.experimental.semantic` import), and prints the spec.py
+wiring block and the requirements lines you need.
 
-### Step 5 — Wire `spec.py` with `data_product_rpc_output()`
+### Step 4 — Wire `spec.py` with `data_product_rpc_output()`
 
 NXD exposes MCP tools **only** through `spec.py` via `data_product_rpc_output()`.
 There is NO module-level `tools` list discovery — a bare
@@ -118,7 +112,7 @@ from nxd.spec import (
     rpc_server,
     code,
 )
-from semantic import build_semantic_tools
+from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 
 _rpc = data_product_rpc_output()
@@ -159,22 +153,23 @@ snowflake-connector-python[pandas]
 pandas
 ```
 
-See `reference/runtime-and-dependencies.md` for version-skew notes.
+See `reference/runtime-and-dependencies.md` for version and registry notes.
 
 ---
 
 ## Invariants — NEVER violate these
 
-- **Never re-author the compiler or MCP tools.** `semantic/compiler.py`,
-  `semantic/dialect.py`, and `semantic/mcp_tools.py` are shared infrastructure.
-  Copy them verbatim. Report bugs to the kit maintainers.
+- **Never re-implement the compiler or MCP tools.** The compiler, dialect, and
+  MCP tool factory live in `nxd.experimental.semantic` (shipped with the
+  `nxd.data_product` wheel). Import them; do not copy or re-author them. Report
+  bugs to the `nxd.data_product` maintainers.
 - **Chasm-trap**: do not put metrics from two different models in one
   `run_semantic_query` call. The compiler raises `CompileError` with an
   actionable message; surface it to the user.
 - **Agg enum is closed**: COUNT, COUNT_DISTINCT, SUM, AVG, MIN, MAX. No custom
   aggregation functions.
 - **Read-only, 200-row cap**: the query path is aggregated and capped. Raw SQL
-  passthrough is not a feature of this kit.
+  passthrough is not a feature of this library.
 - **extra_dimensions is an override only**: rely on the auto-derivation from
   N:1 joins. Only set `extra_dimensions` when the auto-derived set is wrong.
 
@@ -184,13 +179,11 @@ See `reference/runtime-and-dependencies.md` for version-skew notes.
 
 | File | Content |
 |------|---------|
-| `reference/overview.md` | Two-layer design + what the kit provides |
+| `reference/overview.md` | Two-layer design + what the library provides |
 | `reference/registry-authoring.md` | Full fluent API + worked generic example |
 | `reference/compiler-and-routing.md` | Three compile paths + chasm-trap |
-| `reference/runtime-and-dependencies.md` | Requirements, version-skew notes |
-| `reference/adr-026-convergence.md` | ADR-026 migration table |
-| `reference/scripts/semantic/` | Vendored kit — copy verbatim into each DP |
-| `reference/scripts/scaffold_semantic_dp.py` | Scaffold automation |
+| `reference/runtime-and-dependencies.md` | Requirements, wheel version, pip registry notes |
+| `reference/scripts/scaffold_semantic_dp.py` | Scaffold automation (writes registry stub, prints spec wiring) |
 
 ---
 

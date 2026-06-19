@@ -9,7 +9,7 @@
 
 ## What this kit provides
 
-The `semantic/` kit is a self-contained Python library that turns a
+The `nxd.experimental.semantic` library turns a
 **curated semantic registry** (models, dimensions, metrics, joins) into three
 governed, **model-oriented** MCP tools exposed by a Nextdata OS data product:
 
@@ -43,16 +43,14 @@ execution path is read-only, aggregated, and capped at 200 rows.
 └────────────────────────────┬────────────────────────────┘
                              │  CompiledRegistry (frozen)
 ┌────────────────────────────▼────────────────────────────┐
-│  LAYER 2 — vendored kit (never re-author)               │
+│  LAYER 2 — nxd.experimental.semantic (installed wheel)  │
 │                                                         │
-│  semantic/registry.py    — Agg, Cardinality, Model,     │
-│                            Dimension, Metric, Join,      │
-│                            SemanticRegistry              │
-│  semantic/dialect.py     — Dialect protocol +           │
-│                            SnowflakeDialect              │
-│  semantic/compiler.py    — compile_selection,           │
-│                            chasm-trap defence            │
-│  semantic/mcp_tools.py   — build_semantic_tools()        │
+│  Agg, Cardinality, Model, Dimension, Metric, Join,      │
+│  SemanticRegistry, CompiledRegistry, CompileError        │
+│  compile_selection, SnowflakeDialect, Dialect,           │
+│  build_semantic_tools, SemanticTool                      │
+│                                                         │
+│  (provided by nxd_data_product >= 0.41.90)              │
 └────────────────────────────┬────────────────────────────┘
                              │  build_semantic_tools(REGISTRY)
                              │  → list[SemanticTool]
@@ -74,23 +72,22 @@ execution path is read-only, aggregated, and capped at 200 rows.
 ```
 
 The data product author writes only `registry.py`. The compiler, dialect, and
-MCP tool factory are shared infrastructure vendored by copying `reference/scripts/semantic/`
-verbatim into the DP's `transform/semantic/` directory. NXD discovers the tools
-ONLY through the `spec.py` `data_product_rpc_output()` wiring above — there is no
-module-level `tools` list; a bare `tools = build_semantic_tools(...)` exposes
-nothing.
+MCP tool factory are provided by the installed `nxd.experimental.semantic` library
+(shipped in the `nxd_data_product` wheel) — imported, not copied. NXD discovers
+the tools ONLY through the `spec.py` `data_product_rpc_output()` wiring above —
+there is no module-level `tools` list; a bare `tools = build_semantic_tools(...)`
+exposes nothing.
 
 ---
 
 ## Stopgap status and ADR-026 convergence
 
-This kit is **module-named `nxd.experimental.semantic`** in the `nxd_py` monorepo to
-signal that it is a stopgap. ADR-026 (`docs/architecture/adrs/026-semantic-layer-first-class.md`)
+This module is published as **`nxd.experimental.semantic`** (part of the
+`nxd_data_product` wheel, >= 0.41.90) and named `experimental` to signal that it
+is a stopgap. ADR-026 (`docs/architecture/adrs/026-semantic-layer-first-class.md`)
 defines the convergence target: first-class `measure` / `dimension` / `grain` in
 `nxd.spec` with kernel-driven Snowflake semantic-view capability.
 
 Every public name in the kit (`Agg`, `Cardinality`, `Dimension`, `Metric`,
 `Model`, `Join`) is intentionally aligned with ADR-026 so the migration from
 `SemanticRegistry.build()` calls to native spec DSL calls is mechanical.
-
-See `reference/adr-026-convergence.md` for the mapping table.

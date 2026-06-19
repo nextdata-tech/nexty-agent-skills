@@ -15,10 +15,9 @@ from nxd.spec import (
     code,
 )
 
-# Import the semantic kit from the vendored copy inside the DP.
 # `build_semantic_tools` returns list[SemanticTool]; each carries .fn,
 # .request_model, .response_model, .description.
-from semantic import build_semantic_tools
+from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY  # the per-DP registry you authored in registry.py
 
 _rpc = data_product_rpc_output()
