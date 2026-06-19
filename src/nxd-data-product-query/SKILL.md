@@ -334,6 +334,42 @@ python3 scripts/rpc_call.py --dp <fullName> --port <port> --function <fn> --args
 
 `rpc_call.py` reads the token from stdin and writes the response to stdout (or to `--out` if `--out` is supplied — preferred for large payloads).
 
+#### Semantic-layer MCP ports (`list_models` / `run_semantic_query`)
+
+A DP built with the **nxd-semantic-data-product** skill exposes a governed
+text-to-SQL surface as three RPC functions: `list_models`, `describe_model`,
+`run_semantic_query`. Treat them as a navigational discover→select→run
+protocol, not as free-form SQL:
+
+1. **Discover — `list_models`.** Call `list_models` first to see the available
+   semantic models (entities), their grains, and how they join. Never guess
+   concept names or grain membership — the listing is the canonical source.
+2. **Select — `describe_model(name)`.** For each model you intend to query,
+   call `describe_model` with its name. The response contains:
+   - **metrics** (each with its `compatible_dimensions` list — the dimensions
+     that share the model's grain),
+   - **dimensions** (with PII classifications),
+   - **joins** (with a `reaches_dimensions` list — dimensions reachable through
+     the join without grain-hopping).
+   Call `describe_model` once per model; do not batch models into a single call.
+3. **Run — `run_semantic_query` by concept name, never SQL.** Takes a
+   `{measures, dimensions, filters}` payload of concept names (e.g.
+   `{"measures": ["total_revenue"], "dimensions": ["country"]}`). Do NOT pass a
+   `sql` key or a raw SQL string — the DP compiles the selection itself and
+   returns the `compiled_sql` (aggregated, read-only, row-capped) plus rows.
+4. **Grain-safe navigation — one query per model.** Because each
+   `describe_model` response is exactly one grain, grain boundaries are visible
+   before you query. To answer a question that spans two grains (e.g. a
+   customer-grain model and an order-grain model): call `describe_model` on each,
+   then issue **one `run_semantic_query` per model** (sharing any compatible
+   dimension, e.g. `country`) and present the result sets separately. Do not
+   attempt to merge all measures into a single call — it will fail with a
+   `CompileError` ("metrics span multiple grains"), and combining them in a
+   hand-written join would double-count via fan-out.
+
+Call these functions exactly like any other RPC port (`rpc_call.py` above, or
+`nxd mcp client` for an MCP-stdio port).
+
 ### 6e. External API ports — `driver: api`
 
 The location is a URL; the leased credential is whatever the upstream API needs (bearer, basic, key). Build the HTTP call from the model schema, run it via `curl` or `python -m requests`.
@@ -417,6 +453,7 @@ confirm which before changing the query.
 | Vector search errors with a dimension mismatch | Query vector dimension ≠ the indexed column dimension. | Match the embedding model so dimensions agree (e.g. 384 vs 1536). |
 | SQL query against a pgvector port returns 0 rows | Querying the metadata table by the wrong table name, or the DP hasn't run yet (no data). | Confirm the physical table name (model name, lowercased) and that the DP reached `STARTED` with a successful run. |
 | RPC call fails to connect / 404 | Wrong RPC path or trailing-slash mismatch on the MCP endpoint; or the RPC port is unhealthy. | Verify the port path from `list_outputs.py`; if the port itself is failing, debug the DP with **nxd-debugging-data-products**. |
+| `run_semantic_query` returns "metrics span multiple grains" | Metrics from two different-grain models were combined in one call (chasm-trap guard) — correct governance, not a transient error. | Do NOT retry the same combined call. Call `describe_model` on each model to confirm grain membership, then issue one `run_semantic_query` per model sharing a compatible dimension; present the result sets separately. See §6d "Semantic-layer MCP ports". |
 
 When the failure is the Data Product itself (port unhealthy, no data produced,
 RPC pod crashing) rather than the query, switch to the

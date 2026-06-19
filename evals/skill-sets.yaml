@@ -26,4 +26,5 @@ skill_sets:
       - "src/nxd-adding-policy"
       - "src/nxd-complying-with-failing-policy"
       - "src/nxd-debugging-data-products"
+      - "src/nxd-semantic-data-product"
 

@@ -1,0 +1,52 @@
+"""spec.py for a semantic-layer data product.
+
+NXD exposes MCP tools ONLY through spec.py via data_product_rpc_output().
+There is NO module-level `tools` list discovery.  The wiring below is the
+only correct pattern.
+
+See reference/scripts/templates/spec_rpc_output.py.tmpl for full annotation.
+"""
+
+from nxd.spec import (
+    data_product,
+    data_product_rpc_output,
+    rpc_function,
+    rpc_server,
+    code,
+)
+
+# `build_semantic_tools` returns list[SemanticTool]; each carries .fn,
+# .request_model, .response_model, .description.
+from nxd.experimental.semantic import build_semantic_tools
+from registry import REGISTRY  # the per-DP registry you authored in registry.py
+
+_rpc = data_product_rpc_output()
+for _t in build_semantic_tools(REGISTRY):
+    _rpc = _rpc.function(
+        rpc_function(code(_t.fn), _t.request_model, _t.response_model)
+        .description(_t.description)
+    )
+_rpc = _rpc.port(
+    "mcp-api",
+    rpc_server("{{infra_profile_mcp_service_ref}}")
+    .enable_endpoints()
+    .mcp_path("/mcp"),
+)
+
+spec = (
+    data_product(
+        name="{{dp_name}}",
+        domain="{{domain}}",
+        description="{{description}}",
+        version="0.1.0",
+        infra_profile="{{infra_profile}}",
+    )
+    .output(_rpc)
+    # Add inputs, additional outputs, and controls as needed.
+    # Example Snowflake storage output port:
+    # from nxd.spec import data_product_output, storage
+    # .output(
+    #     data_product_output()
+    #     .port("snowflake", storage("#/services/{{snowflake_service}}"))
+    # )
+)

@@ -181,3 +181,7 @@ A semantic link creates a relationship between different attributes across domai
 ## Infra profile and data services
 
 An infra profile is a set of data services that store the credentials and access information that data products use to access data. You can define them using a yaml file and use the CLI to update them in your mesh.
+
+## Semantic-layer data products (text-to-SQL / metrics over MCP)
+
+For data products that expose curated metrics and dimensions to AI agents via MCP (so agents can answer natural-language questions without writing raw SQL), see the `nxd-semantic-data-product` skill. It covers the `SemanticRegistry` fluent builder, the compiler + MCP tool factory imported from the `nxd.experimental.semantic` library (shipped in the `nxd.data_product` wheel), and the end-to-end workflow for a governed NL-to-SQL data product on Snowflake.
