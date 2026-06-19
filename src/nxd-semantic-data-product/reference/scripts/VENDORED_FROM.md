@@ -2,12 +2,15 @@
 
 Source path (in the nxd monorepo): `components/nxd_py/data_product/nxd/experimental/semantic/`
 
-Source commit: `3c1986488ca2ae7dbdfb8ac381237955d811542f` — Re-vendored 2026-06-19.
+Source commit: `dc56bbfdc` (nxd PR #6910, in review) — Re-vendored 2026-06-19.
+The model-oriented tool surface merged via #6909 (commit `e1a62261d` on main);
+#6910 adds the native semantic-view probe fix + docstring corrections vendored here.
 
 This snapshot is byte-identical to the committed source modulo the import-root
 rewrite documented below. To check for drift, diff the committed source against
 these files after normalizing `from nxd.experimental.semantic.X import` →
-`from .X import`.
+`from .X import` **and** the bare-package form `from nxd.experimental.semantic import X`
+→ `from . import X` (used in `__init__.py` for the `mcp_tools` lazy import).
 
 Files vendored:
 - `registry.py`
@@ -18,9 +21,13 @@ Files vendored:
 - `_predicates.py` (neutral leaf: CompileError, _lit, _ALLOWED_OPS, _render_predicate)
 
 Import adjustment: cross-module imports changed from
-`from nxd.experimental.semantic.X import ...` to relative `from .X import ...`
+`from nxd.experimental.semantic.X import ...` to relative `from .X import ...`,
+and the bare-package import `from nxd.experimental.semantic import mcp_tools`
+(the lazy rpc-extra import in `__init__.py`) to `from . import mcp_tools`,
 so the files work as a self-contained sibling package when copied flat into a
-DP's `transform/semantic/` directory. Logic is otherwise byte-identical to the source.
+DP's `transform/semantic/` directory — robust to the package being vendored
+under a directory name other than `semantic/`. Logic is otherwise byte-identical
+to the source.
 
 Changes relative to the previous vendor snapshot (`36dee1470d734b1f6c948f81b2e374177c27f644`):
 
@@ -89,6 +96,20 @@ Changes relative to the previous vendor snapshot (`36dee1470d734b1f6c948f81b2e37
      matches `build()`'s auto-derived `extra_dim_sets` (non-PII, MANY_TO_ONE only);
      `describe_model`'s `reaches_dimensions` documents that explicit per-metric
      `extra_dimensions` overrides may narrow the authoritative slice set.
+
+10. **native semantic-view probe fix + docstrings** (commit `dc56bbfdc`, nxd PR #6910):
+    - **mcp_tools.py** — `build_semantic_tools` now pre-resolves the view name
+      from the registry when none is given, so the dialect's existence probe
+      (`supports_native_semantic_view`) queries the same `<FIRST_MODEL_UPPER>_SEMANTIC`
+      name everything else provisions. Previously the default scaffold
+      (`view_name=""`) probed the literal `SEMANTIC_VIEW`, never matched the
+      provisioned object, and silently fell back to the plain-view path —
+      the native semantic-view path was unreachable on a generic DP.
+    - **registry.py** — `.dimension()` / `.metric()` docstrings referenced the
+      removed `list_dimensions` / `list_metrics` tools; updated to `describe_model`.
+    - **__init__.py** — the lazy rpc-extra import is now relative
+      (`from . import mcp_tools`) rather than the absolute `from semantic import`,
+      so it resolves regardless of the vendored directory name.
 
 This is a verbatim build-time snapshot. Never hand-edit the vendored files in
 this skill or in any generated DP. Report bugs to the `nxd_py` monorepo and

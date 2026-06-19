@@ -62,7 +62,7 @@ __all__ = [
 # absent; the public names are typed as Any so both mypy and pyright accept the
 # import-or-None dance without a redefinition error.
 try:
-    from semantic import mcp_tools as _mcp_tools
+    from . import mcp_tools as _mcp_tools
 
     SemanticTool: Any = _mcp_tools.SemanticTool
     build_semantic_tools: Any = _mcp_tools.build_semantic_tools

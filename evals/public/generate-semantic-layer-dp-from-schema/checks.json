@@ -27,7 +27,7 @@
     },
     {
       "id": "mcp-tools-wired",
-      "check": "The spec.py registers the four tool functions returned by build_semantic_tools(registry) as MCP-exposed tools via data_product_rpc_output()/rpc_function/rpc_server().mcp_path(\"/mcp\") — not via a non-existent module-level tools list."
+      "check": "The spec.py registers every tool function returned by build_semantic_tools(registry) (the three model-oriented tools: list_models, describe_model, run_semantic_query) as MCP-exposed tools via data_product_rpc_output()/rpc_function/rpc_server().mcp_path(\"/mcp\") — not via a non-existent module-level tools list."
     },
     {
       "id": "dependencies-present",

@@ -306,7 +306,7 @@ class SemanticRegistry:
             Logical type hint (e.g. ``"string"``, ``"boolean"``, ``"date"``).
             Informational only — not validated against the warehouse schema.
         description:
-            Plain-language meaning surfaced in ``list_dimensions``.
+            Plain-language meaning surfaced in the owning model's ``describe_model`` response.
         pii:
             When ``True`` this dimension is a governance target.  PII dimensions
             are included in ``compatible_dimensions()`` but the query layer may
@@ -356,7 +356,7 @@ class SemanticRegistry:
             valid for ``COUNT`` — ``build()`` rejects ``column="*"`` for all
             other aggregations including ``COUNT_DISTINCT``.
         description:
-            Plain-language meaning surfaced in ``list_metrics``.
+            Plain-language meaning surfaced in the owning model's ``describe_model`` response.
         boolean:
             When ``True`` SUM uses a CASE expression robust to
             BOOLEAN/VARCHAR physical types (counts rows where the column is

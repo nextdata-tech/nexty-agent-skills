@@ -20,7 +20,7 @@ The data product must:
    - First-order count (count orders where `IS_FIRST_ORDER` is true — boolean flag column)
 3. Register useful slicing dimensions from both tables, including country, segment, channel, order status, and order date. Mark `EMAIL` and `FULL_NAME` as PII.
 4. Declare the join between `order_event` and `customer_profile` with the correct cardinality.
-5. Wire up the four MCP tools (`list_metrics`, `list_dimensions`, `describe_metric`, `run_semantic_query`) by copying (not re-authoring) the vendored compiler and tool factory from the kit.
+5. Wire up the three model-oriented MCP tools (`list_models`, `describe_model`, `run_semantic_query`) by copying (not re-authoring) the vendored compiler and tool factory from the kit.
 6. Ensure the `requirements.txt` or `pyproject.toml` includes the kit's dependencies.
 
 ## Required artifacts from eval runner

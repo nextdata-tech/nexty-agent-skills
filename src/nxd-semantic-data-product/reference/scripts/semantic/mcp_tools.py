@@ -179,7 +179,14 @@ def build_semantic_tools(
     if dialect is None:
         from .dialect import SnowflakeDialect
 
-        dialect = SnowflakeDialect(view_name=view_name or "")
+        # Pre-resolve the view name from the registry so the dialect's
+        # _view_name is always populated. Otherwise supports_native_semantic_view
+        # would fall back to the literal "SEMANTIC_VIEW" while the rest of the
+        # dialect provisions/queries "<FIRST_MODEL_UPPER>_SEMANTIC" — the
+        # existence probe would never match and the native semantic-view path
+        # would be silently unreachable on the default scaffold (view_name="").
+        resolved_view_name = view_name or SnowflakeDialect(view_name="").view_name(registry)
+        dialect = SnowflakeDialect(view_name=resolved_view_name)
     elif view_name is not None:
         raise ValueError(
             "Provide either 'view_name' or a pre-configured 'dialect', not both. "
