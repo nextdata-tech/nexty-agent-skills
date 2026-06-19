@@ -18,7 +18,7 @@ Currently parked for this reason — both are **consumer** scenarios for the
 **nxd-data-product-query** skill (its §6d "Semantic-layer MCP ports"), exercising
 how an agent queries a deployed semantic DP, NOT how the producer skill builds one:
 
-- `semantic-query-nl-to-answer` — needs the four semantic MCP tools live.
+- `semantic-query-nl-to-answer` — needs the three semantic MCP tools live.
 - `chasm-trap-fan-out-defended` — needs a live `run_semantic_query` to return
   the mixed-grain `CompileError` the scenario grades.
 
