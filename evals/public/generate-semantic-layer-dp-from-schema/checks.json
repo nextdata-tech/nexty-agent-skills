@@ -22,8 +22,8 @@
       "check": "The EMAIL and FULL_NAME dimensions are registered with pii=True, and no other dimension is marked pii=True."
     },
     {
-      "id": "compiler-not-re-authored",
-      "check": "The agent vendored the experimental/semantic kit (copied compile_selection / build_semantic_tools) into the project rather than hand-writing compile_selection or the filter/aggregation logic. The DP's registry module contains only SemanticRegistry authoring and imports the compiler + tool factory from the kit."
+      "id": "compiler-imported-not-vendored",
+      "check": "The agent imports compile_selection / build_semantic_tools from the nxd.experimental.semantic library rather than hand-writing compile_selection or the filter/aggregation logic, and does NOT vendor or copy the kit into the project. The DP's registry module contains only SemanticRegistry authoring and imports the compiler + tool factory from nxd.experimental.semantic."
     },
     {
       "id": "mcp-tools-wired",
@@ -31,7 +31,7 @@
     },
     {
       "id": "dependencies-present",
-      "check": "The project's dependency file (requirements.txt or pyproject.toml) lists the kit package / vendored path and any transitive requirements the kit declares."
+      "check": "The project's dependency file (requirements.txt or pyproject.toml) lists nxd.data_product[spec] (which ships the nxd.experimental.semantic library) and nxd.drivers[rpc], plus snowflake-connector-python[pandas] and pandas."
     },
     {
       "id": "no-raw-sql-in-handler",

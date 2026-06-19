@@ -4,7 +4,7 @@ The data-engineering team has two Snowflake tables — one entity-grain table (`
 
 Leadership wants an LLM-accessible analytics surface over these tables: a Nextdata OS data product that exposes governed metrics and dimensions via MCP, so business analysts can ask natural-language questions and get back aggregated, grain-safe answers without hand-writing SQL.
 
-The skill being evaluated teaches how to build this kind of semantic-layer DP using the `experimental.semantic` kit. The agent must author the DP-specific `SemanticRegistry` (the per-DP data) and copy the vendored compiler and MCP-tool kit into the project — not re-implement the compiler.
+The skill being evaluated teaches how to build this kind of semantic-layer DP using the `nxd.experimental.semantic` library (shipped in the `nxd.data_product` wheel). The agent must author the DP-specific `SemanticRegistry` (the per-DP data) and import the compiler and MCP-tool factory from `nxd.experimental.semantic` — not re-implement the compiler, and not vendor or copy it.
 
 ## Task for the agent
 
@@ -20,10 +20,10 @@ The data product must:
    - First-order count (count orders where `IS_FIRST_ORDER` is true — boolean flag column)
 3. Register useful slicing dimensions from both tables, including country, segment, channel, order status, and order date. Mark `EMAIL` and `FULL_NAME` as PII.
 4. Declare the join between `order_event` and `customer_profile` with the correct cardinality.
-5. Wire up the three model-oriented MCP tools (`list_models`, `describe_model`, `run_semantic_query`) by copying (not re-authoring) the vendored compiler and tool factory from the kit.
+5. Wire up the three model-oriented MCP tools (`list_models`, `describe_model`, `run_semantic_query`) by importing the compiler and tool factory from `nxd.experimental.semantic` (not re-authoring, not vendoring).
 6. Ensure the `requirements.txt` or `pyproject.toml` includes the kit's dependencies.
 
 ## Required artifacts from eval runner
 
 - `fixtures/schema.md` — the source table definitions (provided).
-- The `experimental.semantic` kit (compiler + `build_semantic_tools` factory), available as a vendored dependency per the skill's instructions.
+- The `nxd.experimental.semantic` library (compiler + `build_semantic_tools` factory), available as an installed dependency via the `nxd.data_product` wheel per the skill's instructions.
