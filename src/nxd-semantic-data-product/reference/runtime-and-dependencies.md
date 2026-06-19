@@ -49,11 +49,12 @@ pandas
 
 - `nxd.data_product[spec]` — the NXD Python SDK spec extras (semantic_model,
   data_types, script, storage, etc.). Also ships `nxd.experimental.semantic`.
-- `nxd.drivers[rpc]` — the `nxd.drivers.rpc` module that `mcp_tools.py`
-  imports (`Request`, `Response`, `function`, `mcp`).
+- `nxd.drivers[rpc]` — the `nxd.drivers.rpc` module that
+  `nxd.experimental.semantic`'s MCP tool factory imports (`Request`, `Response`,
+  `function`, `mcp`).
 - `snowflake-connector-python[pandas]` — the Snowflake Python connector with
-  pandas result fetching. Required by `mcp_tools.py`'s `run_semantic_query`
-  implementation.
+  pandas result fetching. Required by the library's `run_semantic_query`
+  tool implementation.
 - `pandas` — explicit pin ensures the pandas extras are satisfied consistently
   across Python versions.
 

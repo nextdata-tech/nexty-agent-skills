@@ -9,7 +9,7 @@ This folder is ignored by git except for this README. Do not commit customer nam
 Some scenarios cannot be graded by the headless `run.py` loop because they need
 a **live runtime** the harness does not provision — e.g. a running data product
 exposing MCP tools, or a real warehouse connection. The headless agent only gets
-static `fixtures/`, so it has no `list_metrics` / `run_semantic_query` to call
+static `fixtures/`, so it has no `list_models` / `describe_model` / `run_semantic_query` to call
 and falls back to reconstructing answers from source files, which fails the
 tool-call checks even when the underlying skill is correct.
 
