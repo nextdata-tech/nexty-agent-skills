@@ -99,30 +99,44 @@ tools = build_semantic_tools(REGISTRY, dialect=SnowflakeDialect(), fqn="DB.SCHEM
 # -> list[SemanticTool], one each for list_models / describe_model / run_semantic_query
 ```
 
-Each `SemanticTool` carries `.fn` (the decorated callable), `.request_model`,
+Each `SemanticTool` carries `.fn` (a closure callable), `.request_model`,
 `.response_model`, and `.description`. The **response shapes** the intent gate
 depends on (`describe_model` → `metrics[].compatible_dimensions`,
 `dimensions[].pii`, `joins[].reaches_dimensions`) are derived directly from the
 registry by this factory — they are not hand-authored per DP, which is why the
 client can rely on them.
 
-### Wiring into a running DP
+### Wiring into a running DP (producer side)
 
 NXD exposes MCP tools **only** through `spec.py` via `data_product_rpc_output()`.
 There is no module-level `tools` list discovery — a bare
 `tools = build_semantic_tools(...)` in some file exposes **zero** tools at runtime.
-The correct wiring registers each tool as an RPC function and serves them on an MCP
-path:
+The correct wiring passes `code(<module-level tools.py function>)` (NOT `code(t.fn)`
+— `t.fn` is a closure `code()` cannot extract) and reuses `build_semantic_tools(...)`
+only for the schemas, and **requires** a `.transform(...)` so the sibling
+`registry.py` / `tools.py` modules are bundled into the image:
 
 ```python
-from nxd.spec import data_product_rpc_output, rpc_function, rpc_server, code
+from nxd.spec import (
+    data_product, data_product_output, data_product_rpc_output,
+    rpc_function, rpc_server, storage, code,
+)
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
+from tools import list_models, describe_model, run_semantic_query
+from transform import transform
+from models import provision_marker
 
+_tool_map = {t.name: t for t in build_semantic_tools(REGISTRY)}  # schemas only
 _rpc = data_product_rpc_output()
-for _t in build_semantic_tools(REGISTRY):
+for _fn, _name in [
+    (list_models, "list_models"),
+    (describe_model, "describe_model"),
+    (run_semantic_query, "run_semantic_query"),
+]:
+    _t = _tool_map[_name]
     _rpc = _rpc.function(
-        rpc_function(code(_t.fn), _t.request_model, _t.response_model)
+        rpc_function(code(_fn), _t.request_model, _t.response_model)
         .description(_t.description)
     )
 _rpc = _rpc.port(
@@ -131,11 +145,19 @@ _rpc = _rpc.port(
     .enable_endpoints()
     .mcp_path("/mcp"),
 )
-spec = data_product(name="...", ...).output(_rpc)
+spec = (
+    data_product(name="...", ...)
+    .transform(code(transform).compute("<infra-profile-path>#/services/<compute>"))  # MANDATORY
+    .output(data_product_output().promise(provision_marker)
+            .port("snowflake", storage("<infra-profile-path>#/services/<snowflake>")))
+    .output(_rpc)
+)
 ```
 
 At query time, the querying skill detects this path by the three tool names on
-`tools/list` (Step 6d) and then runs the intent gate (Step 6f).
+`tools/list` (Step 6d) and then runs the intent gate (Step 6f). The producer-side
+wiring constraints (flat layout, module-level tools, mandatory transform,
+verify-before-transform ordering) live authoritatively in the generator skill.
 
 Authoritative detail lives in the generator skill:
 `src/nxd-semantic-data-product/reference/{overview,compiler-and-routing,runtime-and-dependencies}.md`.

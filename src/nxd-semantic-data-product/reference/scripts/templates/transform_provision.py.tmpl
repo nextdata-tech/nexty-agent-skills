@@ -1,52 +1,249 @@
-"""spec.py for a semantic-layer data product.
+"""Complete semantic-layer data product reference (flat layout).
 
-NXD exposes MCP tools ONLY through spec.py via data_product_rpc_output().
-There is NO module-level `tools` list discovery.  The wiring below is the
-only correct pattern.
+This is the validated, end-to-end wiring for a deployable semantic DP. It mirrors
+the known-good example at
+`examples/t2sql-poc/deployable-dp/` in the nxd repo (spec.py + tools.py +
+transform.py + models.py + registry.py, all flat siblings).
 
-See reference/scripts/templates/spec_rpc_output.py.tmpl for full annotation.
+Four wiring constraints this template encodes (each is the difference between a
+DP that LOOKS right and one that actually runs):
+
+1. code() cannot extract closures. build_semantic_tools(REGISTRY) returns
+   closures; pass code(<module-level tools.py fn>) instead and reuse the tools
+   only for their .request_model / .response_model / .description.
+2. The registry/tools siblings are bundled ONLY if there is a .transform(...).
+   The rpc-output code() path ships only the extracted __<fn>__.py scripts; the
+   **/*.py glob on the transform path bundles the siblings. So the transform is
+   MANDATORY.
+3. All modules flat at the DP root — never a transform/ subdir package — so the
+   extracted tool scripts resolve `from registry import REGISTRY` against the
+   script dir (the only path on sys.path in the rpc subprocess).
+4. Base tables must exist BEFORE promise verification (it runs before the
+   transform). For production, facade over pre-existing tables provisioned at
+   provision time; the self-seed transform below is for a self-contained demo
+   and will not fully pass verification in a single launch.
+
+============================================================================
+spec.py  (flat at DP root)
+============================================================================
+
+    from nxd.spec import (
+        data_product, data_product_output, data_product_rpc_output,
+        rpc_function, rpc_server, storage, code,
+    )
+    from nxd.experimental.semantic import build_semantic_tools
+    from registry import REGISTRY
+    from tools import list_models, describe_model, run_semantic_query
+    from transform import transform
+    from models import provision_marker
+
+    INFRA_PROFILE = "{{infra_profile}}"
+
+    # Used ONLY for the schema descriptors + descriptions — NOT for the callable.
+    _tool_map = {t.name: t for t in build_semantic_tools(REGISTRY)}
+
+    _rpc = data_product_rpc_output()
+    for _fn, _name in [
+        (list_models, "list_models"),
+        (describe_model, "describe_model"),
+        (run_semantic_query, "run_semantic_query"),
+    ]:
+        _t = _tool_map[_name]
+        _rpc = _rpc.function(
+            rpc_function(code(_fn), _t.request_model, _t.response_model)
+            .description(_t.description)
+        )
+    _rpc = _rpc.port(
+        "mcp-api",
+        rpc_server(f"/infra-profile/{INFRA_PROFILE}#/services/{{mcp_service}}")
+        .enable_endpoints()
+        .mcp_path("/mcp"),
+    )
+
+    _storage = (
+        data_product_output()
+        .promise(provision_marker)
+        .port(
+            "snowflake",
+            storage(f"/infra-profile/{INFRA_PROFILE}#/services/{{snowflake_service}}"),
+        )
+    )
+
+    spec = (
+        data_product(
+            name="{{dp_name}}",
+            domain="{{domain}}",
+            description="{{description}}",
+            version="0.1.0",
+            infra_profile=INFRA_PROFILE,
+        )
+        # MANDATORY — provisions the semantic view AND bundles registry.py/tools.py.
+        .transform(
+            code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/{{compute_service}}")
+        )
+        .output(_storage)
+        .output(_rpc)
+    )
+
+============================================================================
+tools.py  (flat at DP root) — MODULE-LEVEL functions code() can extract
+============================================================================
+
+    from typing import Any
+    import json as _json
+
+    from nxd.drivers.rpc import Request, Response, function, mcp
+    from registry import REGISTRY  # flat sibling import
+    from nxd.experimental.semantic.compiler import (
+        CompileError, compile_selection, semantic_view_query,
+    )
+    from nxd.experimental.semantic.dialect import SnowflakeDialect
+
+    _DIALECT = SnowflakeDialect(view_name="")
+
+    @function(name="list_models")
+    @mcp.tool(name="list_models", description="List the semantic models ...")
+    def list_models(request: Request) -> Response:
+        out = []
+        for m in REGISTRY.models:
+            out.append({
+                "name": m.name,
+                "grain": m.grain,
+                "description": m.description,
+                "metric_count": len(REGISTRY.metrics_of(m.name)),
+                "dimension_count": len(REGISTRY.dimensions_of(m.name)),
+                "joins": [
+                    {"to": j.right, "cardinality": j.cardinality.value}
+                    for (j, _reached) in REGISTRY.joins_of(m.name)
+                ],
+            })
+        return Response({"models": out})
+
+    @function(name="describe_model")
+    @mcp.tool(name="describe_model", description="Describe one model in full ...")
+    def describe_model(request: Request) -> Response:
+        name = request.get("name") or ""
+        model_obj = REGISTRY.model_of(name)
+        if model_obj is None:
+            known = ", ".join(m.name for m in REGISTRY.models)
+            return Response({"name": name, "error": f"unknown model {name!r}. Known: {known}."})
+        # ... build metrics / dimensions / joins from REGISTRY (see deployable-dp)
+        return Response({"name": model_obj.name, "grain": model_obj.grain, "error": ""})
+
+    @function(name="run_semantic_query")
+    @mcp.tool(name="run_semantic_query", description="The safe, default query path ...")
+    def run_semantic_query(snowflake: Any, request: Request) -> Response:
+        from snowflake import connector
+        selection = {
+            "measures": request.get("measures") or [],
+            "dimensions": request.get("dimensions") or [],
+            "filters": request.get("filters") or [],
+        }
+        if not selection["measures"]:
+            return Response({"error": "No measures selected.", "rows": []})
+        sf_database, sf_schema = snowflake.database, snowflake.schema
+        fqn = f"{sf_database}.{sf_schema}." if sf_database else f"{sf_schema}."
+        conn = connector.connect(
+            user=snowflake.user, account=snowflake.account,
+            warehouse=snowflake.warehouse, role=snowflake.role,
+            database=sf_database, schema=sf_schema, ocsp_fail_open=True,
+            **snowflake.connector_params(),
+        )
+        try:
+            with conn.cursor() as cur:
+                native = _DIALECT.supports_native_semantic_view(cur, fqn=fqn)
+                try:
+                    if native:
+                        sql = semantic_view_query(selection, registry=REGISTRY, dialect=_DIALECT, fqn=fqn)
+                    else:
+                        sql = compile_selection(selection, registry=REGISTRY, dialect=_DIALECT, fqn=fqn, use_view=True)
+                except CompileError as e:
+                    return Response({"error": f"Invalid selection: {e}", "rows": []})
+                cur.execute(f"SELECT * FROM (\n{sql}\n) AS _capped LIMIT 201")
+                rows = list(cur.fetchall())
+                columns = [str(c[0]) for c in cur.description]
+        finally:
+            conn.close()
+        return Response({
+            "row_count": len(rows[:200]),
+            "truncated": len(rows) > 200,
+            "columns": columns,
+            "rows": [_json.dumps(list(r), default=str) for r in rows[:200]],
+            "error": "",
+        })
+
+============================================================================
+transform.py  (flat at DP root) — MANDATORY; provisions the view + bundles siblings
+============================================================================
+
+    from nxd.data_product.context import Snowflake
+
+    def transform(snowflake: Snowflake) -> None:
+        from registry import REGISTRY
+        from nxd.experimental.semantic.compiler import (
+            native_semantic_view_ddl, plain_view_ddl,
+        )
+        from nxd.experimental.semantic.dialect import SnowflakeDialect
+        from snowflake import connector
+
+        if snowflake is None or not snowflake.schema:
+            return
+        fqn = (
+            f"{snowflake.database}.{snowflake.schema}."
+            if snowflake.database else f"{snowflake.schema}."
+        )
+        view_name = SnowflakeDialect.default_view_name(REGISTRY)
+        dialect = SnowflakeDialect(view_name=view_name)
+
+        conn = connector.connect(
+            user=snowflake.user, account=snowflake.account,
+            warehouse=snowflake.warehouse, role=snowflake.role,
+            database=snowflake.database, schema=snowflake.schema,
+            ocsp_fail_open=True, **snowflake.connector_params(),
+        )
+        try:
+            cur = conn.cursor()
+            try:
+                # 1) Write the promised marker model (satisfies the storage port).
+                # 2) (Self-seed demo only) seed the base tables the view reads.
+                # 3) Provision the semantic view (native, plain fallback).
+                native_ddl = native_semantic_view_ddl(REGISTRY, dialect=dialect, fqn=fqn)
+                if native_ddl:
+                    try:
+                        cur.execute(native_ddl)
+                    except Exception:
+                        cur.execute(plain_view_ddl(REGISTRY, dialect=dialect, fqn=fqn))
+                else:
+                    cur.execute(plain_view_ddl(REGISTRY, dialect=dialect, fqn=fqn))
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+
+============================================================================
+models.py  (flat at DP root) — one promised marker model
+============================================================================
+
+    from nxd.spec import semantic_model
+    from nxd.spec.data_types import int64, string
+
+    provision_marker = (
+        semantic_model("semantic_marker")
+        .description("Marker table written by the provisioning transform.")
+        .schema({"MARKER_ID": int64(), "VIEW_NAME": string()})
+    )
+
+============================================================================
+PRODUCTION ALTERNATIVE — facade over pre-existing tables
+============================================================================
+
+If the base tables already exist (loaded by another DP / pipeline), DON'T seed
+them in the transform — promise verification runs first and would fail. Instead
+reference them via source_aligned_input(...) and provision the view at provision
+time:
+
+    storage(...).config(SnowflakeConfig().as_view(sql_script("transform/view.sql")))
+
+See examples/features/drivers/snowflake-storage/snowflake-source-aligned-facade/
+in the nxd repo.
 """
-
-from nxd.spec import (
-    data_product,
-    data_product_rpc_output,
-    rpc_function,
-    rpc_server,
-    code,
-)
-
-# `build_semantic_tools` returns list[SemanticTool]; each carries .fn,
-# .request_model, .response_model, .description.
-from nxd.experimental.semantic import build_semantic_tools
-from registry import REGISTRY  # the per-DP registry you authored in registry.py
-
-_rpc = data_product_rpc_output()
-for _t in build_semantic_tools(REGISTRY):
-    _rpc = _rpc.function(
-        rpc_function(code(_t.fn), _t.request_model, _t.response_model)
-        .description(_t.description)
-    )
-_rpc = _rpc.port(
-    "mcp-api",
-    rpc_server("{{infra_profile_mcp_service_ref}}")
-    .enable_endpoints()
-    .mcp_path("/mcp"),
-)
-
-spec = (
-    data_product(
-        name="{{dp_name}}",
-        domain="{{domain}}",
-        description="{{description}}",
-        version="0.1.0",
-        infra_profile="{{infra_profile}}",
-    )
-    .output(_rpc)
-    # Add inputs, additional outputs, and controls as needed.
-    # Example Snowflake storage output port:
-    # from nxd.spec import data_product_output, storage
-    # .output(
-    #     data_product_output()
-    #     .port("snowflake", storage("#/services/{{snowflake_service}}"))
-    # )
-)
