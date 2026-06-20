@@ -1,0 +1,51 @@
+{
+  "comment": "What list_models + describe_model(name) return for this DP. Model-centric surface (list_models -> describe_model per model). Deliberately confusable: two call-related metrics at the same grain on rep_activity, and no time/month dimension to bind 'last month'. Mirrors the order-analytics domain from semantic-query-nl-to-answer plus an activity model.",
+  "list_models": [
+    {"name": "order_event", "grain": "one row per order", "description": "Placed orders, one row per order."},
+    {"name": "rep_activity", "grain": "one row per logged activity", "description": "Sales-rep activity log, one row per logged activity."},
+    {"name": "customer_profile", "grain": "one row per customer", "description": "Customer master, one row per customer."}
+  ],
+  "describe_model": {
+    "order_event": {
+      "name": "order_event",
+      "grain": "one row per order",
+      "metrics": [
+        {"name": "total_revenue", "aggregation": "SUM", "description": "Sum of order amount in USD (AMOUNT_USD) across orders.", "compatible_dimensions": ["channel", "country", "segment"]},
+        {"name": "order_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct count of orders (ORDER_ID).", "compatible_dimensions": ["channel", "country", "segment"]}
+      ],
+      "dimensions": [
+        {"name": "channel", "type": "string", "pii": false, "description": "Sales channel the order came through (web, retail, partner)."}
+      ],
+      "joins": [
+        {"to_model": "customer_profile", "kind": "many_to_one", "on": [{"from": "CUSTOMER_ID", "to": "CUSTOMER_ID"}], "reaches_dimensions": ["country", "segment"]}
+      ]
+    },
+    "rep_activity": {
+      "name": "rep_activity",
+      "grain": "one row per logged activity",
+      "metrics": [
+        {"name": "call_count", "aggregation": "COUNT", "description": "Count of every logged call activity, regardless of outcome.", "compatible_dimensions": ["rep_name"]},
+        {"name": "sales_calls", "aggregation": "SUM", "description": "Count of calls that converted to a sale (IS_CONVERTED flag = true).", "compatible_dimensions": ["rep_name"]}
+      ],
+      "dimensions": [
+        {"name": "rep_name", "type": "string", "pii": true, "description": "Sales rep who logged the activity. PII — governed/maskable."}
+      ],
+      "joins": []
+    },
+    "customer_profile": {
+      "name": "customer_profile",
+      "grain": "one row per customer",
+      "metrics": [],
+      "dimensions": [
+        {"name": "country", "type": "string", "pii": false, "description": "Customer billing country."},
+        {"name": "segment", "type": "string", "pii": false, "description": "Customer segment (enterprise, mid-market, smb)."}
+      ],
+      "joins": []
+    }
+  },
+  "notes": [
+    "There is NO month / date / time dimension on any model. 'last month' cannot bind to anything in this catalog.",
+    "call_count and sales_calls both live on rep_activity at the same grain — distinguished only by their descriptions (all logged calls vs converted calls).",
+    "country and segment live on customer_profile and reach order_event via a documented many_to_one join (reaches_dimensions). rep_activity has NO join to customer_profile, so a call metric CANNOT be sliced by country/channel — it is neither in compatible_dimensions nor in any reaches_dimensions."
+  ]
+}

@@ -1,0 +1,46 @@
+[
+  {
+    "nl": "How many calls did we make last month?",
+    "expect": "clarify",
+    "why_ambiguous": [
+      "Two metrics plausibly match 'calls': call_count (all logged calls) and sales_calls (converted calls). The catalog descriptions distinguish them; the question does not.",
+      "'last month' has no dimension to bind to — the catalog has no month/date/time dimension."
+    ],
+    "tempting_wrong_selection": {
+      "measures": ["call_count"],
+      "dimensions": [],
+      "filters": [{"dimension": "month", "op": "=", "value": "last month"}],
+      "why_wrong": "Silently picks call_count over sales_calls AND invents a 'month' dimension/filter that does not exist on any model (describe_model('rep_activity') exposes neither). A naive agent executes this; the compiler would reject the unknown dimension, but the metric ambiguity would pass silently and return a confident wrong number for the other reading."
+    },
+    "expected_agent_behavior": {
+      "runs_intent_gate": true,
+      "echo_contains": ["call_count", "sales_calls", "logged call", "converted"],
+      "clarifies": true,
+      "clarify_offers_concepts": ["call_count", "sales_calls"],
+      "flags_missing_time_dimension": true,
+      "calls_run_semantic_query": false
+    }
+  },
+  {
+    "nl": "What is the total revenue by country?",
+    "expect": "execute",
+    "selection": {
+      "measures": ["total_revenue"],
+      "dimensions": ["country"],
+      "filters": []
+    },
+    "expected_agent_behavior": {
+      "runs_intent_gate": true,
+      "echo_contains": ["total_revenue", "country", "sum", "order amount"],
+      "clarifies": false,
+      "calls_run_semantic_query": true
+    },
+    "expected_sql_shape": {
+      "aggregated": true,
+      "group_by_columns": ["COUNTRY"],
+      "aggregate_exprs": ["SUM(TRY_CAST(CAST(AMOUNT_USD AS VARCHAR) AS DOUBLE)) AS total_revenue"],
+      "compile_path": "view",
+      "comment": "Clear question: one obvious metric + one compatible dimension. No clarify turn should be added."
+    }
+  }
+]
