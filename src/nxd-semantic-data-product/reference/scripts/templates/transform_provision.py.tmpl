@@ -1,9 +1,21 @@
 """Complete semantic-layer data product reference (flat layout).
 
-This is the validated, end-to-end wiring for a deployable semantic DP. It mirrors
-the known-good example at
-`examples/t2sql-poc/deployable-dp/` in the nxd repo (spec.py + tools.py +
-transform.py + models.py + registry.py, all flat siblings).
+This is the validated wiring for a deployable semantic DP — the code() / sibling-
+bundling / flat-layout mechanics below are exactly what `examples/t2sql-poc/
+deployable-dp/` in the nxd repo ships (spec.py + tools.py + transform.py +
+models.py + registry.py, all flat siblings).
+
+IMPORTANT — two provisioning paths, only one goes green on first launch:
+
+  * FACADE (production, fully green): base tables loaded externally; the view is
+    provisioned at provision time via storage(...).config(...as_view(...)). Use
+    this when you want a clean first-launch deploy. Make this your primary path.
+  * SELF-SEED (demo only, shown below): the transform seeds the base tables AND
+    writes the marker. Because verification runs BEFORE the transform (see
+    constraint 4), a self-seed DP does NOT fully pass verification in a single
+    launch. `deployable-dp` carries the self-seed transform as a self-contained
+    demo and accepts that first-launch gap — do not copy it expecting a green
+    deploy in one shot. For production, swap to the facade path.
 
 Four wiring constraints this template encodes (each is the difference between a
 DP that LOOKS right and one that actually runs):

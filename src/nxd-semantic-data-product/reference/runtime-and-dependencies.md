@@ -116,11 +116,15 @@ verification — the tables don't exist yet when verification runs. Two options:
   at **provision time** (before verification). See
   `examples/features/drivers/snowflake-storage/snowflake-source-aligned-facade/`
   in the nxd repo.
-- **Self-seed (self-contained demo only).** The transform seeds the base tables.
-  A pure post-verify transform-seed will NOT pass verification in a single launch
-  — the promised marker model passes, but a contract that reads the seeded query
-  tables would fail on the first run. Seed at provision time (or accept the
-  first-launch verification gap) for a fully-green deploy.
+- **Self-seed (self-contained demo only).** The transform seeds the base tables
+  AND writes the promised marker model. Because verification runs **before** the
+  transform, the marker table the transform writes does not exist yet at
+  verification time either — so a pure post-verify transform-seed will NOT pass
+  verification in a single launch (the marker promise fails on the first run, the
+  same as a contract reading the seeded query tables would). To go fully green,
+  provision the marker (and the base tables) at **provision time** rather than in
+  the post-verify transform — or accept the first-launch verification gap and let
+  the second reconcile pass green once the transform has run once.
 
 ---
 

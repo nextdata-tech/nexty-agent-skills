@@ -2,7 +2,7 @@
 
 ## Contents
 - What this kit provides
-- Two-layer design
+- Three-layer design
 - Stopgap status and ADR-026 convergence
 
 ---
@@ -33,7 +33,7 @@ execution path is read-only, aggregated, and capped at 200 rows.
 
 ---
 
-## Two-layer design
+## Three-layer design
 
 ```
 ┌─────────────────────────────────────────────────────────┐
