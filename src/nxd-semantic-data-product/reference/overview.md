@@ -2,16 +2,18 @@
 
 ## Contents
 - What this kit provides
-- Two-layer design
+- Three-layer design
 - Stopgap status and ADR-026 convergence
 
 ---
 
 ## What this kit provides
 
-The `nxd.experimental.semantic` library turns a
-**curated semantic registry** (models, dimensions, metrics, joins) into three
-governed, **model-oriented** MCP tools exposed by a Nextdata OS data product:
+The `nxd.experimental.semantic` library compiles a
+**curated semantic registry** (models, dimensions, metrics, joins) into governed,
+**model-oriented** SQL. The data product authors a flat set of modules
+(`registry.py`, `tools.py`, `transform.py`, `models.py`, `spec.py`) that wire the
+library into three MCP tools exposed by a Nextdata OS data product:
 
 | Tool | Purpose |
 |------|---------|
@@ -31,15 +33,20 @@ execution path is read-only, aggregated, and capped at 200 rows.
 
 ---
 
-## Two-layer design
+## Three-layer design
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  LAYER 1 — per-DP (author this once per data product)   │
+│  LAYER 1 — per-DP (author once per data product, FLAT)  │
 │                                                         │
 │  registry.py  ←  SemanticRegistry fluent builder        │
 │                   .model() .dimension() .metric()        │
 │                   .join() .build()                       │
+│  tools.py     ←  module-level list_models /             │
+│                   describe_model / run_semantic_query    │
+│  transform.py ←  provisions the view (MANDATORY)        │
+│  models.py    ←  one promised marker model              │
+│  (all FLAT siblings of spec.py — no transform/ subdir)  │
 └────────────────────────────┬────────────────────────────┘
                              │  CompiledRegistry (frozen)
 ┌────────────────────────────▼────────────────────────────┐
@@ -54,29 +61,51 @@ execution path is read-only, aggregated, and capped at 200 rows.
 └────────────────────────────┬────────────────────────────┘
                              │  build_semantic_tools(REGISTRY)
                              │  → list[SemanticTool]
-                             │    (.fn, .request_model, .response_model)
+                             │    (.request_model, .response_model, .description)
+                             │    used ONLY for schemas — NOT for the callable
 ┌────────────────────────────▼────────────────────────────┐
 │  LAYER 3 — spec.py RPC output (the real MCP wiring)     │
 │                                                         │
+│  from tools import list_models, describe_model,         │
+│                    run_semantic_query   # module-level  │
+│  _map = {t.name: t for t in                             │
+│          build_semantic_tools(REGISTRY)}                │
 │  _rpc = data_product_rpc_output()                       │
-│  for t in build_semantic_tools(REGISTRY):               │
+│  for fn, name in [(list_models,"list_models"), ...]:    │
+│      t = _map[name]                                      │
 │      _rpc = _rpc.function(                               │
-│          rpc_function(code(t.fn),                       │
+│          rpc_function(code(fn),       # module-level fn │
 │              t.request_model, t.response_model)         │
 │          .description(t.description))                   │
 │  _rpc = _rpc.port("mcp-api",                            │
 │      rpc_server("<svc>").enable_endpoints()             │
 │      .mcp_path("/mcp"))                                  │
-│  ... data_product(...).output(_rpc)                     │
+│  data_product(...).transform(code(transform)...)        │
+│                  .output(_rpc)        # transform = must│
 └─────────────────────────────────────────────────────────┘
 ```
 
-The data product author writes only `registry.py`. The compiler, dialect, and
-MCP tool factory are provided by the installed `nxd.experimental.semantic` library
-(shipped in the `nxd_data_product` wheel) — imported, not copied. NXD discovers
-the tools ONLY through the `spec.py` `data_product_rpc_output()` wiring above —
-there is no module-level `tools` list; a bare `tools = build_semantic_tools(...)`
-exposes nothing.
+The data product author writes `registry.py`, plus a flat `tools.py`
+(module-level `list_models` / `describe_model` / `run_semantic_query`) and a
+mandatory `transform.py`. The compiler, dialect, and MCP tool factory are
+provided by the installed `nxd.experimental.semantic` library (shipped in the
+`nxd_data_product` wheel) — imported, not copied.
+
+Two non-obvious wiring constraints (Layer 3):
+- **`code()` cannot extract closures.** `build_semantic_tools(REGISTRY)` returns
+  closures (`build_semantic_tools.<locals>.list_models`) — `code()`'s
+  `inspect.getsource` can't locate them. Pass `code(<module-level tools.py fn>)`;
+  reuse `build_semantic_tools(...)` ONLY for `.request_model` / `.response_model`
+  / `.description`.
+- **A `.transform(...)` is mandatory.** The rpc-output `code()` path ships only
+  the extracted tool scripts; the `**/*.py` glob on the transform path is what
+  bundles the sibling `registry.py` / `tools.py` modules into the image. Without
+  the transform the pod dies with `ModuleNotFoundError: No module named
+  'registry'`.
+
+NXD discovers the tools ONLY through the `spec.py` `data_product_rpc_output()`
+wiring above — there is no module-level `tools` list; a bare
+`tools = build_semantic_tools(...)` exposes nothing.
 
 ---
 

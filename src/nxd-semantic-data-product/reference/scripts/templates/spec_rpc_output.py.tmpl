@@ -1,22 +1,47 @@
 """spec.py RPC-output wiring template for a semantic-layer data product.
 
 Copy the `data_product_rpc_output()` block below into your spec.py, filling in
-the infra-profile service ref and data product name.  This template is itself
+the infra-profile service refs and data product name.  This template is itself
 the canonical reference for the exact call shapes.
 
-Required imports (add to your spec.py):
-    from nxd.spec import data_product_rpc_output, rpc_function, rpc_server, code
+LAYOUT — keep every module FLAT at the DP root (siblings of spec.py):
+    registry.py   tools.py   transform.py   models.py   spec.py
+Do NOT create a `transform/` subdir package — package-qualified imports
+(`from transform.registry import REGISTRY`) need the DP root on sys.path, which
+is absent in the rpc subprocess. Flat siblings import flat: `from registry
+import REGISTRY`.
 
-The semantic library imports (add to your spec.py):
+Required imports (add to your spec.py):
+    from nxd.spec import (
+        data_product, data_product_output, data_product_rpc_output,
+        rpc_function, rpc_server, storage, code,
+    )
+
+The semantic library + sibling imports (add to your spec.py):
     from nxd.experimental.semantic import build_semantic_tools
     from registry import REGISTRY
+    from tools import list_models, describe_model, run_semantic_query
+    from transform import transform
+    from models import provision_marker
 
 WIRING PATTERN — the only correct way to expose MCP tools in NXD:
 
+    # build_semantic_tools(REGISTRY) is used ONLY for each tool's request/response
+    # schema descriptors and description. The actual CALLABLE passed to code() is
+    # the module-level function from tools.py — NOT `t.fn`, which is a closure
+    # (build_semantic_tools.<locals>.list_models) that code()'s inspect.getsource
+    # cannot locate. Passing code(t.fn) makes the pod fail to build.
+    _tool_map = {t.name: t for t in build_semantic_tools(REGISTRY)}
+
     _rpc = data_product_rpc_output()
-    for _t in build_semantic_tools(REGISTRY):
+    for _fn, _name in [
+        (list_models, "list_models"),
+        (describe_model, "describe_model"),
+        (run_semantic_query, "run_semantic_query"),
+    ]:
+        _t = _tool_map[_name]
         _rpc = _rpc.function(
-            rpc_function(code(_t.fn), _t.request_model, _t.response_model)
+            rpc_function(code(_fn), _t.request_model, _t.response_model)
             .description(_t.description)
         )
     _rpc = _rpc.port(
@@ -34,8 +59,21 @@ WIRING PATTERN — the only correct way to expose MCP tools in NXD:
             version="0.1.0",
             infra_profile="{{infra_profile}}",
         )
+        # MANDATORY transform — provisions the semantic view AND is what makes the
+        # **/*.py glob bundle registry.py / tools.py into the image so the extracted
+        # rpc tool scripts can import them at runtime. Without it the pod dies with
+        # ModuleNotFoundError: No module named 'registry'.
+        .transform(
+            code(transform).compute("{{infra_profile_compute_service_ref}}")
+        )
+        # Storage output port — its name is the transform parameter name and supplies
+        # the Snowflake connection the transform + run_semantic_query use.
+        .output(
+            data_product_output()
+            .promise(provision_marker)
+            .port("snowflake", storage("{{infra_profile_snowflake_service_ref}}"))
+        )
         .output(_rpc)
-        # Add inputs, transforms, storage outputs, etc. as needed.
     )
 
 SERVICE REF FORM:
@@ -44,13 +82,18 @@ SERVICE REF FORM:
 
 IMPORTANT:
 - `data_product_rpc_output()` is the ONLY supported MCP delivery mechanism.
-- `rpc_function(code(t.fn), t.request_model, t.response_model)` requires ALL
-  THREE positional arguments — omitting request_model or response_model raises
-  a TypeError at spec-build time.
+- Pass code(<module-level tools.py function>) — NEVER code(t.fn) over
+  build_semantic_tools(...). Those are closures and code() cannot extract them.
+- A `.transform(...)` is MANDATORY: it bundles the sibling registry.py/tools.py
+  modules. `.output(_rpc)` alone ships only the extracted tool scripts.
+- Base tables must exist BEFORE promise verification (it runs before the
+  transform). Prefer a facade over pre-existing tables provisioned at provision
+  time via storage(...).config(SnowflakeConfig().as_view(sql_script(...))). See
+  reference/runtime-and-dependencies.md.
+- `rpc_function(code(fn), request_model, response_model)` requires ALL THREE
+  positional arguments — omitting one raises a TypeError at spec-build time.
 - `.description(t.description)` is chainable on rpc_function and sets the MCP
   tool description visible to agents.
 - `.enable_endpoints()` publishes the HTTP+MCP endpoint on the rpc_server.
 - `.mcp_path("/mcp")` sets the MCP mount path.
-- Never pass the SemanticTool list to anything else — it is only meaningful when
-  iterated and wired via rpc_function as shown above.
 """
