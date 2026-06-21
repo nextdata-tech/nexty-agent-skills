@@ -1,5 +1,6 @@
 {
-  "comment": "Opt-in marker: this scenario needs the live semantic MCP server. run.py launches evals/mcp/semantic_server.py (stdio) pointed at this fixtures dir and grants the agent the tools below. Without it the agent can only Read catalog.json and fabricate tool output.",
-  "server": "nxd-semantic",
-  "tools": ["list_models", "describe_model", "run_semantic_query"]
+  "comment": "Opt-in marker: this scenario needs the live semantic MCP server. run.py starts evals/mcp/semantic_server.py over Streamable-HTTP pointed at this fixtures dir, and puts a fake `nxd` on PATH so the query skill's `nxd mcp health` discovers it. Without this the agent can only Read catalog.json and fabricate tool output. dp/rpc_port shape the proxy URL the skill parses: /<dp>/rpcs/<rpc_port>/mcp.",
+  "tools": ["list_models", "describe_model", "run_semantic_query"],
+  "dp": "semantic-demo",
+  "rpc_port": "mcp-api"
 }

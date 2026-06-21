@@ -24,6 +24,7 @@ purpose-built reader (the file shape is fixed); per-scenario checks are JSON.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -70,13 +71,17 @@ DEFAULT_JUDGE_TIMEOUT_S = 300
 AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch"
 
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
-#   {"server": "semantic", "tools": ["list_models","describe_model","run_semantic_query"]}
-# When present, run.py launches evals/mcp/semantic_server.py as a stdio MCP
-# server (via uv, so its heavy deps — the real nxd.experimental.semantic
-# compiler + Snowflake connector — stay out of the stdlib-only runner) and grants
-# the agent its tools. Without this, the agent can only Read the catalog fixture
-# and *narrate* tool output (fabricating SQL + rows) — which the xhigh judge
-# correctly fails. The server name maps to a launch spec below.
+#   {"tools": ["list_models","describe_model","run_semantic_query"],
+#    "dp": "semantic-demo", "rpc_port": "mcp-api"}
+# When present, run.py starts evals/mcp/semantic_server.py as a Streamable-HTTP
+# MCP server (via uv / EVAL_MCP_PYTHON, so its heavy deps — the real
+# nxd.experimental.semantic compiler + Snowflake connector — stay out of the
+# stdlib-only runner) and puts a fake `nxd` on the agent's PATH so the
+# nxd-data-product-query skill's shipped HTTP toolchain (`nxd mcp health` +
+# Streamable-HTTP) discovers + drives the genuine tools, exactly as in
+# production. Without this, the agent can only Read the catalog fixture and
+# *narrate* tool output (fabricating SQL + rows) — which the xhigh judge
+# correctly fails.
 MCP_DIR = EVALS_DIR / "mcp"
 MCP_SERVER_NAME = "nxd-semantic"
 # Fixture filenames that belong to the MCP SERVER, not the agent. Excluded from
@@ -357,69 +362,145 @@ def _trace_from_stream(stdout: str) -> tuple[str, dict]:
     return trace, {"final_answer": final_answer, **metrics}
 
 
-def mcp_config_for_scenario(scenario_dir: Path) -> tuple[dict | None, list[str]]:
-    """If a scenario opts into MCP (fixtures/mcp.json), return (config, tools).
-
-    Returns ``(None, [])`` for non-MCP scenarios. Otherwise returns an
-    ``--mcp-config`` dict that launches the semantic stdio server pointed at this
-    scenario's fixtures, plus the list of MCP tool names to add to the allowlist
-    (prefixed ``mcp__<server>__<tool>`` as the agent CLI expects).
-
-    The server runs via ``uv run --project evals/mcp`` so its real deps (the
-    nxd.experimental.semantic compiler + Snowflake connector) are resolved in an
-    isolated venv — the runner itself stays stdlib-only.
-    """
+def scenario_needs_mcp(scenario_dir: Path) -> dict | None:
+    """Return the parsed fixtures/mcp.json if this scenario opts into MCP, else None."""
     marker = scenario_dir / "fixtures" / "mcp.json"
     if not marker.exists():
-        return None, []
-    spec = json.loads(marker.read_text(encoding="utf-8"))
-    tools = spec.get("tools", [])
-    fixtures_dir = str((scenario_dir / "fixtures").resolve())
+        return None
+    return json.loads(marker.read_text(encoding="utf-8"))
 
-    # Launch interpreter for the server. The server needs the GENUINE
-    # nxd.experimental.semantic compiler (not on a public index), so the venv
-    # must have a matched nxd wheel set installed. Two ways:
-    #   * EVAL_MCP_PYTHON=/path/to/python — an interpreter that already has the
-    #     matched nxd set + mcp + snowflake-connector (e.g. a built wheel venv).
-    #   * default: `uv run --project evals/mcp` — requires the matched wheels to
-    #     have been `uv pip install`ed into evals/mcp/.venv first (see README).
-    override_py = os.environ.get("EVAL_MCP_PYTHON", "").strip()
-    server_args = ["-m", "semantic_server", fixtures_dir]
-    if override_py:
-        command = override_py
-        args = server_args
-    else:
-        command = "uv"
-        args = ["run", "--project", str(MCP_DIR), "python"] + server_args
-    config = {
-        "mcpServers": {
-            MCP_SERVER_NAME: {
-                "command": command,
-                "args": args,
-                "cwd": str(MCP_DIR),
-                # Snowflake creds flow from the runner's environment (the user
-                # exports SNOWFLAKE_* before invoking run.py). The MCP client
-                # inherits the parent env, so no creds are written to disk here.
-            }
+
+def _free_port() -> int:
+    import socket
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _mcp_python() -> tuple[str, list[str]]:
+    """Interpreter that launches the HTTP server. Needs the GENUINE
+    nxd.experimental.semantic compiler (not on a public index) + Snowflake.
+
+      * EVAL_MCP_PYTHON=/path/to/python — an interpreter with the matched nxd
+        wheel set + mcp + snowflake-connector already installed.
+      * default: `uv run --project evals/mcp python` — requires the matched
+        wheels to have been installed into evals/mcp/.venv first (see README).
+    """
+    override = os.environ.get("EVAL_MCP_PYTHON", "").strip()
+    if override:
+        return override, []
+    return "uv", ["run", "--project", str(MCP_DIR), "python"]
+
+
+@contextlib.contextmanager
+def semantic_http_server(scenario_dir: Path, mcp_spec: dict):
+    """Start the semantic DP as a Streamable-HTTP MCP server for the duration of
+    a scenario, and yield the (endpoint_url, env_overrides) the agent needs.
+
+    This mirrors production: the nxd-data-product-query skill discovers DP MCP
+    endpoints by shelling out to ``nxd mcp health`` and then opens an HTTP MCP
+    session. We start the real server, then point a fake ``nxd`` (on the agent's
+    PATH) at it via EVAL_MCP_ENDPOINT — so the skill's shipped toolchain drives
+    the genuine tools unchanged. Server + fake-nxd shim are torn down on exit.
+    """
+    fixtures_dir = str((scenario_dir / "fixtures").resolve())
+    dp = mcp_spec.get("dp", "semantic-demo")
+    rpc_port = mcp_spec.get("rpc_port", "mcp-api")
+    tool_count = len(mcp_spec.get("tools", []))
+    port = _free_port()
+    endpoint = f"http://127.0.0.1:{port}/{dp}/rpcs/{rpc_port}/mcp/"
+
+    command, base_args = _mcp_python()
+    cmd = [command, *base_args, "-m", "semantic_server", fixtures_dir,
+           "--http", "--host", "127.0.0.1", "--port", str(port),
+           "--dp", dp, "--rpc-port", rpc_port]
+    proc = subprocess.Popen(
+        cmd, cwd=str(MCP_DIR), env=dict(os.environ),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        _wait_for_http(endpoint, proc, timeout_s=60)
+        env = {
+            "EVAL_MCP_ENDPOINT": endpoint,
+            "EVAL_MCP_DP": dp,
+            "EVAL_MCP_TOOL_COUNT": str(tool_count),
         }
-    }
-    allow = [f"mcp__{MCP_SERVER_NAME}__{t}" for t in tools]
-    return config, allow
+        yield endpoint, env
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> None:
+    """Poll the MCP endpoint until it answers (or the server dies / times out)."""
+    import urllib.error
+    import urllib.request
+
+    deadline = time.time() + timeout_s
+    # An MCP initialize POST; we only care that the socket accepts + the app
+    # responds (any HTTP status, incl. 307/400), not the body.
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "probe", "version": "1"}},
+    }).encode()
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"MCP server exited early (code {proc.returncode})")
+        req = urllib.request.Request(
+            endpoint, data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream"},
+        )
+        try:
+            urllib.request.urlopen(req, timeout=3)
+            return
+        except urllib.error.HTTPError:
+            return  # app responded (e.g. 307/400) — it's up
+        except (urllib.error.URLError, ConnectionError, OSError):
+            time.sleep(0.5)
+    raise TimeoutError(f"MCP server did not come up within {timeout_s}s at {endpoint}")
+
+
+def _write_fake_nxd(bin_dir: Path) -> None:
+    """Write a `nxd` shim onto a dir that gets prepended to the agent's PATH.
+
+    The shim execs fake_nxd.py with the EVAL_MCP_* env the agent inherits, so
+    `nxd mcp health` returns the running server's endpoint. Only the subcommands
+    the query skill calls are stubbed (see fake_nxd.py)."""
+    command, base_args = _mcp_python()
+    interp = " ".join([command, *base_args])
+    shim = bin_dir / "nxd"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        f'exec {interp} "{MCP_DIR / "fake_nxd.py"}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
 
 
 def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
               extra_dirs: list[Path] | None = None,
               effort: str = "",
-              mcp_config: dict | None = None,
-              mcp_tools: list[str] | None = None) -> tuple[bool, str, dict]:
+              env_overrides: dict | None = None,
+              path_prepend: Path | None = None) -> tuple[bool, str, dict]:
     """Run the headless agent. Returns (ok, trace, metrics).
 
     The trace (full tool-call transcript) is what the judge grades; the final
     answer and run metrics ride along in ``metrics`` (metrics["final_answer"]).
+
+    For MCP scenarios the agent reaches the semantic tools through the query
+    skill's shipped HTTP toolchain (``nxd mcp health`` + Streamable-HTTP), so no
+    --mcp-config is needed: ``env_overrides`` carries EVAL_MCP_ENDPOINT and
+    ``path_prepend`` puts the fake ``nxd`` on PATH. The agent uses Bash (already
+    allowed) to run the skill's scripts.
     """
-    allowed = AGENT_ALLOWED_TOOLS
-    if mcp_tools:
-        allowed = allowed + "," + ",".join(mcp_tools)
     cmd = [
         "claude", "-p", prompt,
         # stream-json + verbose emits per-step events so we can reconstruct the
@@ -429,29 +510,23 @@ def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
         # Isolate to the workspace project so user/global skills don't leak in
         # and confound the no_skills baseline.
         "--setting-sources", "project",
-        "--allowedTools", allowed,
+        "--allowedTools", AGENT_ALLOWED_TOOLS,
         "--add-dir", str(ws),
     ]
-    mcp_cfg_file = None
-    if mcp_config is not None:
-        # Write the config to the workspace and pass its path. Cleaned up with
-        # the workspace tempdir by the caller.
-        mcp_cfg_file = ws / ".mcp-config.json"
-        mcp_cfg_file.write_text(json.dumps(mcp_config), encoding="utf-8")
-        # --strict-mcp-config is REQUIRED: without it the CLI merges the user's
-        # global MCP servers and silently drops the --mcp-config one (the eval
-        # server never starts → the agent falls back to reading the catalog file
-        # → fabrication). Strict mode also keeps the run isolated from whatever
-        # MCP servers the operator happens to have configured, mirroring the
-        # --setting-sources project isolation already in place.
-        cmd += ["--mcp-config", str(mcp_cfg_file), "--strict-mcp-config"]
     if effort:
         cmd += ["--effort", effort]
     for d in extra_dirs or []:
         cmd += ["--add-dir", str(d)]
+
+    env = dict(os.environ)
+    if env_overrides:
+        env.update(env_overrides)
+    if path_prepend is not None:
+        env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
     try:
         proc = subprocess.run(
-            cmd, cwd=ws, capture_output=True, text=True, timeout=timeout_s
+            cmd, cwd=ws, capture_output=True, text=True, timeout=timeout_s,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return False, "", {"error": f"agent timed out after {timeout_s}s"}
@@ -629,12 +704,13 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         metrics = {**cached["metrics"], "cached": True}
         ok = True
     else:
-        # MCP scenarios get a live stdio semantic-tool server + a longer timeout
-        # (tool calls reach Snowflake). Non-MCP scenarios: (None, []).
-        mcp_config, mcp_tools = mcp_config_for_scenario(scenario_dir)
+        # MCP scenarios run a live Streamable-HTTP semantic server + a fake `nxd`
+        # on PATH so the query skill's shipped HTTP toolchain drives the real
+        # tools. Tool calls reach Snowflake, so allow a longer timeout.
+        mcp_spec = scenario_needs_mcp(scenario_dir)
         agent_timeout = (
             max(args.agent_timeout, MCP_AGENT_TIMEOUT_S)
-            if mcp_config is not None
+            if mcp_spec is not None
             else args.agent_timeout
         )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
@@ -643,11 +719,26 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             except FileNotFoundError as exc:
                 res.error = str(exc)
                 return res
-            ok, trace, metrics = run_agent(
-                ws, prompt, args.agent_model, agent_timeout,
-                extra_dirs=extra_dirs, effort=args.agent_effort,
-                mcp_config=mcp_config, mcp_tools=mcp_tools,
-            )
+
+            if mcp_spec is not None:
+                bin_dir = Path(tmp) / "bin"
+                bin_dir.mkdir(parents=True, exist_ok=True)
+                _write_fake_nxd(bin_dir)
+                try:
+                    with semantic_http_server(scenario_dir, mcp_spec) as (_ep, env_over):
+                        ok, trace, metrics = run_agent(
+                            ws, prompt, args.agent_model, agent_timeout,
+                            extra_dirs=extra_dirs, effort=args.agent_effort,
+                            env_overrides=env_over, path_prepend=bin_dir,
+                        )
+                except (RuntimeError, TimeoutError) as exc:
+                    res.error = f"MCP server setup failed: {exc}"
+                    return res
+            else:
+                ok, trace, metrics = run_agent(
+                    ws, prompt, args.agent_model, agent_timeout,
+                    extra_dirs=extra_dirs, effort=args.agent_effort,
+                )
         if ok and cache_file:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(

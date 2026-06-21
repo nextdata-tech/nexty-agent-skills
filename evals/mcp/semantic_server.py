@@ -102,7 +102,21 @@ def _fqn() -> str:
     return ""
 
 
-def build_server(fixture_dir: Path) -> FastMCP:
+def build_server(
+    fixture_dir: Path,
+    *,
+    http_path: str | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+) -> FastMCP:
+    """Build the FastMCP server for a scenario.
+
+    stdio mode (http_path=None): the dev/standalone path.
+    HTTP mode (http_path set, e.g. "/<dp>/rpcs/<port>/mcp"): the eval path —
+    the nxd-data-product-query skill discovers DP MCP endpoints over HTTP via
+    its mcp_gateway.py toolchain, so we serve Streamable-HTTP at the proxy URL
+    shape the skill expects.
+    """
     catalog = _load_catalog(fixture_dir)
     spec = load_semantic_fixture(fixture_dir)
     registry = build_registry(spec)
@@ -130,7 +144,15 @@ def build_server(fixture_dir: Path) -> FastMCP:
                 )
         return _state["executor"]
 
-    mcp = FastMCP("nxd-semantic")
+    if http_path is not None:
+        mcp = FastMCP(
+            "nxd-semantic",
+            host=host,
+            port=port,
+            streamable_http_path=http_path,
+        )
+    else:
+        mcp = FastMCP("nxd-semantic")
 
     list_models_payload = catalog.get("list_models", [])
     describe_payload = catalog.get("describe_model", {})
@@ -217,15 +239,36 @@ def build_server(fixture_dir: Path) -> FastMCP:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print("usage: python -m semantic_server <scenario_fixtures_dir>", file=sys.stderr)
-        return 2
-    fixture_dir = Path(argv[1]).resolve()
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="semantic_server")
+    parser.add_argument("fixtures_dir", help="scenario fixtures dir (catalog.json + semantic.json + seed.sql)")
+    parser.add_argument("--http", action="store_true",
+                        help="serve Streamable-HTTP (eval path) instead of stdio")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--dp", default="semantic-demo",
+                        help="dp_full_name segment in the proxy URL path")
+    parser.add_argument("--rpc-port", default="mcp-api",
+                        help="the <port> segment in /<dp>/rpcs/<port>/mcp")
+    args = parser.parse_args(argv[1:])
+
+    fixture_dir = Path(args.fixtures_dir).resolve()
     if not fixture_dir.is_dir():
         print(f"fixtures dir not found: {fixture_dir}", file=sys.stderr)
         return 2
-    server = build_server(fixture_dir)
-    server.run("stdio")
+
+    if args.http:
+        # Match the proxy URL shape mcp_gateway.py parses:
+        # <scheme>://<host>/<dp_full_name>/rpcs/<port>/mcp/
+        http_path = f"/{args.dp}/rpcs/{args.rpc_port}/mcp"
+        server = build_server(
+            fixture_dir, http_path=http_path, host=args.host, port=args.port
+        )
+        server.run("streamable-http")
+    else:
+        server = build_server(fixture_dir)
+        server.run("stdio")
     return 0
 
 
