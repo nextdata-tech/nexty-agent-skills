@@ -19,6 +19,18 @@ from nxd.drivers.rpc import Response
 from nxd.drivers.rpc import function
 from nxd.drivers.rpc import mcp
 
+# Module-level import (NOT lazy/in-body): the rpc `@function` decorator injects a
+# context arg by TYPE. It reads the resolved signature (get_type_hints) at
+# registration time and, for a param whose annotation `is_from_context(...)` is
+# True (i.e. a FromContext subclass like Snowflake), calls
+# `Snowflake.from_context(context_data)` and binds the resulting Snowflake handle.
+# A param typed `Any` is NOT a FromContext subclass, so the framework falls back
+# to injecting a raw `Context` (no `.connector_params()` / `.user` / `.database`).
+# `code()` extraction copies module-level imports verbatim but does NOT hoist
+# in-body imports, so this MUST be a top-level import for the `Snowflake`
+# annotation to resolve in the extracted rpc-server script.
+from nxd.data_product.context import Snowflake
+
 # Flat sibling import — registry.py is bundled as a sibling of the extracted
 # tool scripts, and the script's own directory is the only thing guaranteed on
 # sys.path in the RPC subprocess. A package-qualified `transform.registry`
@@ -179,14 +191,14 @@ def describe_model(request: Request) -> Response:
         "Do not mix metrics from different models in one call."
     ),
 )
-def run_semantic_query(snowflake: Any, request: Request) -> Response:
+def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
     from snowflake import connector  # type: ignore[import-not-found]
-    from nxd.data_product.context import Snowflake
 
-    # The rpc runtime binds `snowflake` to a raw Context, not a Snowflake (it has
-    # no `connector_params()`); convert it. (audit P1-#8.)
-    if snowflake is not None and not hasattr(snowflake, "connector_params"):
-        snowflake = Snowflake.from_context(snowflake)
+    # `snowflake` is injected by the rpc `@function` decorator as a real
+    # `Snowflake` handle: the param name matches the DP's `snowflake` storage
+    # output port, and the `Snowflake` annotation (a FromContext subclass) makes
+    # the framework call `Snowflake.from_context(context_data)` and bind the
+    # result. No in-body Context->Snowflake conversion is needed.
 
     # Built per-call inside the body: a module-level `_DIALECT` singleton would be
     # dropped by code() extraction (audit P1-#7). Resolves the same view name the
