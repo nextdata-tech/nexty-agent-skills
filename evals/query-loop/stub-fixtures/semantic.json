@@ -1,0 +1,36 @@
+{
+  "comment": "PHYSICAL mapping for the stubbed MCP server — the pharma mesh collapsed into ONE queryable DP (the stub server is single-DP; cross-DP multi-hop is a live-cluster-only concern). Models join to the `subjects` spine directly (the crosswalk is flattened: each fact carries SUBJECT_ID). Exercises the discriminators: chasm traps (two/three facts at different grains off the spine), confusable metric pairs, boolean-flag, cross-grain PII refusal. Mirrors MESH_DESIGN.md semantics. Seed in seed.sql.",
+  "models": [
+    {"name": "subjects", "table": "subjects", "grain": "SUBJECT_ID", "description": "Subject spine — one row per clinical-trial subject."},
+    {"name": "visits", "table": "visits", "grain": "VISIT_ID", "description": "Clinical visits — MANY per subject."},
+    {"name": "assays", "table": "assays", "grain": "ASSAY_ID", "description": "Lab assays — MANY per subject."},
+    {"name": "dispenses", "table": "dispenses", "grain": "DISPENSE_ID", "description": "Drug dispenses — MANY per subject."},
+    {"name": "adverse_events", "table": "adverse_events", "grain": "AE_ID", "description": "Adverse events — MANY per subject."}
+  ],
+  "dimensions": [
+    {"name": "subject_country", "model": "subjects", "column": "SUBJECT_COUNTRY", "type": "string", "pii": false, "description": "Subject billing country."},
+    {"name": "subject_mrn", "model": "subjects", "column": "SUBJECT_MRN", "type": "string", "pii": true, "description": "Subject medical record number. PII."},
+    {"name": "visit_type", "model": "visits", "column": "VISIT_TYPE", "type": "string", "pii": false, "description": "Visit type (screening, treatment, follow-up)."},
+    {"name": "assay_type", "model": "assays", "column": "ASSAY_TYPE", "type": "string", "pii": false, "description": "Assay type."},
+    {"name": "dispense_channel", "model": "dispenses", "column": "DISPENSE_CHANNEL", "type": "string", "pii": false, "description": "Dispense channel (pharmacy, mail, clinic)."},
+    {"name": "prescriber_npi", "model": "dispenses", "column": "PRESCRIBER_NPI", "type": "string", "pii": true, "description": "Prescriber NPI. PII."},
+    {"name": "ae_term", "model": "adverse_events", "column": "AE_TERM", "type": "string", "pii": false, "description": "Adverse-event term."}
+  ],
+  "metrics": [
+    {"name": "subject_count", "model": "subjects", "agg": "COUNT_DISTINCT", "column": "SUBJECT_ID", "description": "Distinct subjects."},
+    {"name": "visit_count", "model": "visits", "agg": "COUNT_DISTINCT", "column": "VISIT_ID", "description": "Distinct visits."},
+    {"name": "visit_duration_min", "model": "visits", "agg": "SUM", "column": "DURATION_MIN", "description": "Total visit duration in minutes."},
+    {"name": "titer_sum", "model": "assays", "agg": "SUM", "column": "TITER", "description": "Sum of assay titer."},
+    {"name": "titer_avg", "model": "assays", "agg": "AVG", "column": "TITER", "description": "Mean assay titer."},
+    {"name": "dispense_count", "model": "dispenses", "agg": "COUNT_DISTINCT", "column": "DISPENSE_ID", "description": "Distinct dispenses."},
+    {"name": "units_dispensed", "model": "dispenses", "agg": "SUM", "column": "UNITS", "description": "Total units dispensed."},
+    {"name": "ae_count", "model": "adverse_events", "agg": "COUNT_DISTINCT", "column": "AE_ID", "description": "Distinct adverse events."},
+    {"name": "serious_ae_count", "model": "adverse_events", "agg": "SUM", "column": "IS_SERIOUS", "boolean": true, "description": "Count of serious adverse events (boolean flag)."}
+  ],
+  "joins": [
+    {"left": "visits", "right": "subjects", "on": [["SUBJECT_ID", "SUBJECT_ID"]], "cardinality": "many_to_one"},
+    {"left": "assays", "right": "subjects", "on": [["SUBJECT_ID", "SUBJECT_ID"]], "cardinality": "many_to_one"},
+    {"left": "dispenses", "right": "subjects", "on": [["SUBJECT_ID", "SUBJECT_ID"]], "cardinality": "many_to_one"},
+    {"left": "adverse_events", "right": "subjects", "on": [["SUBJECT_ID", "SUBJECT_ID"]], "cardinality": "many_to_one"}
+  ]
+}

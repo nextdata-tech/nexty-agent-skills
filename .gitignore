@@ -68,3 +68,6 @@ evals/mcp/uv.lock
 
 # Query-loop run transcripts (generated)
 evals/query-loop/runs/
+
+eval*report*.json
+pharma-query-report.json
