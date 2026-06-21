@@ -59,3 +59,9 @@ infra-profile-ecommerce-demo.yaml
 
 # Eval runner cache
 .eval-cache/
+
+# Eval reports (generated)
+eval-report*.json
+# MCP server venv + lock (resolved locally with matched nxd wheels)
+evals/mcp/.venv/
+evals/mcp/uv.lock

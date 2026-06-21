@@ -1,0 +1,35 @@
+[project]
+name = "nxd-eval-semantic-mcp"
+version = "0.1.0"
+description = "Standalone stdio MCP server exposing governed semantic tools for the eval harness."
+requires-python = ">=3.11"
+# The eval runner (evals/run.py) is intentionally stdlib-only. This MCP server is
+# the one piece that needs real deps — the genuine nxd.experimental.semantic
+# compiler, a Snowflake connection, and the MCP SDK — so it lives in its own
+# uv-managed project. run.py launches it via `uv run --project evals/mcp ...`
+# so the harness itself never imports any of this.
+dependencies = [
+    "mcp>=1.2.0",
+    "snowflake-connector-python>=3.12",
+    "cryptography>=42",
+]
+
+# NOTE on the nxd dependency:
+# run_semantic_query imports the GENUINE compiler from nxd.experimental.semantic
+# (the nxd_data_product wheel, NEX-620/621) — NOT a re-implementation. That wheel
+# is built from the nxd monorepo and is NOT on a public index (a PyPI package
+# named "nxd-data-product" is an unrelated stub — do not depend on it). So it is
+# intentionally absent from `dependencies` above. Before running MCP scenarios,
+# install a matched core+drivers+data_product wheel set into this project's venv:
+#
+#   uv pip install --project evals/mcp \
+#     <nxd>/components/nxd_py/wheels/nxd_core-<ver>-*.whl \
+#     <nxd>/components/nxd_py/wheels/nxd_drivers-<ver>-*.whl \
+#     <nxd>/components/nxd_py/wheels/nxd_data_product-<ver>-*.whl
+#
+# Or point run.py at an existing interpreter that already has the matched set via
+# EVAL_MCP_PYTHON (see evals/mcp/README.md). A stale nxd_core against a newer
+# nxd_data_product fails at runtime — the set must share one version.
+
+[tool.uv]
+package = false

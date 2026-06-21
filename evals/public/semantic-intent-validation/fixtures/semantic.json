@@ -1,0 +1,23 @@
+{
+  "comment": "AUTHORITATIVE physical mapping for the MCP server (NOT shown to the agent). Pins each catalog concept to a physical table/column so run_semantic_query can compile + execute against real seeded Snowflake tables. Mirror of catalog.json's logical surface. Keep in sync with seed.sql.",
+  "models": [
+    {"name": "order_event", "table": "order_event", "grain": "ORDER_ID", "description": "Placed orders, one row per order."},
+    {"name": "rep_activity", "table": "rep_activity", "grain": "ACTIVITY_ID", "description": "Sales-rep activity log, one row per logged activity."},
+    {"name": "customer_profile", "table": "customer_profile", "grain": "CUSTOMER_ID", "description": "Customer master, one row per customer."}
+  ],
+  "dimensions": [
+    {"name": "channel", "model": "order_event", "column": "CHANNEL", "type": "string", "pii": false, "description": "Sales channel the order came through (web, retail, partner)."},
+    {"name": "rep_name", "model": "rep_activity", "column": "REP_NAME", "type": "string", "pii": true, "description": "Sales rep who logged the activity. PII — governed/maskable."},
+    {"name": "country", "model": "customer_profile", "column": "COUNTRY", "type": "string", "pii": false, "description": "Customer billing country."},
+    {"name": "segment", "model": "customer_profile", "column": "SEGMENT", "type": "string", "pii": false, "description": "Customer segment (enterprise, mid-market, smb)."}
+  ],
+  "metrics": [
+    {"name": "total_revenue", "model": "order_event", "agg": "SUM", "column": "AMOUNT_USD", "description": "Sum of order amount in USD (AMOUNT_USD) across orders."},
+    {"name": "order_count", "model": "order_event", "agg": "COUNT_DISTINCT", "column": "ORDER_ID", "description": "Distinct count of orders (ORDER_ID)."},
+    {"name": "call_count", "model": "rep_activity", "agg": "COUNT", "column": "*", "description": "Count of every logged call activity, regardless of outcome."},
+    {"name": "sales_calls", "model": "rep_activity", "agg": "SUM", "column": "IS_CONVERTED", "boolean": true, "description": "Count of calls that converted to a sale (IS_CONVERTED flag = true)."}
+  ],
+  "joins": [
+    {"left": "order_event", "right": "customer_profile", "on": [["CUSTOMER_ID", "CUSTOMER_ID"]], "cardinality": "many_to_one"}
+  ]
+}
