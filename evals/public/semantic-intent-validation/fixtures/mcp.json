@@ -1,0 +1,5 @@
+{
+  "comment": "Opt-in marker: this scenario needs the live semantic MCP server. run.py launches evals/mcp/semantic_server.py (stdio) pointed at this fixtures dir and grants the agent the tools below. Without it the agent can only Read catalog.json and fabricate tool output.",
+  "server": "nxd-semantic",
+  "tools": ["list_models", "describe_model", "run_semantic_query"]
+}

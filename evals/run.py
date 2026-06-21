@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -67,6 +68,30 @@ DEFAULT_JUDGE_TIMEOUT_S = 300
 # no_skills baseline reach the same public docs a real user has, so the only
 # variable between skill-sets is the curated skills themselves.
 AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch"
+
+# Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
+#   {"server": "semantic", "tools": ["list_models","describe_model","run_semantic_query"]}
+# When present, run.py launches evals/mcp/semantic_server.py as a stdio MCP
+# server (via uv, so its heavy deps — the real nxd.experimental.semantic
+# compiler + Snowflake connector — stay out of the stdlib-only runner) and grants
+# the agent its tools. Without this, the agent can only Read the catalog fixture
+# and *narrate* tool output (fabricating SQL + rows) — which the xhigh judge
+# correctly fails. The server name maps to a launch spec below.
+MCP_DIR = EVALS_DIR / "mcp"
+MCP_SERVER_NAME = "nxd-semantic"
+# Fixture filenames that belong to the MCP SERVER, not the agent. Excluded from
+# the agent workspace so the agent must obtain the catalog by calling the tools
+# (not by reading the file) and never sees the physical mapping / seed secrets.
+MCP_SERVER_SIDE_FIXTURES = {
+    "catalog.json",       # agent must get this via list_models/describe_model
+    "semantic.json",      # physical-mapping secret (columns, grains)
+    "seed.sql",           # base-table fixtures
+    "mcp.json",           # runner opt-in marker
+    "golden_pairs.json",  # expected verdicts — that's the rubric, never show it
+}
+# MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
+# file read, so MCP scenarios get a longer agent timeout.
+MCP_AGENT_TIMEOUT_S = 1800
 
 # Public platform docs base. The docs site is a docsify SPA: the human viewer
 # lives at https://docs.demo.nextopia.dev/#/<path>, but the *fetchable* markdown
@@ -189,6 +214,15 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> Path:
     fixtures = scenario_dir / "fixtures"
     if fixtures.is_dir():
         for item in fixtures.iterdir():
+            # Server-side MCP inputs must NOT land in the agent's workspace. The
+            # catalog is the data the agent is supposed to obtain by CALLING the
+            # tools — leaving catalog.json in the workspace lets the agent read it
+            # directly and narrate tool output instead of invoking the tools
+            # (exactly the fabrication the MCP server exists to prevent). seed.sql
+            # / semantic.json are physical-mapping secrets the agent must never
+            # see; mcp.json is a runner marker.
+            if item.name in MCP_SERVER_SIDE_FIXTURES:
+                continue
             dst = ws / item.name
             if item.is_dir():
                 shutil.copytree(item, dst)
@@ -323,14 +357,69 @@ def _trace_from_stream(stdout: str) -> tuple[str, dict]:
     return trace, {"final_answer": final_answer, **metrics}
 
 
+def mcp_config_for_scenario(scenario_dir: Path) -> tuple[dict | None, list[str]]:
+    """If a scenario opts into MCP (fixtures/mcp.json), return (config, tools).
+
+    Returns ``(None, [])`` for non-MCP scenarios. Otherwise returns an
+    ``--mcp-config`` dict that launches the semantic stdio server pointed at this
+    scenario's fixtures, plus the list of MCP tool names to add to the allowlist
+    (prefixed ``mcp__<server>__<tool>`` as the agent CLI expects).
+
+    The server runs via ``uv run --project evals/mcp`` so its real deps (the
+    nxd.experimental.semantic compiler + Snowflake connector) are resolved in an
+    isolated venv — the runner itself stays stdlib-only.
+    """
+    marker = scenario_dir / "fixtures" / "mcp.json"
+    if not marker.exists():
+        return None, []
+    spec = json.loads(marker.read_text(encoding="utf-8"))
+    tools = spec.get("tools", [])
+    fixtures_dir = str((scenario_dir / "fixtures").resolve())
+
+    # Launch interpreter for the server. The server needs the GENUINE
+    # nxd.experimental.semantic compiler (not on a public index), so the venv
+    # must have a matched nxd wheel set installed. Two ways:
+    #   * EVAL_MCP_PYTHON=/path/to/python — an interpreter that already has the
+    #     matched nxd set + mcp + snowflake-connector (e.g. a built wheel venv).
+    #   * default: `uv run --project evals/mcp` — requires the matched wheels to
+    #     have been `uv pip install`ed into evals/mcp/.venv first (see README).
+    override_py = os.environ.get("EVAL_MCP_PYTHON", "").strip()
+    server_args = ["-m", "semantic_server", fixtures_dir]
+    if override_py:
+        command = override_py
+        args = server_args
+    else:
+        command = "uv"
+        args = ["run", "--project", str(MCP_DIR), "python"] + server_args
+    config = {
+        "mcpServers": {
+            MCP_SERVER_NAME: {
+                "command": command,
+                "args": args,
+                "cwd": str(MCP_DIR),
+                # Snowflake creds flow from the runner's environment (the user
+                # exports SNOWFLAKE_* before invoking run.py). The MCP client
+                # inherits the parent env, so no creds are written to disk here.
+            }
+        }
+    }
+    allow = [f"mcp__{MCP_SERVER_NAME}__{t}" for t in tools]
+    return config, allow
+
+
 def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
               extra_dirs: list[Path] | None = None,
-              effort: str = "") -> tuple[bool, str, dict]:
+              effort: str = "",
+              mcp_config: dict | None = None,
+              mcp_tools: list[str] | None = None) -> tuple[bool, str, dict]:
     """Run the headless agent. Returns (ok, trace, metrics).
 
     The trace (full tool-call transcript) is what the judge grades; the final
     answer and run metrics ride along in ``metrics`` (metrics["final_answer"]).
     """
+    allowed = AGENT_ALLOWED_TOOLS
+    if mcp_tools:
+        allowed = allowed + "," + ",".join(mcp_tools)
     cmd = [
         "claude", "-p", prompt,
         # stream-json + verbose emits per-step events so we can reconstruct the
@@ -340,9 +429,22 @@ def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
         # Isolate to the workspace project so user/global skills don't leak in
         # and confound the no_skills baseline.
         "--setting-sources", "project",
-        "--allowedTools", AGENT_ALLOWED_TOOLS,
+        "--allowedTools", allowed,
         "--add-dir", str(ws),
     ]
+    mcp_cfg_file = None
+    if mcp_config is not None:
+        # Write the config to the workspace and pass its path. Cleaned up with
+        # the workspace tempdir by the caller.
+        mcp_cfg_file = ws / ".mcp-config.json"
+        mcp_cfg_file.write_text(json.dumps(mcp_config), encoding="utf-8")
+        # --strict-mcp-config is REQUIRED: without it the CLI merges the user's
+        # global MCP servers and silently drops the --mcp-config one (the eval
+        # server never starts → the agent falls back to reading the catalog file
+        # → fabrication). Strict mode also keeps the run isolated from whatever
+        # MCP servers the operator happens to have configured, mirroring the
+        # --setting-sources project isolation already in place.
+        cmd += ["--mcp-config", str(mcp_cfg_file), "--strict-mcp-config"]
     if effort:
         cmd += ["--effort", effort]
     for d in extra_dirs or []:
@@ -527,6 +629,14 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         metrics = {**cached["metrics"], "cached": True}
         ok = True
     else:
+        # MCP scenarios get a live stdio semantic-tool server + a longer timeout
+        # (tool calls reach Snowflake). Non-MCP scenarios: (None, []).
+        mcp_config, mcp_tools = mcp_config_for_scenario(scenario_dir)
+        agent_timeout = (
+            max(args.agent_timeout, MCP_AGENT_TIMEOUT_S)
+            if mcp_config is not None
+            else args.agent_timeout
+        )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
             try:
                 ws = build_workspace(Path(tmp), skill_set, scenario_dir)
@@ -534,8 +644,9 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 res.error = str(exc)
                 return res
             ok, trace, metrics = run_agent(
-                ws, prompt, args.agent_model, args.agent_timeout,
+                ws, prompt, args.agent_model, agent_timeout,
                 extra_dirs=extra_dirs, effort=args.agent_effort,
+                mcp_config=mcp_config, mcp_tools=mcp_tools,
             )
         if ok and cache_file:
             cache_dir.mkdir(parents=True, exist_ok=True)
