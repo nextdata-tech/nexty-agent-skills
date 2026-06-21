@@ -32,31 +32,32 @@ from nxd.experimental.semantic.compiler import compile_selection
 from nxd.experimental.semantic.compiler import semantic_view_query
 from nxd.experimental.semantic.dialect import SnowflakeDialect
 
-# Resolve the SAME view name the transform provisions
-# (``default_view_name(REGISTRY)`` -> ``<FIRST_MODEL_UPPER>_SEMANTIC``). A bare
-# ``view_name=""`` would make ``supports_native_semantic_view`` probe the literal
-# ``SEMANTIC_VIEW`` (library ``dialect.py`` falls back to that), never match the
-# provisioned ``<MODEL>_SEMANTIC`` object, and silently disable the native path —
-# regression python.md #62, the pattern originally extracted from this module.
-_DIALECT = SnowflakeDialect(view_name=SnowflakeDialect.default_view_name(REGISTRY))
+# IMPORTANT — rpc-tool extraction footgun (audit P1-#7): `code(fn)` carries a
+# tool function's IMPORTS and any top-level def/class it calls, but it DROPS
+# module-level `=` assignments. So a `@mcp.tool(description=_CONST)` referencing a
+# module constant, or a function body referencing a module-level singleton like a
+# pre-built `_DIALECT`, raises NameError at rpc-server load → the tool fails to
+# register → tools/list is []. FIX: inline description literals into the decorator
+# and build per-call state (the dialect) INSIDE each function body.
 
 
 # ---------------------------------------------------------------------------
 # list_models
 # ---------------------------------------------------------------------------
 
-_LIST_MODELS_DESC = (
-    "List every semantic model (grain) this data product exposes — each with "
-    "its grain definition, metric count, dimension count, and join topology. "
-    "A MODEL is the fundamental unit: every metric and every dimension lives "
-    "under exactly one model. "
-    "Call this first to orient yourself, then call describe_model on the model "
-    "whose grain matches your question."
-)
-
 
 @function(name="list_models")
-@mcp.tool(name="list_models", description=_LIST_MODELS_DESC)
+@mcp.tool(
+    name="list_models",
+    description=(
+        "List every semantic model (grain) this data product exposes — each with "
+        "its grain definition, metric count, dimension count, and join topology. "
+        "A MODEL is the fundamental unit: every metric and every dimension lives "
+        "under exactly one model. "
+        "Call this first to orient yourself, then call describe_model on the model "
+        "whose grain matches your question."
+    ),
+)
 def list_models(request: Request) -> Response:
     out: list[dict[str, object]] = []
     for m in REGISTRY.models:
@@ -81,20 +82,20 @@ def list_models(request: Request) -> Response:
 # describe_model
 # ---------------------------------------------------------------------------
 
-_DESCRIBE_MODEL_DESC = (
-    "Describe a single semantic model in full: its grain, every metric it owns "
-    "(with aggregation, description, and the exact set of dimensions each metric "
-    "can be sliced by), every own dimension (type, PII flag, description), and "
-    "every documented join with the set of dimensions it makes reachable. "
-    "CHASM-TRAP RULE: metrics from two different models must NEVER be combined "
-    "in one run_semantic_query call. "
-    "Call describe_model before run_semantic_query to pick a valid "
-    "metric + dimension combination from the same model."
-)
-
-
 @function(name="describe_model")
-@mcp.tool(name="describe_model", description=_DESCRIBE_MODEL_DESC)
+@mcp.tool(
+    name="describe_model",
+    description=(
+        "Describe a single semantic model in full: its grain, every metric it owns "
+        "(with aggregation, description, and the exact set of dimensions each metric "
+        "can be sliced by), every own dimension (type, PII flag, description), and "
+        "every documented join with the set of dimensions it makes reachable. "
+        "CHASM-TRAP RULE: metrics from two different models must NEVER be combined "
+        "in one run_semantic_query call. "
+        "Call describe_model before run_semantic_query to pick a valid "
+        "metric + dimension combination from the same model."
+    ),
+)
 def describe_model(request: Request) -> Response:
     name = request.get("name") or ""
     model_obj = REGISTRY.model_of(name)
@@ -161,28 +162,37 @@ def describe_model(request: Request) -> Response:
 # run_semantic_query
 # ---------------------------------------------------------------------------
 
-_model_summary = "; ".join(f"{m.name} (grain: {m.grain})" for m in REGISTRY.models)
-
-_RUN_SEMANTIC_QUERY_DESC = (
-    "THE DEFAULT, SAFE way to answer a question about this data product. "
-    "Name CONCEPTS and the data product writes correct, governed SQL — "
-    "you never write SQL on this path.\n\n"
-    f"Data models: {_model_summary}.\n\n"
-    "ARGS:\n"
-    "- measures (REQUIRED): list of metric names from describe_model.\n"
-    "- dimensions (optional): list of dimension names from describe_model "
-    "to group by. OMIT IT (or pass []) for a grand total.\n"
-    '- filters (optional): list of {"dimension": <name>, "op": <symbol>, '
-    "\"value\": <val>}. The 'op' field MUST be one of: '=', '!=', '>', '>=', "
-    "'<', '<=', 'IN', 'LIKE', 'ILIKE'.\n\n"
-    "Do not mix metrics from different models in one call."
-)
-
-
 @function(name="run_semantic_query")
-@mcp.tool(name="run_semantic_query", description=_RUN_SEMANTIC_QUERY_DESC)
+@mcp.tool(
+    name="run_semantic_query",
+    description=(
+        "THE DEFAULT, SAFE way to answer a question about this data product. "
+        "Name CONCEPTS and the data product writes correct, governed SQL — "
+        "you never write SQL on this path.\n\n"
+        "ARGS:\n"
+        "- measures (REQUIRED): list of metric names from describe_model.\n"
+        "- dimensions (optional): list of dimension names from describe_model "
+        "to group by. OMIT IT (or pass []) for a grand total.\n"
+        '- filters (optional): list of {"dimension": <name>, "op": <symbol>, '
+        "\"value\": <val>}. The 'op' field MUST be one of: '=', '!=', '>', '>=', "
+        "'<', '<=', 'IN', 'LIKE', 'ILIKE'.\n\n"
+        "Do not mix metrics from different models in one call."
+    ),
+)
 def run_semantic_query(snowflake: Any, request: Request) -> Response:
     from snowflake import connector  # type: ignore[import-not-found]
+    from nxd.data_product.context import Snowflake
+
+    # The rpc runtime binds `snowflake` to a raw Context, not a Snowflake (it has
+    # no `connector_params()`); convert it. (audit P1-#8.)
+    if snowflake is not None and not hasattr(snowflake, "connector_params"):
+        snowflake = Snowflake.from_context(snowflake)
+
+    # Built per-call inside the body: a module-level `_DIALECT` singleton would be
+    # dropped by code() extraction (audit P1-#7). Resolves the same view name the
+    # provision step creates (<FIRST_MODEL_UPPER>_SEMANTIC) so the native-view
+    # probe matches (regression python.md #62).
+    _DIALECT = SnowflakeDialect(view_name=SnowflakeDialect.default_view_name(REGISTRY))
 
     cap = 200
 

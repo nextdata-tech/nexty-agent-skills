@@ -24,6 +24,7 @@ from nxd.spec import (
     data_product_rpc_output,
     rpc_function,
     rpc_server,
+    script,
     storage,
 )
 from nxd.experimental.semantic import build_semantic_tools
@@ -87,11 +88,33 @@ spec = (
         ),
         version="0.1.0",
         infra_profile=INFRA_PROFILE,
+        # The provision job builds a cold venv (snowflake-connector-python[pandas]
+        # + pandas) before it can seed — that exceeds the default 180s batch
+        # startup timeout on the local cluster, failing the launch (DP -> Failed,
+        # rpc route never mounts -> /mcp 404s). Raise it so cold provision
+        # completes. (Audit P1-#6.)
+        provision_timeout_secs=600,
     )
-    # The transform SELF-SEEDS this DP's own SUBJECTS base table + provisions the
-    # single-table SUBJECTS_SEMANTIC view, AND makes the **/*.py glob bundle
-    # registry.py / tools.py into the image so the extracted rpc tool scripts can
-    # import them at runtime (constraint #2).
+    # SEED AT PROVISION TIME. The kernel runs output-port promise verification
+    # BEFORE the transform, so a marker/table seeded only in the transform does
+    # not exist yet at verify -> "Field MARKER_ID not found" -> DP Failed. The
+    # provision function runs FIRST (before storage-driver provisioning + before
+    # verify), so seeding here makes the DP green in one launch. The same code is
+    # ALSO wired as .transform() so the **/*.py glob bundles registry.py/tools.py
+    # into the image (constraint #2) — the body is idempotent (CREATE IF NOT
+    # EXISTS + overwrite), so running it at both lifecycle points is safe.
+    # SEED AT PROVISION TIME via a SELF-CONTAINED script (provision.py): the
+    # kernel verifies output-port promises BEFORE the transform, so seeding in the
+    # transform fails verify ("Field MARKER_ID not found"). provision() runs first.
+    # script() (not code()) because the provision entrypoint is extracted into a
+    # provision/ subdir whose sys.path excludes the DP root — provision.py imports
+    # NO siblings, so it resolves there. (See the audit log P1-#4/#5.)
+    .provision(
+        script("provision.py").compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+    )
+    # A .transform() is still declared so the **/*.py glob bundles
+    # registry.py / tools.py into the image (constraint #2). The body is a no-op:
+    # all real seeding happens at provision time above.
     .transform(
         code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
     )
