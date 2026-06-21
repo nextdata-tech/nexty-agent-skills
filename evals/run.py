@@ -50,11 +50,13 @@ SKILL_SETS_FILE = EVALS_DIR / "skill-sets.yaml"
 DEFAULT_AGENT_MODEL = "sonnet"
 DEFAULT_JUDGE_MODEL = "opus"
 
-# Reasoning effort. The agent under test mirrors a real session (medium); the
-# judge is a constrained grading task so it stays at medium too. Override on the
-# CLI. Set to "" to leave it to the CLI default.
+# Reasoning effort. The agent under test mirrors a real session (medium). The
+# judge runs at xhigh because grading is the call we most want to trust — a
+# stronger judge separates real check failures from transcript-skim misreads,
+# and the judge cost is small relative to the agent runs. Override on the CLI.
+# Set to "" to leave it to the CLI default.
 DEFAULT_AGENT_EFFORT = "medium"
-DEFAULT_JUDGE_EFFORT = "medium"
+DEFAULT_JUDGE_EFFORT = "xhigh"
 
 # How many (skill-set x scenario) cells run concurrently. Each cell is an
 # independent subprocess; the cap bounds local load and API rate.
