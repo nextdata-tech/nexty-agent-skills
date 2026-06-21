@@ -75,26 +75,10 @@ echo "nxd validate exit code: $?"
 nxd --config <session_config> verify dp --dir <data_product_directory> --json
 ```
 
-When many DPs fail at once, or a DP `Failed` with no clear app-level cause, rule
-out cluster/infra health before blaming the DP (local dev only — confirm
-`nxd describe config` shows the local cluster first):
-
-```bash
-kubectl get nodes -o wide                                  # Ready?
-kubectl describe node <node> | grep -iE "MemoryPressure|DiskPressure|PIDPressure"  # all False?
-kubectl get pods -A | grep -ivE "Running|Completed"        # broken pods anywhere
-```
-
-A CrashLooping `otel-collector-targetallocator` in `nxd` is **benign** (telemetry
-only — it's the source of the `:4317 connection refused` spam, not a DP cause).
-A node with no pressure + Ready means the failure is in the DP/kernel, not infra.
-Stale `rpc-<hash>` pods stuck `Terminating` (hours/days old) in `dps` wedge new
-rpc servers ("waiting up to 5 minutes for previous resource to delete"); they are
-safe to force-delete ONLY after their owning DP is undeployed and ONLY on the
-confirmed-local cluster. A mismatched pip-registry wheel set (`nxd_core` vs
-`nxd_data_product` at different versions) makes DPs fail at runtime with
-`Error deserializing context: missing field secret_password` — rebuild a matched
-set with the `pip-registry` skill.
+Read the runtime/init logs (`nxd logs`) before concluding — the platform writes
+the failure cause there. Note that `BatchLogProcessor.ExportError ... connection
+refused` lines are the telemetry exporter, **not** the data-product failure;
+ignore them and look for the actual traceback or `nxd describe` status reason.
 
 ## Failure Triage
 
@@ -106,16 +90,15 @@ set with the `pip-registry` skill.
 - Output write failure: check driver context, service credentials, table/path/index names, schema settings, and promise code. For pgvector: `Embedding column is not type Vector` means the embedding attribute was declared `string()` instead of `vector_embeddings(<dim>)`; a dimension-mismatch error means the declared dimension ≠ the model output (see troubleshooting.md §4). **The pgvector driver provisions the column type FROM the model, so fixing the spec is NOT enough on its own: the existing table already has the wrong (`TEXT`) column. The fix must RE-PROVISION the table — re-launch the data product (or drop the table) so the column is recreated as `vector` — not merely re-run the transform against the wrong column.** The same applies to a `vector_embeddings(N)` dimension change.
 - Row count multiplies on every (green) run = an **idempotency** bug, not a crash — do not hunt failure logs. Cause: chunk ids generated with random UUIDs, so every run INSERTs fresh rows. Fix: deterministic ids (`uuid.uuid5(namespace, f"<source>:{record_key}:{chunk_index}")`) so reruns upsert instead of insert. **langchain/pgvector upserts via `ON CONFLICT` on `langchain_id`, which only works if the table has a unique index — add `CREATE UNIQUE INDEX IF NOT EXISTS ... ON <table> (langchain_id)` at transform start.** Do NOT "fix" it by deleting all rows each run (`write_mode("overwrite")` / truncate-then-write) unless that is an explicitly chosen strategy, and do not blame the schedule.
 - Policy or contract failure: switch to `nxd-complying-with-failing-policy`.
-- **Semantic-layer / rpc-MCP DP won't serve (State=Failed, or Broken in `nxd mcp health`, or `tools/list` empty).** These DPs (the `nxd.experimental.semantic` kind, exposing `list_models`/`describe_model`/`run_semantic_query`) have a stack of non-obvious deploy traps — diagnose in this order:
-  - **First, filter telemetry noise.** Pod logs spam `BatchLogProcessor.ExportError ... tcp connect error ... :4317 connection refused` — that is the OTel collector, NOT the failure. Always `grep -ivE "BatchLogProcessor|ExportError|opentelemetry|4317"` before reading.
-  - **`State=Failed` but the marker promise failed (`Field MARKER_ID not found in the model`):** promise verification runs **BEFORE** the transform, so a DP that seeds its marker/base tables **in the transform** fails verify (tables don't exist yet). Seed at **provision time** instead: an `@on_provision` function wired via `.provision(script("provision.py"))` (runs before verify). The transform must NOT also seed.
-  - **`ModuleNotFoundError: No module named 'transform'` (or registry/tools) in `/app/provision/__provision__.py`:** the provision entrypoint runs from a `provision/` subdir whose `sys.path` excludes the DP root. `provision.py` must be **self-contained** — no bare sibling imports (`from registry import ...`); inline any needed value (e.g. hardcode the `<MODEL>_SEMANTIC` view name).
-  - **DP flaps `Started`↔`Failed`, kernel logs `Timeout waiting for execution to start`:** a compute pod (transform or provision) is not coming up within the startup budget. Provision: raise it via `data_product(..., provision_timeout_secs=600)` (cold venv build > default 180s). Transform: it has no timeout knob — keep the transform a **no-op** (seeding lives in provision) and verify a stale/zombie `rpc-<hash>` pod isn't blocking the compute slot (`kubectl get pods -n dps | grep -E "Terminating|^rpc-"` — a stuck-Terminating rpc pod wedges redeploys with `waiting up to 5 minutes for previous resource to delete`).
-  - **`tools/list` returns `[]` / `Unknown tool: list_models` (rpc pod Running):** the `code()` rpc-tool extractor carries imports + top-level def/class but **DROPS module-level `=` assignments**. A `@mcp.tool(description=_CONST)` referencing a module constant, or a module-level `_DIALECT` singleton used in the tool body, raises `NameError` at rpc-server load → 0 tools register. Fix in `tools.py`: **inline the description literal** into each `@mcp.tool(...)` and **build per-call state (the dialect) INSIDE the function body**.
-  - **`run_semantic_query` → `'Context' object has no attribute 'connector_params'`:** the rpc runtime binds the tool's `snowflake` arg to a raw `Context`, not a `Snowflake`. Convert at the top: `from nxd.data_product.context import Snowflake; if not hasattr(snowflake, "connector_params"): snowflake = Snowflake.from_context(snowflake)`.
-  - **`ValidationError: Facade view output(s) cannot be combined with .transform()`:** an rpc/MCP semantic DP cannot use the facade `as_view` pattern — the validator forbids `as_view` + `.transform()`, and rpc-tool sibling bundling REQUIRES a transform. Use the **self-seed** pattern (plain `storage(...)`, seeding in `@on_provision`), not facade.
-  - **Transform `CREATE VIEW` fails binding a table from another DP's schema:** the transform must reference ONLY this DP's own tables. Never run the compiler's `native_semantic_view_ddl`/`plain_view_ddl` when the registry has a cross-DP join (they emit a JOIN to a crosswalk table in another DP's schema). Hand-author a single-table `<MODEL>_SEMANTIC` view.
-  - **Discovery:** `nxd mcp health --format json` (NO `--mesh` on a default-mesh local config — it panics `does not have meshes defined`). `derived_state: Broken` + `tool_count: 0` = the breaker opened on an `empty_tool_list` probe (see the `tools/list []` entry above).
+- **Semantic-layer / rpc-MCP DP won't serve** (the `nxd.experimental.semantic` kind exposing `list_models`/`describe_model`/`run_semantic_query`). Evidence: `nxd describe data-product <dp>` for the state + reason, `nxd logs <dp> --debug-logs` (and `--mcp --debug-logs` for the tool server), `nxd mcp health` for discovery state. These DPs have spec-level authoring traps — all visible in the logs/status, all fixed in the DP source:
+  - **Status reason `Field MARKER_ID not found in the model` (or any "field not found" on the promised model):** the platform verifies output-port promises **before** the transform runs, so a DP that creates/seeds its promised table **in the transform** fails verification (the table doesn't exist yet). Seed at **provision time** instead — an `@on_provision` function wired via `.provision(script("provision.py"))` runs before verification. The transform must not be the only place the table is created.
+  - **Provision logs show `ModuleNotFoundError` for a sibling module (`registry`/`tools`/`transform`):** the provision entrypoint runs from its own subdirectory, so flat `from registry import ...` doesn't resolve. Make `provision.py` **self-contained** — no sibling imports; inline the value it needs (e.g. hardcode the `<MODEL>_SEMANTIC` view name rather than importing the registry to compute it).
+  - **DP cycles between running and failed, status reason `Timeout waiting for execution to start`:** a compute step (provision or transform) didn't start within its budget. For a slow provision (heavy deps), set `data_product(..., provision_timeout_secs=<n>)`. Keep the transform a **no-op** when provisioning already does the seeding (a redundant transform that re-runs the seed can fail and flap the DP).
+  - **`nxd mcp health` shows the DP `Broken` / `tool_count: 0`, or a tool call returns `Unknown tool: list_models`:** the rpc tool server registered zero tools. Cause: the tool-extraction step carries a tool function's imports and the helpers it calls, but **not module-level constants/singletons it references**. A `@mcp.tool(description=_SOME_CONSTANT)` or a module-level `_DIALECT = ...` used inside a tool raises `NameError` at load → the tool fails to register. Fix in `tools.py`: **inline the description text into the `@mcp.tool(...)` decorator** and **construct per-call state (e.g. the dialect) inside the function body**, not at module level.
+  - **`run_semantic_query` errors with `'Context' object has no attribute 'connector_params'`:** the tool's `snowflake` argument is a raw context, not a `Snowflake` handle. Convert at the top of the tool: `from nxd.data_product.context import Snowflake; if not hasattr(snowflake, "connector_params"): snowflake = Snowflake.from_context(snowflake)`.
+  - **`nxd validate` errors `Facade view output(s) cannot be combined with .transform()`:** an rpc/MCP semantic DP can't use the facade `as_view` storage pattern — it's mutually exclusive with `.transform()`, and an rpc DP needs the transform (for its tool/registry modules to ship). Use a plain `storage(...)` port and seed in `@on_provision`, not the facade.
+  - **Provision/transform errors creating a view that references a table from another data product:** a DP's provisioning view must reference only its own tables. Don't emit a cross-DP JOIN at view-creation time (the joined table lives in another DP's schema and won't bind). Author a single-table `<MODEL>_SEMANTIC` view; cross-DP joins are resolved at query time.
+  - **`nxd mcp health`**: prints each DP's `derived_state` + `tool_count`; `Broken` + `0` means the tool-list probe came back empty (see the rpc-zero-tools entry above). (On a single-/default-mesh config, run it without `--mesh`; pass `--mesh <name>` only when your config defines named meshes.)
 - Removed semantic model: restore the deployed model name or launch a versioned product.
 - `nxd validate` returns to prompt with little/no output: first check `whoami`.
   If auth says `Not logged in`, validation is NOT RUN even if exit code is 0.
