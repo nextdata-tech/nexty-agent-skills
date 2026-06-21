@@ -72,13 +72,22 @@ def _run_nxd_mcp_health(mesh: str | None) -> dict:
     row falls through to ``tool_count`` 0 and is recorded per-row, not
     treated as a fatal mismatch (a single misshapen row should not kill
     the whole discovery)."""
-    cmd = ["nxd", "mcp", "health", "--format", "json"]
-    if mesh:
-        cmd.extend(["--mesh", mesh])
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except FileNotFoundError:
-        sys.exit("nxd CLI not on PATH — install nxd or run nxd-setup")
+    def _run(with_mesh: bool):
+        cmd = ["nxd", "mcp", "health", "--format", "json"]
+        if mesh and with_mesh:
+            cmd.extend(["--mesh", mesh])
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            sys.exit("nxd CLI not on PATH — install nxd or run nxd-setup")
+
+    p = _run(with_mesh=True)
+    # A single/default-mesh local config has no `meshes:` block; passing --mesh
+    # then panics ("Mesh '<name>' specified but config does not have meshes
+    # defined", nxd_client_auth config validation). Retry without --mesh — the
+    # default mesh is exactly what we want there.
+    if p.returncode != 0 and mesh and "does not have meshes defined" in (p.stderr or ""):
+        p = _run(with_mesh=False)
     if p.returncode != 0:
         sys.exit(f"nxd mcp health failed (exit {p.returncode}): {p.stderr.strip()[:500]}")
     try:

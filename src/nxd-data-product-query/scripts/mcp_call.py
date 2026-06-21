@@ -98,6 +98,12 @@ def main() -> None:
         help="Write the raw ``tools/call`` envelope to --out instead of the unwrapped result",
     )
     p.add_argument("--timeout", type=float, default=60.0)
+    p.add_argument(
+        "--ca-bundle",
+        help="Path to a CA bundle for TLS verification. Needed for LOCAL "
+        "clusters with a self-signed cert (e.g. the cluster's nxdCA.crt). "
+        "Also honored via REQUESTS_CA_BUNDLE / SSL_CERT_FILE env vars.",
+    )
     args = p.parse_args()
 
     try:
@@ -116,12 +122,26 @@ def main() -> None:
         token = m.token
 
     try:
-        with McpClient(endpoint=args.endpoint, token=token, timeout=args.timeout) as c:
+        with McpClient(
+            endpoint=args.endpoint, token=token, timeout=args.timeout,
+            verify=args.ca_bundle if args.ca_bundle else None,
+        ) as c:
             # Retry transient 5xx — cold DP proxies frequently 503 the first
             # tools/call after a wake-up; subsequent calls warm up.
             raw = with_retry(lambda: c.tools_call(args.tool, arguments))
     except McpError as exc:
-        sys.exit(f"MCP error {exc.code} at {exc.endpoint}: {exc.message}")
+        hint = ""
+        if exc.code == 401:
+            # The per-DP route validates the OAuth SESSION token (issuer/aud
+            # that oathkeeper trusts) — a standalone `nxd create
+            # personal-access-token` token has the wrong audience and 401s.
+            # Refresh + use the session token from find_mesh.py / ~/.nxd.
+            hint = (
+                " — 401: use the OAuth session token (find_mesh.py token_file / "
+                "~/.nxd/tokens.json), NOT a minted PAT; run `nxd whoami` to "
+                "refresh an expired session token, then retry."
+            )
+        sys.exit(f"MCP error {exc.code} at {exc.endpoint}: {exc.message}{hint}")
     except Exception as exc:  # noqa: BLE001
         sys.exit(f"{type(exc).__name__}: {exc}")
 

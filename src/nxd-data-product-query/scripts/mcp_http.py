@@ -22,6 +22,7 @@ Use via:
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,6 +32,28 @@ import requests
 
 _PROTOCOL_VERSION = "2025-06-18"
 _CLIENT = {"name": "nxd-data-product-query", "version": "0.1.0"}
+
+
+def _default_verify() -> bool | str:
+    """Resolve TLS verification for the MCP session.
+
+    LOCAL clusters (e.g. ``nxd.nxd.local``) serve a self-signed CA, so default
+    ``requests`` verification fails with ``CERTIFICATE_VERIFY_FAILED``. Honor the
+    standard env vars so a caller can point at the cluster CA bundle
+    (``shared/charts/nxd/localCerts/nxdCA.crt``) without code changes:
+
+        REQUESTS_CA_BUNDLE=<ca>  (or)  SSL_CERT_FILE=<ca>
+
+    Returns the bundle path if either is set + exists, else True (system store).
+    Set ``NXD_MCP_INSECURE=1`` to skip verification entirely (local dev only).
+    """
+    if os.environ.get("NXD_MCP_INSECURE") == "1":
+        return False
+    for var in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "NXD_CA_BUNDLE"):
+        path = os.environ.get(var)
+        if path and os.path.exists(path):
+            return path
+    return True
 
 
 def normalise_endpoint(endpoint: str) -> str:
@@ -61,12 +84,17 @@ class McpClient:
     endpoint: str
     token: str
     timeout: float = 30.0
+    # TLS verification: bundle path / True (system store) / False (insecure).
+    # Defaults from REQUESTS_CA_BUNDLE / SSL_CERT_FILE / NXD_CA_BUNDLE so local
+    # self-signed clusters work; callers may override explicitly.
+    verify: bool | str | None = None
     session_id: str | None = field(default=None, init=False)
     _session: requests.Session = field(default_factory=requests.Session, init=False)
     _next_id: int = field(default=1, init=False)
 
     def __post_init__(self) -> None:
         self.endpoint = normalise_endpoint(self.endpoint)
+        self._session.verify = _default_verify() if self.verify is None else self.verify
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -204,11 +232,15 @@ def call_tool_one_shot(
     *,
     timeout: float = 30.0,
     retry_attempts: int = 3,
+    verify: bool | str | None = None,
 ) -> dict[str, Any]:
     """Convenience: open a session, call one tool, close. Returns the tool result.
 
     The ``tools/call`` invocation is wrapped in ``with_retry`` so transient
     5xx from a cold DP proxy auto-recover. Session ``initialize`` itself
-    is not retried — that fails fast for clearer error surface."""
-    with McpClient(endpoint=endpoint, token=token, timeout=timeout) as c:
+    is not retried — that fails fast for clearer error surface.
+
+    ``verify`` overrides TLS verification (CA bundle path / False to skip);
+    defaults from the standard CA-bundle env vars (see ``_default_verify``)."""
+    with McpClient(endpoint=endpoint, token=token, timeout=timeout, verify=verify) as c:
         return with_retry(lambda: c.tools_call(name, arguments or {}), attempts=retry_attempts)
