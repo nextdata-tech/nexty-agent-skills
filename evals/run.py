@@ -70,7 +70,14 @@ DEFAULT_JUDGE_TIMEOUT_S = 300
 # (mocked) shell, and fetch the public platform docs. WebFetch is what lets the
 # no_skills baseline reach the same public docs a real user has, so the only
 # variable between skill-sets is the curated skills themselves.
-AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch"
+#
+# NOTE: `Skill` MUST be here or installed skills never activate — the agent only
+# stumbles onto skill *files* by globbing the workspace and reading some ad hoc,
+# so a skill's SKILL.md body (its actual guidance) is never loaded through
+# activation. That silently under-measures every skill-set: the lift attributable
+# to a skill collapses to "whatever files the agent happened to read." With Skill
+# present the agent invokes the matching skill and its body loads as designed.
+AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,Skill"
 
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
 #   {"tools": ["list_models","describe_model","run_semantic_query"],
@@ -205,18 +212,43 @@ def discover_scenarios(suite: str) -> list[Path]:
     return sorted(p.parent for p in base.glob("*/prompt.md"))
 
 
-def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> Path:
-    """Create an isolated agent workspace: installed skills + scenario fixtures."""
+def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple[Path, Path | None]:
+    """Create an isolated agent workspace + a per-skill-set plugin dir.
+
+    Returns ``(workspace, plugin_dir)``. ``plugin_dir`` is None for the
+    ``no_skills`` baseline (no skills) and otherwise a directory holding a
+    minimal `.claude-plugin/plugin.json` + the set's skills, loaded by the agent
+    via ``--plugin-dir``.
+
+    Skills MUST be loaded as a plugin: copying skill dirs into the workspace's
+    ``.claude/skills/`` does NOT register them — ``claude -p --setting-sources
+    project`` ignores project-directory skills, so they never activate and the
+    agent only benefits from files it happens to read. ``--plugin-dir`` with a
+    `plugin.json` is the mechanism that actually surfaces them as invokable
+    skills (`<plugin>:<skill>`)."""
     ws = tmp / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
 
-    skills_dst = ws / ".claude" / "skills"
-    skills_dst.mkdir(parents=True, exist_ok=True)
-    for rel in skill_set.skills:
-        src = REPO_ROOT / rel
-        if not src.is_dir():
-            raise FileNotFoundError(f"skill path missing: {rel}")
-        shutil.copytree(src, skills_dst / src.name)
+    plugin_dir: Path | None = None
+    if skill_set.skills:
+        plugin_dir = tmp / "plugin"
+        skills_dst = plugin_dir / "skills"
+        skills_dst.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        for rel in skill_set.skills:
+            src = REPO_ROOT / rel
+            if not src.is_dir():
+                raise FileNotFoundError(f"skill path missing: {rel}")
+            shutil.copytree(src, skills_dst / src.name)
+        manifest = {
+            "name": "nxd-eval-pack",
+            "version": "0.0.1",
+            "description": f"eval skill-set: {skill_set.name}",
+            "skills": "./skills/",
+        }
+        (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
 
     fixtures = scenario_dir / "fixtures"
     if fixtures.is_dir():
@@ -235,7 +267,7 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> Path:
                 shutil.copytree(item, dst)
             else:
                 shutil.copy2(item, dst)
-    return ws
+    return ws, plugin_dir
 
 
 def agent_task_from_prompt(prompt_md: str) -> str:
@@ -491,7 +523,8 @@ def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
               extra_dirs: list[Path] | None = None,
               effort: str = "",
               env_overrides: dict | None = None,
-              path_prepend: Path | None = None) -> tuple[bool, str, dict]:
+              path_prepend: Path | None = None,
+              plugin_dir: Path | None = None) -> tuple[bool, str, dict]:
     """Run the headless agent. Returns (ok, trace, metrics).
 
     The trace (full tool-call transcript) is what the judge grades; the final
@@ -515,6 +548,11 @@ def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
         "--allowedTools", AGENT_ALLOWED_TOOLS,
         "--add-dir", str(ws),
     ]
+    # Load the skill-set as a plugin so its skills actually activate (invokable as
+    # nxd-eval-pack:<skill>). Copying into .claude/skills/ does NOT register them.
+    # no_skills baseline passes plugin_dir=None → genuinely zero curated skills.
+    if plugin_dir is not None:
+        cmd += ["--plugin-dir", str(plugin_dir)]
     if effort:
         cmd += ["--effort", effort]
     for d in extra_dirs or []:
@@ -717,7 +755,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
             try:
-                ws = build_workspace(Path(tmp), skill_set, scenario_dir)
+                ws, plugin_dir = build_workspace(Path(tmp), skill_set, scenario_dir)
             except FileNotFoundError as exc:
                 res.error = str(exc)
                 return res
@@ -732,6 +770,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             ws, prompt, args.agent_model, agent_timeout,
                             extra_dirs=extra_dirs, effort=args.agent_effort,
                             env_overrides=env_over, path_prepend=bin_dir,
+                            plugin_dir=plugin_dir,
                         )
                 except (RuntimeError, TimeoutError) as exc:
                     res.error = f"MCP server setup failed: {exc}"
@@ -740,6 +779,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 ok, trace, metrics = run_agent(
                     ws, prompt, args.agent_model, agent_timeout,
                     extra_dirs=extra_dirs, effort=args.agent_effort,
+                    plugin_dir=plugin_dir,
                 )
         if ok and cache_file:
             cache_dir.mkdir(parents=True, exist_ok=True)

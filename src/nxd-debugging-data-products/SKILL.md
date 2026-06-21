@@ -82,7 +82,8 @@ nxd --config <session_config> verify dp --dir <data_product_directory> --json
 - Stuck in `PROVISIONING`: the environment is still installing — a dependency install is failing (bad package name, unavailable version, unreachable index). Read init logs. `PROVISIONING` is a state, not yet an error.
 - Startup timeout: inspect init logs and runtime logs before assuming timeout. OOM can appear as startup timeout. Discriminate via the status reason / exit 137, not by guessing.
 - Transform runtime error: reproduce with the local transform runner, then fix parsing, type conversion, chunking, output writes, or API paging.
-- Output write failure: check driver context, service credentials, table/path/index names, schema settings, and promise code. For pgvector: `Embedding column is not type Vector` means the embedding attribute was declared `string()` instead of `vector_embeddings(<dim>)`; a dimension-mismatch error means the declared dimension ≠ the model output (see troubleshooting.md §4).
+- Output write failure: check driver context, service credentials, table/path/index names, schema settings, and promise code. For pgvector: `Embedding column is not type Vector` means the embedding attribute was declared `string()` instead of `vector_embeddings(<dim>)`; a dimension-mismatch error means the declared dimension ≠ the model output (see troubleshooting.md §4). **The pgvector driver provisions the column type FROM the model, so fixing the spec is NOT enough on its own: the existing table already has the wrong (`TEXT`) column. The fix must RE-PROVISION the table — re-launch the data product (or drop the table) so the column is recreated as `vector` — not merely re-run the transform against the wrong column.** The same applies to a `vector_embeddings(N)` dimension change.
+- Row count multiplies on every (green) run = an **idempotency** bug, not a crash — do not hunt failure logs. Cause: chunk ids generated with random UUIDs, so every run INSERTs fresh rows. Fix: deterministic ids (`uuid.uuid5(namespace, f"<source>:{record_key}:{chunk_index}")`) so reruns upsert instead of insert. **langchain/pgvector upserts via `ON CONFLICT` on `langchain_id`, which only works if the table has a unique index — add `CREATE UNIQUE INDEX IF NOT EXISTS ... ON <table> (langchain_id)` at transform start.** Do NOT "fix" it by deleting all rows each run (`write_mode("overwrite")` / truncate-then-write) unless that is an explicitly chosen strategy, and do not blame the schedule.
 - Policy or contract failure: switch to `nxd-complying-with-failing-policy`.
 - Removed semantic model: restore the deployed model name or launch a versioned product.
 - `nxd validate` returns to prompt with little/no output: first check `whoami`.
@@ -93,6 +94,11 @@ nxd --config <session_config> verify dp --dir <data_product_directory> --json
   (see troubleshooting.md §7 for the verify/list commands).
 
 ## Patch And Verify
+
+**Before handing back a fix, state its operational consequence — a spec edit alone is often not the whole fix:**
+
+- **pgvector embedding type/dimension change** (`string()` → `vector_embeddings(<dim>)`, or a dimension change): the driver provisions the column type FROM the model at launch, so the EXISTING table still has the wrong (`TEXT`/old-width) column. The fix is incomplete unless you tell the user the table must be **re-provisioned** — re-launch the data product (or drop the table) so the column is recreated. Re-running the transform alone writes against the wrong column and fails again.
+- **Duplicate/growing rows on a green run** (idempotency): deterministic ids are only half the fix. langchain/pgvector upserts via `ON CONFLICT` on `langchain_id`, which needs a **unique index** — state that `CREATE UNIQUE INDEX IF NOT EXISTS ... ON <table> (langchain_id)` must exist (create it at transform start). Do not propose delete-all-rows / `write_mode("overwrite")` as the fix and do not blame the schedule.
 
 1. Patch the smallest source/config surface that matches the evidence.
 2. Re-run local smoke tests or contract checks.
@@ -118,3 +124,5 @@ nxd launch --dir <data_product_directory> --config <session_config>
 - Do not hide failed validation behind a handover checklist.
 - Do not mark `nxd validate` PASS unless `whoami` confirmed auth, validate exited 0, and no validation error/traceback was printed.
 - Do not print secrets from logs, profiles, or leased credentials.
+- A spec edit that changes a PROVISIONED column type or width is INCOMPLETE on its own. Do not present a pgvector `string()`→`vector_embeddings(<dim>)` (or dimension) fix as done without stating that the existing table must be **re-provisioned / re-launched** (or dropped) for the new column type to take effect — re-running the transform alone hits the same stale column.
+- Do not present an idempotency / duplicate-rows fix (deterministic ids) as done without stating that langchain/pgvector `ON CONFLICT` upserts require a **unique index on `langchain_id`** (`CREATE UNIQUE INDEX IF NOT EXISTS ...`). Deterministic ids without the unique index still insert duplicates.
