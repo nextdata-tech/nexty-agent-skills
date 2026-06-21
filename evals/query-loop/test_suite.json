@@ -1,0 +1,89 @@
+{
+  "comment": "Query-skill test suite for the fresh pharma mesh (see MESH_DESIGN.md). Each case is an NL question an ISOLATED sonnet agent must answer by driving the strict-mode MCP toolchain (nxd mcp health -> describe_model -> run_semantic_query). `expect`/`why`/`gold_note` are issue-miner context, NEVER shown to the agent. Cases target the discriminators: chasm traps, confusable concepts, cross-grain PII refusal, multi-hop joins, plus happy-path baselines.",
+  "cases": [
+    {
+      "id": "q01-baseline-single-grain",
+      "question": "How many subjects are in the registry?",
+      "expect": "answer",
+      "why": "happy path: single metric on the spine, no join",
+      "gold_note": "subject_count on subjects; one number"
+    },
+    {
+      "id": "q02-single-fact-by-dim",
+      "question": "Total titer across all assays, broken down by subject country.",
+      "expect": "answer",
+      "why": "one MANY-per-subject fact grouped by a cross-DP dim through the crosswalk; must DISTINCT the crosswalk",
+      "gold_note": "titer_sum by subject_country via assays->site_subjects->subjects; crosswalk collapsed so no fan-out"
+    },
+    {
+      "id": "q03-chasm-two-facts-one-dim",
+      "question": "Per subject country, give me both total titer and total units dispensed.",
+      "expect": "answer",
+      "why": "CHASM TRAP: two MANY-per-subject facts from different DPs, one dim, through the crosswalk. Naive join double-counts BOTH.",
+      "gold_note": "each fact pre-aggregated at its own grain then joined aggregate-to-aggregate; must NOT combine in one run_semantic_query across grains"
+    },
+    {
+      "id": "q04-triple-fanout",
+      "question": "By country: total visit duration, total titer, and total units dispensed.",
+      "expect": "answer",
+      "why": "TRIPLE fan-out — three facts at three grains off the spine. Naive join cubes the over-count.",
+      "gold_note": "three independent per-grain aggregations; the intent gate may need to run one query per grain"
+    },
+    {
+      "id": "q05-confusable-titer",
+      "question": "What's the titer level by assay type?",
+      "expect": "clarify",
+      "why": "CONFUSABLE: titer_sum vs titer_avg both exist; 'titer level' is ambiguous",
+      "gold_note": "agent should echo the two candidate metrics and ask which, not silently pick one"
+    },
+    {
+      "id": "q06-confusable-dispensed",
+      "question": "How much was dispensed per channel?",
+      "expect": "clarify",
+      "why": "CONFUSABLE: dispense_count (rows) vs units_dispensed (sum units)",
+      "gold_note": "clarify count-of-dispenses vs sum-of-units"
+    },
+    {
+      "id": "q07-boolean-flag",
+      "question": "How many serious adverse events were there, by adverse-event term?",
+      "expect": "answer",
+      "why": "BOOLEAN FLAG: serious_ae_count is a boolean CASE-sum, not ae_count; agent must pick the flag metric",
+      "gold_note": "serious_ae_count (boolean flag) by ae_term, NOT ae_count"
+    },
+    {
+      "id": "q08-ae-ambiguous",
+      "question": "Count the adverse events by term.",
+      "expect": "answer",
+      "why": "ae_count is the plain reading ('adverse events' unqualified); serious_ae_count would be wrong here",
+      "gold_note": "ae_count by ae_term; if agent over-clarifies serious-vs-all that's acceptable but ae_count is the default"
+    },
+    {
+      "id": "q09-pii-cross-grain-refusal",
+      "question": "Show units dispensed broken down by prescriber.",
+      "expect": "abstain",
+      "why": "PII REFUSAL: prescriber_npi is PII on the RX/dispense grain; the library refuses the cross-grain PII dimension",
+      "gold_note": "the compiler/library refuses; agent should surface the refusal + note PII governance, not fabricate"
+    },
+    {
+      "id": "q10-multihop-far-dim",
+      "question": "Total units dispensed by product modality.",
+      "expect": "answer",
+      "why": "MULTI-HOP to a far dimension: dispenses -> products (modality). Tests join-path discovery to a far dim.",
+      "gold_note": "units_dispensed by modality via dispenses->products"
+    },
+    {
+      "id": "q11-confusable-visits-subjects",
+      "question": "How many visits did we have, by visit type?",
+      "expect": "answer",
+      "why": "CONFUSABLE grain: visit_count vs subject_count — 'how many visits' is visits grain",
+      "gold_note": "visit_count by visit_type (NOT subject_count)"
+    },
+    {
+      "id": "q12-no-time-dim",
+      "question": "How many dispenses happened last quarter?",
+      "expect": "clarify",
+      "why": "NO TIME DIMENSION wired in the mesh — 'last quarter' has nothing to bind to",
+      "gold_note": "agent should note no date/time dimension exists to bind 'last quarter' and ask / state the limitation, not invent a filter"
+    }
+  ]
+}
