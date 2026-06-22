@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.1
+  version: 0.2.2
 ---
 
 # NXD Data Product Debugging
@@ -94,8 +94,8 @@ ignore them and look for the actual traceback or `nxd describe` status reason.
   - **Status reason `Field <X> not found in the model` on the promised model** → the table is seeded in the transform, but promise verification runs **before** the transform. Seed must move to provision time. (Fix: `nxd-semantic-data-product` Step 4a.)
   - **Provision logs `ModuleNotFoundError` for a sibling (`registry`/`tools`/`transform`)** → `provision.py` imports a sibling but runs from a subdir. It must be self-contained. (Fix: Step 4c.)
   - **DP cycles running↔failed, reason `Timeout waiting for execution to start`** → a compute step exceeded its budget. Slow provision → raise `provision_timeout_secs`; a non-no-op transform that re-seeds also flaps it. (Fix: Step 4b/4e. Tracks nxd#6930.)
-  - **`nxd mcp health` `Broken`/`tool_count: 0`, or a call returns `Unknown tool: list_models`** → the rpc server registered zero tools, because an extracted tool references a module-level constant (`@mcp.tool(description=_CONST)` / module `_DIALECT`) that `code()` drops → `NameError` at load. (Fix: inline constants — Step 3 gotcha 2. Tracks nxd#6929.)
-  - **`run_semantic_query` errors `'Context' object has no attribute 'connector_params'` / `Context cannot be converted to ContextData`** → the tool's `snowflake` param is untyped, so the rpc runtime injects a raw `Context`. Type it `: Snowflake`. (Fix: Step 3 gotcha 1. Tracks nxd#6928.)
+  - **`nxd mcp health` `Broken`/`tool_count: 0`, or a call returns `Unknown tool: list_models`** → the rpc server registered zero tools. On `nxd_data_product < 0.41.98` this is usually an extracted tool referencing a module-level constant (`@mcp.tool(description=_CONST)` / module `_DIALECT`) that the old `code()` extractor dropped → `NameError` at load; fixed in 0.41.98 (constants are now carried). On a current wheel, suspect a different tool-registration error in the rpc/mcp logs (or a stale wheel — check the served version). Fix: bump to a matched ≥0.41.98 wheel set, or (older SDKs) inline the constants in `tools.py`.
+  - **`run_semantic_query` errors `'Context' object has no attribute 'connector_params'` / `Context cannot be converted to ContextData`** → the tool's `snowflake` param is untyped, so the rpc runtime injects a raw `Context` instead of the driver handle. Fix in the DP's `tools.py`: type the param with the driver class (`snowflake: Snowflake`, module-level import). This is per-DP author code — not fixed by any library bump.
   - **`nxd validate` errors `Facade view output(s) cannot be combined with .transform()`** → an rpc DP can't use the facade `as_view` pattern (mutually exclusive with the required transform). Use plain `storage(...)` + seed in `@on_provision`. (Fix: Step 4.)
   - **Provision/transform error creating a view that references another DP's table** → the view DDL must reference only this DP's own tables; cross-DP joins resolve at query time. (Fix: Step 4d.)
   - **Query compiles + executes but `row_count: 0`** → the seed never ran; provision log shows the `@on_provision` fn registered but not invoked. (Suspect nxd#6931; verify on a current matched wheel set.)
