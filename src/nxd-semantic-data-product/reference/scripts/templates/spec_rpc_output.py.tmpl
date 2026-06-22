@@ -1,10 +1,9 @@
 """spec.py RPC-output wiring template for a semantic-layer data product.
 
 Copy the `data_product_rpc_output()` block below into your spec.py, filling in
-the infra-profile service refs and data product name.  This template is itself
-the canonical reference for the exact call shapes, and is kept in sync with the
-live-proven recipe in SKILL.md (Steps 3 + 4) and the deployed
-evals/query-loop/mesh/pharma-subjects-demo/spec.py.
+the infra-profile service refs and data product name.  This template is the
+canonical reference for the exact call shapes; it matches the recipe in SKILL.md
+(Steps 3 + 4).
 
 LAYOUT — keep every module FLAT at the DP root (siblings of spec.py):
     registry.py   tools.py   transform.py   provision.py   models.py   spec.py
@@ -64,7 +63,7 @@ WIRING PATTERN — the only correct way to expose MCP tools in NXD:
             # signature does not exist on the installed wheel). A cold provision
             # connects to Snowflake + builds snowflake-connector-python[pandas]
             # + pandas, which blows past the 180s default → "Timeout waiting for
-            # execution to start" → DP Failed. 600s is the proven budget.
+            # execution to start" → DP Failed. 600s comfortably covers a cold build.
             provision_timeout_secs=600,
         )
         # PROVISION runs BEFORE promise verification. provision.py is SELF-CONTAINED

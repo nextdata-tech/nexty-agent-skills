@@ -153,7 +153,7 @@ def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
 
 This is the single most error-prone part of a semantic DP. The rule is to use
 each lifecycle function **for what it is for** — the deploy-breakers below all
-come from mixing them up. Each was proven live.
+come from mixing them up.
 
 **(a) PROVISION the promised table + the semantic view — do NOT provision in the
 transform.** The kernel runs output-port **promise verification BEFORE the

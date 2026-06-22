@@ -10,9 +10,8 @@ nxd.data_product wheel (module nxd.experimental.semantic) — imported, not
 vendored. The DP authors the registry + tools + transform + provision and wires
 spec.py.
 
-Every stub here teaches the LIVE-PROVEN recipe (deployed Healthy +
-run_semantic_query returned real rows on the local cluster). The canonical prose
-is SKILL.md Steps 3 + 4 — the stubs MUST agree with it.
+Every stub follows the deploy recipe in SKILL.md Steps 3 + 4 — the stubs MUST
+agree with it.
 
 Usage:
     uv run python scaffold_semantic_dp.py <target_dir>
