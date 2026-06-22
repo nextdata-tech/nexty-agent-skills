@@ -56,34 +56,25 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 0) Marker (the promised output model) so the storage port verifies.
-            managed = snowflake.full_table_name("subjects_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
-                managed.split(".")[-1].strip('"'),
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SUBJECTS_DIAG marker written to {managed}")
-
-            # 1) Seed the SUBJECTS spine table (queried by the semantic view).
+            # 1) Seed the PROMISED `subjects` model's managed table. Using
+            # full_table_name("subjects") writes to the exact table the storage
+            # driver verifies the promise against (so produce-verification passes).
+            managed = snowflake.full_table_name("subjects")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}SUBJECTS "
+                f"CREATE OR REPLACE TABLE {managed} "
                 "(SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR, SUBJECT_MRN VARCHAR)"
             )
-            write_pandas(conn, subjects, "SUBJECTS",
+            write_pandas(conn, subjects, managed.split(".")[-1].strip('"'),
                          database=snowflake.database, schema=snowflake.schema)
-            print(f"SUBJECTS_DIAG seeded {fqn}SUBJECTS rows={len(subjects)}")
+            print(f"SUBJECTS_DIAG seeded {managed} rows={len(subjects)}")
 
-            # 2) Single-table semantic view over SUBJECTS only.
+            # 2) Single-table semantic view over the promised subjects table.
             cur.execute(
                 f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
                 "SELECT SUBJECT_ID AS SUBJECT_ID, "
                 "SUBJECT_COUNTRY AS SUBJECT_COUNTRY, "
                 "SUBJECT_MRN AS SUBJECT_MRN "
-                f"FROM {fqn}SUBJECTS"
+                f"FROM {managed}"
             )
             print(f"SUBJECTS_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:

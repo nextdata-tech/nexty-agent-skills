@@ -31,7 +31,7 @@ from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 from tools import list_models, describe_model, run_semantic_query
 from transform import transform
-from models import provision_marker
+from models import subjects_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -69,7 +69,9 @@ _rpc = _rpc.port(
 # Plain storage(...) with NO as_view: the self-seed transform owns provisioning.
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL subjects model (not a marker) so the discover UI surfaces
+    # its attributes + glossary links. The transform seeds the matching SUBJECTS table.
+    .promise(subjects_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -86,7 +88,7 @@ spec = (
             "subject_count and dimensions subject_country + subject_mrn[PII] — via "
             "MCP so agents answer natural-language questions without raw SQL."
         ),
-        version="0.7.0-dev",
+        version="0.9.1-dev",
         infra_profile=INFRA_PROFILE,
     )
     # TRANSFORM-SEED: the transform seeds the SUBJECTS table + marker + the

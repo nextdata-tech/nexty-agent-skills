@@ -1,26 +1,29 @@
-"""Models for the pharma-subjects-demo semantic-layer data product.
+"""Models for pharma-subjects-demo — the SUBJECT SPINE of the mesh.
 
-This DP self-seeds its OWN base table (``SUBJECTS``) in its own Snowflake schema
-via the transform (the template SELF-SEED pattern — NOT the facade), then
-provisions a single-table ``SUBJECTS_SEMANTIC`` view over it.
-
-A storage output port requires at least one promised model, and the transform
-needs the Snowflake connection that port supplies. So we promise ONE tiny marker
-model the transform creates — this satisfies the port + produce-verification
-without promising the seeded base table (whose shape the semantic view, not the
-kernel, owns).
+The transform seeds the real ``SUBJECTS`` table; we promise that REAL model on the
+storage port (not a dummy marker), so the discover UI surfaces the actual
+attributes, their glossary links, and (on downstream facts) the cross-DP
+SEMANTIC RELATIONSHIP. ``subjects`` is the spine, so it has no outgoing cross-DP
+reference; its attributes link to glossary terms.
 """
 
-from nxd.spec import semantic_model
+from nxd.spec import Predicate, attribute, semantic_model
 from nxd.spec.data_types import int64, string
 
-provision_marker = (
-    semantic_model("subjects_marker")
-    .description("Marker table written by the provisioning transform.")
+# The real subject-spine model the transform seeds (table SUBJECTS).
+subjects_model = (
+    semantic_model("subjects")
+    .description("Subject spine — one row per enrolled clinical-trial subject.")
     .schema(
         {
-            "MARKER_ID": int64(),
-            "VIEW_NAME": string(),
+            "SUBJECT_ID": int64(),
+            "SUBJECT_COUNTRY": string(),
+            # PII: medical record number.
+            "SUBJECT_MRN": string(),
         }
     )
+    # Glossary links at the model + attribute level (render in the UI).
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject")
+    .link("SUBJECT_COUNTRY", Predicate.GlossaryTerm,
+          "/data-product/demo/pharma-glossary-demo#/terms/subject_country")
 )
