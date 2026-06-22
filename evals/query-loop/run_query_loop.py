@@ -9,13 +9,13 @@ One command drives the whole loop against the deployed pharma mesh:
 
 The test agents are **isolated sonnet** sessions: they get ONLY the
 nxd-data-product-query skill (loaded as a plugin via --plugin-dir, the mechanism
-that actually activates skills — see PR #39) and the local cluster env (the
+that actually activates skills — see PR #39) and the target cluster env (the
 cluster CA + a session token). They do NOT get the rest of the repo or the
 internet beyond the platform docs. Each test case is one NL question the agent
 must answer by driving the strict-mode MCP toolchain against the real mesh.
 
 Design mirrors evals/run.py (the skill-pack eval harness) but:
-  - target is the REAL deployed mesh on nxd.nxd.local, not a stub;
+  - target is the REAL deployed mesh on the configured cluster host, not a stub;
   - the agent uses the genuine nxd mcp health -> Streamable-HTTP path;
   - every transcript is archived for issue mining;
   - the judge/reviewer extracts friction into the audit log, it doesn't just PASS/FAIL.
@@ -23,8 +23,8 @@ Design mirrors evals/run.py (the skill-pack eval harness) but:
 Auth + TLS (from the Phase-0 findings, now fixed in the skill):
   - Session token: `python3 src/nxd-data-product-query/scripts/find_mesh.py` -> token_file.
     (NOT a minted PAT — wrong audience, 401s.)
-  - TLS: export NXD_CA_BUNDLE / REQUESTS_CA_BUNDLE at the cluster CA
-    (shared/charts/nxd/localCerts/nxdCA.crt).
+  - TLS: export NXD_CA_BUNDLE / REQUESTS_CA_BUNDLE at the cluster CA bundle
+    (self-signed clusters ship a CA cert under the chart's localCerts dir).
   - mesh discovery: `nxd mcp health` WITHOUT --mesh on a default-mesh config.
 
 Status: SKELETON. Phase 2 fills in agent invocation + issue mining once the

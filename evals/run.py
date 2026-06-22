@@ -114,7 +114,7 @@ MCP_AGENT_TIMEOUT_S = 1800
 # .md form — a "#/..." fragment is client-side only and returns the empty SPA
 # shell. Every run (baseline included) is told this base so the comparison is
 # "skills vs. equally-informed agent", not "skills vs. ignorance". Override with
-# --docs-base (e.g. a local mesh like http://nxd.nxd.local/docs/ for testing).
+# --docs-base (e.g. a local cluster's docs host, for testing).
 DEFAULT_DOCS_BASE = "https://docs.demo.nextopia.dev/"
 
 # The public examples repo (spec.py/transform.py/contracts for real data

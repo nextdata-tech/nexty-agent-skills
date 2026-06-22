@@ -1,7 +1,7 @@
 # Fresh Pharma Mesh — Design (Phase 1 contract)
 
 The shared contract every Phase-1 authoring agent implements. A richer synthetic
-biopharma mesh (argenx-*shaped*, nothing argenx-specific) deployed as **real
+biopharma mesh (clinical-trial shaped, fully synthetic) deployed as **real
 semantic-layer DPs** on the local cluster, each exposing
 `list_models`/`describe_model`/`run_semantic_query` over MCP.
 
@@ -69,7 +69,7 @@ dispenses ─► products (far dim, via product_id)
 
 ## Per-DP authoring spec (each agent produces ONE DP dir)
 
-**Deploy pattern: SELF-SEED, like `deployable-dp/` — NOT facade.** (Corrected after Phase-1 review: the nxd validator `_validate_facade_outputs` HARD-REJECTS `.transform()` + `as_view()` together — `_spec.py:5309-5314` — and the rpc-tool sibling bundling (`**/*.py` glob) only fires when an `executor_spec`/transform exists (`fs/_fs_spec.py:29` returns early `if not self.executor_spec`). So a facade DP can't bundle `registry.py`/`tools.py` → pod dies `ModuleNotFoundError: registry`. The two constraints are mutually exclusive; the template's self-seed path is the only one that both bundles siblings AND validates. `hcp-master-demo` is a deployed self-seed instance — proof.)
+**Deploy pattern: SELF-SEED, like `deployable-dp/` — NOT facade.** (Corrected after Phase-1 review: the nxd validator `_validate_facade_outputs` HARD-REJECTS `.transform()` + `as_view()` together — `_spec.py:5309-5314` — and the rpc-tool sibling bundling (`**/*.py` glob) only fires when an `executor_spec`/transform exists (`fs/_fs_spec.py:29` returns early `if not self.executor_spec`). So a facade DP can't bundle `registry.py`/`tools.py` → pod dies `ModuleNotFoundError: registry`. The two constraints are mutually exclusive; the template's self-seed path is the only one that both bundles siblings AND validates — verified by deploying a self-seed instance live.)
 
 Mirror `deployable-dp/` exactly (the 4 wiring constraints are non-negotiable):
 - `registry.py` — `SemanticRegistry` for that DP's entity/entities (models, dimensions w/ pii flags, metrics w/ agg + boolean flags, N:1 joins). The ONE authored artifact.
