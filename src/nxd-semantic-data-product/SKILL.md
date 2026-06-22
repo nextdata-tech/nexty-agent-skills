@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.0
+  version: 0.2.1
 ---
 
 # nxd-semantic-data-product skill
@@ -160,8 +160,10 @@ transform.** The kernel runs output-port **promise verification BEFORE the
 transform**. So one-time setup that the promise depends on — creating/seeding the
 promised base table and creating the `<MODEL>_SEMANTIC` view — must happen in an
 `@on_provision` function (runs before verification), wired via
-`.provision(script("provision.py"))` (`UserCodeSpec` via `script(...)`;
-`@on_provision` from `nxd.data_product.mark`). Putting that setup in the transform
+`.provision(script("provision.py"))` (`UserCodeSpec` via `script(...)`; the
+decorator is `@data_product.on_provision()` after `from nxd import data_product`
+— the same form the `provision.py` example below + the reference templates use).
+Putting that setup in the transform
 fails verification — the table doesn't exist yet — with a status reason like
 `Field MARKER_ID not found in the model`. **This is the load-bearing rule:
 respect the lifecycle — provisioning is provision-time, not runtime.**
@@ -212,17 +214,32 @@ default kernel provision budget is 180s; a cold provision exceeds it →
 
 ```python
 # provision.py — SELF-CONTAINED. No sibling imports; view name hardcoded.
-from nxd.data_product import on_provision
+from nxd import data_product
+from nxd.data_product.context import Snowflake
 
-@on_provision()
-def provision(context):
-    snowflake = context.snowflake()           # or the driver handle your storage port exposes
-    cur = snowflake.connection().cursor()
-    # 1. seed THIS DP's own base table(s)
-    cur.execute("CREATE TABLE IF NOT EXISTS subjects (SUBJECT_ID NUMBER, SUBJECT_COUNTRY TEXT)")
-    cur.execute("INSERT INTO subjects VALUES (1,'US'),(2,'US'),(3,'DE'),(4,'FR')")
-    # 2. create the SINGLE-TABLE semantic view (NO cross-DP JOIN, name hardcoded)
-    cur.execute("CREATE OR REPLACE VIEW SUBJECTS_SEMANTIC AS SELECT * FROM subjects")
+_VIEW_NAME = "SUBJECTS_SEMANTIC"   # = SnowflakeDialect.default_view_name(REGISTRY), hardcoded
+
+@data_product.on_provision()
+def provision(snowflake: Snowflake) -> None:   # the typed driver handle is injected, like the tools
+    from snowflake import connector
+    if snowflake is None or not snowflake.schema:
+        return
+    fqn = f"{snowflake.database}.{snowflake.schema}." if snowflake.database else f"{snowflake.schema}."
+    conn = connector.connect(
+        user=snowflake.user, account=snowflake.account, warehouse=snowflake.warehouse,
+        role=snowflake.role, database=snowflake.database, schema=snowflake.schema,
+        ocsp_fail_open=True, **snowflake.connector_params(),
+    )
+    try:
+        cur = conn.cursor()
+        # 1. write the promised marker model (satisfies the storage port before verify)
+        # 2. seed THIS DP's own base table(s)
+        cur.execute(f"CREATE OR REPLACE TABLE {fqn}SUBJECTS (SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR)")
+        cur.execute(f"INSERT INTO {fqn}SUBJECTS VALUES (1,'US'),(2,'US'),(3,'DE'),(4,'FR')")
+        # 3. create the SINGLE-TABLE semantic view (NO cross-DP JOIN; name hardcoded)
+        cur.execute(f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS SELECT * FROM {fqn}SUBJECTS")
+    finally:
+        conn.close()
 ```
 
 NXD exposes MCP tools **only** through `spec.py` via `data_product_rpc_output()`.
