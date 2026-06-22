@@ -1,0 +1,60 @@
+{
+  "comment": "Agent-facing logical catalog (what list_models/describe_model return) for the pharma single-DP stub. Mirrors semantic.json without physical column names. Confusable pairs (titer_sum/titer_avg, dispense_count/units_dispensed, ae_count/serious_ae_count, visit_count/subject_count) + a PII dim (subject_mrn, prescriber_npi) + chasm traps (multiple facts per subject) are the discriminators.",
+  "list_models": [
+    {"name": "subjects", "grain": "one row per subject", "description": "Subject spine — one row per clinical-trial subject."},
+    {"name": "visits", "grain": "one row per visit", "description": "Clinical visits — many per subject."},
+    {"name": "assays", "grain": "one row per assay", "description": "Lab assays — many per subject."},
+    {"name": "dispenses", "grain": "one row per dispense", "description": "Drug dispenses — many per subject."},
+    {"name": "adverse_events", "grain": "one row per adverse event", "description": "Adverse events — many per subject."}
+  ],
+  "describe_model": {
+    "subjects": {
+      "name": "subjects", "grain": "one row per subject",
+      "metrics": [{"name": "subject_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct subjects.", "compatible_dimensions": ["subject_country"]}],
+      "dimensions": [
+        {"name": "subject_country", "type": "string", "pii": false, "description": "Subject billing country."},
+        {"name": "subject_mrn", "type": "string", "pii": true, "description": "Subject medical record number. PII — governed/maskable."}
+      ],
+      "joins": []
+    },
+    "visits": {
+      "name": "visits", "grain": "one row per visit",
+      "metrics": [
+        {"name": "visit_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct visits.", "compatible_dimensions": ["visit_type", "subject_country"]},
+        {"name": "visit_duration_min", "aggregation": "SUM", "description": "Total visit duration in minutes.", "compatible_dimensions": ["visit_type", "subject_country"]}
+      ],
+      "dimensions": [{"name": "visit_type", "type": "string", "pii": false, "description": "Visit type (screening, treatment, follow-up)."}],
+      "joins": [{"to_model": "subjects", "kind": "many_to_one", "reaches_dimensions": ["subject_country"]}]
+    },
+    "assays": {
+      "name": "assays", "grain": "one row per assay",
+      "metrics": [
+        {"name": "titer_sum", "aggregation": "SUM", "description": "Sum of assay titer.", "compatible_dimensions": ["assay_type", "subject_country"]},
+        {"name": "titer_avg", "aggregation": "AVG", "description": "Mean assay titer.", "compatible_dimensions": ["assay_type", "subject_country"]}
+      ],
+      "dimensions": [{"name": "assay_type", "type": "string", "pii": false, "description": "Assay type."}],
+      "joins": [{"to_model": "subjects", "kind": "many_to_one", "reaches_dimensions": ["subject_country"]}]
+    },
+    "dispenses": {
+      "name": "dispenses", "grain": "one row per dispense",
+      "metrics": [
+        {"name": "dispense_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct dispenses.", "compatible_dimensions": ["dispense_channel", "subject_country"]},
+        {"name": "units_dispensed", "aggregation": "SUM", "description": "Total units dispensed.", "compatible_dimensions": ["dispense_channel", "subject_country"]}
+      ],
+      "dimensions": [
+        {"name": "dispense_channel", "type": "string", "pii": false, "description": "Dispense channel (pharmacy, mail, clinic)."},
+        {"name": "prescriber_npi", "type": "string", "pii": true, "description": "Prescriber NPI. PII — governed/maskable."}
+      ],
+      "joins": [{"to_model": "subjects", "kind": "many_to_one", "reaches_dimensions": ["subject_country"]}]
+    },
+    "adverse_events": {
+      "name": "adverse_events", "grain": "one row per adverse event",
+      "metrics": [
+        {"name": "ae_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct adverse events (all).", "compatible_dimensions": ["ae_term", "subject_country"]},
+        {"name": "serious_ae_count", "aggregation": "SUM", "description": "Count of SERIOUS adverse events only (boolean flag).", "compatible_dimensions": ["ae_term", "subject_country"]}
+      ],
+      "dimensions": [{"name": "ae_term", "type": "string", "pii": false, "description": "Adverse-event term."}],
+      "joins": [{"to_model": "subjects", "kind": "many_to_one", "reaches_dimensions": ["subject_country"]}]
+    }
+  }
+}

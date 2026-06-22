@@ -61,7 +61,11 @@ infra-profile-ecommerce-demo.yaml
 .eval-cache/
 
 # Eval reports (generated)
-eval-report*.json
+eval*report*.json
+pharma*report*.json
 # MCP server venv + lock (resolved locally with matched nxd wheels)
 evals/mcp/.venv/
 evals/mcp/uv.lock
+
+# Query-loop run transcripts (generated)
+evals/query-loop/runs/

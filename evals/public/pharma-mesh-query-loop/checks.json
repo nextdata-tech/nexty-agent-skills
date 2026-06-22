@@ -1,0 +1,53 @@
+{
+  "name": "Query a Pharma Semantic Mesh (strict MCP)",
+  "checks": [
+    {
+      "id": "discovery-before-query",
+      "check": "The agent calls list_models and describe_model to learn the catalog BEFORE any run_semantic_query call. It does not guess concept names or read a catalog file directly."
+    },
+    {
+      "id": "strict-mcp-toolchain",
+      "check": "The agent reaches the tools via the strict MCP-only path (the nxd-data-product-query skill's mcp_gateway/mcp_call over the discovered endpoint), not by inventing a SQL connection or reading fixtures. It NEVER authors a raw SQL string passed to a SQL tool."
+    },
+    {
+      "id": "q1-subject-count",
+      "check": "Q1 (how many subjects): the agent runs subject_count on the subjects model and answers from rows (4)."
+    },
+    {
+      "id": "q3-chasm-two-facts",
+      "check": "Q3 (titer AND units dispensed per country): the agent recognizes these are two metrics at DIFFERENT grains (assays vs dispenses) that must NOT be combined in one run_semantic_query. It runs them separately (one per model, each sliced by subject_country) and presents both — it does NOT issue a single combined call that would fan out / double-count."
+    },
+    {
+      "id": "q4-triple-fanout",
+      "check": "Q4 (visit duration + titer + units by country): the agent runs the three metrics as separate per-grain queries (visits, assays, dispenses) rather than one combined call. Combining any two different-grain metrics in one call is a failure."
+    },
+    {
+      "id": "q5-confusable-titer-clarifies",
+      "check": "Q5 ('titer level' by assay type): the agent surfaces the ambiguity between titer_sum and titer_avg (both exist on assays) and clarifies or echoes which it will use, rather than silently picking one."
+    },
+    {
+      "id": "q6-confusable-dispensed-clarifies",
+      "check": "Q6 ('how much dispensed' per channel): the agent distinguishes dispense_count (number of dispenses) from units_dispensed (sum of units) and clarifies or echoes the choice, not silently guessing."
+    },
+    {
+      "id": "q7-boolean-flag-metric",
+      "check": "Q7 (serious adverse events by term): the agent selects serious_ae_count (the serious-only boolean-flag metric), NOT ae_count."
+    },
+    {
+      "id": "q8-plain-count-default",
+      "check": "Q8 (count the adverse events by term): the agent selects ae_count (all adverse events) — the plain reading. Over-clarifying serious-vs-all is acceptable but ae_count is the default."
+    },
+    {
+      "id": "q9-pii-prescriber",
+      "check": "Q9 (units dispensed by prescriber): prescriber_npi is a PII dimension. The agent notes the result is governed / may be masked (and/or that the library may refuse a PII dimension), rather than silently returning prescriber identities."
+    },
+    {
+      "id": "q10-confusable-visits-not-subjects",
+      "check": "Q10 (how many visits by visit type): the agent selects visit_count (visits grain), NOT subject_count."
+    },
+    {
+      "id": "echoes-selections",
+      "check": "For each question the agent restates the resolved metric/dimension selection in plain language (using the meanings from describe_model, distinguishing confusable metrics) before executing."
+    }
+  ]
+}

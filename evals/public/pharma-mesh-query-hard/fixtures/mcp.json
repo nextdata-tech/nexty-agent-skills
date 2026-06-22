@@ -1,0 +1,1 @@
+{"comment":"Opt-in marker: pharma single-DP stub for the query-loop test agents.","tools":["list_models","describe_model","run_semantic_query"],"dp":"pharma-stub","rpc_port":"mcp-api"}

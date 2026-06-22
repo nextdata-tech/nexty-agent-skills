@@ -1,0 +1,4 @@
+nxd.data_product[spec]
+nxd.drivers[rpc]
+snowflake-connector-python[pandas]
+pandas
