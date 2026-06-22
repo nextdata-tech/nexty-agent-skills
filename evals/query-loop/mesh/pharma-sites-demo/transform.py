@@ -1,7 +1,7 @@
 """Transform for DP_SITES (pharma-sites-demo) — SELF-SEED, NOT facade.
 
-The nxd validator HARD-REJECTS `.transform()` + `storage().as_view(...)` together
-(_validate_facade_outputs), and the rpc-tool sibling bundling (`**/*.py` glob)
+The nxd validator HARD-REJECTS `.transform()` + `storage().as_view(...)` together,
+and the rpc-tool sibling bundling (`**/*.py` glob)
 only fires when a transform exists. So this DP mirrors the deployable-dp template:
 the post-verify transform SELF-SEEDS this DP's OWN base tables and provisions a
 single-table semantic view. There is no facade.

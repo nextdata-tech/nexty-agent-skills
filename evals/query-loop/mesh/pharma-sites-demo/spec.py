@@ -16,7 +16,7 @@ Wiring constraints (non-negotiable, from the deployable-dp template README):
    REGISTRY) so the rpc subprocess (only its own dir on sys.path) resolves them.
 4. Base tables are SELF-SEEDED by the post-verify transform (like the
    deployable-dp template), NOT via a facade. The nxd validator HARD-REJECTS
-   `.transform()` + `storage().as_view(...)` together (_validate_facade_outputs),
+   `.transform()` + `storage().as_view(...)` together,
    and the rpc-tool sibling bundling (`**/*.py` glob) only fires when a transform
    exists — so the self-seed path is the ONLY one that both bundles registry.py /
    tools.py AND validates. The storage output port is a PLAIN storage(...) with

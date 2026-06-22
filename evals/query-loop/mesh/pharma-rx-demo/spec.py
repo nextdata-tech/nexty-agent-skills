@@ -8,8 +8,8 @@ Deploy pattern: SELF-SEED (like ``deployable-dp/`` — NOT facade). The base
 ``DISPENSES`` table, the ``PHARMA_RX_MARKER`` table, and the single-table
 ``DISPENSES_SEMANTIC`` view are all seeded by the ``.transform(...)`` into this
 DP's OWN Snowflake schema. The nxd validator HARD-REJECTS ``.transform()`` +
-``as_view()`` together (``_validate_facade_outputs``), and the rpc-tool sibling
-bundling (``**/*.py`` glob) only fires when an executor/transform exists — so
+``as_view()`` together, and the rpc-tool sibling
+bundling (``**/*.py`` glob) only fires when a transform exists — so
 self-seed is the ONLY shape that both bundles ``registry.py`` / ``tools.py`` AND
 validates.
 
