@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.0
+  version: 0.2.1
 ---
 
 # nxd-semantic-data-product skill
@@ -113,44 +113,138 @@ library.
 
 ```python
 from nxd.drivers.rpc import Request, Response, function, mcp
+# MODULE-LEVEL import of the typed Snowflake handle — REQUIRED (see two gotchas below).
+from nxd.data_product.context import Snowflake
 from registry import REGISTRY
 from nxd.experimental.semantic.compiler import (
     CompileError, compile_selection, semantic_view_query,
 )
 from nxd.experimental.semantic.dialect import SnowflakeDialect
 
-_DIALECT = SnowflakeDialect(view_name="")
-
 @function(name="list_models")
-@mcp.tool(name="list_models", description="...")
+@mcp.tool(name="list_models", description="List the semantic models, their grain, and metric/dimension counts.")
 def list_models(request: Request) -> Response:
     ...  # iterate REGISTRY.models
 
 @function(name="describe_model")
-@mcp.tool(name="describe_model", description="...")
+@mcp.tool(name="describe_model", description="Describe one model's metrics, dimensions, joins, and PII flags.")
 def describe_model(request: Request) -> Response:
     ...
 
 @function(name="run_semantic_query")
-@mcp.tool(name="run_semantic_query", description="...")
-def run_semantic_query(snowflake, request: Request) -> Response:
+@mcp.tool(name="run_semantic_query", description="Compile a concept selection to governed SQL and return rows.")
+def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
+    dialect = SnowflakeDialect(view_name="")   # built INSIDE the body, not at module level
     ...  # compile_selection / semantic_view_query against the live view
 ```
 
-### Step 4 — Author `transform.py` (MANDATORY) and wire `spec.py`
+**Two extraction gotchas the rpc tool path WILL trip — both are deploy-breakers if ignored:**
 
-**The transform is mandatory, not optional.** The rpc-output `code(fn)` path
-ships **only** the extracted `__<fn>__.py` tool scripts into the image — NOT the
-sibling modules they import (`registry.py`, `tools.py`). Those siblings are
-bundled by the `**/*.py` glob that runs on the **transform/compute** output path.
-Without a `.transform(...)`, the pod dies at startup with
-`ModuleNotFoundError: No module named 'registry'`. So every semantic DP **must**
-declare `.transform(code(transform).compute(...))`.
+1. **Type the storage-context param with its SPECIFIC driver handle (NOT untyped / `Any`), via a MODULE-LEVEL import.** The rpc runtime injects a non-`request` arg **by type**: a param typed with the driver context class (e.g. `Snowflake`, `Databricks`, `BigQuery` — whatever the DP's storage port provides) gets a real handle; an untyped / `Any` param gets a raw `Context` with no driver methods (`.connector_params()` etc.), and `run_semantic_query` fails live with `'Context' object has no attribute ...` / `Context cannot be converted to ContextData`. Import the concrete type at module level so `code()` extraction + `get_type_hints` resolve the annotation in the rpc subprocess — e.g. for a Snowflake-backed DP:
+   ```python
+   from nxd.data_product.context import Snowflake
+   def run_semantic_query(snowflake: Snowflake, request: Request) -> Response: ...
+   ```
+   For a Databricks / BigQuery / other storage backend, import and annotate with that driver's context type instead.
 
-The transform provisions the semantic view the MCP tools query (via
-`native_semantic_view_ddl` / `plain_view_ddl` from the library) AND triggers the
-sibling bundling. Mirror the reference `transform.py` referenced in
-`reference/scripts/templates/transform_provision.py.tmpl`.
+2. **Never reference a module-level constant from inside an extracted tool** — inline it. `code()` extraction carries a tool's imports + the `def`/`class` it calls, but **drops module-level `=` assignments**. So `_DESC = "..."` + `@mcp.tool(description=_DESC)`, or a module-level `_DIALECT = SnowflakeDialect(...)` used in the body, raises `NameError` at rpc-server load → the tool fails to register → `tools/list` returns `[]` → `nxd mcp health` shows the DP `Broken`/`tool_count: 0`. Inline the description literal into each decorator and build per-call state (the dialect) **inside** the function body.
+
+### Step 4 — Respect the lifecycle: provision seeds, transform produces, and wire `spec.py`
+
+This is the single most error-prone part of a semantic DP. The rule is to use
+each lifecycle function **for what it is for** — the deploy-breakers below all
+come from mixing them up.
+
+**(a) PROVISION the promised table + the semantic view — do NOT provision in the
+transform.** The kernel runs output-port **promise verification BEFORE the
+transform**. So one-time setup that the promise depends on — creating/seeding the
+promised base table and creating the `<MODEL>_SEMANTIC` view — must happen in an
+`@on_provision` function (runs before verification), wired via
+`.provision(script("provision.py"))` (`UserCodeSpec` via `script(...)`; the
+decorator is `@data_product.on_provision()` after `from nxd import data_product`
+— the same form the `provision.py` example below + the reference templates use).
+Putting that setup in the transform
+fails verification — the table doesn't exist yet — with a status reason like
+`Field MARKER_ID not found in the model`. **This is the load-bearing rule:
+respect the lifecycle — provisioning is provision-time, not runtime.**
+
+**(b) The transform is for RUNTIME data production — write real transform code
+here if the DP has runtime work.** A `.transform(...)` is mandatory regardless,
+because the rpc-output `code(fn)` path ships only the extracted `__<fn>__.py` tool
+scripts — NOT the sibling modules they import (`registry.py`, `tools.py`); those
+are bundled by the `**/*.py` glob that runs on the transform/compute output path,
+so without a `.transform(...)` the pod dies `ModuleNotFoundError: No module named
+'registry'`. If your DP computes derived tables, refreshes data on a schedule, or
+otherwise produces data at runtime, do that work in the transform as normal.
+What the transform must **never** do is (re)provision — seed/create the promised
+table or the semantic view — because verification already ran; a transform that
+duplicates provisioning's setup (or otherwise fails/times out) makes the DP flap
+`Started`↔`Failed`.
+
+For a DP whose data is **fully static seed** (like these demo DPs), there is no
+runtime work, so its transform is legitimately a no-op — it exists only to
+trigger sibling bundling:
+
+```python
+# transform.py — no runtime work for this static-seed DP; provisioning owns setup.
+# (A DP with real runtime data production would write that logic here instead.)
+def transform(context):
+    print("semantic DP: data is static seed; setup owned by @on_provision")
+```
+
+**(c) `provision.py` must be SELF-CONTAINED.** The provision entrypoint runs
+from its own `provision/` subdir, so a flat `from registry import ...` does NOT
+resolve (`ModuleNotFoundError: registry`). Inline everything the seed needs — do
+not import siblings; hardcode the `<MODEL>_SEMANTIC` view name rather than
+importing the registry to compute it.
+
+**(d) The view DDL must reference ONLY this DP's own tables.** Never call the
+compiler's `native_semantic_view_ddl` / `plain_view_ddl` when the registry
+declares a cross-DP join — those emit a JOIN to a table in ANOTHER DP's schema,
+so `CREATE VIEW` binds a missing object and provision fails. Hand-author a
+**single-table** `<MODEL>_SEMANTIC` view. Cross-DP joins resolve at QUERY time
+via the live mesh, never at view-creation time.
+
+**(e) Raise the provision timeout for heavy deps.** Provision must connect to
+Snowflake + (cold) build `snowflake-connector-python[pandas]`+pandas. The
+default kernel provision budget is 180s; a cold provision exceeds it →
+`Timeout waiting for execution to start` → DP `Failed`. Set the factory kwarg
+`data_product(..., provision_timeout_secs=600)` (NOT `.compute(provision_timeout_secs=...)`
+— that signature doesn't exist on the installed wheel).
+
+```python
+# provision.py — SELF-CONTAINED. No sibling imports; view name hardcoded.
+from nxd import data_product
+from nxd.data_product.context import Snowflake
+
+_VIEW_NAME = "SUBJECTS_SEMANTIC"   # = SnowflakeDialect.default_view_name(REGISTRY), hardcoded
+
+@data_product.on_provision()
+def provision(snowflake: Snowflake) -> None:   # the typed driver handle is injected, like the tools
+    from snowflake import connector
+    if snowflake is None or not snowflake.schema:
+        return
+    fqn = f"{snowflake.database}.{snowflake.schema}." if snowflake.database else f"{snowflake.schema}."
+    conn = connector.connect(
+        user=snowflake.user, account=snowflake.account, warehouse=snowflake.warehouse,
+        role=snowflake.role, database=snowflake.database, schema=snowflake.schema,
+        ocsp_fail_open=True, **snowflake.connector_params(),
+    )
+    try:
+        cur = conn.cursor()
+        # 1. write the promised marker model — MUST exist before verify (the storage
+        #    port promises `subjects_marker` with schema {MARKER_ID, VIEW_NAME}).
+        #    Skipping this is the exact `Field MARKER_ID not found` failure.
+        cur.execute(f"CREATE OR REPLACE TABLE {fqn}SUBJECTS_MARKER (MARKER_ID NUMBER, VIEW_NAME VARCHAR)")
+        cur.execute(f"INSERT INTO {fqn}SUBJECTS_MARKER VALUES (1, '{_VIEW_NAME}')")
+        # 2. seed THIS DP's own base table(s)
+        cur.execute(f"CREATE OR REPLACE TABLE {fqn}SUBJECTS (SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR)")
+        cur.execute(f"INSERT INTO {fqn}SUBJECTS VALUES (1,'US'),(2,'US'),(3,'DE'),(4,'FR')")
+        # 3. create the SINGLE-TABLE semantic view (NO cross-DP JOIN; name hardcoded)
+        cur.execute(f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS SELECT * FROM {fqn}SUBJECTS")
+    finally:
+        conn.close()
+```
 
 NXD exposes MCP tools **only** through `spec.py` via `data_product_rpc_output()`.
 There is NO module-level `tools` list discovery — a bare
@@ -169,6 +263,7 @@ from nxd.spec import (
     rpc_server,
     storage,
     code,
+    script,
 )
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
@@ -200,13 +295,23 @@ _rpc = _rpc.port(
 )
 
 spec = (
-    data_product(name="my-semantic-dp", ...)
-    # MANDATORY — provisions the semantic view AND makes the **/*.py glob bundle
-    # registry.py / tools.py into the image so the extracted tool scripts import.
+    # provision_timeout_secs is a FACTORY kwarg (not .compute(...)) — heavy
+    # snowflake+pandas provision deps exceed the 180s default and the DP fails.
+    data_product(name="my-semantic-dp", provision_timeout_secs=600, ...)
+    # Seeds the base tables + creates the single-table <MODEL>_SEMANTIC view
+    # BEFORE promise verification. provision.py is self-contained (no sibling imports).
+    .provision(script("provision.py"))
+    # Transform = RUNTIME data production (+ it bundles registry.py/tools.py via
+    # the **/*.py glob). Write real transform logic if the DP produces data at
+    # runtime; for a static-seed DP it's a no-op. It must NEVER (re)provision —
+    # seeding/creating the promised table or view here makes the DP flap.
     .transform(code(transform).compute("<infra-profile-path>#/services/<compute>"))
     .output(
         data_product_output()
         .promise(provision_marker)
+        # plain storage(...) — NOT .config(...).as_view(...): the facade as_view
+        # pattern is mutually exclusive with .transform(), and an rpc DP needs the
+        # transform (for sibling bundling). nxd validate rejects facade + transform.
         .port("snowflake", storage("<infra-profile-path>#/services/<snowflake>"))
     )
     .output(_rpc)
@@ -221,24 +326,20 @@ Key facts:
   `.request_model` / `.response_model` / `.description`.
 - `rpc_function(code(fn), request_model, response_model)` — all three positional
   arguments are required.
-- `.transform(...)` is **mandatory** — it bundles the sibling modules.
+- `.provision(script("provision.py"))` seeds + creates the view before verify;
+  `.transform(...)` is mandatory (it bundles the sibling modules) and carries any
+  runtime data production — but never (re)provisions.
 - `.description(t.description)` — chainable; sets the MCP tool description.
 - `.enable_endpoints()` — publishes the HTTP+MCP endpoint.
 - `.mcp_path("/mcp")` — sets the MCP mount path on the rpc_server port.
 
-**Base tables must exist before promise verification.** The kernel runs promise
-verification **before** the transform on this output path, so a DP that seeds its
-own base tables in the transform fails verification (tables don't exist yet).
-Either:
-- **Facade over pre-existing tables** (recommended for production): reference
-  externally-loaded tables via `source_aligned_input(...)` and provision the view
-  with `storage(...).config(SnowflakeConfig().as_view(sql_script(...)))`, which
-  runs at provision time. See
-  `examples/features/drivers/snowflake-storage/snowflake-source-aligned-facade/`
-  in the nxd repo.
-- **Self-seed** (self-contained demo): the transform seeds the base tables — but
-  a pure post-verify transform-seed will NOT pass verification in one launch.
-  See `reference/runtime-and-dependencies.md`.
+**Do NOT use the facade `as_view` storage pattern for an rpc/MCP semantic DP.**
+`storage(...).config(SnowflakeConfig().as_view(sql_script(...)))` is mutually
+exclusive with `.transform()` — `nxd validate` raises
+`Facade view output(s) ... cannot be combined with .transform()` — and an rpc DP
+*needs* the transform to bundle `registry.py`/`tools.py`. Seed in `@on_provision`
+with a plain `storage(...)` port instead. (The facade pattern is fine for a
+pure-storage DP with no rpc tools; it is not an option here.)
 
 Add to `requirements.txt`:
 
@@ -271,9 +372,23 @@ See `reference/runtime-and-dependencies.md` for version and registry notes.
 - **Never pass `code(t.fn)` over `build_semantic_tools(...)`**: those are closures
   `code()` cannot extract. Author module-level `tools.py` functions and pass
   `code(<module_fn>)`; reuse `build_semantic_tools(...)` only for the schemas.
-- **Always declare a `.transform(...)`**: it is what bundles the sibling
-  `registry.py` / `tools.py` modules into the image. `.output(_rpc)` alone ships
-  only the extracted tool scripts → `ModuleNotFoundError` at pod startup.
+- **Always declare a `.transform(...)`**: it bundles the sibling `registry.py` /
+  `tools.py` modules into the image (`.output(_rpc)` alone ships only the
+  extracted tool scripts → `ModuleNotFoundError` at pod startup). Write real
+  runtime data-production logic here if the DP has any; for a static-seed DP it is
+  a legitimate no-op. The transform must NEVER (re)provision — seeding/creating
+  the promised table or view in the transform makes the DP flap `Started`↔`Failed`.
+- **Provision is provision-time, not runtime — respect the lifecycle**: promise
+  verification runs BEFORE the transform, so the promised table + semantic view
+  must be created in `@on_provision` via `.provision(script("provision.py"))`.
+  Transform-time setup fails verification (`Field ... not found in the model`).
+- **`provision.py` is self-contained**: no sibling imports (it runs from a subdir
+  where flat imports don't resolve); hardcode the `<MODEL>_SEMANTIC` view name.
+- **The view DDL references only this DP's own tables**: never the compiler's
+  cross-DP join DDL — cross-DP joins resolve at query time, not view-create time.
+- **Type the rpc `snowflake` param `: Snowflake`** with a module-level import, and
+  **never reference a module-level constant from an extracted tool** (inline it).
+  Both are rpc-extraction deploy-breakers — see Step 3's two gotchas.
 - **All modules flat at the DP root**: never a `transform/` subdir package.
   Import flat (`from registry import REGISTRY`).
 - **Matched wheel version set**: `core` + `drivers` + `data_product` must all be
