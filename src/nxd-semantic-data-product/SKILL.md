@@ -140,9 +140,14 @@ def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
 
 **Two extraction gotchas the rpc tool path WILL trip — both are deploy-breakers if ignored:**
 
-1. **Type the `snowflake` param `: Snowflake` (NOT untyped / `Any`), with a MODULE-LEVEL `from nxd.data_product.context import Snowflake`.** The rpc runtime injects a non-`request` arg **by type**: a param typed `Snowflake` gets a real handle; an untyped / `Any` param gets a raw `Context` with no `.connector_params()`, and `run_semantic_query` fails live with `'Context' object has no attribute 'connector_params'` / `Context cannot be converted to ContextData`. The import must be module-level so `code()` extraction + `get_type_hints` resolve the annotation in the rpc subprocess. (This also affects the library's own `build_semantic_tools` — upstream nxd issue **#6928**.)
+1. **Type the storage-context param with its SPECIFIC driver handle (NOT untyped / `Any`), via a MODULE-LEVEL import.** The rpc runtime injects a non-`request` arg **by type**: a param typed with the driver context class (e.g. `Snowflake`, `Databricks`, `BigQuery` — whatever the DP's storage port provides) gets a real handle; an untyped / `Any` param gets a raw `Context` with no driver methods (`.connector_params()` etc.), and `run_semantic_query` fails live with `'Context' object has no attribute ...` / `Context cannot be converted to ContextData`. Import the concrete type at module level so `code()` extraction + `get_type_hints` resolve the annotation in the rpc subprocess — e.g. for a Snowflake-backed DP:
+   ```python
+   from nxd.data_product.context import Snowflake
+   def run_semantic_query(snowflake: Snowflake, request: Request) -> Response: ...
+   ```
+   For a Databricks / BigQuery / other storage backend, import and annotate with that driver's context type instead.
 
-2. **Never reference a module-level constant from inside an extracted tool** — inline it. `code()` extraction carries a tool's imports + the `def`/`class` it calls, but **drops module-level `=` assignments**. So `_DESC = "..."` + `@mcp.tool(description=_DESC)`, or a module-level `_DIALECT = SnowflakeDialect(...)` used in the body, raises `NameError` at rpc-server load → the tool fails to register → `tools/list` returns `[]` → `nxd mcp health` shows the DP `Broken`/`tool_count: 0`. Inline the description literal into each decorator and build per-call state (the dialect) **inside** the function body. (Upstream nxd issue **#6929**.)
+2. **Never reference a module-level constant from inside an extracted tool** — inline it. `code()` extraction carries a tool's imports + the `def`/`class` it calls, but **drops module-level `=` assignments**. So `_DESC = "..."` + `@mcp.tool(description=_DESC)`, or a module-level `_DIALECT = SnowflakeDialect(...)` used in the body, raises `NameError` at rpc-server load → the tool fails to register → `tools/list` returns `[]` → `nxd mcp health` shows the DP `Broken`/`tool_count: 0`. Inline the description literal into each decorator and build per-call state (the dialect) **inside** the function body.
 
 ### Step 4 — Seed at PROVISION time, keep the transform a NO-OP, and wire `spec.py`
 
@@ -353,26 +358,6 @@ See `reference/runtime-and-dependencies.md` for version and registry notes.
   newer `data_product` fails at runtime with
   `Error deserializing context: missing field secret_password`. See
   `reference/runtime-and-dependencies.md`.
-
----
-
-## Known upstream library/platform bugs (workarounds are baked into the steps above)
-
-These were root-caused live and filed against the nxd core repo. The workarounds
-above are the durable authoring guidance; track the issues for when the platform
-fix lands and a workaround can be dropped:
-
-- **nxd#6928** — `build_semantic_tools`' `run_semantic_query` is typed `snowflake: Any`,
-  so the library's own tool receives a raw `Context` live. (Workaround: type your
-  own tool `: Snowflake` — Step 3 gotcha 1.)
-- **nxd#6929** — `code()` rpc extraction drops module-level constants → `NameError`,
-  0 tools. (Workaround: inline constants — Step 3 gotcha 2.)
-- **nxd#6930** — transform startup timeout hardcoded 180s (no spec knob) + k8s-compute
-  silently fails to spawn the transform pod → flap. (Workaround: no-op transform +
-  `provision_timeout_secs` — Step 4b/4e.)
-- **nxd#6931** — `@on_provision` registers but the body may not be invoked via
-  `.provision(script(...))` → empty seeded table. (Verify rows after deploy; if 0,
-  this is the suspect.)
 
 ---
 
