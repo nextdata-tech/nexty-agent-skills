@@ -149,33 +149,45 @@ def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
 
 2. **Never reference a module-level constant from inside an extracted tool** — inline it. `code()` extraction carries a tool's imports + the `def`/`class` it calls, but **drops module-level `=` assignments**. So `_DESC = "..."` + `@mcp.tool(description=_DESC)`, or a module-level `_DIALECT = SnowflakeDialect(...)` used in the body, raises `NameError` at rpc-server load → the tool fails to register → `tools/list` returns `[]` → `nxd mcp health` shows the DP `Broken`/`tool_count: 0`. Inline the description literal into each decorator and build per-call state (the dialect) **inside** the function body.
 
-### Step 4 — Seed at PROVISION time, keep the transform a NO-OP, and wire `spec.py`
+### Step 4 — Respect the lifecycle: provision seeds, transform produces, and wire `spec.py`
 
-This is the single most error-prone part of a semantic DP. The deploy ordering
-constraints below were proven live (each one was a separate deploy-breaker):
+This is the single most error-prone part of a semantic DP. The rule is to use
+each lifecycle function **for what it is for** — the deploy-breakers below all
+come from mixing them up. Each was proven live.
 
-**(a) Seed + create the view at PROVISION time, NOT in the transform.** The
-kernel runs output-port **promise verification BEFORE the transform**. A DP that
-creates/seeds its promised table in the transform fails verification — the table
-doesn't exist yet — with a status reason like
-`Field MARKER_ID not found in the model`. Seed in an `@on_provision` function
-(runs before verification): `.provision(script("provision.py"))`
-(`UserCodeSpec` via `script(...)`; `@on_provision` from `nxd.data_product.mark`).
+**(a) PROVISION the promised table + the semantic view — do NOT provision in the
+transform.** The kernel runs output-port **promise verification BEFORE the
+transform**. So one-time setup that the promise depends on — creating/seeding the
+promised base table and creating the `<MODEL>_SEMANTIC` view — must happen in an
+`@on_provision` function (runs before verification), wired via
+`.provision(script("provision.py"))` (`UserCodeSpec` via `script(...)`;
+`@on_provision` from `nxd.data_product.mark`). Putting that setup in the transform
+fails verification — the table doesn't exist yet — with a status reason like
+`Field MARKER_ID not found in the model`. **This is the load-bearing rule:
+respect the lifecycle — provisioning is provision-time, not runtime.**
 
-**(b) The transform must still exist, but as a genuine NO-OP.** The rpc-output
-`code(fn)` path ships only the extracted `__<fn>__.py` tool scripts — NOT the
-sibling modules they import (`registry.py`, `tools.py`). Those siblings are
-bundled by the `**/*.py` glob that runs on the transform/compute output path.
-Without a `.transform(...)` the pod dies `ModuleNotFoundError: No module named
-'registry'`. **But the transform must do NO work** — once provision owns the
-seeding, a transform that re-seeds (or does anything that can fail/time out)
-makes the DP flap `Started`↔`Failed`. Make `transform.py` a bare
-`print(...)`; it exists ONLY to trigger sibling bundling.
+**(b) The transform is for RUNTIME data production — write real transform code
+here if the DP has runtime work.** A `.transform(...)` is mandatory regardless,
+because the rpc-output `code(fn)` path ships only the extracted `__<fn>__.py` tool
+scripts — NOT the sibling modules they import (`registry.py`, `tools.py`); those
+are bundled by the `**/*.py` glob that runs on the transform/compute output path,
+so without a `.transform(...)` the pod dies `ModuleNotFoundError: No module named
+'registry'`. If your DP computes derived tables, refreshes data on a schedule, or
+otherwise produces data at runtime, do that work in the transform as normal.
+What the transform must **never** do is (re)provision — seed/create the promised
+table or the semantic view — because verification already ran; a transform that
+duplicates provisioning's setup (or otherwise fails/times out) makes the DP flap
+`Started`↔`Failed`.
+
+For a DP whose data is **fully static seed** (like these demo DPs), there is no
+runtime work, so its transform is legitimately a no-op — it exists only to
+trigger sibling bundling:
 
 ```python
-# transform.py — NO-OP. Exists only so the **/*.py glob bundles registry.py/tools.py.
+# transform.py — no runtime work for this static-seed DP; provisioning owns setup.
+# (A DP with real runtime data production would write that logic here instead.)
 def transform(context):
-    print("semantic DP: seeding owned by @on_provision; transform is a no-op")
+    print("semantic DP: data is static seed; setup owned by @on_provision")
 ```
 
 **(c) `provision.py` must be SELF-CONTAINED.** The provision entrypoint runs
@@ -268,8 +280,10 @@ spec = (
     # Seeds the base tables + creates the single-table <MODEL>_SEMANTIC view
     # BEFORE promise verification. provision.py is self-contained (no sibling imports).
     .provision(script("provision.py"))
-    # NO-OP transform — exists ONLY so the **/*.py glob bundles registry.py/tools.py
-    # into the image. It must do no work (a re-seeding transform makes the DP flap).
+    # Transform = RUNTIME data production (+ it bundles registry.py/tools.py via
+    # the **/*.py glob). Write real transform logic if the DP produces data at
+    # runtime; for a static-seed DP it's a no-op. It must NEVER (re)provision —
+    # seeding/creating the promised table or view here makes the DP flap.
     .transform(code(transform).compute("<infra-profile-path>#/services/<compute>"))
     .output(
         data_product_output()
@@ -292,7 +306,8 @@ Key facts:
 - `rpc_function(code(fn), request_model, response_model)` — all three positional
   arguments are required.
 - `.provision(script("provision.py"))` seeds + creates the view before verify;
-  `.transform(...)` is a mandatory NO-OP that only bundles the sibling modules.
+  `.transform(...)` is mandatory (it bundles the sibling modules) and carries any
+  runtime data production — but never (re)provisions.
 - `.description(t.description)` — chainable; sets the MCP tool description.
 - `.enable_endpoints()` — publishes the HTTP+MCP endpoint.
 - `.mcp_path("/mcp")` — sets the MCP mount path on the rpc_server port.
@@ -336,14 +351,16 @@ See `reference/runtime-and-dependencies.md` for version and registry notes.
 - **Never pass `code(t.fn)` over `build_semantic_tools(...)`**: those are closures
   `code()` cannot extract. Author module-level `tools.py` functions and pass
   `code(<module_fn>)`; reuse `build_semantic_tools(...)` only for the schemas.
-- **Always declare a `.transform(...)`, but keep it a NO-OP**: it is what bundles
-  the sibling `registry.py` / `tools.py` modules into the image. `.output(_rpc)`
-  alone ships only the extracted tool scripts → `ModuleNotFoundError` at pod
-  startup. A transform that does real work (re-seeding) makes the DP flap
-  `Started`↔`Failed`.
-- **Seed at provision, never in the transform**: promise verification runs BEFORE
-  the transform, so transform-seeded tables fail verification (`Field ... not
-  found in the model`). Seed in `@on_provision` via `.provision(script("provision.py"))`.
+- **Always declare a `.transform(...)`**: it bundles the sibling `registry.py` /
+  `tools.py` modules into the image (`.output(_rpc)` alone ships only the
+  extracted tool scripts → `ModuleNotFoundError` at pod startup). Write real
+  runtime data-production logic here if the DP has any; for a static-seed DP it is
+  a legitimate no-op. The transform must NEVER (re)provision — seeding/creating
+  the promised table or view in the transform makes the DP flap `Started`↔`Failed`.
+- **Provision is provision-time, not runtime — respect the lifecycle**: promise
+  verification runs BEFORE the transform, so the promised table + semantic view
+  must be created in `@on_provision` via `.provision(script("provision.py"))`.
+  Transform-time setup fails verification (`Field ... not found in the model`).
 - **`provision.py` is self-contained**: no sibling imports (it runs from a subdir
   where flat imports don't resolve); hardcode the `<MODEL>_SEMANTIC` view name.
 - **The view DDL references only this DP's own tables**: never the compiler's
