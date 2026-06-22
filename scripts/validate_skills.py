@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -244,6 +245,107 @@ def validate_evals(root: Path) -> list[str]:
     return errors
 
 
+def _current_pack_skills(skill_sets_text: str) -> list[str] | None:
+    """Return the list of `src/<skill>` entries under the `current_pack:` key.
+
+    Returns None if the key is absent. Hand-rolled (no pyyaml): walks lines,
+    tracks the active top-level skill-set name, and collects `- "src/..."` items
+    only while inside `current_pack:`'s `skills:` block.
+    """
+    pack: list[str] | None = None
+    in_current = False
+    for line in skill_sets_text.splitlines():
+        set_header = re.match(r"^  ([a-zA-Z0-9_]+):\s*$", line)
+        if set_header:
+            in_current = set_header.group(1) == "current_pack"
+            if in_current and pack is None:
+                pack = []
+            continue
+        if in_current:
+            item = re.match(r'\s+-\s+"?(src/[^"\s]+)"?\s*$', line)
+            if item:
+                pack = pack or []
+                pack.append(item.group(1))
+    return pack
+
+
+def validate_pack_completeness(root: Path) -> list[str]:
+    """Every directory under src/ must be in current_pack and the README table."""
+    errors: list[str] = []
+    src = root / "src"
+    if not src.is_dir():
+        return errors
+    skill_names = [p.name for p in _skill_dirs(src)]
+
+    skill_sets = root / "evals" / "skill-sets.yaml"
+    if skill_sets.exists():
+        pack = _current_pack_skills(skill_sets.read_text(encoding="utf-8"))
+        if pack is None:
+            errors.append(f"{skill_sets}: current_pack skill set is missing")
+        else:
+            listed = {p.split("/", 1)[1] for p in pack if "/" in p}
+            for name in skill_names:
+                if name not in listed:
+                    errors.append(
+                        f"{skill_sets}: skill {name!r} exists under src/ but is not in "
+                        f"current_pack (the shipped pack must list every skill)"
+                    )
+
+    readme = root / "README.md"
+    if readme.exists():
+        readme_text = readme.read_text(encoding="utf-8")
+        for name in skill_names:
+            # Skills appear in the Available Skills table as `\`<name>\``.
+            if f"`{name}`" not in readme_text:
+                errors.append(
+                    f"README.md: skill {name!r} is missing from the Available Skills table"
+                )
+    return errors
+
+
+def validate_version_consistency(root: Path) -> list[str]:
+    """plugin.json, marketplace.json, and every SKILL.md metadata.version agree."""
+    errors: list[str] = []
+    plugin_path = root / ".claude-plugin" / "plugin.json"
+    if not plugin_path.exists():
+        return [f"{plugin_path}: missing plugin manifest"]
+    try:
+        plugin_version = json.loads(plugin_path.read_text(encoding="utf-8"))["version"]
+    except (json.JSONDecodeError, KeyError) as exc:
+        return [f"{plugin_path}: cannot read version ({exc})"]
+
+    market_path = root / ".claude-plugin" / "marketplace.json"
+    if market_path.exists():
+        try:
+            market = json.loads(market_path.read_text(encoding="utf-8"))
+            for plugin in market.get("plugins", []):
+                mv = plugin.get("version")
+                if mv != plugin_version:
+                    errors.append(
+                        f"{market_path}: plugin {plugin.get('name')!r} version {mv!r} "
+                        f"does not match plugin.json {plugin_version!r}"
+                    )
+        except json.JSONDecodeError as exc:
+            errors.append(f"{market_path}: invalid JSON ({exc})")
+
+    src = root / "src"
+    if src.is_dir():
+        for skill_dir in _skill_dirs(src):
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            try:
+                version = _frontmatter(skill_md).get("metadata.version", "")
+            except ValueError:
+                continue  # frontmatter shape errors are reported by validate_skill
+            if version and version != plugin_version:
+                errors.append(
+                    f"{skill_md}: metadata.version {version!r} does not match plugin "
+                    f"version {plugin_version!r} (skill versions are kept in lockstep)"
+                )
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".", help="Repository root")
@@ -273,6 +375,8 @@ def main() -> int:
     errors.extend(validate_reference_dirs(root))
     errors.extend(validate_reference_tocs(root))
     errors.extend(validate_evals(root))
+    errors.extend(validate_pack_completeness(root))
+    errors.extend(validate_version_consistency(root))
 
     if errors:
         print("Skill validation failed:", file=sys.stderr)

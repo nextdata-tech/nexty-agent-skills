@@ -185,6 +185,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-data-product-query` | Query a deployed data product's output ports (SQL, file fetch, vector similarity, or MCP/RPC) via its REST API |
 | `nxd-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
 | `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
+| `nxd-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
 
 ## Usage
 

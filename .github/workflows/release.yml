@@ -1,0 +1,119 @@
+name: release
+
+# Package every skill in src/ into a Claude Desktop-installable zip and publish
+# them as a GitHub Release. Claude Desktop installs a skill by uploading its zip
+# (Settings > Capabilities > Skills, or drag into chat), so the release assets are
+# one zip per skill plus a combined pack zip for whole-pack installs.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.2.1). Must already exist or will be created from the current ref.'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # required to create the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive   # nextdata-public-examples is bundled into some skills
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Releasing tag: ${tag}"
+
+      # The plugin version is the single source of truth. A vX.Y.Z tag must match
+      # .claude-plugin/plugin.json so the published pack and the manifest never drift.
+      - name: Verify tag matches plugin version
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          ver="$(python3 -c 'import json;print(json.load(open(".claude-plugin/plugin.json"))["version"])')"
+          if [[ "$tag" != "v${ver}" ]]; then
+            echo "::error::tag '$tag' does not match plugin.json version 'v${ver}'. Bump the manifest or fix the tag."
+            exit 1
+          fi
+          echo "Tag matches plugin version ${ver}"
+
+      - name: Validate skills
+        run: python3 scripts/validate_skills.py --root .
+
+      # build-skills.sh writes src/<skill>/<skill>.zip and a copy at repo root.
+      # It only prints an "OVER CAP" status; it never exits non-zero, so we grep.
+      - name: Build skill zips and enforce the 200-entry Claude Desktop cap
+        run: |
+          set -euo pipefail
+          out="$(bash ./build-skills.sh)"
+          echo "$out"
+          if grep -q "OVER CAP" <<<"$out"; then
+            echo "::error::one or more skills exceed the 200-entry Claude Desktop cap"
+            exit 1
+          fi
+
+      # Combined whole-pack zip for users who want every skill in one upload. Each
+      # skill keeps its own zip too (built above at the repo root).
+      - name: Assemble release assets
+        id: assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tag="${{ steps.tag.outputs.tag }}"
+          # Per-skill zips (built at repo root by build-skills.sh)
+          for z in *.zip; do
+            cp "$z" "dist/$z"
+          done
+          # Combined pack: bundle every per-skill zip into one archive
+          ( cd dist && zip -q "nexty-agent-skills-${tag}.zip" ./*.zip )
+          echo "Assets:"
+          ls -la dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          notes=$(cat <<'EOF'
+          Nexty AI Pro skill pack — Claude Desktop installable bundles.
+
+          **Install one skill (Claude Desktop):** download the matching `<skill>.zip`
+          below, then upload it under Settings → Capabilities → Skills (or drag it
+          into a chat).
+
+          **Install the whole pack:** download `nexty-agent-skills-<tag>.zip` and
+          upload each contained skill zip.
+
+          **Claude Code users:** prefer the plugin/marketplace flow in the README;
+          these zips target Claude Desktop.
+          EOF
+          )
+          # Create the tag-backed release if it doesn't exist yet, then upload assets.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "$tag" \
+              --notes "$notes" \
+              --verify-tag
+          fi
