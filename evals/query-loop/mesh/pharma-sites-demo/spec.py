@@ -38,7 +38,7 @@ from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 from tools import list_models, describe_model, run_semantic_query
 from transform import transform
-from models import provision_marker
+from models import site_subjects_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -77,7 +77,10 @@ _rpc = _rpc.port(
 # use. PLAIN storage(...) — NO as_view (self-seed pattern, mirrors the template).
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL site_subjects crosswalk model (not a marker) so the
+    # discover UI surfaces its attributes, glossary links, and the cross-DP
+    # SEMANTIC RELATIONSHIP. The transform seeds the matching SITE_SUBJECTS table.
+    .promise(site_subjects_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -95,7 +98,7 @@ spec = (
             "dimension itself. Exposes governed metrics and dimensions via MCP "
             "so agents can answer natural-language questions without raw SQL."
         ),
-        version="0.7.0-dev",
+        version="0.9.1-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING — this crosswalk hub consumes the subject spine upstream.

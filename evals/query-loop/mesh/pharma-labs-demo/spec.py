@@ -37,7 +37,7 @@ from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 from tools import list_models, describe_model, run_semantic_query
 from transform import transform
-from models import provision_marker
+from models import assays_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -71,10 +71,11 @@ _rpc = _rpc.port(
 # Storage output port "snowflake" — PLAIN storage (NO as_view). Its name is the
 # transform's parameter name and it supplies the Snowflake connection both the
 # transform (to self-seed + provision the view) and run_semantic_query (to read
-# it) use. The promised marker model is what the transform actually produces.
+# it) use. Promise the REAL assays model (not a marker) so the discover UI
+# surfaces its attributes + glossary links + the cross-DP SEMANTIC RELATIONSHIP.
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    .promise(assays_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -92,7 +93,7 @@ spec = (
             "site_subjects crosswalk, so agents can answer natural-language "
             "questions without raw SQL."
         ),
-        version="0.7.0-dev",
+        version="0.9.1-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING: DP_LABS consumes the upstream crosswalk DP_SITES. This

@@ -92,32 +92,23 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 0) Marker (the promised output model) so the storage port verifies.
-            managed = snowflake.full_table_name("pharma_rx_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
-                managed.split(".")[-1].strip('"'),
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"PHARMA_RX_DIAG marker written to {managed}")
-
-            # 1) Seed this DP's OWN base fact table (grain: DISPENSE_ID).
+            # 1) Seed the PROMISED `dispenses` model's managed table. Using
+            # full_table_name("dispenses") writes to the exact table the storage
+            # driver verifies the promise against (so produce-verification passes).
+            managed = snowflake.full_table_name("dispenses")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}DISPENSES ("
+                f"CREATE OR REPLACE TABLE {managed} ("
                 "DISPENSE_ID NUMBER, SUBJECT_ID NUMBER, PRODUCT_ID NUMBER, "
                 "UNITS NUMBER, DISPENSE_CHANNEL VARCHAR, PRESCRIBER_NPI VARCHAR)"
             )
             write_pandas(
                 conn,
                 dispenses,
-                "DISPENSES",
+                managed.split(".")[-1].strip('"'),
                 database=snowflake.database,
                 schema=snowflake.schema,
             )
-            print(f"PHARMA_RX_DIAG seeded {fqn}DISPENSES rows={len(dispenses)}")
+            print(f"PHARMA_RX_DIAG seeded {managed} rows={len(dispenses)}")
 
             # 2) Single-table semantic view over DISPENSES only. Cross-DP joins
             # (site_subjects / products) resolve at QUERY time via the live mesh.
@@ -130,7 +121,7 @@ def transform(snowflake: Snowflake) -> None:
                 "UNITS AS UNITS, "
                 "DISPENSE_CHANNEL AS DISPENSE_CHANNEL, "
                 "PRESCRIBER_NPI AS PRESCRIBER_NPI "
-                f"FROM {fqn}DISPENSES"
+                f"FROM {managed}"
             )
             print(f"PHARMA_RX_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:

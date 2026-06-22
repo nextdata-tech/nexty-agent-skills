@@ -1,25 +1,45 @@
-"""Models for DP_SITES (pharma-sites-demo).
+"""Models for DP_SITES (pharma-sites-demo) — the MANY_TO_MANY crosswalk HUB.
 
-With the SELF-SEED deploy pattern the base query tables (SITE_SUBJECTS, SITES)
-are created AND populated by the ``.transform(...)`` in this DP's OWN Snowflake
-schema (CREATE TABLE + INSERT), which then provisions the single-table semantic
-view over them. The storage output port still needs at least one promised model,
-and the transform needs the Snowflake connection that port supplies. So we
-promise ONE tiny marker model that the transform creates — this satisfies the
-port + produce-verification without promising the query tables themselves
-(whose shape the semantic view, not the kernel, owns).
+The transform seeds the REAL ``SITE_SUBJECTS`` crosswalk table; we promise that
+REAL model on the storage port (not a dummy marker), so the discover UI surfaces
+the actual attributes, their glossary links, and the cross-DP SEMANTIC
+RELATIONSHIP. ``site_subjects`` is the fan-out hub: SUBJECT_ID references the
+subject spine (pharma-subjects-demo/subjects) and SITE_ID references the site
+dimension (this DP's own ``sites``).
 """
 
-from nxd.spec import semantic_model
-from nxd.spec.data_types import int64, string
+from nxd.spec import Predicate, attribute, semantic_model
+from nxd.spec.data_types import int64
 
-provision_marker = (
-    semantic_model("site_provision_marker")
-    .description("Marker table written by the self-seeding transform.")
+# The real crosswalk-hub model the transform seeds (table SITE_SUBJECTS).
+# Attributes carry cross-DP FK references (.referencing → UI "SEMANTIC
+# RELATIONSHIP"); glossary links are attached at the model level by attr name.
+site_subjects_model = (
+    semantic_model("site_subjects")
+    .description(
+        "Crosswalk hub — one row per (site, subject) enrollment, "
+        "MANY_TO_MANY fan-out linking the subject spine to the site dimension."
+    )
     .schema(
         {
-            "MARKER_ID": int64(),
-            "VIEW_NAME": string(),
+            # SITE_ID → this DP's own sites dimension.
+            "SITE_ID": attribute(int64(), "SITE_ID").referencing(
+                data_product="pharma-sites-demo", model="sites", attribute=["SITE_ID"]
+            ),
+            # SUBJECT_ID → cross-DP FK to the subject spine.
+            "SUBJECT_ID": attribute(int64(), "SUBJECT_ID").referencing(
+                data_product="pharma-subjects-demo",
+                model="subjects",
+                attribute=["SUBJECT_ID"],
+            ),
         }
     )
+    # Glossary links — model-level + attribute-level (by attr name). These render
+    # in the discover UI glossary column.
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/site")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject")
+    .link("SITE_ID", Predicate.GlossaryTerm,
+          "/data-product/demo/pharma-glossary-demo#/terms/site")
+    .link("SUBJECT_ID", Predicate.GlossaryTerm,
+          "/data-product/demo/pharma-glossary-demo#/terms/subject")
 )

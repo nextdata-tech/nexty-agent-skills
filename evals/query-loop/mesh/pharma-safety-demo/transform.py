@@ -67,26 +67,18 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 0) Marker (the promised output model) so the storage port verifies.
-            managed = snowflake.full_table_name("pharma_safety_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
-                managed.split(".")[-1].strip('"'),
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG marker written to {managed}")
-
-            # 1) Seed this DP's OWN adverse-events base table (unquoted -> upper).
+            # 1) Seed the PROMISED `adverse_events` model's managed table. Using
+            # full_table_name("adverse_events") writes to the exact table the
+            # storage driver verifies the promise against (so produce-verification
+            # passes). No separate marker table.
+            managed = snowflake.full_table_name("adverse_events")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}adverse_events "
+                f"CREATE OR REPLACE TABLE {managed} "
                 "(AE_ID NUMBER, SUBJECT_ID NUMBER, AE_TERM VARCHAR, IS_SERIOUS BOOLEAN)"
             )
-            write_pandas(conn, adverse_events, "ADVERSE_EVENTS",
+            write_pandas(conn, adverse_events, managed.split(".")[-1].strip('"'),
                          database=snowflake.database, schema=snowflake.schema)
-            print(f"SEMVIEW_DIAG seeded {fqn}adverse_events rows={len(adverse_events)}")
+            print(f"SEMVIEW_DIAG seeded {managed} rows={len(adverse_events)}")
 
             # 2) Hand-authored SINGLE-TABLE semantic view over ADVERSE_EVENTS ONLY.
             #    We deliberately DO NOT emit the cross-DP JOIN to site_subjects
@@ -98,7 +90,7 @@ def transform(snowflake: Snowflake) -> None:
                 "SUBJECT_ID AS SUBJECT_ID, "
                 "AE_TERM AS AE_TERM, "
                 "IS_SERIOUS AS IS_SERIOUS "
-                f"FROM {fqn}adverse_events"
+                f"FROM {managed}"
             )
             print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:

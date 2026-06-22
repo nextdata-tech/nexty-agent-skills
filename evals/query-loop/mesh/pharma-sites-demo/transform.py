@@ -77,33 +77,33 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 0) Marker (the promised output model) so the storage port verifies.
-            managed = snowflake.full_table_name("site_provision_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
+            # 1a) Seed the site DIMENSION (this DP's own table, referenced by the
+            #     view's LEFT JOIN). Create UNQUOTED so Snowflake folds to
+            #     upper-case, matching the unquoted references in the view below.
+            cur.execute(f"CREATE OR REPLACE TABLE {fqn}sites (SITE_ID NUMBER, SITE_REGION VARCHAR)")
             write_pandas(
                 conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
+                sites,
+                "SITES",
+                database=snowflake.database,
+                schema=snowflake.schema,
+            )
+            print(f"SEMVIEW_DIAG seeded {fqn}sites rows={len(sites)}")
+
+            # 1b) Seed the PROMISED `site_subjects` crosswalk model's MANAGED table.
+            #     full_table_name("site_subjects") returns the exact table the
+            #     storage driver verifies the promise against, so produce-
+            #     verification passes against the REAL model.
+            managed = snowflake.full_table_name("site_subjects")
+            cur.execute(f"CREATE OR REPLACE TABLE {managed} (SITE_ID NUMBER, SUBJECT_ID NUMBER)")
+            write_pandas(
+                conn,
+                site_subjects,
                 managed.split(".")[-1].strip('"'),
                 database=snowflake.database,
                 schema=snowflake.schema,
             )
-            print(f"SEMVIEW_DIAG marker written to {managed}")
-
-            # 1) Seed this DP's OWN base tables. Create UNQUOTED so Snowflake folds
-            #    to upper-case, matching the unquoted references in the view below.
-            for name, df, cols in [
-                ("sites", sites, "SITE_ID NUMBER, SITE_REGION VARCHAR"),
-                ("site_subjects", site_subjects, "SITE_ID NUMBER, SUBJECT_ID NUMBER"),
-            ]:
-                cur.execute(f"CREATE OR REPLACE TABLE {fqn}{name} ({cols})")
-                write_pandas(
-                    conn,
-                    df,
-                    name.upper(),
-                    database=snowflake.database,
-                    schema=snowflake.schema,
-                )
-                print(f"SEMVIEW_DIAG seeded {fqn}{name} rows={len(df)}")
+            print(f"SEMVIEW_DIAG seeded {managed} rows={len(site_subjects)}")
 
             # 2) Hand-authored SINGLE-TABLE semantic view over THIS DP's own tables
             #    only. Do NOT use the compiler DDL helpers — the registry has a
@@ -119,7 +119,7 @@ def transform(snowflake: Snowflake) -> None:
                 f"    ss.SITE_ID      AS SITE_ID,\n"
                 f"    ss.SUBJECT_ID   AS SUBJECT_ID,\n"
                 f"    s.SITE_REGION   AS SITE_REGION\n"
-                f"FROM {fqn}site_subjects AS ss\n"
+                f"FROM {managed} AS ss\n"
                 f"LEFT JOIN {fqn}sites AS s\n"
                 f"    ON ss.SITE_ID = s.SITE_ID"
             )

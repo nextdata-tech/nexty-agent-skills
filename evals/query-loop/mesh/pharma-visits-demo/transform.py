@@ -65,26 +65,17 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 0) Marker (the promised output model) so the storage port verifies.
-            managed = snowflake.full_table_name("pharma_visits_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
-                managed.split(".")[-1].strip('"'),
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG marker written to {managed}")
-
-            # 1) Seed this DP's OWN visits fact table (queried by the view).
+            # 1) Seed the PROMISED `visits` model's managed table. Using
+            # full_table_name("visits") writes to the exact table the storage
+            # driver verifies the promise against (so produce-verification passes).
+            managed = snowflake.full_table_name("visits")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}VISITS "
+                f"CREATE OR REPLACE TABLE {managed} "
                 "(VISIT_ID NUMBER, SUBJECT_ID NUMBER, VISIT_TYPE VARCHAR, DURATION_MIN FLOAT)"
             )
-            write_pandas(conn, visits, "VISITS",
+            write_pandas(conn, visits, managed.split(".")[-1].strip('"'),
                          database=snowflake.database, schema=snowflake.schema)
-            print(f"SEMVIEW_DIAG seeded {fqn}VISITS rows={len(visits)}")
+            print(f"SEMVIEW_DIAG seeded {managed} rows={len(visits)}")
 
             # 2) Single-table semantic view over THIS DP's own `visits` table
             # ONLY. Deliberately NOT the compiler's view DDL — the registry's
@@ -96,7 +87,7 @@ def transform(snowflake: Snowflake) -> None:
                 "SUBJECT_ID AS SUBJECT_ID, "
                 "VISIT_TYPE AS VISIT_TYPE, "
                 "DURATION_MIN AS DURATION_MIN "
-                f"FROM {fqn}VISITS"
+                f"FROM {managed}"
             )
             print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:

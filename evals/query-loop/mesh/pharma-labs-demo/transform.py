@@ -1,10 +1,11 @@
 """Transform for pharma-labs-demo — fact #2 (assays) of the pharma mesh.
 
-Seeds this DP's OWN base table (`ASSAYS`) + the marker (so the storage port
-verifies) + the single-table semantic view (`ASSAYS_SEMANTIC`) in this DP's
-Snowflake schema, in ONE transform pass. This is the proven `hcp-master` /
-pharma-subjects-demo pattern: output-port promise verification does NOT block a
-transform-seed, so a transform-seed deploys green in one launch.
+Seeds the PROMISED `assays` model's managed base table (`ASSAYS`) + the
+single-table semantic view (`ASSAYS_SEMANTIC`) in this DP's Snowflake schema, in
+ONE transform pass. This is the proven `hcp-master` / pharma-subjects-demo
+pattern: output-port promise verification does NOT block a transform-seed, so a
+transform-seed deploys green in one launch. Using full_table_name("assays")
+writes to the exact table the storage driver verifies the promise against.
 
 The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
 modules into the image (the `**/*.py` glob runs on the transform/compute path).
@@ -65,28 +66,19 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 0) Marker (the promised output model) so the storage port verifies.
-            managed = snowflake.full_table_name("assays_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
-                managed.split(".")[-1].strip('"'),
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG marker written to {managed}")
-
-            # 1) Seed the ASSAYS base table (queried by the semantic view).
+            # 1) Seed the PROMISED `assays` model's managed table. Using
+            # full_table_name("assays") writes to the exact table the storage
+            # driver verifies the promise against (so produce-verification passes).
+            managed = snowflake.full_table_name("assays")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}ASSAYS ("
+                f"CREATE OR REPLACE TABLE {managed} ("
                 "ASSAY_ID NUMBER, SUBJECT_ID NUMBER, ASSAY_TYPE VARCHAR, TITER FLOAT)"
             )
-            write_pandas(conn, assays, "ASSAYS",
+            write_pandas(conn, assays, managed.split(".")[-1].strip('"'),
                          database=snowflake.database, schema=snowflake.schema)
-            print(f"SEMVIEW_DIAG seeded {fqn}ASSAYS rows={len(assays)}")
+            print(f"SEMVIEW_DIAG seeded {managed} rows={len(assays)}")
 
-            # 2) Single-table semantic view over THIS DP's own ASSAYS table only.
+            # 2) Single-table semantic view over the promised ASSAYS table only.
             # NO JOIN to site_subjects (that crosswalk lives in DP_SITES' schema;
             # the cross-DP join resolves at query time, not in this CREATE VIEW).
             cur.execute(
@@ -95,7 +87,7 @@ def transform(snowflake: Snowflake) -> None:
                 "SUBJECT_ID AS SUBJECT_ID, "
                 "ASSAY_TYPE AS ASSAY_TYPE, "
                 "TITER AS TITER "
-                f"FROM {fqn}ASSAYS"
+                f"FROM {managed}"
             )
             print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:

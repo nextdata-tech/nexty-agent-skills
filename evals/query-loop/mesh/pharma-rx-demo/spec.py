@@ -40,7 +40,7 @@ from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 from tools import list_models, describe_model, run_semantic_query
 from transform import transform
-from models import provision_marker
+from models import dispenses_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -78,7 +78,10 @@ _rpc = _rpc.port(
 # NO as_view — the transform self-seeds (template / self-seed pattern).
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL dispenses model (not a marker) so the discover UI surfaces
+    # its attributes + glossary links + cross-DP SEMANTIC RELATIONSHIP. The
+    # transform seeds the matching DISPENSES table.
+    .promise(dispenses_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -96,7 +99,7 @@ spec = (
             "grain via MCP so agents answer natural-language questions without "
             "raw SQL. Joins N:1 to site_subjects and products across the mesh."
         ),
-        version="0.7.0-dev",
+        version="0.9.1-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING: declare the upstream DPs this one consumes. These inputs

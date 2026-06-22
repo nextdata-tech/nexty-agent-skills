@@ -37,7 +37,7 @@ from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 from tools import list_models, describe_model, run_semantic_query
 from transform import transform
-from models import provision_marker
+from models import adverse_events_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -74,7 +74,10 @@ _rpc = _rpc.port(
 # them) use.
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL adverse_events model (not a marker) so the discover UI
+    # surfaces its attributes + glossary links + the cross-DP SUBJECT_ID
+    # relationship. The transform seeds the matching ADVERSE_EVENTS table.
+    .promise(adverse_events_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -93,7 +96,7 @@ spec = (
             "crosswalk, so agents can answer natural-language safety questions "
             "without raw SQL."
         ),
-        version="0.7.0-dev",
+        version="0.9.1-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING — consume the upstream pharma-sites-demo crosswalk hub DP.

@@ -1,26 +1,19 @@
-"""Models for the DP_PRODUCT semantic-layer data product (self-seeded).
+"""Models for pharma-product-demo — the PRODUCT far dimension of the mesh.
 
-This DP self-seeds its OWN `products` base table in its own Snowflake schema (the
-transform runs CREATE TABLE + INSERT), then provisions a single-table
-`PRODUCTS_SEMANTIC` view over it. No facade, no provision-time view DDL.
-
-A storage output port requires at least one promised model, and the transform
-needs the Snowflake connection that port supplies. So we promise ONE tiny marker
-model that the transform actually creates — this satisfies the port +
-produce-verification without promising the seeded query table itself (whose shape
-the semantic view, not the kernel, owns).
-
-`products_model` is kept only as the schema descriptor the registry/tools and the
-hand-authored single-table view reference; it is NOT the promised output.
+The transform seeds the real ``PRODUCTS`` table; we promise that REAL model on the
+storage port (not a dummy marker), so the discover UI surfaces the actual
+attributes and their glossary links. ``products`` is a FAR dimension / ONE-side
+target, so it has no outgoing cross-DP reference; its attributes link to glossary
+terms.
 """
 
-from nxd.spec import semantic_model
+from nxd.spec import Predicate, attribute, semantic_model
 from nxd.spec.data_types import int64, string
 
-# Schema descriptor for the self-seeded `products` base table (not promised).
+# The real product-dimension model the transform seeds (table PRODUCTS).
 products_model = (
     semantic_model("products")
-    .description("Product dimension table self-seeded by the transform.")
+    .description("Product dimension — one row per product (drug / therapeutic agent).")
     .schema(
         {
             "PRODUCT_ID": int64(),
@@ -28,16 +21,8 @@ products_model = (
             "MODALITY": string(),
         }
     )
-)
-
-# Marker model — produced by the transform, satisfies the storage output port.
-provision_marker = (
-    semantic_model("pharma_product_marker")
-    .description("Marker table written by the self-seeding transform.")
-    .schema(
-        {
-            "MARKER_ID": int64(),
-            "VIEW_NAME": string(),
-        }
-    )
+    # Glossary links at the model + attribute level (render in the UI).
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/product")
+    .link("PRODUCT_NAME", Predicate.GlossaryTerm,
+          "/data-product/demo/pharma-glossary-demo#/terms/product")
 )

@@ -54,34 +54,25 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 0) Marker (the promised output model) so the storage port verifies.
-            managed = snowflake.full_table_name("pharma_product_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
-                managed.split(".")[-1].strip('"'),
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG marker written to {managed}")
-
-            # 1) Seed this DP's OWN `products` base table (unquoted -> upper).
+            # 1) Seed the PROMISED `products` model's managed table. Using
+            # full_table_name("products") writes to the exact table the storage
+            # driver verifies the promise against (so produce-verification passes).
+            managed = snowflake.full_table_name("products")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}products "
+                f"CREATE OR REPLACE TABLE {managed} "
                 "(PRODUCT_ID NUMBER, PRODUCT_NAME VARCHAR, MODALITY VARCHAR)"
             )
-            write_pandas(conn, products, "PRODUCTS",
+            write_pandas(conn, products, managed.split(".")[-1].strip('"'),
                          database=snowflake.database, schema=snowflake.schema)
-            print(f"SEMVIEW_DIAG seeded {fqn}products rows={len(products)}")
+            print(f"SEMVIEW_DIAG seeded {managed} rows={len(products)}")
 
-            # 2) Hand-authored SINGLE-TABLE semantic view over PRODUCTS ONLY.
+            # 2) Single-table semantic view over the promised products table.
             cur.execute(
                 f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
                 "SELECT PRODUCT_ID AS PRODUCT_ID, "
                 "PRODUCT_NAME AS PRODUCT_NAME, "
                 "MODALITY AS MODALITY "
-                f"FROM {fqn}products"
+                f"FROM {managed}"
             )
             print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:
