@@ -52,8 +52,9 @@ jobs:
 
             1. Run: python3 scripts/validate_skills.py --root .
                Report any failures as findings (each is a hard convention violation).
-            2. Review the diff against the authoring conventions in README.md
-               (§Conventions) and Anthropic skill best practices:
+            2. Read CLAUDE.md (the authoring & review contract) and review the diff
+               against it and README.md (§Conventions) plus Anthropic skill best
+               practices:
                - description: specific, under 1024 chars, includes a "Use when"
                  trigger clause, and contains no angle-bracket placeholders
                - SKILL.md stays under 500 lines; detailed content lives in reference/
@@ -62,6 +63,13 @@ jobs:
                - allowed-tools is minimal, valid, and non-empty
                - metadata.version is semver (X.Y.Z)
                - no private/customer material added under evals/ outside evals/private/
+               PACK INVARIANTS (CLAUDE.md, high-severity if broken):
+               - every directory under src/ is listed in current_pack in
+                 evals/skill-sets.yaml AND has a row in the README Available Skills
+                 table — a new skill missing from either is REQUEST_CHANGES
+               - all three version surfaces agree: .claude-plugin/plugin.json,
+                 .claude-plugin/marketplace.json, and every src/*/SKILL.md
+                 metadata.version. Any drift is REQUEST_CHANGES.
             3. Post ONE structured review via
                gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews
                Use REQUEST_CHANGES for any high-severity finding, COMMENT
