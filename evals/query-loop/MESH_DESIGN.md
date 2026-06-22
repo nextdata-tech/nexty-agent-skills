@@ -1,22 +1,56 @@
-# Fresh Pharma Mesh — Design (Phase 1 contract)
+# Pharma Mesh — Design (realistic-mesh contract, v2)
 
-The shared contract every Phase-1 authoring agent implements. A richer synthetic
-biopharma mesh (clinical-trial shaped, fully synthetic) deployed as **real
-semantic-layer DPs** on the local cluster, each exposing
-`list_models`/`describe_model`/`run_semantic_query` over MCP.
+The shared contract every authoring agent implements. A synthetic biopharma mesh
+(clinical-trial shaped, fully synthetic) deployed as **real semantic-layer DPs**
+on the local cluster, each exposing `list_models`/`describe_model`/
+`run_semantic_query` over MCP — wired as a **genuine mesh**: downstream DPs
+consume upstream DPs via `.input(...)`, cross-DP relationships are declared
+(`.referencing(...)`) and exposed so the query layer can resolve real cross-DP
+joins, and a central **glossary DP** ties the business terms together.
 
-Built from the proven `examples/t2sql-poc/deployable-dp/` template — the
-**self-seed** deploy pattern (a `.transform()` seeds the DP's own tables + a
-single-table semantic view; NO facade `as_view`). Richer than the existing 5-DP
-`pharma_mesh`: **7 DPs**, deeper multi-hop chains, more chasm traps, more
-confusable concepts.
+## Deploy pattern: TRANSFORM-SEED (corrected)
 
-> **Phase-1 correction:** an earlier draft of this design specified the *facade*
-> (`as_view`) pattern. The nxd validator forbids `as_view` + `.transform()`
-> together, and rpc-tool sibling bundling REQUIRES a transform — so facade DPs
-> can't ship the `registry.py`/`tools.py` siblings the MCP tools import. The
-> self-seed template is the only deployable shape. See the per-DP spec below + the
-> audit log.
+Each DP **seeds its own base tables + creates its single-table semantic view in
+the `.transform()`**, promises those tables on the output port, and deploys
+green in one launch. This mirrors the proven `hcp-master` reference.
+
+> **Correction (supersedes the v1 self-seed/provision guidance):** earlier drafts
+> claimed output-port promise verification runs BEFORE the transform and forced
+> seeding into `@on_provision`. That was wrong. Only **input expectations** verify
+> early; output-port promises do not block a transform-seed, and downstream DPs
+> don't run until their upstream triggers anyway. The `@on_provision` +
+> `.provision(script())` detour also hit a platform bug (the hook registers but
+> the body is never invoked → empty tables). **Seed in the transform.** No
+> facade `as_view` (mutually exclusive with the required `.transform()`).
+
+## Mesh wiring — the four real-mesh primitives (all implemented)
+
+1. **Upstream→downstream consumption** — a downstream DP reads an upstream DP's
+   output port:
+   ```python
+   .input("subjects", data_product_input()
+       .source("/data-product/pharma-subjects-demo#/output/port/snowflake")
+       .environment("demo"))
+   ```
+2. **Declared cross-DP FK** — an attribute references another DP's model:
+   ```python
+   attribute("SUBJECT_ID", int64()).referencing(
+       data_product="pharma-subjects-demo", model="subjects", attribute=["SUBJECT_ID"])
+   ```
+3. **Registry cross-DP label + join** — the stub join target carries the owning
+   DP label so the compiler marks it cross-DP and emits the join:
+   ```python
+   .model("subjects", grain="SUBJECT_ID", data_product="pharma-subjects-demo")
+   .join(left="visits", right="site_subjects", on=(("SUBJECT_ID","SUBJECT_ID"),),
+         cardinality=Cardinality.MANY_TO_ONE)
+   ```
+4. **Glossary DP** — a no-transform glossary DP (`.glossary("glossary.yaml")`)
+   holding the shared business terms; every DP `.link(Predicate.GlossaryTerm, "…")`
+   to the relevant term.
+
+The compiler emits cross-DP JOIN SQL natively (BFS join path, fan-out-safe CTEs;
+the `cross_dp` flag is diagnostic). The query skill's `semantic_relations.py`
+aggregates each DP's declared relationships into one bundle for the plan validator.
 
 ## Why richer
 
@@ -38,6 +72,26 @@ The existing mesh has ONE crosswalk + two facts. To stress the query skills we a
 | **DP_RX** | `dispenses` (dispense_id) | **fact #3**: MANY dispenses per subject (`units_dispensed`, `dispense_count`); confusable `prescriber_npi` | `prescriber_npi` |
 | **DP_SAFETY** | `adverse_events` (ae_id) | **far fact**: MANY AEs per subject, reachable subject→site_subjects→…; (`ae_count`, confusable `serious_ae_count` boolean flag) | — |
 | **DP_PRODUCT** | `products` (product_id) | far dimension, multi-hop only | — |
+| **DP_GLOSSARY** | — (glossary terms) | central business glossary (`.glossary(...)`, no transform); every DP `.link(GlossaryTerm)` to it | — |
+
+## Deploy order (dependency chain)
+
+Deploy in topological order so each upstream exists before its downstream's
+`.input(...source)` resolves:
+
+```
+1. pharma-glossary-demo   (no deps — glossary only)
+2. pharma-subjects-demo   (spine — no upstream DP input)
+3. pharma-sites-demo      (.input subjects)           → crosswalk hub
+4. pharma-visits-demo     (.input sites)  ┐
+5. pharma-labs-demo       (.input sites)  ┤ facts: also .referencing subjects
+6. pharma-rx-demo         (.input sites, .input product) 
+7. pharma-product-demo    (far dim — deploy before rx, or rx references it)
+8. pharma-safety-demo     (.input sites)  ┘
+```
+
+(product has no upstream; deploy it before rx since rx `.input()`s it. So real
+order: glossary, subjects, sites, product, visits, labs, rx, safety.)
 
 ## Join topology (every arrow crosses a DP boundary)
 

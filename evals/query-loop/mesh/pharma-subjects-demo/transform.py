@@ -1,19 +1,92 @@
-"""Transform for pharma-subjects-demo — a deliberate NO-OP.
+"""Transform for pharma-subjects-demo — the SUBJECT SPINE of the mesh.
 
-All seeding (marker, base table, single-table semantic view) happens at PROVISION
-time in provision.py (`@on_provision`), because the kernel verifies output-port
-promises BEFORE the transform. This `.transform()` exists ONLY so the `**/*.py`
-bundling glob ships registry.py / tools.py into the image (constraint #2) — the
-rpc tool scripts import them at runtime.
+Seeds this DP's OWN base table (`SUBJECTS`) + the single-table semantic view
+(`SUBJECTS_SEMANTIC`) in this DP's Snowflake schema, in ONE transform pass. This
+is the proven `hcp-master` pattern: output-port promise verification does NOT run
+before the transform (only input *expectations* verify early, and this spine DP
+has no inputs), so a transform-seed deploys green in one launch.
 
-It MUST do no Snowflake work: re-running the full seed here is redundant with
-provision AND, when it errors/times out, fails the compute task -> the DP flaps
-to State=Failed and the proxy 404s the rpc route. Keep it a pure no-op.
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
+modules into the image (the `**/*.py` glob runs on the transform/compute path).
 """
 
+import pandas as pd
 from nxd.data_product.context import Snowflake
+
+_VIEW_NAME = "SUBJECTS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `subjects`
 
 
 def transform(snowflake: Snowflake) -> None:
-    # No-op: provisioning owns all seeding. See module docstring.
-    print("SUBJECTS_DIAG transform no-op (seeding done at provision time)")
+    from snowflake import connector
+    from snowflake.connector.pandas_tools import write_pandas
+
+    if snowflake is None or not snowflake.schema:
+        print("SUBJECTS_DIAG transform skipped — no Snowflake schema in context")
+        return
+
+    fqn = (
+        f"{snowflake.database}.{snowflake.schema}."
+        if snowflake.database
+        else f"{snowflake.schema}."
+    )
+
+    subjects = pd.DataFrame(
+        [
+            {"SUBJECT_ID": 1, "SUBJECT_COUNTRY": "US", "SUBJECT_MRN": "MRN-0001"},
+            {"SUBJECT_ID": 2, "SUBJECT_COUNTRY": "US", "SUBJECT_MRN": "MRN-0002"},
+            {"SUBJECT_ID": 3, "SUBJECT_COUNTRY": "DE", "SUBJECT_MRN": "MRN-0003"},
+            {"SUBJECT_ID": 4, "SUBJECT_COUNTRY": "DE", "SUBJECT_MRN": "MRN-0004"},
+            {"SUBJECT_ID": 5, "SUBJECT_COUNTRY": "FR", "SUBJECT_MRN": "MRN-0005"},
+            {"SUBJECT_ID": 6, "SUBJECT_COUNTRY": "BE", "SUBJECT_MRN": "MRN-0006"},
+            {"SUBJECT_ID": 7, "SUBJECT_COUNTRY": "BE", "SUBJECT_MRN": "MRN-0007"},
+            {"SUBJECT_ID": 8, "SUBJECT_COUNTRY": "NL", "SUBJECT_MRN": "MRN-0008"},
+        ]
+    )
+
+    conn = connector.connect(
+        user=snowflake.user,
+        account=snowflake.account,
+        warehouse=snowflake.warehouse,
+        role=snowflake.role,
+        database=snowflake.database,
+        schema=snowflake.schema,
+        ocsp_fail_open=True,
+        **snowflake.connector_params(),
+    )
+    try:
+        cur = conn.cursor()
+        try:
+            # 0) Marker (the promised output model) so the storage port verifies.
+            managed = snowflake.full_table_name("subjects_marker")
+            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
+            write_pandas(
+                conn,
+                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
+                managed.split(".")[-1].strip('"'),
+                database=snowflake.database,
+                schema=snowflake.schema,
+            )
+            print(f"SUBJECTS_DIAG marker written to {managed}")
+
+            # 1) Seed the SUBJECTS spine table (queried by the semantic view).
+            cur.execute(
+                f"CREATE OR REPLACE TABLE {fqn}SUBJECTS "
+                "(SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR, SUBJECT_MRN VARCHAR)"
+            )
+            write_pandas(conn, subjects, "SUBJECTS",
+                         database=snowflake.database, schema=snowflake.schema)
+            print(f"SUBJECTS_DIAG seeded {fqn}SUBJECTS rows={len(subjects)}")
+
+            # 2) Single-table semantic view over SUBJECTS only.
+            cur.execute(
+                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
+                "SELECT SUBJECT_ID AS SUBJECT_ID, "
+                "SUBJECT_COUNTRY AS SUBJECT_COUNTRY, "
+                "SUBJECT_MRN AS SUBJECT_MRN "
+                f"FROM {fqn}SUBJECTS"
+            )
+            print(f"SUBJECTS_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
+        finally:
+            cur.close()
+    finally:
+        conn.close()

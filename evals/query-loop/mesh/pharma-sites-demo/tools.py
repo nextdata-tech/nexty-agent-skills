@@ -19,6 +19,18 @@ from nxd.drivers.rpc import Response
 from nxd.drivers.rpc import function
 from nxd.drivers.rpc import mcp
 
+# Module-level import (NOT lazy/in-body): the rpc `@function` decorator injects a
+# context arg by TYPE. It reads the resolved signature (get_type_hints) at
+# registration time and, for a param whose annotation `is_from_context(...)` is
+# True (i.e. a FromContext subclass like Snowflake), calls
+# `Snowflake.from_context(context_data)` and binds the resulting Snowflake handle.
+# A param typed `Any` is NOT a FromContext subclass, so the framework falls back
+# to injecting a raw `Context` (no `.connector_params()` / `.user` / `.database`).
+# `code()` extraction copies module-level imports verbatim but does NOT hoist
+# in-body imports, so this MUST be a top-level import for the `Snowflake`
+# annotation to resolve in the extracted rpc-server script.
+from nxd.data_product.context import Snowflake
+
 # Flat sibling import — registry.py is bundled as a sibling of the extracted
 # tool scripts, and the script's own directory is the only thing guaranteed on
 # sys.path in the RPC subprocess. A package-qualified `transform.registry`
@@ -181,7 +193,7 @@ _RUN_SEMANTIC_QUERY_DESC = (
 
 @function(name="run_semantic_query")
 @mcp.tool(name="run_semantic_query", description=_RUN_SEMANTIC_QUERY_DESC)
-def run_semantic_query(snowflake: Any, request: Request) -> Response:
+def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
     from snowflake import connector  # type: ignore[import-not-found]
 
     cap = 200

@@ -1,42 +1,34 @@
-"""Transform for the pharma-visits (DP_VISITS) semantic-layer data product.
+"""Transform for pharma-visits-demo — fact #1 (clinical visits) of the mesh.
 
-SELF-SEED pattern (mirrors the deployable-dp template). Three jobs, all in this
-DP's OWN Snowflake schema:
+Seeds this DP's OWN base table (`VISITS`) + the marker + the single-table
+semantic view (`VISITS_SEMANTIC`) in this DP's Snowflake schema, in ONE
+transform pass. This is the proven transform-seed pattern (mirrors
+pharma-subjects-demo): output-port promise verification does NOT run before the
+transform, so a transform-seed deploys green in one launch.
 
-1.  Write a one-row marker table (``pharma_visits_marker``) — the single
-    promised output model — so the storage port's produce-verification passes
-    without promising the query tables themselves.
-2.  Seed the base fact table (``visits``) the semantic layer reads.
-    Self-contained: no dependency on any other DP's schema or data.
-3.  Provision a SINGLE-TABLE ``VISITS_SEMANTIC`` view over ``visits`` ONLY.
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
+modules into the image (the `**/*.py` glob runs on the transform/compute path).
 
 CRITICAL — cross-DP view-DDL ban: this DP's registry declares a MANY_TO_ONE
-join from ``visits`` to ``site_subjects`` (a crosswalk hub OWNED by DP_SITES, in
-a DIFFERENT Snowflake schema). The compiler's ``native_semantic_view_ddl`` /
-``plain_view_ddl`` would emit a ``JOIN site_subjects`` into the view DDL — that
-binds an object that does NOT exist in this schema → ``CREATE VIEW`` fails →
-the DP goes ``Failed`` (this is exactly what broke pharma-labs-demo). So we do
-NOT call the compiler here; the single-table view is hand-authored over this
-DP's own ``visits`` table. Cross-DP joins resolve at QUERY time via the live
-mesh, not at view-creation time.
-
-The transform also makes the ``**/*.py`` glob bundle registry.py / tools.py
-into the image so the extracted rpc tool scripts can import them at runtime.
+join from `visits` to `site_subjects` (a crosswalk hub OWNED by DP_SITES, in a
+DIFFERENT Snowflake schema). The compiler's view DDL would emit a
+`JOIN site_subjects` that binds an object not present in this schema. So the
+single-table view is hand-authored over this DP's OWN `visits` table ONLY;
+cross-DP joins resolve at QUERY time.
 """
 
+import pandas as pd
 from nxd.data_product.context import Snowflake
+
+_VIEW_NAME = "VISITS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `visits`
 
 
 def transform(snowflake: Snowflake) -> None:
-    import pandas as pd
+    from snowflake import connector
     from snowflake.connector.pandas_tools import write_pandas
 
-    from registry import REGISTRY
-    from nxd.experimental.semantic.dialect import SnowflakeDialect
-    from snowflake import connector
-
     if snowflake is None or not snowflake.schema:
-        print("SEMVIEW_DIAG skipped — no Snowflake schema in context")
+        print("SEMVIEW_DIAG transform skipped — no Snowflake schema in context")
         return
 
     fqn = (
@@ -44,8 +36,6 @@ def transform(snowflake: Snowflake) -> None:
         if snowflake.database
         else f"{snowflake.schema}."
     )
-    # VISITS_SEMANTIC (first model "visits" upper + _SEMANTIC).
-    view_name = SnowflakeDialect.default_view_name(REGISTRY)
 
     # One row per clinical visit; MANY visits per subject. SUBJECT_ID is the
     # join key into the crosswalk hub (resolved at query time, NOT here).
@@ -75,49 +65,40 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 1) Marker (the promised output model).
+            # 0) Marker (the promised output model) so the storage port verifies.
             managed = snowflake.full_table_name("pharma_visits_marker")
-            marker_bare = managed.split(".")[-1].strip('"')
             cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
             write_pandas(
                 conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": view_name}]),
-                marker_bare,
+                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
+                managed.split(".")[-1].strip('"'),
                 database=snowflake.database,
                 schema=snowflake.schema,
             )
             print(f"SEMVIEW_DIAG marker written to {managed}")
 
-            # 2) Seed the base fact table. Created UNQUOTED so Snowflake folds to
-            # upper-case, matching the hand-authored view DDL below.
+            # 1) Seed this DP's OWN visits fact table (queried by the view).
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}visits ("
-                "VISIT_ID NUMBER, SUBJECT_ID NUMBER, VISIT_TYPE VARCHAR, DURATION_MIN FLOAT)"
+                f"CREATE OR REPLACE TABLE {fqn}VISITS "
+                "(VISIT_ID NUMBER, SUBJECT_ID NUMBER, VISIT_TYPE VARCHAR, DURATION_MIN FLOAT)"
             )
-            write_pandas(
-                conn,
-                visits,
-                "VISITS",
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG seeded {fqn}visits rows={len(visits)}")
+            write_pandas(conn, visits, "VISITS",
+                         database=snowflake.database, schema=snowflake.schema)
+            print(f"SEMVIEW_DIAG seeded {fqn}VISITS rows={len(visits)}")
 
-            # 3) Hand-authored SINGLE-TABLE semantic view over THIS DP's own
-            # `visits` table ONLY. Deliberately NOT using the compiler's
-            # native_/plain_view_ddl — the registry's cross-DP join to
-            # site_subjects would otherwise emit a JOIN into a missing object.
+            # 2) Single-table semantic view over THIS DP's own `visits` table
+            # ONLY. Deliberately NOT the compiler's view DDL — the registry's
+            # cross-DP join to site_subjects would otherwise emit a JOIN into a
+            # missing object.
             cur.execute(
-                f"CREATE OR REPLACE VIEW {fqn}{view_name} AS "
+                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
                 "SELECT VISIT_ID AS VISIT_ID, "
                 "SUBJECT_ID AS SUBJECT_ID, "
                 "VISIT_TYPE AS VISIT_TYPE, "
                 "DURATION_MIN AS DURATION_MIN "
-                f"FROM {fqn}visits"
+                f"FROM {fqn}VISITS"
             )
-            print(
-                f"SEMVIEW_DIAG single-table OK provisioned VIEW {fqn}{view_name}"
-            )
+            print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:
             cur.close()
     finally:

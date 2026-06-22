@@ -27,6 +27,7 @@ from nxd.spec import (
     data_product,
     data_product_output,
     data_product_rpc_output,
+    Predicate,
     rpc_function,
     rpc_server,
     storage,
@@ -84,22 +85,26 @@ _storage = (
 spec = (
     data_product(
         name="pharma-product-demo",
-        domain="analytics",
+        domain="pharma",
         description=(
             "Semantic-layer data product over the pharma `products` dimension "
             "(grain product_id) — a far dimension reachable multi-hop only. "
             "Exposes governed metrics and dimensions via MCP so agents can "
             "answer natural-language questions without raw SQL."
         ),
-        version="0.1.0",
+        version="0.7.0-dev",
         infra_profile=INFRA_PROFILE,
     )
-    # The transform self-seeds the `products` table + the single-table semantic
-    # view AND makes the `**/*.py` glob bundle registry.py / tools.py into the
-    # image so the extracted rpc tool scripts can import them at runtime.
+    # TRANSFORM-SEED: the transform seeds the PRODUCTS table + marker + the
+    # single-table semantic view in one pass, and bundles registry.py/tools.py
+    # (the **/*.py glob runs on the transform path). Output-port promise
+    # verification does NOT run before the transform (only input expectations do,
+    # and this far-dimension DP has no inputs), so this deploys green in one
+    # launch. .startup_timeout(600) covers cold-boot contention at mesh launch.
     .transform(
-        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
     .output(_rpc)
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/product")
 )

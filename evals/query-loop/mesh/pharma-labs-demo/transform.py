@@ -1,38 +1,33 @@
-"""Transform for the pharma-labs (DP_LABS) semantic-layer data product.
+"""Transform for pharma-labs-demo — fact #2 (assays) of the pharma mesh.
 
-SELF-SEED deploy pattern (MESH_DESIGN.md). Three jobs, all in this DP's OWN
-Snowflake schema — self-contained, no dependency on any other DP's schema:
+Seeds this DP's OWN base table (`ASSAYS`) + the marker (so the storage port
+verifies) + the single-table semantic view (`ASSAYS_SEMANTIC`) in this DP's
+Snowflake schema, in ONE transform pass. This is the proven `hcp-master` /
+pharma-subjects-demo pattern: output-port promise verification does NOT block a
+transform-seed, so a transform-seed deploys green in one launch.
 
-1.  Seed the base table ``ASSAYS`` (CREATE + INSERT) — the single promised
-    output model — so the storage port's produce-verification passes.
-2.  Provision a SINGLE-TABLE ``ASSAYS_SEMANTIC`` view over ``ASSAYS`` only.
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
+modules into the image (the `**/*.py` glob runs on the transform/compute path).
 
-CRITICAL: the view DDL references ONLY this DP's own ``ASSAYS`` table. We do
-NOT call ``native_semantic_view_ddl`` / ``plain_view_ddl`` from the compiler:
-this DP's registry declares a MANY_TO_ONE join to ``site_subjects`` (owned by
-DP_SITES), and the compiler would emit that JOIN into the CREATE VIEW — binding
-a crosswalk table that lives in ANOTHER DP's schema → the view creation fails at
-deploy and the DP goes Failed. That was the original pharma-labs-demo break.
-The cross-DP join resolves at QUERY time across the live mesh, not here. So the
-view is hand-authored single-table.
-
-The transform also makes the ``**/*.py`` glob bundle registry.py / tools.py
-into the image so the extracted rpc tool scripts can import them at runtime.
+CRITICAL: the view DDL references ONLY this DP's own `ASSAYS` table. This DP's
+registry declares a MANY_TO_ONE join to `site_subjects` (owned by DP_SITES);
+emitting that JOIN into the CREATE VIEW would bind a crosswalk table that lives
+in ANOTHER DP's schema → view creation fails at deploy. The cross-DP join
+resolves at QUERY time across the live mesh, not here.
 """
 
+import pandas as pd
 from nxd.data_product.context import Snowflake
+
+_VIEW_NAME = "ASSAYS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `assays`
 
 
 def transform(snowflake: Snowflake) -> None:
-    import pandas as pd
+    from snowflake import connector
     from snowflake.connector.pandas_tools import write_pandas
 
-    from registry import REGISTRY
-    from nxd.experimental.semantic.dialect import SnowflakeDialect
-    from snowflake import connector
-
     if snowflake is None or not snowflake.schema:
-        print("SEMVIEW_DIAG skipped — no Snowflake schema in context")
+        print("SEMVIEW_DIAG transform skipped — no Snowflake schema in context")
         return
 
     fqn = (
@@ -40,8 +35,6 @@ def transform(snowflake: Snowflake) -> None:
         if snowflake.database
         else f"{snowflake.schema}."
     )
-    # Single-table semantic view name: <FIRST_MODEL_UPPER>_SEMANTIC → ASSAYS_SEMANTIC.
-    view_name = SnowflakeDialect.default_view_name(REGISTRY)
 
     # Self-seeded assays: grain ASSAY_ID, MANY assays per subject, assay_type
     # dimension + titer measure + the SUBJECT_ID join key (used only at query
@@ -72,35 +65,39 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 1) Seed the ASSAYS base table (the promised output model).
-            # Create UNQUOTED so Snowflake folds to upper-case, matching the
-            # unquoted references in the hand-authored view DDL below.
-            cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}assays ("
-                "ASSAY_ID NUMBER, SUBJECT_ID NUMBER, ASSAY_TYPE VARCHAR, TITER FLOAT)"
-            )
+            # 0) Marker (the promised output model) so the storage port verifies.
+            managed = snowflake.full_table_name("assays_marker")
+            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
             write_pandas(
                 conn,
-                assays,
-                "ASSAYS",
+                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
+                managed.split(".")[-1].strip('"'),
                 database=snowflake.database,
                 schema=snowflake.schema,
             )
-            print(f"SEMVIEW_DIAG seeded {fqn}assays rows={len(assays)}")
+            print(f"SEMVIEW_DIAG marker written to {managed}")
+
+            # 1) Seed the ASSAYS base table (queried by the semantic view).
+            cur.execute(
+                f"CREATE OR REPLACE TABLE {fqn}ASSAYS ("
+                "ASSAY_ID NUMBER, SUBJECT_ID NUMBER, ASSAY_TYPE VARCHAR, TITER FLOAT)"
+            )
+            write_pandas(conn, assays, "ASSAYS",
+                         database=snowflake.database, schema=snowflake.schema)
+            print(f"SEMVIEW_DIAG seeded {fqn}ASSAYS rows={len(assays)}")
 
             # 2) Single-table semantic view over THIS DP's own ASSAYS table only.
             # NO JOIN to site_subjects (that crosswalk lives in DP_SITES' schema;
             # the cross-DP join resolves at query time, not in this CREATE VIEW).
-            view_sql = (
-                f"CREATE OR REPLACE VIEW {fqn}{view_name} AS "
-                "SELECT ASSAY_ID, SUBJECT_ID, ASSAY_TYPE, TITER "
-                f"FROM {fqn}assays"
+            cur.execute(
+                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
+                "SELECT ASSAY_ID AS ASSAY_ID, "
+                "SUBJECT_ID AS SUBJECT_ID, "
+                "ASSAY_TYPE AS ASSAY_TYPE, "
+                "TITER AS TITER "
+                f"FROM {fqn}ASSAYS"
             )
-            cur.execute(view_sql)
-            print(
-                f"SEMVIEW_DIAG single-table OK provisioned VIEW {fqn}{view_name} "
-                "(no cross-DP join)"
-            )
+            print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:
             cur.close()
     finally:
