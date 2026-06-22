@@ -1,6 +1,6 @@
 ---
 name: nxd-debugging-data-products
-description: Debug failed or unhealthy Nextdata OS data products. Use when diagnosing nxd validate, launch, deploy, startup timeout, dependency install, compute status, logs, init container, MCP server, policy, contract, output write, or transform runtime failures and choosing the smallest safe fix.
+description: Debug failed or unhealthy Nextdata OS data products. Use when diagnosing nxd validate, launch, deploy, startup timeout, dependency install, compute status, logs, init container, MCP server, semantic-layer / rpc-MCP DP, policy, contract, output write, or transform runtime failures and choosing the smallest safe fix.
 allowed-tools:
   - Bash
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.2.0
+  version: 0.2.3
 ---
 
 # NXD Data Product Debugging
@@ -75,6 +75,11 @@ echo "nxd validate exit code: $?"
 nxd --config <session_config> verify dp --dir <data_product_directory> --json
 ```
 
+Read the runtime/init logs (`nxd logs`) before concluding — the platform writes
+the failure cause there. Note that `BatchLogProcessor.ExportError ... connection
+refused` lines are the telemetry exporter, **not** the data-product failure;
+ignore them and look for the actual traceback or `nxd describe` status reason.
+
 ## Failure Triage
 
 - Config/spec parse error: inspect `spec.py`, model imports, service URLs, infra profile names, and transform parameter names.
@@ -85,6 +90,15 @@ nxd --config <session_config> verify dp --dir <data_product_directory> --json
 - Output write failure: check driver context, service credentials, table/path/index names, schema settings, and promise code. For pgvector: `Embedding column is not type Vector` means the embedding attribute was declared `string()` instead of `vector_embeddings(<dim>)`; a dimension-mismatch error means the declared dimension ≠ the model output (see troubleshooting.md §4). **The pgvector driver provisions the column type FROM the model, so fixing the spec is NOT enough on its own: the existing table already has the wrong (`TEXT`) column. The fix must RE-PROVISION the table — re-launch the data product (or drop the table) so the column is recreated as `vector` — not merely re-run the transform against the wrong column.** The same applies to a `vector_embeddings(N)` dimension change.
 - Row count multiplies on every (green) run = an **idempotency** bug, not a crash — do not hunt failure logs. Cause: chunk ids generated with random UUIDs, so every run INSERTs fresh rows. Fix: deterministic ids (`uuid.uuid5(namespace, f"<source>:{record_key}:{chunk_index}")`) so reruns upsert instead of insert. **langchain/pgvector upserts via `ON CONFLICT` on `langchain_id`, which only works if the table has a unique index — add `CREATE UNIQUE INDEX IF NOT EXISTS ... ON <table> (langchain_id)` at transform start.** Do NOT "fix" it by deleting all rows each run (`write_mode("overwrite")` / truncate-then-write) unless that is an explicitly chosen strategy, and do not blame the schedule.
 - Policy or contract failure: switch to `nxd-complying-with-failing-policy`.
+- **Semantic-layer / rpc-MCP DP won't serve** (the `nxd.experimental.semantic` kind exposing `list_models`/`describe_model`/`run_semantic_query`). Evidence: `nxd describe data-product <dp>` for the state + reason, `nxd logs <dp> --debug-logs` (and `--mcp --debug-logs` for the tool server), `nxd mcp health` for discovery state (`derived_state` + `tool_count`; on a single-/default-mesh config run it WITHOUT `--mesh`, pass `--mesh <name>` only when your config defines named meshes). These are **authoring** traps — diagnose the symptom here, then **fix in the DP source via the `nxd-semantic-data-product` skill** (which carries the full recipe). Symptom → diagnosis:
+  - **Status reason `Field <X> not found in the model` on the promised model** → the base table is seeded by the transform, but the kernel runs promise verification **before** the transform on this output path, so the table doesn't exist yet. (Fix: `nxd-semantic-data-product` Step 4 — "Base tables must exist before promise verification": use the facade-over-pre-existing-tables pattern, or accept that a pure self-seed won't pass in a single launch.)
+  - **Pod startup `ModuleNotFoundError: No module named 'registry'` (or `tools`)** → the rpc-output `code(fn)` path ships only the extracted tool scripts, not the sibling modules they import; a `.transform(...)` is what triggers the `**/*.py` glob that bundles the siblings. (Fix: Step 4 — declare the mandatory `.transform(...)`; keep all modules flat at the DP root, never a subdir package.)
+  - **DP cycles running↔failed, reason `Timeout waiting for execution to start`** → the compute step exceeded its startup budget (slow image / cold start, or a heavy re-seeding transform). (Fix: Step 4 — keep the transform lean / prefer the facade pattern so provisioning is a view DDL rather than a re-seed. Tracks nxd#6930.)
+  - **`nxd mcp health` `Broken`/`tool_count: 0`, or a call returns `Unknown tool: list_models`** → the rpc server registered zero tools. Inspect the rpc/mcp logs for a tool-registration `NameError`/import error at load (e.g. an extracted tool referencing a module-level constant), and confirm the served wheel set is current and matched (`core` + `drivers` + `data_product` same version). (Fix: Step 3 — author module-level functions in a flat `tools.py`; reuse `build_semantic_tools(...)` only for the request/response schemas.)
+  - **`run_semantic_query` errors `'Context' object has no attribute 'connector_params'` / `Context cannot be converted to ContextData`** → the tool's `snowflake` param is untyped, so the rpc runtime injects a raw `Context` instead of the driver handle. (Fix: Step 3 — type the param with the driver class, `snowflake: Snowflake`, module-level import. Per-DP author code, not a library bump.)
+  - **`nxd validate` errors `Facade view output(s) cannot be combined with .transform()`** → an rpc DP can't use a facade `as_view` output alongside the required `.transform(...)`. (Fix: Step 4 — provision the view inside the mandatory transform via `native_semantic_view_ddl` / `plain_view_ddl`, not a facade `as_view` output.)
+  - **Provision/transform error creating a view that references another DP's table** → the view DDL must reference only this DP's own tables; cross-DP joins resolve at query time. (Fix: Step 4 — provision a view over this DP's own tables only.)
+  - **Query compiles + executes but `row_count: 0`** → the base table was never populated (the transform's self-seed didn't run, or a clean re-provision wiped it). (Fix: Step 4 — verify the seed actually populates the table; the facade-over-pre-existing-tables pattern avoids the self-seed timing entirely. Tracks nxd#6931.)
 - Removed semantic model: restore the deployed model name or launch a versioned product.
 - `nxd validate` returns to prompt with little/no output: first check `whoami`.
   If auth says `Not logged in`, validation is NOT RUN even if exit code is 0.
