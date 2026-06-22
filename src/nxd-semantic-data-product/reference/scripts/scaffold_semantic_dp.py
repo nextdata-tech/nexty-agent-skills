@@ -195,38 +195,48 @@ def provision(snowflake: Snowflake) -> None:
         print("provision skipped — no Snowflake schema in context")
         return
 
-    params = snowflake.connector_params()
-    conn = snowflake.connect(**params)
+    # Canonical connection (matches SKILL.md + the templates): connector.connect(...)
+    # with the explicit fields + connector_params(); NOT snowflake.connect(...).
+    from snowflake import connector
+    fqn = (
+        f"{snowflake.database}.{snowflake.schema}."
+        if snowflake.database else f"{snowflake.schema}."
+    )
+    conn = connector.connect(
+        user=snowflake.user, account=snowflake.account, warehouse=snowflake.warehouse,
+        role=snowflake.role, database=snowflake.database, schema=snowflake.schema,
+        ocsp_fail_open=True, **snowflake.connector_params(),
+    )
     cur = conn.cursor()
     try:
         # 1. seed THIS DP's own base table(s) — single-table, no cross-DP refs.
         cur.execute(
-            "CREATE OR REPLACE TABLE SUBJECTS "
+            f"CREATE OR REPLACE TABLE {fqn}SUBJECTS "
             "(SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR, SUBJECT_MRN VARCHAR)"
         )
         cur.execute(
-            "INSERT INTO SUBJECTS VALUES "
+            f"INSERT INTO {fqn}SUBJECTS VALUES "
             "(1, 'US', 'MRN-0001'), (2, 'US', 'MRN-0002'), "
             "(3, 'DE', 'MRN-0003'), (4, 'FR', 'MRN-0004')"
         )
 
         # 2. seed the promised marker table the storage output port verifies.
         cur.execute(
-            "CREATE OR REPLACE TABLE SUBJECTS_MARKER "
+            f"CREATE OR REPLACE TABLE {fqn}SUBJECTS_MARKER "
             "(MARKER_ID NUMBER, VIEW_NAME VARCHAR)"
         )
         cur.execute(
-            f"INSERT INTO SUBJECTS_MARKER VALUES (1, '{_VIEW_NAME}')"
+            f"INSERT INTO {fqn}SUBJECTS_MARKER VALUES (1, '{_VIEW_NAME}')"
         )
 
         # 3. create the SINGLE-TABLE semantic view (NO cross-DP JOIN; name hardcoded).
         cur.execute(
-            f"CREATE OR REPLACE VIEW {_VIEW_NAME} AS "
+            f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
             "SELECT SUBJECT_ID AS SUBJECT_ID, "
             "SUBJECT_COUNTRY AS SUBJECT_COUNTRY, "
-            "SUBJECT_MRN AS SUBJECT_MRN FROM SUBJECTS"
+            f"SUBJECT_MRN AS SUBJECT_MRN FROM {fqn}SUBJECTS"
         )
-        print(f"provisioned single-table VIEW {_VIEW_NAME}")
+        print(f"provisioned single-table VIEW {fqn}{_VIEW_NAME}")
     finally:
         cur.close()
         conn.close()

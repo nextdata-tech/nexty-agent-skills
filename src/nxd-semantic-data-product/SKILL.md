@@ -232,7 +232,11 @@ def provision(snowflake: Snowflake) -> None:   # the typed driver handle is inje
     )
     try:
         cur = conn.cursor()
-        # 1. write the promised marker model (satisfies the storage port before verify)
+        # 1. write the promised marker model — MUST exist before verify (the storage
+        #    port promises `subjects_marker` with schema {MARKER_ID, VIEW_NAME}).
+        #    Skipping this is the exact `Field MARKER_ID not found` failure.
+        cur.execute(f"CREATE OR REPLACE TABLE {fqn}SUBJECTS_MARKER (MARKER_ID NUMBER, VIEW_NAME VARCHAR)")
+        cur.execute(f"INSERT INTO {fqn}SUBJECTS_MARKER VALUES (1, '{_VIEW_NAME}')")
         # 2. seed THIS DP's own base table(s)
         cur.execute(f"CREATE OR REPLACE TABLE {fqn}SUBJECTS (SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR)")
         cur.execute(f"INSERT INTO {fqn}SUBJECTS VALUES (1,'US'),(2,'US'),(3,'DE'),(4,'FR')")
