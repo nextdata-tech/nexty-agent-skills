@@ -97,7 +97,7 @@ spec = (
             "crosswalk, so agents can answer natural-language safety questions "
             "without raw SQL."
         ),
-        version="0.9.1-dev",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING — consume the upstream pharma-sites-demo crosswalk hub DP.

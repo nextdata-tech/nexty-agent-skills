@@ -93,7 +93,7 @@ spec = (
             "MCP, joined MANY_TO_ONE through site_subjects into the subject "
             "spine, so agents answer natural-language questions without raw SQL."
         ),
-        version="0.9.1-dev",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING — consume the upstream pharma-sites-demo output port. This

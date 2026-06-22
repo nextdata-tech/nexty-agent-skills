@@ -100,7 +100,7 @@ spec = (
             "grain via MCP so agents answer natural-language questions without "
             "raw SQL. Joins N:1 to site_subjects and products across the mesh."
         ),
-        version="0.9.1-dev",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING: declare the upstream DPs this one consumes. These inputs

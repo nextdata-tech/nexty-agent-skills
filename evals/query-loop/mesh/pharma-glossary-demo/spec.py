@@ -11,7 +11,7 @@ spec = (
             "together."
         ),
         domain="pharma",
-        version="0.7.0-dev",
+        version="1.0.0-dev",
         infra_profile="ecommerce-demo",
     )
     .environment("demo")

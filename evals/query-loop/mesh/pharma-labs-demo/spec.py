@@ -94,7 +94,7 @@ spec = (
             "site_subjects crosswalk, so agents can answer natural-language "
             "questions without raw SQL."
         ),
-        version="0.9.1-dev",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
     # REAL MESH WIRING: DP_LABS consumes the upstream crosswalk DP_SITES. This
