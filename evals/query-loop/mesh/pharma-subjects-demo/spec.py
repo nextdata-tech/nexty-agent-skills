@@ -88,7 +88,7 @@ spec = (
             "subject_count and dimensions subject_country + subject_mrn[PII] — via "
             "MCP so agents answer natural-language questions without raw SQL."
         ),
-        version="0.9.1-dev",
+        version="0.9.2-dev",
         infra_profile=INFRA_PROFILE,
     )
     # TRANSFORM-SEED: the transform seeds the SUBJECTS table + marker + the

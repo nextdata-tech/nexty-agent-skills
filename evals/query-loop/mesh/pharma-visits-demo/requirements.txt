@@ -1,5 +1,5 @@
-nxd.core==0.41.98.dev1+ga866a4f23.d20260622
-nxd.data_product[spec]==0.41.98.dev1+ga866a4f23.d20260622
-nxd.drivers[rpc]==0.41.98.dev1+ga866a4f23.d20260622
+nxd.core
+nxd.data_product[spec]
+nxd.drivers[rpc]
 snowflake-connector-python[pandas]
 pandas
