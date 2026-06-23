@@ -3,7 +3,7 @@
 ## Contents
 
 - [Rules](#rules) — the five declarative constraints; per-query no-cache discipline
-- [Discovering MCP functions per DP (two-stage)](#discovering-mcp-functions-per-dp-two-stage) — `nxd mcp health` + per-endpoint `tools/list`
+- [Discovering MCP functions — one multiplexer session](#discovering-mcp-functions--one-multiplexer-session) — `proxy__getDataProductsHealth` + one `tools/list`
 - [Flow (one shape that satisfies the rules)](#flow-one-shape-that-satisfies-the-rules) — the five execution steps
 - [Plan format (shape on disk)](#plan-format-shape-on-disk) — JSON schema the validator reads
 - [Plan Validation](#plan-validation) — independent validator, five checks, retry loop, known limitation
@@ -27,40 +27,55 @@ A locked-down mode for queries that must demonstrably go through MCP and nothing
 4. **Validated before execution.** Every plan goes through an independent **plan validator** that checks (a) every relationship asserted in the plan is present in at least one `semantic_model` MCP response collected this session, (b) every data-fetching step targets an MCP endpoint listed by the gateway, and (c) no step calls a non-MCP path (raw SQL against a port, direct presigned-URL fetch, direct HTTP to an external API).
 5. **Execute only if validation passes.** On pass: run the plan via MCP calls and return `{plan, validation_report, results}` to the user. On fail: return the plan, the validation failures, and a short explanation — **do not run any step**.
 
-## Discovering MCP functions per DP (two-stage)
+## Discovering MCP functions — one multiplexer session
 
-The gateway tells you which DP MCP **endpoints** exist on the mesh; it does **not** tell you which functions each endpoint exposes. To learn the per-DP function list, do this two-stage discovery — every query, no cache.
+The mesh runs a single **MCP multiplexer** (mcp-proxy-api) at `<base>/dp/mcp/`
+(or `<base>/mcp/`). One MCP session yields BOTH the per-DP health rollup and
+every DP's tool list — no `nxd mcp health` CLI subprocess, no per-DP `tools/list`
+fan-out. `scripts/mcp_gateway.py` does it all in one `initialize` + two
+`tools/call`/`tools/list`, re-run **every query, no cache**:
 
-**Stage 1 — endpoint list (CLI).** Run `nxd mcp health --format json`. It wraps `GET /health/dps` on mcp-proxy-api and returns one row per registered DP MCP endpoint with URL, `derived_state`, breaker state, and a reported `tool_count` — **not** the tool names. Skip rows whose `derived_state` is `Broken` (breaker Open) unless explicitly probing.
-
-```bash
-nxd mcp health --format json
-```
-
-**Don't pass `--mesh` blindly.** When `~/.nxd/config.yaml` has a name that appears both top-level (the `url:` field) and inside the `meshes:` block, `nxd mcp health --mesh <name>` picks the entry under `meshes:` — which may not be the active one — and silently queries the wrong proxy host. The robust recipe is to **omit** `--mesh` in the default case so the CLI uses the top-level active `url:`. Only pass `--mesh <name>` when the user has explicitly asked for a non-active mesh and the name resolves unambiguously. `mcp_gateway.py` already follows this rule: it propagates `--mesh` only when the caller passed one.
-
-**Stage 2 — tool names + schemas (MCP Streamable-HTTP).** For each healthy endpoint URL from Stage 1, open a short MCP session and call `tools/list`. The CLI doesn't expose this, so `scripts/mcp_http.py` does the minimal protocol:
-
-1. `POST <endpoint>/` with JSON-RPC `initialize` → `200` + `Mcp-Session-Id` response header.
-2. `POST` `notifications/initialized` (no id) → `202` ack.
-3. `POST` JSON-RPC `tools/list` with `Mcp-Session-Id` header → returns `[{name, description, inputSchema}, …]`.
-
-Bearer: PAT from `~/.nxd/tokens.json` (written by `nxd login`). The same token works against the proxy host since auth + proxy share a parent domain.
-
-**Glue:** `scripts/mcp_gateway.py` runs Stage 1 via subprocess, then loops the endpoints calling Stage 2 via `mcp_http.McpClient`, and writes one catalogue JSON with `endpoints[*].tools[*].{name, description, input_schema}` plus a flat `function_index` of `(dp, tool)` pairs.
+- **Health** — calls the multiplexer's `proxy__getDataProductsHealth` tool for
+  per-DP `derived_state` / breaker (this replaces the old Stage-1
+  `nxd mcp health` subprocess — and with it the `--mesh` foot-gun: there is no
+  CLI mesh selection anymore; the multiplexer URL is derived from the active
+  mesh's `api_url`).
+- **Tools** — one `tools/list` on the multiplexer returns every DP's tools,
+  namespaced `<function>__<hash>` (the gateway's per-DP namespace). This replaces
+  the Stage-2 per-endpoint fan-out.
 
 ```bash
 python3 scripts/mcp_gateway.py --token-file /tmp/strict-tok.txt --out /tmp/strict-gw.json
 ```
 
+`mcp_gateway.py` groups the namespaced tools by their `__<hash>` (the opaque
+per-DP key the multiplexer assigns) and writes the catalogue JSON with
+`endpoints[*].{endpoint, dp_full_name (= hash), tools[*].{name, description,
+input_schema}}` plus a flat `function_index` of `(hash, wire_name)` pairs and the
+multiplexer's own `gateway_tools`. Every `endpoints[*].endpoint` IS the
+multiplexer URL, so a caller dials it with the namespaced wire name
+(`semantic_relations.py` / `mcp_call.py` work against it unchanged).
+
+> **hash, not fullName.** The multiplexer namespaces tools by an opaque
+> `__<hash>`, not the DP fullName. The hash is a stable per-DP key *within a
+> session* — enough for the validator (which matches `(dp, tool)` pairs from this
+> same catalogue). To map hash→fullName for the user, call
+> `gateway_tools.py details --dp <fullName>` or read the group's `semantic_model`
+> response (it carries its own `data_product`).
+
+Auth: a **PAT** (`nxdpat_…`, from `nxd mcp config` / `nxd login`) on the
+**`X-Nextdata-Token`** header — the documented MCP auth. `mcp_http.py` picks the
+header by token type automatically (PAT → `X-Nextdata-Token`; OAuth session token
+→ `Authorization: Bearer`); the two are mutually exclusive on the gateway.
+
 **What the catalogue gives you, by function class:**
 
 | Class | How to identify it in the catalogue | What it returns | Use it for |
 |---|---|---|---|
-| **(a) Data-returning functions** | Any tool whose name does **not** match `^semantic[_-]?models?$` — search/get/scan/top-k/custom RPCs the DP author defined | Domain data (rows, ranked chunks, aggregates, summaries). Shape is whatever the DP author published | Plan steps that fetch data |
-| **(b) Semantic-model functions** | Tool whose name matches `^semantic[_-]?models?$` | A list of model attributes plus typed relationships / links to models in **other** DPs (`SameAs`, `Derived`, `joins_on`, `fk`) | Plan Validation Rule 2 / Rule 4 — every cross-DP join / projection / filter must trace back to an entry returned here. Run via `scripts/semantic_relations.py` |
+| **(a) Data-returning functions** | Any tool whose base name (before `__<hash>`) does **not** match `^semantic[_-]?models?$` — search/get/scan/top-k/custom RPCs the DP author defined | Domain data (rows, ranked chunks, aggregates, summaries). Shape is whatever the DP author published | Plan steps that fetch data |
+| **(b) Semantic-model functions** | Tool whose base name matches `^semantic[_-]?models?$` (wire name `semantic_model__<hash>`) | The serialized cross-DP registry payload — models (grain + owning data_product + physical DB.SCHEMA.TABLE), dimensions, metrics, and joins (`left`/`right`/`on`/`cardinality`) to models in **other** DPs | Plan Validation Rule 2 / Rule 4 — every cross-DP join / projection / filter must trace back to an entry returned here. Run via `scripts/semantic_relations.py` |
 
-Only the **(b)** name is standard. Everything in **(a)** is author-defined and may change between runs — that is why both stages are re-fetched per query.
+Only the **(b)** name is standard. Everything in **(a)** is author-defined and may change between runs — that is why discovery is re-fetched per query.
 
 ## Flow (one shape that satisfies the rules)
 
@@ -88,9 +103,11 @@ Only the **(b)** name is standard. Everything in **(a)** is author-defined and m
 5. **Execute or abstain.**
    - If `passed=true`: walk the plan and run each step via `scripts/mcp_call.py` (a thin CLI over `mcp_http.call_tool_one_shot` — see below). Collect responses and return `{plan, validation_report, results}` to the user.
      ```bash
+     # Every endpoint in the catalogue IS the multiplexer URL; the tool is the
+     # namespaced wire name `<function>__<hash>` from function_index.
      python3 scripts/mcp_call.py \
-       --endpoint "$(jq -r '.endpoints[] | select(.dp_full_name == "<dp>").endpoint' /tmp/nxd-mcp-gateway.json)" \
-       --tool "<mcp_function>" \
+       --endpoint "$(jq -r '.endpoint' /tmp/nxd-mcp-gateway.json)" \
+       --tool "<function>__<hash>" \
        --args '<json-from-step.request>' \
        --token-file /tmp/strict-tok.txt \
        --out /tmp/nxd-step-<id>.json

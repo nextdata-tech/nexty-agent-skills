@@ -182,7 +182,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-adding-policy` | Add contracts and activate computational policies with current CLI syntax |
 | `nxd-complying-with-failing-policy` | Diagnose policy violations and update the data product to comply |
 | `nxd-debugging-data-products` | Diagnose failed data products from describe/logs/init logs/verify output |
-| `nxd-data-product-query` | Query a deployed data product's output ports (SQL, file fetch, vector similarity, or MCP/RPC) via its REST API |
+| `nxd-data-product-query` | Query a deployed data product — discovery via the MCP gateway; reads via SQL / file fetch / vector similarity / MCP-RPC (REST only for credential leasing) |
 | `nxd-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
 | `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
 | `nxd-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |

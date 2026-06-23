@@ -7,9 +7,10 @@ The platform exposes per-DP MCP servers behind a proxy at
 2. ``POST /mcp/`` ``notifications/initialized`` (no id) → 202 ack.
 3. ``POST /mcp/`` ``tools/list`` / ``tools/call`` with the same session id.
 
-Auth: bearer token from ``~/.nxd/tokens.json`` (the file ``nxd login`` writes).
-The mesh registry entry's auth/install host picks the right token; the proxy
-shares a parent domain with the mesh API so the same token applies.
+Auth: the wire header depends on the token TYPE (see ``_auth_header``). A PAT
+(``nxdpat_…``, the token ``nxd mcp config`` / ``nxd login`` provision) goes in
+``X-Nextdata-Token`` — the documented MCP auth; an OAuth session token goes in
+``Authorization: Bearer``. The two are mutually exclusive on the gateway.
 
 Use via:
 
@@ -67,6 +68,29 @@ def normalise_endpoint(endpoint: str) -> str:
     if not endpoint.endswith("/"):
         endpoint += "/"
     return endpoint
+
+
+def _auth_header(token: str) -> dict[str, str]:
+    """Pick the right auth header for the token TYPE — the wire header decides
+    which token the gateway accepts, and the two are mutually exclusive.
+
+    Verified live against the mesh MCP gateway (``/dp/mcp``) and documented in
+    nxd ``components/docs/basics/using_mcp.md`` /
+    ``components/docs/dp_development/mcp_tools.md`` (every MCP example uses
+    ``X-Nextdata-Token: <PAT>``):
+
+        header                 PAT (nxdpat_…)   OAuth session token
+        X-Nextdata-Token       200              401
+        Authorization: Bearer  401              200
+
+    Sending BOTH headers 401s. So send exactly one, keyed on the token kind:
+      - PAT (``nxdpat_`` prefix, the token ``nxd mcp config`` / ``nxd login``
+        provision) → ``X-Nextdata-Token`` — the documented MCP auth.
+      - anything else (an OAuth JWT session token) → ``Authorization: Bearer``.
+    """
+    if token.startswith("nxdpat_"):
+        return {"X-Nextdata-Token": token}
+    return {"Authorization": f"Bearer {token}"}
 
 
 @dataclass
@@ -179,10 +203,10 @@ class McpClient:
 
     def _headers(self, *, include_session: bool = False) -> dict[str, str]:
         h = {
-            "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        h.update(_auth_header(self.token))
         if include_session and self.session_id:
             h["Mcp-Session-Id"] = self.session_id
         return h
