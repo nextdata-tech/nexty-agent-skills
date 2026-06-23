@@ -45,32 +45,29 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 _HERE = Path(__file__).resolve().parent
+# repo root = …/evals/cross-dp-joins/harness -> up 3.
+_REPO_ROOT = _HERE.parents[2]
 
-# The query skill (harvest + compiler client both live here).
+# The query skill (harvest + compiler client both live here). Default is repo-relative;
+# override with NXD_QUERY_SKILL_SCRIPTS for an out-of-tree skill checkout.
 _SKILL_SCRIPTS = Path(
     os.environ.get(
         "NXD_QUERY_SKILL_SCRIPTS",
-        "/Volumes/PRO-G40/projects/nexty-agent-skills/src/nxd-data-product-query/scripts",
+        str(_REPO_ROOT / "src" / "nxd-data-product-query" / "scripts"),
     )
 ).resolve()
 _MCP_CALL = _SKILL_SCRIPTS / "mcp_call.py"
 _CROSS_DP_COMPILE = _SKILL_SCRIPTS / "cross_dp_compile.py"
 
-# The worktree nxd_py package dir: `uv run python` there resolves the dev nxd lib
-# the compiler imports. The skill's plain python3 runs harvest.
-_NXD_PY_DIR = Path(
-    os.environ.get(
-        "NXD_PY_DIR",
-        "/Volumes/PRO-G40/projects/nxd/components/nxd_py",
-    )
-).resolve()
+# The nxd_py package dir: `uv run python` there resolves the dev nxd lib the compiler
+# imports (needs SemanticRegistry.model(data_product=, table=), i.e. >=0.41.99-dev5).
+# No portable default — must be set per environment.
+_NXD_PY_DIR = Path(os.environ["NXD_PY_DIR"]).resolve() if os.environ.get("NXD_PY_DIR") else None
 _SKILL_PYTHON = os.environ.get("NXD_SKILL_PYTHON", "python3")
 
-# CA bundle for the local self-signed mesh (mcp_call upgrades http->https).
-_CA_BUNDLE = os.environ.get(
-    "NXD_CA_BUNDLE",
-    "/Volumes/PRO-G40/projects/nxd/shared/charts/nxd/localCerts/nxdCA.crt",
-)
+# CA bundle for a self-signed mesh (mcp_call upgrades http->https). Set
+# NXD_CA_BUNDLE per cluster; unset = system trust store.
+_CA_BUNDLE = os.environ.get("NXD_CA_BUNDLE")
 
 # The single Snowflake database every pharma DP lives under.
 DATABASE = os.environ.get("NXD_MESH_DATABASE", "LOWERENVS_DB")
@@ -113,8 +110,9 @@ def harvest_one(dp: str, token_file: str, out_path: Path, *, timeout: int = 60) 
         "--args", "{}",
         "--token-file", token_file,
         "--out", str(out_path),
-        "--ca-bundle", _CA_BUNDLE,
     ]
+    if _CA_BUNDLE:
+        cmd += ["--ca-bundle", _CA_BUNDLE]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
         raise RuntimeError(
@@ -159,7 +157,16 @@ def compile_sql(
     the dev ``nxd.experimental.semantic`` import resolves. Each per-DP payload is
     passed as ``--registry-json PATH=SCHEMA`` (offline merge path — no live calls
     from inside the nxd_py interpreter, which lacks the session token plumbing).
+
+    Requires ``NXD_PY_DIR`` to point at a checkout of ``components/nxd_py`` whose
+    nxd lib is >=0.41.99-dev5 (``SemanticRegistry.model`` must accept
+    ``data_product=`` / ``table=``). There is no portable default for this.
     """
+    if _NXD_PY_DIR is None:
+        raise RuntimeError(
+            "NXD_PY_DIR is not set — point it at a components/nxd_py checkout "
+            "(nxd lib >=0.41.99-dev5) so the cross-DP compiler import resolves."
+        )
     cmd = [
         "uv", "run", "python",
         str(_CROSS_DP_COMPILE),
