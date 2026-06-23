@@ -5,7 +5,7 @@
 - Exact requirements.txt lines
 - Pip-registry version requirement
 - Matched version set across core / drivers / data_product
-- Base tables must exist before promise verification
+- Provision creates the tables + views; the transform seeds the data
 - How the DP runtime discovers the MCP tools
 
 ---
@@ -103,28 +103,44 @@ refresh the pip registry, rebuild and publish ALL THREE wheels together (e.g.
 
 ---
 
-## Base tables must exist before promise verification
+## Provision creates the tables + views; the transform seeds the data
 
-The kernel runs **promise verification before the transform** on the rpc-output
-path. A semantic DP that seeds its own base tables in the transform fails
-verification — the tables don't exist yet when verification runs. Two options:
+The kernel ordering is **provision → transform → output-port-promise-verification**
+(the promise is checked after each model completes). So an `@on_provision` hook
+creates the empty table + view in Phase A, the transform fills the rows, and the
+promise then verifies the rows are present. The DP deploys green in a single
+launch.
 
-- **Facade over pre-existing tables (recommended for production).** The base
-  tables are loaded externally (another DP / pipeline). Reference them via
-  `source_aligned_input(...)` and provision the semantic view with
-  `storage(...).config(SnowflakeConfig().as_view(sql_script(...)))`, which runs
-  at **provision time** (before verification). See
-  `examples/features/drivers/snowflake-storage/snowflake-source-aligned-facade/`
-  in the nxd repo.
-- **Self-seed (self-contained demo only).** The transform seeds the base tables
-  AND writes the promised marker model. Because verification runs **before** the
-  transform, the marker table the transform writes does not exist yet at
-  verification time either — so a pure post-verify transform-seed will NOT pass
-  verification in a single launch (the marker promise fails on the first run, the
-  same as a contract reading the seeded query tables would). To go fully green,
-  provision the marker (and the base tables) at **provision time** rather than in
-  the post-verify transform — or accept the first-launch verification gap and let
-  the second reconcile pass green once the transform has run once.
+This is the proven, deployed pattern. Split the work by responsibility:
+
+- **`provision.py` (`@on_provision` hook) — DDL ONLY.** Wired via
+  `.provision(script("provision.py").compute(...))`, placed IMMEDIATELY BEFORE
+  `.transform(...)`. It `CREATE TABLE IF NOT EXISTS`es the promised model's
+  managed table via `snowflake.full_table_name("<model>")` (the EXACT table the
+  storage driver verifies the promise against) and `CREATE OR REPLACE VIEW`s the
+  single-table `<MODEL>_SEMANTIC` view over it. The hook is decorated
+  `@data_product.on_provision()` and needs a trailing
+  `if __name__ == "__main__":\n    data_product.provision()` guard, or the build
+  raises a `ValidationError` (a registered-but-never-invoked lifecycle hook is a
+  hard error). It takes a param named for the storage output port (e.g.
+  `snowflake: Snowflake`), injected as a typed driver handle.
+- **`transform.py` — DATA ONLY.** Seeds the rows into the table the provision hook
+  created: `TRUNCATE TABLE IF EXISTS` + `write_pandas`. It NEVER issues DDL — a
+  transform that re-provisions (`CREATE OR REPLACE TABLE` each run) is what made
+  DPs flap Started ↔ Failed. Target the same `snowflake.full_table_name("<model>")`
+  so produce-verification matches.
+- **Promise the REAL model** on a PLAIN `storage(...)` port (no marker, no
+  `as_view`). `.startup_timeout(600)` goes on the **transform** compute spec (a
+  method, NOT a `provision_timeout_secs` factory kwarg, which does not exist on the
+  installed wheel) — and NEVER on `.provision(...)`, where the validator raises a
+  `ValidationError`. Provision inherits the transform executor's startup budget.
+- **Facade over pre-existing tables (alternative for production data).** If the
+  base tables are loaded externally (another DP / pipeline) and you do NOT need a
+  `.transform()` to bundle registry.py/tools.py, you may reference them via
+  `source_aligned_input(...)` + `storage(...).config(SnowflakeConfig().as_view(...))`.
+  But the facade `as_view` is MUTUALLY EXCLUSIVE with `.transform()`, and an rpc
+  DP needs the transform to bundle its sibling modules — so for a semantic rpc DP
+  the provision-hook/transform split above is the one to use.
 
 ---
 
@@ -142,13 +158,15 @@ extract):
 ```python
 from nxd.spec import (
     data_product, data_product_output, data_product_rpc_output,
-    rpc_function, rpc_server, storage, code,
+    rpc_function, rpc_server, script, storage, code,
 )
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
 from tools import list_models, describe_model, run_semantic_query
 from transform import transform
-from models import provision_marker
+from models import subjects_model   # your REAL semantic model
+
+INFRA_PROFILE = "<infra-profile-name>"
 
 # build_semantic_tools(REGISTRY) is used ONLY for the request/response schemas
 # and descriptions — never for the callable.
@@ -167,19 +185,36 @@ for _fn, _name in [
     )
 _rpc = _rpc.port(
     "mcp-api",
-    rpc_server("<infra-profile-path>#/services/<mcp-service-name>")
+    rpc_server(f"/infra-profile/{INFRA_PROFILE}#/services/<mcp-service-name>")
     .enable_endpoints()
     .mcp_path("/mcp"),
 )
 
 spec = (
-    data_product(name="...", ...)
-    # MANDATORY — bundles the sibling registry.py / tools.py modules.
-    .transform(code(transform).compute("<infra-profile-path>#/services/<compute>"))
+    data_product(name="...", infra_profile=INFRA_PROFILE)
+    # PROVISION (Phase A, before the transform): the @on_provision hook creates the
+    # table STRUCTURE (CREATE TABLE IF NOT EXISTS via snowflake.full_table_name)
+    # + the single-table view (DDL only). Placed IMMEDIATELY BEFORE .transform().
+    # NO .startup_timeout(...) here — the validator rejects it on .provision().
+    .provision(
+        script("provision.py")
+        .compute(f"/infra-profile/{INFRA_PROFILE}#/services/<compute>")
+    )
+    # MANDATORY — the transform seeds the ROWS (TRUNCATE + write_pandas, NO DDL)
+    # into the table the provision hook created, AND bundles the sibling
+    # registry.py / tools.py / provision.py modules. Promise verification runs
+    # AFTER the transform, so this seeds green in one launch. .startup_timeout(600)
+    # is a METHOD on the compute spec — there is no provision_timeout_secs factory
+    # kwarg on the installed wheel.
+    .transform(
+        code(transform)
+        .compute(f"/infra-profile/{INFRA_PROFILE}#/services/<compute>")
+        .startup_timeout(600)
+    )
     .output(
         data_product_output()
-        .promise(provision_marker)
-        .port("snowflake", storage("<infra-profile-path>#/services/<snowflake>"))
+        .promise(subjects_model)   # the REAL model, NOT a marker
+        .port("snowflake", storage(f"/infra-profile/{INFRA_PROFILE}#/services/<snowflake>"))
     )
     .output(_rpc)
 )
@@ -195,6 +230,6 @@ spec = (
 - `.response_model` — the `SemanticModelSpec` for the response schema; 3rd arg to `rpc_function`.
 - `.description` — the MCP tool description string; pass to `.description(t.description)`.
 
-See `reference/scripts/templates/spec_rpc_output.py.tmpl` for full annotation and
-`reference/scripts/templates/transform_provision.py.tmpl` for the complete
-spec.py + tools.py + transform.py example.
+See `reference/scripts/templates/spec_rpc_output.py.tmpl` for the fully annotated
+spec.py wiring, and `transform_provision.py.tmpl` for the complete
+provision.py / transform.py / spec.py / tools.py / models.py reference.

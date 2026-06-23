@@ -2,51 +2,71 @@
 
 This is the complete wiring for a deployable semantic DP. The code() /
 sibling-bundling / flat-layout mechanics below are the required shape:
-spec.py + tools.py + transform.py + models.py + registry.py + provision.py, all
+spec.py + tools.py + provision.py + transform.py + models.py + registry.py, all
 flat siblings.
 
-THE PROVISIONING PATH — seed at PROVISION time, in one launch:
+THE PROVISION-DDL / TRANSFORM-DATA SPLIT — green in one launch:
 
-  The kernel runs output-port promise verification BEFORE the transform. So the
-  one-time setup the promise depends on — seeding this DP's OWN base table(s)
-  AND creating the single-table <MODEL>_SEMANTIC view — happens in an
-  `@on_provision` function (runs before verification + before the transform),
-  wired via `.provision(script("provision.py"))`. This is the working path: it
-  goes green in a SINGLE launch. The transform must NOT provision (verify has
-  already run by then); a transform that re-seeds or re-creates the view is
-  redundant and, on error/timeout, flaps the DP to State=Failed.
+  Kernel ordering is provision -> transform -> output-port-promise-verification
+  (the promise is checked after each model completes). Split the work by
+  responsibility:
 
-Four wiring constraints this template encodes (each is the difference between a
+    * provision.py (@on_provision hook) — DDL ONLY. Creates the SOURCE TABLE
+      STRUCTURE(s) and the single-table <MODEL>_SEMANTIC VIEW(s). No data. Runs
+      in Phase A, BEFORE the transform. It CREATE TABLE IF NOT EXISTS-es the
+      promised model's managed table via `snowflake.full_table_name("<model>")`
+      (the exact table the storage driver verifies the promise against) and
+      CREATE OR REPLACE VIEW-s the single-table view over it.
+    * transform.py — DATA ONLY. Seeds the rows into the table the provision hook
+      created: TRUNCATE TABLE IF EXISTS + write_pandas. NO DDL.
+
+  So provision creates the empty table + view, the transform fills the rows, and
+  the promise then verifies the rows are present. Green in a SINGLE launch.
+
+  The transform must NEVER issue DDL. A transform that RE-PROVISIONS (CREATE OR
+  REPLACE TABLE each run) is what made DPs flap Started <-> Failed.
+
+Seven wiring constraints this template encodes (each is the difference between a
 DP that LOOKS right and one that actually runs):
 
 1. code() cannot extract closures. build_semantic_tools(REGISTRY) returns
    closures; pass code(<module-level tools.py fn>) instead and reuse the tools
    only for their .request_model / .response_model / .description.
-2. The registry/tools siblings are bundled ONLY if there is a .transform(...).
-   The rpc-output code() path ships only the extracted __<fn>__.py scripts; the
-   **/*.py glob on the transform path bundles the siblings. So the transform is
-   MANDATORY (even when it is a no-op).
+2. The registry/tools/provision siblings are bundled ONLY if there is a
+   .transform(...). The rpc-output code() path ships only the extracted
+   __<fn>__.py scripts; the **/*.py glob on the transform path bundles the
+   siblings. So the transform is MANDATORY — without it the rpc subprocess raises
+   `ModuleNotFoundError: No module named 'registry'`.
 3. All modules flat at the DP root — never a transform/ subdir package — so the
    extracted tool scripts resolve `from registry import REGISTRY` against the
    script dir (the only path on sys.path in the rpc subprocess).
-4. Seed at PROVISION time via @on_provision — the transform must NOT provision.
-   Promise verification runs BEFORE the transform, so the promised base table +
-   the <MODEL>_SEMANTIC view must already exist by then. Seed them in
-   provision.py; keep the transform free of any seeding / view DDL.
+4. DDL in @on_provision, data in the transform. provision.py creates the table
+   STRUCTURE + the <MODEL>_SEMANTIC view; transform.py truncate-and-loads the
+   rows. Both target `snowflake.full_table_name("<model>")` so the
+   produce-verification target matches.
+5. Promise the REAL semantic model from models.py (NOT a marker) so the discover
+   UI surfaces attributes, PII flags, glossary links, and cross-DP relationships.
+6. The single-table view references ONLY this DP's own tables. Cross-DP joins
+   resolve at QUERY time via the live mesh, never at view-create time.
+7. provision.py needs a trailing `if __name__ == "__main__":` guard
+   (data_product.provision()), or the build raises a ValidationError. And
+   .startup_timeout(...) goes on .transform() ONLY — the validator rejects it on
+   .provision().
 
 ============================================================================
 spec.py  (flat at DP root)
 ============================================================================
 
     from nxd.spec import (
-        code, data_product, data_product_output, data_product_rpc_output,
-        rpc_function, rpc_server, script, storage,
+        code, data_product, data_product_input, data_product_output,
+        data_product_rpc_output, Predicate, rpc_function, rpc_server, script,
+        storage,
     )
     from nxd.experimental.semantic import build_semantic_tools
     from registry import REGISTRY
     from tools import list_models, describe_model, run_semantic_query
     from transform import transform
-    from models import provision_marker
+    from models import subjects_model
 
     INFRA_PROFILE = "{{infra_profile}}"
     SNOWFLAKE_SERVICE = "{{snowflake_service}}"
@@ -73,12 +93,19 @@ spec.py  (flat at DP root)
         .mcp_path("/mcp"),
     )
 
+    # Storage output port named "snowflake" — its name IS the provision/transform
+    # parameter name, and it supplies the Snowflake connection the provision hook
+    # (to create the table + view), the transform (to seed rows), and
+    # run_semantic_query (to read it) all use. Plain storage(...) — NO
+    # .config(...).as_view(...). The facade as_view pattern is mutually exclusive
+    # with .transform(), and an rpc DP NEEDS the transform (for sibling bundling).
+    # nxd validate HARD-REJECTS the pair.
     _storage = (
         data_product_output()
-        .promise(provision_marker)
-        # Plain storage(...) — NO .config(...).as_view(...). The facade as_view
-        # pattern is mutually exclusive with .transform(), and an rpc DP NEEDS
-        # the transform (for sibling bundling). nxd validate rejects the pair.
+        # Promise the REAL subjects model (NOT a marker) so the discover UI
+        # surfaces its attributes, PII, and glossary links. The provision hook
+        # creates the matching managed table that produce-verification checks.
+        .promise(subjects_model)
         .port(
             "snowflake",
             storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -92,24 +119,72 @@ spec.py  (flat at DP root)
             description="{{description}}",
             version="0.1.0",
             infra_profile=INFRA_PROFILE,
-            # FACTORY kwarg (NOT .compute(provision_timeout_secs=...) — that
-            # signature doesn't exist). Cold provision builds snowflake-connector
-            # +pandas and exceeds the 180s default -> Timeout -> Failed.
-            provision_timeout_secs=600,
         )
-        # PROVISION FIRST — seeds the marker + base table(s) AND creates the
-        # single-table <MODEL>_SEMANTIC view, all BEFORE promise verification.
+        # PROVISION (Phase A, before the transform): the @on_provision hook
+        # (provision.py) creates the table STRUCTURE + the single-table
+        # <MODEL>_SEMANTIC view (DDL only). Placed IMMEDIATELY BEFORE .transform().
+        # NO .startup_timeout(...) here — the validator rejects it on .provision();
+        # provision inherits the transform executor's startup budget.
         .provision(
-            script("provision.py").compute(f"/infra-profile/{INFRA_PROFILE}#/services/{{compute_service}}")
+            script("provision.py")
+            .compute(f"/infra-profile/{INFRA_PROFILE}#/services/{{compute_service}}")
         )
-        # MANDATORY — bundles registry.py/tools.py via the **/*.py glob, and
-        # carries any RUNTIME data production. It must NEVER (re)provision.
+        # MANDATORY .transform(): it SEEDS the ROWS (TRUNCATE + write_pandas, NO
+        # DDL) into the table the provision hook created, and bundles registry.py /
+        # tools.py / provision.py via the **/*.py glob. The output-port promise is
+        # verified AFTER the transform, so the rows are present in time.
+        #
+        # .startup_timeout(600) is a METHOD on the compute spec — it covers the
+        # cold-boot build of snowflake-connector + pandas, which exceeds the
+        # default and would otherwise Timeout -> Failed. (There is NO
+        # `provision_timeout_secs=` factory kwarg — that signature does not exist
+        # on the wheel.)
         .transform(
-            code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/{{compute_service}}")
+            code(transform)
+            .compute(f"/infra-profile/{INFRA_PROFILE}#/services/{{compute_service}}")
+            .startup_timeout(600)
         )
         .output(_storage)
         .output(_rpc)
+        # Glossary links at the spec level (render in the discover UI). Also link
+        # at the model + attribute level in models.py.
+        .link(Predicate.GlossaryTerm,
+              "/data-product/{{env}}/{{glossary_dp}}#/terms/subject")
+        .link(Predicate.GlossaryTerm,
+              "/data-product/{{env}}/{{glossary_dp}}#/terms/subject_country")
     )
+
+    # --- DOWNSTREAM VARIANT: cross-DP FK to an upstream DP ----------------------
+    # A downstream fact/crosswalk DP that references an upstream model declares the
+    # real upstream->downstream dependency with .input(...).source(), placed
+    # BEFORE .provision(). The cross-DP FK itself lives in models.py
+    # (.referencing(...)). The provision hook's single-table view STILL references
+    # only this DP's own tables (it may LEFT JOIN this DP's OWN dimension) — the
+    # cross-DP join resolves at QUERY time via the live mesh.
+    #
+    #   spec = (
+    #       data_product(name="{{downstream_dp}}", domain="{{domain}}", ...)
+    #       .input(
+    #           "{{upstream_dp}}",
+    #           data_product_input()
+    #           .source(
+    #               "https://{{host}}/data-product/{{domain}}/{{upstream_dp}}"
+    #               "#/output/port/snowflake"
+    #           )
+    #           .environment("{{env}}"),
+    #       )
+    #       .provision(
+    #           script("provision.py")
+    #           .compute(f"/infra-profile/{INFRA_PROFILE}#/services/{{compute_service}}")
+    #       )
+    #       .transform(
+    #           code(transform)
+    #           .compute(f"/infra-profile/{INFRA_PROFILE}#/services/{{compute_service}}")
+    #           .startup_timeout(600)
+    #       )
+    #       .output(_storage)
+    #       .output(_rpc)
+    #   )
 
 ============================================================================
 tools.py  (flat at DP root) — MODULE-LEVEL functions code() can extract
@@ -170,6 +245,8 @@ tools.py  (flat at DP root) — MODULE-LEVEL functions code() can extract
         from snowflake import connector
 
         # Dialect built INSIDE the body (NOT at module level — code() drops it).
+        # Resolves the same view name the transform creates
+        # (<FIRST_MODEL_UPPER>_SEMANTIC) so the native-view probe matches.
         _DIALECT = SnowflakeDialect(view_name=SnowflakeDialect.default_view_name(REGISTRY))
         cap = 200
 
@@ -240,53 +317,25 @@ tools.py  (flat at DP root) — MODULE-LEVEL functions code() can extract
         })
 
 ============================================================================
-transform.py  (flat at DP root) — MANDATORY; bundles siblings; does NO provisioning
+provision.py  (flat at DP root) — @on_provision hook; DDL ONLY (table + view)
 ============================================================================
 
-    # All seeding (marker, base table, single-table semantic view) happens at
-    # PROVISION time in provision.py (@on_provision), because the kernel verifies
-    # output-port promises BEFORE the transform. This .transform() exists ONLY so
-    # the **/*.py bundling glob ships registry.py / tools.py into the image
-    # (constraint #2) — the rpc tool scripts import them at runtime.
-    #
-    # For this static-seed DP the transform is a pure no-op. A DP with real
-    # RUNTIME data production (derived tables, scheduled refresh) would write that
-    # logic HERE instead. What it must NEVER do is (re)provision — seed/create the
-    # promised table or the semantic view — verification already ran; re-seeding
-    # (or any error/timeout) flaps the DP State=Failed and the proxy 404s the rpc.
-    from nxd.data_product.context import Snowflake
-
-    def transform(snowflake: Snowflake) -> None:
-        print("semantic DP transform no-op (seeding done at provision time)")
-        # Real runtime data-production logic goes here for a non-static DP.
-
-============================================================================
-provision.py  (flat at DP root) — SELF-CONTAINED @on_provision: seeds BEFORE verify
-============================================================================
-
-    # The kernel runs output-port promise verification BEFORE the transform, so a
-    # marker/base table seeded only in the transform does not exist yet at verify
-    # time -> `Field MARKER_ID not found` -> DP Failed. The provision function
-    # runs FIRST (before storage-driver provisioning + before verify), so seeding
-    # here makes the DP green in ONE launch. Wired via
-    # `.provision(script("provision.py"))` in spec.py.
-    #
-    # SELF-CONTAINED — all imports are inline and it does NOT import any sibling
-    # module (registry/tools/transform). The provision entrypoint is extracted
-    # into a `provision/` subdir whose sys.path does not include the DP root, so a
-    # bare `from registry import REGISTRY` would raise ModuleNotFoundError. The one
-    # value that would come from the registry — the semantic view name — is the
-    # library default `<FIRST_MODEL_UPPER>_SEMANTIC`, HARDCODED here.
+    # The @on_provision hook creates this DP's OWN table STRUCTURE + the
+    # single-table semantic view. DDL ONLY — no data. Runs in Phase A, BEFORE the
+    # transform. Idempotent: CREATE TABLE IF NOT EXISTS + CREATE OR REPLACE VIEW.
+    # The hook param is named for the storage output port (snowflake); the
+    # ProvisionOutputPortArgumentProvider injects it as a typed Snowflake handle.
+    # The trailing `if __name__ == "__main__":` guard is REQUIRED — a
+    # registered-but-never-invoked lifecycle hook is a hard ValidationError.
     from nxd import data_product
     from nxd.data_product.context import Snowflake
 
     _VIEW_NAME = "{{MODEL_UPPER}}_SEMANTIC"  # e.g. "SUBJECTS_SEMANTIC"
+                                             # = SnowflakeDialect.default_view_name(REGISTRY)
 
     @data_product.on_provision()
     def provision(snowflake: Snowflake) -> None:
-        import pandas as pd
         from snowflake import connector
-        from snowflake.connector.pandas_tools import write_pandas
 
         if snowflake is None or not snowflake.schema:
             print("provision skipped — no Snowflake schema in context")
@@ -297,8 +346,70 @@ provision.py  (flat at DP root) — SELF-CONTAINED @on_provision: seeds BEFORE v
             if snowflake.database else f"{snowflake.schema}."
         )
 
-        # Seed THIS DP's OWN base table — hand-author the shape; the view (not the
-        # kernel) owns it. Replace with your model's columns + seed rows.
+        conn = connector.connect(
+            user=snowflake.user, account=snowflake.account,
+            warehouse=snowflake.warehouse, role=snowflake.role,
+            database=snowflake.database, schema=snowflake.schema,
+            ocsp_fail_open=True, **snowflake.connector_params(),
+        )
+        try:
+            cur = conn.cursor()
+            try:
+                # 1) Create the PROMISED `subjects` model's MANAGED table —
+                #    STRUCTURE ONLY (no rows). full_table_name("subjects") is the
+                #    EXACT table the storage driver verifies the promise against.
+                managed = snowflake.full_table_name("subjects")
+                cur.execute(
+                    f"CREATE TABLE IF NOT EXISTS {managed} "
+                    "(SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR, SUBJECT_MRN VARCHAR)"
+                )
+                print(f"provisioned TABLE {managed}")
+
+                # 2) Create the SINGLE-TABLE semantic view over the promised table.
+                #    References ONLY this DP's own tables — NEVER a cross-DP JOIN.
+                #    Hand-author the projection; cross-DP joins resolve at QUERY
+                #    time via the live mesh, never at view-create time.
+                cur.execute(
+                    f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
+                    "SELECT SUBJECT_ID AS SUBJECT_ID, "
+                    "SUBJECT_COUNTRY AS SUBJECT_COUNTRY, "
+                    "SUBJECT_MRN AS SUBJECT_MRN "
+                    f"FROM {managed}"
+                )
+                print(f"provisioned single-table VIEW {fqn}{_VIEW_NAME}")
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+
+
+    if __name__ == "__main__":
+        data_product.provision()
+
+============================================================================
+transform.py  (flat at DP root) — MANDATORY; SEEDS the ROWS (NO DDL) AND bundles siblings
+============================================================================
+
+    # The transform seeds the ROWS into the table the provision hook created:
+    # TRUNCATE TABLE IF EXISTS + write_pandas. NO DDL — never CREATE TABLE, never
+    # CREATE VIEW (a transform that re-provisions made DPs flap Started<->Failed).
+    # The output-port promise is verified AFTER the transform, so the rows are
+    # present in time. This .transform() is ALSO what bundles the sibling
+    # registry.py / tools.py / provision.py modules into the image (the **/*.py
+    # glob runs on the transform/compute path) — without it the rpc subprocess
+    # raises `ModuleNotFoundError: No module named 'registry'`.
+    import pandas as pd
+    from nxd.data_product.context import Snowflake
+
+    def transform(snowflake: Snowflake) -> None:
+        from snowflake import connector
+        from snowflake.connector.pandas_tools import write_pandas
+
+        if snowflake is None or not snowflake.schema:
+            print("transform skipped — no Snowflake schema in context")
+            return
+
+        # Hand-author the seed rows — the view (not the kernel) owns the shape.
         subjects = pd.DataFrame([
             {"SUBJECT_ID": 1, "SUBJECT_COUNTRY": "US", "SUBJECT_MRN": "MRN-0001"},
             {"SUBJECT_ID": 2, "SUBJECT_COUNTRY": "US", "SUBJECT_MRN": "MRN-0002"},
@@ -313,61 +424,111 @@ provision.py  (flat at DP root) — SELF-CONTAINED @on_provision: seeds BEFORE v
             ocsp_fail_open=True, **snowflake.connector_params(),
         )
         try:
+            # Truncate-and-load the PROMISED model's managed table (created by the
+            # provision hook). full_table_name("subjects") targets the EXACT table
+            # produce-verification checks. NO DDL here.
+            managed = snowflake.full_table_name("subjects")
             cur = conn.cursor()
             try:
-                # 1) Write the promised marker model (satisfies the storage port).
-                managed = snowflake.full_table_name("subjects_marker")
                 cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-                write_pandas(
-                    conn,
-                    pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": _VIEW_NAME}]),
-                    managed.split(".")[-1].strip('"'),
-                    database=snowflake.database, schema=snowflake.schema,
-                )
-                print(f"marker written to {managed}")
-
-                # 2) Seed THIS DP's own base table.
-                cur.execute(
-                    f"CREATE OR REPLACE TABLE {fqn}SUBJECTS "
-                    "(SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR, SUBJECT_MRN VARCHAR)"
-                )
-                write_pandas(
-                    conn, subjects, "SUBJECTS",
-                    database=snowflake.database, schema=snowflake.schema,
-                )
-                print(f"seeded {fqn}SUBJECTS rows={len(subjects)}")
-
-                # 3) Create the SINGLE-TABLE semantic view (NO cross-DP JOIN).
-                #    Hand-author the projection — never call native_semantic_view_ddl /
-                #    plain_view_ddl when the registry declares a cross-DP join; those
-                #    bind another DP's table and provision fails. Cross-DP joins
-                #    resolve at QUERY time via the live mesh, never at view creation.
-                cur.execute(
-                    f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
-                    "SELECT SUBJECT_ID AS SUBJECT_ID, SUBJECT_COUNTRY AS SUBJECT_COUNTRY, "
-                    f"SUBJECT_MRN AS SUBJECT_MRN FROM {fqn}SUBJECTS"
-                )
-                print(f"provisioned single-table VIEW {fqn}{_VIEW_NAME}")
             finally:
                 cur.close()
+            write_pandas(
+                conn, subjects, managed.split(".")[-1].strip('"'),
+                database=snowflake.database, schema=snowflake.schema,
+            )
+            print(f"seeded {managed} rows={len(subjects)}")
         finally:
             conn.close()
 
 ============================================================================
-models.py  (flat at DP root) — one promised marker model
+models.py  (flat at DP root) — the REAL promised semantic model
 ============================================================================
 
-    from nxd.spec import semantic_model
+    from nxd.spec import Predicate, attribute, semantic_model
     from nxd.spec.data_types import int64, string
 
-    provision_marker = (
-        semantic_model("subjects_marker")
-        .description("Marker table written by the provisioning hook.")
-        .schema({"MARKER_ID": int64(), "VIEW_NAME": string()})
+    # The REAL subject-spine model the transform seeds (table SUBJECTS). We
+    # promise THIS model on the storage port (not a dummy marker), so the discover
+    # UI surfaces the actual attributes, their PII flags, glossary links, and (on
+    # downstream facts) the cross-DP SEMANTIC RELATIONSHIP.
+    subjects_model = (
+        semantic_model("subjects")
+        .description("Subject spine — one row per enrolled clinical-trial subject.")
+        .schema({
+            "SUBJECT_ID": int64(),
+            "SUBJECT_COUNTRY": string(),
+            "SUBJECT_MRN": string(),  # PII: medical record number.
+        })
+        # Glossary links at the model + attribute level (render in the UI).
+        .link(Predicate.GlossaryTerm,
+              "/data-product/{{env}}/{{glossary_dp}}#/terms/subject")
+        .link("SUBJECT_COUNTRY", Predicate.GlossaryTerm,
+              "/data-product/{{env}}/{{glossary_dp}}#/terms/subject_country")
     )
 
-A storage output port requires at least one promised model. We promise ONE tiny
-marker model that provision.py creates — this satisfies the port + produce-
-verification WITHOUT promising the seeded base table (whose shape the semantic
-view, not the kernel, owns).
+    # --- DOWNSTREAM VARIANT: cross-DP FK via .referencing(...) ------------------
+    # A downstream fact/crosswalk model carries cross-DP foreign keys with
+    # attribute(...).referencing(...). The reference renders in the discover UI as
+    # a "SEMANTIC RELATIONSHIP" and resolves at QUERY time — the seeded view still
+    # references only this DP's own tables. Pair it with the .input(...).source()
+    # on the spec (see spec.py downstream variant).
+    #
+    #   site_subjects_model = (
+    #       semantic_model("site_subjects")
+    #       .description("Crosswalk hub — one row per (site, subject) enrollment.")
+    #       .schema({
+    #           # SITE_ID -> this DP's own sites dimension.
+    #           "SITE_ID": attribute(int64(), "SITE_ID").referencing(
+    #               data_product="{{this_dp}}", model="sites", attribute=["SITE_ID"]
+    #           ),
+    #           # SUBJECT_ID -> cross-DP FK to the upstream subject spine.
+    #           "SUBJECT_ID": attribute(int64(), "SUBJECT_ID").referencing(
+    #               data_product="{{upstream_dp}}",
+    #               model="subjects",
+    #               attribute=["SUBJECT_ID"],
+    #           ),
+    #       })
+    #       .link(Predicate.GlossaryTerm,
+    #             "/data-product/{{env}}/{{glossary_dp}}#/terms/site")
+    #       .link("SUBJECT_ID", Predicate.GlossaryTerm,
+    #             "/data-product/{{env}}/{{glossary_dp}}#/terms/subject")
+    #   )
+
+A storage output port requires at least one promised model. Promise the REAL
+model the transform seeds (above) — NOT a marker. full_table_name("<model>") in
+the transform targets the exact table produce-verification checks, so the
+promise passes while the discover UI gets the full attribute / PII / glossary /
+relationship surface.
+
+============================================================================
+registry.py  (flat at DP root) — the semantic registry the tools read
+============================================================================
+
+    from nxd.experimental.semantic import Agg, SemanticRegistry
+
+    REGISTRY = (
+        SemanticRegistry()
+        .model(
+            "subjects",
+            grain="SUBJECT_ID",
+            description="One row per clinical-trial subject. The subject spine.",
+        )
+        .dimension(
+            "subject_country", model="subjects", column="SUBJECT_COUNTRY",
+            type="string", description="Subject's country of enrollment.",
+        )
+        .dimension(
+            "subject_mrn", model="subjects", column="SUBJECT_MRN",
+            type="string", description="Subject medical record number (PII).",
+            pii=True,
+        )
+        .metric(
+            "subject_count", model="subjects", agg=Agg.COUNT_DISTINCT,
+            column="SUBJECT_ID", description="Distinct number of subjects.",
+        )
+        # Joins: none for the spine. A downstream DP declares cross-DP joins here;
+        # they resolve at QUERY time against the live mesh, never in the view DDL.
+        .build()
+    )
 """
