@@ -1,0 +1,5 @@
+nxd.core>=0.41.100.dev0
+nxd.data_product[spec]>=0.41.100.dev0
+nxd.drivers[rpc]>=0.41.100.dev0
+snowflake-connector-python[pandas]
+pandas
