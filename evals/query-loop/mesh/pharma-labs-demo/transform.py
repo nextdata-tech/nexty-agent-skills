@@ -1,26 +1,17 @@
 """Transform for pharma-labs-demo — fact #2 (assays) of the pharma mesh.
 
-Seeds the PROMISED `assays` model's managed base table (`ASSAYS`) + the
-single-table semantic view (`ASSAYS_SEMANTIC`) in this DP's Snowflake schema, in
-ONE transform pass. This is the proven `hcp-master` / pharma-subjects-demo
-pattern: output-port promise verification does NOT block a transform-seed, so a
-transform-seed deploys green in one launch. Using full_table_name("assays")
-writes to the exact table the storage driver verifies the promise against.
+Seeds the ROWS of the promised `assays` model's managed table (`ASSAYS`). The
+table STRUCTURE and the single-table `ASSAYS_SEMANTIC` view are created earlier
+by the `@on_provision` hook (provision.py), which runs in Phase A before this
+transform. This transform only writes the data the output-port promise verifies.
 
-The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
-modules into the image (the `**/*.py` glob runs on the transform/compute path).
-
-CRITICAL: the view DDL references ONLY this DP's own `ASSAYS` table. This DP's
-registry declares a MANY_TO_ONE join to `site_subjects` (owned by DP_SITES);
-emitting that JOIN into the CREATE VIEW would bind a crosswalk table that lives
-in ANOTHER DP's schema → view creation fails at deploy. The cross-DP join
-resolves at QUERY time across the live mesh, not here.
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py` /
+`provision.py` modules into the image (the `**/*.py` glob runs on the
+transform/compute path).
 """
 
 import pandas as pd
 from nxd.data_product.context import Snowflake
-
-_VIEW_NAME = "ASSAYS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `assays`
 
 
 def transform(snowflake: Snowflake) -> None:
@@ -30,12 +21,6 @@ def transform(snowflake: Snowflake) -> None:
     if snowflake is None or not snowflake.schema:
         print("SEMVIEW_DIAG transform skipped — no Snowflake schema in context")
         return
-
-    fqn = (
-        f"{snowflake.database}.{snowflake.schema}."
-        if snowflake.database
-        else f"{snowflake.schema}."
-    )
 
     # Self-seeded assays: grain ASSAY_ID, MANY assays per subject, assay_type
     # dimension + titer measure + the SUBJECT_ID join key (used only at query
@@ -64,33 +49,17 @@ def transform(snowflake: Snowflake) -> None:
         **snowflake.connector_params(),
     )
     try:
+        managed = snowflake.full_table_name("assays")
+        # Truncate-and-load so repeated runs stay deterministic (the provision
+        # hook created the table with CREATE TABLE IF NOT EXISTS, so it may
+        # already hold rows from a prior run).
         cur = conn.cursor()
         try:
-            # 1) Seed the PROMISED `assays` model's managed table. Using
-            # full_table_name("assays") writes to the exact table the storage
-            # driver verifies the promise against (so produce-verification passes).
-            managed = snowflake.full_table_name("assays")
-            cur.execute(
-                f"CREATE OR REPLACE TABLE {managed} ("
-                "ASSAY_ID NUMBER, SUBJECT_ID NUMBER, ASSAY_TYPE VARCHAR, TITER FLOAT)"
-            )
-            write_pandas(conn, assays, managed.split(".")[-1].strip('"'),
-                         database=snowflake.database, schema=snowflake.schema)
-            print(f"SEMVIEW_DIAG seeded {managed} rows={len(assays)}")
-
-            # 2) Single-table semantic view over the promised ASSAYS table only.
-            # NO JOIN to site_subjects (that crosswalk lives in DP_SITES' schema;
-            # the cross-DP join resolves at query time, not in this CREATE VIEW).
-            cur.execute(
-                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
-                "SELECT ASSAY_ID AS ASSAY_ID, "
-                "SUBJECT_ID AS SUBJECT_ID, "
-                "ASSAY_TYPE AS ASSAY_TYPE, "
-                "TITER AS TITER "
-                f"FROM {managed}"
-            )
-            print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
+            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
         finally:
             cur.close()
+        write_pandas(conn, assays, managed.split(".")[-1].strip('"'),
+                     database=snowflake.database, schema=snowflake.schema)
+        print(f"SEMVIEW_DIAG seeded {managed} rows={len(assays)}")
     finally:
         conn.close()

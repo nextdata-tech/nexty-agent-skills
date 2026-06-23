@@ -1,0 +1,6 @@
+question,strategy,acc,fanout,matches_compiler,distinct_results,abstained
+x01,A,FAIL,FANOUT_SAFE,true,1,false
+x01,B,FAIL,N/A,true,1,false
+x06,B,ABSTAIN,N/A,false,1,true
+x07,A,FAIL,FANOUT_SAFE,true,1,false
+x07,B,FAIL,N/A,false,1,false

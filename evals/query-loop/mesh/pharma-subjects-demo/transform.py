@@ -1,19 +1,17 @@
 """Transform for pharma-subjects-demo — the SUBJECT SPINE of the mesh.
 
-Seeds this DP's OWN base table (`SUBJECTS`) + the single-table semantic view
-(`SUBJECTS_SEMANTIC`) in this DP's Snowflake schema, in ONE transform pass. This
-is the proven `hcp-master` pattern: output-port promise verification does NOT run
-before the transform (only input *expectations* verify early, and this spine DP
-has no inputs), so a transform-seed deploys green in one launch.
+Seeds the ROWS of the promised `subjects` model's managed table. The table
+STRUCTURE and the single-table `SUBJECTS_SEMANTIC` view are created earlier by
+the `@on_provision` hook (provision.py), which runs in Phase A before this
+transform. This transform only writes the data the output-port promise verifies.
 
-The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
-modules into the image (the `**/*.py` glob runs on the transform/compute path).
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py` /
+`provision.py` modules into the image (the `**/*.py` glob runs on the
+transform/compute path).
 """
 
 import pandas as pd
 from nxd.data_product.context import Snowflake
-
-_VIEW_NAME = "SUBJECTS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `subjects`
 
 
 def transform(snowflake: Snowflake) -> None:
@@ -23,12 +21,6 @@ def transform(snowflake: Snowflake) -> None:
     if snowflake is None or not snowflake.schema:
         print("SUBJECTS_DIAG transform skipped — no Snowflake schema in context")
         return
-
-    fqn = (
-        f"{snowflake.database}.{snowflake.schema}."
-        if snowflake.database
-        else f"{snowflake.schema}."
-    )
 
     subjects = pd.DataFrame(
         [
@@ -54,30 +46,17 @@ def transform(snowflake: Snowflake) -> None:
         **snowflake.connector_params(),
     )
     try:
+        managed = snowflake.full_table_name("subjects")
+        # Truncate-and-load so repeated runs stay deterministic (the provision
+        # hook created the table with CREATE TABLE IF NOT EXISTS, so it may
+        # already hold rows from a prior run).
         cur = conn.cursor()
         try:
-            # 1) Seed the PROMISED `subjects` model's managed table. Using
-            # full_table_name("subjects") writes to the exact table the storage
-            # driver verifies the promise against (so produce-verification passes).
-            managed = snowflake.full_table_name("subjects")
-            cur.execute(
-                f"CREATE OR REPLACE TABLE {managed} "
-                "(SUBJECT_ID NUMBER, SUBJECT_COUNTRY VARCHAR, SUBJECT_MRN VARCHAR)"
-            )
-            write_pandas(conn, subjects, managed.split(".")[-1].strip('"'),
-                         database=snowflake.database, schema=snowflake.schema)
-            print(f"SUBJECTS_DIAG seeded {managed} rows={len(subjects)}")
-
-            # 2) Single-table semantic view over the promised subjects table.
-            cur.execute(
-                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
-                "SELECT SUBJECT_ID AS SUBJECT_ID, "
-                "SUBJECT_COUNTRY AS SUBJECT_COUNTRY, "
-                "SUBJECT_MRN AS SUBJECT_MRN "
-                f"FROM {managed}"
-            )
-            print(f"SUBJECTS_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
+            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
         finally:
             cur.close()
+        write_pandas(conn, subjects, managed.split(".")[-1].strip('"'),
+                     database=snowflake.database, schema=snowflake.schema)
+        print(f"SUBJECTS_DIAG seeded {managed} rows={len(subjects)}")
     finally:
         conn.close()

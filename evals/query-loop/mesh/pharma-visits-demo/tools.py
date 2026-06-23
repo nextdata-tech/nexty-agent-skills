@@ -284,13 +284,31 @@ def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
                             fqn=fqn,
                         )
                     else:
-                        sql = compile_selection(
-                            selection,
-                            registry=REGISTRY,
-                            dialect=_DIALECT,
-                            fqn=fqn,
-                            use_view=True,
-                        )
+                        try:
+                            # Single-DP selections compile against the pre-joined
+                            # <MODEL>_SEMANTIC view. A cross-DP / multi-hop
+                            # selection cannot be represented by that single-table
+                            # view; the compiler raises CompileError telling us to
+                            # compile against base tables. Auto-fall back to
+                            # use_view=False so the multi-hop join resolves at
+                            # query time against the live mesh tables.
+                            sql = compile_selection(
+                                selection,
+                                registry=REGISTRY,
+                                dialect=_DIALECT,
+                                fqn=fqn,
+                                use_view=True,
+                            )
+                        except CompileError as ve:
+                            if "use_view=False" not in str(ve):
+                                raise
+                            sql = compile_selection(
+                                selection,
+                                registry=REGISTRY,
+                                dialect=_DIALECT,
+                                fqn=fqn,
+                                use_view=False,
+                            )
                 except CompileError as e:
                     return _error(f"Invalid selection: {e}")
                 except Exception as e:

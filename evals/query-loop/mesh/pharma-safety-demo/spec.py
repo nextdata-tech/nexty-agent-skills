@@ -31,6 +31,7 @@ from nxd.spec import (
     data_product_rpc_output,
     rpc_function,
     rpc_server,
+    script,
     storage,
 )
 from nxd.experimental.semantic import build_semantic_tools
@@ -83,6 +84,7 @@ _storage = (
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
     )
+    .managed_access()
 )
 
 spec = (
@@ -111,10 +113,19 @@ spec = (
         )
         .environment("demo"),
     )
-    # TRANSFORM-SEED: the transform seeds this DP's OWN adverse_events table +
-    # marker + the single-table semantic view in one pass, and bundles
-    # registry.py/tools.py (the **/*.py glob runs on the transform path).
-    # .startup_timeout(600) covers cold-boot contention when the mesh launches.
+    # PROVISION: the @on_provision hook (provision.py) creates the ADVERSE_EVENTS
+    # table structure + the single-table ADVERSE_EVENTS_SEMANTIC view in Phase A,
+    # BEFORE the transform. Runs on the same k8s compute; receives the `snowflake`
+    # output port as a typed Snowflake handle (injected by param name).
+    .provision(
+        script("provision.py").compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+    )
+    # TRANSFORM: seeds the ROWS of the promised adverse_events table (structure +
+    # view already provisioned). Output-port promise verification runs AFTER the
+    # transform, so seeding rows here satisfies the promise in one launch. The
+    # .transform() also bundles registry.py/tools.py/provision.py (the **/*.py
+    # glob runs on the transform path). .startup_timeout(600) covers cold-boot
+    # contention when the mesh launches.
     .transform(
         code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )

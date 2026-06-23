@@ -25,6 +25,7 @@ from nxd.spec import (
     Predicate,
     rpc_function,
     rpc_server,
+    script,
     storage,
 )
 from nxd.experimental.semantic import build_semantic_tools
@@ -77,6 +78,7 @@ _storage = (
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
     )
+    .managed_access()
 )
 
 spec = (
@@ -92,12 +94,19 @@ spec = (
         version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
-    # TRANSFORM-SEED: the transform seeds the SUBJECTS table + marker + the
-    # single-table semantic view in one pass, and bundles registry.py/tools.py
-    # (the **/*.py glob runs on the transform path). Output-port promise
-    # verification does NOT run before the transform (only input expectations do,
-    # and this spine DP has no inputs), so this deploys green in one launch.
-    # .startup_timeout(600) covers cold-boot contention when the mesh launches.
+    # PROVISION: the @on_provision hook (provision.py) creates the SUBJECTS table
+    # structure + the single-table SUBJECTS_SEMANTIC view in Phase A, BEFORE the
+    # transform. Runs on the same k8s compute; receives the `snowflake` output
+    # port as a typed Snowflake handle (injected by param name).
+    .provision(
+        script("provision.py").compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+    )
+    # TRANSFORM: seeds the ROWS of the promised SUBJECTS table (structure + view
+    # already provisioned). Output-port promise verification runs AFTER the
+    # transform, so seeding rows here satisfies the promise in one launch. The
+    # .transform() also bundles registry.py/tools.py/provision.py (the **/*.py
+    # glob runs on the transform path). .startup_timeout(600) covers cold-boot
+    # contention when the mesh launches.
     .transform(
         code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
