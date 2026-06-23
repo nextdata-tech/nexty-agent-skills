@@ -14,7 +14,7 @@ The data should be stored within a pgvector instance, specifically the service c
 focused on embeddings. 
 
 # Transformation
-All issues will be retrieved. Alongside free text fields like summary, comment and description also retrieve core fields like id, date - things that would be useful to store as metadata within a vector store.
+All issues will be retrieved. Alongside free text fields like summary, comment and description also retrieve core fields like id, date - things that would be useful to store as metadata within a vector store. Store with a key that will be idempotent so that if the same issue is retrieved again it will be updated rather than duplicated.
 
 Free text should be chunked with RecursiveCharacterTextSplitter (from langchain_text_splitters import RecursiveCharacterTextSplitter) with the size of 512.
 

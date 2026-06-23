@@ -72,3 +72,6 @@ evals/query-loop/runs/
 
 # Cross-DP join eval run outputs (generated)
 evals/cross-dp-joins/runs/
+
+# Skill build artifacts
+build/

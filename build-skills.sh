@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Package each skill in src/ into a zip, excluding noise (VCS, CI, caches,
 # pre-commit hooks, lockfiles, OS junk). Report file count + size per skill.
-# Output zips land next to each skill dir: src/<skill>/<skill>.zip (also
-# copied to repo root for convenience).
+# Output zips land in the build/ directory: build/<skill>.zip.
 set -euo pipefail
 
-SRC_DIR="$(cd "$(dirname "$0")" && pwd)/src"
-OUT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SRC_DIR="$ROOT_DIR/src"
+OUT_DIR="$ROOT_DIR/build"
+mkdir -p "$OUT_DIR"
 
 # Exclusion globs (matched by `zip -x`). Patterns are relative to the skill
 # root once we cd into it; '*/' covers any depth.
@@ -100,3 +101,6 @@ for skill_dir in "$SRC_DIR"/*/; do
   if [[ "$total" -gt "$CAP" ]]; then status="OVER CAP ($CAP)"; fi
   printf '%-32s %6d %5d %6d %8s %s\n' "$skill" "$files" "$dirs" "$total" "$size" "$status"
 done
+
+echo
+echo "Skill zips written to ${OUT_DIR}/"
