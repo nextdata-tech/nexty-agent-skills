@@ -53,6 +53,24 @@ def _matches(tool_name: str, pattern: str) -> bool:
     return re.search(pattern, tool_name or "", re.IGNORECASE) is not None
 
 
+_DP_IN_DESC = re.compile(r"data product:\s*([^,)]+)", re.IGNORECASE)
+
+
+def _fullname_from_tools(tools: list[dict]) -> str:
+    """Resolve a DP's real fullName from its tool descriptions.
+
+    The multiplexer keys endpoints by an opaque ``__<hash>`` (``dp_full_name`` in
+    the catalogue is that hash, NOT the fullName). But every per-DP tool
+    description is prefixed ``(data product: <fullName>, port: ...)``, so the real
+    fullName is recoverable. Returns ``""`` if no description carries it.
+    """
+    for t in tools or []:
+        m = _DP_IN_DESC.search(t.get("description") or "")
+        if m:
+            return m.group(1).strip()
+    return ""
+
+
 def _unwrap_tool_result(result: dict[str, Any]) -> Any:
     """MCP ``tools/call`` returns ``{content: [...], structuredContent: {...}}``.
 
@@ -75,12 +93,21 @@ def _unwrap_tool_result(result: dict[str, Any]) -> Any:
     return result
 
 
-def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[dict], str | None]:
+def _harvest_models(
+    payload: Any, dp: str, tool: str, dp_fullname: str = ""
+) -> tuple[list[dict], list[dict], str | None]:
     """Pull model entries + relationship entries from a semantic_model response.
 
     Recognised field names — case insensitive:
       models | semantic_models                         → list of {name|model, attributes|fields|columns}
       relationships | relations | links | joins        → list of {from|source, to|target, kind|type, on|join_on}
+
+    ``dp`` is the multiplexer hash; ``dp_fullname`` (when known) is the DP's real
+    fullName, used for ``from_dp``/``to_dp`` so the validator and the user see
+    fullNames, not hashes. For a CROSS-DP registry join the foreign model carries
+    its own ``data_product`` label, so the join's ``to_dp`` resolves to the DP
+    that OWNS the foreign model — not the harvesting DP (the bug this fixes:
+    cross-DP joins were stamped with the harvesting DP on both sides).
 
     Also accepts a top-level ``result`` envelope (a common MCP server
     pattern) and surfaces any ``error`` field as the third return value.
@@ -103,6 +130,16 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
         payload = payload["result"]
     tool_error = payload.get("error") if isinstance(payload.get("error"), str) else None
 
+    # The DP identity to stamp on this DP's own entries: prefer the resolved
+    # fullName, fall back to the hash.
+    own = dp_fullname or dp
+    # model name -> owning DP fullName. The harvesting DP's OWN models carry an
+    # empty data_product label, so they map to `own`; a foreign (cross-DP) model
+    # carries the fullName of the DP that owns it. Used to resolve join `to_dp`.
+    # Populated from `raw_models` below (same alias resolution the harvester uses),
+    # so it covers every model-list shape — not just the `models` key.
+    model_owner: dict[str, str] = {}
+
     # Models
     raw_models_any: Any = (
         payload.get("models")
@@ -117,6 +154,14 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
         ]
     else:
         raw_models = list(raw_models_any or [])
+    # Build the model→owner map first, over the SAME resolved list + name aliases,
+    # so a cross-DP join's `to_dp` resolves for every payload shape the harvester
+    # accepts (not only the canonical `models`/`name` shape).
+    for _m in raw_models:
+        if isinstance(_m, dict):
+            _name = _m.get("name") or _m.get("model") or _m.get("id")
+            if _name:
+                model_owner[_name] = _m.get("data_product") or own
     for m in raw_models:
         if not isinstance(m, dict):
             continue
@@ -128,7 +173,7 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
             or m.get("properties")
             or []
         )
-        models.append({"dp": dp, "model": name, "attributes": attrs, "source_tool": tool})
+        models.append({"dp": own, "model": name, "attributes": attrs, "source_tool": tool})
 
         # Per-model link arrays. Each entry typically has
         # {field, predicate, data_product, model, attribute}.
@@ -142,15 +187,15 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
             kind = link.get("predicate") or link.get("kind") or link.get("type") or "joins_on"
             rels.append(
                 {
-                    "from_dp": dp,
+                    "from_dp": own,
                     "from_model": name,
                     "from_attribute": field,
-                    "to_dp": other_dp or dp,
+                    "to_dp": other_dp or model_owner.get(other_model, own),
                     "to_model": other_model,
                     "to_attribute": other_attr,
                     "kind": kind,
                     "evidence": {
-                        "semantic_model_dp": dp,
+                        "semantic_model_dp": own,
                         "tool": tool,
                         "path": f"models[{name}].links[{idx}]",
                     },
@@ -170,16 +215,17 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
     for idx, r in enumerate(raw_rels or []):
         if not isinstance(r, dict):
             continue
+        _to_model = r.get("to_model") or r.get("to") or r.get("target") or r.get("target_model")
         rels.append(
             {
-                "from_dp": r.get("from_dp") or r.get("source_dp") or dp,
+                "from_dp": r.get("from_dp") or r.get("source_dp") or own,
                 "from_model": r.get("from_model") or r.get("from") or r.get("source") or r.get("source_model"),
-                "to_dp": r.get("to_dp") or r.get("target_dp") or dp,
-                "to_model": r.get("to_model") or r.get("to") or r.get("target") or r.get("target_model"),
+                "to_dp": r.get("to_dp") or r.get("target_dp") or model_owner.get(_to_model, own),
+                "to_model": _to_model,
                 "kind": r.get("kind") or r.get("type") or "joins_on",
                 "on": r.get("on") or r.get("join_on") or r.get("keys") or [],
                 "evidence": {
-                    "semantic_model_dp": dp,
+                    "semantic_model_dp": own,
                     "tool": tool,
                     "path": f"relationships[{idx}]",
                 },
@@ -198,16 +244,21 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
             for pair in (j.get("on") or [])
             if isinstance(pair, (list, tuple)) and len(pair) == 2
         ]
+        left_model = j.get("left") or j.get("from_model")
+        right_model = j.get("right") or j.get("to_model")
         rels.append(
             {
-                "from_dp": dp,
-                "from_model": j.get("left") or j.get("from_model"),
-                "to_dp": dp,
-                "to_model": j.get("right") or j.get("to_model"),
+                # The owning DP of each side, resolved from the model's
+                # data_product label — a cross-DP join lands `to_dp` on the DP
+                # that owns the foreign (right) model, not the harvesting DP.
+                "from_dp": model_owner.get(left_model, own),
+                "from_model": left_model,
+                "to_dp": model_owner.get(right_model, own),
+                "to_model": right_model,
                 "kind": j.get("cardinality") or j.get("kind") or "joins_on",
                 "on": on_pairs,
                 "evidence": {
-                    "semantic_model_dp": dp,
+                    "semantic_model_dp": own,
                     "tool": tool,
                     "path": f"joins[{idx}]",
                 },
@@ -272,36 +323,39 @@ def main() -> None:
     visited: list[dict] = []
 
     for ep in gateway.get("endpoints") or []:
-        dp = ep.get("dp_full_name") or ""
+        dp = ep.get("dp_full_name") or ""  # the multiplexer hash
         endpoint = ep.get("endpoint") or ""
         if not dp or not endpoint or ep.get("error"):
             continue
-        if dp_filter and dp not in dp_filter:
-            continue
         tools = ep.get("tools") or []
+        # Resolve the DP's REAL fullName from its tool descriptions so --dps and
+        # the bundle's *_dp fields use fullName, not the opaque hash.
+        dp_fullname = _fullname_from_tools(tools) or dp
+        if dp_filter and dp_fullname not in dp_filter and dp not in dp_filter:
+            continue
         sem_tools = [t for t in tools if _matches(t.get("name") or "", args.tool_pattern)]
         if not sem_tools:
             continue
         for t in sem_tools:
             tool_name = t.get("name")
-            visited.append({"dp": dp, "tool": tool_name})
+            visited.append({"dp": dp_fullname, "hash": dp, "tool": tool_name})
             try:
                 with McpClient(endpoint=endpoint, token=token, timeout=args.timeout) as c:
                     # Retry transient 5xx on the semantic-model call — cold DP
                     # proxies sometimes 503 the first request after a redeploy.
                     raw = with_retry(lambda: c.tools_call(tool_name, call_args))
             except McpError as exc:
-                errors.append({"dp": dp, "tool": tool_name, "reason": f"{exc.code}: {exc.message}"})
+                errors.append({"dp": dp_fullname, "tool": tool_name, "reason": f"{exc.code}: {exc.message}"})
                 continue
             except Exception as exc:  # noqa: BLE001
-                errors.append({"dp": dp, "tool": tool_name, "reason": f"{type(exc).__name__}: {exc}"})
+                errors.append({"dp": dp_fullname, "tool": tool_name, "reason": f"{type(exc).__name__}: {exc}"})
                 continue
             payload = _unwrap_tool_result(raw)
-            m, r, tool_err = _harvest_models(payload, dp, tool_name)
+            m, r, tool_err = _harvest_models(payload, dp, tool_name, dp_fullname)
             models.extend(m)
             relationships.extend(r)
             if tool_err:
-                errors.append({"dp": dp, "tool": tool_name, "reason": f"tool reported error: {tool_err}"})
+                errors.append({"dp": dp_fullname, "tool": tool_name, "reason": f"tool reported error: {tool_err}"})
 
     bundle = {
         "source_gateway": str(Path(args.gateway).resolve()),

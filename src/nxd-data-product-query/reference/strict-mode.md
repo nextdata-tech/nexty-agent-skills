@@ -77,6 +77,19 @@ header by token type automatically (PAT → `X-Nextdata-Token`; OAuth session to
 
 Only the **(b)** name is standard. Everything in **(a)** is author-defined and may change between runs — that is why discovery is re-fetched per query.
 
+> **(c) Cross-DP execution — `run_cross_dp_query`.** A cross-DP question (a metric
+> on DP A grouped by a dimension on DP B) cannot be executed by stitching per-DP
+> `run_semantic_query` calls when the **join key is PII** — neither leg may return
+> the key, so there is nothing to stitch on (strict mode must then **abstain**).
+> The mesh's cross-DP facade DP serves one governed MCP tool, `run_cross_dp_query`,
+> that merges the member registries and runs ONE fan-out-safe cross-schema SQL
+> **in-pod** (the only locus with cross-schema authorization). It is MCP-only, so
+> it is strict-mode legal: a plan step targeting `run_cross_dp_query` with
+> `registry_payloads` = the harvested `semantic_model` payloads passes Rule 1
+> (MCP-mediated) and Rule 4 (the join it relies on is in the relations bundle).
+> See SKILL.md §6g. The PII/mixed-grain gate runs inside the tool; a denied
+> selection returns an error, never a wrong number.
+
 ## Flow (one shape that satisfies the rules)
 
 1. **Discover MCP surface.** Call the mesh MCP gateway to enumerate DP MCP endpoints and their declared functions. Reuse this catalogue **only within the current query run** — never across queries (see Rule 3 above). The next user question must start with a fresh `mcp_gateway.py` invocation.
@@ -112,6 +125,16 @@ Only the **(b)** name is standard. Everything in **(a)** is author-defined and m
        --token-file /tmp/strict-tok.txt \
        --out /tmp/nxd-step-<id>.json
      ```
+     **Cross-DP step (class (c)).** A step whose `mcp_function` is
+     `run_cross_dp_query__<facade-hash>` is executed the same way — one
+     `mcp_call.py` against the facade tool — but its `request` carries
+     `registry_payloads` (the harvested `semantic_model` payloads of every member
+     DP, the JSON each `semantic_model` call returned) plus the `{measures,
+     dimensions, filters}` selection. The facade merges the registries and runs
+     ONE governed cross-schema SQL in-pod. This is how a single plan step answers a
+     cross-DP join without the client ever touching a second schema — see SKILL.md
+     §6g. A `relationships_used[*]` entry citing the cross-DP join (Rule 4) is what
+     authorises the step's reliance on that join.
    - If `passed=false`: return `{plan, validation_report}` with each failure named and the rule it violated (Rule 1 / 2 / 4). **Stop.** Do not retry the underlying query through a non-MCP path; if the user wants to relax strict mode, they pass `--strict=false` (or "drop strict mode") and the skill falls back to the default Step-6 routing of the parent skill.
 
 ## Plan format (shape on disk)
