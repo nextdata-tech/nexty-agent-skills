@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-query
-description: Query a deployed Nextdata OS Data Product through its public REST API. Discovers the active mesh from the user's local nxd settings, lists Data Products and their output ports, fetches each port's location and a leased credential, then runs the query against the port using those credentials. Routes by output-port driver — SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone), and MCP/RPC calls for RPC ports — and turns natural-language questions into concrete queries for vector and MCP endpoints. Also supports an opt-in strict MCP-only mode that disables direct-store access, builds a plan from semantic_model relationships, and gates execution on an independent validator. Use when the user asks to "query a data product", "read from an output port", "search a named DP", "use strict mode", or "MCP-only".
+description: Query a deployed Nextdata OS Data Product. Discovers the active mesh from local nxd settings, then does ALL discovery — Data Products, output ports, model attributes, health, glossary — through the mesh MCP gateway multiplexer in one MCP session, not the per-DP REST API. For direct-store reads it leases a credential from the per-DP REST API (the one thing the gateway cannot do) and routes by output-port driver: SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone); RPC/MCP ports are called as gateway tools. Turns natural-language questions into concrete queries. Also supports an opt-in strict MCP-only mode that disables direct-store access, builds a plan from semantic_model relationships, and gates execution on a validator. Use when the user asks to "query a data product", "read from an output port", "search a named DP", "use strict mode", or "MCP-only".
 allowed-tools:
   - Bash
   - Read
@@ -10,20 +10,48 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.4.0
+  version: 0.5.0
 ---
 
 # nxd Data Product Query
 
-Query a deployed Nextdata OS Data Product through its public Data Product REST API. The skill:
+Query a deployed Nextdata OS Data Product. The skill:
 
 1. Finds the active mesh from `~/.nxd/meshes.json` (or `~/.nxd/config.yaml` as fallback).
-2. Lists Data Products on the mesh and asks the user which one (if not supplied).
-3. Lists output ports on that Data Product and asks the user which port (if not supplied).
-4. Fetches the port's location and a leased credential from the DP API.
-5. Routes the query by output-port driver type, then runs it.
+2. Lists Data Products **via the MCP gateway** and asks the user which one (if not supplied).
+3. Lists output ports + tools **via the MCP gateway** and asks the user which (if not supplied).
+4. For a direct-store read, fetches the port's location and a leased credential from the DP REST API.
+5. Routes the query by output-port driver type (or calls the MCP tool), then runs it.
 
-The public Data Product REST API contract this skill drives is documented per-mesh at `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (resolve `<app_url>` in Step 1; see **Platform docs**).
+## Gateway-first (discovery / metadata / health via MCP)
+
+The mesh runs a single **MCP gateway multiplexer** (mcp-proxy-api) that serves —
+over ONE MCP session — the catalogue, metadata, health, glossary, and debug info
+this skill needs. **All discovery (Steps 2–4) goes through it, not REST.**
+`scripts/gateway_tools.py` wraps the gateway tools (`tools/list` + `tools/call`
+against `<base>/dp/mcp/`):
+
+| Need | `gateway_tools.py` subcommand | Gateway tool |
+|---|---|---|
+| List DPs | `list-dps [--domain D]` | `discovery…__list_data_products` |
+| Output ports (+ infra service) + models/attributes | `details --dp <dp> --outputs --models` | `proxy__get_data_product_details` |
+| Per-DP MCP/RPC tool list | `tools [--dp <dp>]` | `tools/list` |
+| Health (diagnose a failing tool) | `health [--broken-only]` | `proxy__getDataProductsHealth` |
+| Glossary | `glossary --name <gloss-dp>` | `glossary__get_glossary` |
+| Logs / events (debug) | `logs --dp <dp>` / `events --dp <dp>` | `proxy__getDataProductLogs` / `…Events` |
+
+**REST is used for ONE thing only: credential leasing + direct-store execution.**
+The gateway has no credential-lease tool, so querying a relational / file /
+vector port directly (Step 5 + 6a/6b/6c) goes through `connect_port.py` +
+`query_sql.py` / `fetch_file.py` / `vector_search.py`. Everything REST discovery
+used to do (`/data-products`, `/outputs`, `/models`) is now served by the gateway
+— there is **no REST discovery fallback**. Run one gateway session per query;
+re-list per query (the DP set + tools are not stable). Auth is the same token
+used everywhere here (see **Credentials**): a PAT is sent on `X-Nextdata-Token`,
+an OAuth session token on `Authorization: Bearer` — `mcp_http.py` picks the
+header by token type automatically.
+
+The public Data Product REST API contract the lease/query scripts drive is documented per-mesh at `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (resolve `<app_url>` in Step 1; see **Platform docs**).
 
 For **vector stores** and **MCP / RPC ports**, this skill consults the LLM (Claude — the conversation itself) to turn the user's natural-language question into a concrete query (vector similarity expression, MCP call payload) before executing.
 
@@ -36,8 +64,8 @@ This skill is read-only. It never writes to a data product's output store.
 The user may pass any of these in the request — collect the rest interactively:
 
 - **Mesh** — which configured mesh to query. nxd-setup owns mesh selection; the active mesh + its api/app host come from `~/.nxd` (see Step 1). Do not hardcode a mesh host — derive it.
-- **Data Product** — `fullName` (illustrative example: `<dp-name>`, e.g. an embeddings DP). If missing, prompt with the list returned by `/api/v1/data-products`. You can also scope by **domain** (the `domain` field in the DP list) when many DPs span domains — ask the user to narrow by domain rather than scrolling a long list.
-- **Output port** — port `name` (illustrative examples: a `pgvector` port, an `adls` file port, a relational `*-out` port). If missing, prompt with the list returned by `/api/v1/outputs` on that DP.
+- **Data Product** — `fullName` (illustrative example: `<dp-name>`, e.g. an embeddings DP). If missing, prompt with the list from `gateway_tools.py list-dps`. You can also scope by **domain** (`--domain`) when many DPs span domains — ask the user to narrow by domain rather than scrolling a long list.
+- **Output port** — port `name` (illustrative examples: a `pgvector` port, an `adls` file port, a relational `*-out` port). If missing, prompt with `gateway_tools.py details --dp <dp> --outputs` (data ports) + `gateway_tools.py tools --dp <dp>` (MCP/RPC tools).
 - **Infra-profile** — only needed when a port's `connect` returns `unsupported` (Step 5). Derive it from the port / mesh — `nxd ls infra-profiles` against the active mesh — or ask the user; do not assume a local file (see Step 5).
 - **Query** — natural-language question, or a SQL string, or a vector-search description, or an MCP function + args. If missing, ask.
 - **Strict mode** (`--strict`) — opt-in MCP-only mode. When the user asks for "strict mode", "MCP-only", "no direct access", or passes the flag explicitly, follow **Strict Mode** below instead of the default routing in Step 6. Strict mode disables every data-source-direct path (SQL, presigned-URL fetch, pgvector dial, external API) and only allows mediated access via MCP.
@@ -50,9 +78,9 @@ A locked-down mode for queries that must demonstrably go through MCP and nothing
 
 **When to use.** The user explicitly asks for "strict mode", "MCP-only", or "no direct access", or passes the `--strict` flag. Otherwise default to the Step-6 routing below.
 
-**The full strict-mode contract** — five rules, two-stage discovery, plan JSON shape, the five concrete validation checks, generator-↔-validator retry loop, abstain rules, output shape, and known limitations — lives in [reference/strict-mode.md](reference/strict-mode.md). Read it before running a strict-mode query and again whenever the supporting scripts change.
+**The full strict-mode contract** — five rules, one-session multiplexer discovery, plan JSON shape, the five concrete validation checks, generator-↔-validator retry loop, abstain rules, output shape, and known limitations — lives in [reference/strict-mode.md](reference/strict-mode.md). Read it before running a strict-mode query and again whenever the supporting scripts change.
 
-**Strict-mode scripts** (all under `scripts/`, all per-query and cache-free): `mcp_gateway.py` (Stage 1+2 discovery), `semantic_relations.py` (harvest `semantic_model` responses into a relations bundle), `plan_validator.py` (pure local five-check validator), `mcp_call.py` (one-shot MCP `tools/call` from a validated plan step), `mcp_http.py` (minimal MCP Streamable-HTTP client used by the others).
+**Strict-mode scripts** (all under `scripts/`, all per-query and cache-free): `mcp_gateway.py` (multiplexer discovery — health + one `tools/list`), `semantic_relations.py` (harvest `semantic_model` responses into a relations bundle), `plan_validator.py` (pure local five-check validator), `mcp_call.py` (one-shot MCP `tools/call` from a validated plan step), `mcp_http.py` (minimal MCP Streamable-HTTP client used by the others).
 
 ---
 
@@ -60,7 +88,7 @@ A locked-down mode for queries that must demonstrably go through MCP and nothing
 
 Mesh/env selection is the **first** thing this skill resolves — everything else (api host, doc links, infra-profile lookups) derives from it. nxd-setup owns this config; this skill only reads it.
 
-Read the user's local nxd settings. The mesh URL is needed to list Data Products; the bearer token is needed to call the per-DP API.
+Read the user's local nxd settings. The mesh URL locates the gateway multiplexer + per-DP API; the token authenticates both (header by token type — see **Credentials**).
 
 ```bash
 python3 scripts/find_mesh.py
@@ -109,12 +137,10 @@ Prefer **showing** over linking — a live `nxd ls …` / REST call against the 
 If the user named one, validate it against the list. Otherwise present the list:
 
 ```bash
-python3 scripts/list_dps.py --api-url "$API_URL" --token-file "$TOKEN_FILE"
+python3 scripts/gateway_tools.py list-dps [--domain <domain>] --token-file "$TOKEN_FILE"
 ```
 
-Outputs one row per DP: `fullName`, `domain`, `version`, `baseUrl`. Use `AskUserQuestion` (single-select) when there are many. When DPs span several `domain` values, first ask the user which **domain** to narrow to (or confirm the one they named), then present only that domain's DPs — don't make them scroll an unscoped list.
-
-The script reads the bearer token from stdin (see **Credentials on the command line** below).
+Returns one entry per DP: `name`, `domain`, `description`, `status`, `endpoint`, plus access/promise stats. Use `AskUserQuestion` (single-select) when there are many; pass `--domain` (or the gateway tool's `filter_domain`) to narrow rather than scrolling an unscoped list.
 
 Docs: the consumer REST API contract these calls follow is at `<app_url>/docs/#/tutorials/guides/consumer-tutorial`.
 
@@ -122,17 +148,14 @@ Docs: the consumer REST API contract these calls follow is at `<app_url>/docs/#/
 
 ## Step 3: Pick the output port
 
-Each DP exposes its output ports at `<baseUrl>/api/v1/outputs`. List them:
+List the DP's output ports and its MCP/RPC tools:
 
 ```bash
-python3 scripts/list_outputs.py --dp <fullName> --api-url "$API_URL" --token-file "$TOKEN_FILE"
+python3 scripts/gateway_tools.py details --dp <fullName> --outputs --token-file "$TOKEN_FILE"
+python3 scripts/gateway_tools.py tools --dp <fullName> --token-file "$TOKEN_FILE"
 ```
 
-Output per port: `name`, `infra_profile_name`, `infra_service_name`, `model_names`.
-
-Also fetch RPC ports at `<baseUrl>/api/v1/rpc-outputs` — those are MCP/RPC endpoints rather than data ports. Present both lists together, distinguished by kind (`data` vs `rpc`).
-
-If only one port exists, confirm it and proceed. Otherwise prompt the user.
+`details --outputs` returns `outputs.ports[*]` — `name`, `infra_profile_name`, `infra_service_name`, `model_names`, `promises` (the same data-port contract the old REST `/outputs` gave, including the **driver / `infra_service_name` the credential-lease step in Step 5 needs**). `tools` returns the DP's MCP/RPC functions, namespaced `<function>__<hash>` on the multiplexer. Present data ports and RPC/MCP tools together, distinguished by kind. If only one port/tool exists, confirm and proceed; otherwise prompt the user.
 
 Docs: output-port semantics (`/api/v1/outputs`, `/api/v1/rpc-outputs`) at `<app_url>/docs/#/tutorials/guides/02-outputs`.
 
@@ -143,10 +166,10 @@ Docs: output-port semantics (`/api/v1/outputs`, `/api/v1/rpc-outputs`) at `<app_
 Before the user submits a query, surface the column schema of the port's models so they can frame the question against real fields:
 
 ```bash
-python3 scripts/port_models.py --dp <fullName> --port <port> --api-url "$API_URL" --token-file "$TOKEN_FILE"
+python3 scripts/gateway_tools.py details --dp <fullName> --models --token-file "$TOKEN_FILE"
 ```
 
-Resolves the port's models in this order: `port.model_names` → `port.promises.model[].model` → DP-level `model_names`. Then fetches `/api/v1/models` and emits each matching model's `name`, `description`, and full `attributes` list (`name`, `data_type`, `description`).
+`--models` (gateway `includeSemanticModels`) returns each model's `name`, `description`, and full `attributes` (`name`, `data_type`, `description`) with semantic/glossary links. Match the port's models (from Step 3's `outputs.ports[*].model_names` / `promises.model[].model`) against this list.
 
 Render the attributes back to the user as a compact table (model → columns + types) and only then ask for the query. For natural-language queries against vector / RPC ports, also call out which column holds the text payload (vector store) or which `request_model` fields the query must populate (RPC).
 
@@ -167,7 +190,7 @@ python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_UR
   - `status: "connected"` with `leased_credential` (presigned URLs, DB creds, etc.).
   - `status: "approval_pending"` with an approval form — surface the message and `tracking_url` to the user and stop. The access / approval and data-quality expectation model is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
   - `status: "unsupported"` — driver does not lease credentials. You then need an **infra-profile** to construct auth out-of-band. **Derive or elicit it — do not assume a local file exists:**
-    1. Read the `infra_profile_name` / `infra_service_name` the port declares (from `list_outputs.py` in Step 3).
+    1. Read the `infra_profile_name` / `infra_service_name` the port declares (from `gateway_tools.py details --dp <dp> --outputs` in Step 3).
     2. Resolve the profile against the **active mesh** — `nxd ls infra-profiles` lists what the mesh actually has; confirm the matching profile with the user.
     3. Only if the user genuinely has a working-tree copy from the **nxd-data-product-builder** skill, you may read the infra-profile YAML on disk — but **ask the user to confirm the path first**, don't grep assumed directories. How DPs and their infra-profiles are defined is documented at `<app_url>/docs/#/tutorials/cli/create`.
     4. If neither resolves, ask the user for the infra-profile name (`AskUserQuestion`) rather than guessing.
@@ -190,7 +213,7 @@ The leased credential carries `username`, `password` / `private_key`, plus the l
 python3 scripts/query_sql.py --creds <port_credentials_file> --sql "<SQL>"
 ```
 
-If the user asked in natural language, **you (Claude)** generate the SQL from the port's `model_names` plus a `DESCRIBE`-style probe — fetch the model schemas from `<baseUrl>/api/v1/models` and embed them into the SQL you draft. Show the user the SQL you intend to run before running it; only run after they confirm. Cap rows with `LIMIT` and only read the schema/table the location names.
+If the user asked in natural language, **you (Claude)** generate the SQL from the port's `model_names` plus the model schemas already fetched in Step 4 (`gateway_tools.py details --dp <dp> --models`) — embed those attributes into the SQL you draft. Show the user the SQL you intend to run before running it; only run after they confirm. Cap rows with `LIMIT` and only read the schema/table the location names.
 
 ### 6b. File storage — S3, ADLS, MinIO, GCS
 
@@ -204,135 +227,35 @@ python3 scripts/fetch_file.py --creds <port_credentials_file> --model <model_nam
 
 ### 6c. Vector store — pgvector, Pinecone (classic RAG pipeline)
 
-Vector ports run as a small RAG pipeline. The LLM (Claude — this conversation) is the generator; the scripts here are the retriever. The pipeline has five steps. Skip optional steps for cheap one-shot queries; enable them when recall or precision are weak.
-
-**Step 1 — Discover the chunk schema and embedding model.**
-
-Read `/api/v1/info` (DP `description`) and `/api/v1/models` to learn:
-- which embedding model produced the index (e.g. `sentence-transformers/all-MiniLM-L6-v2`),
-- which column holds the text chunk (default `content`),
-- which column holds the vector (default `embedding`),
-- what metadata fields ride along (project, status, key, url, dates, …).
-
-Surface the embedding model to the user and confirm before proceeding — querying with a different model from the one used at ingest gives nonsense results.
-
-**Step 2 — Query rewriting (LLM-driven, no script).**
-
-Before embedding, you (Claude) draft 1–3 candidate query strings derived from the user's natural-language question:
-
-- a literal restatement (catches exact terms / IDs),
-- a paraphrase that drops chatty wording and surfaces nouns,
-- optionally a domain-specific rephrase (e.g. expand acronyms, add synonyms).
-
-Run each candidate through steps 3–5 and fuse results (dedup by primary key, sum RRF scores). For one-shot simple queries skip this — embed the user's question directly.
-
-**Step 3 — Metadata pre-filter (optional).**
-
-If the user's question carries obvious filters (e.g. "in the NXD project", "resolved tickets only", "from last quarter"), apply them as a `WHERE` on the metadata JSON before the similarity search. This is faster and more accurate than letting the vector search return cross-project chunks you then have to discard.
-
-Pass `--filter '<json>'` to `vector_search.py`. The keys/values are whatever metadata fields the port's models actually carry (discovered in Step 4) — the shape below is an **illustrative example**, not a fixed schema:
-
-```json
-{"<metadata_field>": "<value>", "<status_field>": ["<value-a>", "<value-b>"]}
-```
-
-Equality for scalars, IN-list for arrays. Translates to e.g. `langchain_metadata->>'<field>' = '<value>' AND langchain_metadata->>'<status_field>' IN ('<value-a>','<value-b>')`.
-
-**Step 4 — Retrieve (vector-only or hybrid).**
-
-Compute the query embedding once per candidate query:
-
-```bash
-python3 scripts/embed_query.py --model <model-id> --query "<text>" --out <query_vector_file>
-```
-
-Then retrieve. Two modes:
-
-- **Vector-only** (default) — pgvector kNN with `ORDER BY <vector_col> <-> query::vector LIMIT k`.
-
-  ```bash
-  python3 scripts/vector_search.py \
-    --backend pgvector --creds <port_credentials_file> \
-    --query-vector <query_vector_file> --k 5 \
-    [--filter '<json>']
-  ```
-
-- **Hybrid (RRF fusion of vector + Postgres FTS)** — runs the vector kNN and a `ts_rank` full-text search on the text column in parallel, fuses the two ranked lists with Reciprocal Rank Fusion (k=60). Catches exact-keyword matches the vector misses (IDs, codenames, error strings) without losing semantic recall.
-
-  ```bash
-  python3 scripts/vector_search.py \
-    --backend pgvector --creds <port_credentials_file> \
-    --query-vector <query_vector_file> \
-    --query-text "<original query text>" \
-    --hybrid --candidates 50 --k 5 \
-    [--filter '<json>']
-  ```
-
-  `--candidates` is the per-list pool size (default 50); each side pulls N candidates, RRF fuses, top-`k` survives. Larger candidates ≈ better recall, more DB work.
-
-  Pinecone hybrid is **not** wired up here — pgvector only.
-
-**Step 5 — Abstain on low confidence (optional).**
-
-Pass `--min-score <f>` to set a floor on the best result's score (RRF score for hybrid, `1/(1+L2)` for vector-only). If no result clears the bar, the script returns `"abstain": true` with empty `rows`. When that fires, **tell the user "no good match in the DP"** rather than hallucinating from weak chunks. The data-quality / expectation model that governs when to trust a port's data is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
-
-Reasonable starting thresholds:
-- vector-only: `0.45` (≈ L2 distance ≤ 1.2 for normalised embeddings),
-- hybrid RRF: `0.02` (one strong-rank hit ≈ `1/(60+1) ≈ 0.016`).
-
-Tune per DP — log a few real queries first.
-
-**Step 6 — Generate the answer (LLM, in the conversation).**
-
-Pass the surviving rows — text chunk + metadata — back into the conversation. You (Claude) synthesise prose for the user's original question. Always **cite** by the metadata that identifies each chunk's source (`key`, `url`, `created`, `assignee`). Cite the chunks you actually used, not the whole top-k. If the script returned `"abstain": true`, say so plainly.
-
-**Step 7 — Agentic loop (optional, LLM-driven, no script).**
-
-If the first retrieval is partial or weak, refine and re-search — up to 3 rounds. Use the existing tools, don't add new ones. Refinement strategies:
-
-- narrow with a metadata filter that the first batch revealed (e.g. user mentioned a project the chunks made explicit),
-- broaden by dropping a filter,
-- re-rewrite the query using terminology you discovered in the first batch,
-- switch from vector-only to `--hybrid` if exact keywords matter,
-- raise `--candidates` if RRF fused thinly.
-
-Stop the loop when the score crosses the abstain threshold *and* the chunks plausibly answer the question. Tell the user how many rounds you ran and on what queries — keeps the loop debuggable.
-
----
-
-**Pipeline summary**
-
-```
-user question
-  ├─ rewrite (LLM)               → 1..3 candidate queries
-  ├─ embed_query.py              → query vector
-  ├─ vector_search.py            → kNN  ─┐
-  │   --hybrid + --query-text    → FTS  ─┴→ RRF fuse top-k
-  │   --filter                   → metadata WHERE
-  │   --min-score                → abstain on weak match
-  └─ generate (LLM)              → answer + citations
-        └─ agentic refine? → re-rewrite → loop (≤3 rounds)
-```
-
-`vector_search.py` flags reference: `--filter`, `--hybrid`, `--query-text`, `--candidates`, `--id-col`, `--text-col`, `--vector-col`, `--min-score`. See the script docstring.
+Vector ports run as a small RAG pipeline: the LLM (Claude) is the generator;
+`embed_query.py` + `vector_search.py` are the retriever (rewrite → embed →
+retrieve [vector-only / hybrid RRF] → abstain → generate → optional agentic
+loop). This path needs leased credentials (no MCP equivalent), so it stays on
+the REST `connect_port.py` lease. **Full step-by-step pipeline, flags, and
+thresholds: [reference/vector-rag.md](reference/vector-rag.md).**
 
 ### 6d. RPC / MCP port
 
-RPC ports are listed at `/api/v1/rpc-outputs`. Each port declares `functions: [{name, request_model, response_model, description}]`. The MCP client and rpc-outputs contract are documented at `<app_url>/docs/#/tutorials/guides/07-mcp`.
+RPC / MCP tools are served through the **gateway multiplexer** — discover and
+call them there, not via the REST `/rpc-outputs` contract. The MCP guide is at
+`<app_url>/docs/#/tutorials/guides/07-mcp`.
 
-**Consult the LLM.** The user's natural-language question maps onto one of the declared functions:
+**Consult the LLM.** The user's natural-language question maps onto one of the DP's tools:
 
-1. Read `/api/v1/rpc-outputs` and `/api/v1/models` to learn the function names, descriptions, and request/response schemas.
-2. Pick the function that matches the user's intent (you, Claude, do this).
-3. Construct the request payload conforming to `request_model`.
-4. Call the RPC endpoint — for HTTP-style RPC ports, that's `POST <baseUrl>/rpc/<function_name>` with the leased bearer credential; for MCP-stdio ports use `nxd mcp client` (see `nxd mcp --help`) and invoke the function over MCP.
-5. Show the response to the user; for natural-language answers, synthesise from the response payload.
+1. List the DP's tools (names, descriptions, input schemas) — already in hand from `gateway_tools.py tools --dp <fullName>` (Step 3), each named `<function>__<hash>` on the multiplexer.
+2. Pick the tool that matches the user's intent (you, Claude, do this).
+3. Construct the request payload conforming to the tool's `inputSchema`.
+4. Call it through the multiplexer:
 
 ```bash
-python3 scripts/rpc_call.py --dp <fullName> --port <port> --function <fn> --args '<json>' --api-url "$API_URL" --token-file "$TOKEN_FILE"
+python3 scripts/mcp_call.py \
+  --endpoint "<base>/dp/mcp/" --tool "<function>__<hash>" \
+  --args '<json>' --token-file "$TOKEN_FILE" --out <out_file>
 ```
 
-`rpc_call.py` reads the token from stdin and writes the response to stdout (or to `--out` if `--out` is supplied — preferred for large payloads).
+5. Show the response to the user; for natural-language answers, synthesise from the response payload.
+
+`mcp_call.py` opens one MCP session, calls the tool, and writes the unwrapped result to `--out`. (Interactive `nxd mcp client` is still available when a user explicitly wants a live MCP session, but one-shot calls go through `mcp_call.py`.)
 
 #### Semantic-layer MCP ports (`list_models` / `run_semantic_query`)
 
@@ -367,8 +290,8 @@ protocol, not as free-form SQL:
    `CompileError` ("metrics span multiple grains"), and combining them in a
    hand-written join would double-count via fan-out.
 
-Call these functions exactly like any other RPC port (`rpc_call.py` above, or
-`nxd mcp client` for an MCP-stdio port).
+Call these functions exactly like any other MCP tool — `mcp_call.py` against the
+multiplexer (§6d above), using the `<function>__<hash>` wire name.
 
 ### 6e. External API ports — `driver: api`
 
@@ -417,11 +340,23 @@ carries `compiled_sql`, `rows`, `row_count`, `truncated`, `error`; on non-empty 
 
 **Never put a bearer token or password on a command line.** The scripts read secrets from one of:
 
-- `stdin` — pipe the token in: `echo "$TOK" | python3 scripts/list_dps.py …`
+- `stdin` — pipe the token in: `echo "$TOK" | python3 scripts/connect_port.py …`
 - `--token-file <path>` — a file containing the token. Prefer the `token_file` emitted by `find_mesh.py`.
 - A JSON credentials file (`--creds <port_credentials_file>`) — the leased credential blob produced by `connect_port.py`.
 
 The skill itself never prints tokens, presigned URLs, or DB passwords back to the chat. When showing the user what was leased, show the *fields available* (e.g. `presigned_url`, `database`, `schema`) — not the values.
+
+**Token + header by surface.** The same token file feeds both surfaces, but the
+wire header differs and `mcp_http.py` / `nxd_api.py` handle it for you:
+
+- **MCP gateway** (`gateway_tools.py`, strict-mode scripts) — a **PAT**
+  (`nxdpat_…`, from `nxd mcp config` / `nxd login`) is sent on **`X-Nextdata-Token`**
+  (the documented MCP auth); an OAuth session token goes on `Authorization: Bearer`.
+  The two are mutually exclusive on the gateway — `mcp_http.py` picks by token type.
+- **DP REST API** (`list_*`, `connect_port.py`, …) — uses `x-nextdata-token`.
+
+A `401` on either means the token is missing/expired, **not** the wrong kind:
+refresh a PAT (`nxd mcp config`) or an OAuth session token (`nxd whoami`), then retry.
 
 ---
 
@@ -441,21 +376,18 @@ py -3 -m venv .nxd-data-product-query-venv
 
 | Script | Purpose |
 |---|---|
+| `gateway_tools.py` | **The discovery path (MCP-only).** One multiplexer session → `list-dps`, `details` (outputs/models/inputs/promises/policies), `health`, `glossary`, `logs`, `events`, `tools`. This is the sole discovery surface — the old REST `list_dps.py` / `list_outputs.py` / `port_models.py` are removed |
 | `find_mesh.py` | Discover the active mesh URL and bearer token from `~/.nxd/` |
-| `list_dps.py` | `GET /api/v1/data-products` — list deployed DPs on the mesh |
-| `list_outputs.py` | `GET <dp>/api/v1/outputs` and `/api/v1/rpc-outputs` — list ports |
-| `port_models.py` | Resolve a port's models and emit each model's attributes (name, type, description) |
-| `connect_port.py` | `GET /location` + `POST /connect` — fetch port location + leased credential |
+| `connect_port.py` | `GET /location` + `POST /connect` — fetch port location + leased credential (no MCP equivalent — required for direct-store query) |
 | `query_sql.py` | Run a SQL query against the leased database credential |
 | `fetch_file.py` | Download a leased presigned URL, preview / SQL-query the file with DuckDB |
 | `embed_query.py` | Compute an embedding for a query string using a named model |
 | `vector_search.py` | Vector similarity search against pgvector / Pinecone |
-| `rpc_call.py` | Invoke a function on an RPC output port |
 | `mcp_http.py` | (Strict mode) Minimal MCP Streamable-HTTP client used by the strict-mode scripts — handles `initialize`, session id, `tools/list`, `tools/call` |
-| `mcp_gateway.py` | (Strict mode) Wraps `nxd mcp health --format json` for endpoint discovery; calls `tools/list` per healthy DP MCP endpoint to capture the tool catalogue. **Re-run every query** — the DP set + tools are not stable |
+| `mcp_gateway.py` | (Strict mode) Sources the catalogue from the **MCP multiplexer** in one session — `proxy__getDataProductsHealth` + one `tools/list` (no `nxd mcp health` subprocess, no per-DP fan-out). Tools grouped by `__<hash>`. **Re-run every query** — the DP set + tools are not stable |
 | `semantic_relations.py` | (Strict mode) For each gateway DP whose tools include a name matching `^semantic[_-]?models?$` (regex overridable), calls that tool and merges the response into a single relations bundle. **Re-run every query** |
 | `plan_validator.py` | (Strict mode) Pure local plan validator. Checks the plan against the gateway catalogue + relations bundle. Emits `{passed, checks, failures}`. Network-free — caller must keep the catalogue + relations fresh |
-| `mcp_call.py` | (Strict mode) One-shot CLI over `mcp_http.call_tool_one_shot` — opens an MCP session, calls one tool, writes the unwrapped result to `--out`. Use this to execute each step of a validated plan (Rule 5). Replaces the non-existent `rpc_call.py --mcp` form |
+| `mcp_call.py` | One-shot CLI over `mcp_http.call_tool_one_shot` — opens an MCP session, calls one tool (via the multiplexer, `<function>__<hash>`), writes the unwrapped result to `--out`. Used for default-mode RPC/MCP calls (§6d) and to execute each step of a validated strict-mode plan (Rule 5) |
 
 Each script writes secrets only to `--out` files (never stdout) and reads tokens via `--token-file` or stdin.
 
@@ -468,7 +400,7 @@ Each script writes secrets only to `--out` files (never stdout) and reads tokens
 - **`connect` returns `approval_pending`** — stop and surface the `message` / `tracking_url` to the user. Do not poll.
 - **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `<port_credentials_file>` for the session; re-request if the TTL passes.
 - **Vector store embedding model mismatch** — querying with a different embedding model from the one the DP used to index gives nonsense results. Always confirm the model from the DP's `description` / `/v1/info` before computing the query vector.
-- **MCP vs HTTP RPC** — the same DP may expose its RPC port via both. Prefer HTTP when running one-shot; use `nxd mcp client` only when the user explicitly wants interactive MCP.
+- **One gateway session per query** — the DP set + each DP's tools change (new DP, redeploy, breaker flip). Don't reuse a tool list across queries; re-run `gateway_tools.py` per question. Use `nxd mcp client` only when the user explicitly wants an interactive MCP session.
 - **Strict mode validation failures are terminal** — when `plan_validator.py` returns `passed=false`, do **not** fall back to default routing in the same run. Return the failure to the user and stop. Falling back silently would defeat the rule. If the user wants the fallback, they must explicitly drop strict mode.
 - **Strict mode + unknown relationships** — if a join the question seems to need is not present in any `semantic_model` MCP response, the right answer is "I can't do this in strict mode" — not "I'll guess from column names". Add the missing relationship to the source DP's `semantic_model` and redeploy, or ask the user to drop strict mode.
 
@@ -484,12 +416,12 @@ confirm which before changing the query.
 |---|---|---|
 | `401 Unauthorized` from a port call | Leased credential or PAT expired (`tokens.json` `expiry` passed), or the wrong auth header. DP REST uses `x-nextdata-token`, NOT `Authorization: Bearer`. | Re-run `nxd login` (or **nxd-setup**) and re-request `connect`; send the PAT as `x-nextdata-token`. |
 | `403` / `SignatureDoesNotMatch` fetching a file URL | The presigned URL TTL elapsed mid-session (they are short-lived). | Re-request `connect` for a fresh URL; don't reuse a cached one past its TTL. |
-| `connect` returns `unsupported` | The port's driver has no query recipe wired, or the infra profile couldn't be resolved. | Resolve the infra profile from the active mesh; confirm the port's driver type via `list_outputs.py`. |
+| `connect` returns `unsupported` | The port's driver has no query recipe wired, or the infra profile couldn't be resolved. | Resolve the infra profile from the active mesh; confirm the port's driver type via `gateway_tools.py details --dp <dp> --outputs`. |
 | `connect` returns `approval_pending` | Access requires a pending approval. | Stop. Surface the `message` / `tracking_url` to the user. Do NOT poll. |
 | Vector search returns nonsense / irrelevant hits | Query embedded with a different model than the DP indexed with. | Read the index model from the DP `description` / `/v1/info`; embed the query with that exact model. |
 | Vector search errors with a dimension mismatch | Query vector dimension ≠ the indexed column dimension. | Match the embedding model so dimensions agree (e.g. 384 vs 1536). |
 | SQL query against a pgvector port returns 0 rows | Querying the metadata table by the wrong table name, or the DP hasn't run yet (no data). | Confirm the physical table name (model name, lowercased) and that the DP reached `STARTED` with a successful run. |
-| RPC call fails to connect / 404 | Wrong RPC path or trailing-slash mismatch on the MCP endpoint; or the RPC port is unhealthy. | Verify the port path from `list_outputs.py`; if the port itself is failing, debug the DP with **nxd-debugging-data-products**. |
+| RPC/MCP call fails to connect / 404 | Wrong tool wire name or trailing-slash mismatch on the multiplexer endpoint; or the DP MCP port is unhealthy. | Re-confirm the `<function>__<hash>` name from `gateway_tools.py tools --dp <dp>` and check `gateway_tools.py health`; if the port itself is failing, debug the DP with **nxd-debugging-data-products**. |
 | `run_semantic_query` returns "metrics span multiple grains" | Metrics from two different-grain models were combined in one call (chasm-trap guard) — correct governance, not a transient error. | Do NOT retry the same combined call. Call `describe_model` on each model to confirm grain membership, then issue one `run_semantic_query` per model sharing a compatible dimension; present the result sets separately. See §6d "Semantic-layer MCP ports". |
 | `run_semantic_query` returns `error: "dimension X is not compatible with metric Y"` | The dimension can't slice that metric (not in `compatible_dimensions`, no join reaching it). | Re-pick from `describe_model`'s `compatible_dimensions` / `joins.reaches_dimensions`; re-run the §6f gate. |
 | Filtered semantic query returns 0 rows, but the unfiltered query returns rows | Likely a **value mismatch** — the NL literal (`"California"`) doesn't match the stored encoding (`"CA"`); structural validation can't catch it (the dimension exists, only the value diverges). | Surface to the user; ask for the stored form or drop the filter. Do **NOT** retry with invented encodings. Durable fix is server-side value-linking (§6f "Not yet built"). |

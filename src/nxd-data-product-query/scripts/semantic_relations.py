@@ -89,6 +89,13 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
     rels: list[dict] = []
     if not isinstance(payload, dict):
         return models, rels, None
+    # Unwrap the serialized-registry envelope {"payload": "<json string>"} that
+    # the standard `semantic_model` tool returns (the cross-DP registry payload).
+    if "payload" in payload and isinstance(payload["payload"], str) and "models" not in payload:
+        try:
+            payload = json.loads(payload["payload"])
+        except json.JSONDecodeError:
+            pass
     # Unwrap a top-level "result" envelope if present.
     if "result" in payload and isinstance(payload["result"], dict) and not (
         payload.get("models") or payload.get("relationships")
@@ -151,12 +158,13 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
                 }
             )
 
-    # Relationships
+    # Relationships. NOTE: `joins` is intentionally NOT here — the registry-style
+    # `joins` array ({left, right, on, cardinality}) is parsed by the dedicated
+    # block below; including it here would double-count it as None→None.
     raw_rels = (
         payload.get("relationships")
         or payload.get("relations")
         or payload.get("links")
-        or payload.get("joins")
         or []
     )
     for idx, r in enumerate(raw_rels or []):
@@ -179,6 +187,34 @@ def _harvest_models(payload: Any, dp: str, tool: str) -> tuple[list[dict], list[
             }
         )
 
+    # Registry-style joins: {left, right, on: [[from_col, to_col], ...], cardinality}
+    # — the shape the nxd.experimental.semantic registry / `semantic_model` tool
+    # emits. ``left`` is the many side, ``right`` the one side.
+    for idx, j in enumerate(payload.get("joins") or []):
+        if not isinstance(j, dict):
+            continue
+        on_pairs = [
+            {"from": pair[0], "to": pair[1]}
+            for pair in (j.get("on") or [])
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
+        rels.append(
+            {
+                "from_dp": dp,
+                "from_model": j.get("left") or j.get("from_model"),
+                "to_dp": dp,
+                "to_model": j.get("right") or j.get("to_model"),
+                "kind": j.get("cardinality") or j.get("kind") or "joins_on",
+                "on": on_pairs,
+                "evidence": {
+                    "semantic_model_dp": dp,
+                    "tool": tool,
+                    "path": f"joins[{idx}]",
+                },
+                "raw": j,
+            }
+        )
+
     return models, rels, tool_error
 
 
@@ -195,11 +231,12 @@ def main() -> None:
     )
     p.add_argument(
         "--tool-pattern",
-        default=r"^semantic[_-]?models?$",
-        help="Regex to match the semantic-model tool name on each DP (case-insensitive). "
-        "Default matches the contracted standard `^semantic[_-]?models?$` (singular or "
-        "plural, with underscore or hyphen). Override if a DP author uses a non-standard "
-        "name (e.g. `get_semantic_models`): `--tool-pattern '^(get_)?semantic_models?$'`.",
+        default=r"^semantic[_-]?models?(__[a-z0-9]+)?$",
+        help="Regex to match the semantic-model tool name (case-insensitive). "
+        "Default matches the contracted standard `semantic_model` with an optional "
+        "multiplexer `__<hash>` suffix (the gateway namespaces per-DP tools). "
+        "Override if a DP author uses a non-standard name (e.g. `get_semantic_models`): "
+        "`--tool-pattern '^(get_)?semantic_models?(__[a-z0-9]+)?$'`.",
     )
     p.add_argument(
         "--call-args",

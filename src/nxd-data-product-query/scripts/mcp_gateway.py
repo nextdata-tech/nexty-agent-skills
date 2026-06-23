@@ -1,255 +1,208 @@
-"""Strict mode — discover DP MCP endpoints + their tool catalogues.
+"""Strict mode — discover DP MCP tools via the mesh MCP gateway multiplexer.
 
-Source of truth for the endpoint list is the mesh MCP gateway, queried via
-the CLI: ``nxd mcp health --format json`` (wraps ``GET /health/dps`` on
-mcp-proxy-api). For each healthy/degraded DP MCP endpoint we then open a
-short MCP session via Streamable HTTP and call ``tools/list`` to capture
-the function names + JSON-Schema input shapes — that information is not
-exposed by ``nxd mcp health`` itself.
+Source of truth is the **MCP multiplexer** (mcp-proxy-api) at ``<base>/dp/mcp/``
+(or ``<base>/mcp/``). ONE MCP session yields everything strict mode needs:
 
-Writes one JSON document to ``--out``:
+  - ``proxy__getDataProductsHealth`` — per-DP derived_state / breaker (replaces
+    the old ``nxd mcp health`` subprocess, Stage 1).
+  - ``tools/list`` — every DP's MCP tools, namespaced ``<function>__<hash>``
+    (replaces the per-DP endpoint ``tools/list`` fan-out, Stage 2).
+
+No CLI subprocess, no per-DP dial. Output keeps the SAME catalogue shape the
+downstream strict-mode scripts (``semantic_relations.py``, ``plan_validator.py``)
+already consume — only the SOURCE changed. Each ``endpoints[*].endpoint`` is the
+multiplexer URL and ``tools[*].name`` is the namespaced wire name, so a caller
+dials the multiplexer with that wire name (``mcp_call.py`` / ``semantic_relations``
+work unchanged).
+
+Catalogue written to ``--out``:
 
     {
       "mesh": "<name>",
-      "summary": {...},
+      "endpoint": "<multiplexer url>",
+      "summary": {...},                       # from getDataProductsHealth
       "endpoints": [
-        {"endpoint": "https://...", "dp_full_name": "...", "port": "...",
-         "state": "Healthy|Degraded|Broken|Unknown",
-         "tool_count_reported": 2,
-         "tools": [{"name": "...", "description": "...", "input_schema": {...}}],
+        {"endpoint": "<multiplexer url>", "dp_full_name": "<hash>",
+         "port": "", "state": "Healthy|...",
+         "tools": [{"name": "<fn>__<hash>", "description": "...", "input_schema": {...}}],
          "error": null}
       ],
-      "function_index": [{"dp": "...", "tool": "..."}],
+      "function_index": [{"dp": "<hash>", "tool": "<fn>__<hash>"}],
+      "gateway_tools": ["proxy__...", ...],   # the multiplexer's own tools
       "errors": [...]
     }
 
+NOTE on ``dp_full_name``: the multiplexer namespaces per-DP tools by an opaque
+``__<hash>``, not the DP fullName. We group by that hash. To map hash→fullName,
+call ``gateway_tools.py details --dp <fullName>`` or read each group's
+``semantic_model`` response (which carries its own data_product). The hash is a
+stable per-DP key within a session — sufficient for the validator, which matches
+on ``(dp, tool)`` pairs it sees in this same catalogue.
+
 CLI:
 
-    python3 mcp_gateway.py --mesh <name> --token-file /tmp/nxd.tok \
-        --out /tmp/nxd-mcp-gateway.json [--include-broken]
+    python3 mcp_gateway.py --token-file /tmp/nxd.tok --out /tmp/nxd-mcp-gateway.json \
+        [--endpoint <url>] [--include-broken]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
+from typing import Any
 
-from mcp_http import McpClient, McpError, normalise_endpoint, with_retry
+from mcp_http import McpClient, McpError, with_retry
 from nxd_api import read_token, resolve_mesh
 
+TOOL_HEALTH = "proxy__getDataProductsHealth"
 
-def _run_nxd_mcp_health(mesh: str | None) -> dict:
-    """Invoke ``nxd mcp health --format json`` and assert the shape this
-    script depends on.
 
-    Verified CLI output shape (as of `nxd mcp` wrapping mcp-proxy-api's
-    ``GET /health/dps``):
+def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
+    """Candidate multiplexer URLs (mirror gateway_tools._proxy_endpoints)."""
+    if override:
+        return [override]
+    base = api_url.rstrip("/")
+    if base.endswith("/api"):
+        base = base[: -len("/api")]
+    return [f"{base}/dp/mcp/", f"{base}/mcp/"]
 
-        {
-          "service": "mcp-proxy-api",
-          "version": "...",
-          "summary": {"total": int, "healthy": int, ...},
-          "discovery_stream": {...},
-          "data_products": [
-            {
-              "endpoint": "https://.../<dp>/rpcs/<port>/mcp/",
-              "derived_state": "Healthy|Degraded|Broken|Unknown",
-              "http": {"healthy": bool, ...},
-              "mcp": {"tool_count": int, "breaker": {"state": "Closed|Open|..."}, ...}
-            },
-            ...
-          ]
-        }
 
-    If the top-level ``data_products`` key disappears or is renamed, this
-    function exits loudly rather than letting the rest of the script
-    silently parse zero endpoints and report a successful empty
-    catalogue. Same for ``data_products[*].mcp`` — its absence in any
-    row falls through to ``tool_count`` 0 and is recorded per-row, not
-    treated as a fatal mismatch (a single misshapen row should not kill
-    the whole discovery)."""
-    def _run(with_mesh: bool):
-        cmd = ["nxd", "mcp", "health", "--format", "json"]
-        if mesh and with_mesh:
-            cmd.extend(["--mesh", mesh])
+def _open(endpoints: list[str], token: str, timeout: float) -> McpClient:
+    last: Exception | None = None
+    for ep in endpoints:
         try:
-            return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        except FileNotFoundError:
-            sys.exit("nxd CLI not on PATH — install nxd or run nxd-setup")
+            c = McpClient(endpoint=ep, token=token, timeout=timeout)
+            c.initialize()
+            return c
+        except McpError as exc:
+            last = exc
+            if exc.code not in (404, 502, 503, 504):
+                raise
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+    sys.exit(f"could not reach the MCP gateway at any of {endpoints}: {last}")
 
-    p = _run(with_mesh=True)
-    # A single/default-mesh local config has no `meshes:` block; passing --mesh
-    # then panics ("Mesh '<name>' specified but config does not have meshes
-    # defined", nxd_client_auth config validation). Retry without --mesh — the
-    # default mesh is exactly what we want there.
-    if p.returncode != 0 and mesh and "does not have meshes defined" in (p.stderr or ""):
-        p = _run(with_mesh=False)
-    if p.returncode != 0:
-        sys.exit(f"nxd mcp health failed (exit {p.returncode}): {p.stderr.strip()[:500]}")
+
+def _unwrap(result: dict[str, Any]) -> Any:
+    if not isinstance(result, dict):
+        return result
+    if result.get("structuredContent") is not None:
+        return result["structuredContent"]
+    content = result.get("content")
+    if isinstance(content, list):
+        texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        joined = "\n".join(texts).strip()
+        if joined:
+            try:
+                return json.loads(joined)
+            except json.JSONDecodeError:
+                return {"text": joined}
+    return result
+
+
+def _health_summary(c: McpClient) -> dict:
+    """Call proxy__getDataProductsHealth; return its summary (best-effort)."""
     try:
-        parsed = json.loads(p.stdout)
-    except json.JSONDecodeError as exc:
-        sys.exit(f"nxd mcp health emitted invalid JSON: {exc}; first 200 chars: {p.stdout[:200]!r}")
-
-    if not isinstance(parsed, dict):
-        sys.exit(
-            f"nxd mcp health returned a non-object top-level value ({type(parsed).__name__}); "
-            f"expected an object with a 'data_products' key"
-        )
-    if "data_products" not in parsed:
-        sys.exit(
-            "nxd mcp health output is missing the 'data_products' key — the CLI output schema "
-            "appears to have changed. Top-level keys present: "
-            f"{sorted(parsed.keys())}. Update mcp_gateway.py to match the new shape "
-            "(see the docstring on _run_nxd_mcp_health for the verified shape)."
-        )
-    if not isinstance(parsed["data_products"], list):
-        sys.exit(
-            "nxd mcp health: 'data_products' is "
-            f"{type(parsed['data_products']).__name__}, expected a list"
-        )
-    return parsed
-
-
-def _dp_and_port(endpoint: str) -> tuple[str, str]:
-    """Pull the DP fullName + port from the proxy URL path.
-
-    Proxy URL shape: ``<scheme>://<dp-host>/<dp_full_name>/rpcs/<port>/mcp/``
-    Anything that doesn't match returns empty strings — the caller still
-    records the endpoint, just without parsed identifiers."""
-    path = urlparse(endpoint).path.strip("/").split("/")
-    # expect: [<dp_full_name>, "rpcs", <port>, "mcp"]
-    if len(path) >= 4 and path[1] == "rpcs" and path[3] == "mcp":
-        return path[0], path[2]
-    return "", ""
+        payload = _unwrap(with_retry(lambda: c.tools_call(TOOL_HEALTH, {})))
+    except McpError as exc:
+        return {"_health_error": f"{exc.code}: {exc.message}"}
+    if isinstance(payload, dict):
+        return payload.get("summary") or payload.get("data_products") and {"raw": "see health tool"} or payload
+    return {}
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--mesh", help="Mesh name when multiple are configured")
-    p.add_argument("--token-file", help="Path to a file holding the bearer token (preferred)")
+    p.add_argument("--token-file", help="Path to a file holding the token (preferred)")
+    p.add_argument("--endpoint", help="Override the multiplexer URL")
     p.add_argument("--out", required=True, help="Where to write the gateway catalogue JSON")
     p.add_argument(
         "--include-broken",
         action="store_true",
-        help="Also attempt tools/list against endpoints whose breaker is open (default: skip)",
+        help="(kept for compatibility; the multiplexer tools/list already excludes unhealthy DPs)",
     )
-    p.add_argument(
-        "--timeout",
-        type=float,
-        default=15.0,
-        help="Per-endpoint MCP timeout in seconds (default 15)",
-    )
+    p.add_argument("--timeout", type=float, default=30.0)
     args = p.parse_args()
-
-    health = _run_nxd_mcp_health(args.mesh)
 
     if args.token_file:
         token = read_token(args.token_file)
-        # Token came from --token-file; mesh name unknown here unless passed.
+        api_url = "" if args.endpoint else resolve_mesh(args.mesh).api_url
         mesh_name = args.mesh or ""
     else:
         m = resolve_mesh(args.mesh)
         if not m.token:
-            sys.exit("no bearer token for the active mesh — run nxd-setup or nxd login")
-        token = m.token
-        mesh_name = m.name
+            sys.exit("no token for the active mesh — run nxd-setup or nxd login")
+        token, api_url, mesh_name = m.token, m.api_url, m.name
+
+    endpoints = _proxy_endpoints(api_url, args.endpoint)
+    c = _open(endpoints, token, args.timeout)
+    multiplexer = c.endpoint
+    try:
+        summary = _health_summary(c)
+        tools = c.tools_list()
+    finally:
+        c.close()
+
+    # Group per-DP tools by their __<hash> suffix; collect the gateway's own
+    # tools (proxy__/glossary__/discovery-) separately.
+    groups: dict[str, list[dict]] = {}
+    gateway_tools: list[str] = []
+    for t in tools:
+        n = t.get("name") or ""
+        if "__" in n and not n.startswith(("proxy__", "glossary__", "discovery-")):
+            _, _, h = n.rpartition("__")
+            groups.setdefault(h, []).append(
+                {
+                    "name": n,
+                    "description": t.get("description"),
+                    "input_schema": t.get("inputSchema") or t.get("input_schema"),
+                }
+            )
+        else:
+            gateway_tools.append(n)
 
     endpoints_out: list[dict] = []
     fn_index: list[dict] = []
-    errors: list[dict] = []
-
-    # `_run_nxd_mcp_health` already asserted `data_products` is a list,
-    # so a missing/renamed key would have exited at parse time rather
-    # than producing a silent empty catalogue here.
-    for dp in health["data_products"]:
-        # Per-row fields per the verified shape in _run_nxd_mcp_health:
-        #   endpoint:       str — proxy URL
-        #   derived_state:  str — Healthy / Degraded / Broken / Unknown
-        #   mcp.tool_count: int — number of tools reported by the DP
-        # Missing-row-field defaults (e.g. ``mcp`` absent) record as
-        # tool_count=0 rather than killing the whole discovery; a single
-        # ragged row should not erase the rest of the catalogue.
-        endpoint_raw = dp.get("endpoint") or ""
-        endpoint = normalise_endpoint(endpoint_raw) if endpoint_raw else ""
-        state = dp.get("derived_state") or "Unknown"
-        dp_full, port = _dp_and_port(endpoint)
-        tool_count = ((dp.get("mcp") or {}).get("tool_count")) or 0
-
-        entry: dict = {
-            "endpoint": endpoint,
-            "dp_full_name": dp_full,
-            "port": port,
-            "state": state,
-            "tool_count_reported": tool_count,
-            "tools": [],
-            "error": None,
-        }
-
-        if state == "Broken" and not args.include_broken:
-            entry["error"] = "skipped: derived_state=Broken (pass --include-broken to probe)"
-            endpoints_out.append(entry)
-            continue
-        if not endpoint:
-            entry["error"] = "missing endpoint URL in mcp health output"
-            endpoints_out.append(entry)
-            continue
-
-        try:
-            with McpClient(endpoint=endpoint, token=token, timeout=args.timeout) as c:
-                # Retry transient 5xx — cold DP proxies often need a warm-up hit
-                # before the underlying MCP server reports its tool list.
-                tools = with_retry(c.tools_list)
-        except McpError as exc:
-            entry["error"] = f"{exc.code}: {exc.message}"
-            errors.append({"endpoint": endpoint, "reason": entry["error"]})
-            endpoints_out.append(entry)
-            continue
-        except Exception as exc:  # noqa: BLE001
-            entry["error"] = f"{type(exc).__name__}: {exc}"
-            errors.append({"endpoint": endpoint, "reason": entry["error"]})
-            endpoints_out.append(entry)
-            continue
-
-        entry["tools"] = [
+    for h, tool_list in groups.items():
+        endpoints_out.append(
             {
-                "name": t.get("name"),
-                "description": t.get("description"),
-                "input_schema": t.get("inputSchema") or t.get("input_schema"),
+                "endpoint": multiplexer,
+                "dp_full_name": h,  # opaque per-DP hash (see module docstring)
+                "port": "",
+                "state": "Healthy",
+                "tool_count_reported": len(tool_list),
+                "tools": tool_list,
+                "error": None,
             }
-            for t in tools
-        ]
-        for t in entry["tools"]:
-            fn_index.append({"dp": dp_full, "tool": t["name"]})
-
-        endpoints_out.append(entry)
+        )
+        for t in tool_list:
+            fn_index.append({"dp": h, "tool": t["name"]})
 
     catalogue = {
         "mesh": mesh_name,
-        "summary": health.get("summary") or {},
-        "discovery_stream": health.get("discovery_stream") or {},
+        "endpoint": multiplexer,
+        "summary": summary,
         "endpoints": endpoints_out,
         "function_index": fn_index,
-        "errors": errors,
+        "gateway_tools": gateway_tools,
+        "errors": [],
     }
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(catalogue, indent=2))
 
-    healthy = sum(1 for e in endpoints_out if e["state"] == "Healthy" and not e["error"])
     print(
         json.dumps(
             {
                 "out": str(out_path),
-                "endpoints_total": len(endpoints_out),
-                "endpoints_healthy": healthy,
+                "endpoint": multiplexer,
+                "dp_groups": len(endpoints_out),
                 "tools_indexed": len(fn_index),
-                "errors": len(errors),
+                "gateway_tools": len(gateway_tools),
             },
             indent=2,
         )

@@ -132,14 +132,15 @@ def main() -> None:
     except McpError as exc:
         hint = ""
         if exc.code == 401:
-            # The per-DP route validates the OAuth SESSION token (issuer/aud
-            # that oathkeeper trusts) — a standalone `nxd create
-            # personal-access-token` token has the wrong audience and 401s.
-            # Refresh + use the session token from find_mesh.py / ~/.nxd.
+            # 401 = wrong/expired token for the header it was sent on. mcp_http
+            # picks the header by token TYPE (PAT → X-Nextdata-Token, the
+            # documented MCP auth; OAuth → Authorization: Bearer). A 401 means
+            # the token is missing/expired, NOT the wrong kind. Refresh it.
             hint = (
-                " — 401: use the OAuth session token (find_mesh.py token_file / "
-                "~/.nxd/tokens.json), NOT a minted PAT; run `nxd whoami` to "
-                "refresh an expired session token, then retry."
+                " — 401: the MCP token is missing or expired. For a PAT, re-check "
+                "`nxd mcp config` / re-mint (`nxd create personal-access-token`); "
+                "for an OAuth session token, run `nxd whoami` to refresh "
+                "~/.nxd/tokens.json. Then retry."
             )
         sys.exit(f"MCP error {exc.code} at {exc.endpoint}: {exc.message}{hint}")
     except Exception as exc:  # noqa: BLE001
