@@ -59,9 +59,10 @@ _SKILL_SCRIPTS = Path(
 _MCP_CALL = _SKILL_SCRIPTS / "mcp_call.py"
 _CROSS_DP_COMPILE = _SKILL_SCRIPTS / "cross_dp_compile.py"
 
-# The nxd_py package dir: `uv run python` there resolves the dev nxd lib the compiler
-# imports (needs SemanticRegistry.model(data_product=, table=), i.e. >=0.41.99-dev5).
-# No portable default — must be set per environment.
+# The nxd_py package dir: `uv run python` there resolves the nxd lib the compiler
+# imports (needs SemanticRegistry.model(data_product=, table=) + the semantic_model
+# MCP tool, i.e. >=0.41.100 once the cross-DP work ships stable). No portable
+# default — must be set per environment.
 _NXD_PY_DIR = Path(os.environ["NXD_PY_DIR"]).resolve() if os.environ.get("NXD_PY_DIR") else None
 _SKILL_PYTHON = os.environ.get("NXD_SKILL_PYTHON", "python3")
 
@@ -159,13 +160,15 @@ def compile_sql(
     from inside the nxd_py interpreter, which lacks the session token plumbing).
 
     Requires ``NXD_PY_DIR`` to point at a checkout of ``components/nxd_py`` whose
-    nxd lib is >=0.41.99-dev5 (``SemanticRegistry.model`` must accept
-    ``data_product=`` / ``table=``). There is no portable default for this.
+    nxd lib has the cross-DP compiler API (``SemanticRegistry.model`` accepts
+    ``data_product=`` / ``table=``) — i.e. >=0.41.100 stable. There is no portable
+    default for this.
     """
     if _NXD_PY_DIR is None:
         raise RuntimeError(
             "NXD_PY_DIR is not set — point it at a components/nxd_py checkout "
-            "(nxd lib >=0.41.99-dev5) so the cross-DP compiler import resolves."
+            "(nxd lib >=0.41.100, with the cross-DP compiler API) so the "
+            "cross_dp_compile.py import resolves."
         )
     cmd = [
         "uv", "run", "python",
