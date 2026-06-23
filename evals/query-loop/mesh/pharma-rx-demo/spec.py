@@ -25,8 +25,10 @@ The four non-negotiable wiring constraints (template README):
 """
 
 from nxd.spec import (
+    Predicate,
     code,
     data_product,
+    data_product_input,
     data_product_output,
     data_product_rpc_output,
     rpc_function,
@@ -36,9 +38,9 @@ from nxd.spec import (
 
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
-from tools import list_models, describe_model, run_semantic_query
+from tools import list_models, describe_model, run_semantic_query, semantic_model
 from transform import transform
-from models import provision_marker
+from models import dispenses_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -53,6 +55,7 @@ _rpc = data_product_rpc_output()
 
 for _fn, _name in [
     (list_models, "list_models"),
+    (semantic_model, "semantic_model"),
     (describe_model, "describe_model"),
     (run_semantic_query, "run_semantic_query"),
 ]:
@@ -76,7 +79,10 @@ _rpc = _rpc.port(
 # NO as_view — the transform self-seeds (template / self-seed pattern).
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL dispenses model (not a marker) so the discover UI surfaces
+    # its attributes + glossary links + cross-DP SEMANTIC RELATIONSHIP. The
+    # transform seeds the matching DISPENSES table.
+    .promise(dispenses_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -86,7 +92,7 @@ _storage = (
 spec = (
     data_product(
         name="pharma-rx-demo",
-        domain="analytics",
+        domain="pharma",
         description=(
             "Semantic-layer data product over pharmacy dispense data (DP_RX). "
             "Exposes governed metrics (dispense_count, units_dispensed) and "
@@ -94,15 +100,38 @@ spec = (
             "grain via MCP so agents answer natural-language questions without "
             "raw SQL. Joins N:1 to site_subjects and products across the mesh."
         ),
-        version="0.1.0",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
-    # The transform self-seeds this DP's own base table + marker + single-table
-    # semantic view AND makes the **/*.py glob bundle registry.py / tools.py into
-    # the image so the extracted rpc tool scripts can import them at runtime.
+    # REAL MESH WIRING: declare the upstream DPs this one consumes. These inputs
+    # establish the real upstream→downstream dependency in the mesh and must be
+    # declared BEFORE the .transform(...).
+    .input(
+        "pharma-sites-demo",
+        data_product_input()
+        .source("https://nxd.nxd.local/data-product/pharma/pharma-sites-demo#/output/port/snowflake")
+        .environment("demo"),
+    )
+    .input(
+        "pharma-product-demo",
+        data_product_input()
+        .source("https://nxd.nxd.local/data-product/pharma/pharma-product-demo#/output/port/snowflake")
+        .environment("demo"),
+    )
+    # TRANSFORM-SEED: the transform seeds the DISPENSES table + marker + the
+    # single-table semantic view in one pass, and bundles registry.py/tools.py
+    # (the **/*.py glob runs on the transform path). Output-port promise
+    # verification does NOT run before the transform, so this deploys green in one
+    # launch. .startup_timeout(600) covers cold-boot contention at mesh launch.
     .transform(
-        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
     .output(_rpc)
+    # Glossary links — terms this DP relates to (pharma-glossary-demo term ids).
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/dispense")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/product")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/prescriber")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/site")
 )

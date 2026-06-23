@@ -1,44 +1,34 @@
-"""Transform for the pharma-safety (DP_SAFETY) semantic-layer data product.
+"""Transform for pharma-safety-demo — the FAR ADVERSE-EVENTS FACT of the mesh.
 
-SELF-SEED deploy pattern (MESH_DESIGN.md). Three jobs, all in this DP's OWN
-Snowflake schema:
+Seeds this DP's OWN base table (`ADVERSE_EVENTS`) + marker + the single-table
+semantic view (`ADVERSE_EVENTS_SEMANTIC`) in this DP's Snowflake schema, in ONE
+transform pass. This is the proven `pharma-subjects-demo` pattern: output-port
+promise verification does NOT run before the transform (only input *expectations*
+verify early), so a transform-seed deploys green in one launch.
 
-1.  Write a one-row marker table (``pharma_safety_marker``) — the single
-    promised output model — so the storage port's produce-verification passes
-    without promising the query tables themselves.
-2.  Seed this DP's OWN base table (``adverse_events``) the semantic layer reads.
-    Self-contained: no dependency on any other DP's schema or pre-existing data.
-3.  Provision a SINGLE-TABLE ``ADVERSE_EVENTS_SEMANTIC`` view over that one
-    table — hand-authored, referencing ONLY this DP's own ``adverse_events``.
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
+modules into the image (the `**/*.py` glob runs on the transform/compute path).
 
 CRITICAL (MESH_DESIGN.md, the pharma-labs-demo break): this DP's registry has a
-cross-DP MANY_TO_ONE join to ``site_subjects`` (owned by DP_SITES, lives in
-ANOTHER schema). We therefore MUST NOT call the compiler's
-``native_semantic_view_ddl`` / ``plain_view_ddl`` — those emit a JOIN to the
-crosswalk table in the other DP's schema, so ``CREATE VIEW`` binds a missing
-object and the transform fails → DP ``Failed``. The cross-DP join resolves at
-QUERY time via the live mesh, not at view-creation time. We hand-author a
-single-table view over ``adverse_events`` only. ``run_semantic_query`` reads the
-base table directly for single-model selections and this view for single-hop
-selections that stay within this DP.
-
-The transform also makes the ``**/*.py`` glob bundle registry.py / tools.py
-into the image so the extracted rpc tool scripts can import them at runtime.
+cross-DP MANY_TO_ONE join to `site_subjects` (owned by DP_SITES, lives in
+ANOTHER schema). We therefore hand-author a SINGLE-TABLE view over
+`adverse_events` only — we MUST NOT emit a JOIN to the crosswalk table in the
+other DP's schema, or `CREATE VIEW` binds a missing object and the DP fails. The
+cross-DP join resolves at QUERY time via the live mesh, not at view creation.
 """
 
+import pandas as pd
 from nxd.data_product.context import Snowflake
+
+_VIEW_NAME = "ADVERSE_EVENTS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `adverse_events`
 
 
 def transform(snowflake: Snowflake) -> None:
-    import pandas as pd
+    from snowflake import connector
     from snowflake.connector.pandas_tools import write_pandas
 
-    from registry import REGISTRY
-    from nxd.experimental.semantic.dialect import SnowflakeDialect
-    from snowflake import connector
-
     if snowflake is None or not snowflake.schema:
-        print("SEMVIEW_DIAG skipped — no Snowflake schema in context")
+        print("SEMVIEW_DIAG transform skipped — no Snowflake schema in context")
         return
 
     fqn = (
@@ -46,9 +36,6 @@ def transform(snowflake: Snowflake) -> None:
         if snowflake.database
         else f"{snowflake.schema}."
     )
-    # ``<FIRST_MODEL_UPPER>_SEMANTIC`` -> ``ADVERSE_EVENTS_SEMANTIC``. Matches the
-    # name run_semantic_query resolves via SnowflakeDialect.default_view_name.
-    view_name = SnowflakeDialect.default_view_name(REGISTRY)
 
     # This DP's OWN adverse-events fact (one row per ae_id). IS_SERIOUS is the
     # boolean flag serious_ae_count CASE-sums over.
@@ -80,57 +67,32 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 1) Marker (the promised output model).
-            managed = snowflake.full_table_name("pharma_safety_marker")
-            marker_bare = managed.split(".")[-1].strip('"')
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": view_name}]),
-                marker_bare,
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG marker written to {managed}")
-
-            # 2) Seed this DP's OWN base table. Create UNQUOTED so Snowflake folds
-            #    to upper-case — the compiler references the table name unquoted
-            #    too (`FROM adverse_events`), so both resolve to the same object.
+            # 1) Seed the PROMISED `adverse_events` model's managed table. Using
+            # full_table_name("adverse_events") writes to the exact table the
+            # storage driver verifies the promise against (so produce-verification
+            # passes). No separate marker table.
+            managed = snowflake.full_table_name("adverse_events")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}adverse_events ("
-                "AE_ID NUMBER, SUBJECT_ID NUMBER, AE_TERM VARCHAR, IS_SERIOUS BOOLEAN)"
+                f"CREATE OR REPLACE TABLE {managed} "
+                "(AE_ID NUMBER, SUBJECT_ID NUMBER, AE_TERM VARCHAR, IS_SERIOUS BOOLEAN)"
             )
-            write_pandas(
-                conn,
-                adverse_events,
-                "ADVERSE_EVENTS",
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG seeded {fqn}adverse_events rows={len(adverse_events)}")
+            write_pandas(conn, adverse_events, managed.split(".")[-1].strip('"'),
+                         database=snowflake.database, schema=snowflake.schema)
+            print(f"SEMVIEW_DIAG seeded {managed} rows={len(adverse_events)}")
 
-            # 3) Hand-authored SINGLE-TABLE semantic view over THIS DP's own table
-            #    only. We deliberately DO NOT call native_semantic_view_ddl /
-            #    plain_view_ddl: this registry's only join is the cross-DP N:1 to
-            #    site_subjects (another DP's schema), and those helpers would emit
-            #    a JOIN to a missing object → CREATE VIEW fails (the
-            #    pharma-labs-demo break). The cross-DP join resolves at query time
-            #    via the live mesh. Project the physical columns the registry's
-            #    dimensions/metrics reference (AE_ID, SUBJECT_ID, AE_TERM,
-            #    IS_SERIOUS).
+            # 2) Hand-authored SINGLE-TABLE semantic view over ADVERSE_EVENTS ONLY.
+            #    We deliberately DO NOT emit the cross-DP JOIN to site_subjects
+            #    (another DP's schema) — that would bind a missing object and fail
+            #    CREATE VIEW. The cross-DP join resolves at query time via the mesh.
             cur.execute(
-                f"CREATE OR REPLACE VIEW {fqn}{view_name} AS\n"
-                "SELECT\n"
-                "  AE_ID AS AE_ID,\n"
-                "  SUBJECT_ID AS SUBJECT_ID,\n"
-                "  AE_TERM AS AE_TERM,\n"
-                "  IS_SERIOUS AS IS_SERIOUS\n"
-                f"FROM {fqn}adverse_events"
+                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
+                "SELECT AE_ID AS AE_ID, "
+                "SUBJECT_ID AS SUBJECT_ID, "
+                "AE_TERM AS AE_TERM, "
+                "IS_SERIOUS AS IS_SERIOUS "
+                f"FROM {managed}"
             )
-            print(
-                f"SEMVIEW_DIAG single-table OK provisioned VIEW {fqn}{view_name} "
-                "(cross-DP join resolved at query time, not materialised)"
-            )
+            print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:
             cur.close()
     finally:

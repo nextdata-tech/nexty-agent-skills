@@ -34,7 +34,8 @@ REGISTRY = (
     .model(
         "subjects",
         grain="SUBJECT_ID",
-        description="Subject spine (owned by DP_REGISTRY). Join target.",
+        data_product="pharma-subjects-demo",
+        description="Subject spine (owned by pharma-subjects-demo). Cross-DP join target.",
     )
     # ── Dimensions ──────────────────────────────────────────────────────────────
     .dimension(
@@ -43,6 +44,24 @@ REGISTRY = (
         column="SITE_REGION",
         type="string",
         description="Geographic region the site belongs to.",
+    )
+    # Subject-spine dimensions (owned by pharma-subjects-demo; declared here so
+    # cross-DP queries grouping by subject attributes resolve through the
+    # crosswalk join). Mirrors the conftest pharma_registry subjects dims.
+    .dimension(
+        "subject_country",
+        model="subjects",
+        column="SUBJECT_COUNTRY",
+        type="string",
+        description="Country of enrollment.",
+    )
+    .dimension(
+        "subject_mrn",
+        model="subjects",
+        column="SUBJECT_MRN",
+        type="string",
+        description="Medical record number.",
+        pii=True,
     )
     # ── Metrics ─────────────────────────────────────────────────────────────────
     .metric(

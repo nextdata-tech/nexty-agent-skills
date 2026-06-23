@@ -36,6 +36,12 @@ REGISTRY = (
         data_product="pharma-sites-demo",
     )
     .model(
+        "subjects",
+        grain="SUBJECT_ID",
+        data_product="pharma-subjects-demo",
+        description="Subject spine (owned by pharma-subjects-demo). Cross-DP join target.",
+    )
+    .model(
         "products",
         grain="PRODUCT_ID",
         description="Product dimension (owned by DP_PRODUCT).",
@@ -57,6 +63,24 @@ REGISTRY = (
         description="National Provider Identifier of the prescribing clinician.",
         pii=True,
     )
+    # Spine dimensions owned by pharma-subjects-demo, reachable via the
+    # site_subjects -> subjects 2-hop join below. compatible_dimensions
+    # auto-derives these as sliceable from this fact's metrics at cross-DP plan time.
+    .dimension(
+        "subject_country",
+        model="subjects",
+        column="SUBJECT_COUNTRY",
+        type="string",
+        description="Country of enrollment.",
+    )
+    .dimension(
+        "subject_mrn",
+        model="subjects",
+        column="SUBJECT_MRN",
+        type="string",
+        description="Medical record number.",
+        pii=True,
+    )
     # ── Metrics (CONFUSABLE pair) ────────────────────────────────────────────
     .metric(
         "dispense_count",
@@ -76,6 +100,12 @@ REGISTRY = (
     .join(
         left="dispenses",
         right="site_subjects",
+        on=(("SUBJECT_ID", "SUBJECT_ID"),),
+        cardinality=Cardinality.MANY_TO_ONE,
+    )
+    .join(
+        left="site_subjects",
+        right="subjects",
         on=(("SUBJECT_ID", "SUBJECT_ID"),),
         cardinality=Cardinality.MANY_TO_ONE,
     )

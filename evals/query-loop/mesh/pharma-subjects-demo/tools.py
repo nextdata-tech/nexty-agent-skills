@@ -43,6 +43,7 @@ from nxd.experimental.semantic.compiler import CompileError
 from nxd.experimental.semantic.compiler import compile_selection
 from nxd.experimental.semantic.compiler import semantic_view_query
 from nxd.experimental.semantic.dialect import SnowflakeDialect
+from nxd.experimental.semantic.mcp_tools import registry_payload
 
 # IMPORTANT — rpc-tool extraction footgun (audit P1-#7): `code(fn)` carries a
 # tool function's IMPORTS and any top-level def/class it calls, but it DROPS
@@ -56,6 +57,21 @@ from nxd.experimental.semantic.dialect import SnowflakeDialect
 # ---------------------------------------------------------------------------
 # list_models
 # ---------------------------------------------------------------------------
+
+
+@function(name="semantic_model")
+@mcp.tool(name="semantic_model", description="Return this data product's FULL semantic registry as a JSON payload — every model (grain + owning data_product + its physical DB.SCHEMA.TABLE), dimension (physical column, type, pii), metric (aggregation, physical column, boolean), and join (on-key pairs + cardinality). A client merges each DP's payload into ONE registry to plan/compile a cross-DP join against the live mesh.")
+def semantic_model(snowflake: Snowflake, request: Request) -> Response:
+    payload = registry_payload(REGISTRY)
+    db: Any = snowflake.database
+    schema: Any = snowflake.schema
+    own = {m.name for m in REGISTRY.models if not getattr(m, "data_product", "")}
+    for m in payload["models"]:
+        if m["name"] in own and db and schema:
+            m["database"] = db
+            m["schema"] = schema
+            m["table"] = f"{db}.{schema}.{m['name']}"
+    return Response({"payload": _json.dumps(payload)})
 
 
 @function(name="list_models")

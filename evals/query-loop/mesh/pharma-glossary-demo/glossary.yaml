@@ -1,0 +1,286 @@
+terms:
+
+  # ── Core entity terms ────────────────────────────────────────────────────────
+
+  subject:
+    name: Subject
+    priority: P1
+    definition: >
+      A de-identified individual enrolled in a clinical trial. Each subject is
+      assigned a stable subject identifier at screening and is the primary entity
+      across the trial mesh: visits, assays, dispenses, and adverse events all key
+      back to a subject. Owned by the pharma-subjects-demo data product
+      (SUBJECTS model). Subject identifiers must never be mapped back to a real
+      name, date of birth, or any direct identifier in analytical output.
+    synonyms:
+      - Participant
+      - Patient
+      - Trial Subject
+    examples:
+      - "SUBJ-0001"
+      - "SUBJ-10842"
+    owner:
+      data_product: pharma-subjects-demo
+      model: subjects
+    tags:
+      cde: "true"
+      domain: "PHARMA/CLINICAL/SUBJECTS"
+      pii: "true"
+
+  site:
+    name: Site
+    priority: P1
+    definition: >
+      A physical investigational site (hospital or clinic) where subjects are
+      enrolled and trial procedures are performed. Each site has a unique site
+      identifier, a principal investigator, and a country. Sites are the unit of
+      operational enrollment reporting and the join key between subjects and
+      geography. Owned by the pharma-sites-demo data product (SITES model).
+    synonyms:
+      - Investigational Site
+      - Clinical Site
+      - Study Center
+    examples:
+      - "SITE-021"
+      - "SITE-104"
+    owner:
+      data_product: pharma-sites-demo
+      model: sites
+    tags:
+      cde: "true"
+      domain: "PHARMA/CLINICAL/SITES"
+      pii: "false"
+
+  visit:
+    name: Visit
+    priority: P1
+    definition: >
+      A scheduled or unscheduled subject encounter at a site, occurring at a defined
+      point in the trial schedule (e.g. Screening, Baseline, Week 4, End of Study).
+      A visit carries a visit date and a visit-window label and is the temporal spine
+      that ties assays, dispenses, and adverse-event onset to a point in a subject's
+      trial timeline. Owned by the pharma-visits-demo data product (VISITS model).
+    synonyms:
+      - Encounter
+      - Study Visit
+      - Trial Visit
+    term_values:
+      - Screening
+      - Baseline
+      - Week 4
+      - Week 12
+      - End of Study
+    examples:
+      - "Baseline"
+      - "Week 12"
+    owner:
+      data_product: pharma-visits-demo
+      model: visits
+    tags:
+      cde: "true"
+      domain: "PHARMA/CLINICAL/VISITS"
+      pii: "false"
+
+  # ── Lab / assay terms ────────────────────────────────────────────────────────
+
+  assay:
+    name: Assay
+    priority: P1
+    definition: >
+      A laboratory measurement performed on a biological sample collected at a visit.
+      Each assay record carries an analyte name, a numeric result, a unit, and a
+      reference range, and is linked to the subject and visit at which the sample was
+      drawn. Owned by the pharma-labs-demo data product (ASSAYS model). The most
+      analytically important assay in this mesh is the antibody titer (see titer).
+    synonyms:
+      - Lab Test
+      - Laboratory Measurement
+      - Sample Result
+    examples:
+      - "Hemoglobin"
+      - "Neutralizing Antibody Titer"
+    owner:
+      data_product: pharma-labs-demo
+      model: assays
+    tags:
+      cde: "true"
+      domain: "PHARMA/LAB/ASSAYS"
+      pii: "false"
+
+  titer:
+    name: Titer
+    priority: P1
+    definition: >
+      The concentration of a target antibody in a subject's serum, reported by an
+      immunogenicity assay as the highest sample dilution that still yields a positive
+      result. Titer is the key immunogenicity endpoint in this mesh: rising
+      anti-drug-antibody titers can indicate an immune response to the investigational
+      product. Stored as a specialised assay row (analyte = "Neutralizing Antibody
+      Titer") in the pharma-labs-demo ASSAYS model.
+    synonyms:
+      - Antibody Titer
+      - Titre
+      - Immunogenicity Titer
+    examples:
+      - "1:160"
+      - "1:1280"
+    owner:
+      data_product: pharma-labs-demo
+      model: assays
+    tags:
+      cde: "true"
+      domain: "PHARMA/LAB/ASSAYS"
+      pii: "false"
+
+  # ── Supply / dispense terms ──────────────────────────────────────────────────
+
+  dispense:
+    name: Dispense
+    priority: P1
+    definition: >
+      A single act of dispensing investigational product to a subject at a site,
+      recording the product, kit/lot identifier, quantity, and dispense date. Dispense
+      records are the link between drug supply and a subject's exposure, and are used
+      to reconcile accountability against shipped kits. Owned by the
+      pharma-rx-demo data product (DISPENSES model).
+    synonyms:
+      - Dispensation
+      - IP Dispense
+      - Drug Dispensing Event
+    examples:
+      - "DISP-55012"
+      - "DISP-55988"
+    owner:
+      data_product: pharma-rx-demo
+      model: dispenses
+    tags:
+      cde: "true"
+      domain: "PHARMA/SUPPLY/DISPENSES"
+      pii: "false"
+
+  product:
+    name: Product
+    priority: P1
+    definition: >
+      The investigational medicinal product (or comparator) administered in the trial,
+      identified by a product code and presentation (e.g. dose strength, formulation).
+      Product is the join key between dispenses, exposure, and downstream commercial
+      analytics. Owned by the pharma-product-demo data product (PRODUCTS model).
+    synonyms:
+      - Investigational Product
+      - IP
+      - Drug Product
+    examples:
+      - "NXD-101 50mg"
+      - "PLACEBO"
+    owner:
+      data_product: pharma-product-demo
+      model: products
+    tags:
+      cde: "true"
+      domain: "PHARMA/SUPPLY/PRODUCTS"
+      pii: "false"
+
+  # ── Safety terms ─────────────────────────────────────────────────────────────
+
+  adverse_event:
+    name: Adverse Event
+    priority: P1
+    definition: >
+      Any untoward medical occurrence in a subject during the trial, whether or not
+      considered related to the investigational product. Each adverse event carries a
+      preferred term, an onset date, a severity grade, and a relatedness assessment,
+      and is linked to the subject and the nearest visit. Owned by the
+      pharma-safety-demo data product (ADVERSE_EVENTS model).
+    synonyms:
+      - AE
+      - Adverse Experience
+      - Safety Event
+    examples:
+      - "Headache"
+      - "Infusion-related reaction"
+    owner:
+      data_product: pharma-safety-demo
+      model: adverse_events
+    tags:
+      cde: "true"
+      domain: "PHARMA/SAFETY/ADVERSE_EVENTS"
+      pii: "false"
+
+  serious_ae:
+    name: Serious Adverse Event
+    priority: P1
+    definition: >
+      An adverse event that meets at least one regulatory seriousness criterion:
+      results in death, is life-threatening, requires or prolongs hospitalisation,
+      causes persistent disability, results in a congenital anomaly, or is otherwise
+      medically important. Serious AEs are subject to expedited regulatory reporting
+      and are flagged by the SERIOUS boolean on the pharma-safety-demo
+      ADVERSE_EVENTS model.
+    synonyms:
+      - SAE
+      - Serious Adverse Experience
+    term_values:
+      - "true"
+      - "false"
+    examples:
+      - "true"
+    owner:
+      data_product: pharma-safety-demo
+      model: adverse_events
+    tags:
+      cde: "true"
+      domain: "PHARMA/SAFETY/ADVERSE_EVENTS"
+      pii: "false"
+
+  # ── Geography / commercial terms ─────────────────────────────────────────────
+
+  subject_country:
+    name: Subject Country
+    priority: P1
+    definition: >
+      The ISO-3166 country in which a subject is enrolled, derived from the country of
+      the subject's investigational site. Used to aggregate enrollment, safety, and
+      exposure by geography and to apply per-country regulatory and privacy rules.
+      Resolved by joining the subject to its site (pharma-sites-demo) and reading the
+      site country; it is a derived dimension rather than a directly captured field.
+    synonyms:
+      - Enrollment Country
+      - Country of Enrollment
+      - Site Country
+    examples:
+      - "DE"
+      - "US"
+      - "JP"
+    owner:
+      data_product: pharma-sites-demo
+      model: sites
+    tags:
+      cde: "true"
+      domain: "PHARMA/CLINICAL/SITES"
+      pii: "false"
+
+  prescriber:
+    name: Prescriber
+    priority: P1
+    definition: >
+      A healthcare professional authorised to prescribe the product in the
+      post-trial commercial setting, identified by a national provider identifier and
+      associated with a country and specialty. Prescriber links the clinical mesh to
+      downstream commercial uptake analytics; in the trial context the principal
+      investigator at a site may also be a prescriber. Owned by the
+      pharma-rx-demo data product (the prescriber_npi dimension on DISPENSES).
+    synonyms:
+      - HCP
+      - Healthcare Professional
+      - Provider
+    examples:
+      - "NPI-1234567890"
+      - "NPI-0987654321"
+    owner:
+      data_product: pharma-rx-demo
+      model: dispenses
+    tags:
+      cde: "true"
+      domain: "PHARMA/COMMERCIAL/PRESCRIBERS"
+      pii: "true"

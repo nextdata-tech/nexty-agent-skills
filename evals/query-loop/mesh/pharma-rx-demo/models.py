@@ -1,27 +1,53 @@
 """Models for the pharma-rx-demo (DP_RX) semantic-layer data product.
 
-A storage output port requires at least one promised model. With the SELF-SEED
-deploy pattern the base ``DISPENSES`` table and its single-table
-``DISPENSES_SEMANTIC`` view are created AND populated by the ``.transform(...)``
-in this DP's OWN Snowflake schema (CREATE TABLE + INSERT) — NOT materialised
-via a facade.
-
-We promise ONE tiny marker model that the transform creates. This satisfies the
-port + produce-verification without promising the query tables (whose shape the
-semantic view, not the kernel, owns).
+The transform seeds the REAL ``DISPENSES`` table; we promise that REAL model on
+the storage port (not a dummy marker), so the discover UI surfaces the actual
+attributes, their glossary links, and the cross-DP SEMANTIC RELATIONSHIP. As the
+MANY-side fact, ``dispenses`` carries outgoing cross-DP references on its foreign
+keys: SUBJECT_ID -> pharma-subjects-demo/subjects, PRODUCT_ID ->
+pharma-product-demo/products. Model + key attributes link to glossary terms.
 """
 
-from nxd.spec import semantic_model
+from nxd.spec import Predicate, attribute, semantic_model
 from nxd.spec.data_types import int64, string
 
-# Marker model — produced by the transform, satisfies the storage port.
-provision_marker = (
-    semantic_model("pharma_rx_marker")
-    .description("Marker table written by the self-seeding transform.")
+# The real dispense-fact model the transform seeds (table DISPENSES).
+dispenses_model = (
+    semantic_model("dispenses")
+    .description("One row per medication dispense. MANY dispenses per subject.")
     .schema(
         {
-            "MARKER_ID": int64(),
-            "VIEW_NAME": string(),
+            "DISPENSE_ID": attribute(int64(), "DISPENSE_ID", "Unique dispense identifier (grain)."),
+            # Cross-DP FK -> subject spine owned by pharma-subjects-demo.
+            "SUBJECT_ID": attribute(int64(), "SUBJECT_ID", "Subject the product was dispensed to.")
+            .referencing(
+                data_product="pharma-subjects-demo",
+                model="subjects",
+                attribute=["SUBJECT_ID"],
+            ),
+            # Cross-DP FK -> product dimension owned by pharma-product-demo.
+            "PRODUCT_ID": attribute(int64(), "PRODUCT_ID", "Product that was dispensed.")
+            .referencing(
+                data_product="pharma-product-demo",
+                model="products",
+                attribute=["PRODUCT_ID"],
+            ),
+            "UNITS": attribute(int64(), "UNITS", "Units dispensed in this event."),
+            "DISPENSE_CHANNEL": attribute(
+                string(), "DISPENSE_CHANNEL", "Channel the dispense was fulfilled through (retail, mail-order, specialty)."
+            ),
+            # PII: National Provider Identifier of the prescribing clinician.
+            "PRESCRIBER_NPI": attribute(
+                string(), "PRESCRIBER_NPI", "National Provider Identifier of the prescribing clinician."
+            ),
         }
     )
+    # Glossary links at the model + attribute level (render in the UI).
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/dispense")
+    .link("PRESCRIBER_NPI", Predicate.GlossaryTerm,
+          "/data-product/demo/pharma-glossary-demo#/terms/prescriber")
+    .link("PRODUCT_ID", Predicate.GlossaryTerm,
+          "/data-product/demo/pharma-glossary-demo#/terms/product")
+    .link("SUBJECT_ID", Predicate.GlossaryTerm,
+          "/data-product/demo/pharma-glossary-demo#/terms/subject")
 )

@@ -22,16 +22,16 @@ from nxd.spec import (
     data_product,
     data_product_output,
     data_product_rpc_output,
+    Predicate,
     rpc_function,
     rpc_server,
-    script,
     storage,
 )
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
-from tools import list_models, describe_model, run_semantic_query
+from tools import list_models, describe_model, run_semantic_query, semantic_model
 from transform import transform
-from models import provision_marker
+from models import subjects_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -46,6 +46,7 @@ _rpc = data_product_rpc_output()
 
 for _fn, _name in [
     (list_models, "list_models"),
+    (semantic_model, "semantic_model"),
     (describe_model, "describe_model"),
     (run_semantic_query, "run_semantic_query"),
 ]:
@@ -69,7 +70,9 @@ _rpc = _rpc.port(
 # Plain storage(...) with NO as_view: the self-seed transform owns provisioning.
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL subjects model (not a marker) so the discover UI surfaces
+    # its attributes + glossary links. The transform seeds the matching SUBJECTS table.
+    .promise(subjects_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -86,38 +89,20 @@ spec = (
             "subject_count and dimensions subject_country + subject_mrn[PII] — via "
             "MCP so agents answer natural-language questions without raw SQL."
         ),
-        version="0.1.0",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
-        # The provision job builds a cold venv (snowflake-connector-python[pandas]
-        # + pandas) before it can seed — that exceeds the default 180s batch
-        # startup timeout on the local cluster, failing the launch (DP -> Failed,
-        # rpc route never mounts -> /mcp 404s). Raise it so cold provision
-        # completes. (Audit P1-#6.)
-        provision_timeout_secs=600,
     )
-    # SEED AT PROVISION TIME. The kernel runs output-port promise verification
-    # BEFORE the transform, so a marker/table seeded only in the transform does
-    # not exist yet at verify -> "Field MARKER_ID not found" -> DP Failed. The
-    # provision function runs FIRST (before storage-driver provisioning + before
-    # verify), so seeding here makes the DP green in one launch. The same code is
-    # ALSO wired as .transform() so the **/*.py glob bundles registry.py/tools.py
-    # into the image (constraint #2) — the body is idempotent (CREATE IF NOT
-    # EXISTS + overwrite), so running it at both lifecycle points is safe.
-    # SEED AT PROVISION TIME via a SELF-CONTAINED script (provision.py): the
-    # kernel verifies output-port promises BEFORE the transform, so seeding in the
-    # transform fails verify ("Field MARKER_ID not found"). provision() runs first.
-    # script() (not code()) because the provision entrypoint is extracted into a
-    # provision/ subdir whose sys.path excludes the DP root — provision.py imports
-    # NO siblings, so it resolves there. (See the audit log P1-#4/#5.)
-    .provision(
-        script("provision.py").compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
-    )
-    # A .transform() is still declared so the **/*.py glob bundles
-    # registry.py / tools.py into the image (constraint #2). The body is a no-op:
-    # all real seeding happens at provision time above.
+    # TRANSFORM-SEED: the transform seeds the SUBJECTS table + marker + the
+    # single-table semantic view in one pass, and bundles registry.py/tools.py
+    # (the **/*.py glob runs on the transform path). Output-port promise
+    # verification does NOT run before the transform (only input expectations do,
+    # and this spine DP has no inputs), so this deploys green in one launch.
+    # .startup_timeout(600) covers cold-boot contention when the mesh launches.
     .transform(
-        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
     .output(_rpc)
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject_country")
 )

@@ -23,8 +23,10 @@ so the self-seed path is the only one that both bundles siblings AND validates.
 """
 
 from nxd.spec import (
+    Predicate,
     code,
     data_product,
+    data_product_input,
     data_product_output,
     data_product_rpc_output,
     rpc_function,
@@ -33,7 +35,7 @@ from nxd.spec import (
 )
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
-from tools import list_models, describe_model, run_semantic_query
+from tools import list_models, describe_model, run_semantic_query, semantic_model
 from transform import transform
 from models import assays_model
 
@@ -49,6 +51,7 @@ _rpc = data_product_rpc_output()
 
 for _fn, _name in [
     (list_models, "list_models"),
+    (semantic_model, "semantic_model"),
     (describe_model, "describe_model"),
     (run_semantic_query, "run_semantic_query"),
 ]:
@@ -69,7 +72,8 @@ _rpc = _rpc.port(
 # Storage output port "snowflake" — PLAIN storage (NO as_view). Its name is the
 # transform's parameter name and it supplies the Snowflake connection both the
 # transform (to self-seed + provision the view) and run_semantic_query (to read
-# it) use. The promised marker model is what the transform actually produces.
+# it) use. Promise the REAL assays model (not a marker) so the discover UI
+# surfaces its attributes + glossary links + the cross-DP SEMANTIC RELATIONSHIP.
 _storage = (
     data_product_output()
     .promise(assays_model)
@@ -82,7 +86,7 @@ _storage = (
 spec = (
     data_product(
         name="pharma-labs-demo",
-        domain="analytics",
+        domain="pharma",
         description=(
             "Semantic-layer data product over lab assays (grain assay_id). "
             "Exposes the governed titer_sum / titer_avg metric pair and an "
@@ -90,15 +94,35 @@ spec = (
             "site_subjects crosswalk, so agents can answer natural-language "
             "questions without raw SQL."
         ),
-        version="0.1.0",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
-    # Transform: self-seeds this DP's OWN base table, provisions the single-table
-    # semantic view, AND forces sibling bundling of registry.py / tools.py via
-    # the **/*.py glob (constraint #2).
+    # REAL MESH WIRING: DP_LABS consumes the upstream crosswalk DP_SITES. This
+    # declares the genuine upstream→downstream dependency; the cross-DP join to
+    # the subject spine resolves through site_subjects at query time across the
+    # live mesh. Placed BEFORE .transform(...).
+    .input(
+        "pharma-sites-demo",
+        data_product_input()
+        .source(
+            "https://nxd.nxd.local/data-product/pharma/pharma-sites-demo#/output/port/snowflake"
+        )
+        .environment("demo"),
+    )
+    # TRANSFORM-SEED: the transform seeds the ASSAYS table + marker + the
+    # single-table semantic view in one pass, and bundles registry.py/tools.py
+    # (the **/*.py glob runs on the transform path). Output-port promise
+    # verification does NOT block a transform-seed, so this deploys green in one
+    # launch. .startup_timeout(600) covers cold-boot contention at mesh launch.
     .transform(
-        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
     .output(_rpc)
+    # GLOSSARY LINKS — relate this DP to the canonical pharma-glossary-demo terms
+    # it touches. Term ids match glossary.yaml keys exactly.
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/assay")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/titer")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/site")
 )

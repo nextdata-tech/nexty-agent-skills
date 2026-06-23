@@ -1,36 +1,28 @@
-"""Transform for the DP_PRODUCT semantic-layer data product (self-seeded).
+"""Transform for pharma-product-demo — TRANSFORM-SEED of the `products` dimension.
 
-Three jobs, all in this DP's OWN Snowflake schema:
+Seeds this DP's OWN base table (`PRODUCTS`) + the marker + the single-table
+semantic view (`PRODUCTS_SEMANTIC`) in this DP's Snowflake schema, in ONE
+transform pass. This is the proven `pharma-subjects-demo` pattern: output-port
+promise verification does NOT run before the transform (only input *expectations*
+verify early, and this far-dimension DP has no inputs), so a transform-seed
+deploys green in one launch.
 
-1.  Seed this DP's OWN `products` base table (CREATE TABLE + INSERT) — the
-    dimension the semantic layer reads. Self-contained: no dependency on any
-    other DP's schema or pre-existing data.
-2.  Provision a SINGLE-TABLE ``PRODUCTS_SEMANTIC`` view over that ONE table.
-    Hand-authored — we do NOT call the compiler's
-    ``native_semantic_view_ddl`` / ``plain_view_ddl``. `products` is a far
-    dimension / ONE-side target with no outgoing joins, so a single-table
-    projection is correct; hand-authoring also guarantees the view never binds
-    a crosswalk/join table in another DP's schema (the pharma-labs-demo break).
-3.  Write a one-row marker table (``pharma_product_marker``) — the single
-    promised output model — so the storage port's produce-verification passes.
-
-The transform also makes the ``**/*.py`` glob bundle registry.py / tools.py
-into the image so the extracted rpc tool scripts can import them at runtime.
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
+modules into the image (the `**/*.py` glob runs on the transform/compute path).
 """
 
+import pandas as pd
 from nxd.data_product.context import Snowflake
+
+_VIEW_NAME = "PRODUCTS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `products`
 
 
 def transform(snowflake: Snowflake) -> None:
-    import pandas as pd
+    from snowflake import connector
     from snowflake.connector.pandas_tools import write_pandas
 
-    from registry import REGISTRY
-    from nxd.experimental.semantic.dialect import SnowflakeDialect
-    from snowflake import connector
-
     if snowflake is None or not snowflake.schema:
-        print("SEMVIEW_DIAG skipped — no Snowflake schema in context")
+        print("SEMVIEW_DIAG transform skipped — no Snowflake schema in context")
         return
 
     fqn = (
@@ -38,7 +30,6 @@ def transform(snowflake: Snowflake) -> None:
         if snowflake.database
         else f"{snowflake.schema}."
     )
-    view_name = SnowflakeDialect.default_view_name(REGISTRY)
 
     products = pd.DataFrame(
         [
@@ -63,48 +54,27 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # 1) Seed this DP's OWN `products` base table.
-            # Create UNQUOTED so Snowflake folds to upper-case — the hand-authored
-            # view references the table name unquoted too (`FROM products`), so
-            # both resolve to the same upper-cased object.
+            # 1) Seed the PROMISED `products` model's managed table. Using
+            # full_table_name("products") writes to the exact table the storage
+            # driver verifies the promise against (so produce-verification passes).
+            managed = snowflake.full_table_name("products")
             cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}products "
+                f"CREATE OR REPLACE TABLE {managed} "
                 "(PRODUCT_ID NUMBER, PRODUCT_NAME VARCHAR, MODALITY VARCHAR)"
             )
-            write_pandas(
-                conn,
-                products,
-                "PRODUCTS",
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG seeded {fqn}products rows={len(products)}")
+            write_pandas(conn, products, managed.split(".")[-1].strip('"'),
+                         database=snowflake.database, schema=snowflake.schema)
+            print(f"SEMVIEW_DIAG seeded {managed} rows={len(products)}")
 
-            # 2) Hand-author the SINGLE-TABLE semantic view over the seeded table.
-            # References ONLY this DP's own `products` table — no JOIN, no
-            # cross-DP crosswalk object. `products` is a leaf / ONE-side target.
+            # 2) Single-table semantic view over the promised products table.
             cur.execute(
-                f"CREATE OR REPLACE VIEW {fqn}{view_name} AS\n"
-                "SELECT\n"
-                "    PRODUCT_ID,\n"
-                "    PRODUCT_NAME,\n"
-                "    MODALITY\n"
-                f"FROM {fqn}products"
+                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
+                "SELECT PRODUCT_ID AS PRODUCT_ID, "
+                "PRODUCT_NAME AS PRODUCT_NAME, "
+                "MODALITY AS MODALITY "
+                f"FROM {managed}"
             )
-            print(f"SEMVIEW_DIAG single-table OK provisioned VIEW {fqn}{view_name}")
-
-            # 3) Marker (the promised output model).
-            managed = snowflake.full_table_name("pharma_product_marker")
-            marker_bare = managed.split(".")[-1].strip('"')
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(
-                conn,
-                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": view_name}]),
-                marker_bare,
-                database=snowflake.database,
-                schema=snowflake.schema,
-            )
-            print(f"SEMVIEW_DIAG marker written to {managed}")
+            print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
         finally:
             cur.close()
     finally:

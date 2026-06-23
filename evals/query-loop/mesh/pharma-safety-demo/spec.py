@@ -23,8 +23,10 @@ can import them at runtime.
 """
 
 from nxd.spec import (
+    Predicate,
     code,
     data_product,
+    data_product_input,
     data_product_output,
     data_product_rpc_output,
     rpc_function,
@@ -33,9 +35,9 @@ from nxd.spec import (
 )
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
-from tools import list_models, describe_model, run_semantic_query
+from tools import list_models, describe_model, run_semantic_query, semantic_model
 from transform import transform
-from models import provision_marker
+from models import adverse_events_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -49,6 +51,7 @@ _rpc = data_product_rpc_output()
 
 for _fn, _name in [
     (list_models, "list_models"),
+    (semantic_model, "semantic_model"),
     (describe_model, "describe_model"),
     (run_semantic_query, "run_semantic_query"),
 ]:
@@ -72,7 +75,10 @@ _rpc = _rpc.port(
 # them) use.
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL adverse_events model (not a marker) so the discover UI
+    # surfaces its attributes + glossary links + the cross-DP SUBJECT_ID
+    # relationship. The transform seeds the matching ADVERSE_EVENTS table.
+    .promise(adverse_events_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -82,7 +88,7 @@ _storage = (
 spec = (
     data_product(
         name="pharma-safety-demo",
-        domain="analytics",
+        domain="pharma",
         description=(
             "Semantic-layer data product over adverse events (grain ae_id). "
             "Exposes the ae_term dimension and the governed ae_count / "
@@ -91,15 +97,31 @@ spec = (
             "crosswalk, so agents can answer natural-language safety questions "
             "without raw SQL."
         ),
-        version="0.1.0",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
-    # Self-seed transform: creates this DP's OWN base table + marker +
-    # single-table semantic view AND forces sibling bundling of registry.py /
-    # tools.py via the **/*.py glob.
+    # REAL MESH WIRING — consume the upstream pharma-sites-demo crosswalk hub DP.
+    # This declares the upstream→downstream dependency; the cross-DP join to
+    # site_subjects (in registry.py) resolves at query time via the live mesh.
+    .input(
+        "pharma-sites-demo",
+        data_product_input()
+        .source(
+            "https://nxd.nxd.local/data-product/pharma/pharma-sites-demo#/output/port/snowflake"
+        )
+        .environment("demo"),
+    )
+    # TRANSFORM-SEED: the transform seeds this DP's OWN adverse_events table +
+    # marker + the single-table semantic view in one pass, and bundles
+    # registry.py/tools.py (the **/*.py glob runs on the transform path).
+    # .startup_timeout(600) covers cold-boot contention when the mesh launches.
     .transform(
-        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
     .output(_rpc)
+    # GLOSSARY LINKS — relate this DP to the canonical mesh terms it touches.
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/adverse_event")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject")
+    .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/site")
 )

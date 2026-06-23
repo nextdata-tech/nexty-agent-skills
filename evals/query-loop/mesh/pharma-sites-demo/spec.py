@@ -26,17 +26,19 @@ Wiring constraints (non-negotiable, from the deployable-dp template README):
 from nxd.spec import (
     code,
     data_product,
+    data_product_input,
     data_product_output,
     data_product_rpc_output,
+    Predicate,
     rpc_function,
     rpc_server,
     storage,
 )
 from nxd.experimental.semantic import build_semantic_tools
 from registry import REGISTRY
-from tools import list_models, describe_model, run_semantic_query
+from tools import list_models, describe_model, run_semantic_query, semantic_model
 from transform import transform
-from models import provision_marker
+from models import site_subjects_model
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
@@ -52,6 +54,7 @@ _rpc = data_product_rpc_output()
 
 for _fn, _name in [
     (list_models, "list_models"),
+    (semantic_model, "semantic_model"),
     (describe_model, "describe_model"),
     (run_semantic_query, "run_semantic_query"),
 ]:
@@ -75,7 +78,10 @@ _rpc = _rpc.port(
 # use. PLAIN storage(...) — NO as_view (self-seed pattern, mirrors the template).
 _storage = (
     data_product_output()
-    .promise(provision_marker)
+    # Promise the REAL site_subjects crosswalk model (not a marker) so the
+    # discover UI surfaces its attributes, glossary links, and the cross-DP
+    # SEMANTIC RELATIONSHIP. The transform seeds the matching SITE_SUBJECTS table.
+    .promise(site_subjects_model)
     .port(
         "snowflake",
         storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
@@ -85,7 +91,7 @@ _storage = (
 spec = (
     data_product(
         name="pharma-sites-demo",
-        domain="analytics",
+        domain="pharma",
         description=(
             "DP_SITES — the MANY_TO_MANY crosswalk hub of the pharma mesh. "
             "Models the site_subjects crosswalk (grain site_id, subject_id) "
@@ -93,15 +99,38 @@ spec = (
             "dimension itself. Exposes governed metrics and dimensions via MCP "
             "so agents can answer natural-language questions without raw SQL."
         ),
-        version="0.1.0",
+        version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
-    # The transform provisions the semantic view the MCP tools query AND is what
-    # makes the **/*.py glob bundle registry.py / tools.py into the image so the
-    # extracted rpc tool scripts can import them at runtime.
+    # REAL MESH WIRING — this crosswalk hub consumes the subject spine upstream.
+    # The .input(...) declares the real upstream->downstream dependency on the
+    # subject-spine DP's snowflake output port (placed BEFORE .transform()).
+    .input(
+        "pharma-subjects-demo",
+        data_product_input()
+        .source(
+            "https://nxd.nxd.local/data-product/pharma/pharma-subjects-demo#/output/port/snowflake"
+        )
+        .environment("demo"),
+    )
+    # TRANSFORM-SEED: the transform seeds the SITES + SITE_SUBJECTS tables + marker
+    # + the single-table semantic view in one pass, and bundles registry.py /
+    # tools.py (the **/*.py glob runs on the transform path). Output-port promise
+    # verification does NOT run before the transform, so this deploys green in one
+    # launch. .startup_timeout(600) covers cold-boot contention at mesh launch.
     .transform(
-        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
     .output(_rpc)
+    # Glossary links — tie this DP to the governed pharma glossary terms it
+    # surfaces (the `site` dimension it owns + the `subject` spine it crosswalks).
+    .link(
+        Predicate.GlossaryTerm,
+        "/data-product/demo/pharma-glossary-demo#/terms/site",
+    )
+    .link(
+        Predicate.GlossaryTerm,
+        "/data-product/demo/pharma-glossary-demo#/terms/subject",
+    )
 )

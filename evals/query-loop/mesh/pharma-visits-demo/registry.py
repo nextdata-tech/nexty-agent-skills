@@ -26,6 +26,16 @@ REGISTRY = (
         "site_subjects",
         grain="SITE_ID, SUBJECT_ID",
         description="Site/subject crosswalk hub (owned by DP_SITES). Join target.",
+        data_product="pharma-sites-demo",
+    )
+    # Subject spine — OWNED by DP_REGISTRY (pharma-subjects-demo). Declared here as
+    # the second-hop join target so this fact's metrics become sliceable by the
+    # spine dimensions (subject_country) cross-DP at query time.
+    .model(
+        "subjects",
+        grain="SUBJECT_ID",
+        data_product="pharma-subjects-demo",
+        description="Subject spine (owned by pharma-subjects-demo). Cross-DP join target.",
     )
     # ── Dimensions ──────────────────────────────────────────────────────────────
     .dimension(
@@ -34,6 +44,23 @@ REGISTRY = (
         column="VISIT_TYPE",
         type="string",
         description="Type of clinical visit (e.g. screening, baseline, follow-up).",
+    )
+    # Spine dimensions (owned by pharma-subjects-demo) — reachable from visit
+    # metrics via the 2-hop cross-DP join through site_subjects.
+    .dimension(
+        "subject_country",
+        model="subjects",
+        column="SUBJECT_COUNTRY",
+        type="string",
+        description="Country of enrollment.",
+    )
+    .dimension(
+        "subject_mrn",
+        model="subjects",
+        column="SUBJECT_MRN",
+        type="string",
+        description="Medical record number.",
+        pii=True,
     )
     # ── Metrics ─────────────────────────────────────────────────────────────────
     .metric(
@@ -54,6 +81,13 @@ REGISTRY = (
     .join(
         left="visits",
         right="site_subjects",
+        on=(("SUBJECT_ID", "SUBJECT_ID"),),
+        cardinality=Cardinality.MANY_TO_ONE,
+    )
+    # ── Second hop: site_subjects crosswalk -> subject spine (N:1) ───────────────
+    .join(
+        left="site_subjects",
+        right="subjects",
         on=(("SUBJECT_ID", "SUBJECT_ID"),),
         cardinality=Cardinality.MANY_TO_ONE,
     )

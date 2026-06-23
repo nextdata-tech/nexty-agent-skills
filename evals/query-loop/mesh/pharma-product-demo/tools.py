@@ -19,6 +19,18 @@ from nxd.drivers.rpc import Response
 from nxd.drivers.rpc import function
 from nxd.drivers.rpc import mcp
 
+# Module-level import (NOT lazy/in-body): the rpc `@function` decorator injects a
+# context arg by TYPE. It reads the resolved signature (get_type_hints) at
+# registration time and, for a param whose annotation `is_from_context(...)` is
+# True (i.e. a FromContext subclass like Snowflake), calls
+# `Snowflake.from_context(context_data)` and binds the resulting Snowflake handle.
+# A param typed `Any` is NOT a FromContext subclass, so the framework falls back
+# to injecting a raw `Context` (no `.connector_params()` / `.user` / `.database`).
+# `code()` extraction copies module-level imports verbatim but does NOT hoist
+# in-body imports, so this MUST be a top-level import for the `Snowflake`
+# annotation to resolve in the extracted rpc-server script.
+from nxd.data_product.context import Snowflake
+
 # Flat sibling import — registry.py is bundled as a sibling of the extracted
 # tool scripts, and the script's own directory is the only thing guaranteed on
 # sys.path in the RPC subprocess. A package-qualified `transform.registry`
@@ -31,6 +43,7 @@ from nxd.experimental.semantic.compiler import CompileError
 from nxd.experimental.semantic.compiler import compile_selection
 from nxd.experimental.semantic.compiler import semantic_view_query
 from nxd.experimental.semantic.dialect import SnowflakeDialect
+from nxd.experimental.semantic.mcp_tools import registry_payload
 
 # Resolve the SAME view name the transform provisions
 # (``default_view_name(REGISTRY)`` -> ``<FIRST_MODEL_UPPER>_SEMANTIC``). A bare
@@ -53,6 +66,21 @@ _LIST_MODELS_DESC = (
     "Call this first to orient yourself, then call describe_model on the model "
     "whose grain matches your question."
 )
+
+
+@function(name="semantic_model")
+@mcp.tool(name="semantic_model", description="Return this data product's FULL semantic registry as a JSON payload — every model (grain + owning data_product + its physical DB.SCHEMA.TABLE), dimension (physical column, type, pii), metric (aggregation, physical column, boolean), and join (on-key pairs + cardinality). A client merges each DP's payload into ONE registry to plan/compile a cross-DP join against the live mesh.")
+def semantic_model(snowflake: Snowflake, request: Request) -> Response:
+    payload = registry_payload(REGISTRY)
+    db: Any = snowflake.database
+    schema: Any = snowflake.schema
+    own = {m.name for m in REGISTRY.models if not getattr(m, "data_product", "")}
+    for m in payload["models"]:
+        if m["name"] in own and db and schema:
+            m["database"] = db
+            m["schema"] = schema
+            m["table"] = f"{db}.{schema}.{m['name']}"
+    return Response({"payload": _json.dumps(payload)})
 
 
 @function(name="list_models")
@@ -181,7 +209,7 @@ _RUN_SEMANTIC_QUERY_DESC = (
 
 @function(name="run_semantic_query")
 @mcp.tool(name="run_semantic_query", description=_RUN_SEMANTIC_QUERY_DESC)
-def run_semantic_query(snowflake: Any, request: Request) -> Response:
+def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
     from snowflake import connector  # type: ignore[import-not-found]
 
     cap = 200
