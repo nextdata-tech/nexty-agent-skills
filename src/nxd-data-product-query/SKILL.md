@@ -382,6 +382,18 @@ join-reachable and the tool returns an error, not a wrong number. PII on the joi
 key or a PII output dimension is denied (`PII dimension excluded from cross-model
 reach`) — that is governance, not a transient failure; do not retry.
 
+**In strict mode, this IS the cross-DP path — wrapped in the plan→validate→execute
+gate.** Strict mode does NOT stitch per-DP `run_semantic_query` calls for a
+cross-DP join (when the join key is PII no leg may return it, so there is nothing
+to stitch — strict mode would have to abstain). Instead the join is **one plan
+step** whose `mcp_function` is `run_cross_dp_query__<facade-hash>` and whose
+`request` carries `registry_payloads` + the selection; `relationships_used[*]`
+cites the cross-DP join from the relations bundle. `plan_validator.py` then passes
+only when the facade `(dp, mcp_function)` is in the gateway `function_index`
+(Rule 3) **and** the join matches the bundle (Rule 4). On pass, execute that one
+step via `mcp_call.py`; on fail, abstain — never fall back to direct SQL or the
+experimental client compiler. Full flow + plan shape: [reference/strict-mode.md](reference/strict-mode.md) class (c).
+
 > **`run_cross_dp_query` vs `scripts/cross_dp_compile.py`.** They run the *same*
 > shipped compiler. `run_cross_dp_query` is the **deployable, governed, in-pod**
 > form — the path the skill uses. `scripts/cross_dp_compile.py` is an

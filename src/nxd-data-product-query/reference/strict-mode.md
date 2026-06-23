@@ -125,6 +125,16 @@ Only the **(b)** name is standard. Everything in **(a)** is author-defined and m
        --token-file /tmp/strict-tok.txt \
        --out /tmp/nxd-step-<id>.json
      ```
+     **Cross-DP step (class (c)).** A step whose `mcp_function` is
+     `run_cross_dp_query__<facade-hash>` is executed the same way — one
+     `mcp_call.py` against the facade tool — but its `request` carries
+     `registry_payloads` (the harvested `semantic_model` payloads of every member
+     DP, the JSON each `semantic_model` call returned) plus the `{measures,
+     dimensions, filters}` selection. The facade merges the registries and runs
+     ONE governed cross-schema SQL in-pod. This is how a single plan step answers a
+     cross-DP join without the client ever touching a second schema — see SKILL.md
+     §6g. A `relationships_used[*]` entry citing the cross-DP join (Rule 4) is what
+     authorises the step's reliance on that join.
    - If `passed=false`: return `{plan, validation_report}` with each failure named and the rule it violated (Rule 1 / 2 / 4). **Stop.** Do not retry the underlying query through a non-MCP path; if the user wants to relax strict mode, they pass `--strict=false` (or "drop strict mode") and the skill falls back to the default Step-6 routing of the parent skill.
 
 ## Plan format (shape on disk)
