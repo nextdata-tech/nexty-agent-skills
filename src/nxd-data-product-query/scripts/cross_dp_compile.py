@@ -104,29 +104,45 @@ def merge_registry(
     ``database`` (offline override). data_product labels are preserved.
     """
     reg = SemanticRegistry()
-    seen_models: set[str] = set()
     seen_dims: set[str] = set()
     seen_metrics: set[str] = set()
     seen_joins: set[tuple] = set()
 
+    # PASS 1 — resolve each model name to its BEST definition across ALL payloads.
+    # A model appears in several payloads: as the OWN model in its owning DP (with a
+    # physical ``table`` from that DP's read context) and as a bare STUB join-target
+    # in every consuming DP (no table, only a ``data_product`` label). First-wins
+    # would keep whichever was harvested first — often a stub — and the compiler
+    # would then fall back to ``<fqn><name>`` with the WRONG schema for the spine /
+    # crosswalk. So prefer the definition that carries a real ``table`` (the owner),
+    # regardless of harvest order.
+    best: dict[str, dict] = {}
     for p in payloads:
         for m in p.get("models", []):
             name = m["name"]
-            if name in seen_models:
+            prev = best.get(name)
+            if prev is None:
+                best[name] = m
                 continue
-            seen_models.add(name)
-            db = m.get("database") or database
-            schema = m.get("schema") or schema_of.get(name, "")
-            table = m.get("table") or (
-                f"{db}.{schema}.{name}" if (db and schema) else (f"{schema}.{name}" if schema else "")
-            )
-            reg = reg.model(
-                name,
-                grain=m["grain"],
-                description=m.get("description", ""),
-                data_product=m.get("data_product", ""),
-                table=table,
-            )
+            # upgrade a tableless stub to the owner definition that has a table
+            if not prev.get("table") and m.get("table"):
+                best[name] = m
+
+    for name, m in best.items():
+        db = m.get("database") or database
+        schema = m.get("schema") or schema_of.get(name, "")
+        table = m.get("table") or (
+            f"{db}.{schema}.{name}" if (db and schema) else (f"{schema}.{name}" if schema else "")
+        )
+        reg = reg.model(
+            name,
+            grain=m["grain"],
+            description=m.get("description", ""),
+            data_product=m.get("data_product", ""),
+            table=table,
+        )
+
+    for p in payloads:
         for d in p.get("dimensions", []):
             if d["name"] in seen_dims:
                 continue

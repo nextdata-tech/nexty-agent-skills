@@ -69,3 +69,6 @@ evals/mcp/uv.lock
 
 # Query-loop run transcripts (generated)
 evals/query-loop/runs/
+
+# Cross-DP join eval run outputs (generated)
+evals/cross-dp-joins/runs/

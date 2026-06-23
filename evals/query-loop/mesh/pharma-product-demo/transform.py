@@ -1,20 +1,17 @@
-"""Transform for pharma-product-demo — TRANSFORM-SEED of the `products` dimension.
+"""Transform for pharma-product-demo — the `products` FAR dimension.
 
-Seeds this DP's OWN base table (`PRODUCTS`) + the marker + the single-table
-semantic view (`PRODUCTS_SEMANTIC`) in this DP's Snowflake schema, in ONE
-transform pass. This is the proven `pharma-subjects-demo` pattern: output-port
-promise verification does NOT run before the transform (only input *expectations*
-verify early, and this far-dimension DP has no inputs), so a transform-seed
-deploys green in one launch.
+Seeds the ROWS of the promised `products` model's managed table. The table
+STRUCTURE and the single-table `PRODUCTS_SEMANTIC` view are created earlier by
+the `@on_provision` hook (provision.py), which runs in Phase A before this
+transform. This transform only writes the data the output-port promise verifies.
 
-The `.transform()` is also what bundles the sibling `registry.py` / `tools.py`
-modules into the image (the `**/*.py` glob runs on the transform/compute path).
+The `.transform()` is also what bundles the sibling `registry.py` / `tools.py` /
+`provision.py` modules into the image (the `**/*.py` glob runs on the
+transform/compute path).
 """
 
 import pandas as pd
 from nxd.data_product.context import Snowflake
-
-_VIEW_NAME = "PRODUCTS_SEMANTIC"  # = SnowflakeDialect.default_view_name(REGISTRY) for model `products`
 
 
 def transform(snowflake: Snowflake) -> None:
@@ -24,12 +21,6 @@ def transform(snowflake: Snowflake) -> None:
     if snowflake is None or not snowflake.schema:
         print("SEMVIEW_DIAG transform skipped — no Snowflake schema in context")
         return
-
-    fqn = (
-        f"{snowflake.database}.{snowflake.schema}."
-        if snowflake.database
-        else f"{snowflake.schema}."
-    )
 
     products = pd.DataFrame(
         [
@@ -52,30 +43,17 @@ def transform(snowflake: Snowflake) -> None:
         **snowflake.connector_params(),
     )
     try:
+        managed = snowflake.full_table_name("products")
+        # Truncate-and-load so repeated runs stay deterministic (the provision
+        # hook created the table with CREATE TABLE IF NOT EXISTS, so it may
+        # already hold rows from a prior run).
         cur = conn.cursor()
         try:
-            # 1) Seed the PROMISED `products` model's managed table. Using
-            # full_table_name("products") writes to the exact table the storage
-            # driver verifies the promise against (so produce-verification passes).
-            managed = snowflake.full_table_name("products")
-            cur.execute(
-                f"CREATE OR REPLACE TABLE {managed} "
-                "(PRODUCT_ID NUMBER, PRODUCT_NAME VARCHAR, MODALITY VARCHAR)"
-            )
-            write_pandas(conn, products, managed.split(".")[-1].strip('"'),
-                         database=snowflake.database, schema=snowflake.schema)
-            print(f"SEMVIEW_DIAG seeded {managed} rows={len(products)}")
-
-            # 2) Single-table semantic view over the promised products table.
-            cur.execute(
-                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
-                "SELECT PRODUCT_ID AS PRODUCT_ID, "
-                "PRODUCT_NAME AS PRODUCT_NAME, "
-                "MODALITY AS MODALITY "
-                f"FROM {managed}"
-            )
-            print(f"SEMVIEW_DIAG provisioned single-table VIEW {fqn}{_VIEW_NAME}")
+            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
         finally:
             cur.close()
+        write_pandas(conn, products, managed.split(".")[-1].strip('"'),
+                     database=snowflake.database, schema=snowflake.schema)
+        print(f"SEMVIEW_DIAG seeded {managed} rows={len(products)}")
     finally:
         conn.close()
