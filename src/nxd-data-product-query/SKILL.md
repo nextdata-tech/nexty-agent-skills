@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.5.0
+  version: 0.6.0
 ---
 
 # nxd Data Product Query
@@ -338,17 +338,16 @@ carries `compiled_sql`, `rows`, `row_count`, `truncated`, `error`; on non-empty 
 
 When the question spans **two or more DPs** (a metric on DP A grouped by a
 dimension on DP B, joined on a key declared in a `semantic_model` payload), do
-**not** lease a credential and compile/run SQL on the client. A credential leased
-from one DP's port is scoped to that DP's schema; a single cross-schema SELECT
-needs USAGE on every spanned schema, and the warehouse network policy only admits
-the platform egress IP — so the client cannot run the join itself.
+**not** lease a credential and compile/run SQL on the client — a per-DP lease is
+single-schema-scoped and the warehouse network policy admits only the platform
+egress IP, so the client cannot run the join.
 
-The mesh exposes a **server-side cross-DP compiler as one governed MCP tool**:
-`run_cross_dp_query`, served by a cross-DP facade DP (e.g. `cross-dp-query-demo`).
-It merges the member DPs' semantic registries, compiles ONE fan-out-safe
-cross-schema SQL, and executes it **in-pod** under a cross-DP-scoped role — the one
-locus that can both reach and be authorized. You never write SQL; the same PII /
-mixed-grain governance the per-DP `run_semantic_query` enforces applies here.
+The mesh exposes a **server-side cross-DP compiler as one governed MCP tool**,
+`run_cross_dp_query`, served by a cross-DP facade DP (e.g. `cross-dp-query-demo`):
+it merges the member DPs' registries, compiles ONE fan-out-safe cross-schema SQL,
+and runs it **in-pod** under a cross-DP-scoped role — the only locus that can both
+reach and authorize. You never write SQL; the same PII / mixed-grain governance
+the per-DP `run_semantic_query` enforces applies here.
 
 **Protocol** (MCP-only — works in default mode and strict mode alike):
 

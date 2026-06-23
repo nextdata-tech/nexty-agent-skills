@@ -136,10 +136,9 @@ def _harvest_models(
     # model name -> owning DP fullName. The harvesting DP's OWN models carry an
     # empty data_product label, so they map to `own`; a foreign (cross-DP) model
     # carries the fullName of the DP that owns it. Used to resolve join `to_dp`.
+    # Populated from `raw_models` below (same alias resolution the harvester uses),
+    # so it covers every model-list shape — not just the `models` key.
     model_owner: dict[str, str] = {}
-    for _m in payload.get("models") or []:
-        if isinstance(_m, dict) and _m.get("name"):
-            model_owner[_m["name"]] = _m.get("data_product") or own
 
     # Models
     raw_models_any: Any = (
@@ -155,6 +154,14 @@ def _harvest_models(
         ]
     else:
         raw_models = list(raw_models_any or [])
+    # Build the model→owner map first, over the SAME resolved list + name aliases,
+    # so a cross-DP join's `to_dp` resolves for every payload shape the harvester
+    # accepts (not only the canonical `models`/`name` shape).
+    for _m in raw_models:
+        if isinstance(_m, dict):
+            _name = _m.get("name") or _m.get("model") or _m.get("id")
+            if _name:
+                model_owner[_name] = _m.get("data_product") or own
     for m in raw_models:
         if not isinstance(m, dict):
             continue
