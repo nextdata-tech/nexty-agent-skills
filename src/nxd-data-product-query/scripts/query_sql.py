@@ -26,10 +26,29 @@ def _connect(details: dict, location: dict, type_hint: str) -> Any:
     if "snowflake" in t:
         import snowflake.connector  # type: ignore
 
+        # Key-pair leases hand back a PEM string (data.private_key_pem, or nested
+        # under data.auth.private_key_pem). The connector wants a DER-encoded
+        # private_key, so convert. Falls back to a raw DER private_key or a
+        # password when those are what the lease provided.
+        auth = data.get("auth") or {}
+        pem = data.get("private_key_pem") or auth.get("private_key_pem")
+        der = data.get("private_key")
+        if pem and not der:
+            from cryptography.hazmat.primitives import serialization  # type: ignore
+
+            key = serialization.load_pem_private_key(
+                pem.encode() if isinstance(pem, str) else pem, password=None
+            )
+            der = key.private_bytes(
+                serialization.Encoding.DER,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+
         return snowflake.connector.connect(
             user=data.get("username") or data.get("user"),
             password=data.get("_password") or data.get("password"),
-            private_key=data.get("private_key"),
+            private_key=der,
             account=data.get("account") or location.get("account"),
             warehouse=data.get("warehouse") or location.get("warehouse"),
             database=data.get("database") or location.get("database"),

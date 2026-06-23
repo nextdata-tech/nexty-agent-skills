@@ -41,17 +41,31 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The SHIPPED compiler — same library the DPs serve with.
-from nxd.experimental.semantic import (  # type: ignore[import-not-found]
-    Agg,
-    Cardinality,
-    CompileError,
-    SemanticRegistry,
-    SnowflakeDialect,
-    compile_selection,
-)
-
+# The SHIPPED compiler (nxd.experimental.semantic) is imported lazily inside
+# main(), AFTER the experimental opt-in guard — so a normal skill install (which
+# does NOT pin the nxd wheel) can import this module / print the refusal without
+# the compiler dependency present. _load_compiler() resolves the symbols.
 _HERE = Path(__file__).resolve().parent
+
+
+def _load_compiler():
+    """Import the experimental compiler symbols. Raises ImportError with guidance
+    if the nxd wheel isn't installed (it is intentionally not a skill dep)."""
+    try:
+        from nxd.experimental.semantic import (  # type: ignore[import-not-found]
+            Agg,
+            Cardinality,
+            CompileError,
+            SemanticRegistry,
+            SnowflakeDialect,
+            compile_selection,
+        )
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "cross_dp_compile.py needs the experimental nxd compiler: "
+            "pip install 'nxd-data-product>=0.41.100' (not a skill dependency)."
+        ) from exc
+    return Agg, Cardinality, CompileError, SemanticRegistry, SnowflakeDialect, compile_selection
 
 
 # ---------------------------------------------------------------------------
@@ -87,13 +101,10 @@ def harvest_registry(endpoint: str, token_file: str, *, timeout: int = 40) -> di
 # 2. MERGE — combine per-DP payloads into ONE schema-qualified registry
 # ---------------------------------------------------------------------------
 
-_AGG = {a.value: a for a in Agg}
-_CARD = {c.value: c for c in Cardinality}
-
 
 def merge_registry(
     payloads: list[dict], schema_of: dict[str, str], database: str
-) -> SemanticRegistry:
+):
     """Merge per-DP registry payloads into one SemanticRegistry.
 
     Each model keeps its BARE name (used as the CTE alias — must be dot-free) but
@@ -103,6 +114,9 @@ def merge_registry(
     from the DP's storage context) when present, else from ``schema_of`` +
     ``database`` (offline override). data_product labels are preserved.
     """
+    Agg, Cardinality, _CE, SemanticRegistry, _SD, _cs = _load_compiler()
+    _AGG = {a.value: a for a in Agg}
+    _CARD = {c.value: c for c in Cardinality}
     reg = SemanticRegistry()
     seen_dims: set[str] = set()
     seen_metrics: set[str] = set()
@@ -194,6 +208,7 @@ def compile_cross_dp(selection: dict, registry, database: str) -> str:
     cross-DP path); ``fqn`` is the database prefix (schema is baked into the model
     names). Raises CompileError if the selection is not join-reachable.
     """
+    _Agg, _Card, _CE, _SR, SnowflakeDialect, compile_selection = _load_compiler()
     dialect = SnowflakeDialect(view_name="")
     return compile_selection(
         selection,
@@ -210,6 +225,25 @@ def compile_cross_dp(selection: dict, registry, database: str) -> str:
 
 
 def main() -> int:
+    # HARD GUARD — this is the EXPERIMENTAL client-side cross-DP compiler. It is
+    # NOT part of the nxd-data-product-query skill flow (see README.md
+    # "experimental, NOT part of the skill"). The skill's canonical cross-DP path
+    # is strict mode (per-DP run_semantic_query + client-side merge of authorized
+    # partials), which never crosses a DP authorization boundary. The compiler is
+    # only safely deployable server-side. To run this reference implementation
+    # anyway, set NXD_ALLOW_EXPERIMENTAL_CROSS_DP=1 explicitly.
+    import os
+
+    if os.environ.get("NXD_ALLOW_EXPERIMENTAL_CROSS_DP") != "1":
+        print(
+            "refusing to run: cross_dp_compile.py is the EXPERIMENTAL client-side "
+            "compiler and is not part of the skill. The skill's cross-DP path is "
+            "strict mode (reference/strict-mode.md). To run this reference "
+            "implementation anyway, set NXD_ALLOW_EXPERIMENTAL_CROSS_DP=1.",
+            file=sys.stderr,
+        )
+        return 2
+
     p = argparse.ArgumentParser(prog="cross_dp_compile")
     p.add_argument("--measures", default="", help="comma-separated metric names")
     p.add_argument("--dimensions", default="", help="comma-separated dimension names")
@@ -265,6 +299,7 @@ def main() -> int:
         print("error: pass --dp or --registry-json for at least one DP", file=sys.stderr)
         return 2
 
+    CompileError = _load_compiler()[2]
     registry = merge_registry(payloads, schema_of, args.database)
 
     try:

@@ -334,6 +334,62 @@ carries `compiled_sql`, `rows`, `row_count`, `truncated`, `error`; on non-empty 
 > `DISTINCT` read, not reachable from the three tools). See the [README](README.md)
 > for both; the value-mismatch symptom is the table row below.
 
+### 6g. Cross-DP semantic query — `run_cross_dp_query` (the governed MCP path)
+
+When the question spans **two or more DPs** (a metric on DP A grouped by a
+dimension on DP B, joined on a key declared in a `semantic_model` payload), do
+**not** lease a credential and compile/run SQL on the client. A credential leased
+from one DP's port is scoped to that DP's schema; a single cross-schema SELECT
+needs USAGE on every spanned schema, and the warehouse network policy only admits
+the platform egress IP — so the client cannot run the join itself.
+
+The mesh exposes a **server-side cross-DP compiler as one governed MCP tool**:
+`run_cross_dp_query`, served by a cross-DP facade DP (e.g. `cross-dp-query-demo`).
+It merges the member DPs' semantic registries, compiles ONE fan-out-safe
+cross-schema SQL, and executes it **in-pod** under a cross-DP-scoped role — the one
+locus that can both reach and be authorized. You never write SQL; the same PII /
+mixed-grain governance the per-DP `run_semantic_query` enforces applies here.
+
+**Protocol** (MCP-only — works in default mode and strict mode alike):
+
+1. Find the facade DP + its tool: `gateway_tools.py tools` → the tool whose base
+   name is `run_cross_dp_query`. Confirm it on the gateway every query (no cache).
+2. For **each DP** your question touches, call its `semantic_model` tool and keep
+   the raw payload (the JSON the tool returns).
+3. Call `run_cross_dp_query` with:
+   - `registry_payloads`: the list of those `semantic_model` payloads (dict or
+     JSON string each) — include exactly the DPs the question spans; the set is
+     dynamic, no redeploy when the mesh changes.
+   - `measures`, `dimensions`, `filters` — the concept selection, same vocabulary
+     as `run_semantic_query`.
+
+```bash
+# each member DP's semantic_model payload, then the cross-DP call
+python3 scripts/mcp_call.py --endpoint "$BASE" --tool semantic_model__<hashA> --args '{}' \
+    --token-file "$TOK" --out /tmp/pA.json
+python3 scripts/mcp_call.py --endpoint "$BASE" --tool semantic_model__<hashB> --args '{}' \
+    --token-file "$TOK" --out /tmp/pB.json
+python3 scripts/mcp_call.py --endpoint "$BASE" --tool run_cross_dp_query__<facade-hash> \
+    --args '{"registry_payloads": [<pA-json-string>, <pB-json-string>],
+             "measures": ["<metric>"], "dimensions": ["<dim>"]}' \
+    --token-file "$TOK" --out /tmp/xdp.json
+```
+
+The cross-DP join must be **declared** in some member DP's `registry.py` (a foreign
+model stub with `data_product=` + physical `table=`, plus the `.join()` on-key) so
+its `semantic_model` payload publishes the edge — otherwise the selection is not
+join-reachable and the tool returns an error, not a wrong number. PII on the join
+key or a PII output dimension is denied (`PII dimension excluded from cross-model
+reach`) — that is governance, not a transient failure; do not retry.
+
+> **`run_cross_dp_query` vs `scripts/cross_dp_compile.py`.** They run the *same*
+> shipped compiler. `run_cross_dp_query` is the **deployable, governed, in-pod**
+> form — the path the skill uses. `scripts/cross_dp_compile.py` is an
+> **experimental client-side** stand-in that is **NOT part of the skill flow**
+> (it fails on client authorization + network locus); it is guarded behind
+> `NXD_ALLOW_EXPERIMENTAL_CROSS_DP=1` and documented in the [README](README.md).
+> Never route a cross-DP query through it.
+
 ---
 
 ## Credentials on the command line
