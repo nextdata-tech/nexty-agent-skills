@@ -200,8 +200,9 @@ schema-qualified registry, and compiles a single fan-out-safe cross-schema SQL.
 It is intentionally **not referenced by `SKILL.md`, the scripts table, or any
 `reference/` doc** — the skill never invokes it.
 
-Why it is parked here and not wired in: a cross-DP eval (commit #47,
-`evals/cross-dp-joins/`) compared it head-to-head with strict mode on the live
+Why it is parked here and not wired in: a cross-DP eval (a private harness under
+`evals/private/cross-dp-joins/`, kept private because it carries internal infra
+paths + live-mesh outputs) compared it head-to-head with strict mode on the live
 mesh. Verdict — the compiler is the better cross-DP *engine* but is only safely
 deployable **server-side**, because client-side it fails on two boundaries the
 skill must respect:

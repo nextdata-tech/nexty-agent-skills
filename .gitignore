@@ -70,8 +70,8 @@ evals/mcp/uv.lock
 # Query-loop run transcripts (generated)
 evals/query-loop/runs/
 
-# Cross-DP join eval run outputs (generated)
-evals/cross-dp-joins/runs/
+# Cross-DP join eval harness (internal infra paths + live-mesh outputs) lives
+# under evals/private/ (already covered by `evals/private/*` above).
 
 # Skill build artifacts
 build/
