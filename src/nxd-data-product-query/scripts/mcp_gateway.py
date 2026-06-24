@@ -59,14 +59,7 @@ from nxd_api import read_token, resolve_mesh
 TOOL_HEALTH = "proxy__getDataProductsHealth"
 
 
-def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
-    """Candidate multiplexer URLs (mirror gateway_tools._proxy_endpoints)."""
-    if override:
-        return [override]
-    base = api_url.rstrip("/")
-    if base.endswith("/api"):
-        base = base[: -len("/api")]
-    return [f"{base}/dp/mcp/", f"{base}/mcp/"]
+from gateway_tools import _proxy_endpoints  # single source of truth (multi-host aware)
 
 
 def _open(endpoints: list[str], token: str, timeout: float) -> McpClient:

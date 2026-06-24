@@ -67,16 +67,38 @@ TOOL_EVENTS = "proxy__getDataProductEvents"
 def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
     """Candidate multiplexer URLs, in priority order.
 
-    Derived from the mesh api_url by stripping a trailing ``/api``. This mesh
-    serves the multiplexer at ``<base>/dp/mcp/``; the generic nxd pattern is
-    ``<base>/mcp/`` (see components/docs/dp_development/mcp_tools.md). Try both.
+    The mesh MCP multiplexer (mcp-proxy-api) is exposed differently per
+    deployment, so try the known patterns:
+
+    - **Hosted multi-host meshes** (e.g. ``api.<domain>`` / ``app.<domain>`` /
+      ``dp.<domain>``): the gateway lives on the **``dp.<domain>``** host at
+      ``/mcp/`` — i.e. ``https://dp.<domain>/mcp/``. The per-DP MCP endpoints are
+      ``https://dp.<domain>/<dp>/rpcs/mcp-api/mcp/`` on the same host (see
+      components/docs/dp_development/mcp_tools.md), and the gateway is the
+      host-root ``/mcp/``.
+    - **Single-host meshes** (e.g. the local ``nxd.nxd.local``): the gateway is
+      ``<base>/dp/mcp/`` (envoy ``/dp/mcp/`` prefix), with ``<base>/mcp/`` as a
+      generic fallback.
+
+    Derived from the mesh api_url (strip a trailing ``/api``). Returns every
+    candidate; ``_open`` tries them in order until one initialises.
     """
     if override:
         return [override]
     base = api_url.rstrip("/")
     if base.endswith("/api"):
         base = base[: -len("/api")]
-    return [f"{base}/dp/mcp/", f"{base}/mcp/"]
+    cands = [f"{base}/dp/mcp/", f"{base}/mcp/"]
+    # Multi-host pattern: rewrite the api/app host to the dp host, gateway at /mcp/.
+    parsed = urlparse(base)
+    host = parsed.hostname or ""
+    if host and "." in host:
+        first, _, rest = host.partition(".")
+        if first in ("api", "app", "nxd") and rest:
+            dp_host = f"dp.{rest}"
+            scheme = parsed.scheme or "https"
+            cands.insert(0, f"{scheme}://{dp_host}/mcp/")
+    return cands
 
 
 def _open(endpoints: list[str], token: str, timeout: float) -> McpClient:
