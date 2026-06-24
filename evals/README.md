@@ -24,6 +24,7 @@ withholding context from the baseline.
 - `public/` — generic scenarios safe to share across companies.
 - `templates/` — reusable scenario templates for private/customer evals.
 - `private/` — local-only scenarios with customer names, schemas, transcripts, logs, or commercial-demo material. Do not commit these.
+- `cross-dp-joins/` — standalone strategy eval (not part of the skill-pack `run.py` loop). Compares a server-side compiler DP vs a strict-MCP LLM agent on cross–data-product joins over a live pharma mesh, scored against an independent frozen oracle. **Proves a compiler is correct, deterministic, and fan-out-safe where a naive agent join double-counts.** See [`cross-dp-joins/README.md`](cross-dp-joins/README.md).
 
 ## KPI-blocking private scenarios
 

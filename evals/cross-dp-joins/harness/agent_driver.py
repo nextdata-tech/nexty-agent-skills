@@ -37,6 +37,16 @@ EVAL_DIR = Path(__file__).resolve().parents[1]          # evals/cross-dp-joins
 REPO_ROOT = EVAL_DIR.parents[1]                          # repo root
 RUNS_DIR = EVAL_DIR / "runs"
 
+# Fallback CA path for the local NXD dev cluster (self-signed cert).
+# cluster_env() propagates NXD_CA_BUNDLE/REQUESTS_CA_BUNDLE from the caller's
+# environment — but those vars are often absent when the harness is run
+# directly (e.g. from a sub-agent or a fresh shell). Without the CA, all MCP
+# calls made by the spawned agent fail TLS. Inject the known local path when
+# the vars are not already set.
+_NXD_LOCAL_CA = Path(
+    "/Volumes/PRO-G40/projects/nxd/shared/charts/nxd/localCerts/nxdCA.crt"
+)
+
 # Import the session/plugin bootstrap helpers verbatim from the query-loop runner.
 _QUERY_LOOP = REPO_ROOT / "evals" / "query-loop"
 sys.path.insert(0, str(_QUERY_LOOP))
@@ -244,6 +254,14 @@ def run_case(
                           transcript_path=str(transcript_path))
 
     env = {**os.environ, **cluster_env()}
+    # Inject the local-cluster CA when the caller didn't export the CA vars.
+    # cluster_env() only forwards what's already in os.environ, so a fresh
+    # shell or sub-agent context would propagate no CA → all MCP TLS calls fail.
+    if not env.get("NXD_CA_BUNDLE") and _NXD_LOCAL_CA.exists():
+        ca = str(_NXD_LOCAL_CA)
+        env["NXD_CA_BUNDLE"] = ca
+        env["REQUESTS_CA_BUNDLE"] = ca
+        env["SSL_CERT_FILE"] = ca
 
     with tempfile.TemporaryDirectory(prefix=f"cdj-{case_id}-{strategy}-") as tmp:
         plugin_dir = build_plugin_dir(Path(tmp))

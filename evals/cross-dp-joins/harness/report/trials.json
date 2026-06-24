@@ -1,0 +1,1106 @@
+[
+  {
+    "question_id": "x01",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "subject_count": 8
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  COUNT(DISTINCT SUBJECT_ID) AS subject_count\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x01",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "subject_count": 8
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  COUNT(DISTINCT SUBJECT_ID) AS subject_count\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x01",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "subject_count": 8
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  COUNT(DISTINCT SUBJECT_ID) AS subject_count\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x02",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "dispense_channel": "retail",
+        "units_dispensed": 60.0
+      },
+      {
+        "dispense_channel": "mail-order",
+        "units_dispensed": 105.0
+      },
+      {
+        "dispense_channel": "specialty",
+        "units_dispensed": 90.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  LOWERENVS_DB.PHARMA_RX_DEMO.dispenses.DISPENSE_CHANNEL AS dispense_channel,\n  SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses\nGROUP BY LOWERENVS_DB.PHARMA_RX_DEMO.dispenses.DISPENSE_CHANNEL\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x02",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "dispense_channel": "retail",
+        "units_dispensed": 60.0
+      },
+      {
+        "dispense_channel": "mail-order",
+        "units_dispensed": 105.0
+      },
+      {
+        "dispense_channel": "specialty",
+        "units_dispensed": 90.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  LOWERENVS_DB.PHARMA_RX_DEMO.dispenses.DISPENSE_CHANNEL AS dispense_channel,\n  SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses\nGROUP BY LOWERENVS_DB.PHARMA_RX_DEMO.dispenses.DISPENSE_CHANNEL\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x02",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "dispense_channel": "retail",
+        "units_dispensed": 60.0
+      },
+      {
+        "dispense_channel": "mail-order",
+        "units_dispensed": 105.0
+      },
+      {
+        "dispense_channel": "specialty",
+        "units_dispensed": 90.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  LOWERENVS_DB.PHARMA_RX_DEMO.dispenses.DISPENSE_CHANNEL AS dispense_channel,\n  SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses\nGROUP BY LOWERENVS_DB.PHARMA_RX_DEMO.dispenses.DISPENSE_CHANNEL\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x03",
+    "strategy": "A",
+    "trial": 0,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x03",
+    "strategy": "A",
+    "trial": 1,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x03",
+    "strategy": "A",
+    "trial": 2,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x04",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "site_region": "APAC",
+        "units_dispensed": null
+      },
+      {
+        "site_region": "NA",
+        "units_dispensed": 285.0
+      },
+      {
+        "site_region": "EU",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SITE_ID AS SITE_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION AS site_region,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SITES_DEMO.sites\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_ID = bridge_site_subjects.SITE_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x04",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "site_region": "APAC",
+        "units_dispensed": null
+      },
+      {
+        "site_region": "NA",
+        "units_dispensed": 285.0
+      },
+      {
+        "site_region": "EU",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SITE_ID AS SITE_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION AS site_region,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SITES_DEMO.sites\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_ID = bridge_site_subjects.SITE_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x04",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "site_region": "APAC",
+        "units_dispensed": null
+      },
+      {
+        "site_region": "NA",
+        "units_dispensed": 285.0
+      },
+      {
+        "site_region": "EU",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SITE_ID AS SITE_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION AS site_region,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SITES_DEMO.sites\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_ID = bridge_site_subjects.SITE_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x05",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "subject_country": "NL",
+        "titer_sum": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0
+      },
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x05",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "subject_country": "NL",
+        "titer_sum": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0
+      },
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x05",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "subject_country": "NL",
+        "titer_sum": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0
+      },
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x06",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "modality": "antibody",
+        "titer_sum": 495.0
+      },
+      {
+        "modality": "small_molecule",
+        "titer_sum": 200.0
+      },
+      {
+        "modality": "vaccine",
+        "titer_sum": 350.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_dispenses AS (\n  SELECT DISTINCT PRODUCT_ID AS PRODUCT_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.MODALITY AS modality,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN bridge_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = bridge_dispenses.PRODUCT_ID\nLEFT JOIN bridge_site_subjects ON bridge_dispenses.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.MODALITY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x06",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "modality": "antibody",
+        "titer_sum": 495.0
+      },
+      {
+        "modality": "small_molecule",
+        "titer_sum": 200.0
+      },
+      {
+        "modality": "vaccine",
+        "titer_sum": 350.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_dispenses AS (\n  SELECT DISTINCT PRODUCT_ID AS PRODUCT_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.MODALITY AS modality,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN bridge_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = bridge_dispenses.PRODUCT_ID\nLEFT JOIN bridge_site_subjects ON bridge_dispenses.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.MODALITY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x06",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "modality": "antibody",
+        "titer_sum": 495.0
+      },
+      {
+        "modality": "small_molecule",
+        "titer_sum": 200.0
+      },
+      {
+        "modality": "vaccine",
+        "titer_sum": 350.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_dispenses AS (\n  SELECT DISTINCT PRODUCT_ID AS PRODUCT_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.MODALITY AS modality,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN bridge_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = bridge_dispenses.PRODUCT_ID\nLEFT JOIN bridge_site_subjects ON bridge_dispenses.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.MODALITY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x07",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0,
+        "units_dispensed": 120.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "NL",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0,
+        "units_dispensed": 135.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0,
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nagg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x07",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0,
+        "units_dispensed": 120.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "NL",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0,
+        "units_dispensed": 135.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0,
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nagg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x07",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0,
+        "units_dispensed": 120.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "NL",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0,
+        "units_dispensed": 135.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0,
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nagg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x08",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "site_region": "NA",
+        "titer_sum": 1140.0,
+        "units_dispensed": 285.0
+      },
+      {
+        "site_region": "EU",
+        "titer_sum": 500.0,
+        "units_dispensed": null
+      },
+      {
+        "site_region": "APAC",
+        "titer_sum": null,
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nagg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SITE_ID AS SITE_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION AS site_region,\n  SUM(agg_assays.titer_sum) AS titer_sum,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SITES_DEMO.sites\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_ID = bridge_site_subjects.SITE_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x08",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "site_region": "NA",
+        "titer_sum": 1140.0,
+        "units_dispensed": 285.0
+      },
+      {
+        "site_region": "EU",
+        "titer_sum": 500.0,
+        "units_dispensed": null
+      },
+      {
+        "site_region": "APAC",
+        "titer_sum": null,
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nagg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SITE_ID AS SITE_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION AS site_region,\n  SUM(agg_assays.titer_sum) AS titer_sum,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SITES_DEMO.sites\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_ID = bridge_site_subjects.SITE_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x08",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "site_region": "NA",
+        "titer_sum": 1140.0,
+        "units_dispensed": 285.0
+      },
+      {
+        "site_region": "EU",
+        "titer_sum": 500.0,
+        "units_dispensed": null
+      },
+      {
+        "site_region": "APAC",
+        "titer_sum": null,
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nagg_dispenses AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SITE_ID AS SITE_ID, SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION AS site_region,\n  SUM(agg_assays.titer_sum) AS titer_sum,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_SITES_DEMO.sites\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_ID = bridge_site_subjects.SITE_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nLEFT JOIN agg_dispenses ON bridge_site_subjects.SUBJECT_ID = agg_dispenses.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SITES_DEMO.sites.SITE_REGION\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x12",
+    "strategy": "A",
+    "trial": 0,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x12",
+    "strategy": "A",
+    "trial": 1,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x12",
+    "strategy": "A",
+    "trial": 2,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x09",
+    "strategy": "A",
+    "trial": 0,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x09",
+    "strategy": "A",
+    "trial": 1,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x09",
+    "strategy": "A",
+    "trial": 2,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x10",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "subject_country": "NL",
+        "titer_sum": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0
+      },
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x10",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "subject_country": "NL",
+        "titer_sum": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0
+      },
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x10",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "subject_country": "NL",
+        "titer_sum": null
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0
+      },
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_assays AS (\n  SELECT SUBJECT_ID AS SUBJECT_ID, SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum FROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays GROUP BY SUBJECT_ID\n),\nbridge_site_subjects AS (\n  SELECT DISTINCT SUBJECT_ID AS SUBJECT_ID FROM LOWERENVS_DB.PHARMA_SITES_DEMO.site_subjects\n)\nSELECT\n  LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY AS subject_country,\n  SUM(agg_assays.titer_sum) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects\nLEFT JOIN bridge_site_subjects ON LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_ID = bridge_site_subjects.SUBJECT_ID\nLEFT JOIN agg_assays ON bridge_site_subjects.SUBJECT_ID = agg_assays.SUBJECT_ID\nGROUP BY LOWERENVS_DB.PHARMA_SUBJECTS_DEMO.subjects.SUBJECT_COUNTRY\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x13",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x13",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x13",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x13b",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x13b",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x13b",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x14",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x14",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x14",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x15",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x15",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x15",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60.0
+      },
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135.0
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      }
+    ],
+    "sql": "SELECT * FROM (\nWITH agg_dispenses AS (\n  SELECT PRODUCT_ID AS PRODUCT_ID, SUM(TRY_CAST(CAST(UNITS AS VARCHAR) AS DOUBLE)) AS units_dispensed FROM LOWERENVS_DB.PHARMA_RX_DEMO.dispenses GROUP BY PRODUCT_ID\n)\nSELECT\n  LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME AS product_name,\n  SUM(agg_dispenses.units_dispensed) AS units_dispensed\nFROM LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products\nLEFT JOIN agg_dispenses ON LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_ID = agg_dispenses.PRODUCT_ID\nGROUP BY LOWERENVS_DB.PHARMA_PRODUCT_DEMO.products.PRODUCT_NAME\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x16",
+    "strategy": "A",
+    "trial": 0,
+    "rows": [
+      {
+        "titer_sum": 1170.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x16",
+    "strategy": "A",
+    "trial": 1,
+    "rows": [
+      {
+        "titer_sum": 1170.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x16",
+    "strategy": "A",
+    "trial": 2,
+    "rows": [
+      {
+        "titer_sum": 1170.0
+      }
+    ],
+    "sql": "SELECT * FROM (\nSELECT\n  SUM(TRY_CAST(CAST(TITER AS VARCHAR) AS DOUBLE)) AS titer_sum\nFROM LOWERENVS_DB.PHARMA_LABS_DEMO.assays\n) AS _capped LIMIT 201",
+    "abstained": false,
+    "errored": false
+  },
+  {
+    "question_id": "x17",
+    "strategy": "A",
+    "trial": 0,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x17",
+    "strategy": "A",
+    "trial": 1,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  },
+  {
+    "question_id": "x17",
+    "strategy": "A",
+    "trial": 2,
+    "rows": null,
+    "sql": null,
+    "abstained": false,
+    "errored": true
+  }
+]

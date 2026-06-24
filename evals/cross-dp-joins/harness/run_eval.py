@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -159,6 +160,31 @@ def trial_record_from_compiler(
 # --------------------------------------------------------------------------- #
 
 
+def _resolve_api_url() -> str | None:
+    """Best-effort resolve the live mesh ``api_url`` via the skill's find_mesh.py.
+
+    Passed to ``run_compiler_dp_strategy`` for signature parity (the per-DP MCP
+    routes are derived from NXD_MESH_BASE inside that module, so api_url is
+    currently informational). Returns None if find_mesh isn't resolvable.
+    """
+    find_mesh = strategy_compiler_dp_scripts() / "find_mesh.py"
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(find_mesh)], capture_output=True, text=True, timeout=60
+        )
+        if proc.returncode != 0:
+            return None
+        return json.loads(proc.stdout).get("api_url")
+    except Exception:  # noqa: BLE001 — informational only
+        return None
+
+
+def strategy_compiler_dp_scripts() -> Path:
+    import strategy_compiler_dp  # noqa: E402
+
+    return strategy_compiler_dp._SKILL_SCRIPTS
+
+
 def _run_agent_trial(case: dict, strategy: str, trial: int, run_ts: str, token_file: str | None) -> dict:
     from agent_driver import run_case  # noqa: E402  (lazy: avoids the run_query_loop import on dry-run)
 
@@ -174,34 +200,32 @@ def _run_agent_trial(case: dict, strategy: str, trial: int, run_ts: str, token_f
     )
 
 
-def _run_compiler_trial(case: dict, strategy: str, trial: int, token_file: str) -> dict:
-    import strategy_compiler  # noqa: E402
+def _run_compiler_trial(
+    case: dict, strategy: str, trial: int, token_file: str, api_url: str | None
+) -> dict:
+    """Drive strategy A via the DEPLOYED server-side compiler DP (WireA).
 
-    sel = case.get("compiler_selection")
-    if not sel:
-        # No selection wired for this question -> the compiler can't run it; record
-        # an explicit ERROR (rows None) rather than silently skipping the cell.
-        return trial_record_from_compiler(
-            None,
-            "no compiler_selection for question (cannot drive strategy A)",
-            question_id=case["id"],
-            strategy=strategy,
-            trial=trial,
-        )
-    error: str | None = None
-    result: dict | None = None
-    try:
-        result = strategy_compiler.run_compiler_strategy(
-            measures=sel["measures"],
-            dimensions=sel["dimensions"],
-            dps=sel["dps"],
-            token_file=token_file,
-        )
-    except Exception as exc:  # noqa: BLE001 — a compile/exec failure scores ERROR
-        error = str(exc)
-    return trial_record_from_compiler(
-        result, error, question_id=case["id"], strategy=strategy, trial=trial
+    Replaces the IP-blocked client stand-in (``strategy_compiler``). The compiler
+    DP ``cross-dp-query-demo-demo`` (run_cross_dp_query) merges + compiles +
+    executes in-pod; ``run_compiler_dp_strategy`` already returns the explicit
+    ``{rows, sql, abstained, errored, error}`` shape, so we build the trial record
+    from it directly. The compiler never abstains — a CompileError maps to
+    ``errored`` (mirrors gold_cross_dp.py).
+    """
+    import strategy_compiler_dp  # noqa: E402
+
+    res = strategy_compiler_dp.run_compiler_dp_strategy(
+        case, api_url=api_url, token_file=token_file or ""
     )
+    return {
+        "question_id": case["id"],
+        "strategy": strategy,
+        "trial": trial,
+        "rows": res.get("rows"),
+        "sql": res.get("sql"),
+        "abstained": bool(res.get("abstained")),
+        "errored": bool(res.get("errored")),
+    }
 
 
 def collect_trials_live(
@@ -211,15 +235,24 @@ def collect_trials_live(
     *,
     compiler_strategy: str,
     token_file: str | None,
+    per_strategy_trials: dict[str, int] | None = None,
 ) -> list[dict]:
-    """Drive every (question x strategy x trial) live; return trial records."""
+    """Drive every (question x strategy x trial) live; return trial records.
+
+    ``per_strategy_trials`` overrides ``trials`` for a given strategy (e.g. 3 for
+    the deterministic compiler, 2 for the high-cost strict agent) so a single
+    matrix can run an asymmetric trial budget.
+    """
     run_ts = time.strftime("%Y%m%dT%H%M%S")
+    api_url = _resolve_api_url()
+    pst = per_strategy_trials or {}
     records: list[dict] = []
     for case in cases:
         for strat in strategies:
-            for t in range(trials):
+            n = pst.get(strat, trials)
+            for t in range(n):
                 if strat == compiler_strategy:
-                    rec = _run_compiler_trial(case, strat, t, token_file or "")
+                    rec = _run_compiler_trial(case, strat, t, token_file or "", api_url)
                 else:
                     rec = _run_agent_trial(case, strat, t, run_ts, token_file)
                 records.append(rec)
@@ -304,6 +337,73 @@ def _load_cases(cases_path: Path | None) -> list[dict]:
     return [{"id": r["id"], "question": r["question"]} for r in GOLD_CROSS_DP]
 
 
+# --------------------------------------------------------------------------- #
+# LIVE mode — gold_cross_dp_live + oracle_live.json (the definitive matrix)
+# --------------------------------------------------------------------------- #
+# The default (PoC) path freezes against gold.gold_cross_dp on a live Snowflake
+# conn. The LIVE path instead sources the question set from gold_cross_dp_live
+# (re-authored to the live mesh columns), the gold ROWS from the pre-frozen
+# oracle_live.json (independent root-principal ground truth — NOT the compiler),
+# the per-question compiler_selection from gold_live_selections, and remaps the
+# PoC expect_abstain ids (M/X/P) to the live "strict" strategy. Records flagged
+# ``skipped`` in the gold (non-discriminating live) are dropped entirely.
+
+
+def _live_gold_records() -> list[dict]:
+    """The live cross-DP gold records (skipped ones dropped)."""
+    from gold_cross_dp_live import GOLD_CROSS_DP_LIVE  # noqa: E402
+
+    return [r for r in GOLD_CROSS_DP_LIVE if not r.get("skipped")]
+
+
+def _load_cases_live() -> list[dict]:
+    """Live question set: {id, question, compiler_selection} per non-skipped record.
+
+    ``compiler_selection`` is attached from gold_live_selections so strategy A
+    (the compiler DP) can be driven. The strict agent ignores it (it works off
+    ``question`` alone). A record with no authored selection still runs the strict
+    agent; strategy A would error ("no compiler_selection") — surfaced, not hidden.
+    """
+    from gold_live_selections import COMPILER_SELECTIONS  # noqa: E402
+
+    cases: list[dict] = []
+    for r in _live_gold_records():
+        qid = r["id"]
+        case = {"id": qid, "question": r["question"]}
+        sel = COMPILER_SELECTIONS.get(qid)
+        if sel is not None:
+            case["compiler_selection"] = sel
+        cases.append(case)
+    return cases
+
+
+def load_gold_live(oracle_path: Path) -> dict[str, dict]:
+    """Build the scorer's gold map from gold_cross_dp_live + oracle_live.json.
+
+    For each non-skipped live gold record, produce the score_accuracy shape:
+        {question_id, category, equality_mode, rows (from oracle), expects_abstain}
+    where ``expects_abstain`` is the live-strategy remap of the PoC expect_abstain
+    list (M/X/P -> {"strict": True}). Rows come from the frozen oracle, NEVER from
+    a strategy — this is the no-circularity guarantee (both A and strict score
+    against the SAME oracle rows here).
+    """
+    from gold_live_selections import live_expects_abstain  # noqa: E402
+
+    oracle = json.loads(Path(oracle_path).read_text())
+    out: dict[str, dict] = {}
+    for r in _live_gold_records():
+        qid = r["id"]
+        frozen = oracle.get(qid) or {}
+        out[qid] = {
+            "question_id": qid,
+            "category": r.get("category", ""),
+            "equality_mode": r.get("equality_mode", "set"),
+            "rows": frozen.get("rows"),
+            "expects_abstain": live_expects_abstain(r.get("expect_abstain")),
+        }
+    return out
+
+
 def run_eval(
     *,
     strategies: list[str],
@@ -314,34 +414,51 @@ def run_eval(
     frozen_path: Path | None,
     report_dir: Path,
     token_file: str | None,
+    live_oracle: Path | None = None,
+    per_strategy_trials: dict[str, int] | None = None,
 ) -> list[dict]:
-    """Collect trial records, score them against frozen gold, write the report."""
+    """Collect trial records, score them against frozen gold, write the report.
+
+    ``live_oracle`` (the definitive matrix): when set, the question set comes from
+    gold_cross_dp_live (skipped records dropped, compiler_selection attached) and
+    the gold map is built from that file + the supplied oracle_live.json via
+    ``load_gold_live`` — NOT the stale gold.gold_cross_dp freeze.
+
+    ``per_strategy_trials``: optional {strategy: trials} override so the compiler
+    (determinism check, >=3) and the strict agent (variance, >=2) can run a
+    different trial count in one matrix.
+    """
     report_dir.mkdir(parents=True, exist_ok=True)
+    live = live_oracle is not None
 
     if dry_run_results is not None:
         records = collect_trials_dry_run(dry_run_results)
     else:
-        cases = _load_cases(cases_path)
+        cases = _load_cases_live() if live else _load_cases(cases_path)
         records = collect_trials_live(
             cases,
             strategies,
             trials,
             compiler_strategy=compiler_strategy,
             token_file=token_file,
+            per_strategy_trials=per_strategy_trials,
         )
 
     # Persist the trial records next to the report for reproducibility/debugging.
     (report_dir / "trials.json").write_text(json.dumps(records, indent=2, default=str))
 
-    # Freeze gold unless a frozen file was supplied. On dry-run, freezing is
-    # skipped when no frozen file exists (no live Snowflake) — the scorer then
-    # leaves gold rows absent, so accuracy reads FAIL for answered questions
-    # (surfacing the missing oracle), which is the documented score.py behavior.
-    if frozen_path is None and dry_run_results is None:
-        frozen_path = report_dir / "frozen_gold.json"
-        freeze_gold_to_file(frozen_path)
+    if live:
+        gold = load_gold_live(live_oracle)
+    else:
+        # Freeze gold unless a frozen file was supplied. On dry-run, freezing is
+        # skipped when no frozen file exists (no live Snowflake) — the scorer then
+        # leaves gold rows absent, so accuracy reads FAIL for answered questions
+        # (surfacing the missing oracle), which is the documented score.py behavior.
+        if frozen_path is None and dry_run_results is None:
+            frozen_path = report_dir / "frozen_gold.json"
+            freeze_gold_to_file(frozen_path)
+        gold = score.load_gold(frozen_path)
 
-    gold = score.load_gold(frozen_path)
     matrix = score.build_matrix(records, gold)
 
     (report_dir / "matrix.csv").write_text(score.to_csv(matrix))
@@ -373,7 +490,26 @@ def main(argv: list[str] | None = None) -> int:
         metavar="CANNED_RESULTS_JSON",
         help="build trial records from a canned results JSON (no live agents/Snowflake)",
     )
+    ap.add_argument(
+        "--live",
+        type=Path,
+        default=None,
+        metavar="ORACLE_LIVE_JSON",
+        help="DEFINITIVE matrix: source questions from gold_cross_dp_live + score "
+        "vs this frozen oracle_live.json (skipped records dropped, "
+        "compiler_selection attached, expect_abstain remapped to 'strict')",
+    )
+    ap.add_argument(
+        "--strict-trials",
+        type=int,
+        default=None,
+        help="override trial count for the 'strict' strategy (variance budget)",
+    )
     args = ap.parse_args(argv)
+
+    per_strategy_trials: dict[str, int] = {}
+    if args.strict_trials is not None:
+        per_strategy_trials["strict"] = args.strict_trials
 
     matrix = run_eval(
         strategies=[s for s in args.strategies.split(",") if s],
@@ -384,6 +520,8 @@ def main(argv: list[str] | None = None) -> int:
         frozen_path=args.frozen_gold,
         report_dir=args.report_dir,
         token_file=args.token_file,
+        live_oracle=args.live,
+        per_strategy_trials=per_strategy_trials or None,
     )
     print(json.dumps(matrix, indent=2, default=str))
     return 0

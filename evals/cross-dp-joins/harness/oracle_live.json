@@ -1,0 +1,335 @@
+{
+  "x01": {
+    "rows": [
+      {
+        "subject_count": 8
+      }
+    ],
+    "row_hash": "58b7e79cf84468b9987530a51ba8dab51b70be70abbb7271feb4b0f145e61931"
+  },
+  "x02": {
+    "rows": [
+      {
+        "dispense_channel": "specialty",
+        "units_dispensed": 90
+      },
+      {
+        "dispense_channel": "retail",
+        "units_dispensed": 60
+      },
+      {
+        "dispense_channel": "mail-order",
+        "units_dispensed": 105
+      }
+    ],
+    "row_hash": "9875cade8b2b9ad145a07033de5e00ffc92af9c5c5be6dae156be6b3809d2f3f"
+  },
+  "x03": {
+    "rows": [
+      {
+        "subject_country": "NL",
+        "assay_count": null
+      },
+      {
+        "subject_country": "DE",
+        "assay_count": 3
+      },
+      {
+        "subject_country": "US",
+        "assay_count": 4
+      },
+      {
+        "subject_country": "BE",
+        "assay_count": null
+      },
+      {
+        "subject_country": "FR",
+        "assay_count": 1
+      }
+    ],
+    "row_hash": "68790edec84469f7a7e16b1dd31d96082305294f3cb5e5ef308c20fe295a7a57"
+  },
+  "x04": {
+    "rows": [
+      {
+        "site_region": "NA",
+        "units_dispensed": 255
+      },
+      {
+        "site_region": "EU",
+        "units_dispensed": null
+      },
+      {
+        "site_region": "APAC",
+        "units_dispensed": null
+      }
+    ],
+    "row_hash": "dc0d7264e19d9d28d21a89acf317fba621b5cff2b21a6fe8480c6986dbdfe6f9"
+  },
+  "x05": {
+    "rows": [
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null
+      },
+      {
+        "subject_country": "NL",
+        "titer_sum": null
+      }
+    ],
+    "row_hash": "21c17225018dbf40e24487cbfa48bcebdea6a550163327273b45de329e018b57"
+  },
+  "x06": {
+    "rows": [
+      {
+        "modality": "small_molecule",
+        "titer_sum": 200.0
+      },
+      {
+        "modality": "antibody",
+        "titer_sum": 495.0
+      },
+      {
+        "modality": "vaccine",
+        "titer_sum": 350.0
+      }
+    ],
+    "row_hash": "5fbc1ed3e8edf6ab1ad05284a2b83ecae48c90f96f7819026524549dc4a741f0"
+  },
+  "x07": {
+    "rows": [
+      {
+        "subject_country": "US",
+        "titer_sum": 495.0,
+        "units_dispensed": 120
+      },
+      {
+        "subject_country": "DE",
+        "titer_sum": 500.0,
+        "units_dispensed": 135
+      },
+      {
+        "subject_country": "FR",
+        "titer_sum": 175.0,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "BE",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "subject_country": "NL",
+        "titer_sum": null,
+        "units_dispensed": null
+      }
+    ],
+    "row_hash": "3aa88f00661b408e3af4494c615cd099d99681c2fd18bba701782f60229a087e"
+  },
+  "x08": {
+    "rows": [
+      {
+        "site_region": "NA",
+        "titer_sum": 845.0,
+        "units_dispensed": 255
+      },
+      {
+        "site_region": "APAC",
+        "titer_sum": null,
+        "units_dispensed": null
+      },
+      {
+        "site_region": "EU",
+        "titer_sum": 325.0,
+        "units_dispensed": null
+      }
+    ],
+    "row_hash": "504a3087a492cefa20c50d7cc872db43f69fabd7bb39eb0216f3ad986ce57536"
+  },
+  "x11": {
+    "skipped": "no live subject has >=2 dispenses in the same channel; fact-spine fan-out collapses, naive == correct (non-discriminating)"
+  },
+  "x12": {
+    "rows": [
+      {
+        "prescriber_npi": "1234567890",
+        "titer_sum": 200.0
+      },
+      {
+        "prescriber_npi": "9876543210",
+        "titer_sum": 295.0
+      },
+      {
+        "prescriber_npi": "5556667770",
+        "titer_sum": 350.0
+      }
+    ],
+    "row_hash": "56acebaeea056f4695a994737455a54aca275b37156d246cf465353ed9ec15fa"
+  },
+  "x09": {
+    "rows": [
+      {
+        "subject_mrn": "MRN-0001",
+        "prescriber_npi": "1234567890"
+      },
+      {
+        "subject_mrn": "MRN-0002",
+        "prescriber_npi": "9876543210"
+      },
+      {
+        "subject_mrn": "MRN-0003",
+        "prescriber_npi": "5556667770"
+      }
+    ],
+    "row_hash": "e060b5d7bdc5d6e2e269a2128f6637a57d64dc88d756a87ac5b6064a9e509cd0"
+  },
+  "x10": {
+    "rows": [
+      {
+        "subject_id": 3,
+        "subject_country": "DE",
+        "titer_sum": 350.0,
+        "rnk": 1
+      },
+      {
+        "subject_id": 4,
+        "subject_country": "DE",
+        "titer_sum": 150.0,
+        "rnk": 2
+      },
+      {
+        "subject_id": 5,
+        "subject_country": "FR",
+        "titer_sum": 175.0,
+        "rnk": 1
+      },
+      {
+        "subject_id": 2,
+        "subject_country": "US",
+        "titer_sum": 295.0,
+        "rnk": 1
+      },
+      {
+        "subject_id": 1,
+        "subject_country": "US",
+        "titer_sum": 200.0,
+        "rnk": 2
+      }
+    ],
+    "row_hash": "0fc6e0884c5820a3e5d2d593d404f72095db9bf4cfd4358a88abb9ffbc0d3a1f"
+  },
+  "x13": {
+    "rows": [
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60
+      }
+    ],
+    "row_hash": "285674ccab01c4ec6a23c3d1f2005efa6255d8b5056ba54e7bc0041bdaf646bc"
+  },
+  "x13b": {
+    "rows": [
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135
+      },
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60
+      }
+    ],
+    "row_hash": "209c6755ad1488436688691ed7facad3eaf3c7bb0955a169f409425b99a75020"
+  },
+  "x14": {
+    "rows": [
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135
+      },
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60
+      }
+    ],
+    "row_hash": "8b3041ff703ca8974c7eec120920524633b68731ca80a47af33c94532604beb7"
+  },
+  "x15": {
+    "rows": [
+      {
+        "product_name": "Comirnaty",
+        "units_dispensed": 135
+      },
+      {
+        "product_name": "Keytruda",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Metformin",
+        "units_dispensed": null
+      },
+      {
+        "product_name": "Humira",
+        "units_dispensed": 60
+      },
+      {
+        "product_name": "Lipitor",
+        "units_dispensed": 60
+      }
+    ],
+    "row_hash": "285674ccab01c4ec6a23c3d1f2005efa6255d8b5056ba54e7bc0041bdaf646bc"
+  },
+  "x16": {
+    "rows": [
+      {
+        "titer_sum": 1170.0
+      }
+    ],
+    "row_hash": "e460c79806f1d5f66951593f9c5c9b70b156cafbffa22278a0b5bcab471ea7f4"
+  },
+  "x17": {
+    "rows": [
+      {
+        "dispense_channel": "mail-order"
+      },
+      {
+        "dispense_channel": "retail"
+      },
+      {
+        "dispense_channel": "specialty"
+      }
+    ],
+    "row_hash": "49f0bddd2a8ad95a779a96b2ed6ecc0e5ec79a84ebfb6c79a85a4fa7ed8e4039"
+  }
+}
