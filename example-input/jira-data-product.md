@@ -29,7 +29,7 @@ The transformation should run on a four hourly basis.
 # Models
 There should be one model for the API input which should reflect what information is gathered from the API response. The output should also feature a single model which aligns with the schema which get seeded within "pgvector" specifically pg_engine.init_vectorstore_table.
 
-Complex types should be avoided since within semantic models since they are not fully compatibile, in the interim utilse strings within NXD sematic models to represent complex types.
+Complex types should be avoided since within semantic models since they are not fully compatible, in the interim utilize strings within NXD sematic models to represent complex types.
 
 # Validation
 Write a local validation test that verifies that data can be properly fetched from the API and parsed with the transform
