@@ -9,6 +9,23 @@ fixture eval. It runs the two strategies against eight healthy pharma DPs on the
 cluster and scores both against an **independent, frozen oracle** — not against either
 strategy's own output.
 
+## Three test tiers (where each bug class is caught)
+
+The compiler's correctness is guarded at three levels, cheapest first. The two
+compiler bugs this eval found (#6964 region/bridge chasm, and its review-2 multi-fan
+follow-on) were **arithmetic** bugs — they motivate tier 2, which the offline goldens
+structurally could not catch.
+
+| Tier | Where | Runs in CI | Catches | Misses |
+|---|---|---|---|---|
+| 1 · offline string-goldens | `nxd_py` `test_cross_dp_compiler.py` | ✅ | SQL *shape* regressions, byte-determinism | fan-out arithmetic, strict-dialect 42601 / invalid-identifier (never executes the SQL) |
+| 2 · **DuckDB hermetic row-oracle** | `nxd_py` `test_cross_dp_compiler_exec.py` | ✅ | **fan-out arithmetic** (chasm double-count → wrong rows) + **strict-dialect** rejections (#63 GROUP-BY, #67 CTE-projection — DuckDB is ANSI-strict). Seeds a subject at 2 same-region sites; pre-#6964 SQL returns NA titer 1000, fixed returns 500 → regression goes RED automatically. No warehouse / creds. | engine-specific Snowflake grammar quirks, real governance/locus |
+| 3 · live definitive matrix | this harness (`run_eval.py --live`) | ✗ (creds-gated, flaky 250001) | everything real: row-accuracy vs frozen oracle on the actual mesh, execution-locus + authorization-scope governance findings | — |
+
+Tier 2 is the **missing middle** the two #6964 reviews flagged ("offline goldens
+structurally cannot catch this — needs an integration test that executes the SQL").
+It makes a chasm regression a deterministic RED in CI instead of a manual live catch.
+
 ---
 
 ## Methodology
