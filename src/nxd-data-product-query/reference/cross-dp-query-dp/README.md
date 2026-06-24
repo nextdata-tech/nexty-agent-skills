@@ -53,7 +53,7 @@ cross-dp-query-dp/
   spec.py            facade DP: rpc output (run_cross_dp_query) + storage port
   cross_dp_query.py  self-contained tool — merge + compile + in-pod execute
   models.py          marker model (build-time only; see below)
-  requirements.txt   nxd.* >=0.41.101
+  requirements.txt   nxd.* >=0.41.100.dev0  (the cross-DP decoupling)
 ```
 
 - **No `.transform()`.** This DP owns no data. The rpc output bundles
