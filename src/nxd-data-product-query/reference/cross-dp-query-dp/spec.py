@@ -20,10 +20,12 @@ DEPLOY PRECONDITIONS (the only two things to change per mesh):
      the moment a query crosses a DP boundary. This is the deliberate cross-DP
      grant the design calls "the mesh-governed service identity".
 
-The DP owns no tables and seeds no data. The ``.transform()`` is a NO-OP that
-exists only to (a) bundle the cross_dp_query.py sibling via the ``**/*.py`` glob
-and (b) satisfy the validator's rpc-DP wiring. The ``snowflake`` storage output
-port supplies the connection handle injected into the tool by parameter name.
+The DP owns no tables and seeds no data, and has NO ``.transform()``:
+``rpc_function(code(run_cross_dp_query))`` bundles the tool's own module
+independently of the transform-gated ``**/*.py`` glob, so no transform is needed
+to ship the sibling. The ``snowflake`` storage output port supplies the connection
+handle injected into the tool by parameter name; its marker model is DECLARED via
+``.model(...)`` (no production/verification contract), so nothing is seeded.
 """
 
 from nxd.spec import (
@@ -158,16 +160,16 @@ _rpc = (
 )
 
 # ── Storage output port ──────────────────────────────────────────────────────
-# Named "snowflake" to match the tool's + transform's parameter name, so the rpc
+# Named "snowflake" to match the tool's `snowflake` parameter, so the rpc
 # framework injects this port's Snowflake handle. The handle's role is the
 # cross-DP principal (the deploy precondition).
 #
 # Attaches the marker model via `.model(...)`, NOT `.promise(...)`: `.model()`
 # DECLARES a model on the port (satisfying the validator's every-port-needs-a-
-# model rule) WITHOUT a production/verification contract. So nothing is seeded
-# and the no-op transform writes nothing — this DP owns no data. `.promise()`
-# would instead require the kernel to verify a produced table after the
-# transform, which we deliberately avoid.
+# model rule) WITHOUT a production/verification contract. So nothing is seeded —
+# this DP owns no data and has no transform. `.promise()` would instead require
+# the kernel to verify a produced table after a transform, which we deliberately
+# avoid (there is no transform to produce it).
 _storage = (
     data_product_output()
     .model(marker_model)

@@ -2,17 +2,18 @@
 
 This DP owns no real data — it serves the ``run_cross_dp_query`` MCP tool, which
 reads OTHER DPs' schemas. But the nxd validator requires every output port to
-promise at least one model, so we promise a tiny MARKER model: a single-column
-table the no-op transform creates and seeds with one row. It exists only to
-satisfy the output-port promise + its post-transform verification; nothing reads
-it. (See overview.md — "one promised marker model".)
+DECLARE at least one model, so we declare a tiny MARKER model via ``.model(...)``
+on the storage port (see spec.py). ``.model()`` declares the model WITHOUT a
+production/verification contract — so there is no transform and nothing is
+seeded; the marker exists only to satisfy the every-port-needs-a-model rule.
+Nothing reads it.
 """
 
 from nxd.spec import semantic_model
 from nxd.spec.data_types import string
 
-# Tiny marker — one column, one row. Not part of any query; only satisfies the
-# output-port promise contract.
+# Tiny marker — a single declared column. Not part of any query; only satisfies
+# the validator's every-port-needs-a-model rule (declared, not produced).
 marker_model = (
     semantic_model("cross_dp_query_marker")
     .description(

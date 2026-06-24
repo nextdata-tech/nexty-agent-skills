@@ -10,6 +10,15 @@ This is the **server-side home of the cross-DP compiler** that the client-side
 `scripts/cross_dp_compile.py` stands in for. It moves the compile + execute step
 to where it can actually run.
 
+## Contents
+
+- [Why server-side (the two findings the live eval proved)](#why-server-side-the-two-findings-the-live-eval-proved)
+- [Why the caller passes the registries (dynamic — no redeploy)](#why-the-caller-passes-the-registries-dynamic--no-redeploy)
+- [Shape — a true facade (no transform, no promise, no data)](#shape--a-true-facade-no-transform-no-promise-no-data)
+- [Deploy onto any mesh — the two preconditions](#deploy-onto-any-mesh--the-two-preconditions)
+- [Using the tool](#using-the-tool)
+- [Relationship to the client-side script](#relationship-to-the-client-side-script)
+
 ## Why server-side (the two findings the live eval proved)
 
 A client cannot run a cross-DP join itself:
