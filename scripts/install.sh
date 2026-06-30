@@ -98,8 +98,10 @@ parse_args() {
       --no-submodule)    DO_SUBMODULE=0 ;;
       --rpm-experimental) RPM_EXPERIMENTAL=1 ;;
       --zip)     FORCE_ZIP=1 ;;
-      --account-id) shift; ACCOUNT_ID="${1:-}" ;;
-      --device-id)  shift; DEVICE_ID="${1:-}" ;;
+      --account-id) shift; [[ $# -gt 0 ]] || die "--account-id needs an argument"
+                    ACCOUNT_ID="$1" ;;
+      --device-id)  shift; [[ $# -gt 0 ]] || die "--device-id needs an argument"
+                    DEVICE_ID="$1" ;;
       -y|--yes)  ASSUME_YES=1 ;;
       --dry-run) DRY_RUN=1 ;;
       --verbose|-v) VERBOSE=1 ;;
@@ -222,7 +224,7 @@ uninstall_code() {
   while IFS= read -r s; do
     if [[ -d "$dest/$s" ]]; then run "rm -rf '$dest/$s'"; ok "removed: $s"; fi
   done < <(selected_skills)
-  [[ -d "$dest" ]] && rmdir "$dest" 2>/dev/null && dbg "removed empty $dest" || true
+  [[ -d "$dest" ]] && run "rmdir '$dest' 2>/dev/null || true"
 }
 
 status_code() {
@@ -385,7 +387,11 @@ EOF
 
 uninstall_desktop_rpm() {
   is_macos || return 0
-  local acct dev; acct="$(discover_account_id)"; dev="$(discover_device_id | head -1)"
+  local acct dev; acct="$(discover_account_id)"; dev="$(discover_device_id)"
+  if [[ "$(printf '%s' "$dev" | grep -c .)" -gt 1 ]]; then
+    warn "multiple deviceIds found; pass --device-id ID to choose which to uninstall:"
+    printf '%s\n' "$dev" >&2; return 0
+  fi
   [[ -n "$acct" && -n "$dev" ]] || { warn "cannot resolve ids; nothing to uninstall"; return 0; }
   local rpm; rpm="$(rpm_dir "$acct" "$dev")"
   [[ -n "$rpm" ]] || { warn "rpm dir not found; nothing to uninstall"; return 0; }
@@ -411,7 +417,11 @@ PY
 
 status_desktop() {
   if ! is_macos; then echo "Claude Desktop/Cowork: macOS-only (n/a here)"; return 0; fi
-  local acct dev; acct="$(discover_account_id)"; dev="$(discover_device_id | head -1)"
+  local acct dev; acct="$(discover_account_id)"; dev="$(discover_device_id)"
+  if [[ "$(printf '%s' "$dev" | grep -c .)" -gt 1 ]]; then
+    echo "Claude Desktop/Cowork: account=${acct:-?} devices (multiple — pass --device-id):"
+    while IFS= read -r d; do echo "  - $d"; done <<<"$dev"; return 0
+  fi
   echo "Claude Desktop/Cowork: account=${acct:-?} device=${dev:-?}"
   local rpm; rpm="$(rpm_dir "$acct" "$dev" 2>/dev/null || true)"
   if [[ -z "$rpm" ]]; then echo "  rpm registry: not found"; return 0; fi
