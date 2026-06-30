@@ -1,78 +1,50 @@
 """spec.py for pharma-subjects-demo — the SUBJECT SPINE of the fresh pharma mesh.
 
-Three MCP tools (list_models, describe_model, run_semantic_query) over the
-`subjects` semantic model in Snowflake, served via an RPC output port.
+Four MCP tools (list_models, semantic_model, describe_model, run_semantic_query)
+are auto-generated at pod boot via the .semantic_tools() flag (NEX-710 /
+PR #6979). The kernel compiles per-field __nxd_semantic__ blobs on each promised
+model's manifest attributes into typed SemanticRegistry payloads, delivers them
+to ``<root>/.nxd/semantic/<model>.json`` at startup, and the entrypoints module
+reads them back to build the four tool closures.
 
-The four non-negotiable wiring constraints (deployable-dp README):
-1. `code()` cannot extract closures — the tool callables are module-level defs
-   in tools.py that delegate to the library; build_semantic_tools(REGISTRY) is
-   used ONLY for each tool's request/response models + description.
-2. The registry/tools siblings are bundled only because a `.transform(...)` is
-   declared (the **/*.py glob runs on the transform/compute output path).
-3. All modules are FLAT at the DP root; imports are flat (`from registry import
-   REGISTRY`).
-4. Base tables are SELF-SEEDED by the transform into this DP's own Snowflake
-   schema (the template pattern — NOT the facade). The storage port is a plain
-   `storage(...)` with NO `as_view` (the nxd validator HARD-REJECTS
-   `.transform()` + `as_view()` together), and there is no `source_aligned_input`.
+Manifest authoring
+------------------
+The Python spec author surface for __nxd_semantic__ field annotations (NEX-704)
+is not yet merged. The annotations are injected in models.py via a private-field
+stopgap:
+  AttributeSpec._metadata["__nxd_semantic__"] = json.dumps(role)
+
+Wiring
+------
+- subjects (the real spine model) is promised on the storage port so its
+  annotated attributes appear in the kernel's manifest (and thus in
+  .nxd/semantic/*.json at pod boot).
+- provision_marker is also promised (satisfies produce-verification).
+- .semantic_tools() auto-wires 4 RPC tool functions + mcp-api port.
+- The transform seeds the base table and writes the marker row.
 """
 
 from nxd.spec import (
+    Predicate,
     code,
     data_product,
     data_product_output,
-    data_product_rpc_output,
-    Predicate,
-    rpc_function,
-    rpc_server,
-    script,
     storage,
 )
-from nxd.experimental.semantic import build_semantic_tools
-from registry import REGISTRY
-from tools import list_models, describe_model, run_semantic_query, semantic_model
 from transform import transform
-from models import subjects_model
+from models import subjects_model, provision_marker
 
 INFRA_PROFILE = "ecommerce-demo"
 SNOWFLAKE_SERVICE = "nxd-snowflake"
 
-# Build semantic tools ONLY to obtain the request/response schema descriptors +
-# descriptions; the actual callables are the module-level functions from tools.py
-# (which the spec builder can locate via AST — closures cannot be located).
-_tools = build_semantic_tools(REGISTRY)
-_tool_map = {t.name: t for t in _tools}
-
-_rpc = data_product_rpc_output()
-
-for _fn, _name in [
-    (list_models, "list_models"),
-    (semantic_model, "semantic_model"),
-    (describe_model, "describe_model"),
-    (run_semantic_query, "run_semantic_query"),
-]:
-    _t = _tool_map[_name]
-    _rpc = _rpc.function(
-        rpc_function(code(_fn), _t.request_model, _t.response_model).description(
-            _t.description
-        )
-    )
-
-_rpc = _rpc.port(
-    "mcp-api",
-    rpc_server(f"/infra-profile/{INFRA_PROFILE}#/services/mcp-api-service-k8s")
-    .enable_endpoints()
-    .mcp_path("/mcp"),
-)
-
-# Storage output port named "snowflake" — its name is the transform's parameter
-# name, and it supplies the Snowflake connection both the transform (to seed the
-# base table + provision the view) and run_semantic_query (to read it) use.
-# Plain storage(...) with NO as_view: the self-seed transform owns provisioning.
+# Storage output port named "snowflake" — promises the marker (produce-
+# verification target) and the REAL subjects model so its annotated attributes
+# and glossary links are included in the kernel-generated manifest. The kernel
+# compiles __nxd_semantic__ blobs from those attributes and delivers a
+# .nxd/semantic/<model>.json payload per annotated model at boot.
 _storage = (
     data_product_output()
-    # Promise the REAL subjects model (not a marker) so the discover UI surfaces
-    # its attributes + glossary links. The transform seeds the matching SUBJECTS table.
+    .promise(provision_marker)
     .promise(subjects_model)
     .port(
         "snowflake",
@@ -94,24 +66,20 @@ spec = (
         version="1.0.0-dev",
         infra_profile=INFRA_PROFILE,
     )
-    # PROVISION: the @on_provision hook (provision.py) creates the SUBJECTS table
-    # structure + the single-table SUBJECTS_SEMANTIC view in Phase A, BEFORE the
-    # transform. Runs on the same k8s compute; receives the `snowflake` output
-    # port as a typed Snowflake handle (injected by param name).
-    .provision(
-        script("provision.py").compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
-    )
-    # TRANSFORM: seeds the ROWS of the promised SUBJECTS table (structure + view
-    # already provisioned). Output-port promise verification runs AFTER the
-    # transform, so seeding rows here satisfies the promise in one launch. The
-    # .transform() also bundles registry.py/tools.py/provision.py (the **/*.py
-    # glob runs on the transform path). .startup_timeout(600) covers cold-boot
-    # contention when the mesh launches.
+    # Transform seeds the subjects base table and writes the subjects_smoke_marker
+    # row. No semantic-view DDL needed — the auto-generated run_semantic_query
+    # compiles SQL against the base table from the kernel-delivered
+    # .nxd/semantic/ payloads. .startup_timeout(600) covers cold-boot contention
+    # when the mesh launches.
     .transform(
-        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
+        code(transform)
+        .compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
+        .startup_timeout(600)
     )
     .output(_storage)
-    .output(_rpc)
+    # Auto-wire 4 governed MCP tools (list_models, semantic_model, describe_model,
+    # run_semantic_query) reading kernel-delivered payloads.
+    .semantic_tools(service="mcp-api-service-k8s")
     .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject")
     .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/subject_country")
 )

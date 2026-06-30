@@ -75,8 +75,8 @@ where a missing field (e.g. a richer `describe_model`) would have to be added.
 ### The kit
 
 The compiler, dialect, and the **MCP tool factory** `build_semantic_tools` ship in
-the `nxd.data_product` wheel as the importable package `nxd.experimental.semantic`
-(nxd#6902). A DP imports it at runtime; it is **not** vendored or copied.
+the `nxd.data_product` wheel as the importable package `nxd.experimental.semantic`.
+A DP imports it at runtime; it is **not** vendored or copied.
 
 ```python
 from nxd.experimental.semantic import (
@@ -85,8 +85,9 @@ from nxd.experimental.semantic import (
 )
 ```
 
-The `experimental` namespace is a stopgap — once **ADR-026** lands, the public
-names migrate into the first-class `nxd.spec` DSL. The names are already
+The `experimental` namespace is a stopgap — once the first-class `nxd.spec`
+measure/dimension DSL lands, the public
+names migrate into it. The names are already
 pre-aligned, so the migration is a mechanical import-path change.
 
 ### Registry → tools
@@ -167,7 +168,7 @@ Authoritative detail lives in the generator skill:
 ## 4. Deferred work and product-side gaps
 
 Documented here (not in the query flow) so the agent isn't cluttered with work it
-can't do. Tracked on **NEX-620** as ADR-026 convergence candidates.
+can't do. These are candidates for convergence with a future first-class `nxd.spec` measure/dimension DSL.
 
 ### Deferred — could be built client-side later
 

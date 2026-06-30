@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.6.1
+  version: 0.7.0
 ---
 
 # nxd Data Product Query
@@ -260,9 +260,10 @@ python3 scripts/mcp_call.py \
 #### Semantic-layer MCP ports (`list_models` / `run_semantic_query`)
 
 A DP built with the **nxd-semantic-data-product** skill exposes a governed
-text-to-SQL surface as three RPC functions: `list_models`, `describe_model`,
-`run_semantic_query`. Treat them as a navigational discover→select→run
-protocol, not as free-form SQL:
+text-to-SQL surface as four RPC functions: `list_models`, `describe_model`,
+`run_semantic_query`, and `semantic_model` (raw per-model projection, harvested by
+strict mode for cross-DP relationships). Treat the first three as a
+discover→select→run protocol, not free-form SQL:
 
 1. **Discover — `list_models`.** Call `list_models` first to see the available
    semantic models (entities), their grains, and how they join. Never guess
@@ -374,10 +375,11 @@ python3 scripts/mcp_call.py --endpoint "$BASE" --tool run_cross_dp_query__<facad
     --token-file "$TOK" --out /tmp/xdp.json
 ```
 
-The cross-DP join must be **declared** in some member DP's `registry.py` (a foreign
-model stub with `data_product=` + physical `table=`, plus the `.join()` on-key) so
-its `semantic_model` payload publishes the edge — otherwise the selection is not
-join-reachable and the tool returns an error, not a wrong number. PII on the join
+The cross-DP join must be **declared** in some member DP's models — a
+`__nxd_semantic__` join blob on the FK (`{"kind": "join", "to_model": ...,
+"cardinality": "many_to_one"}`) plus the cross-DP `.referencing(...)` lineage edge
+— so its `semantic_model` payload publishes the edge. Otherwise the selection is
+not join-reachable and the tool errors (not a wrong number). PII on the join
 key or a PII output dimension is denied (`PII dimension excluded from cross-model
 reach`) — that is governance, not a transient failure; do not retry.
 
