@@ -69,17 +69,28 @@ Curated by our field engineers. Brings the patterns, skills, and tools your AI a
 
 ## Quick Install
 
+From a clone of this repo, the first-party installer handles every Claude target:
+
+```bash
+git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
+cd nexty-agent-skills
+./scripts/install.sh --code        # Claude Code: copy skills to ~/.claude/skills
+./scripts/install.sh --desktop     # Claude Desktop / Cowork: build zips + upload steps
+./scripts/install.sh --all         # all targets
+```
+
+`scripts/install.sh` validates the pack (`scripts/validate_skills.py`), initializes the
+examples submodule, and installs without any third-party CLI. See
+[Installer reference](#installer-scriptsinstallsh) below for targets, scope, and uninstall.
+
+### Alternative: Vercel Skills CLI
+
 ```bash
 npx skills add nextdata-tech/nexty-agent-skills --all -y
 ```
 
-The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right location for each agent automatically.
-
-For Windows PowerShell, run the same command in PowerShell:
-
-```powershell
-npx skills add nextdata-tech/nexty-agent-skills --all -y
-```
+The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right
+location for each agent automatically. On Windows PowerShell, run the same command.
 
 ### Claude Code plugin distribution
 
@@ -131,6 +142,55 @@ Before submitting to the community marketplace:
 
 The official Anthropic & Partners directory is separate from the community marketplace and should be treated as a later partner/curation conversation.
 
+### Installer (`scripts/install.sh`)
+
+The first-party installer is the canonical path. It is pure bash + `python3` (no `npx`,
+no `jq`), validates the pack before installing, and supports a clean uninstall.
+
+```bash
+scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
+```
+
+**Targets** (default `--code`): `--code` `--desktop` `--cowork` `--all`.
+
+| Target | What it does |
+|--------|--------------|
+| `--code` | Copies each skill to `~/.claude/skills/<skill>/` (global) or `./.claude/skills/` with `--project`. Full submodule, no size cap. Idempotent (`rsync --delete`). |
+| `--desktop` / `--cowork` | Both are "local-agent-mode". By default builds `build/<skill>.zip` and prints the **Customize → Skills** upload steps. |
+
+**Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
+
+**Examples**
+
+```bash
+scripts/install.sh --code                       # global Claude Code install (default)
+scripts/install.sh --code --project             # current project only
+scripts/install.sh --code --skills "nxd-setup nxd-data-product-builder"
+scripts/install.sh --desktop                    # build zips + Desktop/Cowork upload steps
+scripts/install.sh --all                        # every target
+scripts/install.sh status --code                # show what's installed
+scripts/install.sh uninstall --code             # remove the nxd-* skills cleanly
+scripts/install.sh --code --dry-run             # print actions, change nothing
+```
+
+Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
+`-y/--yes`, `--verbose`.
+
+#### Experimental: filesystem install for Claude Desktop / Cowork
+
+Claude Desktop and Cowork normally take skills as zip uploads. `--rpm-experimental`
+instead injects a self-owned plugin into the local-agent-mode user registry
+(`~/Library/Application Support/Claude/local-agent-mode-sessions/<accountId>/<deviceId>/rpm/`),
+backing up the manifest first and never touching the Anthropic-managed store. This is
+**unverified against the running app** — after installing you must fully restart Claude
+Desktop and confirm the skills appear under Customize → Skills; if they don't, fall back to
+the supported zip-upload path (`scripts/install.sh --desktop`). macOS only.
+
+```bash
+scripts/install.sh --desktop --rpm-experimental             # inject (then restart Desktop)
+scripts/install.sh uninstall --desktop --rpm-experimental   # reverse cleanly
+```
+
 ### Manual install
 
 ```bash
@@ -164,6 +224,14 @@ npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx 
 ```
 
 ## Uninstall
+
+With the first-party installer:
+
+```bash
+scripts/install.sh uninstall --code     # or --desktop --rpm-experimental, --all
+```
+
+Or, if you installed via the Vercel Skills CLI:
 
 ```bash
 npx skills remove --all -y
