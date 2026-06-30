@@ -1,26 +1,39 @@
 """Transform for pharma-visits-demo — fact #1 (clinical visits) of the mesh.
 
-Seeds the ROWS of the promised `visits` model's managed table. The table
-STRUCTURE and the single-table `VISITS_SEMANTIC` view are created earlier by
-the `@on_provision` hook (provision.py), which runs in Phase A before this
-transform. This transform only writes the data the output-port promise verifies.
+Two jobs, all in this DP's OWN Snowflake schema:
 
-The `.transform()` is also what bundles the sibling `registry.py` / `tools.py` /
-`provision.py` modules into the image (the `**/*.py` glob runs on the
-transform/compute path).
+1.  Seed the ``visits`` base table the semantic MCP tools read. Self-contained:
+    one row per clinical visit, MANY visits per subject. SUBJECT_ID is the join
+    key into the crosswalk hub (resolved at query time, NOT here). CREATE OR
+    REPLACE so re-runs are idempotent.
+2.  Write a one-row marker table (``visits_smoke_marker``) — the promised output
+    model — so the storage port's produce-verification passes.
+
+The semantic view provisioning from the old registry.py/provision.py-based
+implementation is removed. The auto-generated ``run_semantic_query`` (from
+``nxd.experimental.semantic.entrypoints``) compiles governed SQL against the base
+table directly, reading the kernel-delivered ``<root>/.nxd/semantic/<model>.json``
+payloads. No pre-provisioned view is required.
 """
 
-import pandas as pd
 from nxd.data_product.context import Snowflake
 
 
 def transform(snowflake: Snowflake) -> None:
-    from snowflake import connector
+    import pandas as pd
     from snowflake.connector.pandas_tools import write_pandas
 
+    from snowflake import connector
+
     if snowflake is None or not snowflake.schema:
-        print("SEMVIEW_DIAG transform skipped — no Snowflake schema in context")
+        print("SEMVIEW_DIAG skipped — no Snowflake schema in context")
         return
+
+    fqn = (
+        f"{snowflake.database}.{snowflake.schema}."
+        if snowflake.database
+        else f"{snowflake.schema}."
+    )
 
     # One row per clinical visit; MANY visits per subject. SUBJECT_ID is the
     # join key into the crosswalk hub (resolved at query time, NOT here).
@@ -48,17 +61,39 @@ def transform(snowflake: Snowflake) -> None:
         **snowflake.connector_params(),
     )
     try:
-        managed = snowflake.full_table_name("visits")
-        # Truncate-and-load so repeated runs stay deterministic (the provision
-        # hook created the table with CREATE TABLE IF NOT EXISTS, so it may
-        # already hold rows from a prior run).
         cur = conn.cursor()
         try:
+            # Seed the base table (name matches the spec model). Create UNQUOTED
+            # so Snowflake folds to upper-case — the compiler's base-table SQL
+            # references the table name unquoted too, so both resolve to the same
+            # upper-cased objects.
+            cur.execute(
+                f"CREATE OR REPLACE TABLE {fqn}visits "
+                "(VISIT_ID NUMBER, SUBJECT_ID NUMBER, VISIT_TYPE VARCHAR, DURATION_MIN FLOAT)"
+            )
+            write_pandas(
+                conn,
+                visits,
+                "VISITS",
+                database=snowflake.database,
+                schema=snowflake.schema,
+            )
+            print(f"SEMVIEW_DIAG seeded {fqn}visits rows={len(visits)}")
+
+            # Write the marker row (promised output model).
+            managed = snowflake.full_table_name("visits_smoke_marker")
+            marker_bare = managed.split(".")[-1].strip('"')
             cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
+            write_pandas(
+                conn,
+                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": "n/a"}]),
+                marker_bare,
+                database=snowflake.database,
+                schema=snowflake.schema,
+            )
+            print(f"SEMVIEW_DIAG marker written to {managed}")
+
         finally:
             cur.close()
-        write_pandas(conn, visits, managed.split(".")[-1].strip('"'),
-                     database=snowflake.database, schema=snowflake.schema)
-        print(f"SEMVIEW_DIAG seeded {managed} rows={len(visits)}")
     finally:
         conn.close()

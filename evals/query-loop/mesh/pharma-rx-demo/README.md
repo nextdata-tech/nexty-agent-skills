@@ -1,57 +1,79 @@
-# pharma-rx-demo (DP_RX)
+# pharma-rx-demo — dispense fact (DP_RX)
 
-Deployable Nextdata OS semantic-layer data product for the fresh pharma mesh
-(`MESH_DESIGN.md`). Exposes a governed text-to-SQL semantic layer over pharmacy
-**dispenses** via three model-oriented MCP tools (`list_models`,
-`describe_model`, `run_semantic_query`), built on `nxd.experimental.semantic`.
+The **dispense fact** DP of the fresh pharma mesh (`MESH_DESIGN.md` → `DP_REGISTRY`).
+A deployable Nextdata OS semantic-layer data product exposing a governed
+text-to-SQL layer over pharmacy **dispenses** (`dispenses` model, grain
+`DISPENSE_ID`) via **four** auto-generated MCP tools (`list_models`,
+`semantic_model`, `describe_model`, `run_semantic_query`), auto-wired by the
+`.semantic_tools()` spec flag (NEX-710).
 
-## Entity / grain
+## Semantic shape
 
-`dispenses` (grain `DISPENSE_ID`) — MANY dispenses per subject.
+- **Model:** `dispenses` (grain `DISPENSE_ID`) — one row per medication dispense;
+  MANY dispenses per subject.
+- **Dimensions:** `dispense_channel` (string — retail / mail-order / specialty),
+  `prescriber_npi` (string, **PII** — prescriber National Provider Identifier).
+- **Metrics (confusable pair):**
+  - `dispense_count` — `COUNT_DISTINCT(DISPENSE_ID)` — *how many* dispenses occurred.
+  - `units_dispensed` — `SUM(UNITS)` — *how much* medication was dispensed.
+  - These are easily confused; keep "number of dispenses" vs "total units" distinct.
+- **Joins (N:1, MANY side is `dispenses`):**
+  - `dispenses ─► site_subjects` on `SUBJECT_ID` (crosswalk hub → subject spine, DP_SITES).
+  - `dispenses ─► products` on `PRODUCT_ID` (far dimension, DP_PRODUCT).
 
-| Concept | Kind | Detail |
-|---|---|---|
-| `dispense_channel` | dimension (string) | fulfilment channel |
-| `prescriber_npi` | dimension (string, **PII**) | prescriber NPI |
-| `dispense_count` | metric `COUNT_DISTINCT(DISPENSE_ID)` | how many dispenses — **confusable** |
-| `units_dispensed` | metric `SUM(UNITS)` | how much dispensed — **confusable** |
+  The grain column `DISPENSE_ID` carries BOTH a grain role and the
+  `dispense_count` metric role. Entity/model names are globally unique across the
+  mesh so bare-name joins resolve against the other DPs' registries at cross-DP
+  plan time.
 
-Joins (N:1, MANY side is `dispenses`):
-- `dispenses ─► site_subjects` on `SUBJECT_ID` (crosswalk hub → spine)
-- `dispenses ─► products` on `PRODUCT_ID` (far dimension)
+## How the semantic layer is wired (NEX-710)
 
-Entity names are globally unique across the mesh so bare-name joins resolve.
+The DP exposes four auto-generated MCP tools — `list_models`, `semantic_model`,
+`describe_model`, `run_semantic_query` — wired by the `.semantic_tools(service=...)`
+flag on the spec. There is **no** `registry.py`, **no** `tools.py`, **no**
+`provision.py`, **no** `@on_provision` hook, and **no** `<MODEL>_SEMANTIC` view.
+
+The semantic vocabulary is authored as per-field `__nxd_semantic__` annotations
+on the `dispenses` attributes in `models.py` (injected via the `_annotate()`
+NEX-704 stopgap that writes `AttributeSpec._metadata` directly). At pod boot the
+kernel compiles those annotations into typed SemanticRegistry payloads and
+delivers one `<root>/.nxd/semantic/<model>.json` per annotated model. The
+auto-generated `run_semantic_query` reads those payloads and compiles governed
+SQL against the **base tables** directly — no provisioned view required.
+
+## Deploy pattern: SELF-SEED
+
+The `.transform(...)` self-seeds this DP's OWN `DISPENSES` base table with
+`CREATE OR REPLACE TABLE` **unquoted** (so Snowflake folds it to upper-case,
+matching the compiler's unquoted base-table SQL) + `write_pandas`, and writes a
+`dispenses_smoke_marker` row for produce-verification. The storage output port
+promises every annotated model (`dispenses`) plus the marker via a plain
+`storage(...)` — **no** `as_view` (the nxd validator hard-rejects
+`.transform()` + `as_view()` together).
 
 ## Files
 
 | File | Role |
 |------|------|
-| `registry.py` | The one per-DP artifact: `SemanticRegistry` (model, dims w/ PII flag, confusable metric pair, two N:1 joins). |
-| `tools.py` | Module-level `list_models`/`describe_model`/`run_semantic_query` delegating to the library. |
-| `transform.py` | Self-seeds this DP's OWN `DISPENSES` base table + marker + the single-table `DISPENSES_SEMANTIC` view; also makes `registry.py`/`tools.py` get bundled (constraint #2). |
-| `models.py` | Single promised marker model. |
-| `spec.py` | Wires the plain storage port (NO `as_view`) + rpc/MCP output + transform. |
-| `requirements.txt` | `nxd.data_product[spec]`, `nxd.drivers[rpc]`, `snowflake-connector-python[pandas]`, `pandas`. |
-
-## Deploy pattern: SELF-SEED (not facade)
-
-The `.transform(...)` creates and seeds this DP's OWN `DISPENSES` base table
-(CREATE TABLE + INSERT), writes the marker, and provisions the single-table
-`DISPENSES_SEMANTIC` view over only this DP's own table — all in its own
-Snowflake schema. The storage output port is a plain `storage(...)` with NO
-`as_view` (the nxd validator hard-rejects `.transform()` + `as_view()` together).
+| `models.py` | The real `dispenses` model with per-field `__nxd_semantic__` annotations (grain + `dispense_count` metric on `DISPENSE_ID`, `units_dispensed` metric on `UNITS`, `dispense_channel` dim, `prescriber_npi` PII dim, two N:1 cross-DP join blobs on `SUBJECT_ID`/`PRODUCT_ID`) plus the `dispenses_smoke_marker` produce-verification model. |
+| `transform.py` | Self-seeds the `DISPENSES` base table (`CREATE OR REPLACE TABLE` unquoted + `write_pandas`) and writes the marker row. |
+| `spec.py` | Wires upstream mesh inputs (`pharma-sites-demo`, `pharma-product-demo`) + transform + plain storage port (NO `as_view`) + `.semantic_tools(service="mcp-api-service-k8s")`. `INFRA_PROFILE = "ecommerce-demo"`. |
+| `requirements.txt` | `nxd.core`, `nxd.data_product[spec]`, `nxd.drivers[rpc]`, `snowflake-connector-python[pandas]`, `pandas`, `pyyaml>=6.0.2`. |
+| `README.md` | This file. |
 
 ## Local validation (no cluster)
 
 ```bash
-PYTHONPATH=. python -c "
-from registry import REGISTRY
-from nxd.experimental.semantic import build_semantic_tools
-from nxd.experimental.semantic.compiler import compile_selection
-from nxd.experimental.semantic.dialect import SnowflakeDialect
-d = SnowflakeDialect(view_name=SnowflakeDialect.default_view_name(REGISTRY))
-print([t.name for t in build_semantic_tools(REGISTRY)])              # 3 tools
-print(compile_selection({'measures':['units_dispensed'],'dimensions':['dispense_channel'],'filters':[]},
-                        registry=REGISTRY, dialect=d, fqn='DB.SCH.', use_view=True))
-"
+python3 -c "import ast; [ast.parse(open(f).read()) for f in ('models.py','transform.py','spec.py')]; print('OK')"
 ```
+
+## Mesh role
+
+`dispenses` is a MANY-side fact: it carries outgoing cross-DP references on its
+foreign keys — `SUBJECT_ID → pharma-subjects-demo/subjects` (via the
+`site_subjects` crosswalk hub) and `PRODUCT_ID → pharma-product-demo/products`.
+The `site_subjects → subjects` second hop is published by `pharma-sites-demo`.
+Its model and key attributes link to glossary terms in `pharma-glossary-demo`
+(dispense, subject, product, prescriber, site), and the cross-DP SEMANTIC
+RELATIONSHIP surfaces in the discover UI. See `MESH_DESIGN.md` for the full
+registry and join topology.

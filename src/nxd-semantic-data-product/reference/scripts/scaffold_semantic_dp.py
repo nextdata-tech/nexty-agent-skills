@@ -1,49 +1,54 @@
 #!/usr/bin/env python3
-"""Scaffold a semantic-layer data product (flat layout).
+"""Scaffold a semantic-layer data product (.semantic_tools() pattern).
 
-Writes placeholder registry.py, tools.py, provision.py, transform.py, models.py
-FLAT at the DP root (NOT under a transform/ subdir), and prints the
-requirements.txt lines and the spec.py wiring block the DP needs.
+Writes placeholder models.py, transform.py, requirements.txt FLAT at the DP root
+(NOT under a transform/ subdir), and prints the spec.py wiring block the DP needs.
 
-The compiler, dialect, and MCP tool factory are provided by the installed
+The four governed MCP tools (list_models, semantic_model, describe_model,
+run_semantic_query) are auto-generated at pod boot by the `.semantic_tools()`
+spec flag. You do NOT author registry.py, tools.py, or provision.py — the kernel
+compiles per-field `__nxd_semantic__` blobs on the promised models' attributes
+into typed SemanticRegistry payloads, delivers them to
+`<root>/.nxd/semantic/<model>.json` at startup, and the entrypoints module reads
+them back to build the four tool closures.
+
+The compiler, dialect, and tool factory are provided by the installed
 nxd.data_product wheel (module nxd.experimental.semantic) — imported, not
-vendored. The DP authors the registry + tools + transform and wires spec.py.
-
-Every stub follows the deploy recipe in SKILL.md Steps 3 + 4 — the stubs MUST
-agree with it.
+vendored.
 
 Usage:
     uv run python scaffold_semantic_dp.py <target_dir>
 
-<target_dir> should be the root of the data product directory (the directory
-that will contain spec.py). All modules are created as flat siblings.
+<target_dir> is the root of the data product directory (the directory that will
+contain spec.py). All modules are created as flat siblings.
 
-FOUR WIRING CONSTRAINTS
+THREE WIRING CONSTRAINTS
 ------------------------------------------------------------------------------
-1. code() cannot extract closures. build_semantic_tools(REGISTRY) returns
-   closures — author MODULE-LEVEL functions in tools.py and pass code(<fn>);
-   reuse build_semantic_tools(...) only for the request/response schemas.
-2. The registry/tools/provision siblings are bundled ONLY when there is a
-   .transform(...). The rpc-output code() path ships only the extracted tool
-   scripts; the **/*.py glob on the transform path bundles the siblings. The
-   transform is MANDATORY.
-3. Keep all modules FLAT at the DP root — never a transform/ subdir package — so
-   the extracted tool scripts resolve `from registry import REGISTRY` against the
-   script dir (the only path on sys.path in the rpc subprocess).
-4. DDL IN @on_provision, DATA IN THE TRANSFORM. provision.py (an @on_provision
-   hook, wired via .provision(script("provision.py").compute(...)) IMMEDIATELY
-   BEFORE .transform()) creates the base table STRUCTURE(s) (CREATE TABLE IF NOT
-   EXISTS) + the single-table <MODEL>_SEMANTIC view (CREATE OR REPLACE VIEW) —
-   DDL only, no data. transform.py seeds the ROWS (TRUNCATE TABLE IF EXISTS +
-   write_pandas) — NO DDL. Kernel order is provision -> transform -> promise
-   verification, so the rows are present when the promise is checked; the DP
-   deploys green in one launch. A transform that RE-PROVISIONS (CREATE OR REPLACE
-   TABLE each run) is what made DPs flap Started↔Failed. Promise the REAL model;
-   target snowflake.full_table_name("<model>") in BOTH so produce-verification
-   matches.
+1. The SEMANTIC VOCABULARY lives as per-field `__nxd_semantic__` JSON blobs on
+   each model's AttributeSpec, injected via the `_annotate()` stopgap (see
+   models.py stub). The kernel compiles them; you never call a SemanticRegistry
+   builder by hand.
 
-Reference (PROVEN, deployed-and-running):
-    evals/query-loop/mesh/<dp>/{spec,provision,transform,models,tools}.py
+   STOPGAP — the public author API is not yet available: AttributeSpec has no public
+   `.semantic_annotation()` setter, so the blob is written directly to the
+   private `_metadata` dict. Replace `_annotate()` with the public API once
+   it ships. The injection is isolated to models.py and clearly marked.
+
+2. PROMISE every annotated model on the storage port so its attributes land in
+   the kernel-generated manifest (and thus in `.nxd/semantic/<model>.json` at
+   boot). `.semantic_tools(service=...)` does the rest — it auto-wires the 4 RPC
+   tool functions + an mcp-api port. Do NOT also call data_product_rpc_output()
+   yourself; semantic_tools() raises ValidationError if an RPC output already exists.
+
+3. A `.transform(...)` SEEDS the base tables the tools query (CREATE OR REPLACE
+   TABLE + write_pandas). No semantic-view DDL is needed — `run_semantic_query`
+   compiles governed SQL against the base tables directly from the kernel
+   payloads. The transform also writes a one-row marker for the promised marker
+   model so the storage port's produce-verification passes.
+
+Reference (canonical, deployed):
+    nxd: examples/features/semantic/deployable-dp/{spec,models,transform}.py
+    here: evals/query-loop/mesh/<dp>/{spec,models,transform}.py
 """
 
 from __future__ import annotations
@@ -57,119 +62,149 @@ REQUIREMENTS_LINES = [
     "nxd.drivers[rpc]",
     "snowflake-connector-python[pandas]",
     "pandas",
+    # The .semantic_tools() manifest-fallback path (_manifest_compile) parses the
+    # bundled models.yaml when the kernel does not deliver .nxd/semantic/*.json
+    # (the split-pod k8s/rpc topology — the MCP server pod runs no kernel).
+    "pyyaml>=6.0.2",
 ]
 
-_REGISTRY_STUB = """\
-# TODO: author your SemanticRegistry here.
-# See reference/registry-authoring.md for the full API.
-#
-# from nxd.experimental.semantic import Agg, Cardinality, SemanticRegistry
-#
-# REGISTRY = (
-#     SemanticRegistry()
-#     .model(...)
-#     .dimension(...)
-#     .metric(...)
-#     .join(...)
-#     .build()
+_MODELS_STUB = '''\
+"""Semantic models with per-field __nxd_semantic__ annotations.
+
+The kernel reads each promised model's `__nxd_semantic__` attribute blobs,
+compiles them into a typed SemanticRegistry, and delivers the result to the DP
+pod at boot as `<root>/.nxd/semantic/<model>.json`. At runtime the four MCP tools
+(list_models, semantic_model, describe_model, run_semantic_query) are rebuilt
+from those payloads — no registry.py / tools.py to author.
+
+MISSING SEAM: AttributeSpec has no public setter for per-field metadata.
+The blobs are injected here by writing the private `_metadata` dict directly via
+`_annotate()`. This is a STOPGAP until a public
+`AttributeSpec.semantic_annotation(blob)` API ships. Keep the injection isolated to
+this module.
+
+ROLE GRAMMAR (one blob per column):
+  grain:     {"kind": "grain"}
+  dimension: {"kind": "dimension", "name": ..., "description": ..., "type": ...,
+              "pii": <bool, optional>}
+  metric:    {"kind": "metric", "name": ..., "agg": "count|count_distinct|sum|avg|min|max",
+              "description": ..., "boolean": <bool, optional>}
+  join:      {"kind": "join", "to_model": ..., "to_column": ...,
+              "cardinality": "many_to_one"}
+  multi-role on one column: {"roles": [ {...}, {...} ]}
+"""
+
+import json
+
+from nxd.spec import semantic_model
+from nxd.spec._model import AttributeSpec
+from nxd.spec.data_types import float64, int64, string
+
+_SEMANTIC_KEY = "__nxd_semantic__"
+
+
+def _annotate(attr: AttributeSpec, role: dict) -> AttributeSpec:
+    """Inject a `__nxd_semantic__` blob into *attr*._metadata (stopgap).
+
+    Mutates *attr* in place and returns it for chaining. Replace with the public
+    `AttributeSpec.semantic_annotation()` once it ships.
+    """
+    attr._metadata[_SEMANTIC_KEY] = json.dumps(role, separators=(",", ":"))
+    return attr
+
+
+# ── <model_a> — one row per <grain_a> ────────────────────────────────────────
+your_model = (
+    semantic_model("<model_a>")
+    .description("One row per <grain_a>.")
+    .schema(
+        {
+            "<KEY_A>": _annotate(
+                AttributeSpec(name="<KEY_A>", data_type=int64()),
+                {"kind": "grain"},
+            ),
+            "<DIM_COL>": _annotate(
+                AttributeSpec(
+                    name="<DIM_COL>",
+                    data_type=string(),
+                    _description="<dimension description>.",
+                ),
+                {
+                    "kind": "dimension",
+                    "name": "<dim_name>",
+                    "description": "<dimension description>.",
+                    "type": "string",
+                    # "pii": True,   # uncomment for governed PII dimensions
+                },
+            ),
+            "<METRIC_COL>": _annotate(
+                AttributeSpec(
+                    name="<METRIC_COL>",
+                    data_type=float64(),
+                    _description="<metric description>.",
+                ),
+                {
+                    "kind": "metric",
+                    "name": "<metric_name>",
+                    "agg": "sum",
+                    "description": "<metric description>.",
+                },
+            ),
+        }
+    )
+)
+
+# Multi-role example: a column that is BOTH the grain AND a count metric, OR a
+# join key AND a count_distinct metric. Patch the full roles list post-hoc — the
+# bare {"kind": ...} shorthand has no inline multi-role form.
+# _annotate(
+#     your_model._attributes["<KEY_A>"],
+#     {"roles": [
+#         {"kind": "grain"},
+#         {"kind": "metric", "name": "<entity>_count", "agg": "count",
+#          "description": "Total number of <entity>."},
+#     ]},
 # )
-"""
 
-_TOOLS_STUB = '''\
-"""Module-level MCP tool functions — code() can extract these (closures it can't).
-
-Author list_models / describe_model / run_semantic_query as TOP-LEVEL functions
-that import REGISTRY flat and delegate to the library compiler. Copy the full
-bodies from the deployed reference (pharma-subjects-demo/tools.py), which mirrors
-the validated deployable-dp example.
-
-Two rpc-extraction deploy-breakers this stub already avoids (SKILL.md Step 3):
-  1. run_semantic_query's storage param is typed with the SPECIFIC driver handle
-     (`snowflake: Snowflake`) via a MODULE-LEVEL import — NOT `Any`. An untyped /
-     Any param gets a raw Context with no driver methods and fails live. The param
-     NAME must match the storage output port name (`snowflake`).
-  2. No module-level constant is referenced from inside a tool. code() drops
-     module-level `=` assignments, so a module-level `_DIALECT = ...` (or a
-     description constant) raises NameError at rpc load → 0 tools registered.
-     Inline the @mcp.tool description literals and build the dialect INSIDE the
-     function body.
-"""
-
-from nxd.drivers.rpc import Request, Response, function, mcp
-# MODULE-LEVEL import of the typed Snowflake handle — REQUIRED (see gotcha 1).
-from nxd.data_product.context import Snowflake
-from registry import REGISTRY  # flat sibling import
-from nxd.experimental.semantic.compiler import (
-    CompileError,
-    compile_selection,
-    semantic_view_query,
+# ── marker model — satisfies the storage port's produce-verification ──────────
+# The kernel verifies at least one promised model is produced. This tiny table
+# confirms the transform ran without promising the self-seeded query tables.
+provision_marker = (
+    semantic_model("<dp_name>_marker")
+    .description("Marker table written by the seeding transform.")
+    .schema({"MARKER_ID": int64(), "VIEW_NAME": string()})
 )
-from nxd.experimental.semantic.dialect import SnowflakeDialect
-
-
-@function(name="list_models")
-@mcp.tool(
-    name="list_models",
-    description="List the semantic models, their grain, and metric/dimension counts.",
-)
-def list_models(request: Request) -> Response:
-    raise NotImplementedError("Copy the body from the deployed tools.py reference.")
-
-
-@function(name="describe_model")
-@mcp.tool(
-    name="describe_model",
-    description="Describe one model's metrics, dimensions, joins, and PII flags.",
-)
-def describe_model(request: Request) -> Response:
-    raise NotImplementedError("Copy the body from the deployed tools.py reference.")
-
-
-@function(name="run_semantic_query")
-@mcp.tool(
-    name="run_semantic_query",
-    description="Compile a concept selection to governed SQL and return rows.",
-)
-def run_semantic_query(snowflake: Snowflake, request: Request) -> Response:
-    # Build the dialect INSIDE the body — never reference a module-level constant.
-    # default_view_name(REGISTRY) resolves the SAME <MODEL>_SEMANTIC view the
-    # provision hook creates, so the native-view probe matches (regression python.md #62).
-    dialect = SnowflakeDialect(view_name=SnowflakeDialect.default_view_name(REGISTRY))  # noqa: F841
-    raise NotImplementedError("Copy the body from the deployed tools.py reference.")
 '''
 
-_PROVISION_STUB = '''\
-"""@on_provision hook — DDL ONLY: table STRUCTURE(s) + single-table semantic view.
+_TRANSFORM_STUB = '''\
+"""Transform — seeds the base tables the semantic MCP tools query (self-seeded).
 
-Runs in Phase A, BEFORE the transform (kernel order: provision -> transform ->
-promise verification). Creates this DP's OWN table(s) (CREATE TABLE IF NOT EXISTS,
-structure only — no rows) and the single-table <MODEL>_SEMANTIC view (CREATE OR
-REPLACE VIEW). The transform seeds the rows afterwards.
+Two jobs, all in this DP's OWN Snowflake schema:
+  1. Seed the base table(s) the tools read (CREATE OR REPLACE TABLE so re-runs
+     are idempotent + write_pandas). Table names match the model names in
+     models.py; create them UNQUOTED so Snowflake folds to upper-case (the
+     compiler references the base tables unquoted too).
+  2. Write a one-row marker into the promised marker model so the storage port's
+     produce-verification passes.
 
-The param name (`snowflake`) MUST match the storage output port name; the
-ProvisionOutputPortArgumentProvider injects it as a typed Snowflake handle. Create
-the PROMISED model's managed table via `snowflake.full_table_name("<model>")` so
-the storage driver verifies the promise against the exact table.
+NO semantic-view DDL. The auto-generated `run_semantic_query` compiles governed
+SQL against the base tables directly, reading the kernel-delivered
+`<root>/.nxd/semantic/<model>.json` payloads — no pre-provisioned view is required.
 
-The trailing `if __name__ == "__main__":` guard is REQUIRED — a
-registered-but-never-invoked lifecycle hook is a hard ValidationError at build time.
+The param name (`snowflake`) MUST match the storage output port name; it is
+injected as a typed Snowflake handle.
 """
 
-from nxd import data_product
 from nxd.data_product.context import Snowflake
 
-# = SnowflakeDialect.default_view_name(REGISTRY) for the promised model. Replace
-# "<MODEL_UPPER>" with your model name uppercased (e.g. model `subjects` ->
-# "SUBJECTS_SEMANTIC").
-_VIEW_NAME = "<MODEL_UPPER>_SEMANTIC"
 
-
-@data_product.on_provision()
-def provision(snowflake: Snowflake) -> None:
+def transform(snowflake: Snowflake) -> None:
+    import pandas as pd
     from snowflake import connector
+    from snowflake.connector.pandas_tools import write_pandas
 
     if snowflake is None or not snowflake.schema:
-        print("provision skipped — no Snowflake schema in context")
+        print("transform skipped — no Snowflake schema in context")
         return
 
     fqn = (
@@ -178,84 +213,11 @@ def provision(snowflake: Snowflake) -> None:
         else f"{snowflake.schema}."
     )
 
-    conn = connector.connect(
-        user=snowflake.user,
-        account=snowflake.account,
-        warehouse=snowflake.warehouse,
-        role=snowflake.role,
-        database=snowflake.database,
-        schema=snowflake.schema,
-        ocsp_fail_open=True,
-        **snowflake.connector_params(),
-    )
-    try:
-        cur = conn.cursor()
-        try:
-            # 1) Create the PROMISED model's managed table — STRUCTURE ONLY (no
-            # rows). full_table_name("<model>") is the exact table the storage
-            # driver verifies the promise against.
-            managed = snowflake.full_table_name("<model>")
-            cur.execute(
-                f"CREATE TABLE IF NOT EXISTS {managed} "
-                "(<COL_A> NUMBER, <COL_B> VARCHAR)"
-            )
-            print(f"provisioned TABLE {managed}")
-
-            # 2) SINGLE-TABLE semantic view over the promised table. References ONLY
-            # this DP's own table — never a cross-DP JOIN (cross-DP joins resolve at
-            # QUERY time via the live mesh, never at view-creation time).
-            cur.execute(
-                f"CREATE OR REPLACE VIEW {fqn}{_VIEW_NAME} AS "
-                "SELECT <COL_A> AS <COL_A>, <COL_B> AS <COL_B> "
-                f"FROM {managed}"
-            )
-            print(f"provisioned single-table VIEW {fqn}{_VIEW_NAME}")
-        finally:
-            cur.close()
-    finally:
-        conn.close()
-
-
-if __name__ == "__main__":
-    data_product.provision()
-'''
-
-_TRANSFORM_STUB = '''\
-"""Transform — DATA ONLY: seeds the rows. NO DDL.
-
-The table + view are created by the @on_provision hook (provision.py) BEFORE this
-runs, so the transform only refreshes rows: TRUNCATE TABLE IF EXISTS + write_pandas.
-NEVER issue CREATE TABLE / CREATE VIEW here — a transform that re-provisions made
-DPs flap Started↔Failed. The output-port promise is verified AFTER the transform,
-so the seeded rows are present in time.
-
-The `.transform()` is ALSO what bundles the sibling `registry.py` / `tools.py` /
-`provision.py` modules into the image (the `**/*.py` glob runs on the
-transform/compute path), so the transform is MANDATORY even when seeding is the
-only runtime work.
-
-The param name (`snowflake`) MUST match the storage output port name. Target the
-PROMISED model's managed table via `snowflake.full_table_name("<model>")` — the
-same table the provision hook created and produce-verification checks.
-"""
-
-import pandas as pd
-from nxd.data_product.context import Snowflake
-
-
-def transform(snowflake: Snowflake) -> None:
-    from snowflake import connector
-    from snowflake.connector.pandas_tools import write_pandas
-
-    if snowflake is None or not snowflake.schema:
-        print("transform skipped — no Snowflake schema in context")
-        return
-
-    # TODO: replace with your real seed data (or real runtime data production).
+    # TODO: replace with your real seed data.
     rows = pd.DataFrame(
         [
-            {"<COL_A>": 1, "<COL_B>": "value-1"},
-            {"<COL_A>": 2, "<COL_B>": "value-2"},
+            {"<KEY_A>": 1, "<DIM_COL>": "value-1", "<METRIC_COL>": 100.0},
+            {"<KEY_A>": 2, "<DIM_COL>": "value-2", "<METRIC_COL>": 250.0},
         ]
     )
 
@@ -270,115 +232,57 @@ def transform(snowflake: Snowflake) -> None:
         **snowflake.connector_params(),
     )
     try:
-        # Truncate-and-load the table the provision hook created. NO DDL here.
-        managed = snowflake.full_table_name("<model>")
         cur = conn.cursor()
         try:
+            # 1) Seed the base table(s) — name(s) match the model name(s).
+            cur.execute(
+                f"CREATE OR REPLACE TABLE {fqn}<model_a> "
+                "(<KEY_A> NUMBER, <DIM_COL> VARCHAR, <METRIC_COL> FLOAT)"
+            )
+            write_pandas(
+                conn, rows, "<MODEL_A>",
+                database=snowflake.database, schema=snowflake.schema,
+            )
+            print(f"seeded {fqn}<model_a> rows={len(rows)}")
+
+            # 2) Marker row (the promised marker model).
+            managed = snowflake.full_table_name("<dp_name>_marker")
             cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
+            write_pandas(
+                conn,
+                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": "n/a"}]),
+                managed.split(".")[-1].strip('"'),
+                database=snowflake.database, schema=snowflake.schema,
+            )
+            print(f"marker written to {managed}")
         finally:
             cur.close()
-        write_pandas(
-            conn, rows, managed.split(".")[-1].strip('"'),
-            database=snowflake.database, schema=snowflake.schema,
-        )
-        print(f"seeded {managed} rows={len(rows)}")
     finally:
         conn.close()
 '''
 
-_MODELS_STUB = '''\
-"""The REAL promised semantic model — satisfies the storage output port.
-
-Promise the REAL model (NOT a dummy marker) so the discover UI surfaces the
-actual attributes, their glossary links, and (on downstream facts) the cross-DP
-SEMANTIC RELATIONSHIP. The transform seeds the matching table.
-"""
-
-from nxd.spec import Predicate, semantic_model
-from nxd.spec.data_types import int64, string
-
-# The real model the transform seeds (managed table <model>).
-your_model = (
-    semantic_model("<model>")
-    .description("One row per <grain>.")
-    .schema(
-        {
-            "<COL_A>": int64(),
-            # PII columns: document them as such.
-            "<COL_B>": string(),
-        }
-    )
-    # Glossary links at the model + attribute level (render in the UI).
-    .link(Predicate.GlossaryTerm, "/data-product/<domain>/<glossary-dp>#/terms/<term>")
-    .link("<COL_B>", Predicate.GlossaryTerm,
-          "/data-product/<domain>/<glossary-dp>#/terms/<col_b_term>")
-    # Cross-DP FK (downstream FACT models only, NOT a spine): a fact references a
-    # dimension model in another DP so the mesh can plan a cross-DP join.
-    # .referencing("/data-product/<domain>/<dim-dp>#/models/<dim-model>", on="<COL_A>")
-)
-'''
-
 # The correct spec.py wiring block to print for the user.
-SPEC_RPC_OUTPUT_SNIPPET = """\
-# ── Add these imports to spec.py ─────────────────────────────────────────────
-from nxd.spec import (
-    code,
-    data_product,
-    data_product_output,
-    data_product_rpc_output,
-    Predicate,
-    rpc_function,
-    rpc_server,
-    script,                 # required for .provision(script("provision.py"))
-    storage,
-)
-from nxd.experimental.semantic import build_semantic_tools
-from registry import REGISTRY
-from tools import list_models, describe_model, run_semantic_query
-from transform import transform   # provision.py is referenced by name in .provision(script(...))
-from models import your_model
+SPEC_SNIPPET = """\
+# ── spec.py — .semantic_tools() auto-wires the 4 MCP tools ───────────────────
+from nxd.spec import code, data_product, data_product_output, storage
+from transform import transform
+from models import your_model, provision_marker
 
 INFRA_PROFILE = "<infra-profile>"
 SNOWFLAKE_SERVICE = "<snowflake-service>"
+MCP_SERVICE = "mcp-api-service-k8s"
 
-# ── RPC output wiring (the ONLY supported MCP delivery mechanism) ─────────────
-# build_semantic_tools(REGISTRY) is used ONLY for the schemas/descriptions; the
-# callable passed to code() is the module-level tools.py function — code() cannot
-# extract the closures build_semantic_tools(...) returns.
-_tool_map = {t.name: t for t in build_semantic_tools(REGISTRY)}
-_rpc = data_product_rpc_output()
-for _fn, _name in [
-    (list_models, "list_models"),
-    (describe_model, "describe_model"),
-    (run_semantic_query, "run_semantic_query"),
-]:
-    _t = _tool_map[_name]
-    _rpc = _rpc.function(
-        rpc_function(code(_fn), _t.request_model, _t.response_model)
-        .description(_t.description)
-    )
-_rpc = _rpc.port(
-    "mcp-api",
-    rpc_server(f"/infra-profile/{INFRA_PROFILE}#/services/mcp-api-service-k8s")
-    .enable_endpoints()
-    .mcp_path("/mcp"),
-)
-
-# Storage output port named "snowflake" — its name is the provision/transform
-# parameter name and the run_semantic_query param name. Plain storage(...) with NO
-# as_view: the facade as_view pattern is MUTUALLY EXCLUSIVE with .transform() (nxd
-# validate HARD-REJECTS them together), and an rpc DP needs the transform for
-# sibling bundling. The provision hook creates the table + view; promise the REAL model.
+# Storage output port — PROMISE every annotated model so its attributes appear
+# in the kernel-generated manifest models section (and thus in
+# .nxd/semantic/<model>.json at boot). Plain storage(...), NO as_view: the
+# transform self-seeds the base tables.
 _storage = (
     data_product_output()
+    .promise(provision_marker)
     .promise(your_model)
-    .port(
-        "snowflake",
-        storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"),
-    )
+    .port("snowflake", storage(f"/infra-profile/{INFRA_PROFILE}#/services/{SNOWFLAKE_SERVICE}"))
 )
 
-# ── data_product spec ─────────────────────────────────────────────────────────
 spec = (
     data_product(
         name="<your-dp-name>",
@@ -386,28 +290,15 @@ spec = (
         version="0.1.0",
         infra_profile=INFRA_PROFILE,
     )
-    # PROVISION (Phase A, before the transform): the @on_provision hook
-    # (provision.py) creates the table STRUCTURE + the single-table semantic VIEW
-    # (DDL only). Placed IMMEDIATELY BEFORE .transform(). NO .startup_timeout(...)
-    # here — the validator rejects it on .provision().
-    .provision(
-        script("provision.py")
-        .compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
-    )
-    # TRANSFORM: seeds the ROWS (TRUNCATE + write_pandas, NO DDL) into the table the
-    # provision hook created, and bundles registry.py/tools.py/provision.py (the
-    # **/*.py glob runs on the transform path). The output-port promise is verified
-    # AFTER the transform, so the rows are present in time. .startup_timeout(600) is
-    # a METHOD on .compute(...) (NOT a factory kwarg) and covers cold-boot
-    # contention + heavy snowflake/pandas deps.
+    # Transform seeds the base tables + the marker row. No semantic-view DDL.
     .transform(
-        code(transform)
-        .compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
-        .startup_timeout(600)
+        code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
     )
     .output(_storage)
-    .output(_rpc)
-    .link(Predicate.GlossaryTerm, "/data-product/<domain>/<glossary-dp>#/terms/<term>")
+    # Auto-wire the 4 governed MCP tools (list_models, semantic_model,
+    # describe_model, run_semantic_query) reading kernel-delivered payloads.
+    # ONE line replaces the old build_semantic_tools + 4x rpc_function loop.
+    .semantic_tools(service=MCP_SERVICE)
 )
 """
 
@@ -424,27 +315,30 @@ def scaffold(target_dir: Path) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     print(f"  [ok] DP root ready: {target_dir}")
 
-    _write_stub(target_dir / "registry.py", _REGISTRY_STUB, "placeholder — author your registry")
-    _write_stub(target_dir / "tools.py", _TOOLS_STUB, "module-level tool stubs — fill in bodies")
-    _write_stub(target_dir / "provision.py", _PROVISION_STUB, "@on_provision DDL stub (table + view) — adapt to your tables/view")
-    _write_stub(target_dir / "transform.py", _TRANSFORM_STUB, "MANDATORY data-only transform stub (truncate-and-load) — adapt to your rows")
-    _write_stub(target_dir / "models.py", _MODELS_STUB, "REAL promised semantic model — adapt to your schema")
+    _write_stub(target_dir / "models.py", _MODELS_STUB,
+                "models with __nxd_semantic__ annotations — adapt to your schema")
+    _write_stub(target_dir / "transform.py", _TRANSFORM_STUB,
+                "self-seeding transform stub — adapt to your rows")
+
+    req = target_dir / "requirements.txt"
+    if not req.exists():
+        req.write_text("\n".join(REQUIREMENTS_LINES) + "\n", encoding="utf-8")
+        print(f"  [write] {req} (dependencies)")
+    else:
+        print(f"  [skip] {req} already exists — add these lines if missing:")
+        for line in REQUIREMENTS_LINES:
+            print(f"            {line}")
 
     print()
     print("All modules are FLAT at the DP root (no transform/ subdir package).")
     print()
-    print("Add these lines to requirements.txt:")
-    for line in REQUIREMENTS_LINES:
-        print(f"  {line}")
+    print("spec.py wiring (.semantic_tools() — auto-generates all 4 MCP tools):")
     print()
-    print("spec.py wiring (data_product_rpc_output — the ONLY correct MCP delivery):")
-    print()
-    print(SPEC_RPC_OUTPUT_SNIPPET)
+    print(SPEC_SNIPPET)
     print(
-        "See reference/scripts/templates/transform_provision.py.tmpl for the "
-        "complete spec.py + tools.py + provision.py + transform.py + models.py "
-        "example.\n"
-        "See SKILL.md Steps 3 + 4 for the authoritative recipe these stubs mirror."
+        "See reference/scripts/templates/semantic_dp.py.tmpl for the complete "
+        "models.py + transform.py + spec.py example.\n"
+        "See SKILL.md for the authoritative recipe these stubs mirror."
     )
 
 

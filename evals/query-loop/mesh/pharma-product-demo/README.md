@@ -1,71 +1,71 @@
-# pharma-product-demo (DP_PRODUCT)
+# pharma-product-demo — product far dimension
 
-Deployable Nextdata OS semantic-layer data product for the fresh pharma mesh.
-Models the **`products`** entity (grain `product_id`) — a **far dimension**,
-reachable multi-hop only (`dispenses -> products`). This DP is a **ONE-side
-target**: it has **no outgoing joins**. The inbound N:1 join is declared by
-DP_RX (`dispenses -> products`); here we model only the product entity so the
-bare name `products` resolves across the mesh.
+The **product far dimension** DP of the fresh pharma mesh (`MESH_DESIGN.md` → `DP_REGISTRY`).
+A deployable Nextdata OS semantic-layer data product exposing a governed
+text-to-SQL layer over the `products` model (grain `PRODUCT_ID`) via **four**
+auto-generated MCP tools (`list_models`, `semantic_model`, `describe_model`,
+`run_semantic_query`), auto-wired by the `.semantic_tools()` spec flag (NEX-710).
 
-Exposes the three model-oriented MCP tools (`list_models`, `describe_model`,
-`run_semantic_query`) over Snowflake via the `nxd.experimental.semantic` library.
+## Semantic shape
 
-## Semantic surface
+- **Model:** `products` (grain `PRODUCT_ID`) — a **far dimension** / ONE-side
+  target, reachable multi-hop only (`dispenses -> products`).
+- **Dimensions:** `product_name` (string), `modality` (string — e.g. antibody,
+  small_molecule, vaccine).
+- **Metric:** `product_count` — `COUNT_DISTINCT(PRODUCT_ID)`. `PRODUCT_ID`
+  carries **both** the grain role and the `product_count` metric role (declared
+  via a multi-role blob that replaces its bare-grain annotation).
+- **Joins:** none — this is a leaf / far dimension with **no outgoing joins**.
+  The inbound N:1 join (`dispenses -> products`) is declared by the fact DP
+  (DP_RX); here we model only the product entity so the bare name `products`
+  resolves across the mesh.
 
-| Kind | Name | Detail |
-|------|------|--------|
-| model | `products` | grain `PRODUCT_ID` |
-| dimension | `product_name` | string |
-| dimension | `modality` | string |
-| metric | `product_count` | `COUNT_DISTINCT(PRODUCT_ID)` |
+## How the semantic layer is wired (NEX-710)
 
-No joins (leaf / far dimension).
+The DP exposes four auto-generated MCP tools — `list_models`, `semantic_model`,
+`describe_model`, `run_semantic_query` — wired by the `.semantic_tools(service=...)`
+flag on the spec. There is **no** `registry.py`, **no** `tools.py`, **no**
+`provision.py`, **no** `@on_provision` hook, and **no** `<MODEL>_SEMANTIC` view.
+
+The semantic vocabulary is authored as per-field `__nxd_semantic__` annotations
+on the model attributes in `models.py` (injected via the `_annotate()` NEX-704
+stopgap that writes `AttributeSpec._metadata` directly). At pod boot the kernel
+compiles those annotations into typed SemanticRegistry payloads and delivers one
+`<root>/.nxd/semantic/<model>.json` per annotated model. The auto-generated
+`run_semantic_query` reads those payloads and compiles governed SQL against the
+**base tables** directly — no provisioned view required.
+
+## Deploy pattern: SELF-SEED
+
+The `.transform(...)` self-seeds this DP's OWN `PRODUCTS` base table with
+`CREATE OR REPLACE TABLE` **unquoted** (so Snowflake folds it to upper-case, matching
+the compiler's unquoted base-table SQL) + `write_pandas`, and writes a
+`products_smoke_marker` row for produce-verification. The storage output port
+promises every annotated model (`products`) plus the marker via a plain
+`storage(...)` — **no** `as_view` (the nxd validator hard-rejects
+`.transform()` + `as_view()` together).
 
 ## Files
 
 | File | Role |
 |------|------|
-| `registry.py` | `SemanticRegistry`: the `products` model, two dims, one metric, no joins. The one authored artifact. |
-| `tools.py` | Module-level `list_models` / `describe_model` / `run_semantic_query` delegating to the library compiler. |
-| `transform.py` | Self-seeds this DP's OWN `products` base table (CREATE + INSERT), provisions the single-table `PRODUCTS_SEMANTIC` view, and writes the promised marker; its presence triggers sibling bundling. |
-| `models.py` | The promised `pharma_product_marker` model (satisfies the storage output port) + the `products` schema descriptor. |
-| `spec.py` | Wires the plain storage port (NO `as_view`), the transform, and the rpc/MCP output. |
-| `requirements.txt` | `nxd.data_product[spec]`, `nxd.drivers[rpc]`, `snowflake-connector-python[pandas]`, `pandas`. |
-
-## Deploy pattern: self-seed (mirrors `deployable-dp/`)
-
-The `.transform(...)` creates and seeds this DP's OWN `products` base table
-(CREATE TABLE + INSERT) and provisions a single-table `PRODUCTS_SEMANTIC` view
-over it, then writes the promised marker — all in this DP's own Snowflake schema.
-The storage output port is a plain `storage(...)` with NO `as_view` (the nxd
-validator hard-rejects `.transform()` + `as_view()` together).
-
-For this joinless / leaf model there is no plain-view DDL (the library requires a
-join for `plain_view_ddl`); `run_semantic_query` compiles `use_view=True`
-directly against the hand-authored single-table `PRODUCTS_SEMANTIC` view the
-transform provisions over this DP's own `products` table.
+| `models.py` | The real `products` model with per-field `__nxd_semantic__` annotations (grain + `product_count` metric on `PRODUCT_ID`, `product_name` dim, `modality` dim) plus the `products_smoke_marker` produce-verification model. |
+| `transform.py` | Self-seeds the `PRODUCTS` base table (`CREATE OR REPLACE TABLE` unquoted + `write_pandas`) and writes the marker row. |
+| `spec.py` | Wires transform + plain storage port (NO `as_view`) + `.semantic_tools(service="mcp-api-service-k8s")`. `INFRA_PROFILE = "ecommerce-demo"`. |
+| `requirements.txt` | `nxd.core`, `nxd.data_product[spec]`, `nxd.drivers[rpc]`, `snowflake-connector-python[pandas]`, `pandas`, `pyyaml>=6.0.2`. |
+| `README.md` | This file. |
 
 ## Local validation (no cluster)
 
 ```bash
-PYTHONPATH=. \
-  /Volumes/PRO-G40/projects/nxd/.claude/worktrees/t2sql-exp/examples/t2sql-poc/.venv/bin/python -c "
-from registry import REGISTRY
-from nxd.experimental.semantic import build_semantic_tools
-from nxd.experimental.semantic.compiler import compile_selection
-from nxd.experimental.semantic.dialect import SnowflakeDialect
-d = SnowflakeDialect(view_name=SnowflakeDialect.default_view_name(REGISTRY))
-print([t.name for t in build_semantic_tools(REGISTRY)])
-print(compile_selection({'measures':['product_count'],'dimensions':['modality'],'filters':[]},
-                        registry=REGISTRY, dialect=d, fqn='DB.SCH.', use_view=True))
-"
+python3 -c "import ast; [ast.parse(open(f).read()) for f in ('models.py','transform.py','spec.py')]; print('OK')"
 ```
 
-## Wiring constraints (non-negotiable)
+## Mesh role
 
-1. `code()` cannot extract closures → module-level tool functions in `tools.py`.
-2. Sibling modules bundle only if a `.transform(...)` is declared → keep one.
-3. All modules flat at the DP root → import flat (`from registry import REGISTRY`).
-4. Base tables are self-seeded by the `.transform(...)` (CREATE + INSERT into
-   this DP's own schema); the single-table semantic view references ONLY this
-   DP's own table.
+`products` is a far dimension / ONE-side target: it has no outgoing cross-DP
+reference. Its attributes link to glossary terms in `pharma-glossary-demo`. The
+fact DP (DP_RX) declares the inbound N:1 join (`dispenses -> products`) and
+carries the cross-DP SEMANTIC RELATIONSHIP into this dimension, resolving
+`products` by its globally-unique bare model name. See `MESH_DESIGN.md` for the
+full registry and join topology.

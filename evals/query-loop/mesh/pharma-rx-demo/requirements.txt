@@ -1,5 +1,7 @@
-nxd.core>=0.41.100
-nxd.data_product[spec]>=0.41.100
-nxd.drivers[rpc]>=0.41.100
+nxd.data_product[spec]
+nxd.drivers[rpc]
 snowflake-connector-python[pandas]
 pandas
+# Needed by the .semantic_tools() manifest fallback (_manifest_compile) when the
+# kernel does not deliver .nxd/semantic/*.json payloads.
+pyyaml>=6.0.2

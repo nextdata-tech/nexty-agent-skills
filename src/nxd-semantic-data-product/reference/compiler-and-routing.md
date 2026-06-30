@@ -2,11 +2,10 @@
 
 ## Contents
 - What the compiler does
-- Three compile paths
+- Compile paths (base-table default under .semantic_tools())
 - Chasm-trap defence (load-bearing correctness property)
 - Filter rendering
 - Snowflake dialect specifics
-- Provisioning: native_semantic_view_ddl and plain_view_ddl
 - Adding a new backend dialect
 
 ---
@@ -37,7 +36,13 @@ dialect-specific.
 
 ---
 
-## Three compile paths
+## Compile paths
+
+Under the `.semantic_tools()` pattern the auto-generated `run_semantic_query`
+compiles against the **base tables** directly (`use_view=False`) — there is no
+pre-provisioned `<MODEL>_SEMANTIC` view object. Paths 1 and 2 (inline-join) are the
+live paths; the view variant below is documented for completeness but is not used
+under `.semantic_tools()`.
 
 ### Path 1: single-model
 
@@ -67,7 +72,10 @@ JOIN DB.SCHEMA.products r ON l.product_id = r.product_id
 GROUP BY r.CATEGORY
 ```
 
-### Path 2 variant: compile against the pre-joined plain view (when `use_view=True`, the default)
+### Path 2 variant: compile against a pre-joined plain view (when `use_view=True`)
+
+> Not used under `.semantic_tools()` (which compiles base-table / inline-join,
+> `use_view=False`). Documented for the legacy provisioned-view pattern only.
 
 Instead of an inline JOIN, the compiler queries the pre-created view
 `<FIRST_MODEL>_SEMANTIC` (or the view name set on the dialect). This path is
@@ -83,20 +91,13 @@ GROUP BY CATEGORY
 
 The plain view must have been created by `plain_view_ddl()` during provisioning.
 
-### Path 3: native semantic view (Snowflake)
+### Path 3: native semantic view (Snowflake) — legacy only
 
-When the Snowflake `SEMANTIC VIEW` object exists in the session,
-`run_semantic_query` prefers the native path via `semantic_view_query()`:
-
-```sql
-SELECT * FROM SEMANTIC_VIEW(DB.SCHEMA.ORDERS_SEMANTIC
-  METRICS order_count
-  DIMENSIONS category
-  WHERE status = 'Active')
-```
-
-The MCP tool calls `dialect.supports_native_semantic_view(cursor)` to probe
-existence. Falls back to path 2 on failure.
+When a Snowflake `SEMANTIC VIEW` object exists in the session, the legacy
+provisioned-view path preferred a native `SEMANTIC_VIEW(...)` query. Under
+`.semantic_tools()` no view object is provisioned, so this path does not fire — the
+tools compile base-table / inline-join SQL (paths 1 and 2). The native path remains
+available in the library for the legacy pattern.
 
 ---
 
@@ -175,25 +176,18 @@ active database/schema.
 
 ---
 
-## Provisioning: native_semantic_view_ddl and plain_view_ddl
+## No provisioning step under `.semantic_tools()`
 
-Two provisioning functions are available for the DP's provision step:
+The `.semantic_tools()` pattern provisions **no view object**. The transform seeds
+the base tables (`CREATE OR REPLACE TABLE` + `write_pandas`) and that is all the
+DDL there is; `run_semantic_query` compiles against those base tables directly. You
+do not call `native_semantic_view_ddl` / `plain_view_ddl`, and there is no
+`@on_provision` hook.
 
-### `native_semantic_view_ddl(registry, dialect, fqn)`
-
-Returns a `CREATE OR REPLACE SEMANTIC VIEW` DDL string (Snowflake-specific).
-Emit this during the DP's provision transform to materialize the native object.
-When it exists, `run_semantic_query` uses path 3.
-
-### `plain_view_ddl(registry, dialect, fqn)`
-
-Returns a `CREATE OR REPLACE VIEW ... AS SELECT ... FROM left JOIN right ON ...`
-DDL. Dialect-independent fallback. Emit during provision as a stand-in when the
-Snowflake SEMANTIC VIEW is not yet supported by the account tier.
-
-Both functions derive the view name from the dialect (default:
-`<FIRST_MODEL_UPPER>_SEMANTIC`). The same name is used by
-`compile_selection(..., use_view=True)` so the paths are consistent.
+> The library still exposes `native_semantic_view_ddl(registry, dialect, fqn)` and
+> `plain_view_ddl(registry, dialect, fqn)` for the legacy provisioned-view pattern,
+> deriving the view name from the dialect (`<FIRST_MODEL_UPPER>_SEMANTIC`). They are
+> not used under `.semantic_tools()`.
 
 ---
 

@@ -1,61 +1,76 @@
-# pharma-safety-demo (DP_SAFETY)
+# pharma-safety-demo — far adverse-events fact
 
-Deployable semantic-layer data product for the fresh pharma mesh. Models the
-**far adverse-events fact** (`adverse_events`, grain `ae_id`) — MANY adverse
-events per subject — and exposes a governed text-to-SQL semantic layer over
-Snowflake via three model-oriented MCP tools (`list_models`, `describe_model`,
-`run_semantic_query`), built on `nxd.experimental.semantic`.
+The **far adverse-events fact** DP of the fresh pharma mesh (`MESH_DESIGN.md` → `DP_REGISTRY`).
+A deployable Nextdata OS semantic-layer data product exposing a governed
+text-to-SQL layer over the `adverse_events` model (grain `AE_ID`) via **four**
+auto-generated MCP tools (`list_models`, `semantic_model`, `describe_model`,
+`run_semantic_query`), auto-wired by the `.semantic_tools()` spec flag (NEX-710).
 
-Mirrors `examples/t2sql-poc/deployable-dp/` file-for-file, with the **self-seed**
-deploy pattern (the transform creates + seeds this DP's own base table and the
-single-table semantic view; no facade `as_view`).
+## Semantic shape
 
-## Entities
+- **Model:** `adverse_events` (grain `AE_ID`) — one row per adverse event; MANY
+  adverse events per subject.
+- **Dimensions:** `ae_term` (string — MedDRA-style adverse-event term).
+- **Metrics:** `ae_count` — `COUNT_DISTINCT(AE_ID)` (so `AE_ID` carries BOTH grain
+  and metric roles); `serious_ae_count` — a **CASE-sum over the `IS_SERIOUS`
+  boolean flag** (`boolean: true` — NOT a numeric SUM of a numeric column).
+- **Joins:** `MANY_TO_ONE` → `site_subjects` on `SUBJECT_ID` (the crosswalk hub
+  owned by sibling `pharma-sites-demo`). The foreign model is NOT declared here;
+  the join resolves at the mesh layer by globally-unique bare name.
 
-| Model | grain | dimensions | metrics | join |
-|---|---|---|---|---|
-| `adverse_events` | `AE_ID` | `ae_term` (string) | `ae_count` (COUNT_DISTINCT ae_id), `serious_ae_count` (CASE-SUM `IS_SERIOUS` boolean flag) | MANY_TO_ONE → `site_subjects` on `subject_id` |
+`ae_count` vs `serious_ae_count` is a **confusable pair** (intent-gate stressor):
+a loosely-worded "adverse events" must pick `ae_count`; "serious adverse events"
+must pick `serious_ae_count`. The latter counts rows where `IS_SERIOUS` is true
+via a CASE-sum, NOT a numeric SUM.
 
-`ae_count` vs `serious_ae_count` is a **confusable pair** — `serious_ae_count`
-is a `boolean=True` CASE-sum over the `IS_SERIOUS` flag, NOT a numeric SUM. A
-loosely-worded "adverse events" must pick `ae_count`; "serious adverse events"
-must pick `serious_ae_count`.
+## How the semantic layer is wired (NEX-710)
 
-The `site_subjects` join target lives in the sibling `pharma-sites-demo` DP; the
-bare-name target resolves because entity names are globally unique across the
-mesh.
+The DP exposes four auto-generated MCP tools — `list_models`, `semantic_model`,
+`describe_model`, `run_semantic_query` — wired by the `.semantic_tools(service=...)`
+flag on the spec. There is **no** `registry.py`, **no** `tools.py`, **no**
+`provision.py`, **no** `@on_provision` hook, and **no** `<MODEL>_SEMANTIC` view.
+
+The semantic vocabulary is authored as per-field `__nxd_semantic__` annotations
+on the model attributes in `models.py` (injected via the `_annotate()` NEX-704
+stopgap that writes `AttributeSpec._metadata` directly). At pod boot the kernel
+compiles those annotations into typed SemanticRegistry payloads and delivers one
+`<root>/.nxd/semantic/<model>.json` per annotated model. The auto-generated
+`run_semantic_query` reads those payloads and compiles governed SQL against the
+**base tables** directly — no provisioned view required.
+
+## Deploy pattern: SELF-SEED
+
+The `.transform(...)` self-seeds this DP's OWN `ADVERSE_EVENTS` base table with
+`CREATE OR REPLACE TABLE` **unquoted** (so Snowflake folds it to upper-case, matching
+the compiler's unquoted base-table SQL) + `write_pandas`, and writes an
+`adverse_events_smoke_marker` row for produce-verification. The storage output port
+promises every annotated model (`adverse_events`) plus the marker via a plain
+`storage(...)` — **no** `as_view` (the nxd validator hard-rejects
+`.transform()` + `as_view()` together).
 
 ## Files
 
 | File | Role |
 |------|------|
-| `registry.py` | The one per-DP artifact: `SemanticRegistry` (1 model, 1 dim, 2 metrics, N:1 join). |
-| `tools.py` | Module-level `list_models` / `describe_model` / `run_semantic_query` delegating to the library compiler. |
-| `transform.py` | Self-seeds this DP's OWN `ADVERSE_EVENTS` base table + marker + a hand-authored single-table `ADVERSE_EVENTS_SEMANTIC` view — and forces the `**/*.py` glob to bundle the registry/tools siblings (constraint #2). |
-| `models.py` | The promised `pharma_safety_marker` model (satisfies the storage output port). |
-| `spec.py` | Wires the transform, the plain storage port (NO `as_view`), and the rpc/MCP output. |
-| `requirements.txt` | `nxd.data_product[spec]`, `nxd.drivers[rpc]`, `snowflake-connector-python[pandas]`, `pandas`. |
+| `models.py` | The real `adverse_events` model with per-field `__nxd_semantic__` annotations (grain + `ae_count` metric on `AE_ID`, `ae_term` dim, N:1 join + cross-DP FK on `SUBJECT_ID`, `serious_ae_count` boolean CASE-sum on `IS_SERIOUS`) plus the `adverse_events_smoke_marker` produce-verification model. |
+| `transform.py` | Self-seeds the `ADVERSE_EVENTS` base table (`CREATE OR REPLACE TABLE` unquoted + `write_pandas`) and writes the marker row. |
+| `spec.py` | Wires transform + plain storage port (NO `as_view`) + `.semantic_tools(service="mcp-api-service-k8s")`. `INFRA_PROFILE = "ecommerce-demo"`. |
+| `requirements.txt` | `nxd.core`, `nxd.data_product[spec]`, `nxd.drivers[rpc]`, `snowflake-connector-python[pandas]`, `pandas`, `pyyaml>=6.0.2`. |
+| `README.md` | This file. |
 
 ## Local validation (no cluster)
 
 ```bash
-PYTHONPATH=. uv run python -c "
-from registry import REGISTRY
-from nxd.experimental.semantic import build_semantic_tools
-from nxd.experimental.semantic.compiler import compile_selection
-from nxd.experimental.semantic.dialect import SnowflakeDialect
-d = SnowflakeDialect(view_name=SnowflakeDialect.default_view_name(REGISTRY))
-print([t.name for t in build_semantic_tools(REGISTRY)])              # 3 tools
-print(compile_selection({'measures':['serious_ae_count'],'dimensions':['ae_term'],'filters':[]},
-                        registry=REGISTRY, dialect=d, fqn='DB.SCH.', use_view=True))
-"
+python3 -c "import ast; [ast.parse(open(f).read()) for f in ('models.py','transform.py','spec.py')]; print('OK')"
 ```
 
-## Wiring constraints
+## Mesh role
 
-The four non-negotiables from the template apply unchanged: (1) `code()` cannot
-extract closures — tools are module-level functions; (2) the registry sibling is
-bundled only because a `.transform(...)` is declared; (3) all modules flat at the
-DP root, imported flat; (4) base tables are self-seeded by the `.transform(...)`
-(CREATE + INSERT into this DP's own schema), and the single-table semantic view
-references ONLY this DP's own table.
+`adverse_events` is the far fact: it fans MANY_TO_ONE into `site_subjects` (the
+crosswalk hub owned by `pharma-sites-demo`) on `SUBJECT_ID`, and carries a cross-DP
+SEMANTIC RELATIONSHIP FK back to `subjects` (owned by `pharma-subjects-demo`).
+spec.py consumes `pharma-sites-demo`'s storage port as a real mesh input, so the
+upstream→downstream dependency is declared and the cross-DP join resolves at query
+time via the live mesh. Its model and attributes link to glossary terms
+(`adverse_event`, `subject`, `serious_ae`) in `pharma-glossary-demo`. See
+`MESH_DESIGN.md` for the full registry and join topology.
