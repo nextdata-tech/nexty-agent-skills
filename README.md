@@ -75,7 +75,7 @@ From a clone of this repo, the first-party installer handles every Claude target
 git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
 cd nexty-agent-skills
 ./scripts/install.sh --code        # Claude Code: copy skills to ~/.claude/skills
-./scripts/install.sh --desktop     # Claude Desktop / Cowork: build zips + upload steps
+./scripts/install.sh --desktop     # Claude Desktop / Cowork: install + enable (no upload)
 ./scripts/install.sh --all         # all targets
 ```
 
@@ -156,7 +156,7 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 | Target | What it does |
 |--------|--------------|
 | `--code` | Copies each skill to `~/.claude/skills/<skill>/` (global) or `./.claude/skills/` with `--project`. Full submodule, no size cap. Idempotent (`rsync --delete`). |
-| `--desktop` / `--cowork` | Both are "local-agent-mode". By default builds `build/<skill>.zip` and prints the **Customize → Skills** upload steps. |
+| `--desktop` / `--cowork` | Both are "local-agent-mode". Installs the pack as a local marketplace plugin and enables it — no manual upload. Restart Claude Desktop to load it. `--zip` switches to the build-zip + manual-upload fallback. macOS only. |
 
 **Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
 
@@ -166,30 +166,28 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 scripts/install.sh --code                       # global Claude Code install (default)
 scripts/install.sh --code --project             # current project only
 scripts/install.sh --code --skills "nxd-setup nxd-data-product-builder"
-scripts/install.sh --desktop                    # build zips + Desktop/Cowork upload steps
+scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
+scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
 scripts/install.sh --all                        # every target
 scripts/install.sh status --code                # show what's installed
-scripts/install.sh uninstall --code             # remove the nxd-* skills cleanly
+scripts/install.sh uninstall --desktop          # remove + disable the Desktop/Cowork plugin
 scripts/install.sh --code --dry-run             # print actions, change nothing
 ```
 
 Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
 `-y/--yes`, `--verbose`.
 
-#### Experimental: filesystem install for Claude Desktop / Cowork
+#### How the Claude Desktop / Cowork install works
 
-Claude Desktop and Cowork normally take skills as zip uploads. `--rpm-experimental`
-instead injects a self-owned plugin into the local-agent-mode user registry
-(`~/Library/Application Support/Claude/local-agent-mode-sessions/<accountId>/<deviceId>/rpm/`),
-backing up the manifest first and never touching the Anthropic-managed store. This is
-**unverified against the running app** — after installing you must fully restart Claude
-Desktop and confirm the skills appear under Customize → Skills; if they don't, fall back to
-the supported zip-upload path (`scripts/install.sh --desktop`). macOS only.
-
-```bash
-scripts/install.sh --desktop --rpm-experimental             # inject (then restart Desktop)
-scripts/install.sh uninstall --desktop --rpm-experimental   # reverse cleanly
-```
+Desktop and Cowork ("local-agent-mode") load plugins from a local marketplace store
+under `~/Library/Application Support/Claude/local-agent-mode-sessions/<accountId>/<deviceId>/`.
+The installer mirrors what the **Browse plugins** UI writes to disk — it materializes a
+marketplace checkout and a plugin cache, then registers the plugin across
+`known_marketplaces.json`, `installed_plugins.json`, and `cowork_settings.json`
+(which carries the `enabledPlugins` flag, so the plugin installs **enabled**, not disabled).
+Every file is backed up before it's edited, and `uninstall --desktop` reverses all of it.
+Restart Claude Desktop after installing for it to pick up the change. macOS only;
+use `--zip` for the manual-upload fallback.
 
 ### Manual install
 
