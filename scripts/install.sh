@@ -22,7 +22,6 @@ SCOPE="global"          # global | project
 declare -a SKILLS=()    # empty => all
 DO_VALIDATE=1
 DO_SUBMODULE=1
-RPM_EXPERIMENTAL=0
 FORCE_ZIP=0
 ACCOUNT_ID=""
 DEVICE_ID=""
@@ -32,6 +31,8 @@ VERBOSE=0
 
 DESKTOP_SUPPORT="$HOME/Library/Application Support/Claude"
 PLUGIN_NAME="nexty-agent-skills"
+MP_NAME="nexty"                                  # marketplace name (matches marketplace.json)
+MP_REPO="nextdata-tech/nexty-agent-skills"       # owner/name for the marketplace source
 
 # ---- logging --------------------------------------------------------------
 info() { printf '\033[34m==>\033[0m %s\n' "$*" >&2; }
@@ -55,8 +56,8 @@ install.sh — first-party installer for the Nexty AI Pro skill pack.
 
 Installs the skills under src/<skill>/ to one or more Claude targets:
   --code     Claude Code     -> ~/.claude/skills (global) or ./.claude/skills (--project)
-  --desktop  Claude Desktop  -> build zips + upload steps (default), or rpm injection (--rpm-experimental)
-  --cowork   Claude Cowork   -> same local-agent-mode mechanism as --desktop
+  --desktop  Claude Desktop  -> marketplace-cache injection (filesystem, no upload)
+  --cowork   Claude Cowork   -> same local-agent-mode store as --desktop
   --all      all of the above
 
 Usage: scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
@@ -69,8 +70,8 @@ Options:
   --skills "a b c"       Restrict to a subset of skills (default: all)
   --no-validate          Skip scripts/validate_skills.py (not recommended)
   --no-submodule         Don't auto-init the examples submodule
-  --rpm-experimental     Desktop/Cowork: filesystem-inject into the rpm registry
-                         (default is build-zip + manual upload, which is supported)
+  --zip                  Desktop/Cowork: build zips + print manual-upload steps
+                         instead of the filesystem marketplace install
   --account-id ID        Override Desktop accountId autodiscovery
   --device-id ID         Override Desktop deviceId autodiscovery
   -y, --yes              Non-interactive (assume yes)
@@ -96,7 +97,6 @@ parse_args() {
                  SKILLS=($1) ;;
       --no-validate)     DO_VALIDATE=0 ;;
       --no-submodule)    DO_SUBMODULE=0 ;;
-      --rpm-experimental) RPM_EXPERIMENTAL=1 ;;
       --zip)     FORCE_ZIP=1 ;;
       --account-id) shift; [[ $# -gt 0 ]] || die "--account-id needs an argument"
                     ACCOUNT_ID="$1" ;;
@@ -250,7 +250,13 @@ Claude Desktop / Cowork — upload the zips:
 EOF
 }
 
-# ---- Claude Desktop / Cowork: rpm injection (experimental) ----------------
+# ---- Claude Desktop / Cowork: marketplace-cache injection -----------------
+# Mechanism (proven 2026-06-30, survives restart): mimic what the "Browse
+# plugins" UI writes to disk. Under <support>/local-agent-mode-sessions/
+# <acct>/<dev>/cowork_plugins/ we materialize a marketplace + a plugin cache
+# and register both in known_marketplaces.json + installed_plugins.json.
+# Skills are auto-discovered from the cache's ./skills/ — plugin.json must NOT
+# carry a "skills" key (that overrides discovery to a wrong path).
 is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
 
 discover_account_id() {
@@ -274,145 +280,217 @@ print("\n".join(ids))
 PY
 }
 
-rpm_dir() {  # echo "<rpm-dir>" or empty if path can't be resolved
+cowork_root() {  # echo "<cowork_plugins dir>" or empty if path can't be resolved
   local acct="$1" dev="$2"
   local base="$DESKTOP_SUPPORT/local-agent-mode-sessions"
-  local a="$base/$acct/$dev/rpm"
-  local b="$base/$dev/$acct/rpm"   # defensive: swapped order
+  local a="$base/$acct/$dev/cowork_plugins"
+  local b="$base/$dev/$acct/cowork_plugins"   # defensive: swapped order
   if [[ -d "$a" ]]; then echo "$a"; elif [[ -d "$b" ]]; then echo "$b"; else echo ""; fi
 }
 
-build_plugin_dir() {  # build_plugin_dir <plugin-root>
-  local proot="$1"
-  run "mkdir -p '$proot/.claude-plugin' '$proot/skills'"
-  run "cp '$PLUGIN_JSON' '$proot/.claude-plugin/plugin.json'"
-  local manifest="$proot/manifest.json"
+plugin_version() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$PLUGIN_JSON"; }
 
-  # Copy each skill tree, collecting <skill>\t<name>\t<description> rows.
-  local tsv; tsv="$(mktemp)"
-  while IFS= read -r s; do
-    copy_skill_tree "$SRC_DIR/$s" "$proot/skills/$s"
-    printf '%s\t%s\t%s\n' "$s" \
-      "$(skill_field "$SRC_DIR/$s/SKILL.md" name)" \
-      "$(skill_field "$SRC_DIR/$s/SKILL.md" description)"
-  done < <(selected_skills) > "$tsv"
-
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '\033[35m[dry-run]\033[0m write %s (skills[] from frontmatter)\n' "$manifest" >&2
-    rm -f "$tsv"
-    return 0
-  fi
-  # manifest.json with skills[] mirroring the anthropic store shape (creatorType:user)
-  python3 - "$manifest" "$tsv" "$(now_ms)" <<'PY'
-import json,sys
-manifest, tsv, ms = sys.argv[1], sys.argv[2], int(sys.argv[3])
-skills=[]
-with open(tsv, encoding="utf-8") as f:
-    for line in f:
-        parts=line.rstrip("\n").split("\t")
-        if len(parts)<2: continue
-        sid, nm = parts[0], parts[1]
-        desc = parts[2] if len(parts)>2 else ""
-        skills.append({"skillId":sid,"name":nm or sid,"description":desc,
-                       "creatorType":"user","enabled":True})
-json.dump({"lastUpdated":ms,"skills":skills}, open(manifest,"w"), indent=2)
-PY
-  rm -f "$tsv"
-}
-
-rpm_inject() {  # rpm_inject <manifest> <plugin-root> <version>
-  local manifest="$1" proot="$2" ver="$3"
-  run "cp '$manifest' '$manifest.nexty-bak.$(now_ms)'"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '\033[35m[dry-run]\033[0m inject plugin entry into %s\n' "$manifest" >&2
-    return 0
-  fi
-  python3 - "$manifest" "$PLUGIN_NAME" "$proot" "$ver" "$(now_iso)" "$(now_ms)" <<'PY'
-import json,sys,os,tempfile
-manifest,name,proot,ver,iso,ms = sys.argv[1:7]
-data = json.load(open(manifest)) if os.path.getsize(manifest) else {}
-plugins = data.get("plugins", [])
-entry = {"name":name,"displayName":"Nexty AI Pro","version":ver,"scope":"user",
-         "enabled":True,"source":"nexty-install.sh","installPath":proot,
-         "installedAt":iso,"lastUpdated":iso}
-for i,p in enumerate(plugins):
-    if p.get("name")==name:
-        entry["installedAt"]=p.get("installedAt",iso)  # preserve original install time
-        plugins[i]=entry; break
-else:
-    plugins.append(entry)
-data["plugins"]=plugins
-data["lastUpdated"]=int(ms)
-fd,tmp=tempfile.mkstemp(dir=os.path.dirname(manifest))
-with os.fdopen(fd,"w") as f: json.dump(data,f,indent=2)
-os.replace(tmp,manifest)
-PY
-}
-
-install_desktop_rpm() {
-  is_macos || { warn "Desktop/Cowork rpm injection is macOS-only; skipping"; return 0; }
+# Resolve account+device to a single (acct,dev) pair, or empty on ambiguity/miss.
+# Prints "acct\tdev" on success. Emits guidance to stderr and returns 1 otherwise.
+resolve_ids() {
   local acct dev
-  acct="$(discover_account_id)"
-  dev="$(discover_device_id)"
-  if [[ -z "$acct" ]]; then warn "could not discover accountId"; desktop_zip; return 0; fi
-  if [[ -z "$dev" ]]; then warn "could not discover deviceId"; desktop_zip; return 0; fi
+  acct="$(discover_account_id)"; dev="$(discover_device_id)"
+  if [[ -z "$acct" ]]; then warn "could not discover accountId (pass --account-id)"; return 1; fi
+  if [[ -z "$dev" ]]; then warn "could not discover deviceId (pass --device-id)"; return 1; fi
   if [[ "$(printf '%s' "$dev" | grep -c .)" -gt 1 ]]; then
     warn "multiple deviceIds found; pass --device-id ID to choose:"; printf '%s\n' "$dev" >&2
-    desktop_zip; return 0
+    return 1
   fi
-  local rpm; rpm="$(rpm_dir "$acct" "$dev")"
-  if [[ -z "$rpm" ]]; then warn "rpm registry dir not found for $acct/$dev"; desktop_zip; return 0; fi
-  local manifest="$rpm/manifest.json"
-  if [[ -f "$manifest" ]] && ! python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$manifest" 2>/dev/null; then
-    warn "rpm manifest.json is not valid JSON; not editing"; desktop_zip; return 0
-  fi
-  [[ -f "$manifest" ]] || run "printf '%s' '{\"lastUpdated\":$(now_ms),\"plugins\":[]}' > '$manifest'"
+  printf '%s\t%s\n' "$acct" "$dev"
+}
 
-  local proot="$rpm/plugins/$PLUGIN_NAME"
-  local ver; ver="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$PLUGIN_JSON")"
-  info "rpm injection -> $proot"
+# Build cache/<mp>/<plugin>/<ver>/ : .claude-plugin/plugin.json (skills key
+# stripped) + skills/<name>/. Mirrors the on-disk shape Desktop expects.
+build_plugin_cache() {  # build_plugin_cache <cache-dir>
+  local cache="$1"
+  run "rm -rf '$cache'"
+  run "mkdir -p '$cache/.claude-plugin' '$cache/skills'"
+  # plugin.json without the "skills" override and without $schema (match the
+  # minimal shape the UI installer writes; skills auto-discovered from ./skills/).
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\033[35m[dry-run]\033[0m write %s/.claude-plugin/plugin.json (skills key stripped)\n' "$cache" >&2
+  else
+    python3 - "$PLUGIN_JSON" "$cache/.claude-plugin/plugin.json" <<'PY'
+import json,sys
+src,dst=sys.argv[1],sys.argv[2]
+d=json.load(open(src))
+d.pop("skills",None)     # let Desktop auto-discover ./skills/
+d.pop("$schema",None)
+json.dump(d,open(dst,"w"),indent=2)
+PY
+  fi
+  while IFS= read -r s; do
+    copy_skill_tree "$SRC_DIR/$s" "$cache/skills/$s"
+  done < <(selected_skills)
+}
+
+# Add/replace the marketplace in known_marketplaces.json (atomic, backed up).
+register_marketplace() {  # register_marketplace <known.json> <mp-name> <install-location>
+  local f="$1" mp="$2" loc="$3"
+  [[ -f "$f" ]] && run "cp '$f' '$f.nexty-bak.$(now_ms)'"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\033[35m[dry-run]\033[0m register marketplace %s in %s\n' "$mp" "$f" >&2; return 0
+  fi
+  python3 - "$f" "$mp" "$loc" "$MP_REPO" "$(now_iso)" <<'PY'
+import json,sys,os,tempfile
+f,mp,loc,repo,iso=sys.argv[1:6]
+data=json.load(open(f)) if (os.path.exists(f) and os.path.getsize(f)) else {}
+data[mp]={"source":{"source":"github","repo":repo},"installLocation":loc,"lastUpdated":iso}
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(f) or ".")
+with os.fdopen(fd,"w") as fh: json.dump(data,fh,indent=2)
+os.replace(tmp,f)
+PY
+}
+
+# Add/replace the installed-plugin entry (atomic, backed up). Preserves the
+# original installedAt on re-install.
+register_plugin() {  # register_plugin <installed.json> <plugin@mp> <cache-dir> <ver> <sha>
+  local f="$1" key="$2" cache="$3" ver="$4" sha="$5"
+  [[ -f "$f" ]] && run "cp '$f' '$f.nexty-bak.$(now_ms)'"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\033[35m[dry-run]\033[0m register plugin %s in %s\n' "$key" "$f" >&2; return 0
+  fi
+  python3 - "$f" "$key" "$cache" "$ver" "$sha" "$(now_iso)" <<'PY'
+import json,sys,os,tempfile
+f,key,cache,ver,sha,iso=sys.argv[1:7]
+data=json.load(open(f)) if (os.path.exists(f) and os.path.getsize(f)) else {"version":2,"plugins":{}}
+data.setdefault("version",2); data.setdefault("plugins",{})
+prev=data["plugins"].get(key) or []
+installed_at=(prev[0].get("installedAt") if prev and isinstance(prev[0],dict) else None) or iso
+data["plugins"][key]=[{"scope":"user","installPath":cache,"version":ver,
+                       "installedAt":installed_at,"lastUpdated":iso,"gitCommitSha":sha}]
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(f) or ".")
+with os.fdopen(fd,"w") as fh: json.dump(data,fh,indent=2)
+os.replace(tmp,f)
+PY
+}
+
+# Enable the plugin + mirror the marketplace in cowork_settings.json. Without
+# the enabledPlugins entry the plugin installs but shows "Disabled" in the UI.
+register_settings() {  # register_settings <cowork_settings.json> <plugin@mp> <mp-name> <enable 0|1>
+  local f="$1" key="$2" mp="$3" enable="$4"
+  [[ -f "$f" ]] && run "cp '$f' '$f.nexty-bak.$(now_ms)'"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\033[35m[dry-run]\033[0m set enabledPlugins[%s]=%s in %s\n' "$key" \
+      "$([[ "$enable" -eq 1 ]] && echo true || echo '(remove)')" "$f" >&2
+    return 0
+  fi
+  python3 - "$f" "$key" "$mp" "$MP_REPO" "$enable" <<'PY'
+import json,sys,os,tempfile
+f,key,mp,repo,enable=sys.argv[1:6]
+data=json.load(open(f)) if (os.path.exists(f) and os.path.getsize(f)) else {}
+ep=data.setdefault("enabledPlugins",{})
+km=data.setdefault("extraKnownMarketplaces",{})
+if enable=="1":
+    ep[key]=True
+    km[mp]={"source":{"source":"github","repo":repo}}
+else:
+    ep.pop(key,None)
+    if not any(k.endswith("@"+mp) for k in ep): km.pop(mp,None)
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(f) or ".")
+with os.fdopen(fd,"w") as fh: json.dump(data,fh,indent=2)
+os.replace(tmp,f)
+PY
+}
+
+# Materialize the marketplace checkout (a working tree at marketplaces/<mp>/
+# with the repo's marketplace.json). Echoes the HEAD sha used for gitCommitSha.
+materialize_marketplace() {  # materialize_marketplace <marketplaces-dir>
+  local mpdir="$1"
+  run "rm -rf '$mpdir'"
+  run "mkdir -p '$mpdir/.claude-plugin'"
+  run "cp '$ROOT/.claude-plugin/marketplace.json' '$mpdir/.claude-plugin/marketplace.json'"
+  # gitCommitSha: real repo HEAD when available, else a deterministic placeholder.
+  local sha=""
+  sha="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$sha" ]] || sha="local-$(plugin_version)"
+  echo "$sha"
+}
+
+install_desktop_marketplace() {
+  is_macos || { warn "Desktop/Cowork install is macOS-only; skipping"; return 0; }
+  local pair; pair="$(resolve_ids)" || return 0
+  local acct dev; acct="${pair%%$'\t'*}"; dev="${pair##*$'\t'}"
+  local cw; cw="$(cowork_root "$acct" "$dev")"
+  if [[ -z "$cw" ]]; then warn "cowork_plugins dir not found for $acct/$dev"; return 0; fi
+
+  local ver mpdir cache key sha
+  ver="$(plugin_version)"
+  mpdir="$cw/marketplaces/$MP_NAME"
+  cache="$cw/cache/$MP_NAME/$PLUGIN_NAME/$ver"
+  key="$PLUGIN_NAME@$MP_NAME"
+
+  info "marketplace injection -> $cw ($MP_NAME / $PLUGIN_NAME $ver)"
   ensure_submodule
-  build_plugin_dir "$proot"
-  rpm_inject "$manifest" "$proot" "$ver"
-  ok "rpm: injected $PLUGIN_NAME ($ver)"
+  sha="$(materialize_marketplace "$mpdir")"
+  build_plugin_cache "$cache"
+  register_marketplace "$cw/known_marketplaces.json" "$MP_NAME" "$mpdir"
+  register_plugin "$cw/installed_plugins.json" "$key" "$cache" "$ver" "$sha"
+  register_settings "$(dirname "$cw")/cowork_settings.json" "$key" "$MP_NAME" 1
+  ok "marketplace: installed + enabled $key ($ver)"
   cat >&2 <<EOF
 
-⚠ Experimental: the rpm filesystem path is unverified against the running app.
-  1. Fully quit and restart Claude Desktop.
-  2. Open Customize → Skills and confirm the nxd-* skills appear.
-  If they do NOT appear, run:  scripts/install.sh --desktop   (zip-upload, supported)
-  To reverse:                  scripts/install.sh uninstall --desktop --rpm-experimental
+Claude Desktop / Cowork — installed and enabled.
+  Fully quit and restart Claude Desktop (Cmd+Q, reopen) to load it.
+  Skills then invoke via /<skill-name> in chat, or automatically.
+  To reverse:  scripts/install.sh uninstall --desktop
 EOF
 }
 
-uninstall_desktop_rpm() {
+uninstall_desktop_marketplace() {
   is_macos || return 0
-  local acct dev; acct="$(discover_account_id)"; dev="$(discover_device_id)"
-  if [[ "$(printf '%s' "$dev" | grep -c .)" -gt 1 ]]; then
-    warn "multiple deviceIds found; pass --device-id ID to choose which to uninstall:"
-    printf '%s\n' "$dev" >&2; return 0
-  fi
-  [[ -n "$acct" && -n "$dev" ]] || { warn "cannot resolve ids; nothing to uninstall"; return 0; }
-  local rpm; rpm="$(rpm_dir "$acct" "$dev")"
-  [[ -n "$rpm" ]] || { warn "rpm dir not found; nothing to uninstall"; return 0; }
-  local manifest="$rpm/manifest.json" proot="$rpm/plugins/$PLUGIN_NAME"
-  if [[ -f "$manifest" ]]; then
-    run "cp '$manifest' '$manifest.nexty-bak.$(now_ms)'"
+  local pair; pair="$(resolve_ids)" || return 0
+  local acct dev; acct="${pair%%$'\t'*}"; dev="${pair##*$'\t'}"
+  local cw; cw="$(cowork_root "$acct" "$dev")"
+  [[ -n "$cw" ]] || { warn "cowork_plugins dir not found; nothing to uninstall"; return 0; }
+
+  local key="$PLUGIN_NAME@$MP_NAME"
+  # Drop the installed-plugin entry (backed up).
+  local inst="$cw/installed_plugins.json"
+  if [[ -f "$inst" ]]; then
+    run "cp '$inst' '$inst.nexty-bak.$(now_ms)'"
     if [[ "$DRY_RUN" -eq 0 ]]; then
-      python3 - "$manifest" "$PLUGIN_NAME" "$(now_ms)" <<'PY'
+      python3 - "$inst" "$key" <<'PY'
 import json,sys,os,tempfile
-manifest,name,ms=sys.argv[1],sys.argv[2],int(sys.argv[3])
-data=json.load(open(manifest))
-data["plugins"]=[p for p in data.get("plugins",[]) if p.get("name")!=name]
-data["lastUpdated"]=ms
-fd,tmp=tempfile.mkstemp(dir=os.path.dirname(manifest))
-with os.fdopen(fd,"w") as f: json.dump(data,f,indent=2)
-os.replace(tmp,manifest)
+f,key=sys.argv[1],sys.argv[2]
+data=json.load(open(f))
+data.get("plugins",{}).pop(key,None)
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(f) or ".")
+with os.fdopen(fd,"w") as fh: json.dump(data,fh,indent=2)
+os.replace(tmp,f)
 PY
     fi
   fi
-  [[ -d "$proot" ]] && run "rm -rf '$proot'" || true
-  ok "rpm: removed $PLUGIN_NAME — restart Claude Desktop to apply"
+  # Drop the marketplace registration only if no other plugin references it.
+  local known="$cw/known_marketplaces.json"
+  if [[ -f "$known" && "$DRY_RUN" -eq 0 ]]; then
+    run "cp '$known' '$known.nexty-bak.$(now_ms)'"
+    python3 - "$known" "$inst" "$MP_NAME" <<'PY'
+import json,sys,os,tempfile
+known,inst,mp=sys.argv[1],sys.argv[2],sys.argv[3]
+plugins=json.load(open(inst)).get("plugins",{}) if os.path.exists(inst) else {}
+still_used=any(k.endswith("@"+mp) for k in plugins)
+data=json.load(open(known))
+if not still_used: data.pop(mp,None)
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(known) or ".")
+with os.fdopen(fd,"w") as fh: json.dump(data,fh,indent=2)
+os.replace(tmp,known)
+PY
+  elif [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\033[35m[dry-run]\033[0m drop marketplace %s if unreferenced\n' "$MP_NAME" >&2
+  fi
+  # Disable + de-mirror in cowork_settings.json.
+  register_settings "$(dirname "$cw")/cowork_settings.json" "$key" "$MP_NAME" 0
+  # Remove cache + marketplace checkout dirs.
+  run "rm -rf '$cw/cache/$MP_NAME/$PLUGIN_NAME'"
+  run "rmdir '$cw/cache/$MP_NAME' 2>/dev/null || true"
+  run "rm -rf '$cw/marketplaces/$MP_NAME'"
+  ok "marketplace: removed $key — restart Claude Desktop to apply"
 }
 
 status_desktop() {
@@ -423,21 +501,33 @@ status_desktop() {
     while IFS= read -r d; do echo "  - $d"; done <<<"$dev"; return 0
   fi
   echo "Claude Desktop/Cowork: account=${acct:-?} device=${dev:-?}"
-  local rpm; rpm="$(rpm_dir "$acct" "$dev" 2>/dev/null || true)"
-  if [[ -z "$rpm" ]]; then echo "  rpm registry: not found"; return 0; fi
-  local proot="$rpm/plugins/$PLUGIN_NAME"
-  [[ -d "$proot" ]] && echo "  ✓ plugin dir: $proot" || echo "  · plugin dir: absent"
-  if [[ -f "$rpm/manifest.json" ]] && grep -q "\"$PLUGIN_NAME\"" "$rpm/manifest.json" 2>/dev/null; then
-    echo "  ✓ rpm entry present"
+  local cw; cw="$(cowork_root "$acct" "$dev" 2>/dev/null || true)"
+  if [[ -z "$cw" ]]; then echo "  cowork_plugins: not found"; return 0; fi
+  local key="$PLUGIN_NAME@$MP_NAME"
+  if [[ -f "$cw/installed_plugins.json" ]] && \
+     python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if sys.argv[2] in d.get("plugins",{}) else 1)' \
+       "$cw/installed_plugins.json" "$key" 2>/dev/null; then
+    echo "  ✓ registered: $key"
   else
-    echo "  · rpm entry absent"
+    echo "  · not registered ($key)"
   fi
-  echo "  zips: $ROOT/build/ ($(ls "$ROOT"/build/*.zip 2>/dev/null | wc -l | tr -d ' ') present)"
+  local ver; ver="$(plugin_version)"
+  [[ -d "$cw/cache/$MP_NAME/$PLUGIN_NAME/$ver/skills" ]] \
+    && echo "  ✓ cache: $cw/cache/$MP_NAME/$PLUGIN_NAME/$ver" \
+    || echo "  · cache: absent"
+  local settings; settings="$(dirname "$cw")/cowork_settings.json"
+  if [[ -f "$settings" ]] && \
+     python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d.get("enabledPlugins",{}).get(sys.argv[2]) else 1)' \
+       "$settings" "$key" 2>/dev/null; then
+    echo "  ✓ enabled"
+  else
+    echo "  · disabled (toggle in Customize → Skills, or reinstall)"
+  fi
 }
 
-# Dispatch a desktop/cowork target (default zip, rpm only when requested)
+# Dispatch a desktop/cowork target.
 do_desktop_install() {
-  if [[ "$FORCE_ZIP" -eq 1 || "$RPM_EXPERIMENTAL" -eq 0 ]]; then desktop_zip; else install_desktop_rpm; fi
+  if [[ "$FORCE_ZIP" -eq 1 ]]; then desktop_zip; else install_desktop_marketplace; fi
 }
 
 # ---- main -----------------------------------------------------------------
@@ -464,8 +554,9 @@ main() {
           code) uninstall_code ;;
           desktop|cowork)
             [[ "$did_desktop" -eq 1 ]] && continue; did_desktop=1
-            if [[ "$RPM_EXPERIMENTAL" -eq 1 ]]; then uninstall_desktop_rpm
-            else info "Desktop zip-installed skills are removed from the Customize → Skills UI."; fi ;;
+            if [[ "$FORCE_ZIP" -eq 1 ]]; then
+              info "Zip-uploaded skills are removed from the Customize → Skills UI."
+            else uninstall_desktop_marketplace; fi ;;
         esac
       done
       ;;
