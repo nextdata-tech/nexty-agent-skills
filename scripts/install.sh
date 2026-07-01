@@ -3,7 +3,7 @@
 #
 # Installs the skills under src/<skill>/ to one or more Claude targets:
 #   --code     Claude Code        -> ~/.claude/skills (global) or ./.claude/skills (--project)
-#   --desktop  Claude Desktop     -> build zips + upload steps (default), or rpm injection (--rpm-experimental)
+#   --desktop  Claude Desktop     -> marketplace-cache injection (survives restart), or zip build+upload (--zip)
 #   --cowork   Claude Cowork      -> same local-agent-mode mechanism as --desktop
 #   --all      all of the above
 #

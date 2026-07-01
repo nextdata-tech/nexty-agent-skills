@@ -226,7 +226,7 @@ npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx 
 With the first-party installer:
 
 ```bash
-scripts/install.sh uninstall --code     # or --desktop --rpm-experimental, --all
+scripts/install.sh uninstall --code     # or --desktop, --cowork, --all
 ```
 
 Or, if you installed via the Vercel Skills CLI:
