@@ -69,17 +69,28 @@ Curated by our field engineers. Brings the patterns, skills, and tools your AI a
 
 ## Quick Install
 
+From a clone of this repo, the first-party installer handles every Claude target:
+
+```bash
+git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
+cd nexty-agent-skills
+./scripts/install.sh --code        # Claude Code: copy skills to ~/.claude/skills
+./scripts/install.sh --desktop     # Claude Desktop / Cowork: install + enable (no upload)
+./scripts/install.sh --all         # all targets
+```
+
+`scripts/install.sh` validates the pack (`scripts/validate_skills.py`), initializes the
+examples submodule, and installs without any third-party CLI. See
+[Installer reference](#installer-scriptsinstallsh) below for targets, scope, and uninstall.
+
+### Alternative: Vercel Skills CLI
+
 ```bash
 npx skills add nextdata-tech/nexty-agent-skills --all -y
 ```
 
-The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right location for each agent automatically.
-
-For Windows PowerShell, run the same command in PowerShell:
-
-```powershell
-npx skills add nextdata-tech/nexty-agent-skills --all -y
-```
+The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right
+location for each agent automatically. On Windows PowerShell, run the same command.
 
 ### Claude Code plugin distribution
 
@@ -131,6 +142,53 @@ Before submitting to the community marketplace:
 
 The official Anthropic & Partners directory is separate from the community marketplace and should be treated as a later partner/curation conversation.
 
+### Installer (`scripts/install.sh`)
+
+The first-party installer is the canonical path. It is pure bash + `python3` (no `npx`,
+no `jq`), validates the pack before installing, and supports a clean uninstall.
+
+```bash
+scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
+```
+
+**Targets** (default `--code`): `--code` `--desktop` `--cowork` `--all`.
+
+| Target | What it does |
+|--------|--------------|
+| `--code` | Copies each skill to `~/.claude/skills/<skill>/` (global) or `./.claude/skills/` with `--project`. Full submodule, no size cap. Idempotent (`rsync --delete`). |
+| `--desktop` / `--cowork` | Both are "local-agent-mode". Installs the pack as a local marketplace plugin and enables it — no manual upload. Restart Claude Desktop to load it. `--zip` switches to the build-zip + manual-upload fallback. macOS only. |
+
+**Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
+
+**Examples**
+
+```bash
+scripts/install.sh --code                       # global Claude Code install (default)
+scripts/install.sh --code --project             # current project only
+scripts/install.sh --code --skills "nxd-setup nxd-data-product-builder"
+scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
+scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
+scripts/install.sh --all                        # every target
+scripts/install.sh status --code                # show what's installed
+scripts/install.sh uninstall --desktop          # remove + disable the Desktop/Cowork plugin
+scripts/install.sh --code --dry-run             # print actions, change nothing
+```
+
+Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
+`-y/--yes`, `--verbose`.
+
+#### How the Claude Desktop / Cowork install works
+
+Desktop and Cowork ("local-agent-mode") load plugins from a local marketplace store
+under `~/Library/Application Support/Claude/local-agent-mode-sessions/<accountId>/<deviceId>/`.
+The installer mirrors what the **Browse plugins** UI writes to disk — it materializes a
+marketplace checkout and a plugin cache, then registers the plugin across
+`known_marketplaces.json`, `installed_plugins.json`, and `cowork_settings.json`
+(which carries the `enabledPlugins` flag, so the plugin installs **enabled**, not disabled).
+Every file is backed up before it's edited, and `uninstall --desktop` reverses all of it.
+Restart Claude Desktop after installing for it to pick up the change. macOS only;
+use `--zip` for the manual-upload fallback.
+
 ### Manual install
 
 ```bash
@@ -164,6 +222,14 @@ npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx 
 ```
 
 ## Uninstall
+
+With the first-party installer:
+
+```bash
+scripts/install.sh uninstall --code     # or --desktop, --cowork, --all
+```
+
+Or, if you installed via the Vercel Skills CLI:
 
 ```bash
 npx skills remove --all -y
