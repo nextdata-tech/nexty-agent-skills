@@ -117,3 +117,24 @@ jobs:
               --notes "$notes" \
               --verify-tag
           fi
+
+      # Notify the nxd monorepo to bump its external/nexty-agent-skills submodule
+      # pin, which rebuilds the nxd-cli-installer bundle so `nxd activate skills`
+      # serves this release. Requires NXD_DISPATCH_PAT: a fine-grained PAT with
+      # contents:write + pull-requests:write on nextdata-tech/nxd only (the
+      # default github.token cannot dispatch to another repository).
+      - name: Notify nxd to bump the skills submodule
+        env:
+          GH_TOKEN: ${{ secrets.NXD_DISPATCH_PAT }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "NXD_DISPATCH_PAT not set — skipping nxd notification (release still published)."
+            exit 0
+          fi
+          gh api repos/nextdata-tech/nxd/dispatches \
+            -f event_type=nexty-skills-release \
+            -F "client_payload[tag]=${TAG}" \
+            -F "client_payload[sha]=${GITHUB_SHA}"
+          echo "Dispatched nexty-skills-release (${TAG}) to nextdata-tech/nxd"
