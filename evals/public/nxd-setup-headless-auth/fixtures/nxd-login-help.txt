@@ -1,0 +1,11 @@
+$ nxd login --help
+Login to the nextdata platform
+
+Usage: nxd login [OPTIONS]
+
+Options:
+      --open-browser <OPEN_BROWSER>  Open the verification URL in the default
+                                     browser [default: true] [possible values:
+                                     true, false]
+      --debug                        Print debug information during login
+  -h, --help                         Print help

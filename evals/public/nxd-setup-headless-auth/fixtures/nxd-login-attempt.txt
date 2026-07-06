@@ -1,0 +1,20 @@
+$ nohup nxd --config /tmp/nxd-acme.yaml login > /tmp/nxd-login.log 2>&1 & sleep 8; cat /tmp/nxd-login.log
+Navigate to https://app.acme-corp.example.com/oauth2/device?code=3H8M-2X1P
+xdg-open: no method available for opening 'https://app.acme-corp.example.com/oauth2/device?code=3H8M-2X1P'
+
+--- user reported in chat: "done, I approved the link in my browser" ---
+
+$ nxd --config /tmp/nxd-acme.yaml whoami
+Not logged in or your token is expired - run 'nxd login'
+(exit code 1)
+
+$ pgrep -fa nxd
+(no output)
+(exit code 1)
+
+$ ls -la ~/.nxd/ /tmp/tokens.json
+ls: cannot access '/tmp/tokens.json': No such file or directory
+/home/user/.nxd/:
+total 8
+drwxr-xr-x 2 user user 4096 .
+drwxr-xr-x 9 user user 4096 ..

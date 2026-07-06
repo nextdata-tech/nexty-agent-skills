@@ -1,0 +1,16 @@
+$ timeout 12 nxd --config /tmp/nxd-acme.yaml login --debug --open-browser false
+DEBUG config_path=/tmp/nxd-acme.yaml
+DEBUG config_dir=/tmp
+DEBUG api_url=https://api.acme-corp.example.com
+DEBUG auth_url=https://auth.acme-corp.example.com
+DEBUG client_id_url=https://auth.acme-corp.example.com/oauth2/device/clientid
+DEBUG client_id=nxd-cli
+DEBUG device_authorization_url=https://auth.acme-corp.example.com/oauth2/device/code
+DEBUG token_url=https://auth.acme-corp.example.com/oauth2/device/token
+DEBUG scopes=offline_access openid email profile
+DEBUG device code response: {"device_code":"<opaque>","user_code":"7Q2K-9F4B","verification_uri":"https://app.acme-corp.example.com/oauth2/device?code=7Q2K-9F4B","expires_in":300,"interval":5,"pkce_verifier":"<opaque-server-generated-verifier>"}
+Navigate to https://app.acme-corp.example.com/oauth2/device?code=7Q2K-9F4B
+DEBUG polling https://auth.acme-corp.example.com/oauth2/device/token every 5s
+DEBUG poll: authorization_pending
+DEBUG poll: authorization_pending
+(command timed out after 12s)

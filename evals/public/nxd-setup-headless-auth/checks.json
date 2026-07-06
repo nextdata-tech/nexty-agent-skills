@@ -1,0 +1,37 @@
+{
+  "name": "nxd Setup — Headless Auth in a Sandboxed Shell (dead background login poller)",
+  "checks": [
+    {
+      "id": "diagnoses-dead-poller",
+      "check": "The agent's diagnosis is that the backgrounded `nxd login` process was killed as soon as the shell call that spawned it returned (each call is an independent process tree; nohup does not help), so nothing was polling the token endpoint when the user approved and the approval/device code was wasted. It does NOT misattribute the failure to a wrong URL, wrong mesh, expired PAT, or user error in approving."
+    },
+    {
+      "id": "no-retry-of-interactive-login",
+      "check": "The agent does not propose re-running interactive or backgrounded `nxd login` (with or without nohup/&) as the fix, and instead switches to a manual OAuth device flow driven with curl, where each step is an independent shell call and all intermediate state is persisted to files."
+    },
+    {
+      "id": "uses-auth-host-from-debug",
+      "check": "The plan sends the device-code request and the token exchange to the OAuth host from the debug output (https://auth.acme-corp.example.com/oauth2/device/code and .../oauth2/device/token) — a third host distinct from the app and api hosts — with client_id nxd-cli and the scopes from the debug output, rather than inventing endpoints on the app/api hosts."
+    },
+    {
+      "id": "pkce-verifier-round-trip",
+      "check": "The plan persists the device-code response JSON to a file (state must survive between calls) and sends the server-issued non-standard `pkce_verifier` field from that response back as `code_verifier` in the token-exchange POST (grant_type urn:ietf:params:oauth:grant-type:device_code). Omitting code_verifier fails this check."
+    },
+    {
+      "id": "ttl-handling",
+      "check": "The plan tells the user to approve the verification link promptly because the device code expires quickly (expires_in=300 seconds in the artifacts), and states that on expiry a fresh device code must be requested rather than retrying the expired one."
+    },
+    {
+      "id": "tokens-json-location-and-format",
+      "check": "The plan writes tokens.json into the directory of the active config file — /tmp/tokens.json for /tmp/nxd-acme.yaml (NOT ~/.nxd/tokens.json) — as a JSON map keyed by the auth URL, whose value carries access_token, token_type, refresh_token, and an RFC3339 expiry derived from now + expires_in (ideally minus a safety margin)."
+    },
+    {
+      "id": "no-oauth-token-as-pat",
+      "check": "The plan never passes the OAuth access token to `nxd create config --personal-access-token=...` (or explicitly calls this out as a dead end that returns 401); persistence is achieved by minting a real personal access token (nxdpat_...) via `nxd create personal-access-token` after whoami succeeds, then regenerating the config with that PAT."
+    },
+    {
+      "id": "verifies-whoami-and-identity",
+      "check": "The plan verifies authentication by checking `nxd --config /tmp/nxd-acme.yaml whoami` OUTPUT (noting that 'Not logged in' can appear even with exit code 0) and surfaces the reported email to the user as an identity sanity-check (flagging if it is not the user's own account)."
+    }
+  ]
+}
