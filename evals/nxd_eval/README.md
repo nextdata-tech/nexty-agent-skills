@@ -172,6 +172,44 @@ uv run --project evals/nxd_eval \
            evals/nxd_eval/tests/test_scoring_adapter.py -v
 ```
 
+## Live mesh run (verified against real Snowflake)
+
+`mesh_suite.py` drives the **real** `evals/mcp/semantic_server.py` (genuine
+`compile_selection` compiler) against lower-env Snowflake over stdio — the
+actual mesh, not the stub. Verified live with `openai/gpt-5.4-mini`:
+
+- **`mesh_baseline`** (feasible): compiled `SELECT COUNT(DISTINCT SUBJECT_ID) …`,
+  executed on Snowflake → `[{subject_count: 4}]` → answer `4`, score **C**.
+- **`mesh_adversarial`** (8 impossible/ambiguous questions): the agent
+  clarifies/abstains rather than fabricating. Deterministic `expect_abstain`
+  axis lands **6–7 of 8** per run (single-epoch; see caveats).
+
+Setup (one-time):
+1. Install a matched nxd wheel set into `evals/mcp` (supplies the compiler):
+   `uv pip install --python evals/mcp/.venv/bin/python <nxd>/components/nxd_py/wheels/nxd_{core,drivers}-<ver>-…macosx…arm64.whl <…>/nxd_data_product-<ver>-py3-none-any.whl`
+2. Pull the lower-env infra profile from GCP and materialize `SNOWFLAKE_*`
+   (keypair auth avoids MFA); export them.
+3. Seed base tables once: `python -m … evals/mcp/seed.py` against
+   `$SNOWFLAKE_SCHEMA` (DROP+CREATE+INSERT, idempotent).
+
+**Caveats found running it live** (real, not stub artifacts):
+- **`mcp_server_stdio` starts a clean env** — the server subprocess does NOT
+  inherit `SNOWFLAKE_*`. Forward them via `env=` (mesh_suite.py does). Without
+  it the compiler compiles but execution fails `Missing SNOWFLAKE_ACCOUNT`,
+  and the agent correctly abstains — a false "miss".
+- **Governed-view metrics need the `GOV_*` schemas provisioned**, not just base
+  tables. A metric routed through `GOV_ANALYST` errors `Schema … does not exist`
+  if you only ran `seed.py` (base tables). Direct-table metrics work.
+- **Single-epoch results wobble** (the agent is nondeterministic — different
+  questions miss run to run). Use `epochs` + a `pass^k`/`at_least` reducer for a
+  stable estimate; don't quote an n=1 number.
+- **Two scorer sharp-edges** surfaced on abstain cases: (a) `deterministic_ex`
+  scores abstain cases `I` instead of N/A (no gold rows) — it should skip when
+  the case isn't an `answer` case, else it drags overall accuracy to 0; (b)
+  `expect_abstain`'s refusal-marker heuristic mis-scores an agent that abstains
+  on one half of a decomposable question but answers the other half. Both are
+  follow-ups, not blockers for the abstain signal itself.
+
 ## What's proven vs pending
 
 | | Status |
