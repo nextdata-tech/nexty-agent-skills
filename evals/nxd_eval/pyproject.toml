@@ -1,0 +1,32 @@
+[project]
+name = "nxd-eval"
+version = "0.1.0"
+description = "Inspect-based evaluation framework for the Nexty skill pack — deterministic-EX + judged scoring with a Wilson/McNemar/FDR statistics contract."
+requires-python = ">=3.11"
+dependencies = [
+    "inspect_ai==0.3.130",     # pinned known-good 0.3.x; the agent/MCP surface churns — do NOT float
+    "statsmodels>=0.14",       # proportion_confint(wilson), contingency_tables.mcnemar, multitest.multipletests
+    "scipy>=1.11",
+    "scikit-learn>=1.4",       # brier_score_loss, calibration_curve
+    "mcp>=1.2.0",              # matches evals/mcp; MCP client types + stub server
+]
+
+[project.optional-dependencies]
+# Inspect's Anthropic model provider (agent-under-test + grader role). Kept an
+# extra so the stats/scoring unit tests install without a provider.
+anthropic = ["anthropic>=0.40"]
+
+[dependency-groups]
+# Test runner for the framework's own unit tests. A uv default group (installed
+# by `uv run --project evals/nxd_eval`), NOT a package dependency — the shipped
+# framework does not depend on pytest. anyio ships transitively with inspect_ai.
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+package = false               # mirror evals/mcp: isolated venv, not a distributable
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# package = false keeps this venv non-distributable (mirrors evals/mcp), so the
+# src-layout package is not installed; put it on the path for the test run.
+pythonpath = ["src"]

@@ -1,0 +1,293 @@
+"""Deterministic-lane scorers: verdicts over synthetic transcripts, NO model.
+
+Each test builds a synthetic ``TaskState`` — a message list with
+``run_semantic_query`` tool calls and their JSON results (the exact shape the
+stub and production ``semantic_server.py`` return) plus a final assistant answer
+— and asserts the scorer's ``Score.value``. No model provider, no API key, no
+network; the scorers are pure functions of the transcript.
+
+The load-bearing cases the brief calls out explicitly:
+  * two numeric measures SWAPPED must FAIL deterministic-EX (the name-aware
+    guard, imported from score.py — never re-implemented here);
+  * a WRONG DIMENSION must drop slot-F1 below a perfect match.
+"""
+
+from __future__ import annotations
+
+import json
+
+import anyio
+from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, ModelName
+from inspect_ai.scorer import CORRECT, INCORRECT, Score, Target
+from inspect_ai.solver import TaskState
+from inspect_ai.tool import ToolCall
+
+from nxd_eval.scorers import (
+    error_nonempty,
+    expect_abstain,
+    rows_equal,
+    slot_match,
+    sql_contains,
+    sql_excludes,
+)
+from nxd_eval.slots import ema, overall_f1, selection_of, slot_f1s
+
+QUERY = "run_semantic_query"
+
+
+def _state(
+    *,
+    calls: list[tuple[dict, dict]] | None = None,
+    final: str = "",
+    metadata: dict | None = None,
+    sample_id: str = "q1",
+) -> TaskState:
+    """Build a TaskState from (args, result) query pairs + a final answer.
+
+    ``calls`` is a list of ``(tool_args, tool_result_dict)``; each becomes an
+    assistant tool-call message paired to its JSON tool-result message. ``final``
+    is the agent's closing free-text answer (an assistant message).
+    """
+    messages: list = []
+    for i, (args, result) in enumerate(calls or []):
+        tc = ToolCall(id=f"c{i}", function=QUERY, arguments=args)
+        messages.append(ChatMessageAssistant(content="", tool_calls=[tc]))
+        messages.append(
+            ChatMessageTool(
+                content=json.dumps(result), function=QUERY, tool_call_id=f"c{i}"
+            )
+        )
+    if final:
+        messages.append(ChatMessageAssistant(content=final))
+    return TaskState(
+        model=ModelName("mockllm/model"),
+        sample_id=sample_id,
+        epoch=0,
+        input="q",
+        messages=messages,
+        metadata=metadata or {},
+    )
+
+
+def _run(scorer, state: TaskState, target: Target) -> Score:
+    return anyio.run(lambda: scorer(state, target))
+
+
+# --------------------------------------------------------------------------- #
+# rows_equal — deterministic execution-accuracy
+# --------------------------------------------------------------------------- #
+
+_GOLD = [{"region": "x", "revenue": 5.0, "cost": 95.0}]
+_SWAP = [{"region": "x", "revenue": 95.0, "cost": 5.0}]  # two measures swapped
+
+
+def test_rows_equal_matching_rows_correct():
+    st = _state(
+        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})]
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
+    assert s.value == CORRECT
+    assert s.metadata["verdict"] == "PASS"
+
+
+def test_rows_equal_swapped_two_measures_fails():
+    """THE load-bearing case: two numeric measures swapped must FAIL.
+
+    The name-aware multi-measure guard lives in score.py and is exercised here
+    through the imported EX core — proving the eval inherits it, not a re-impl.
+    """
+    st = _state(
+        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _SWAP})]
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
+    assert s.value == INCORRECT
+    assert s.metadata["verdict"] == "FAIL"
+
+
+def test_rows_equal_no_query_is_incorrect():
+    """An agent that never queried has no rows to match — INCORRECT for answer."""
+    st = _state(calls=[], final="I think it's about five.")
+    s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
+    assert s.value == INCORRECT
+
+
+def test_rows_equal_single_measure_order_blind_pass():
+    gold = [{"region": "a", "n": 1.0}, {"region": "b", "n": 2.0}]
+    got = [{"region": "b", "n": 2.0}, {"region": "a", "n": 1.0}]  # reordered
+    st = _state(calls=[({"measures": ["n"]}, {"compiled_sql": "s", "rows": got})])
+    s = _run(rows_equal(), st, Target(json.dumps(gold)))
+    assert s.value == CORRECT
+
+
+# --------------------------------------------------------------------------- #
+# sql_contains / sql_excludes — substring on compiled SQL
+# --------------------------------------------------------------------------- #
+
+
+def test_sql_contains_present_and_missing():
+    st = _state(
+        calls=[({"measures": ["n"]}, {"compiled_sql": "SELECT COUNT(*) FROM subjects", "rows": []})]
+    )
+    assert _run(sql_contains("FROM subjects"), st, Target("")).value == CORRECT
+    assert _run(sql_contains("JOIN prescriptions"), st, Target("")).value == INCORRECT
+
+
+def test_sql_excludes_flags_forbidden_join():
+    st = _state(
+        calls=[({"measures": ["n"]}, {"compiled_sql": "SELECT ... FROM a JOIN b", "rows": []})]
+    )
+    # excludes a table that is NOT present -> correct
+    assert _run(sql_excludes("JOIN prescriptions"), st, Target("")).value == CORRECT
+    # excludes a table that IS present -> incorrect (fan-out join leaked)
+    assert _run(sql_excludes("JOIN b"), st, Target("")).value == INCORRECT
+
+
+def test_sql_excludes_no_sql_is_vacuously_correct():
+    st = _state(calls=[], final="declined")
+    assert _run(sql_excludes("anything"), st, Target("")).value == CORRECT
+
+
+# --------------------------------------------------------------------------- #
+# error_nonempty — fan-out / infeasible rejection
+# --------------------------------------------------------------------------- #
+
+
+def test_error_nonempty_correct_when_tool_refused():
+    st = _state(
+        calls=[({"measures": ["bogus"]}, {"error": "compile refused: unknown metric"})]
+    )
+    s = _run(error_nonempty(), st, Target(""))
+    assert s.value == CORRECT
+    assert s.metadata["errored"] is True
+
+
+def test_error_nonempty_incorrect_when_rows_returned():
+    st = _state(calls=[({"measures": ["n"]}, {"compiled_sql": "s", "rows": [{"n": 1}]})])
+    assert _run(error_nonempty(), st, Target("")).value == INCORRECT
+
+
+# --------------------------------------------------------------------------- #
+# slot_match — per-slot F1 + EMA
+# --------------------------------------------------------------------------- #
+
+_GOLD_SEL = {"measures": ["revenue"], "dimensions": ["region"]}
+
+
+def test_slot_match_exact_selection_is_perfect():
+    st = _state(
+        calls=[({"measures": ["revenue"], "dimensions": ["region"]}, {"compiled_sql": "s", "rows": []})],
+        metadata={"gold_selection": _GOLD_SEL},
+    )
+    s = _run(slot_match(), st, Target(""))
+    assert s.value == CORRECT
+    assert s.metadata["slot_f1"] == 1.0
+
+
+def test_slot_match_wrong_dimension_drops_f1():
+    """THE load-bearing case: a wrong dimension drops slot-F1 off perfect.
+
+    The metric is right, but the dimension is ``product`` not ``region`` — so
+    the ``dimensions`` F1 falls to 0 AND ``grain`` (exact-match on the dim set)
+    falls to 0, dragging the mean well below 1.0.
+    """
+    st = _state(
+        calls=[({"measures": ["revenue"], "dimensions": ["product"]}, {"compiled_sql": "s", "rows": []})],
+        metadata={"gold_selection": _GOLD_SEL},
+    )
+    s = _run(slot_match(), st, Target(""))
+    assert s.value == INCORRECT
+    assert s.metadata["slot_f1"] < 1.0
+    per = s.metadata["per_slot"]
+    assert per["metric"] == 1.0        # metric still right
+    assert per["dimensions"] == 0.0    # wrong dimension
+    assert per["grain"] == 0.0         # wrong grain follows the wrong dim set
+
+
+def test_slot_match_ema_rewards_late_correction():
+    """A late correct query pulls the EMA up above the wrong first attempt."""
+    st = _state(
+        calls=[
+            ({"measures": ["revenue"], "dimensions": ["product"]}, {"compiled_sql": "s", "rows": []}),
+            ({"measures": ["revenue"], "dimensions": ["region"]}, {"compiled_sql": "s", "rows": []}),
+        ],
+        metadata={"gold_selection": _GOLD_SEL},
+    )
+    s = _run(slot_match(), st, Target(""))
+    # last query is perfect; EMA(alpha=.5) over [wrong, 1.0] lands between them.
+    assert s.metadata["slot_f1"] > s.metadata["per_query_f1"][0]
+    assert s.metadata["per_query_f1"][1] == 1.0
+
+
+def test_slot_helpers_units():
+    gold = selection_of(measures=["revenue"], dimensions=["region"])
+    right = selection_of(measures=["revenue"], dimensions=["region"])
+    wrong = selection_of(measures=["revenue"], dimensions=["product"])
+    assert overall_f1(right, gold) == 1.0
+    assert overall_f1(wrong, gold) < 1.0
+    assert slot_f1s(wrong, gold)["dimensions"] == 0.0
+    # EMA convention: last value weighs most.
+    assert ema([0.0, 1.0]) == 0.5
+    assert ema([]) == 0.0
+    # empty-vs-empty slot = perfect (both selected nothing).
+    assert slot_f1s(selection_of(), selection_of())["filters"] == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# expect_abstain — feasible / abstain discriminator
+# --------------------------------------------------------------------------- #
+
+
+def test_expect_abstain_infeasible_refusal_is_correct():
+    st = _state(
+        calls=[({"measures": ["ssn"]}, {"error": "compile refused: pii grouping"})],
+        final="I cannot answer that: grouping by SSN is not available.",
+        metadata={"feasible": False},
+    )
+    assert _run(expect_abstain(), st, Target("")).value == CORRECT
+
+
+def test_expect_abstain_infeasible_fabrication_is_incorrect():
+    """Infeasible question but the agent fabricated rows and asserted them."""
+    st = _state(
+        calls=[({"measures": ["units"], "dimensions": ["prescriber"]}, {"compiled_sql": "s", "rows": [{"prescriber": "Dr X", "units": 10}]})],
+        final="Dr X prescribed 10 units.",
+        metadata={"feasible": False},
+    )
+    assert _run(expect_abstain(), st, Target("")).value == INCORRECT
+
+
+def test_expect_abstain_feasible_answer_is_correct():
+    st = _state(
+        calls=[({"measures": ["n"]}, {"compiled_sql": "s", "rows": [{"n": 4}]})],
+        final="There are 4 subjects.",
+        metadata={"feasible": True},
+    )
+    assert _run(expect_abstain(), st, Target("")).value == CORRECT
+
+
+def test_expect_abstain_feasible_spurious_abstain_is_incorrect():
+    """A feasible question the agent wrongly declined -> INCORRECT."""
+    st = _state(
+        calls=[],
+        final="I cannot answer this question.",
+        metadata={"feasible": True},
+    )
+    assert _run(expect_abstain(), st, Target("")).value == INCORRECT
+
+
+def test_expect_abstain_clarify_question_asks_back():
+    """A clarify case (feasible=True) where the agent asks rather than picks.
+
+    Asking a clarifying question counts as an abstain heuristic hit, so on a
+    feasible case it reads as a spurious abstain -> INCORRECT. Clarify-specific
+    'did it enumerate the options' judgement is the judge lane's job; here we
+    only assert the feasible/abstain routing is wired and deterministic.
+    """
+    st = _state(
+        calls=[],
+        final="Which time period do you mean — monthly or yearly?",
+        metadata={"feasible": True},
+    )
+    s = _run(expect_abstain(), st, Target(""))
+    assert s.metadata["abstained"] is True
+    assert s.value == INCORRECT
