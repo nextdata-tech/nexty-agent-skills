@@ -201,8 +201,17 @@ Setup (one-time):
   tables. A metric routed through `GOV_ANALYST` errors `Schema … does not exist`
   if you only ran `seed.py` (base tables). Direct-table metrics work.
 - **Single-epoch results wobble** (the agent is nondeterministic — different
-  questions miss run to run). Use `epochs` + a `pass^k`/`at_least` reducer for a
-  stable estimate; don't quote an n=1 number.
+  questions miss run to run). Use `epochs` for a stable estimate; don't quote an
+  n=1 number. **Verified 5-epoch adversarial run** (40 samples, gpt-5.4-mini
+  agent + grader): abstain accuracy **0.975** (39/40), Wilson CI **[0.87, 0.996]**,
+  pass^1 0.95 / pass^2 0.925, governance precision 1.00 / recall 0.975. Per
+  question all 5/5 except q1 (cross-grain single number) at 4/5 — the single
+  hard case. The judge lane grades a separate rigor axis (mean ~0.51: the agent
+  refuses but doesn't always name the exact governance reason each check wants).
+  Caveat: the design-effect estimator currently treats epochs as independent
+  (icc≈0, N_eff=40); repeated measures of the same questions are clustered by
+  question, so the true N_eff is lower and the CI slightly optimistic — a
+  secondary stats follow-up.
 - **Two scorer sharp-edges** surfaced on abstain cases: (a) `deterministic_ex`
   scores abstain cases `I` instead of N/A (no gold rows) — it should skip when
   the case isn't an `answer` case, else it drags overall accuracy to 0; (b)
