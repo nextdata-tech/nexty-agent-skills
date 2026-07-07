@@ -100,27 +100,38 @@ No `ANTHROPIC_API_KEY`, no `--extra anthropic` — `mockllm` ships with `inspect
 
 ### 4. Full agent run with a live model (needs a provider + key)
 
-Launch the stub server, then run the Inspect task against it:
+Vendor-agnostic — any `provider/model` string Inspect routes (`openai/…`,
+`anthropic/…`, `google/…`, …). Verified live end-to-end with `openai/gpt-5.4-mini`
+(3 tool calls → correct answer, `includes` accuracy 1.000).
+
+Put the key in a **gitignored** `evals/nxd_eval/.env`:
 
 ```bash
-# terminal A — launch the stub MCP server
-uv run --project evals/nxd_eval \
-    python evals/nxd_eval/stub_mcp/stub_semantic_server.py \
-    evals/public/pharma-mesh-query-hard/fixtures \
-    --http --host 127.0.0.1 --port 8790 --dp pharma-mesh --rpc-port mcp-api
-
-# terminal B — run the eval
-export ANTHROPIC_API_KEY=sk-ant-...        # the agent-under-test provider
-export NXD_EVAL_MCP_URL=http://127.0.0.1:8790/pharma-mesh/rpcs/mcp-api/mcp
-uv run --project evals/nxd_eval --extra anthropic \
-    inspect eval evals/nxd_eval/spike_task.py \
-    --model anthropic/claude-3-5-sonnet-latest \
-    --log-dir evals/nxd_eval/logs
+# evals/nxd_eval/.env  (gitignored — never commit)
+OPENAI_API_KEY=sk-...
 ```
 
-`--extra anthropic` pulls the provider (kept an optional extra so the substrate
-tests install without it). The run writes an `.eval` log under
-`evals/nxd_eval/logs/`; inspect it with `inspect view --log-dir evals/nxd_eval/logs`.
+**Transport: use stdio.** Inspect launches the stub as a subprocess over stdio.
+The Streamable-HTTP path (`mcp_server_http` + a separately-launched `--http`
+server) currently crashes on teardown with an `mcp`/`anyio` cancel-scope error
+(`Attempted to exit a cancel scope in a different task…`) once a live multi-turn
+agent holds the connection open — model-independent, reproduces on
+`inspect_ai` 0.3.130 and 0.3.244 alike. stdio sidesteps it. `spike_stdio.py`
+wires the stub over `mcp_server_stdio`:
+
+```bash
+set -a; . evals/nxd_eval/.env; set +a          # load OPENAI_API_KEY
+cd evals/nxd_eval && uv run --extra openai python -c "
+from inspect_ai import eval as inspect_eval
+import spike_stdio as m
+lg = inspect_eval(m.spike_stdio(), model='openai/gpt-5.4-mini', log_dir='logs')[0]
+print(lg.status, lg.samples[0].scores)
+"
+```
+
+Swap `--extra openai` + `openai/gpt-5.4-mini` for any other vendor. The run
+writes an `.eval` log under `logs/`; browse it with
+`inspect view --log-dir evals/nxd_eval/logs`.
 
 The baseline question is *"How many subjects are in the registry?"*; the
 built-in `includes()` scorer checks the agent's answer contains `4` (ground truth

@@ -94,3 +94,47 @@ jobs:
           name: eval-report
           path: eval-report.json
           if-no-files-found: warn
+
+  # nxd_eval substrate smoke — the Inspect-wrapped harness (evals/nxd_eval).
+  # Vendor-agnostic; runs the live baseline over the stdio MCP transport with a
+  # cheap OpenAI model. Manual-only, gated on the OPENAI_API_KEY repo secret.
+  nxd-eval-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Sync nxd_eval (with the openai provider extra)
+        run: uv sync --project evals/nxd_eval --extra openai
+
+      - name: Live baseline smoke (stdio transport, cheap model)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        working-directory: evals/nxd_eval
+        run: |
+          uv run --extra openai python -c "
+          from inspect_ai import eval as inspect_eval
+          import spike_stdio as m
+          lg = inspect_eval(m.spike_stdio(), model='openai/gpt-5.4-mini', log_dir='logs')[0]
+          s = lg.samples[0]
+          print('status', lg.status, 'answer', repr(s.output.completion.strip()), 'score', s.scores['includes'].value)
+          assert lg.status == 'success', lg.status
+          assert s.scores['includes'].value == 'C', s.scores
+          print('nxd_eval live smoke PASS')
+          "
+
+      - name: Upload .eval log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nxd-eval-smoke-log
+          path: evals/nxd_eval/logs/*.eval
+          if-no-files-found: warn
