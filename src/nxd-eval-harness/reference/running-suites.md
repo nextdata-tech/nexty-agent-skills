@@ -27,14 +27,21 @@ Never bare `python` / `pip`. First time, sync the project:
 uv sync --project evals/nxd_eval
 ```
 
-A live-model run additionally needs the provider extra:
+A live-model run additionally needs the SDK for whichever vendor you run. The
+harness is vendor-agnostic — `agent_model`/`grader_model` are `provider/model`
+strings Inspect routes by prefix — so install the matching extra and set that
+vendor's key:
 
 ```bash
-uv run --project evals/nxd_eval --extra anthropic inspect eval …
+# pick one — openai, anthropic, google, …
+uv run --project evals/nxd_eval --extra openai    inspect eval …   # OPENAI_API_KEY
+uv run --project evals/nxd_eval --extra anthropic inspect eval …   # ANTHROPIC_API_KEY
+uv run --project evals/nxd_eval --extra google    inspect eval …   # GOOGLE_API_KEY
 ```
 
-The `anthropic` provider is an **optional extra** so the stats/scoring unit tests
-install without any model provider.
+Provider SDKs are **optional extras** so the stats/scoring unit tests install with
+no provider at all. OpenAI-compatible gateways work via `openai/…` + `OPENAI_BASE_URL`.
+Agent and grader may be different vendors.
 
 ## The three variants
 
@@ -100,6 +107,7 @@ the run entry point / environment rather than hardcoding it in a committed suite
 ## Run a suite (live model)
 
 ```bash
+# --extra + models shown for one vendor; swap both for openai/…, google/…, etc.
 NXD_EVAL_MCP_URL=<your-mcp-url> uv run --project evals/nxd_eval --extra anthropic \
 python -c "
 from my_suite import SUITE
@@ -109,8 +117,8 @@ log = run_suite(
     SUITE,
     variant='current_pack',
     mcp_url=os.environ['NXD_EVAL_MCP_URL'],
-    agent_model='anthropic/claude-3-5-sonnet-latest',
-    grader_model='anthropic/claude-3-7-sonnet-latest',
+    agent_model='anthropic/claude-3-5-sonnet-latest',   # or 'openai/gpt-4o', 'google/gemini-2.5-pro', …
+    grader_model='anthropic/claude-3-7-sonnet-latest',  # grader may be a different vendor
     epochs=5,
     epochs_reducer='at_least',
     log_dir='./logs',

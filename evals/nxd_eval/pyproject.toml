@@ -12,9 +12,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Inspect's Anthropic model provider (agent-under-test + grader role). Kept an
-# extra so the stats/scoring unit tests install without a provider.
-anthropic = ["anthropic>=0.40"]
+# Model-provider SDKs. The framework is vendor-agnostic: it passes the
+# `provider/model` string straight to Inspect (`agent_model=`/`grader_model=`),
+# which routes by prefix. Install the extra for whichever vendor you run
+# (`uv sync --extra openai`, `--extra anthropic`, …). Kept as extras so the
+# stats/scoring unit tests install with no provider SDK at all.
+anthropic = ["anthropic>=0.40"]   # anthropic/<model>
+openai = ["openai>=1.40"]         # openai/<model>  (also OpenAI-compatible endpoints via OPENAI_BASE_URL)
+google = ["google-genai>=0.3"]    # google/<model>
 
 [dependency-groups]
 # Test runner for the framework's own unit tests. A uv default group (installed

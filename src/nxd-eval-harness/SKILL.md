@@ -219,6 +219,14 @@ same cases. Repeats per case come from `epochs`; correlated repeats are
 discounted in the stats (Step 5). See `reference/running-suites.md` for the
 variant contract, auth, and the offline (mockllm, no key) lane.
 
+**Vendor-agnostic.** `agent_model` / `grader_model` are `provider/model` strings
+passed straight to Inspect, which routes by prefix — the harness names no vendor.
+Swap the example above for `openai/gpt-4o` + `OPENAI_API_KEY`, `google/gemini-2.5-pro`,
+`grok/…`, `bedrock/…`, an OpenAI-compatible endpoint via `OPENAI_BASE_URL`, etc.
+Install the matching provider SDK (`--extra openai` / `--extra anthropic` /
+`--extra google`) and set that vendor's key. Agent and grader can be different
+vendors. Omit the models entirely to let `INSPECT_EVAL_MODEL` / `--model` decide.
+
 ---
 
 ## Step 4 — certify and read the KPI card
