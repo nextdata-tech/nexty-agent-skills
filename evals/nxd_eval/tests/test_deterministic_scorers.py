@@ -291,3 +291,67 @@ def test_expect_abstain_clarify_question_asks_back():
     s = _run(expect_abstain(), st, Target(""))
     assert s.metadata["abstained"] is True
     assert s.value == INCORRECT
+
+
+# --------------------------------------------------------------------------- #
+# rows_equal — skips non-answer buckets (deterministic-EX is N/A there)
+# --------------------------------------------------------------------------- #
+
+def test_rows_equal_skips_abstain_bucket():
+    """An abstain/clarify case has no gold rows -> deterministic-EX returns
+    NOANSWER (N/A), NOT INCORRECT, so a mixed suite's EX metric is not dragged
+    down by inapplicable cases."""
+    from inspect_ai.scorer import NOANSWER
+
+    st = _state(calls=[], final="cannot answer", metadata={"bucket": "abstain"})
+    s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
+    assert s.value == NOANSWER
+
+
+def test_rows_equal_answer_bucket_still_scored():
+    """An explicit answer bucket is still scored normally (not skipped)."""
+    st = _state(
+        calls=[({"measures": ["revenue", "cost"]}, {"rows": _GOLD})],
+        final="done",
+        metadata={"bucket": "answer"},
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
+    assert s.value == CORRECT
+
+
+# --------------------------------------------------------------------------- #
+# judge — model-graded checks lane
+# --------------------------------------------------------------------------- #
+
+def test_judge_no_checks_is_noanswer():
+    """No checks for the sample -> judge abstains (NOANSWER), not a penalty."""
+    from inspect_ai.scorer import NOANSWER
+
+    from nxd_eval.scorers import judge
+
+    st = _state(calls=[], final="whatever", metadata={"judge_checks": []})
+    assert _run(judge(), st, Target("")).value == NOANSWER
+
+
+def test_judge_parse_grade_and_prompt():
+    """The grade parser and prompt builder are deterministic and robust."""
+    from nxd_eval.scorers import _judge_prompt, _parse_grade
+    from nxd_eval.transcript import extract
+    from inspect_ai.scorer import CORRECT as C, INCORRECT as I, PARTIAL as P, NOANSWER as N
+
+    assert _parse_grade("reasoning...\nGRADE: C") == C
+    assert _parse_grade("GRADE: I") == I
+    assert _parse_grade("GRADE: P") == P
+    assert _parse_grade("no grade here") == N
+    # last grade wins if the model restates
+    assert _parse_grade("GRADE: I ... actually GRADE: C") == C
+
+    st = _state(
+        calls=[({"measures": ["x"]}, {"error": "no such metric"})],
+        final="There is no mortality metric.",
+        metadata={},
+    )
+    prompt = _judge_prompt("mortality rate?", extract(st), ["must refuse; no mortality metric"])
+    assert "CRITERIA:" in prompt
+    assert "mortality" in prompt
+    assert "run_semantic_query" in prompt  # the tool trail is summarised

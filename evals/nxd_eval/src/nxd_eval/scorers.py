@@ -38,6 +38,7 @@ from inspect_ai.scorer import (
     CORRECT,
     INCORRECT,
     NOANSWER,
+    PARTIAL,
     Score,
     Scorer,
     Target,
@@ -119,6 +120,15 @@ def _gold_selection(state: TaskState) -> Selection:
 
 
 def _rows_equal_score(state: TaskState, target: Target) -> Score:
+    # Deterministic-EX only applies to `answer` cases (rows to compare against
+    # gold). For `clarify` / `abstain` cases there are no gold rows — the abstain
+    # discriminator owns those. Skip (NOANSWER) so a mixed suite's raw scorer
+    # summary is not dragged down by inapplicable cases; report.py already routes
+    # per bucket, but this keeps the raw log honest too.
+    bucket = (state.metadata or {}).get("bucket", "answer")
+    if bucket != "answer":
+        return Score(value=NOANSWER, metadata={"reason": f"deterministic-EX N/A for bucket={bucket}"})
+
     tx = extract(state)
     gold_rows = _gold_rows_from_target(target)
     call = tx.last_answered_call()
@@ -313,20 +323,29 @@ def slot_match(*, threshold: float = 0.999) -> Scorer:
 _ABSTAIN_MARKERS = (
     "cannot",
     "can't",
+    "can not",
     "unable",
     "no such",
     "does not exist",
     "doesn't exist",
     "not available",
     "not possible",
+    "not supported",
     "decline",
     "there is no",
+    "do not have",
+    "don't have",
     "not a valid",
+    "invalid",
     "incompatible",
+    "different grain",
     "ambiguous",
     "clarif",
     "which ",
     "do you mean",
+    "rather than fabricate",
+    "cannot combine",
+    "can't combine",
 )
 
 
@@ -395,17 +414,78 @@ abstain_infeasible = expect_abstain
 # --------------------------------------------------------------------------- #
 
 
+_JUDGE_SYSTEM = (
+    "You are a rigorous grader for a governed data-product query agent. You are "
+    "given the analyst's QUESTION, a summary of what the agent DID (its tool "
+    "calls and whether they returned rows or errored), the agent's final ANSWER, "
+    "and a list of CRITERIA the answer must satisfy. Grade whether the answer "
+    "satisfies ALL criteria. Reply with your reasoning, then on the last line "
+    "exactly one of: GRADE: C (all criteria met), GRADE: P (some met), or "
+    "GRADE: I (criteria not met). Judge only against the criteria — do not "
+    "invent requirements."
+)
+
+
+def _judge_prompt(question: str, tx: "Transcript", checks: list[str]) -> str:
+    trail = []
+    for c in tx.calls:
+        status = "errored" if c.errored else (f"{len(c.rows)} rows" if c.rows is not None else "no rows")
+        trail.append(f"- run_semantic_query → {status}")
+    did = "\n".join(trail) if trail else "- (no run_semantic_query calls)"
+    criteria = "\n".join(f"{i}. {c}" for i, c in enumerate(checks, 1))
+    return (
+        f"QUESTION:\n{question}\n\n"
+        f"WHAT THE AGENT DID:\n{did}\n\n"
+        f"AGENT'S FINAL ANSWER:\n{tx.final_answer}\n\n"
+        f"CRITERIA:\n{criteria}\n\n"
+        "Grade now. End with GRADE: C, GRADE: P, or GRADE: I."
+    )
+
+
+def _parse_grade(text: str) -> str:
+    import re
+
+    m = re.findall(r"GRADE:\s*([CPI])", text.upper())
+    if not m:
+        return NOANSWER
+    g = m[-1]
+    return {"C": CORRECT, "P": PARTIAL, "I": INCORRECT}[g]
+
+
 @scorer(name=JUDGE, metrics=[mean(), stderr()])
 def judge() -> Scorer:
-    """Model-graded checks slot (the ``checks()`` / back-compat judge bucket).
+    """Model-graded checks slot: grades the agent's answer against the sample's
+    bucket check list (``judge_checks`` in Sample metadata, from the suite's
+    ``checks()`` / ``checks.json``) using the ``grader`` model role.
 
-    Left as a NOANSWER placeholder in the deterministic lane — the judged
-    scoring layer replaces this body with ``model_graded_qa`` under a grader
-    role, WITHOUT changing this name or metric.
+    Returns NOANSWER when the sample carries no checks (nothing to grade), so a
+    suite without a check for a bucket does not penalise it. The mean metric then
+    reflects only graded samples.
     """
+    from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 
     async def score(state: TaskState, target: Target) -> Score:
-        return Score(value=NOANSWER, metadata={"placeholder": True})
+        meta = state.metadata or {}
+        checks = list(meta.get("judge_checks", []) or [])
+        if not checks:
+            return Score(value=NOANSWER, metadata={"reason": "no checks for bucket"})
+
+        tx = extract(state)
+        model = get_model(role="grader", default=None) or get_model()
+        prompt = _judge_prompt(str(state.input), tx, checks)
+        result = await model.generate(
+            [
+                ChatMessageSystem(content=_JUDGE_SYSTEM),
+                ChatMessageUser(content=prompt),
+            ]
+        )
+        grade = _parse_grade(result.completion)
+        return Score(
+            value=grade,
+            answer=tx.final_answer,
+            explanation=result.completion[:2000],
+            metadata={"n_checks": len(checks)},
+        )
 
     return score
 

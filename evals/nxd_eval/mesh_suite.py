@@ -80,12 +80,21 @@ _ADVERSARIAL = [
      "titer (assays) + visit_duration (visits) are different grains"),
 ]
 
+from nxd_eval import load_checks_json  # noqa: E402
+
+# The scenario's checks.json (10 free-text abstain/no-fabrication criteria).
+# load_checks_json lowers an untyped {name, checks:[{id,check}]} to the
+# bucket-keyed shape; an untyped file routes all criteria to the abstain bucket,
+# which is exactly the graded lane for these infeasible questions.
+_CHECKS = load_checks_json(FIX.parent / "checks.json")
+
 ADVERSARIAL_SUITE = Suite(
     name="pharma-mesh-query-hard",
     cases=[
         Case(id=cid, question=q, expect="abstain", metadata={"why": why})
         for cid, q, why in _ADVERSARIAL
     ],
+    checks=_CHECKS,
 )
 
 
@@ -116,11 +125,18 @@ def mesh_baseline() -> Task:
 
 
 @task
-def mesh_adversarial() -> Task:
-    """The 8 adversarial questions, scored on the deterministic abstain axis."""
+def mesh_adversarial(grader_model: str = "openai/gpt-5.4-mini") -> Task:
+    """The 8 adversarial questions.
+
+    Scored on two lanes: the deterministic ``expect_abstain`` discriminator AND
+    the model ``judge`` graded against the scenario's checks.json criteria (via
+    the ``grader`` model role). Pass a different ``grader_model`` to grade with
+    another vendor/model.
+    """
     agent = react(prompt=_AGENT_PROMPT, tools=[_server()])
     return Task(
         dataset=[case_to_sample(c, ADVERSARIAL_SUITE) for c in ADVERSARIAL_SUITE.cases],
         solver=as_solver(agent),
         scorer=scorers_for(ADVERSARIAL_SUITE),
+        model_roles={"grader": grader_model},
     )

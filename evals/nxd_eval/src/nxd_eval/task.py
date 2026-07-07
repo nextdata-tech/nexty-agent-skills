@@ -70,12 +70,19 @@ def _sample_target(case: "Case", suite: "Suite") -> str:
     return ""
 
 
-def _sample_metadata(case: "Case") -> dict:
+def _sample_metadata(case: "Case", suite: "Suite") -> dict:
     """Sample metadata: routing keys + judge-only context, never agent-visible."""
     meta = {
         "bucket": case.expect,
         "cluster": case.gold_id or case.id,
         "feasible": case.expect != ABSTAIN,
+        # The judge grades a sample against its bucket's check list (from the
+        # suite's checks()/checks.json). An untyped checks.json lowers all
+        # criteria to a catch-all "judge" bucket (graded against every sample);
+        # typed checks() route per bucket. Union both so either shape works.
+        # Carried here for the judge scorer; NEVER part of the agent-visible input.
+        "judge_checks": list(suite.checks.get(case.expect, []))
+        + list(suite.checks.get("judge", [])),
     }
     # Judge-only context (why / gold_note / raw check text) rides along for the
     # scorer; it is NOT part of the Sample input, so the agent never sees it.
@@ -89,7 +96,7 @@ def case_to_sample(case: "Case", suite: "Suite") -> Sample:
         id=case.id,
         input=case.question,
         target=_sample_target(case, suite),
-        metadata=_sample_metadata(case),
+        metadata=_sample_metadata(case, suite),
     )
 
 
