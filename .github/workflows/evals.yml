@@ -4,9 +4,9 @@ name: evals
 # each scenario with a chosen skill-set and grades it with an LLM judge.
 #
 # DISABLED BY DEFAULT. This workflow is manual-only (workflow_dispatch) and is
-# not wired to push/PR. It needs a working Claude credential in CI; until that
-# is provisioned the suite is run locally (see evals/README.md). Tracking issue:
-# enabling automated eval execution in CI.
+# not wired to push/PR: it spends model tokens and needs a Claude credential in
+# CI, so it runs on demand rather than on every push. Until a CI credential is
+# provisioned the suite is run locally (see evals/README.md).
 on:
   workflow_dispatch:
     inputs:
