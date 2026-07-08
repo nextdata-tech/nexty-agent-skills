@@ -24,3 +24,9 @@ If the PoC scoring contract changes and `score.py` is updated for it, re-copy th
 two files here from the PoC harness. They are stdlib-only (`hashlib`, `re`,
 `numbers`, `typing`) — no Snowflake, no network — so the offline scorer never
 pulls a cloud dependency.
+
+**Drift guard.** `tests/test_vendored_poc_drift.py` pins each file's SHA-256, so a
+verbatim copy can't silently diverge: an accidental edit fails the test, and a
+deliberate re-vendor is a reviewed one-line hash bump. On re-copy: update the pins
+there in the same commit and re-run `test_scoring_adapter.py` to confirm the
+semantics didn't move under you.
