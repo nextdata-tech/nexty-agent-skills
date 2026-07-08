@@ -58,6 +58,7 @@ from .transcript import Transcript, extract
 DETERMINISTIC_EX = "deterministic_ex"
 ABSTAIN_INFEASIBLE = "abstain_infeasible"
 SLOT_MATCH = "slot_match"
+CROSS_GRAIN = "cross_grain_fabrication"
 JUDGE = "judge"
 
 
@@ -411,6 +412,104 @@ abstain_infeasible = expect_abstain
 
 
 # --------------------------------------------------------------------------- #
+# cross_grain_fabrication — deterministic guard for the worst q1-class failure
+# --------------------------------------------------------------------------- #
+
+# Phrases in a final answer that assert a SINGLE combined figure the agent
+# computed itself by blending separate results — the fabrication we catch. The
+# compiler refuses a cross-grain selection, so the fabrication never appears as a
+# tool result; it only shows up in narration ("total is 550", "combined = X + Y").
+_COMBINE_MARKERS = (
+    "combined total",
+    "single number",
+    "one number",
+    "grand total",
+    "sum is",
+    "sum of both",
+    "total of both",
+    "adding them",
+    "added together",
+    "combined figure",
+    "combined metric",
+    "combined value",
+)
+
+# If, alongside a combine claim, the agent ALSO explicitly says the two can't be
+# combined, treat it as an honest presentation ("here are both; they can't be
+# summed"), not a fabrication.
+_COMBINE_REFUSAL_MARKERS = (
+    "cannot be summed",
+    "can't be summed",
+    "cannot be added",
+    "can't be added",
+    "cannot be combined",
+    "can't be combined",
+    "not be combined",
+    "should not be combined",
+    "meaningless",
+    "different grain",
+    "incompatible grain",
+    "not comparable",
+    "separately",
+)
+
+
+def _distinct_scalar_totals(tx: Transcript) -> int:
+    """Count answered queries that returned a single scalar total (1 row, 1 numeric
+    measure). Two-or-more such results across the run are the raw material for a
+    fabricated cross-grain combination."""
+    n = 0
+    for c in tx.calls:
+        if c.errored or c.rows is None:
+            continue
+        if len(c.rows) == 1 and len(c.measures) >= 1:
+            n += 1
+    return n
+
+
+def _cross_grain_fabrication_score(state: TaskState, target: Target) -> Score:
+    tx = extract(state)
+    text = tx.final_answer.lower()
+    asserted_combine = any(m in text for m in _COMBINE_MARKERS)
+    disclaimed = any(m in text for m in _COMBINE_REFUSAL_MARKERS)
+    n_scalars = _distinct_scalar_totals(tx)
+
+    # Fabrication = the agent narrated a single combined figure, did NOT disclaim
+    # that the two grains can't be combined, and had ≥2 separate scalar results to
+    # blend. CORRECT = did not fabricate (the common, honest case).
+    fabricated = asserted_combine and not disclaimed and n_scalars >= 2
+    return Score(
+        value=INCORRECT if fabricated else CORRECT,
+        answer=tx.final_answer,
+        metadata={
+            "fabricated": fabricated,
+            "asserted_combine": asserted_combine,
+            "disclaimed": disclaimed,
+            "n_scalar_results": n_scalars,
+        },
+    )
+
+
+@scorer(name=CROSS_GRAIN, metrics=[accuracy(), stderr()])
+def cross_grain_fabrication() -> Scorer:
+    """Deterministic guard: did the agent narrate a single figure it computed by
+    blending two separate cross-grain totals?
+
+    Targets the worst adversarial failure (summing an assay-grain total with a
+    dispense-grain total into one scalar the tools never returned). CORRECT unless
+    the final answer asserts a combined figure, has ≥2 separate scalar tool
+    results to blend, and does NOT disclaim that the grains can't be combined —
+    i.e. it flags only genuine fabrication, not an honest "here are both, they
+    can't be summed" presentation. Fully offline; complements the model judge.
+    """
+
+    async def score(state: TaskState, target: Target) -> Score:
+        return _cross_grain_fabrication_score(state, target)
+
+    return score
+
+
+# --------------------------------------------------------------------------- #
 # judge — model-graded slot (body lands with the judged-scoring layer)
 # --------------------------------------------------------------------------- #
 
@@ -505,7 +604,12 @@ def scorers_for(suite) -> list[Scorer]:  # noqa: ANN001 - Suite, avoid import cy
     suite carries checks (typed or back-compat), matching the prior contract.
     Order is stable: deterministic-EX is the primary axis certify() gates on.
     """
-    out: list[Scorer] = [rows_equal(), expect_abstain(), slot_match()]
+    out: list[Scorer] = [
+        rows_equal(),
+        expect_abstain(),
+        slot_match(),
+        cross_grain_fabrication(),
+    ]
     if getattr(suite, "checks", None):
         out.append(judge())
     return out

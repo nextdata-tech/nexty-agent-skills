@@ -21,6 +21,7 @@ from nxd_eval import gold
 from nxd_eval import load_checks_json
 from nxd_eval import load_suite
 from nxd_eval.scorers import ABSTAIN_INFEASIBLE
+from nxd_eval.scorers import CROSS_GRAIN
 from nxd_eval.scorers import DETERMINISTIC_EX
 from nxd_eval.scorers import JUDGE
 from nxd_eval.scorers import SLOT_MATCH
@@ -141,6 +142,7 @@ def test_suite_round_trips_to_task_with_full_wiring():
         DETERMINISTIC_EX,
         ABSTAIN_INFEASIBLE,
         SLOT_MATCH,
+        CROSS_GRAIN,
         JUDGE,
     }
 
@@ -154,7 +156,7 @@ def test_no_checks_suite_omits_judge_slot():
     )
     task = suite.to_inspect_task()
     names = _scorer_names(task)
-    assert names == {DETERMINISTIC_EX, ABSTAIN_INFEASIBLE, SLOT_MATCH}
+    assert names == {DETERMINISTIC_EX, ABSTAIN_INFEASIBLE, SLOT_MATCH, CROSS_GRAIN}
     assert JUDGE not in names
 
 
