@@ -154,12 +154,39 @@ def test_ece_in_unit_range():
     assert 0.0 <= e <= 1.0
 
 
+def test_ece_golden_value():
+    # Pin the exact ECE so the hand-rolled bin-weighting / digitize logic can't
+    # silently drift. Five samples, n_bins=5 (edges every 0.2): the three
+    # positives land in bins [0.8,1.0), [0.8,1.0)→wait, 0.9,0.8,0.7 fall in the
+    # top two populated bins, the two negatives (0.2, 0.1) in the low bins. Each
+    # populated bin's |accuracy - mean_confidence| weighted by its sample share
+    # sums to 1/6. Recomputed independently from calibration_curve + bin counts.
+    y_true = [1, 1, 1, 0, 0]
+    y_prob = [0.9, 0.8, 0.7, 0.2, 0.1]
+    assert math.isclose(S.ece(y_true, y_prob, n_bins=5), 1.0 / 6.0, rel_tol=1e-6)
+
+
 def test_aurc_ranks_confidence_quality():
     # A ranker that is confident exactly when right has lower AURC than one that
     # is confident exactly when wrong.
     good = S.aurc([1, 1, 0, 0], [0.9, 0.8, 0.2, 0.1])
     bad = S.aurc([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1])
     assert good < bad
+
+
+def test_aurc_golden_value():
+    # Pin the exact AURC (trapezoid over the sorted risk-coverage curve) so a
+    # sign flip in `errors = 1 - y_true`, a cumsum-vs-mean slip, or a trapezoid
+    # error can't survive while merely preserving the good<bad ordering.
+    # Sorted by confidence desc: [1,1,0,0] -> running risk [0, 0, 1/3, 1/2] at
+    # coverage [.25,.5,.75,1.0]; trapezoid = 0.145833... Recomputed independently.
+    assert math.isclose(
+        S.aurc([1, 1, 0, 0], [0.9, 0.8, 0.2, 0.1]), 0.1458333333, rel_tol=1e-6
+    )
+    # The mirror-image bad ranker integrates to a much larger area.
+    assert math.isclose(
+        S.aurc([0, 0, 1, 1], [0.9, 0.8, 0.2, 0.1]), 0.6041666667, rel_tol=1e-6
+    )
 
 
 def test_aurc_empty_is_zero():
