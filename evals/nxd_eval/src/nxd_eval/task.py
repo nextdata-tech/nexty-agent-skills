@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from inspect_ai import Epochs, Task
 from inspect_ai.dataset import Sample
@@ -52,6 +52,8 @@ def _resolve_reducer(reducer: str, k: int) -> str:
     return reducer
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Callable
+
     from .case import Case, Suite
 
 
@@ -104,6 +106,8 @@ def build_task(
     suite: "Suite",
     *,
     target: str | None = None,
+    server_factory: "Callable[[], Any] | None" = None,
+    agent_prompt: str | None = None,
     agent_model: str | None = None,
     grader_model: str | None = None,
     epochs: int = 1,
@@ -111,20 +115,30 @@ def build_task(
 ) -> Task:
     """Assemble the Inspect ``Task`` for a suite (dataset + solver + scorers).
 
-    ``target`` (MCP URL) resolves from the argument then ``suite.target``; a
-    suite with neither is a build error — the agent has nothing to drive.
+    The agent's server resolves from ``server_factory`` (a zero-arg thunk
+    returning a pre-built Inspect MCP server, e.g. ``mcp_server_stdio(...)``) then
+    ``target`` (an MCP URL), falling back to the suite's own ``server_factory`` /
+    ``target``. A suite with none of these is a build error — the agent has
+    nothing to drive. ``agent_prompt`` overrides the default agent system prompt.
     ``grader_model``, when given, wires a ``grader`` model role for the judge
     scorer. Epochs > 1 attaches an ``Epochs(k, reducer)`` policy.
     """
+    factory = server_factory or suite.server_factory
     mcp_url = target or suite.target
-    if not mcp_url:
+    if factory is None and not mcp_url:
         raise ValueError(
-            f"suite {suite.name!r}: no MCP target URL (pass target= or set "
-            f"Suite.target) — the react agent has no server to drive"
+            f"suite {suite.name!r}: no MCP server (pass server_factory= / target= "
+            f"or set Suite.server_factory / Suite.target) — the react agent has "
+            f"no server to drive"
         )
 
     dataset = [case_to_sample(c, suite) for c in suite.cases]
-    solver = mcp_solver(mcp_url, model=agent_model)
+    # A stdio server_factory wins over a URL: it is the teardown-safe transport
+    # (see solver.py / the README "Transport" note). Build a fresh server per run.
+    server = factory() if factory is not None else None
+    solver = mcp_solver(
+        mcp_url, server=server, prompt=agent_prompt, model=agent_model
+    )
     scorer = scorers_for(suite)
 
     model_roles = {"grader": grader_model} if grader_model else None
@@ -149,6 +163,8 @@ def run_suite(
     *,
     variant: str = "current_pack",
     mcp_url: str | None = None,
+    server_factory: "Callable[[], Any] | None" = None,
+    agent_prompt: str | None = None,
     agent_model: str | None = None,
     grader_model: str | None = None,
     epochs: int = 1,
@@ -162,6 +178,11 @@ def run_suite(
     ``agent_model`` (with an optional ``grader`` model role for the judge slot
     and an ``Epochs(k, reducer)`` policy), and returns the written log's path for
     :class:`nxd_eval.report.Report` / :func:`nxd_eval.certify.certify` to read.
+
+    The agent's server is chosen by ``server_factory`` (a zero-arg thunk building
+    a pre-built stdio MCP server — the teardown-safe default) then ``mcp_url``,
+    falling back to the suite's own wiring. ``agent_prompt`` overrides the agent
+    system prompt.
 
     ``variant`` (``no_skills`` / ``current_pack`` / ``candidate_pack``) selects
     the agent's skill context and is recorded on the run metadata so the report
@@ -177,6 +198,8 @@ def run_suite(
     task = build_task(
         suite,
         target=mcp_url,
+        server_factory=server_factory,
+        agent_prompt=agent_prompt,
         agent_model=agent_model,
         grader_model=grader_model,
         epochs=epochs,

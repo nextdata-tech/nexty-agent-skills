@@ -78,3 +78,4 @@ build/
 
 # local infra-profile secrets — never commit
 .nxd/
+.claude-pr/

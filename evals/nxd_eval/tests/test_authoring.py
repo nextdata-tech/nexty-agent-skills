@@ -176,6 +176,81 @@ def test_mcp_solver_builds_over_url():
 
 
 # --------------------------------------------------------------------------- #
+# stdio transport seam (server_factory) — the teardown-safe path
+# --------------------------------------------------------------------------- #
+
+
+def _stub_stdio_server():
+    """A lazy stdio MCP server (does not launch until used) — safe to build in a
+    unit test, same as a URL server is lazy-connect."""
+    from inspect_ai.tool import mcp_server_stdio
+
+    return mcp_server_stdio(command="/bin/false", args=[])
+
+
+def test_mcp_solver_accepts_prebuilt_server():
+    # A pre-built server bypasses the URL path entirely; no url needed.
+    assert mcp_solver(server=_stub_stdio_server()) is not None
+
+
+def test_mcp_solver_requires_url_or_server():
+    with pytest.raises(ValueError):
+        mcp_solver()
+
+
+def test_mcp_solver_prompt_override():
+    # A custom prompt is accepted (mesh scenarios pass their own analyst prompt).
+    assert mcp_solver(MCP_URL, prompt="custom analyst prompt") is not None
+
+
+def test_build_task_accepts_server_factory_without_url():
+    # A stdio server_factory satisfies the "has a server" requirement — no URL.
+    suite = Suite(name="s", cases=[Case(id="a", question="q", expect="clarify")])
+    task = build_task(suite, server_factory=_stub_stdio_server)
+    assert task.solver is not None
+    assert len(task.dataset) == 1
+
+
+def test_suite_server_factory_field_satisfies_build():
+    # server_factory carried on the Suite itself is enough to build (no target).
+    suite = Suite(
+        name="s",
+        cases=[Case(id="a", question="q", expect="abstain")],
+        server_factory=_stub_stdio_server,
+    )
+    # no target, no arg factory — must still build off the suite field.
+    task = build_task(suite)
+    assert task.solver is not None
+
+
+def test_build_task_requires_url_or_server_factory():
+    # Neither a URL nor a factory anywhere -> build error.
+    suite = Suite(name="s", cases=[Case(id="a", question="q", expect="clarify")])
+    with pytest.raises(ValueError):
+        build_task(suite)
+
+
+def test_server_factory_excluded_from_suite_equality():
+    # The factory is runtime wiring, not identity: two suites differing only in
+    # server_factory must compare equal (compare=False on the field).
+    base = dict(name="s", cases=[Case(id="a", question="q", expect="clarify")])
+    assert Suite(**base, server_factory=_stub_stdio_server) == Suite(**base)
+
+
+def test_load_suite_attaches_server_factory_and_gold():
+    # The loader threads runtime wiring the file doesn't carry.
+    suite = load_suite(
+        QUERY_LOOP_SUITE,
+        server_factory=_stub_stdio_server,
+        gold=gold({"g": gold.rows("g", [{"n": 1}])}),
+    )
+    assert suite.server_factory is _stub_stdio_server
+    assert "g" in suite.gold
+    # builds off the loaded factory, no target needed
+    assert build_task(suite).solver is not None
+
+
+# --------------------------------------------------------------------------- #
 # Loaders
 # --------------------------------------------------------------------------- #
 

@@ -17,6 +17,7 @@ context and MUST stay out of the agent's view. We honor that by carrying them in
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -66,11 +67,22 @@ class Case:
 class Suite:
     """A named list of cases, plus the MCP endpoint the agent drives.
 
-    ``target`` is the Streamable-HTTP MCP URL (the ``/<dp>/rpcs/<port>/mcp``
-    shape the semantic server serves). ``gold`` is an optional
-    ``{gold_id: record}`` map (from ``gold()``) used to fill Sample targets for
-    ``answer`` cases. ``checks`` is the judge-only check set (from ``checks()``),
-    keyed by discriminator.
+    The agent reaches the semantic server one of two ways, resolved in order:
+
+    - ``target`` — a Streamable-HTTP MCP URL (the ``/<dp>/rpcs/<port>/mcp`` shape
+      the semantic server serves). Convenient, but the HTTP transport currently
+      crashes on teardown (see the README "Transport" note); prefer stdio.
+    - ``server_factory`` — a zero-arg callable returning a pre-built Inspect MCP
+      server (e.g. ``lambda: mcp_server_stdio(command=..., args=..., env=...)``).
+      This is the documented default for live runs: it drives the real server as
+      a subprocess over stdio, sidestepping the HTTP teardown bug, and lets the
+      caller forward credentials into the subprocess ``env``. It is a *factory*,
+      not a live server, so each run (and each epoch) gets a fresh connection.
+
+    A suite must carry exactly one of the two — a build error is raised if it has
+    neither. ``gold`` is an optional ``{gold_id: record}`` map (from ``gold()``)
+    used to fill Sample targets for ``answer`` cases. ``checks`` is the judge-only
+    check set (from ``checks()``), keyed by discriminator.
     """
 
     name: str
@@ -78,11 +90,19 @@ class Suite:
     target: str | None = None
     gold: dict[str, dict] = field(default_factory=dict)
     checks: dict[str, list[str]] = field(default_factory=dict)
+    # Zero-arg thunk returning an Inspect MCP server (stdio transport). Kept out
+    # of equality/repr: it's runtime wiring, not part of the suite's identity, and
+    # a closure is not meaningfully comparable.
+    server_factory: "Callable[[], Any] | None" = field(
+        default=None, compare=False, repr=False
+    )
 
     def to_inspect_task(
         self,
         *,
         target: str | None = None,
+        server_factory: "Callable[[], Any] | None" = None,
+        agent_prompt: str | None = None,
         agent_model: str | None = None,
         grader_model: str | None = None,
         epochs: int = 1,
@@ -90,8 +110,9 @@ class Suite:
     ) -> "Task":
         """Lower this suite into a runnable Inspect ``Task``.
 
-        Wiring only — the scorer bodies are placeholder slots at this layer.
-        The MCP URL resolves from the ``target`` argument, then ``self.target``.
+        Wiring only — the scorer bodies are placeholder slots at this layer. The
+        server resolves from ``target``/``server_factory`` arguments, then the
+        suite's own ``target``/``server_factory`` (see the class docstring).
         """
         # Imported lazily so ``load_suite`` / authoring works without pulling in
         # the whole Inspect solver stack.
@@ -100,6 +121,8 @@ class Suite:
         return build_task(
             self,
             target=target,
+            server_factory=server_factory,
+            agent_prompt=agent_prompt,
             agent_model=agent_model,
             grader_model=grader_model,
             epochs=epochs,
@@ -126,16 +149,37 @@ def _case_from_raw(raw: dict[str, Any]) -> Case:
     )
 
 
-def load_suite(path: str | Path, *, target: str | None = None) -> Suite:
+def load_suite(
+    path: str | Path,
+    *,
+    target: str | None = None,
+    server_factory: "Callable[[], Any] | None" = None,
+    gold: dict[str, dict] | None = None,
+    checks: dict[str, list[str]] | None = None,
+) -> Suite:
     """Load a ``test_suite.json``-shaped file into a ``Suite``.
 
     The file shape is ``{comment?, name?, cases: [{id, question, expect, ...}]}``
     (as in ``evals/query-loop/test_suite.json``). The suite name defaults to the
     file's ``name`` key, then the file stem. Judge-only fields on each case are
     preserved in ``Case.metadata``.
+
+    The file carries only the *cases*. The runtime wiring — how the agent reaches
+    the server (``target`` URL or ``server_factory`` stdio thunk), the gold-row
+    map for ``answer`` cases, and the judge ``checks`` — is attached here by the
+    caller, since it is environment-specific (a live cluster URL, a credentialed
+    stdio subprocess, a frozen gold set) and does not belong in a checked-in
+    suite file.
     """
     p = Path(path)
     doc = json.loads(p.read_text())
     cases = [_case_from_raw(c) for c in doc.get("cases", [])]
     name = doc.get("name") or p.stem
-    return Suite(name=name, cases=cases, target=target)
+    return Suite(
+        name=name,
+        cases=cases,
+        target=target,
+        server_factory=server_factory,
+        gold=gold or {},
+        checks=checks or {},
+    )

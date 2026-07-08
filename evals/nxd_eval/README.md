@@ -184,15 +184,34 @@ uv run --project evals/nxd_eval \
 
 ## Live mesh run (verified against real Snowflake)
 
-`mesh_suite.py` drives the **real** `evals/mcp/semantic_server.py` (genuine
-`compile_selection` compiler) against lower-env Snowflake over stdio — the
-actual mesh, not the stub. Verified live with `openai/gpt-5.4-mini`:
+`scenarios/pharma_mesh.py` drives the **real** `evals/mcp/semantic_server.py`
+(genuine `compile_selection` compiler) against lower-env Snowflake over stdio —
+the actual mesh, not the stub. It is a *scenario* (one mesh, one credential path,
+one case set) that wires its `Suite` into the framework's `run_suite` via
+`Suite.server_factory` (a stdio thunk that forwards `SNOWFLAKE_*` into the
+subprocess) — no hand-assembled Inspect `Task`. Run it:
 
-- **`mesh_baseline`** (feasible): compiled `SELECT COUNT(DISTINCT SUBJECT_ID) …`,
-  executed on Snowflake → `[{subject_count: 4}]` → answer `4`, score **C**.
-- **`mesh_adversarial`** (8 impossible/ambiguous questions): the agent
+```bash
+cd evals/nxd_eval && uv run --extra openai python -c "
+from scenarios import pharma_mesh as m
+log = m.run_adversarial(agent_model='openai/gpt-5.4-mini',
+                        grader_model='openai/gpt-5.4-mini', epochs=5)
+from nxd_eval import Report; print(Report.from_path(log).to_markdown())"
+```
+
+Verified live with `openai/gpt-5.4-mini`:
+
+- **feasible baseline**: compiled `SELECT COUNT(DISTINCT SUBJECT_ID) …`, executed
+  on Snowflake → `[{subject_count: 4}]` → answer `4`, score **C**.
+- **`adversarial_suite`** (8 impossible/ambiguous questions): the agent
   clarifies/abstains rather than fabricating. Deterministic `expect_abstain`
   axis lands **6–7 of 8** per run (single-epoch; see caveats).
+
+The same stdio `server_factory` seam re-points `evals/query-loop`: its
+`run_query_loop.py` (formerly a Phase-2 skeleton) now loads
+`query-loop/test_suite.json` via `load_suite` and drives it through `run_suite`
+against this mesh — the query-skill improvement loop, on the framework instead of
+`NotImplementedError` stubs.
 
 Setup (one-time):
 1. Install a matched nxd wheel set into `evals/mcp` (supplies the compiler):
@@ -204,9 +223,10 @@ Setup (one-time):
 
 **Caveats found running it live** (real, not stub artifacts):
 - **`mcp_server_stdio` starts a clean env** — the server subprocess does NOT
-  inherit `SNOWFLAKE_*`. Forward them via `env=` (mesh_suite.py does). Without
-  it the compiler compiles but execution fails `Missing SNOWFLAKE_ACCOUNT`,
-  and the agent correctly abstains — a false "miss".
+  inherit `SNOWFLAKE_*`. Forward them via `env=` (the `server_factory` in
+  `scenarios/pharma_mesh.py` does). Without it the compiler compiles but
+  execution fails `Missing SNOWFLAKE_ACCOUNT`, and the agent correctly abstains —
+  a false "miss".
 - **Governed-view metrics need `CREATE SCHEMA` on the executing role.** The
   `GovernedExecutor` auto-builds each principal's `gov_<principal>` schema of
   masked views at construction (`executor.py::_build_governed_schema` — a
