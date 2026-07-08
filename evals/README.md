@@ -83,12 +83,69 @@ edit invalidates it; a grading-only change does not.
 graded). A graded `FAIL` is a measured signal, not a CI break — pass rates are
 tracked, not gated.
 
+### Benchmarking a skill change (regression + efficiency)
+
+Every run records `num_turns`, `tool_calls`, `input_tokens`/`output_tokens`,
+`total_cost_usd`, and `duration_ms` per (skill-set × scenario) cell — in the
+console summary and in the `--report` JSON under `results[].metrics`. Correctness
+(the judge verdict) and efficiency (steps/tokens to get there) are graded
+together: a skill edit that keeps PASS but doubles the tool calls is a
+regression too.
+
+Before committing a change to a skill, run its scenario(s) and compare against a
+baseline report from `main`:
+
+```sh
+# On main: capture the baseline for the skill's scenario(s).
+python3 evals/run.py --skill-set current_pack \
+  --scenario nxd-setup-headless-auth --report /tmp/eval-before.json
+
+# On your branch: same command, new report.
+python3 evals/run.py --skill-set current_pack \
+  --scenario nxd-setup-headless-auth --report /tmp/eval-after.json
+```
+
+Then diff the two reports' verdicts and metrics. Judge checks are the
+regression gate; `num_turns` / `tool_calls` / tokens are the efficiency trend.
+
+Record the outcome in the repo so improvement is visible over time:
+
+```sh
+python3 evals/benchmark_record.py \
+  --label "nxd-setup: <what changed>" \
+  --report before-v0.7.0=/tmp/eval-before.json \
+  --report after-v0.8.0=/tmp/eval-after.json \
+  --notes "<why the change was made>"
+```
+
+This appends a before/after entry to `evals/benchmarks/ledger.md` and saves a
+compact transcript-free copy of the reports under `evals/benchmarks/records/`.
+Commit both in the same PR as the skill change they measure. To produce a
+genuine "before" for a scenario that is new in your PR, run it from a worktree
+of `main` with the scenario (and `evals/run.py`, for identical metrics) copied
+in: `git worktree add /tmp/before origin/main && cp -R evals/public/<scenario>
+/tmp/before/evals/public/ && cp evals/run.py /tmp/before/evals/`.
+Because agent runs are nondeterministic, treat single-run metric deltas under
+~20% as noise — repeat the run (or use `--cache-dir` only for judge iteration,
+never for before/after comparisons, since a cache hit replays the old
+transcript).
+
+Each scenario should pin down one failure mode we never want to reintroduce
+(e.g. `nxd-setup-headless-auth` regression-tests the `nxd-setup` skill's
+sandboxed-shell auth branch: dead background login poller → manual curl device
+flow → hand-written `tokens.json` → PAT).
+
 ### Authoring a scenario
 
 Each scenario directory holds:
 
 - `prompt.md` — the task shown to the agent. **Never leak the expected fix or
-  known failure mode here.**
+  known failure mode here.** Only the text under `Task for the agent:` is
+  agent-visible; the runner cuts it at the next section header, matched by a
+  line *beginning* with `Required artifacts`, `Success checks`, `Constraints`,
+  or `Expected final` (case-insensitive) — so don't let an ordinary task
+  sentence wrap onto a line starting with one of those words, or the rest of
+  the task is silently dropped.
 - `fixtures/` — the artifacts a real session would have: mock `nxd` CLI output
   (`*.txt`) and any source `data_product/` directory. Copied into the agent's
   workspace. These are agent-visible, so they must read like raw artifacts, not

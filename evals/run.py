@@ -354,6 +354,7 @@ def _trace_from_stream(stdout: str) -> tuple[str, dict]:
     """
     parts: list[str] = []
     final_answer = ""
+    tool_calls = 0
     metrics: dict = {"is_error": False}
     for line in stdout.splitlines():
         line = line.strip()
@@ -369,6 +370,7 @@ def _trace_from_stream(stdout: str) -> tuple[str, dict]:
                 if block.get("type") == "text" and block.get("text", "").strip():
                     parts.append(f"[assistant] {block['text'].strip()}")
                 elif block.get("type") == "tool_use":
+                    tool_calls += 1
                     inp = json.dumps(block.get("input", {}), ensure_ascii=False)
                     parts.append(f"[tool_use:{block.get('name')}] {inp[:600]}")
         elif typ == "user":
@@ -392,6 +394,10 @@ def _trace_from_stream(stdout: str) -> tuple[str, dict]:
                 "output_tokens": usage.get("output_tokens"),
                 "is_error": d.get("is_error", False),
             }
+    # tool_calls is the "how many steps did this take" efficiency signal the
+    # README's metrics table asks for; ride it along with the result metrics so
+    # reports can compare step counts across skill-sets and over time.
+    metrics["tool_calls"] = tool_calls
     trace = "\n".join(parts)
     return trace, {"final_answer": final_answer, **metrics}
 
@@ -948,7 +954,15 @@ def print_summary(results: list[RunResult]) -> None:
         status = "PASS" if r.verdict.get("overall_pass") else "FAIL"
         n_pass = sum(1 for c in r.verdict.get("checks", []) if c.get("pass"))
         n_total = len(r.verdict.get("checks", []))
-        print(f"  {label}  {status}  ({n_pass}/{n_total} checks)", file=sys.stderr)
+        # Efficiency alongside correctness: a skill edit that keeps PASS but
+        # doubles turns/tool-calls/tokens is a regression worth seeing here.
+        eff = "  ".join(
+            f"{k}={r.metrics[k]}"
+            for k in ("num_turns", "tool_calls", "output_tokens")
+            if r.metrics.get(k) is not None
+        )
+        print(f"  {label}  {status}  ({n_pass}/{n_total} checks)  {eff}",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

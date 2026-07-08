@@ -61,6 +61,14 @@ python3 scripts/validate_skills.py --root .   # conventions
 ./build-skills.sh                             # packaging + 200-entry cap
 ```
 
+When a PR changes a skill's behavior (not pure packaging/typo fixes), benchmark
+it and commit the evidence: run the relevant eval scenario(s) before and after
+(`evals/run.py --report ...`), then record the comparison with
+`evals/benchmark_record.py`, which appends to `evals/benchmarks/ledger.md`.
+The ledger is the repo's before/after history of skill quality and efficiency
+(judge checks, turns, tool calls, tokens) — see "Benchmarking a skill change"
+in `evals/README.md`.
+
 ## Safety
 
 - Keep the pack self-contained: no files required outside this repo, no customer

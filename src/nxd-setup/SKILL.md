@@ -6,7 +6,7 @@ allowed-tools:
   - Read
 metadata:
   author: nextdata
-  version: 0.7.0
+  version: 0.8.0
 ---
 
 # nxd Setup
@@ -15,7 +15,7 @@ Ensure the user's environment is ready to work with the nextdata platform. This 
 
 Mesh configurations are persisted in the user's nxd home (`~/.nxd/meshes.json` on POSIX/WSL, `$env:USERPROFILE\.nxd\meshes.json` on Windows PowerShell). Each mesh stores an **app URL**, an **API URL**, an authentication token, and an install URL. At session start, a temporary config file is generated from the registry so the CLI can target the correct platform.
 
-> **`meshes.json` is a registry this skill maintains — the nxd CLI does not write it.** The CLI's own live state is `~/.nxd/config.yaml` (the single active mesh: `url`, `skipversioncheck`) plus `~/.nxd/tokens.json` (bearer tokens keyed by auth host). This skill layers `meshes.json` on top to track *multiple* named meshes and their `app_url`/`api_url` so the agent can switch between them. Treat `config.yaml` as the source of truth for what the CLI is currently pointed at, and `meshes.json` as this skill's multi-mesh address book; if it is absent, fall back to discovering meshes from `config.yaml` (Step 0 below already does this).
+> **`meshes.json` is a registry this skill maintains — the nxd CLI does not write it.** The CLI's own live state is `~/.nxd/config.yaml` (the single active mesh: `url`, `skipversioncheck`) plus `tokens.json` (bearer tokens keyed by auth host) — which lives **in the directory of the active config file**, not always `~/.nxd/`: with the default `~/.nxd/config.yaml` it is `~/.nxd/tokens.json`, but with a session config at `/tmp/nxd-<mesh_name>.yaml` it is `/tmp/tokens.json`. This skill layers `meshes.json` on top to track *multiple* named meshes and their `app_url`/`api_url` so the agent can switch between them. Treat `config.yaml` as the source of truth for what the CLI is currently pointed at, and `meshes.json` as this skill's multi-mesh address book; if it is absent, fall back to discovering meshes from `config.yaml` (Step 0 below already does this).
 
 The host shape varies per mesh: a `trynxd.com` cloud mesh follows the `app.<sub>.trynxd.com` / `api.<sub>.trynxd.com` convention, but self-hosted or custom-domain meshes (e.g. an apex domain) may not. **Do not assume the convention** — elicit or confirm hosts with the user when they don't match (see Step 3).
 
@@ -81,7 +81,15 @@ curl -fsSL <install_url> | bash
 iwr <install_url> | iex
 ```
 
-Where `<install_url>` is the mesh's install URL — the real value comes from the registered mesh (Step 3 derives it). *(Example form only, not a default: `https://app.<mesh>.example.com/cli/install`.)* Verify the install succeeded by re-running `nxd --version`.
+Where `<install_url>` is the mesh's install URL — the real value comes from the registered mesh (Step 3 derives it). *(Example form only, not a default: `https://app.<mesh>.example.com/cli/install`.)*
+
+On POSIX/WSL the installer places `nxd` in `~/.local/bin`, which is often **not** on PATH — export it proactively rather than debugging a "command not found" afterwards:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"   # and append the same line to the shell rc for persistence
+```
+
+Verify the install succeeded by re-running `nxd --version`.
 
 For install/troubleshooting guidance, once `app_url` is known you can point the user at the per-mesh CLI setup docs at `<app_url>/docs/#/tutorials/cli/setup` (see "Platform docs" below).
 
@@ -236,7 +244,27 @@ If it fails (expired token), fall through to the login flow below.
 
 ### New mesh or expired token
 
-Run browser-based login:
+**First, pick the right login path for the execution environment:**
+
+- **Persistent shell** (Claude Code terminal, the user's own machine): use the
+  interactive login below.
+- **Sandboxed / non-persistent shell** (e.g. the Claude desktop/Cowork sandbox,
+  where each Bash call is an independent process tree, backgrounded processes
+  are killed as soon as the call returns, and there is no browser): the
+  interactive `nxd login` **cannot work** — it must stay alive polling the
+  token endpoint while the user approves, and nothing survives between tool
+  calls. Do not attempt it (not even with `nohup`/`&`; a dead poller silently
+  wastes the user's approval). Use the manual OAuth device flow in
+  [`reference/headless-device-flow.md`](reference/headless-device-flow.md)
+  instead, then rejoin at "Create a PAT for persistence" below. Key facts from
+  that flow worth knowing up front: the OAuth server is a **third host**
+  (usually `auth.<mesh-domain>`, discoverable via
+  `timeout 12 nxd --config <session_config> login --debug --open-browser false`),
+  the device-code endpoint returns a non-standard `pkce_verifier` that must be
+  echoed back as `code_verifier`, device codes expire fast (~300 s), and
+  `tokens.json` is hand-writable in the config file's directory.
+
+**Interactive login (persistent shells only):**
 
 ```bash
 nxd --config <session_config> login
@@ -255,6 +283,16 @@ nxd --config <session_config> whoami
 
 Do not trust exit code alone; if `whoami` prints `Not logged in`, auth is not
 ready even if the shell exit code is `0`.
+
+**Identity sanity-check:** surface the `whoami` email to the user. If it is not
+their own address (e.g. a shared admin account), they likely approved the login
+while signed into the wrong account — flag it before minting a PAT under that
+identity.
+
+> **Never pass an OAuth access token as a PAT.** `nxd create config
+> --personal-access-token=<oauth access_token>` fails with HTTP 401 — the
+> field only accepts real `nxdpat_...` tokens from
+> `create personal-access-token`.
 
 ### Create a PAT for persistence
 
@@ -366,6 +404,7 @@ The hosts below are **example placeholders** — real values vary per mesh (clou
     "api_url": "https://api.<mesh_name>.example.com",
     "token": "nxdpat_...",
     "install_url": "https://app.<mesh_name>.example.com/cli/install",
+    "auth_url": "https://auth.<mesh_name>.example.com",
     "infra_profile": "<infra_profile>",
     "domain": "<domain>"
   }
@@ -376,6 +415,7 @@ The hosts below are **example placeholders** — real values vary per mesh (clou
 - `api_url` — the platform API endpoint
 - `token` — a personal access token (PAT) for authentication (30-day expiry)
 - `install_url` — the URL used to install the CLI for this mesh
+- `auth_url` *(optional)* — the mesh's OAuth host (a **third host**, distinct from app/api), discovered during headless login (see `reference/headless-device-flow.md`); record it so future headless sessions skip endpoint discovery
 - `infra_profile` *(optional)* — the user's default infra-profile for this mesh
 - `domain` *(optional)* — the user's default domain for this mesh
 
@@ -390,7 +430,13 @@ Re-run Step 4. The login flow will create a new PAT and update the registry.
 Re-run Step 2 to pick a different mesh or register a new one.
 
 ### CLI not found after install
-On POSIX/WSL, check that `~/.local/bin` is in your PATH. On Windows PowerShell, check that the installer-added nxd directory is on the user PATH, then restart the shell.
+On POSIX/WSL, check that `~/.local/bin` is in your PATH (Step 1 exports it proactively). On Windows PowerShell, check that the installer-added nxd directory is on the user PATH, then restart the shell.
+
+### Login "succeeds" but `whoami` says not logged in
+In a sandboxed/non-persistent shell the backgrounded `nxd login` was killed before the user approved — nothing was polling the token endpoint, so the approval was wasted. Use the headless device flow (`reference/headless-device-flow.md`) instead of retrying.
+
+### Device code expired
+Device codes have a short TTL (~300 s). Request a fresh code (repeat the device-code POST); never retry an expired one.
 
 ### Registry corrupted
 Delete `~/.nxd/meshes.json` on POSIX/WSL, or `$env:USERPROFILE\.nxd\meshes.json` on Windows PowerShell, and re-register meshes from scratch.

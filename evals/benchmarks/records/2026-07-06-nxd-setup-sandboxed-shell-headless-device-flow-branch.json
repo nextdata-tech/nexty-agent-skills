@@ -1,0 +1,211 @@
+{
+  "date": "2026-07-06",
+  "label": "nxd-setup: sandboxed-shell headless device-flow branch",
+  "notes": "Fix from a Cowork session debrief: interactive 'nxd login' cannot survive a per-call sandbox process tree. v0.8.0 adds a Step-4 sandboxed-shell branch + reference/headless-device-flow.md (manual curl device flow, pkce_verifier round-trip, hand-written tokens.json, PAT switch). The v0.7.0 skill scored below the no-skill baseline because it steered the agent back to re-running 'nxd login'. The no_skills row (from the after-report batch) is the lift baseline. Scenario is new in the same PR; before-run used a worktree of main with the scenario copied in.",
+  "plugin_version": "0.8.0",
+  "reports": {
+    "before-v0.7.0": {
+      "elapsed_s": 148.1,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "nxd-setup-headless-auth",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 4,
+            "duration_ms": 100997,
+            "total_cost_usd": 0.2882325,
+            "input_tokens": 5508,
+            "output_tokens": 8120,
+            "is_error": false,
+            "tool_calls": 2
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "diagnoses-dead-poller",
+                "pass": true,
+                "why": "The diagnosis correctly attributes the failure to the backgrounded poller being killed when the shell call returned (independent process tree, nohup useless), leaving nothing to redeem the approval, and explicitly rejects wrong-URL/token/user-error causes."
+              },
+              {
+                "id": "no-retry-of-interactive-login",
+                "pass": false,
+                "why": "The agent's fix re-runs interactive `nxd login` (foreground with `timeout 40`) rather than switching to a manual curl-driven OAuth device flow, exactly the retry the check forbids."
+              },
+              {
+                "id": "uses-auth-host-from-debug",
+                "pass": false,
+                "why": "The plan never issues curl requests to the auth host's `/oauth2/device/code` and `/oauth2/device/token` endpoints, instead delegating entirely to `nxd login` against the app host."
+              },
+              {
+                "id": "pkce-verifier-round-trip",
+                "pass": false,
+                "why": "There is no persisted device-code response file and no token-exchange POST echoing the server's `pkce_verifier` back as `code_verifier`, since no manual token exchange is performed at all."
+              },
+              {
+                "id": "ttl-handling",
+                "pass": true,
+                "why": "The plan tells the user to approve promptly, cites the 300s `expires_in`, and instructs re-running to mint a fresh device code on expiry rather than reusing the burned one."
+              },
+              {
+                "id": "tokens-json-location-and-format",
+                "pass": false,
+                "why": "The agent writes to `~/.nxd/meshes.json` with app/api URLs, not `/tmp/tokens.json` keyed by the auth URL with access_token/token_type/refresh_token and an RFC3339 expiry."
+              },
+              {
+                "id": "no-oauth-token-as-pat",
+                "pass": true,
+                "why": "The agent mints a real `nxdpat_...` PAT via `nxd create personal-access-token` only after whoami succeeds and rebuilds the config with it, never passing an OAuth access token as the PAT."
+              },
+              {
+                "id": "verifies-whoami-and-identity",
+                "pass": false,
+                "why": "It checks whoami output text but never surfaces the reported identity email to the user as a sanity-check nor flags a non-own account, and omits the exit-code-0-yet-Not-logged-in caveat."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent nailed the dead-poller diagnosis and PAT minting but fundamentally chose to re-run foreground `nxd login` instead of the required manual curl device flow, failing the auth-host, pkce round-trip, tokens.json, and identity-surfacing checks."
+          }
+        }
+      ]
+    },
+    "after-v0.8.0": {
+      "elapsed_s": 384.6,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 2,
+      "results": [
+        {
+          "skill_set": "no_skills",
+          "scenario": "nxd-setup-headless-auth",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 7,
+            "duration_ms": 259021,
+            "total_cost_usd": 0.7256806000000001,
+            "input_tokens": 3039,
+            "output_tokens": 19724,
+            "is_error": false,
+            "tool_calls": 6
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "diagnoses-dead-poller",
+                "pass": true,
+                "why": "The diagnosis correctly attributes failure to the backgrounded login process being killed at the call boundary (PID-namespace teardown, nohup doesn't help) so nothing was polling when the user approved, and does not blame a wrong URL/mesh/PAT or user error."
+              },
+              {
+                "id": "no-retry-of-interactive-login",
+                "pass": true,
+                "why": "The agent explicitly rejects relying on nxd to poll across the call boundary and moves polling to curl against the token endpoint with all state persisted to disk, rather than re-backgrounding nxd login."
+              },
+              {
+                "id": "uses-auth-host-from-debug",
+                "pass": false,
+                "why": "The plan curls the token exchange to auth.acme-corp.example.com/oauth2/device/token but obtains the device code via `nxd login --debug` instead of sending a device-code request to the auth host's /oauth2/device/code endpoint, and never includes the scopes from the debug output."
+              },
+              {
+                "id": "pkce-verifier-round-trip",
+                "pass": false,
+                "why": "The primary token-exchange POST omits code_verifier and only mentions sending pkce_verifier back as code_verifier as an optional fallback if the plain request is rejected, which the check explicitly counts as a failure."
+              },
+              {
+                "id": "ttl-handling",
+                "pass": true,
+                "why": "The plan tells the user to approve immediately because the link expires in 300 seconds and specifies that on expiry/expired_token you must return to Step 1 for a brand-new device code rather than retrying the expired one."
+              },
+              {
+                "id": "tokens-json-location-and-format",
+                "pass": false,
+                "why": "The agent writes to ~/.nxd/tokens.json (the exact location the check forbids) instead of /tmp/tokens.json, and dumps the raw response with an added obtained_at epoch rather than a map keyed by the auth URL with an RFC3339 expiry."
+              },
+              {
+                "id": "no-oauth-token-as-pat",
+                "pass": true,
+                "why": "The plan mints a real nxdpat via `nxd create personal-access-token` only after whoami succeeds and then regenerates the config with that PAT, never passing the OAuth access token to `create config --personal-access-token`."
+              },
+              {
+                "id": "verifies-whoami-and-identity",
+                "pass": false,
+                "why": "The plan runs whoami for verification but never notes that 'Not logged in' can appear with exit code 0 nor surfaces/checks the reported identity email to confirm it is the user's own account."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent nails the dead-poller diagnosis, curl-polling pivot, TTL handling, and PAT minting, but fails on sending the device-code request (with scopes) to the auth host, making the pkce_verifier round-trip mandatory, writing tokens.json to /tmp in the keyed RFC3339 format, and verifying whoami output/identity email."
+          }
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "nxd-setup-headless-auth",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 1,
+            "duration_ms": 2788,
+            "total_cost_usd": 0.44767749999999995,
+            "input_tokens": 2,
+            "output_tokens": 54,
+            "is_error": false,
+            "tool_calls": 4
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "diagnoses-dead-poller",
+                "pass": true,
+                "why": "The diagnosis correctly identifies that the backgrounded poller was killed when the shell call returned (independent process tree, nohup doesn't help) so nothing exchanged the approved device code, and does not blame a wrong URL/token or user error."
+              },
+              {
+                "id": "no-retry-of-interactive-login",
+                "pass": true,
+                "why": "The agent switches to a manual curl device flow with all state persisted to files and does not propose re-running interactive/backgrounded nxd login as the fix (the one conditional `timeout` login is only a fallback for endpoint discovery, explicitly marked unnecessary)."
+              },
+              {
+                "id": "uses-auth-host-from-debug",
+                "pass": true,
+                "why": "The plan sends device-code and token requests to https://auth.acme-corp.example.com/oauth2/device/code and .../device/token \u2014 the third auth host distinct from app/api \u2014 with client_id nxd-cli and the debug scopes."
+              },
+              {
+                "id": "pkce-verifier-round-trip",
+                "pass": true,
+                "why": "The device-code response is persisted to /tmp/nxd-device.json and the server-issued pkce_verifier is extracted and sent back as code_verifier in the device_code grant token exchange."
+              },
+              {
+                "id": "ttl-handling",
+                "pass": true,
+                "why": "Step C tells the user the code expires in ~300s and to approve promptly, and Step B/D instruct requesting a brand-new device code on expiry rather than retrying the expired one."
+              },
+              {
+                "id": "tokens-json-location-and-format",
+                "pass": true,
+                "why": "It writes /tmp/tokens.json (config dir, not ~/.nxd) as a map keyed by the auth URL with access_token, token_type, refresh_token, and an RFC3339 expiry of now+expires_in minus a 60s margin."
+              },
+              {
+                "id": "no-oauth-token-as-pat",
+                "pass": true,
+                "why": "The plan explicitly warns that pointing --personal-access-token at the OAuth access_token yields 401 and instead mints an nxdpat_ PAT via `nxd create personal-access-token` after whoami, then regenerates the config with it."
+              },
+              {
+                "id": "verifies-whoami-and-identity",
+                "pass": true,
+                "why": "Step F verifies by checking whoami OUTPUT is a real email rather than 'Not logged in' and surfaces that email to the user to confirm it is their own account, flagging a mismatch."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent correctly diagnosed the dead background poller and produced a complete, concrete headless curl device-flow recovery plan satisfying all eight success checks."
+          }
+        }
+      ]
+    }
+  }
+}
