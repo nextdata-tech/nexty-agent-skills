@@ -1,13 +1,23 @@
-"""Solver wiring: a react agent driving the semantic MCP tools over HTTP.
+"""Solver wiring: a react agent driving the semantic MCP tools.
 
-``mcp_server_http(url=...)`` speaks Streamable-HTTP to the semantic server (the
-``/<dp>/rpcs/<port>/mcp`` endpoint); ``react(tools=[server])`` gives the
-agent-under-test the three tools (``list_models`` / ``describe_model`` /
-``run_semantic_query``) and nothing else. The agent MUST call the tools, not
-narrate — the prompt says so and the deterministic-EX scorer enforces it.
+The agent reaches the semantic server one of two ways:
+
+- ``mcp_server_http(url=...)`` speaks Streamable-HTTP to the ``/<dp>/rpcs/<port>/
+  mcp`` endpoint. Convenient, but the HTTP transport currently crashes on
+  teardown (see the README "Transport" note).
+- a pre-built server (typically ``mcp_server_stdio(command=..., env=...)``)
+  passed in as ``server`` — the documented default for live runs. The caller
+  constructs it so it can forward credentials into the subprocess ``env``.
+
+Either way, ``react(tools=[server])`` gives the agent-under-test the three tools
+(``list_models`` / ``describe_model`` / ``run_semantic_query``) and nothing else.
+The agent MUST call the tools, not narrate — the prompt says so and the
+deterministic-EX scorer enforces it.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from inspect_ai.agent import as_solver, react
 from inspect_ai.solver import Solver
@@ -31,17 +41,25 @@ AGENT_PROMPT = (
 
 
 def mcp_solver(
-    url: str,
+    url: str | None = None,
     *,
+    server: Any | None = None,
+    prompt: str | None = None,
     model: str | None = None,
     authorization: str | None = None,
 ) -> Solver:
-    """A react solver bound to the semantic MCP server at ``url``.
+    """A react solver bound to the semantic MCP server.
 
-    ``model`` overrides the agent model for this solver (otherwise the task /
-    eval model is used). ``authorization`` is the bearer token for real runs;
-    ``None`` for the local stub.
+    Pass exactly one of ``url`` (build an HTTP server) or ``server`` (a pre-built
+    Inspect MCP server, e.g. ``mcp_server_stdio(...)``); passing neither is an
+    error. ``prompt`` overrides the default :data:`AGENT_PROMPT`. ``model``
+    overrides the agent model (otherwise the task / eval model is used).
+    ``authorization`` is the bearer token for real HTTP runs (``None`` for the
+    local stub); it is ignored when a pre-built ``server`` is supplied.
     """
-    server = mcp_server_http(name="semantic", url=url, authorization=authorization)
-    agent = react(prompt=AGENT_PROMPT, tools=[server], model=model)
+    if server is None:
+        if not url:
+            raise ValueError("mcp_solver: pass url= or a pre-built server=")
+        server = mcp_server_http(name="semantic", url=url, authorization=authorization)
+    agent = react(prompt=prompt or AGENT_PROMPT, tools=[server], model=model)
     return as_solver(agent)
