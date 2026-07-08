@@ -39,6 +39,16 @@ def test_norm_rowset_is_order_blind_and_numeric_tolerant():
     assert scoring._norm_rowset(a) == scoring._norm_rowset(b)
 
 
+def test_norm_rowset_tolerance_boundary_rejects_larger_gap():
+    # The just-INSIDE side is covered above (1e-7). Pin the just-OUTSIDE side too,
+    # so a widened or removed numeric tolerance can't silently start matching rows
+    # that genuinely differ. The equality bucket edge sits below ~7e-7; a 1e-6 gap
+    # must NOT collapse to the same normalized row.
+    a = [{"k": "x", "v": 3.0}]
+    b = [{"k": "x", "v": 3.000001}]  # 1e-6 gap — outside tolerance
+    assert scoring._norm_rowset(a) != scoring._norm_rowset(b)
+
+
 def test_rows_equal_name_aware_single_measure_matches():
     # One numeric measure: guard falls back to the base PoC verdict (PASS).
     gold = [{"region": "x", "revenue": 5.0}]

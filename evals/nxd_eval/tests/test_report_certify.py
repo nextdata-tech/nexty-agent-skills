@@ -178,6 +178,63 @@ def test_clustered_repeats_widen_the_interval():
     assert rep_clu.cards["answer"].ci.halfwidth > rep_ind.cards["answer"].ci.halfwidth
 
 
+def test_icc_and_design_effect_golden_value():
+    # The clustered test above only asserts deff>1 and an ORDERING, so a
+    # wrong-but-positive ICC (off-by-one in the m0 term, dropped MSW denominator,
+    # flipped clamp) would still pass while silently mis-sizing N_eff — and N_eff
+    # is exactly what the certification gate's Wilson lower bound rides on. Pin
+    # the exact estimator output for a known layout so the deflation is protected.
+    #
+    # Layout: 4 clusters x 5 epochs. Three clusters all-pass, one 3/5 pass. This
+    # is the same [5,5,5,3] shape the ordering test builds. Recomputed
+    # independently from ICC(1) = (MSB - MSW)/(MSB + (m0-1)*MSW): icc = 0.25,
+    # deff = 1 + (5-1)*0.25 = 2.0, N_eff = 20/2 = 10.
+    from nxd_eval.report import SampleRow, _effective_n, _icc_oneway
+
+    layout = [5, 5, 5, 3]  # correct-per-cluster over 5 epochs each
+    groups = [[1.0 if e < correct else 0.0 for e in range(5)] for correct in layout]
+    assert math.isclose(_icc_oneway(groups), 0.25, rel_tol=1e-9)
+
+    rows = [
+        SampleRow(
+            sample_id=f"c{ci}-{e}",
+            epoch=e + 1,
+            bucket="answer",
+            cluster=f"c{ci}",
+            feasible=True,
+            passed=(e < correct),
+            abstained=False,
+        )
+        for ci, correct in enumerate(layout)
+        for e in range(5)
+    ]
+    eff = _effective_n(rows)
+    assert eff.n == 20
+    assert math.isclose(eff.icc, 0.25, rel_tol=1e-9)
+    assert math.isclose(eff.m, 5.0)
+    assert math.isclose(eff.deff, 2.0, rel_tol=1e-9)
+    assert math.isclose(eff.n_eff, 10.0, rel_tol=1e-9)
+
+
+def test_icc_collapse_boundaries():
+    # The two documented collapse directions must be exact, not just "small" /
+    # "large": a homogeneous-between/zero-within layout is MAXIMALLY clustered
+    # (icc=1, so repeats carry NO new information) and a no-between-variance
+    # layout has NO evidence of clustering (icc=0, N_eff==n). If the estimator
+    # ever returned 0 for the maximally-clustered case it would grant unearned CI
+    # tightness -> a false certification pass. Pin both endpoints.
+    from nxd_eval.report import _icc_oneway
+
+    # No between-cluster variance (every cluster same rate) -> icc 0.
+    assert _icc_oneway([[1.0, 1.0], [1.0, 1.0]]) == 0.0
+    # Max between-cluster variance, zero within (each cluster homogeneous but the
+    # clusters disagree) -> icc 1.
+    assert _icc_oneway([[1.0, 1.0, 1.0], [0.0, 0.0, 0.0]]) == 1.0
+    # Singleton / degenerate -> honest 0 (no evidence).
+    assert _icc_oneway([[1.0]]) == 0.0
+    assert _icc_oneway([]) == 0.0
+
+
 def test_reliability_and_governance_on_abstain_bucket():
     # 3 infeasible cases: two correctly abstained, one fabricated (answered wrong).
     samples = [
@@ -250,6 +307,37 @@ def test_report_regression_bh_fdr_delta():
 
     doc = _json.loads(rep_cand.to_json(baseline=rep_base))
     assert doc["regression"]["answer"]["delta"] < 0
+
+
+def test_regression_discordant_bc_counts_golden():
+    # regression_against pairs on (sample_id, epoch) and builds the McNemar 2x2:
+    # b = baseline-right/now-wrong (regressions), c = now-right/baseline-wrong
+    # (recoveries). The delta-only assertion above wouldn't catch a b/c SWAP,
+    # which would invert every regression-vs-recovery report. Pin the counts on a
+    # hand-built pair with known flips.
+    #
+    # baseline  s0..s4 = [P, P, P, P, F]
+    # candidate s0..s4 = [P, F, F, P, P]
+    #   s0 P->P = a   s1 P->F = b   s2 P->F = b   s3 P->P = a   s4 F->P = c
+    # => b (regressions) = 2, c (recoveries) = 1.
+    base = [
+        _sample("s0", passed=True),
+        _sample("s1", passed=True),
+        _sample("s2", passed=True),
+        _sample("s3", passed=True),
+        _sample("s4", passed=False),
+    ]
+    cand = [
+        _sample("s0", passed=True),
+        _sample("s1", passed=False),
+        _sample("s2", passed=False),
+        _sample("s3", passed=True),
+        _sample("s4", passed=True),
+    ]
+    reg = Report.from_log(_log(cand)).regression_against(Report.from_log(_log(base)))
+    ans = reg["answer"]
+    assert ans.b == 2, f"expected 2 regressions, got b={ans.b}"
+    assert ans.c == 1, f"expected 1 recovery, got c={ans.c}"
 
 
 # --------------------------------------------------------------------------- #
