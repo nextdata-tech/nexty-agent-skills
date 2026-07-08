@@ -50,6 +50,7 @@ from inspect_ai.scorer import (
 from inspect_ai.solver import TaskState
 
 from . import scoring
+from .metrics import applicable_accuracy
 from .slots import Selection, ema, overall_f1, selection_of, slot_f1s
 from .transcript import Transcript, extract
 
@@ -155,7 +156,7 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
     )
 
 
-@scorer(name=DETERMINISTIC_EX, metrics=[accuracy(), stderr()])
+@scorer(name=DETERMINISTIC_EX, metrics=[applicable_accuracy(), stderr()])
 def rows_equal() -> Scorer:
     """Deterministic-EX: agent's returned rows set/multiset-equal the gold rows.
 

@@ -88,3 +88,36 @@ def test_reliability_larger_c_prefers_abstention_over_error():
 
 def test_reliability_empty_is_zero():
     assert reliability_score()([]) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# applicable_accuracy — excludes NOANSWER from the denominator
+# --------------------------------------------------------------------------- #
+
+def test_applicable_accuracy_excludes_noanswer():
+    from inspect_ai.scorer import NOANSWER
+
+    from nxd_eval.metrics import applicable_accuracy
+
+    # 2 correct, 1 incorrect, 3 skipped (NOANSWER). Inspect's accuracy() would
+    # report 2/6=0.333; applicable_accuracy reports 2/3=0.667 over the samples
+    # the scorer actually applied to.
+    scores = [
+        _sample(CORRECT),
+        _sample(CORRECT),
+        _sample(INCORRECT),
+        _sample(NOANSWER),
+        _sample(NOANSWER),
+        _sample(NOANSWER),
+    ]
+    assert math.isclose(applicable_accuracy()(scores), 2.0 / 3.0, rel_tol=1e-9)
+
+
+def test_applicable_accuracy_all_noanswer_is_zero():
+    from inspect_ai.scorer import NOANSWER
+
+    from nxd_eval.metrics import applicable_accuracy
+
+    # A single-bucket abstain suite: deterministic_ex applied to nothing.
+    scores = [_sample(NOANSWER), _sample(NOANSWER)]
+    assert applicable_accuracy()(scores) == 0.0

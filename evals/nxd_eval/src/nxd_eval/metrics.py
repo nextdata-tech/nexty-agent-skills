@@ -22,6 +22,7 @@ Value``, no model call.
 from __future__ import annotations
 
 from inspect_ai.scorer import (
+    NOANSWER,
     Metric,
     SampleScore,
     Value,
@@ -31,7 +32,30 @@ from inspect_ai.scorer import (
 
 from .stats import wilson_ci
 
-__all__ = ["wilson_accuracy", "reliability_score"]
+__all__ = ["wilson_accuracy", "reliability_score", "applicable_accuracy"]
+
+
+@metric
+def applicable_accuracy() -> Metric:
+    """Accuracy over only the samples this scorer actually applied to.
+
+    Inspect's built-in ``accuracy()`` counts ``NOANSWER`` in the denominator, so
+    a scorer that correctly skips inapplicable samples (e.g. ``deterministic_ex``
+    returning ``NOANSWER`` for non-``answer`` buckets) reads as ``0.000`` on a
+    single-bucket suite even though every case it applied to passed. This metric
+    excludes ``NOANSWER`` from both numerator and denominator, so the raw
+    ``inspect eval`` summary line matches the framework's bucket-aware ``Report``.
+    Returns ``0.0`` when the scorer applied to nothing (all NOANSWER).
+    """
+    to_float = value_to_float()
+
+    def metric_fn(scores: list[SampleScore]) -> Value:
+        applicable = [s for s in scores if s.score.value != NOANSWER]
+        if not applicable:
+            return 0.0
+        return sum(to_float(s.score.value) for s in applicable) / len(applicable)
+
+    return metric_fn
 
 
 @metric
