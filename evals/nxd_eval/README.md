@@ -111,13 +111,23 @@ Put the key in a **gitignored** `evals/nxd_eval/.env`:
 OPENAI_API_KEY=sk-...
 ```
 
-**Transport: use stdio.** Inspect launches the stub as a subprocess over stdio.
-The Streamable-HTTP path (`mcp_server_http` + a separately-launched `--http`
-server) currently crashes on teardown with an `mcp`/`anyio` cancel-scope error
-(`Attempted to exit a cancel scope in a different task…`) once a live multi-turn
-agent holds the connection open — model-independent, reproduces on
-`inspect_ai` 0.3.130 and 0.3.244 alike. stdio sidesteps it. `spike_stdio.py`
-wires the stub over `mcp_server_stdio`:
+**Transport: stdio is the default.** Inspect launches the stub as a subprocess
+over stdio. The Streamable-HTTP path (`mcp_server_http` + a separately-launched
+`--http` server) currently crashes on teardown with an `mcp`/`anyio` cancel-scope
+error (`Attempted to exit a cancel scope in a different task…`) once a live
+multi-turn agent holds the connection open — model-independent, reproduces on
+`inspect_ai` 0.3.130 and 0.3.244 alike. stdio sidesteps it.
+
+This is an **upstream MCP Python SDK bug**, not an inspect_ai defect —
+`inspect_ai` only surfaces it through `mcp_server_http`. The root cause is
+`ClientSessionGroup`/exit-stack teardown running in a different task than it was
+entered (anyio's same-task cancel-scope rule), tracked upstream at
+[modelcontextprotocol/python-sdk#521](https://github.com/modelcontextprotocol/python-sdk/issues/521)
+and [#577](https://github.com/modelcontextprotocol/python-sdk/issues/577); the
+proposed fix serialises session `aclose()`. Until a known-good HTTP combo ships,
+**use stdio** — there is nothing to fix on our side and no new upstream issue to
+file (the root cause is already tracked). `spike_stdio.py` wires the stub over
+`mcp_server_stdio`:
 
 ```bash
 set -a; . evals/nxd_eval/.env; set +a          # load OPENAI_API_KEY
