@@ -75,3 +75,6 @@ evals/cross-dp-joins/runs/
 
 # Skill build artifacts
 build/
+
+# local infra-profile secrets — never commit
+.nxd/
