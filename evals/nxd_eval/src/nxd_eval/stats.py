@@ -256,9 +256,13 @@ def ece(y_true: list[int], y_prob: list[float], *, n_bins: int = 10) -> float:
     # Recover each returned bin's sample count so we can weight by bin mass. Use
     # the same uniform edges sklearn used, then match populated bins in order.
     edges = np.linspace(0.0, 1.0, n_bins + 1)
-    # np.digitize with right=True puts p==edge into the lower bin; clamp to
-    # [1, n_bins] then shift to 0-based bin ids.
-    bin_ids = np.clip(np.digitize(y_prob_arr, edges[1:-1], right=False), 0, n_bins - 1)
+    # Match sklearn's calibration_curve, which assigns bins with
+    # ``searchsorted(edges[1:-1], y_prob, side='left')``. A confidence exactly on
+    # an interior edge (0.1, 0.2, ...) then lands in the SAME bin for the weight
+    # count as it does for frac_pos/mean_pred; using ``digitize`` (side='right')
+    # here would misweight such boundary values when both adjacent bins are
+    # populated. Clamp to [0, n_bins - 1] for the p == 1.0 tail.
+    bin_ids = np.clip(np.searchsorted(edges[1:-1], y_prob_arr, side="left"), 0, n_bins - 1)
     counts = np.bincount(bin_ids, minlength=n_bins)
     populated = counts[counts > 0]
 

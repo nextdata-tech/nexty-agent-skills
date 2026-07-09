@@ -144,15 +144,23 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
         _gold_record(state, gold_rows),
     )
     value = CORRECT if verdict == "PASS" else INCORRECT
+    metadata: dict[str, Any] = {
+        "verdict": verdict,
+        "made_query": tx.made_query,
+        "n_queries": len(tx.calls),
+        "compiled_sql": call.compiled_sql if call else None,
+    }
+    # Carry the agent's verbalized confidence (if any) alongside the 0/1
+    # outcome so report.py can build the (correctness, confidence) pairs the
+    # selective-prediction / calibration metrics ride on. Absent ⇒ omitted, and
+    # the sample simply contributes no confidence pair.
+    confidence = tx.confidence
+    if confidence is not None:
+        metadata["confidence"] = confidence
     return Score(
         value=value,
         answer=json.dumps(actual_rows) if actual_rows is not None else "",
-        metadata={
-            "verdict": verdict,
-            "made_query": tx.made_query,
-            "n_queries": len(tx.calls),
-            "compiled_sql": call.compiled_sql if call else None,
-        },
+        metadata=metadata,
     )
 
 

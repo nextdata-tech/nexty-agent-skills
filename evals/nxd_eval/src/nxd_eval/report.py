@@ -13,7 +13,15 @@ answer bucket (``answer`` / ``clarify`` / ``abstain``):
 * the Reliability Score at penalties ``c ∈ {0, 1, 2}`` (TrustSQL posture);
 * governance precision / recall — how well the agent refuses the infeasible
   cases without wrongly refusing feasible ones;
-* ``pass^k`` — the fraction of clusters that pass on *every* epoch.
+* ``pass^k`` — the fraction of clusters that pass on *every* epoch;
+* calibration / selective-prediction quality over the answered samples that
+  carry a verbalized confidence: Brier score, Expected Calibration Error (ECE),
+  and the Area Under the Risk–Coverage curve (AURC). The confidence is the
+  agent's calibrated self-report (QA-Calibration, ICLR 2025); pairing it with
+  the 0/1 correctness outcome turns the binary abstain rate into a
+  risk-coverage view (Geifman & El-Yaniv, "Selective Classification for Deep
+  Neural Networks", NeurIPS 2017). Absent confidences ⇒ the block is omitted,
+  never a crash.
 
 ``Report.to_markdown`` / ``Report.to_json`` emit the cards. Against a
 ``--baseline`` report, :meth:`Report.regression_against` reports the per-bucket
@@ -27,6 +35,7 @@ re-derived here.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
@@ -34,9 +43,12 @@ from dataclasses import field
 from pathlib import Path
 
 from .stats import ConfidenceInterval
+from .stats import aurc
 from .stats import bh_fdr
+from .stats import brier
 from .stats import cohen_kappa
 from .stats import design_effect
+from .stats import ece
 from .stats import gwet_ac1
 from .stats import mcnemar_paired
 from .stats import wilson_ci
@@ -80,6 +92,7 @@ class SampleRow:
     feasible: bool
     passed: bool
     abstained: bool
+    confidence: float | None = None
 
     @property
     def key(self) -> str:
@@ -130,6 +143,20 @@ def _score_meta(sc) -> dict:
     return meta or {}
 
 
+def _confidence_of(meta: dict) -> float | None:
+    """A finite verbalized confidence in ``[0, 1]`` from scorer metadata, else None."""
+    val = meta.get("confidence")
+    if val is None:
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    return max(0.0, min(1.0, f))
+
+
 def _primary_passed(bucket: str, scores: dict) -> bool:
     """The correctness verdict for a sample given its bucket.
 
@@ -163,6 +190,12 @@ def _rows_from_log(log) -> list[SampleRow]:
         feasible = bool(abstain_meta.get("feasible", meta.get("feasible", bucket != "abstain")))
         abstained = bool(abstain_meta.get("abstained", False))
 
+        # Verbalized confidence rides in the deterministic-EX scorer's metadata
+        # for answered cases (scorers.py stamps it when the agent emitted a
+        # CONFIDENCE line). Absent ⇒ None, and the sample contributes no
+        # confidence pair to the calibration metrics.
+        confidence = _confidence_of(_score_meta(_get_score(scores, _EX_SCORER)))
+
         rows.append(
             SampleRow(
                 sample_id=str(s.id),
@@ -172,6 +205,7 @@ def _rows_from_log(log) -> list[SampleRow]:
                 feasible=feasible,
                 passed=_primary_passed(bucket, scores),
                 abstained=abstained,
+                confidence=confidence,
             )
         )
     return rows
@@ -350,6 +384,63 @@ def _effective_n(rows: list[SampleRow]) -> EffectiveN:
 
 
 # --------------------------------------------------------------------------- #
+# Calibration / selective-prediction quality
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """Confidence-quality summary over answered samples carrying a confidence.
+
+    ``n`` is the number of (correctness, confidence) pairs the metrics were
+    computed over — always a subset of the bucket's rows, since a sample without
+    a verbalized confidence contributes nothing here. Lower is better for all
+    three: ``brier`` (mean squared error of confidence vs outcome), ``ece``
+    (Expected Calibration Error), ``aurc`` (Area Under the Risk–Coverage curve).
+    """
+
+    n: int
+    brier: float
+    ece: float
+    aurc: float
+
+    def to_dict(self) -> dict:
+        return {
+            "n": self.n,
+            "brier": self.brier,
+            "ece": self.ece,
+            "aurc": self.aurc,
+        }
+
+
+def _calibration(rows: list[SampleRow]) -> Calibration | None:
+    """Brier / ECE / AURC over the rows that carry a confidence, else None.
+
+    Builds the ``(correctness, confidence)`` pairs from every row whose
+    ``confidence`` is present, then defers to the ``stats`` primitives. Returns
+    ``None`` when no row carries a confidence — the report then omits the block
+    cleanly rather than emitting a degenerate zero. Uses the agent's calibrated
+    self-report (QA-Calibration, ICLR 2025) to build the risk-coverage view
+    (Geifman & El-Yaniv, NeurIPS 2017).
+    """
+    y_true: list[int] = []
+    y_prob: list[float] = []
+    for r in rows:
+        if r.confidence is None:
+            continue
+        y_true.append(1 if r.passed else 0)
+        y_prob.append(float(r.confidence))
+    if not y_prob:
+        return None
+    return Calibration(
+        n=len(y_prob),
+        brier=brier(y_true, y_prob),
+        ece=ece(y_true, y_prob),
+        aurc=aurc(y_true, y_prob),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Per-bucket KPI card
 # --------------------------------------------------------------------------- #
 
@@ -368,9 +459,10 @@ class BucketCard:
     pass_at_k: float  # fraction of clusters passing on every epoch
     governance_precision: float | None
     governance_recall: float | None
+    calibration: Calibration | None = None  # None when no confidences present
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "bucket": self.bucket,
             "n": self.n,
             "passed": self.passed,
@@ -387,6 +479,9 @@ class BucketCard:
             "governance_precision": self.governance_precision,
             "governance_recall": self.governance_recall,
         }
+        if self.calibration is not None:
+            out["calibration"] = self.calibration.to_dict()
+        return out
 
 
 def _reliability(rows: list[SampleRow], c: float) -> float:
@@ -475,6 +570,7 @@ def _card(bucket: str, rows: list[SampleRow], *, alpha: float) -> BucketCard:
         pass_at_k=_pass_at_k(rows),
         governance_precision=gp,
         governance_recall=gr,
+        calibration=_calibration(rows),
     )
 
 
@@ -736,6 +832,12 @@ def _card_markdown(card: BucketCard, conf_pct: int) -> list[str]:
         f"- **governance** P={_fmt_pct(card.governance_precision)} · "
         f"R={_fmt_pct(card.governance_recall)}",
     ]
+    cal = card.calibration
+    if cal is not None:
+        lines.append(
+            f"- **calibration** (n={cal.n}) Brier {cal.brier:.3f} · "
+            f"ECE {cal.ece:.3f} · AURC {cal.aurc:.3f}"
+        )
     return lines
 
 
