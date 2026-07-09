@@ -13,6 +13,17 @@ contaminate the pack's license posture. Nothing here needs it.
 The interval used to *gate* a pass rate is always the Wilson score interval
 (``proportion_confint(..., method="wilson")``); swapping in the Wald interval is
 exactly the silent drift the unit tests are built to catch.
+
+References (see ``METHODOLOGY.md`` for the full metric→paper table):
+
+* Wilson score interval — Wilson (1927), JASA 22(158):209–212.
+* Design effect / effective N — Kish (1965), *Survey Sampling*, Wiley.
+* McNemar paired test — McNemar (1947), Psychometrika 12(2):153–157.
+* Benjamini–Hochberg FDR — Benjamini & Hochberg (1995), JRSS-B 57(1):289–300.
+* Brier score — Brier (1950), Monthly Weather Review 78(1):1–3.
+* Expected Calibration Error — Naeini et al. (2015), AAAI; Guo et al. (2017),
+  arXiv:1706.04599.
+* AURC / risk–coverage — Geifman & El-Yaniv (2017), NeurIPS, arXiv:1705.08500.
 """
 
 from __future__ import annotations

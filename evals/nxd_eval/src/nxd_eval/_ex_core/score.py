@@ -22,6 +22,24 @@ Public surface (re-exported by `nxd_eval.scoring`):
     distinct_results(trials) -> int
 
 Also used by the cross-DP harness: `COMPILER_STRATEGY`, `_remap_gold_record`.
+
+EX equivalence bound (optimistic single-frozen-gold comparison)
+---------------------------------------------------------------
+`score_one` / `rows_equal_name_aware` compare agent rows against ONE frozen gold
+result set. Test-based execution accuracy on a single frozen result is
+OPTIMISTIC: two queries can coincide on the frozen database yet differ in
+general, so a coincidental row match is credited as a correct query. This is the
+known EX-overestimate of the result-comparison family — SpotIt (Klopfenstein et
+al. 2025, arXiv:2510.26840) measures 11–14% EX drop under SMT bounded equivalence on
+BIRD, and Zhong et al. (2020, EMNLP, arXiv:2010.02840) bound the false-negative
+side of single-database comparison at 2.5% avg / 8.1% worst on Spider.
+
+Our architecture is LESS exposed than raw text-to-SQL: the selection→SQL layer
+is deterministic via the compiler, so there is no free-form-SQL diversity to be
+falsely equated — the exposure is confined to this frozen-gold row comparison,
+and `matches_compiler` (below) cross-checks against the compiler's own executed
+rows. We do not run a bounded-equivalence verifier; this is a documented bound,
+not a solved gap. Full write-up: `evals/nxd_eval/METHODOLOGY.md`.
 """
 
 from __future__ import annotations
