@@ -8,9 +8,9 @@ them call a model — the deterministic lane is fully offline.
 The lane, scorer by scorer:
 
 * ``rows_equal`` — deterministic execution-accuracy for ``answer`` cases. Wraps
-  the cross-DP ``score.py`` core (``score_one`` / ``rows_equal_name_aware`` via
-  ``nxd_eval.scoring``), so the swapped-two-measure guard and set/multiset modes
-  are the PoC's, never re-implemented here.
+  the ``_ex_core.score`` core this package owns (``score_one`` /
+  ``rows_equal_name_aware`` via ``nxd_eval.scoring``), so the swapped-two-measure
+  guard and set/multiset modes have one definition, never re-implemented here.
 * ``sql_contains`` / ``sql_excludes`` — substring assertions on the returned
   ``compiled_sql`` (e.g. must / must-not join a fan-out table).
 * ``error_nonempty`` — fan-out / infeasible rejection: the tool returned an
@@ -160,7 +160,7 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
 def rows_equal() -> Scorer:
     """Deterministic-EX: agent's returned rows set/multiset-equal the gold rows.
 
-    Delegates the verdict to the cross-DP ``score.py`` core, so two numeric
+    Delegates the verdict to the ``_ex_core.score`` core, so two numeric
     measures SWAPPED is a FAIL (the name-aware guard) without re-implementing EX.
     """
 

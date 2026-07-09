@@ -9,8 +9,8 @@ round so the shipping package is self-contained and the experiment consumes it.
 Everything here is a pure function over plain dicts plus the vendored PoC
 scoring / structure_check primitives (`_ex_core._primitives`). No network, no
 Snowflake, no filesystem or report I/O — that CLI/report layer lives in the
-cross-DP harness (`evals/cross-dp-joins/harness/score_cli.py`), which imports
-the functions below.
+cross-DP harness (`evals/cross-dp-joins/harness/score.py`), which imports the
+functions below.
 
 Public surface (re-exported by `nxd_eval.scoring`):
 

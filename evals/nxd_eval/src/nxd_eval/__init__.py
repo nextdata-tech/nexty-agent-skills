@@ -7,9 +7,9 @@ Public authoring API (this layer):
     gold                      — frozen-oracle gold records (rows / query forms)
 
 ``Suite.to_inspect_task()`` lowers a suite into a runnable Inspect ``Task``. The
-scorer *bodies* (deterministic-EX via the cross-DP score.py core, the model
-judge) and the run/certify entry points attach in later layers on top of this
-stable shape.
+scorer *bodies* (deterministic-EX via the ``_ex_core.score`` module this package
+owns, the model judge) and the run/certify entry points attach in later layers
+on top of this stable shape.
 """
 
 from __future__ import annotations
