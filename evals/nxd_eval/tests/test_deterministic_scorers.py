@@ -119,6 +119,34 @@ def test_rows_equal_single_measure_order_blind_pass():
     assert s.value == CORRECT
 
 
+def test_rows_equal_default_set_mode_tolerates_float_drift():
+    """Default equality_mode="set" must tolerate harmless 1e-6 float drift.
+
+    Regression for the gap where only equality_mode="numeric" applied
+    _NUMERIC_TOL rounding — the default "set" mode did exact float comparison,
+    so a value like 840110.00000001 spuriously FAILed against gold 840110.0
+    even though the user-facing doc promises the comparison "tolerates
+    harmless differences". No `equality_mode` in metadata here — this exercises
+    the actual default.
+    """
+    gold = [{"region": "x", "revenue": 840110.0}]
+    got = [{"region": "x", "revenue": 840110.00000001}]
+    st = _state(calls=[({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": got})])
+    s = _run(rows_equal(), st, Target(json.dumps(gold)))
+    assert s.value == CORRECT
+    assert s.metadata["verdict"] == "PASS"
+
+
+def test_rows_equal_default_set_mode_still_fails_real_difference():
+    """Tolerance must not be over-widened: a genuine 0.5 difference still FAILs."""
+    gold = [{"region": "x", "revenue": 840110.0}]
+    got = [{"region": "x", "revenue": 840110.5}]
+    st = _state(calls=[({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": got})])
+    s = _run(rows_equal(), st, Target(json.dumps(gold)))
+    assert s.value == INCORRECT
+    assert s.metadata["verdict"] == "FAIL"
+
+
 # --------------------------------------------------------------------------- #
 # sql_contains / sql_excludes — substring on compiled SQL
 # --------------------------------------------------------------------------- #
@@ -273,6 +301,55 @@ def test_expect_abstain_feasible_spurious_abstain_is_incorrect():
         metadata={"feasible": True},
     )
     assert _run(expect_abstain(), st, Target("")).value == INCORRECT
+
+
+def test_expect_abstain_feasible_answer_with_which_is_not_flagged():
+    """A declarative answer containing the word 'which' must NOT be flagged
+    as abstain — regression for the over-broad bare 'which ' marker."""
+    st = _state(
+        calls=[({"measures": ["revenue"], "dimensions": ["region"]}, {"compiled_sql": "s", "rows": [{"region": "EMEA", "revenue": 100}]})],
+        final="The region which had the highest revenue is EMEA.",
+        metadata={"feasible": True},
+    )
+    s = _run(expect_abstain(), st, Target(""))
+    assert s.metadata["abstained"] is False
+    assert s.value == CORRECT
+
+
+def test_expect_abstain_genuine_clarify_still_flagged():
+    """A genuine clarifying question must still be caught via the remaining
+    'do you mean' marker even without the bare 'which ' token.
+
+    The call carries a successful answered query so the ``not answered``
+    short-circuit in ``_looks_like_abstain`` does NOT fire — the abstain verdict
+    here must come from the MARKER branch, so deleting 'do you mean' from
+    ``_ABSTAIN_MARKERS`` would make this test fail (the regression it guards).
+    """
+    st = _state(
+        calls=[({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": [{"revenue": 1}]})],
+        final="Which metric do you mean — revenue or margin?",
+        metadata={"feasible": True},
+    )
+    s = _run(expect_abstain(), st, Target(""))
+    assert s.metadata["abstained"] is True
+    assert s.value == INCORRECT
+
+
+def test_expect_abstain_genuine_refusal_no_such_metric_is_flagged():
+    """A genuine refusal ('no such metric') must still be flagged as abstain.
+
+    Same as above — an answered call is present so the flag is exercised through
+    the marker branch, not the no-query short-circuit; removing 'no such' /
+    'there is no' from ``_ABSTAIN_MARKERS`` would fail this test.
+    """
+    st = _state(
+        calls=[({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": [{"revenue": 1}]})],
+        final="There is no such metric in this semantic model.",
+        metadata={"feasible": False},
+    )
+    s = _run(expect_abstain(), st, Target(""))
+    assert s.metadata["abstained"] is True
+    assert s.value == CORRECT
 
 
 def test_expect_abstain_clarify_question_asks_back():
