@@ -128,7 +128,10 @@ def _rows_equal_score(state: TaskState, target: Target) -> Score:
     # per bucket, but this keeps the raw log honest too.
     bucket = (state.metadata or {}).get("bucket", "answer")
     if bucket != "answer":
-        return Score(value=NOANSWER, metadata={"reason": f"deterministic-EX N/A for bucket={bucket}"})
+        return Score(
+            value=NOANSWER,
+            metadata={"reason": f"deterministic-EX N/A for bucket={bucket}"},
+        )
 
     tx = extract(state)
     gold_rows = _gold_rows_from_target(target)
@@ -465,7 +468,11 @@ def _judge_prompt(
 ) -> str:
     trail = []
     for c in tx.calls:
-        status = "errored" if c.errored else (f"{len(c.rows)} rows" if c.rows is not None else "no rows")
+        status = (
+            "errored"
+            if c.errored
+            else (f"{len(c.rows)} rows" if c.rows is not None else "no rows")
+        )
         trail.append(f"- run_semantic_query → {status}")
     did = "\n".join(trail) if trail else "- (no run_semantic_query calls)"
     # Position-bias debiasing: present the criteria in a per-sample randomised

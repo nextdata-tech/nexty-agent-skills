@@ -114,7 +114,9 @@ def _write(tmp_path, samples: list[EvalSample], name="run.eval") -> str:
     return str(p)
 
 
-def _answer_samples(n: int, n_correct: int, *, bucket: str = "answer") -> list[EvalSample]:
+def _answer_samples(
+    n: int, n_correct: int, *, bucket: str = "answer"
+) -> list[EvalSample]:
     """``n`` independent (distinct-cluster) answer samples, ``n_correct`` passing."""
     out = []
     for i in range(n):
@@ -135,8 +137,12 @@ def test_report_per_bucket_counts_and_pointwise_accuracy():
             _sample("cl-1", bucket="clarify", passed=False),
         ]
         + [
-            _sample("ab-0", bucket="abstain", feasible=False, passed=True, abstained=True),
-            _sample("ab-1", bucket="abstain", feasible=False, passed=False, abstained=False),
+            _sample(
+                "ab-0", bucket="abstain", feasible=False, passed=True, abstained=True
+            ),
+            _sample(
+                "ab-1", bucket="abstain", feasible=False, passed=False, abstained=False
+            ),
         ]
     )
     rep = Report.from_log(_log(samples))
@@ -159,6 +165,7 @@ def test_report_reads_package_qualified_scorer_keys():
     report must resolve either form, or a real published run silently scores
     every answer case as a miss (the bare-key fixtures above can't catch this).
     """
+
     def _prefixed(sample_id: str, *, bucket: str, passed: bool) -> EvalSample:
         s = _sample(sample_id, bucket=bucket, passed=passed)
         # re-key the scores dict with the package-qualified registry name
@@ -285,7 +292,9 @@ def test_reliability_and_governance_on_abstain_bucket():
     samples = [
         _sample("ab-0", bucket="abstain", feasible=False, passed=True, abstained=True),
         _sample("ab-1", bucket="abstain", feasible=False, passed=True, abstained=True),
-        _sample("ab-2", bucket="abstain", feasible=False, passed=False, abstained=False),
+        _sample(
+            "ab-2", bucket="abstain", feasible=False, passed=False, abstained=False
+        ),
     ]
     rep = Report.from_log(_log(samples))
     card = rep.cards["abstain"]
@@ -371,8 +380,8 @@ def test_calibration_uses_only_confidence_bearing_rows():
     samples = [
         _sample("a-0", passed=True, confidence=0.9),
         _sample("a-1", passed=False, confidence=0.1),
-        _sample("a-2", passed=True),   # no confidence — excluded
-        _sample("a-3", passed=True),   # no confidence — excluded
+        _sample("a-2", passed=True),  # no confidence — excluded
+        _sample("a-3", passed=True),  # no confidence — excluded
     ]
     rep = Report.from_log(_log(samples))
     cal = rep.cards["answer"].calibration
@@ -479,7 +488,9 @@ def test_certify_fails_when_point_estimate_passes_but_lower_bound_misses(tmp_pat
 
     assert res.p_hat > 0.90, "guard: point estimate must clear the target"
     assert res.ci_low < 0.90, "guard: lower bound must miss the target"
-    assert res.refused is False, "sample is powered enough — this is a fail, not a refusal"
+    assert res.refused is False, (
+        "sample is powered enough — this is a fail, not a refusal"
+    )
     assert res.passed is False
     assert res.exit_code != 0
     assert "lower bound" in res.reason

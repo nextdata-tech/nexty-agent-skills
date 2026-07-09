@@ -171,8 +171,10 @@ def score_one(
     # numeric measures SWAPPED still score PASS. When gold has >=2 numeric measure
     # columns, re-validate name-aware and downgrade a name-mismatch PASS to FAIL.
     # Only touches the answered-PASS path — ABSTAIN/ERROR/N/A/FAIL are unchanged.
-    if verdict == "PASS" and not bool(trial.get("abstained")) and not bool(
-        trial.get("errored")
+    if (
+        verdict == "PASS"
+        and not bool(trial.get("abstained"))
+        and not bool(trial.get("errored"))
     ):
         # Re-check against the SAME bucketed rows score_accuracy just judged —
         # using the raw (unbucketed) rows here would spuriously downgrade a
@@ -246,9 +248,7 @@ def rows_equal_name_aware(
     return _numeric_cells_named(actual) == _numeric_cells_named(gold_rows)
 
 
-def matches_compiler(
-    rows: list[dict] | None, compiler_rows: list[dict] | None
-) -> bool:
+def matches_compiler(rows: list[dict] | None, compiler_rows: list[dict] | None) -> bool:
     """Set-equality of this strategy's rows vs the compiler's executed rows.
 
     Name-blind, numeric-tolerant, DISTINCT-row comparison (the same normalization

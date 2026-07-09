@@ -84,7 +84,9 @@ _SWAP = [{"region": "x", "revenue": 95.0, "cost": 5.0}]  # two measures swapped
 
 def test_rows_equal_matching_rows_correct():
     st = _state(
-        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})]
+        calls=[
+            ({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})
+        ]
     )
     s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
     assert s.value == CORRECT
@@ -98,7 +100,9 @@ def test_rows_equal_swapped_two_measures_fails():
     through the imported EX core — proving the eval inherits it, not a re-impl.
     """
     st = _state(
-        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _SWAP})]
+        calls=[
+            ({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _SWAP})
+        ]
     )
     s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
     assert s.value == INCORRECT
@@ -145,7 +149,9 @@ def test_rows_equal_carries_verbalized_confidence():
     risk-coverage metrics. Elicited per QA-Calibration (ICLR 2025).
     """
     st = _state(
-        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})],
+        calls=[
+            ({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})
+        ],
         final="The answer is 5 and 95.\nCONFIDENCE: 0.87",
     )
     s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
@@ -156,7 +162,9 @@ def test_rows_equal_carries_verbalized_confidence():
 def test_rows_equal_without_confidence_omits_key():
     """Backward-compat: no CONFIDENCE line ⇒ no confidence key, still scores."""
     st = _state(
-        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})],
+        calls=[
+            ({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})
+        ],
         final="The answer is 5 and 95.",
     )
     s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
@@ -203,7 +211,12 @@ def test_rows_equal_default_set_mode_still_fails_real_difference():
 
 def test_sql_contains_present_and_missing():
     st = _state(
-        calls=[({"measures": ["n"]}, {"compiled_sql": "SELECT COUNT(*) FROM subjects", "rows": []})]
+        calls=[
+            (
+                {"measures": ["n"]},
+                {"compiled_sql": "SELECT COUNT(*) FROM subjects", "rows": []},
+            )
+        ]
     )
     assert _run(sql_contains("FROM subjects"), st, Target("")).value == CORRECT
     assert _run(sql_contains("JOIN prescriptions"), st, Target("")).value == INCORRECT
@@ -211,7 +224,12 @@ def test_sql_contains_present_and_missing():
 
 def test_sql_excludes_flags_forbidden_join():
     st = _state(
-        calls=[({"measures": ["n"]}, {"compiled_sql": "SELECT ... FROM a JOIN b", "rows": []})]
+        calls=[
+            (
+                {"measures": ["n"]},
+                {"compiled_sql": "SELECT ... FROM a JOIN b", "rows": []},
+            )
+        ]
     )
     # excludes a table that is NOT present -> correct
     assert _run(sql_excludes("JOIN prescriptions"), st, Target("")).value == CORRECT
@@ -239,7 +257,9 @@ def test_error_nonempty_correct_when_tool_refused():
 
 
 def test_error_nonempty_incorrect_when_rows_returned():
-    st = _state(calls=[({"measures": ["n"]}, {"compiled_sql": "s", "rows": [{"n": 1}]})])
+    st = _state(
+        calls=[({"measures": ["n"]}, {"compiled_sql": "s", "rows": [{"n": 1}]})]
+    )
     assert _run(error_nonempty(), st, Target("")).value == INCORRECT
 
 
@@ -252,7 +272,12 @@ _GOLD_SEL = {"measures": ["revenue"], "dimensions": ["region"]}
 
 def test_slot_match_exact_selection_is_perfect():
     st = _state(
-        calls=[({"measures": ["revenue"], "dimensions": ["region"]}, {"compiled_sql": "s", "rows": []})],
+        calls=[
+            (
+                {"measures": ["revenue"], "dimensions": ["region"]},
+                {"compiled_sql": "s", "rows": []},
+            )
+        ],
         metadata={"gold_selection": _GOLD_SEL},
     )
     s = _run(slot_match(), st, Target(""))
@@ -268,24 +293,35 @@ def test_slot_match_wrong_dimension_drops_f1():
     falls to 0, dragging the mean well below 1.0.
     """
     st = _state(
-        calls=[({"measures": ["revenue"], "dimensions": ["product"]}, {"compiled_sql": "s", "rows": []})],
+        calls=[
+            (
+                {"measures": ["revenue"], "dimensions": ["product"]},
+                {"compiled_sql": "s", "rows": []},
+            )
+        ],
         metadata={"gold_selection": _GOLD_SEL},
     )
     s = _run(slot_match(), st, Target(""))
     assert s.value == INCORRECT
     assert s.metadata["slot_f1"] < 1.0
     per = s.metadata["per_slot"]
-    assert per["metric"] == 1.0        # metric still right
-    assert per["dimensions"] == 0.0    # wrong dimension
-    assert per["grain"] == 0.0         # wrong grain follows the wrong dim set
+    assert per["metric"] == 1.0  # metric still right
+    assert per["dimensions"] == 0.0  # wrong dimension
+    assert per["grain"] == 0.0  # wrong grain follows the wrong dim set
 
 
 def test_slot_match_ema_rewards_late_correction():
     """A late correct query pulls the EMA up above the wrong first attempt."""
     st = _state(
         calls=[
-            ({"measures": ["revenue"], "dimensions": ["product"]}, {"compiled_sql": "s", "rows": []}),
-            ({"measures": ["revenue"], "dimensions": ["region"]}, {"compiled_sql": "s", "rows": []}),
+            (
+                {"measures": ["revenue"], "dimensions": ["product"]},
+                {"compiled_sql": "s", "rows": []},
+            ),
+            (
+                {"measures": ["revenue"], "dimensions": ["region"]},
+                {"compiled_sql": "s", "rows": []},
+            ),
         ],
         metadata={"gold_selection": _GOLD_SEL},
     )
@@ -326,7 +362,12 @@ def test_expect_abstain_infeasible_refusal_is_correct():
 def test_expect_abstain_infeasible_fabrication_is_incorrect():
     """Infeasible question but the agent fabricated rows and asserted them."""
     st = _state(
-        calls=[({"measures": ["units"], "dimensions": ["prescriber"]}, {"compiled_sql": "s", "rows": [{"prescriber": "Dr X", "units": 10}]})],
+        calls=[
+            (
+                {"measures": ["units"], "dimensions": ["prescriber"]},
+                {"compiled_sql": "s", "rows": [{"prescriber": "Dr X", "units": 10}]},
+            )
+        ],
         final="Dr X prescribed 10 units.",
         metadata={"feasible": False},
     )
@@ -356,7 +397,12 @@ def test_expect_abstain_feasible_answer_with_which_is_not_flagged():
     """A declarative answer containing the word 'which' must NOT be flagged
     as abstain — regression for the over-broad bare 'which ' marker."""
     st = _state(
-        calls=[({"measures": ["revenue"], "dimensions": ["region"]}, {"compiled_sql": "s", "rows": [{"region": "EMEA", "revenue": 100}]})],
+        calls=[
+            (
+                {"measures": ["revenue"], "dimensions": ["region"]},
+                {"compiled_sql": "s", "rows": [{"region": "EMEA", "revenue": 100}]},
+            )
+        ],
         final="The region which had the highest revenue is EMEA.",
         metadata={"feasible": True},
     )
@@ -375,7 +421,9 @@ def test_expect_abstain_genuine_clarify_still_flagged():
     ``_ABSTAIN_MARKERS`` would make this test fail (the regression it guards).
     """
     st = _state(
-        calls=[({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": [{"revenue": 1}]})],
+        calls=[
+            ({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": [{"revenue": 1}]})
+        ],
         final="Which metric do you mean — revenue or margin?",
         metadata={"feasible": True},
     )
@@ -392,7 +440,9 @@ def test_expect_abstain_genuine_refusal_no_such_metric_is_flagged():
     'there is no' from ``_ABSTAIN_MARKERS`` would fail this test.
     """
     st = _state(
-        calls=[({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": [{"revenue": 1}]})],
+        calls=[
+            ({"measures": ["revenue"]}, {"compiled_sql": "s", "rows": [{"revenue": 1}]})
+        ],
         final="There is no such metric in this semantic model.",
         metadata={"feasible": False},
     )
@@ -423,6 +473,7 @@ def test_expect_abstain_clarify_question_asks_back():
 # rows_equal — skips non-answer buckets (deterministic-EX is N/A there)
 # --------------------------------------------------------------------------- #
 
+
 def test_rows_equal_skips_abstain_bucket():
     """An abstain/clarify case has no gold rows -> deterministic-EX returns
     NOANSWER (N/A), NOT INCORRECT, so a mixed suite's EX metric is not dragged
@@ -449,6 +500,7 @@ def test_rows_equal_answer_bucket_still_scored():
 # judge — model-graded checks lane
 # --------------------------------------------------------------------------- #
 
+
 def test_judge_no_checks_is_noanswer():
     """No checks for the sample -> judge abstains (NOANSWER), not a penalty."""
     from inspect_ai.scorer import NOANSWER
@@ -463,7 +515,12 @@ def test_judge_parse_grade_and_prompt():
     """The grade parser and prompt builder are deterministic and robust."""
     from nxd_eval.scorers import _judge_prompt, _parse_grade
     from nxd_eval.transcript import extract
-    from inspect_ai.scorer import CORRECT as C, INCORRECT as I, PARTIAL as P, NOANSWER as N
+    from inspect_ai.scorer import (
+        CORRECT as C,
+        INCORRECT as I,
+        PARTIAL as P,
+        NOANSWER as N,
+    )
 
     assert _parse_grade("reasoning...\nGRADE: C") == C
     assert _parse_grade("GRADE: I") == I
@@ -477,7 +534,9 @@ def test_judge_parse_grade_and_prompt():
         final="There is no mortality metric.",
         metadata={},
     )
-    prompt = _judge_prompt("mortality rate?", extract(st), ["must refuse; no mortality metric"])
+    prompt = _judge_prompt(
+        "mortality rate?", extract(st), ["must refuse; no mortality metric"]
+    )
     assert "CRITERIA:" in prompt
     assert "mortality" in prompt
     assert "run_semantic_query" in prompt  # the tool trail is summarised

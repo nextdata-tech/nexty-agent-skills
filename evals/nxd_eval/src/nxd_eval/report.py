@@ -187,7 +187,9 @@ def _rows_from_log(log) -> list[SampleRow]:
         # feasible / abstained come from the abstain scorer's metadata when
         # present, else from the sample-level routing metadata.
         abstain_meta = _score_meta(_get_score(scores, _ABSTAIN_SCORER))
-        feasible = bool(abstain_meta.get("feasible", meta.get("feasible", bucket != "abstain")))
+        feasible = bool(
+            abstain_meta.get("feasible", meta.get("feasible", bucket != "abstain"))
+        )
         abstained = bool(abstain_meta.get("abstained", False))
 
         # Verbalized confidence rides in the deterministic-EX scorer's metadata
@@ -661,9 +663,7 @@ class Report:
 
         p = str(path)
         log = read_eval_log(p)
-        return cls.from_log(
-            log, alpha=alpha, suite=suite, variant=variant, log_path=p
-        )
+        return cls.from_log(log, alpha=alpha, suite=suite, variant=variant, log_path=p)
 
     # ---- accuracy accessor certify() gates on ---- #
 

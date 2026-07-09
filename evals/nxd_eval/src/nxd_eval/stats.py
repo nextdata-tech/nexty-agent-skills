@@ -262,7 +262,9 @@ def ece(y_true: list[int], y_prob: list[float], *, n_bins: int = 10) -> float:
     # count as it does for frac_pos/mean_pred; using ``digitize`` (side='right')
     # here would misweight such boundary values when both adjacent bins are
     # populated. Clamp to [0, n_bins - 1] for the p == 1.0 tail.
-    bin_ids = np.clip(np.searchsorted(edges[1:-1], y_prob_arr, side="left"), 0, n_bins - 1)
+    bin_ids = np.clip(
+        np.searchsorted(edges[1:-1], y_prob_arr, side="left"), 0, n_bins - 1
+    )
     counts = np.bincount(bin_ids, minlength=n_bins)
     populated = counts[counts > 0]
 
