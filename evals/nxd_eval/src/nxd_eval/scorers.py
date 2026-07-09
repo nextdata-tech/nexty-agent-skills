@@ -428,13 +428,42 @@ _JUDGE_SYSTEM = (
 )
 
 
-def _judge_prompt(question: str, tx: "Transcript", checks: list[str]) -> str:
+def _debias_order(checks: list[str], *, seed: int) -> list[str]:
+    """Return the criteria in a deterministically shuffled order.
+
+    The judge is single-answer (it grades one transcript against a criteria list),
+    not pairwise — so there is no candidate A/B to swap. The ordered material it
+    still sees is the CRITERIA list, and an LLM grader exhibits primacy/recency
+    bias over that list: a criterion presented first or last is weighted more than
+    one buried in the middle. Randomising the criteria order per sample (seeded, so
+    a given sample+pass is reproducible) neutralises that positional weighting the
+    same way order-swap neutralises candidate-position bias in a pairwise judge.
+
+    Reference:
+        "Trust or Escalate: LLM Judges with Provable Guarantees for Human
+        Agreement" (ICLR 2025) — establishes position/order bias as a first-order
+        confound in LLM-as-judge and prescribes order randomisation / swapping as
+        the debiasing intervention.
+    """
+    import random
+
+    order = list(range(len(checks)))
+    random.Random(seed).shuffle(order)
+    return [checks[i] for i in order]
+
+
+def _judge_prompt(
+    question: str, tx: "Transcript", checks: list[str], *, order_seed: int = 0
+) -> str:
     trail = []
     for c in tx.calls:
         status = "errored" if c.errored else (f"{len(c.rows)} rows" if c.rows is not None else "no rows")
         trail.append(f"- run_semantic_query → {status}")
     did = "\n".join(trail) if trail else "- (no run_semantic_query calls)"
-    criteria = "\n".join(f"{i}. {c}" for i, c in enumerate(checks, 1))
+    # Position-bias debiasing: present the criteria in a per-sample randomised
+    # order so no criterion holds a fixed primacy/recency slot across samples.
+    ordered = _debias_order(checks, seed=order_seed)
+    criteria = "\n".join(f"{i}. {c}" for i, c in enumerate(ordered, 1))
     return (
         f"QUESTION:\n{question}\n\n"
         f"WHAT THE AGENT DID:\n{did}\n\n"
@@ -454,6 +483,25 @@ def _parse_grade(text: str) -> str:
     return {"C": CORRECT, "P": PARTIAL, "I": INCORRECT}[g]
 
 
+# Env flag gating the opt-in judge test-retest pass. When set truthy, the judge
+# grades each sample a SECOND time with an independent criteria ordering; the two
+# labels are recorded so report.py can compute Gwet AC1 test-retest agreement and
+# attribute a flat judge axis to agent-weakness vs judge-noise. Off by default so
+# a normal run is not doubled.
+_JUDGE_RETEST_ENV = "NXD_EVAL_JUDGE_RETEST"
+
+
+def _judge_retest_enabled() -> bool:
+    import os
+
+    return os.environ.get(_JUDGE_RETEST_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 @scorer(name=JUDGE, metrics=[mean(), stderr()])
 def judge() -> Scorer:
     """Model-graded checks slot: grades the agent's answer against the sample's
@@ -463,6 +511,18 @@ def judge() -> Scorer:
     Returns NOANSWER when the sample carries no checks (nothing to grade), so a
     suite without a check for a bucket does not penalise it. The mean metric then
     reflects only graded samples.
+
+    Position-bias debiasing: the criteria are presented in a per-sample randomised
+    order (see :func:`_debias_order`) so no criterion holds a fixed primacy/recency
+    slot — the single-answer analogue of order-swap in a pairwise judge, per
+    "Trust or Escalate" (ICLR 2025).
+
+    Test-retest reliability (opt-in via the ``NXD_EVAL_JUDGE_RETEST`` env flag):
+    when enabled, each sample is graded a SECOND time with an independent criteria
+    ordering, and both labels are stamped into ``Score.metadata`` (``grade_1`` /
+    ``grade_2``) so :mod:`nxd_eval.report` can compute Gwet AC1 between the two
+    label sets. That lets a flat judge axis be attributed to agent-weakness vs
+    judge-noise. Off by default so a normal run is not doubled.
     """
     from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 
@@ -474,7 +534,17 @@ def judge() -> Scorer:
 
         tx = extract(state)
         model = get_model(role="grader", default=None) or get_model()
-        prompt = _judge_prompt(str(state.input), tx, checks)
+        # Seed the criteria ordering off a stable per-sample id so a pass is
+        # reproducible ACROSS processes; the retest pass uses a distinct seed for
+        # an independent ordering. Use zlib.crc32 rather than the built-in hash(),
+        # which is salted per process (PYTHONHASHSEED) and would give every run a
+        # different order — injecting judge order-sensitivity variance into exactly
+        # the cross-run deltas this framework measures.
+        import zlib
+
+        base_seed = zlib.crc32(str(state.sample_id).encode()) & 0x7FFFFFFF
+
+        prompt = _judge_prompt(str(state.input), tx, checks, order_seed=base_seed)
         result = await model.generate(
             [
                 ChatMessageSystem(content=_JUDGE_SYSTEM),
@@ -482,11 +552,26 @@ def judge() -> Scorer:
             ]
         )
         grade = _parse_grade(result.completion)
+
+        score_meta: dict[str, Any] = {"n_checks": len(checks), "grade_1": grade}
+
+        if _judge_retest_enabled():
+            prompt2 = _judge_prompt(
+                str(state.input), tx, checks, order_seed=base_seed ^ 0x5EED
+            )
+            result2 = await model.generate(
+                [
+                    ChatMessageSystem(content=_JUDGE_SYSTEM),
+                    ChatMessageUser(content=prompt2),
+                ]
+            )
+            score_meta["grade_2"] = _parse_grade(result2.completion)
+
         return Score(
             value=grade,
             answer=tx.final_answer,
             explanation=result.completion[:2000],
-            metadata={"n_checks": len(checks)},
+            metadata=score_meta,
         )
 
     return score

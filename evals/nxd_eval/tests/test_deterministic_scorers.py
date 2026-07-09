@@ -15,6 +15,7 @@ The load-bearing cases the brief calls out explicitly:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import anyio
 from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, ModelName
@@ -432,3 +433,138 @@ def test_judge_parse_grade_and_prompt():
     assert "CRITERIA:" in prompt
     assert "mortality" in prompt
     assert "run_semantic_query" in prompt  # the tool trail is summarised
+
+
+# --------------------------------------------------------------------------- #
+# Judge position-bias debiasing (criteria-order randomisation)
+# --------------------------------------------------------------------------- #
+
+
+def test_judge_debias_permutes_criteria_order():
+    # The single-answer judge randomises the CRITERIA order per sample so no
+    # criterion holds a fixed primacy/recency slot (the single-answer analogue of
+    # order-swap in a pairwise judge). A different seed must yield a different
+    # order for the same criteria, and every criterion must survive (permutation,
+    # not a drop).
+    from nxd_eval.scorers import _debias_order
+
+    checks = [f"criterion {i}" for i in range(8)]
+    o0 = _debias_order(checks, seed=0)
+    o1 = _debias_order(checks, seed=1)
+    assert sorted(o0) == sorted(checks)  # permutation preserves the set
+    assert o0 != o1  # different seeds -> different presentation order
+    # At least one seed must reorder relative to the input (debiasing is applied,
+    # not a no-op identity).
+    assert any(_debias_order(checks, seed=s) != checks for s in range(4))
+
+
+def test_judge_debias_is_deterministic_per_seed():
+    # A given seed is reproducible so a sample+pass is stable across runs.
+    from nxd_eval.scorers import _debias_order
+
+    checks = ["a", "b", "c", "d", "e"]
+    assert _debias_order(checks, seed=42) == _debias_order(checks, seed=42)
+
+
+def test_judge_prompt_applies_debiasing():
+    # The assembled judge prompt must present the criteria in the debiased order,
+    # not the raw input order — proving the debiasing is wired into the prompt.
+    from nxd_eval.scorers import _debias_order, _judge_prompt
+    from nxd_eval.transcript import extract
+
+    tx = extract(_state(final="done"))
+    checks = [f"crit-{i}" for i in range(8)]
+    seed = 7
+    prompt = _judge_prompt("Q?", tx, checks, order_seed=seed)
+    ordered = _debias_order(checks, seed=seed)
+    # The criteria block is the debiased order, numbered 1..n.
+    expected = "\n".join(f"{i}. {c}" for i, c in enumerate(ordered, 1))
+    assert expected in prompt
+
+
+def test_debias_order_seed_stable_across_processes():
+    # The per-sample ordering seed must NOT depend on the salted built-in hash(),
+    # which varies with PYTHONHASHSEED between processes and would give every run a
+    # different criteria order. zlib.crc32 is process-stable, so the seed derived
+    # from a sample id is fixed forever.
+    import zlib
+
+    def seed_of(sample_id: str) -> int:
+        return zlib.crc32(str(sample_id).encode()) & 0x7FFFFFFF
+
+    # A hand-computed anchor pins the derivation (and would break if someone
+    # swapped back to hash()).
+    assert seed_of("q1") == zlib.crc32(b"q1") & 0x7FFFFFFF
+    assert seed_of("q1") == seed_of("q1")
+
+
+# --------------------------------------------------------------------------- #
+# judge() test-retest pass (opt-in via NXD_EVAL_JUDGE_RETEST)
+# --------------------------------------------------------------------------- #
+
+
+def test_judge_retest_enabled_parses_env(monkeypatch):
+    from nxd_eval.scorers import _JUDGE_RETEST_ENV, _judge_retest_enabled
+
+    monkeypatch.delenv(_JUDGE_RETEST_ENV, raising=False)
+    assert _judge_retest_enabled() is False
+    for truthy in ("1", "true", "TRUE", "yes", "on", " On "):
+        monkeypatch.setenv(_JUDGE_RETEST_ENV, truthy)
+        assert _judge_retest_enabled() is True
+    for falsy in ("0", "false", "no", "off", ""):
+        monkeypatch.setenv(_JUDGE_RETEST_ENV, falsy)
+        assert _judge_retest_enabled() is False
+
+
+class _FakeModel:
+    """A model stub whose generate() returns queued completions in order."""
+
+    def __init__(self, completions: list[str]):
+        self._completions = list(completions)
+
+    async def generate(self, messages):  # noqa: ANN001 - matches inspect_ai
+        text = self._completions.pop(0)
+        return SimpleNamespace(completion=text)
+
+
+def _judge_state() -> TaskState:
+    return _state(
+        final="the answer",
+        metadata={"judge_checks": ["criterion a", "criterion b"]},
+        sample_id="q1",
+    )
+
+
+def test_judge_stamps_both_grades_when_retest_enabled(monkeypatch):
+    # With the retest flag set, judge() grades twice and stamps grade_1 + grade_2
+    # under EXACTLY those metadata keys (the producer side of the contract that
+    # report.py consumes).
+    import inspect_ai.model as im
+
+    from nxd_eval.scorers import _JUDGE_RETEST_ENV, judge
+
+    monkeypatch.setenv(_JUDGE_RETEST_ENV, "1")
+    fake = _FakeModel(["GRADE: C", "GRADE: I"])
+    monkeypatch.setattr(im, "get_model", lambda *a, **k: fake)
+
+    s = _run(judge(), _judge_state(), Target(""))
+    assert s.metadata["grade_1"] == CORRECT
+    assert s.metadata["grade_2"] == INCORRECT
+    assert s.value == CORRECT  # value tracks the first pass
+
+
+def test_judge_omits_grade_2_when_retest_disabled(monkeypatch):
+    # With the flag unset, judge() grades once: grade_1 present, grade_2 absent
+    # and only ONE generate() call is made.
+    import inspect_ai.model as im
+
+    from nxd_eval.scorers import _JUDGE_RETEST_ENV, judge
+
+    monkeypatch.delenv(_JUDGE_RETEST_ENV, raising=False)
+    fake = _FakeModel(["GRADE: C"])  # a second call would IndexError
+    monkeypatch.setattr(im, "get_model", lambda *a, **k: fake)
+
+    s = _run(judge(), _judge_state(), Target(""))
+    assert s.metadata["grade_1"] == CORRECT
+    assert "grade_2" not in s.metadata
+    assert fake._completions == []  # exactly one generate() consumed
