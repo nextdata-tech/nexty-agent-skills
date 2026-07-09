@@ -137,6 +137,54 @@ def test_rows_equal_default_set_mode_tolerates_float_drift():
     assert s.metadata["verdict"] == "PASS"
 
 
+def test_rows_equal_carries_verbalized_confidence():
+    """A CONFIDENCE line in the final answer is parsed into score metadata.
+
+    The (correctness, confidence) pair feeds the report's calibration /
+    risk-coverage metrics. Elicited per QA-Calibration (ICLR 2025).
+    """
+    st = _state(
+        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})],
+        final="The answer is 5 and 95.\nCONFIDENCE: 0.87",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
+    assert s.value == CORRECT
+    assert s.metadata["confidence"] == 0.87
+
+
+def test_rows_equal_without_confidence_omits_key():
+    """Backward-compat: no CONFIDENCE line ⇒ no confidence key, still scores."""
+    st = _state(
+        calls=[({"measures": ["revenue", "cost"]}, {"compiled_sql": "s", "rows": _GOLD})],
+        final="The answer is 5 and 95.",
+    )
+    s = _run(rows_equal(), st, Target(json.dumps(_GOLD)))
+    assert s.value == CORRECT
+    assert "confidence" not in s.metadata
+
+
+def test_parse_confidence_units():
+    from nxd_eval.transcript import parse_confidence
+
+    assert parse_confidence("answer\nCONFIDENCE: 0.9") == 0.9
+    assert parse_confidence("confidence: .25 blah") == 0.25
+    assert parse_confidence("CONFIDENCE: 1") == 1.0
+    # last occurrence wins on a restatement
+    assert parse_confidence("CONFIDENCE: 0.2 ... CONFIDENCE: 0.8") == 0.8
+    # out-of-range clamps into [0, 1]
+    assert parse_confidence("CONFIDENCE: 1.5") == 1.0
+    # integer/percentage restatements are NOT the 0.NN form ⇒ None, not a
+    # spurious full-confidence read of the leading digit
+    assert parse_confidence("CONFIDENCE: 12") is None
+    assert parse_confidence("CONFIDENCE: 95%") is None
+    assert parse_confidence("CONFIDENCE: 12%") is None
+    # bare integer 0/1 at end of text still parse (no trailing digit/%)
+    assert parse_confidence("CONFIDENCE: 0") == 0.0
+    # no line ⇒ None (backward-compatible)
+    assert parse_confidence("just an answer, no confidence stated") is None
+    assert parse_confidence("") is None
+
+
 def test_rows_equal_default_set_mode_still_fails_real_difference():
     """Tolerance must not be over-widened: a genuine 0.5 difference still FAILs."""
     gold = [{"region": "x", "revenue": 840110.0}]

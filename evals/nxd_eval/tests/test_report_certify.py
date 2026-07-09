@@ -61,13 +61,17 @@ def _sample(
     feasible: bool = True,
     passed: bool = True,
     abstained: bool = False,
+    confidence: float | None = None,
 ) -> EvalSample:
     """One scored EvalSample with our routing metadata + the primary scorer."""
     scorer_name = _EX if bucket == "answer" else _ABS
+    score_meta = {"feasible": feasible, "abstained": abstained}
+    if confidence is not None:
+        score_meta["confidence"] = confidence
     scores = {
         scorer_name: Score(
             value="C" if passed else "I",
-            metadata={"feasible": feasible, "abstained": abstained},
+            metadata=score_meta,
         )
     }
     return EvalSample(
@@ -292,6 +296,72 @@ def test_pass_at_k_requires_every_epoch():
     rep = Report.from_log(_log(samples))
     # 1 of 2 clusters passed on EVERY epoch.
     assert math.isclose(rep.cards["answer"].pass_at_k, 0.5)
+
+
+# --------------------------------------------------------------------------- #
+# Calibration / selective-prediction (Brier / ECE / AURC)
+# --------------------------------------------------------------------------- #
+
+
+def test_calibration_metrics_finite_when_confidences_present():
+    # Answer cases carrying verbalized confidences: well-calibrated head (right &
+    # confident) plus one over-confident miss. Brier/ECE/AURC must be finite and
+    # in-range, and computed only over the confidence-bearing pairs.
+    import math as _math
+
+    samples = [
+        _sample("a-0", passed=True, confidence=0.95),
+        _sample("a-1", passed=True, confidence=0.90),
+        _sample("a-2", passed=True, confidence=0.85),
+        _sample("a-3", passed=False, confidence=0.80),  # over-confident miss
+        _sample("a-4", passed=False, confidence=0.20),  # well-flagged miss
+    ]
+    rep = Report.from_log(_log(samples))
+    cal = rep.cards["answer"].calibration
+    assert cal is not None
+    assert cal.n == 5
+    for v in (cal.brier, cal.ece, cal.aurc):
+        assert _math.isfinite(v)
+        assert v >= 0.0
+    assert cal.brier <= 1.0
+
+    # Surfaced in JSON and markdown.
+    import json as _json
+
+    doc = _json.loads(rep.to_json())
+    assert doc["buckets"]["answer"]["calibration"]["n"] == 5
+    assert "brier" in doc["buckets"]["answer"]["calibration"]
+    md = rep.to_markdown()
+    assert "calibration" in md
+    assert "Brier" in md and "ECE" in md and "AURC" in md
+
+
+def test_calibration_omitted_without_confidences():
+    # No confidences on any sample ⇒ block omitted, no crash, no calibration key.
+    rep = Report.from_log(_log(_answer_samples(10, 9)))
+    assert rep.cards["answer"].calibration is None
+
+    import json as _json
+
+    doc = _json.loads(rep.to_json())
+    assert "calibration" not in doc["buckets"]["answer"]
+    md = rep.to_markdown()  # must not raise
+    assert "Brier" not in md
+
+
+def test_calibration_uses_only_confidence_bearing_rows():
+    # Mixed: some answered samples carry a confidence, some do not. The metrics
+    # ride only on the confidence-bearing subset.
+    samples = [
+        _sample("a-0", passed=True, confidence=0.9),
+        _sample("a-1", passed=False, confidence=0.1),
+        _sample("a-2", passed=True),   # no confidence — excluded
+        _sample("a-3", passed=True),   # no confidence — excluded
+    ]
+    rep = Report.from_log(_log(samples))
+    cal = rep.cards["answer"].calibration
+    assert cal is not None
+    assert cal.n == 2  # only the two confidence-bearing rows
 
 
 # --------------------------------------------------------------------------- #

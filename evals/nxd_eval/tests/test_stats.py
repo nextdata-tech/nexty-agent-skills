@@ -155,15 +155,34 @@ def test_ece_in_unit_range():
 
 
 def test_ece_golden_value():
-    # Pin the exact ECE so the hand-rolled bin-weighting / digitize logic can't
-    # silently drift. Five samples, n_bins=5 (edges every 0.2): the three
-    # positives land in bins [0.8,1.0), [0.8,1.0)→wait, 0.9,0.8,0.7 fall in the
-    # top two populated bins, the two negatives (0.2, 0.1) in the low bins. Each
-    # populated bin's |accuracy - mean_confidence| weighted by its sample share
-    # sums to 1/6. Recomputed independently from calibration_curve + bin counts.
+    # Pin the exact ECE so the hand-rolled bin-weighting can't silently drift.
+    # Five samples, n_bins=5 (edges every 0.2). Bins are assigned exactly as
+    # sklearn's calibration_curve does — ``searchsorted(edges[1:-1], p)`` — so
+    # 0.8 lands on its interior edge in the [0.6,0.8) bin, giving populated bins
+    # {0.1,0.2}, {0.7,0.8}, {0.9} with mean confidences 0.15 / 0.75 / 0.90 and
+    # accuracies 0 / 1 / 1. Weighted |acc - conf| sums to 0.18. Recomputed
+    # independently from calibration_curve + bin counts.
     y_true = [1, 1, 1, 0, 0]
     y_prob = [0.9, 0.8, 0.7, 0.2, 0.1]
-    assert math.isclose(S.ece(y_true, y_prob, n_bins=5), 1.0 / 6.0, rel_tol=1e-6)
+    assert math.isclose(S.ece(y_true, y_prob, n_bins=5), 0.18, rel_tol=1e-6)
+
+
+def test_ece_interior_edge_boundary_values():
+    # Confidences sitting exactly on interior bin edges must be weighted in the
+    # SAME bin the calibration curve assigns them (sklearn uses searchsorted
+    # side='left'). All confidences at 0.5 collapse to a single bin: accuracy
+    # 0.5, mean confidence 0.5 ⇒ ECE exactly 0.
+    y_true = [1, 0, 1, 0]
+    y_prob = [0.5, 0.5, 0.5, 0.5]
+    assert math.isclose(S.ece(y_true, y_prob, n_bins=10), 0.0, abs_tol=1e-9)
+
+    # A mix straddling the 0.2 edge stays finite and in range with no
+    # bin-count/curve desync (which would trip the equal-weight fallback).
+    y_true2 = [1, 1, 0, 0]
+    y_prob2 = [0.2, 0.4, 0.2, 0.6]
+    e = S.ece(y_true2, y_prob2, n_bins=5)
+    assert 0.0 <= e <= 1.0
+    assert math.isfinite(e)
 
 
 def test_aurc_ranks_confidence_quality():

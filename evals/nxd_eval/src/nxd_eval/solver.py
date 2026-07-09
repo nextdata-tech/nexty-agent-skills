@@ -13,6 +13,16 @@ Either way, ``react(tools=[server])`` gives the agent-under-test the three tools
 (``list_models`` / ``describe_model`` / ``run_semantic_query``) and nothing else.
 The agent MUST call the tools, not narrate — the prompt says so and the
 deterministic-EX scorer enforces it.
+
+The prompt also elicits a *verbalized confidence* in ``[0, 1]`` on a trailing
+``CONFIDENCE: 0.NN`` line. This is the calibrated self-report of QA-Calibration
+(Manggala et al., "QA-Calibration of Language Model Confidence Scores",
+ICLR 2025, arXiv 2410.06615):
+a per-answer probability that the answer is correct, which feeds the
+selective-prediction / risk-coverage view (Geifman & El-Yaniv,
+"Selective Classification for Deep Neural Networks", NeurIPS 2017) that
+``report.py`` renders as Brier / ECE / AURC. The line is OPTIONAL — samples
+without it still score, they just do not contribute a confidence pair.
 """
 
 from __future__ import annotations
@@ -36,7 +46,12 @@ AGENT_PROMPT = (
     "Do not fabricate: if the tools cannot answer the question as asked — a "
     "missing metric, an incompatible dimension, an ambiguous request, or a "
     "governed/PII grouping — say so and ask or decline rather than inventing "
-    "rows or metrics."
+    "rows or metrics.\n\n"
+    "After your answer, on a final line by itself, state your calibrated "
+    "confidence that your answer is correct as 'CONFIDENCE: 0.NN', a number "
+    "between 0 and 1 (e.g. 'CONFIDENCE: 0.85'). Report it honestly: use a high "
+    "value only when the tools clearly support the answer, and a low value when "
+    "you are guessing or had to decline."
 )
 
 

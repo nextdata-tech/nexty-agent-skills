@@ -23,10 +23,43 @@ does not couple the scorer layer to a specific Inspect message class.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 QUERY_TOOL = "run_semantic_query"
+
+# Verbalized-confidence line the agent is asked to emit (QA-Calibration, ICLR
+# 2025): a trailing ``CONFIDENCE: 0.NN`` self-report in [0, 1]. Matched
+# case-insensitively anywhere in the final answer; the LAST occurrence wins so a
+# restatement overrides an earlier draft value.
+# The trailing ``(?![\d%])`` rejects percentage/integer restatements
+# (``CONFIDENCE: 12``, ``CONFIDENCE: 95%``): without it, ``12`` would match the
+# leading ``1`` and read as full confidence. Such non-``0.NN`` forms return
+# ``None`` (no confidence pair) rather than a wrong value.
+_CONFIDENCE_RE = re.compile(
+    r"CONFIDENCE:\s*([01](?:\.\d+)?|\.\d+|\d*\.\d+)(?![\d%])", re.IGNORECASE
+)
+
+
+def parse_confidence(text: str) -> float | None:
+    """Parse a verbalized ``CONFIDENCE: 0.NN`` self-report out of free text.
+
+    Returns the last confidence in ``[0, 1]`` found, or ``None`` when the answer
+    carries no parsable confidence line (the backward-compatible case — such
+    samples still score, they just contribute no confidence pair). Values outside
+    ``[0, 1]`` are clamped into range.
+    """
+    if not text:
+        return None
+    matches = _CONFIDENCE_RE.findall(text)
+    if not matches:
+        return None
+    try:
+        val = float(matches[-1])
+    except ValueError:
+        return None
+    return max(0.0, min(1.0, val))
 
 
 @dataclass(frozen=True)
@@ -88,6 +121,11 @@ class Transcript:
     @property
     def made_query(self) -> bool:
         return bool(self.calls)
+
+    @property
+    def confidence(self) -> float | None:
+        """The agent's verbalized confidence in ``[0, 1]``, or None if absent."""
+        return parse_confidence(self.final_answer)
 
     def last_answered_call(self) -> QueryCall | None:
         """The most recent query that returned rows (the answer it stands behind).
