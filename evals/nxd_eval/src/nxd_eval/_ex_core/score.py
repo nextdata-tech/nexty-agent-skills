@@ -51,14 +51,15 @@ from pathlib import Path
 from typing import Any
 
 # --------------------------------------------------------------------------- #
-# PoC scoring primitives
+# Scoring primitives
 # --------------------------------------------------------------------------- #
-# The scorer reuses the frozen-gold PoC's scoring + structure_check verbatim so
-# the eval and the PoC can never drift on what "PASS" or "FANOUT_SAFE" means.
-# These are vendored into this package (`_ex_core.poc_scoring`) so the built
-# wheel is self-contained — nothing resolved by filesystem path at runtime.
-from .poc_scoring import scoring  # noqa: E402
-from .poc_scoring import structure_check  # noqa: E402
+# The scorer reuses the frozen scoring + structure_check primitives verbatim (a
+# byte-for-byte copy of the text-to-SQL PoC harness they originated in) so the
+# eval never drifts on what "PASS" or "FANOUT_SAFE" means. They are vendored
+# into this package (`_ex_core._primitives`) so the built wheel is
+# self-contained — nothing resolved by filesystem path at runtime.
+from ._primitives import scoring  # noqa: E402
+from ._primitives import structure_check  # noqa: E402
 
 # Strategy id treated as the compiler oracle for the matches_compiler axis.
 COMPILER_STRATEGY = "A"

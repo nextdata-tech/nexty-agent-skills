@@ -169,7 +169,7 @@ guard that FAILs two numeric measures swapped.
 The EX core is **vendored inside the package** under
 `src/nxd_eval/_ex_core/`: a byte-for-byte copy of the cross-DP
 `evals/cross-dp-joins/harness/score.py` plus the two PoC primitives it wraps
-(`_ex_core/poc_scoring/{scoring,structure_check}.py`). Vendoring them into the
+(`_ex_core/_primitives/{scoring,structure_check}.py`). Vendoring them into the
 package makes the built wheel self-contained — the core is a normal package
 import, not a module resolved by filesystem path at runtime. The verbatim copies
 are drift-guarded by pinned SHA-256 hashes in

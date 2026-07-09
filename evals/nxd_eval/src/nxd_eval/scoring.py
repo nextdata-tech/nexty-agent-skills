@@ -30,7 +30,7 @@ from __future__ import annotations
 # Re-export the public deterministic-EX surface (no re-implementation).
 # --------------------------------------------------------------------------- #
 # The EX core (``_ex_core.score``) and the PoC scoring primitives it wraps
-# (``_ex_core.poc_scoring``) are vendored inside this package, so the built
+# (``_ex_core._primitives``) are vendored inside this package, so the built
 # wheel is self-contained — the core is a normal package import, not a module
 # resolved by filesystem path at runtime.
 from ._ex_core import score as _score
