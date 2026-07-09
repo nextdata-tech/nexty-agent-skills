@@ -2,9 +2,9 @@
 
 An ``answer`` case scores by comparing the agent's returned rows to a gold
 row-set. This module is the authoring surface for those gold records; the actual
-set/multiset comparison is the cross-DP ``score.py`` core, imported by the
-scorer layer — NOT re-implemented here, so eval and PoC never drift on what
-"PASS" means.
+set/multiset comparison is the ``_ex_core.score`` core this package owns,
+imported by the scorer layer — NOT re-implemented here, so there is one
+definition of what "PASS" means.
 
 Two authoring forms, one record shape:
 
@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-# Equality modes understood by the deterministic-EX core (cross-DP score.py):
+# Equality modes understood by the deterministic-EX core (``_ex_core.score``):
 # "set" = DISTINCT-row set equality, "multiset" = row multiplicity matters.
 SET = "set"
 MULTISET = "multiset"
