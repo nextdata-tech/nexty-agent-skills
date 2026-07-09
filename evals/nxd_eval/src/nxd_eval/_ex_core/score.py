@@ -38,6 +38,16 @@ the scoring shape (id -> question_id, expect_abstain list -> expects_abstain
 dict, rows injected from the frozen oracle). `load_gold` does that remap.
 
 The COMPILER strategy id defaults to "A" (configurable via COMPILER_STRATEGY).
+
+Vendored copy: this file is kept as a near-mirror of
+``evals/cross-dp-joins/harness/score.py`` (scoring logic verbatim) so the two
+never drift. Only ``nxd_eval`` re-exports the pure scoring surface
+(``score_one``, ``rows_equal_name_aware``, ``_norm_rowset``, ``matches_compiler``,
+``fanout_of``, ``distinct_results``) — that surface is what the "self-contained
+wheel" covers. The cross-DP CLI surface below (``load_gold`` / ``build_matrix`` /
+``main``) is retained only to keep this a recognizable mirror of its origin; it
+depends on the PoC's ``gold.gold_cross_dp`` package, which is absent in the
+wheel, so it is inert here and never reached by the re-exported adapter.
 """
 
 from __future__ import annotations

@@ -9,7 +9,7 @@ dependencies = [
     "scipy>=1.11",
     "scikit-learn>=1.4",       # brier_score_loss, calibration_curve
     "mcp>=1.2.0",              # matches evals/mcp; MCP client types + stub server
-    "sqlglot>=25",             # vendored deterministic-EX core parses agent SQL for the fan-out / structure checks
+    "sqlglot>=25",             # vendored EX core normalizes agent SQL in the deterministic scoring path (guarded import)
 ]
 
 [project.optional-dependencies]

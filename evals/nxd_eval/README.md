@@ -166,15 +166,17 @@ from the seed: 4 subjects — US, US, DE, FR).
 text-to-SQL PoC never drift on what "PASS" means — including the name-aware
 guard that FAILs two numeric measures swapped.
 
-The EX core is **vendored inside the package** under
-`src/nxd_eval/_ex_core/`: a byte-for-byte copy of the cross-DP
-`evals/cross-dp-joins/harness/score.py` plus the two PoC primitives it wraps
-(`_ex_core/_primitives/{scoring,structure_check}.py`). Vendoring them into the
-package makes the built wheel self-contained — the core is a normal package
-import, not a module resolved by filesystem path at runtime. The verbatim copies
-are drift-guarded by pinned SHA-256 hashes in
-`tests/test_vendored_poc_drift.py`; re-vendor by re-copying and bumping the pins
-in the same commit.
+The EX core is **vendored inside the package** under `src/nxd_eval/_ex_core/`: a
+copy of the cross-DP `evals/cross-dp-joins/harness/score.py` (scoring logic
+verbatim; only the import wiring adapted from `T2SQL_POC_ROOT` path-loading to a
+package import) plus the two primitives it wraps
+(`_ex_core/_primitives/{scoring,structure_check}.py`, byte-for-byte). Vendoring
+them into the package makes the built wheel self-contained — the core is a
+normal package import, not a module resolved by filesystem path at runtime. The
+two `_primitives/*` files are drift-guarded by pinned SHA-256 hashes in
+`tests/test_vendored_primitives_drift.py` (`score.py` is not pinned — its import
+block is package-specific); re-vendor a primitive by re-copying and bumping its
+pin in the same commit.
 
 Run the deterministic-scorer + adapter unit tests:
 

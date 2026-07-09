@@ -8,7 +8,7 @@ module re-exports its public surface so the eval and the PoC never drift.
 The core and the PoC primitives it wraps (``scoring`` / ``structure_check``)
 are vendored inside this package under ``_ex_core/`` — a byte-for-byte copy of
 ``evals/cross-dp-joins/harness/score.py`` plus the two PoC files
-(``test_vendored_poc_drift.py`` pins their hashes). Because they live in the
+(``test_vendored_primitives_drift.py`` pins their hashes). Because they live in the
 package, the built wheel is self-contained: the core is a normal package
 import, not a module resolved by filesystem path or ``T2SQL_POC_ROOT`` at
 runtime. The EX verdict flows through the core's wrappers, never a local
