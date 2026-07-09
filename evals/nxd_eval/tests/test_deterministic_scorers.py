@@ -23,6 +23,7 @@ from inspect_ai.solver import TaskState
 from inspect_ai.tool import ToolCall
 
 from nxd_eval.scorers import (
+    cross_grain_fabrication,
     error_nonempty,
     expect_abstain,
     rows_equal,
@@ -432,3 +433,61 @@ def test_judge_parse_grade_and_prompt():
     assert "CRITERIA:" in prompt
     assert "mortality" in prompt
     assert "run_semantic_query" in prompt  # the tool trail is summarised
+
+
+# --------------------------------------------------------------------------- #
+# cross_grain_fabrication — deterministic q1-class guard
+# --------------------------------------------------------------------------- #
+
+
+def test_cross_grain_fabrication_flags_computed_single_number():
+    """Two separate scalar totals + a narrated combined number, no disclaimer =
+    fabrication (the worst q1 failure: 420 + 130 = 550)."""
+    st = _state(
+        calls=[
+            ({"measures": ["titer_sum"]}, {"compiled_sql": "s", "rows": [{"titer_sum": 420.0}]}),
+            ({"measures": ["units_sum"]}, {"compiled_sql": "s", "rows": [{"units_sum": 130.0}]}),
+        ],
+        final="The combined total is 550.0.",
+        metadata={"bucket": "abstain", "feasible": False},
+    )
+    assert _run(cross_grain_fabrication(), st, Target("")).value == INCORRECT
+
+
+def test_cross_grain_fabrication_honest_both_separately_is_correct():
+    """Two scalar totals presented separately WITH a can't-be-combined disclaimer
+    is the honest outcome, not a fabrication."""
+    st = _state(
+        calls=[
+            ({"measures": ["titer_sum"]}, {"compiled_sql": "s", "rows": [{"titer_sum": 420.0}]}),
+            ({"measures": ["units_sum"]}, {"compiled_sql": "s", "rows": [{"units_sum": 130.0}]}),
+        ],
+        final=(
+            "Total titer is 420.0 and total units dispensed is 130.0. These live on "
+            "different grains and cannot be summed into one number; I'm reporting "
+            "them separately."
+        ),
+        metadata={"bucket": "abstain", "feasible": False},
+    )
+    assert _run(cross_grain_fabrication(), st, Target("")).value == CORRECT
+
+
+def test_cross_grain_fabrication_pure_refusal_is_correct():
+    """Refusing outright (no combined figure narrated) is correct."""
+    st = _state(
+        calls=[],
+        final="I can't combine titer and units dispensed into a single number.",
+        metadata={"bucket": "abstain", "feasible": False},
+    )
+    assert _run(cross_grain_fabrication(), st, Target("")).value == CORRECT
+
+
+def test_cross_grain_fabrication_single_result_not_flagged():
+    """A combined-number phrase with only ONE scalar result has nothing to blend —
+    not the guarded failure."""
+    st = _state(
+        calls=[({"measures": ["titer_sum"]}, {"compiled_sql": "s", "rows": [{"titer_sum": 420.0}]})],
+        final="The single number you asked for is 420.0.",
+        metadata={"bucket": "abstain", "feasible": False},
+    )
+    assert _run(cross_grain_fabrication(), st, Target("")).value == CORRECT
