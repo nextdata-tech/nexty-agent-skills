@@ -62,9 +62,13 @@ def applicable_accuracy() -> Metric:
 def wilson_accuracy(alpha: float = 0.05) -> Metric:
     """Accuracy reported as the lower bound of its Wilson score interval.
 
-    Each sample's value is mapped to correct/incorrect via the standard
-    ``value_to_float`` (CORRECT→1.0, INCORRECT→0). The count of correct samples
-    feeds :func:`nxd_eval.stats.wilson_ci`; the returned scalar is the interval's
+    Each applicable sample's value is mapped to correct/incorrect via the
+    standard ``value_to_float`` (CORRECT→1.0, INCORRECT→0). ``NOANSWER``
+    samples are excluded from both the count and ``n`` — matching
+    ``applicable_accuracy`` — so a scorer that correctly skips inapplicable
+    samples doesn't have those skips counted as failed trials, deflating the
+    interval. The count of correct samples feeds
+    :func:`nxd_eval.stats.wilson_ci`; the returned scalar is the interval's
     lower bound — the pass rate we can defend at ``1 - alpha`` confidence given
     the observed ``n``. The point estimate and both bounds are attached as
     metric metadata for the report.
@@ -72,10 +76,11 @@ def wilson_accuracy(alpha: float = 0.05) -> Metric:
     to_float = value_to_float()
 
     def metric_fn(scores: list[SampleScore]) -> Value:
-        n = len(scores)
+        applicable = [s for s in scores if s.score.value != NOANSWER]
+        n = len(applicable)
         if n == 0:
             return 0.0
-        count = int(round(sum(to_float(s.score.value) for s in scores)))
+        count = int(round(sum(to_float(s.score.value) for s in applicable)))
         ci = wilson_ci(count, n, alpha=alpha)
         # Gate on the lower bound; the point estimate cannot be claimed above
         # what the sample size supports.

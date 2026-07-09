@@ -41,6 +41,24 @@ def test_wilson_accuracy_empty_is_zero():
     assert wilson_accuracy()([]) == 0.0
 
 
+def test_wilson_accuracy_excludes_noanswer_from_denominator():
+    from inspect_ai.scorer import NOANSWER
+
+    m = wilson_accuracy()
+    # 10 applicable samples, all CORRECT, plus 5 NOANSWER (inapplicable) samples.
+    # NOANSWER must not be counted as failed trials in either the Wilson count
+    # or nobs — the bound should match wilson_ci(10, 10).low, not a bound
+    # deflated by treating the 5 skips as incorrect out of n=15.
+    scores = [_sample(CORRECT)] * 10 + [_sample(NOANSWER)] * 5
+    got = m(scores)
+    expected = S.wilson_ci(10, 10).low
+    assert math.isclose(got, expected, abs_tol=1e-9)
+    # Sanity: this must be strictly higher than the deflated bound you'd get
+    # by wrongly including NOANSWER in n (treating skips as incorrect).
+    deflated = S.wilson_ci(10, 15).low
+    assert got > deflated
+
+
 # --------------------------------------------------------------------------- #
 # reliability_score (TrustSQL asymmetric penalty)
 # --------------------------------------------------------------------------- #

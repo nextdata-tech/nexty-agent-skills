@@ -93,6 +93,36 @@ def _norm_rowset(rows: list[dict] | None) -> frozenset[tuple]:
     return frozenset(sigs)
 
 
+def _bucket_numeric_cells(rows: list[dict] | None) -> list[dict] | None:
+    """Snap every numeric cell to the vendored scorer's tolerance bucket.
+
+    The vendored `rows_equal` only applies `_NUMERIC_TOL` (1e-6) rounding under
+    `equality_mode="numeric"` — the default "set" mode (and "multiset") compare
+    raw float values, so harmless float drift like 840110.00000001 spuriously
+    fails against gold's 840110.0 even though the doc promises tolerance.
+    Rather than editing the drift-pinned vendored file, we pre-round numeric
+    cells of both sides here, in the owned layer, to the SAME bucket the
+    vendored `_row_signature` computes under "numeric" mode
+    (`round(v / scoring._NUMERIC_TOL)`) before delegating. Doing so BEFORE
+    `rows_equal` runs makes its exact-equality comparison treat bucket-identical
+    floats as equal in every mode, while real differences (e.g. 0.5 apart) still
+    land in different buckets and still fail. `None` passes through unchanged;
+    non-float cells (str/bool/None/int) are untouched.
+    """
+    if rows is None:
+        return None
+    out = []
+    for raw in rows:
+        nrow = {}
+        for k, v in raw.items():
+            nv = scoring._norm_value(v)
+            if isinstance(nv, float):
+                nv = round(nv / scoring._NUMERIC_TOL) * scoring._NUMERIC_TOL
+            nrow[k] = nv
+        out.append(nrow)
+    return out
+
+
 def score_one(
     trial: dict, gold_record: dict, *, strategy_for_abstain: str | None = None
 ) -> str:
@@ -102,9 +132,19 @@ def score_one(
     expects_abstain; defaults to the trial's own strategy.
     """
     approach = strategy_for_abstain or trial.get("strategy")
+    mode = (gold_record.get("equality_mode") or "set") if gold_record else "set"
+    trial_rows = trial.get("rows")
+    gold_for_scoring = gold_record
+    if mode != "numeric" and gold_record is not None:
+        # "numeric" mode already tolerates float drift via the vendored
+        # rows_equal; bucket the other modes here so tolerance is real under
+        # the default "set" mode too (see _bucket_numeric_cells).
+        trial_rows = _bucket_numeric_cells(trial_rows)
+        gold_for_scoring = dict(gold_record)
+        gold_for_scoring["rows"] = _bucket_numeric_cells(gold_record.get("rows"))
     verdict = scoring.score_accuracy(
-        trial.get("rows"),
-        gold_record,
+        trial_rows,
+        gold_for_scoring,
         abstained=bool(trial.get("abstained")),
         approach=approach,
         errored=bool(trial.get("errored")),
@@ -116,9 +156,12 @@ def score_one(
     if verdict == "PASS" and not bool(trial.get("abstained")) and not bool(
         trial.get("errored")
     ):
-        gold_rows = gold_record.get("rows")
-        mode = (gold_record.get("equality_mode") or "set") if gold_record else "set"
-        if not rows_equal_name_aware(trial.get("rows"), gold_rows, mode):
+        # Re-check against the SAME bucketed rows score_accuracy just judged —
+        # using the raw (unbucketed) rows here would spuriously downgrade a
+        # float-drift PASS back to FAIL under "set"/"multiset" mode.
+        if not rows_equal_name_aware(
+            trial_rows, gold_for_scoring.get("rows") if gold_for_scoring else None, mode
+        ):
             return "FAIL"
     return verdict
 
