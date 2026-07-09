@@ -173,10 +173,12 @@ package import) plus the two primitives it wraps
 (`_ex_core/_primitives/{scoring,structure_check}.py`, byte-for-byte). Vendoring
 them into the package makes the built wheel self-contained — the core is a
 normal package import, not a module resolved by filesystem path at runtime. The
-two `_primitives/*` files are drift-guarded by pinned SHA-256 hashes in
-`tests/test_vendored_primitives_drift.py` (`score.py` is not pinned — its import
-block is package-specific); re-vendor a primitive by re-copying and bumping its
-pin in the same commit.
+two `_primitives/*` files are drift-guarded by pinned whole-file SHA-256 hashes
+in `tests/test_vendored_primitives_drift.py`; `score.py` is guarded by a hash of
+its *scoring logic only* (from `COMPILER_STRATEGY` to EOF), excluding the
+package-adapted import block, so the part that defines "what PASS means" can't
+silently drift from its cross-DP origin. Re-vendor by re-copying and bumping the
+relevant pin in the same commit.
 
 Run the deterministic-scorer + adapter unit tests:
 
