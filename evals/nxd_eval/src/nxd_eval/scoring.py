@@ -5,14 +5,13 @@ source of truth is the EX core, ``_ex_core.score`` — it wraps the text-to-SQL
 PoC's scoring primitives and adds the name-aware multi-measure guard. This
 module re-exports its public surface so the eval and the PoC never drift.
 
-The core and the PoC primitives it wraps (``scoring`` / ``structure_check``)
-are vendored inside this package under ``_ex_core/`` — a byte-for-byte copy of
-``evals/cross-dp-joins/harness/score.py`` plus the two PoC files
-(``test_vendored_primitives_drift.py`` pins their hashes). Because they live in the
-package, the built wheel is self-contained: the core is a normal package
-import, not a module resolved by filesystem path or ``T2SQL_POC_ROOT`` at
-runtime. The EX verdict flows through the core's wrappers, never a local
-re-implementation.
+nxd_eval owns ``_ex_core.score``; the cross-DP experiment imports it (not the
+other way round), so the built wheel is self-contained — the core is a normal
+package import, never resolved by filesystem path at runtime. The two
+lower-level primitives it wraps (``_ex_core._primitives.{scoring,
+structure_check}``) are still verbatim copies of the text-to-SQL PoC harness,
+hash-pinned by ``test_vendored_primitives_drift.py``. The EX verdict flows
+through the core's wrappers, never a local re-implementation.
 
 Public surface re-exported (see ``_ex_core.score`` for signatures):
 
@@ -29,10 +28,10 @@ from __future__ import annotations
 # --------------------------------------------------------------------------- #
 # Re-export the public deterministic-EX surface (no re-implementation).
 # --------------------------------------------------------------------------- #
-# The EX core (``_ex_core.score``) and the PoC scoring primitives it wraps
-# (``_ex_core._primitives``) are vendored inside this package, so the built
-# wheel is self-contained — the core is a normal package import, not a module
-# resolved by filesystem path at runtime.
+# The EX core (``_ex_core.score``) is nxd_eval's own; the PoC scoring primitives
+# it wraps (``_ex_core._primitives``) are vendored copies. Both live in the
+# package, so the built wheel is self-contained — a normal package import, not a
+# module resolved by filesystem path at runtime.
 from ._ex_core import score as _score
 
 score_one = _score.score_one
