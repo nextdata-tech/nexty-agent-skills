@@ -161,18 +161,24 @@ from the seed: 4 subjects — US, US, DE, FR).
 | `expect_abstain` (`abstain_infeasible`) | feasible/abstain discriminator — refuse without fabricating (abstain) vs. do not spuriously decline (feasible) |
 
 `rows_equal` does **not** re-implement execution accuracy. It calls through
-`src/nxd_eval/scoring.py`, a thin re-export of the cross-DP
-`evals/cross-dp-joins/harness/score.py` core (`score_one`,
-`rows_equal_name_aware`, `_norm_rowset`, …), so the eval and the text-to-SQL PoC
-never drift on what "PASS" means — including the name-aware guard that FAILs two
-numeric measures swapped.
+`src/nxd_eval/scoring.py`, a thin re-export of the deterministic-EX core
+(`score_one`, `rows_equal_name_aware`, `_norm_rowset`, …), so the eval and the
+text-to-SQL PoC never drift on what "PASS" means — including the name-aware
+guard that FAILs two numeric measures swapped.
 
-`score.py` resolves the PoC scoring primitives from `T2SQL_POC_ROOT` (or a
-hardcoded worktree path that is not present on every machine). To keep this eval
-project self-contained, the exact PoC `scoring.py` + `structure_check.py` are
-**vendored** under `vendor/poc_scoring/harness/` and the adapter points
-`T2SQL_POC_ROOT` at them before loading `score.py` — unless the caller already
-set the env to their own PoC checkout, which wins. See `vendor/poc_scoring/README.md`.
+The EX core is **vendored inside the package** under `src/nxd_eval/_ex_core/`: a
+copy of the cross-DP `evals/cross-dp-joins/harness/score.py` (scoring logic
+verbatim; only the import wiring adapted from `T2SQL_POC_ROOT` path-loading to a
+package import) plus the two primitives it wraps
+(`_ex_core/_primitives/{scoring,structure_check}.py`, byte-for-byte). Vendoring
+them into the package makes the built wheel self-contained — the core is a
+normal package import, not a module resolved by filesystem path at runtime. The
+two `_primitives/*` files are drift-guarded by pinned whole-file SHA-256 hashes
+in `tests/test_vendored_primitives_drift.py`; `score.py` is guarded by a hash of
+its *scoring logic only* (from `COMPILER_STRATEGY` to EOF), excluding the
+package-adapted import block, so the part that defines "what PASS means" can't
+silently drift from its cross-DP origin. Re-vendor by re-copying and bumping the
+relevant pin in the same commit.
 
 Run the deterministic-scorer + adapter unit tests:
 

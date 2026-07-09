@@ -14,16 +14,30 @@ from pathlib import Path
 
 import pytest
 from inspect_ai._util.registry import registry_info
-
-from nxd_eval import Case, Suite, checks, gold, load_suite, load_checks_json
-from nxd_eval.scorers import ABSTAIN_INFEASIBLE, DETERMINISTIC_EX, JUDGE, SLOT_MATCH
+from nxd_eval import Case
+from nxd_eval import Suite
+from nxd_eval import checks
+from nxd_eval import gold
+from nxd_eval import load_checks_json
+from nxd_eval import load_suite
+from nxd_eval.scorers import ABSTAIN_INFEASIBLE
+from nxd_eval.scorers import DETERMINISTIC_EX
+from nxd_eval.scorers import JUDGE
+from nxd_eval.scorers import SLOT_MATCH
 from nxd_eval.solver import mcp_solver
-from nxd_eval.task import build_task, case_to_sample
+from nxd_eval.task import build_task
+from nxd_eval.task import case_to_sample
 
 
 def _scorer_names(task) -> set[str]:
-    """Stable slot names via the Inspect registry (inner fn __name__ is 'score')."""
-    return {registry_info(s).name for s in task.scorer}
+    """Stable slot names via the Inspect registry (inner fn __name__ is 'score').
+
+    Inspect package-qualifies the registry name once nxd_eval is installed as a
+    wheel (``nxd_eval/deterministic_ex``) vs. bare on a src checkout
+    (``deterministic_ex``); strip the prefix so the slot assertions are
+    layout-agnostic, matching report.py's prefix-tolerant scorer lookup.
+    """
+    return {registry_info(s).name.rsplit("/", 1)[-1] for s in task.scorer}
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 QUERY_LOOP_SUITE = REPO_ROOT / "evals/query-loop/test_suite.json"

@@ -29,16 +29,15 @@ from __future__ import annotations
 import json
 import statistics
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
-from .stats import (
-    ConfidenceInterval,
-    bh_fdr,
-    design_effect,
-    mcnemar_paired,
-    wilson_ci,
-)
+from .stats import ConfidenceInterval
+from .stats import bh_fdr
+from .stats import design_effect
+from .stats import mcnemar_paired
+from .stats import wilson_ci
 
 # The three answer buckets, in report order. A sample's bucket rides in Sample
 # metadata under "bucket" (set by the task layer from Case.expect).
@@ -85,9 +84,28 @@ class SampleRow:
         return self.cluster
 
 
+def _get_score(scores: dict, name: str):
+    """Look up a scorer's Score by its short name, prefix-tolerantly.
+
+    Inspect keys ``sample.scores`` by the scorer's registry name. That name is
+    bare (``deterministic_ex``) when the scorers are imported as loose modules,
+    but package-qualified (``nxd_eval/deterministic_ex``) once nxd_eval is
+    installed as a wheel. Match the exact key first, then any key whose segment
+    after the last ``/`` equals ``name`` — so the report reads the same whether
+    it runs against a src checkout or the published package.
+    """
+    sc = scores.get(name)
+    if sc is not None:
+        return sc
+    for key, val in scores.items():
+        if key.rsplit("/", 1)[-1] == name:
+            return val
+    return None
+
+
 def _verdict_correct(scores: dict, name: str) -> bool | None:
     """Was scorer ``name``'s value CORRECT? None if the scorer is absent."""
-    sc = scores.get(name)
+    sc = _get_score(scores, name)
     if sc is None:
         return None
     return _score_value(sc) == _CORRECT
@@ -138,7 +156,7 @@ def _rows_from_log(log) -> list[SampleRow]:
 
         # feasible / abstained come from the abstain scorer's metadata when
         # present, else from the sample-level routing metadata.
-        abstain_meta = _score_meta(scores.get(_ABSTAIN_SCORER))
+        abstain_meta = _score_meta(_get_score(scores, _ABSTAIN_SCORER))
         feasible = bool(abstain_meta.get("feasible", meta.get("feasible", bucket != "abstain")))
         abstained = bool(abstain_meta.get("abstained", False))
 
