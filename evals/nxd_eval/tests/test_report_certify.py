@@ -130,6 +130,31 @@ def test_report_per_bucket_counts_and_pointwise_accuracy():
     assert rep.overall.passed == 11
 
 
+def test_report_reads_package_qualified_scorer_keys():
+    """Report scores the same whether scorer keys are bare or package-qualified.
+
+    Inspect keys ``sample.scores`` by the scorer's registry name, which is bare
+    (``deterministic_ex``) on a src checkout but package-qualified
+    (``nxd_eval/deterministic_ex``) once nxd_eval is installed as a wheel. The
+    report must resolve either form, or a real published run silently scores
+    every answer case as a miss (the bare-key fixtures above can't catch this).
+    """
+    def _prefixed(sample_id: str, *, bucket: str, passed: bool) -> EvalSample:
+        s = _sample(sample_id, bucket=bucket, passed=passed)
+        # re-key the scores dict with the package-qualified registry name
+        s.scores = {f"nxd_eval/{k}": v for k, v in s.scores.items()}
+        return s
+
+    samples = [
+        _prefixed("a-0", bucket="answer", passed=True),
+        _prefixed("a-1", bucket="answer", passed=True),
+        _prefixed("a-2", bucket="answer", passed=False),
+    ]
+    rep = Report.from_log(_log(samples))
+    assert rep.cards["answer"].n == 3
+    assert rep.cards["answer"].passed == 2  # not 0 — the prefixed key resolved
+
+
 def test_report_independent_bucket_ci_matches_wilson_on_n():
     # 10 independent answer cases, all distinct clusters -> icc 0 -> deff 1 ->
     # N_eff == n, so the bucket CI equals the plain Wilson CI on n.

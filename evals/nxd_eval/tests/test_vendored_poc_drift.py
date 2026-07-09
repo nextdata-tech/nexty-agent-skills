@@ -1,16 +1,16 @@
 """Drift guard for the vendored PoC scoring primitives.
 
-``vendor/poc_scoring/harness/{scoring,structure_check}.py`` are copied verbatim
-from the text-to-SQL PoC harness (see ``vendor/poc_scoring/README.md``). That PoC
-tree is not present on every checkout, so we can't diff the copy against a live
-source of truth here. Instead we pin each vendored file's SHA-256: an *accidental*
-edit (a stray formatter run, a well-meaning "cleanup") fails this test loudly,
-while a *deliberate* re-vendor is a one-line, reviewed hash bump in this file.
+``src/nxd_eval/_ex_core/poc_scoring/{scoring,structure_check}.py`` are copied
+verbatim from the text-to-SQL PoC harness. That PoC tree is not present on every
+checkout, so we can't diff the copy against a live source of truth here. Instead
+we pin each vendored file's SHA-256: an *accidental* edit (a stray formatter run,
+a well-meaning "cleanup") fails this test loudly, while a *deliberate* re-vendor
+is a one-line, reviewed hash bump in this file.
 
 When you intentionally re-copy the two files from the PoC harness because its
 scoring contract changed:
   1. re-copy the files,
-  2. run ``shasum -a 256 vendor/poc_scoring/harness/*.py``,
+  2. run ``shasum -a 256 src/nxd_eval/_ex_core/poc_scoring/*.py``,
   3. update the pins below in the same commit,
   4. confirm ``test_scoring_adapter.py`` still passes (the semantics didn't
      silently move under you).
@@ -21,7 +21,13 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-_VENDOR = Path(__file__).resolve().parents[1] / "vendor" / "poc_scoring" / "harness"
+_VENDOR = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "nxd_eval"
+    / "_ex_core"
+    / "poc_scoring"
+)
 
 # SHA-256 of the verbatim PoC copies. Bump deliberately on re-vendor (see module
 # docstring); never edit the files in place without bumping these.
