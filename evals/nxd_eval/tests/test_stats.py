@@ -191,3 +191,70 @@ def test_aurc_golden_value():
 
 def test_aurc_empty_is_zero():
     assert S.aurc([], []) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Gwet AC1 / Cohen kappa — chance-corrected agreement
+# --------------------------------------------------------------------------- #
+
+
+def test_ac1_perfect_agreement_is_one():
+    a = ["C", "P", "I", "C"]
+    assert math.isclose(S.gwet_ac1(a, a), 1.0, abs_tol=1e-12)
+    assert math.isclose(S.cohen_kappa(a, a), 1.0, abs_tol=1e-12)
+
+
+def test_ac1_single_category_is_one():
+    # Both raters only ever say "C": perfect agreement, no (q-1) blow-up.
+    a = ["C", "C", "C"]
+    assert S.gwet_ac1(a, a) == 1.0
+    assert S.cohen_kappa(a, a) == 1.0
+
+
+def test_ac1_greater_than_kappa_under_concentrated_marginals():
+    # The kappa paradox: high observed agreement but one label ("C") dominates the
+    # marginals, so kappa's chance term inflates and kappa collapses toward 0 —
+    # while Gwet AC1 stays high. 14/15 agree; the marginals are heavily skewed to
+    # "C". This is exactly the range-restriction regime the judge axis sits in.
+    a = ["C"] * 13 + ["I", "C"]
+    b = ["C"] * 13 + ["C", "I"]
+    ac1 = S.gwet_ac1(a, b)
+    kappa = S.cohen_kappa(a, b)
+    # Both see the same 13/15 observed agreement, but AC1 must exceed kappa here.
+    assert ac1 > kappa
+    # And the gap is large: kappa under-reports badly (near/below 0) while AC1
+    # reflects the genuinely high agreement.
+    assert ac1 > 0.8
+    assert kappa < 0.2
+
+
+def test_ac1_formula_hand_computed():
+    # Two categories, n=4, 3 agreements. Pin AC1 to its closed form so the
+    # prevalence / (q-1) chance term can't silently drift.
+    #   a = [C, C, C, I], b = [C, C, I, I]
+    #   p_o = 3/4 = 0.75
+    #   marginals: C -> (3+2)/8 = 0.625, I -> (1+2)/8 = 0.375
+    #   p_e = [0.625*0.375 + 0.375*0.625] / (2-1) = 0.46875
+    #   AC1 = (0.75 - 0.46875) / (1 - 0.46875) = 0.28125 / 0.53125
+    a = ["C", "C", "C", "I"]
+    b = ["C", "C", "I", "I"]
+    expected = (0.75 - 0.46875) / (1.0 - 0.46875)
+    assert math.isclose(S.gwet_ac1(a, b), expected, rel_tol=1e-12)
+
+
+def test_ac1_length_mismatch_raises():
+    try:
+        S.gwet_ac1(["C", "P"], ["C"])
+    except ValueError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError on mismatched lengths")
+
+
+def test_ac1_empty_raises():
+    try:
+        S.gwet_ac1([], [])
+    except ValueError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError on empty input")

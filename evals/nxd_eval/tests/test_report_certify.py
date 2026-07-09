@@ -18,6 +18,7 @@ production is exercised, not mocked.
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -81,6 +82,21 @@ def _sample(
             "feasible": feasible,
         },
         scores=scores,
+    )
+
+
+def _judge_sample(sample_id: str, grade_1: str, grade_2: str | None) -> EvalSample:
+    """A scored EvalSample carrying a judge Score with test-retest grade pair."""
+    meta = {"n_checks": 2, "grade_1": grade_1}
+    if grade_2 is not None:
+        meta["grade_2"] = grade_2
+    return EvalSample(
+        id=sample_id,
+        epoch=1,
+        input="q",
+        target="",
+        metadata={"bucket": "answer", "cluster": sample_id, "feasible": True},
+        scores={"judge": Score(value=grade_1, metadata=meta)},
     )
 
 
@@ -457,3 +473,66 @@ def test_parse_gate_rejects_garbage():
         parse_gate("accuracy~0.9")
     with pytest.raises(ValueError):
         parse_gate("nonsense>=0.5")
+
+
+# --------------------------------------------------------------------------- #
+# Judge test-retest reliability (Gwet AC1)
+# --------------------------------------------------------------------------- #
+
+
+def test_judge_reliability_absent_without_retest_pass():
+    # A judge Score with only grade_1 (no retest pass run) yields no coefficient.
+    samples = [_judge_sample("q0", "C", None), _judge_sample("q1", "C", None)]
+    rep = Report.from_log(_log(samples))
+    assert rep.judge_reliability.n_pairs == 0
+    assert rep.judge_reliability.ac1 is None
+    md = rep.to_markdown()
+    assert "judge reliability (test-retest)" in md
+    assert "not measured" in md
+    assert rep.judge_reliability.judge_present is True
+    assert rep.to_json()  # serialises without error
+
+
+def test_judge_reliability_section_omitted_for_deterministic_suite():
+    # A pure deterministic run carries no judge Score on any sample. The
+    # retest-hint would be misleading noise there, so the whole section is dropped
+    # rather than rendered with "not measured".
+    samples = [_sample("q0"), _sample("q1")]
+    rep = Report.from_log(_log(samples))
+    assert rep.judge_reliability.judge_present is False
+    assert rep.judge_reliability.n_pairs == 0
+    md = rep.to_markdown()
+    assert "judge reliability (test-retest)" not in md
+    assert "not measured" not in md
+    # Still serialises, exposing judge_present so downstream can tell the states.
+    doc = json.loads(rep.to_json())
+    assert doc["judge_reliability"]["judge_present"] is False
+
+
+def test_judge_reliability_ac1_from_retest_pairs():
+    # 4/5 samples agree between the two gradings; one flips C->I. AC1 is computed
+    # over the (grade_1, grade_2) pairs and surfaced in report + json + markdown.
+    samples = [
+        _judge_sample("q0", "C", "C"),
+        _judge_sample("q1", "C", "C"),
+        _judge_sample("q2", "C", "C"),
+        _judge_sample("q3", "P", "P"),
+        _judge_sample("q4", "C", "I"),
+    ]
+    rep = Report.from_log(_log(samples))
+    jr = rep.judge_reliability
+    assert jr.n_pairs == 5
+    assert jr.ac1 is not None
+    assert math.isclose(jr.percent_agreement, 4 / 5)
+    # AC1 matches the stats primitive over the same label vectors.
+    from nxd_eval.stats import gwet_ac1
+
+    first = ["C", "C", "C", "P", "C"]
+    second = ["C", "C", "C", "P", "I"]
+    assert math.isclose(jr.ac1, gwet_ac1(first, second), rel_tol=1e-12)
+
+    md = rep.to_markdown()
+    assert "Gwet AC1" in md
+    doc = json.loads(rep.to_json())
+    assert doc["judge_reliability"]["n_pairs"] == 5
+    assert doc["judge_reliability"]["ac1"] is not None

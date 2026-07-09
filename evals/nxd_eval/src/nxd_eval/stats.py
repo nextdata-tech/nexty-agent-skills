@@ -40,6 +40,8 @@ __all__ = [
     "brier",
     "ece",
     "aurc",
+    "gwet_ac1",
+    "cohen_kappa",
 ]
 
 
@@ -282,3 +284,91 @@ def aurc(y_true: list[int], y_prob: list[float]) -> float:
     coverage = k / float(n)
 
     return float(np.trapezoid(risk, coverage))
+
+
+# --------------------------------------------------------------------------- #
+# Chance-corrected inter-rater / test-retest agreement
+# --------------------------------------------------------------------------- #
+
+
+def _confusion_from_pairs(
+    rater_a: list[str], rater_b: list[str]
+) -> tuple[list[str], np.ndarray]:
+    """Ordered category list + confusion matrix for two aligned label vectors."""
+    if len(rater_a) != len(rater_b):
+        raise ValueError("rater label vectors must be the same length")
+    if not rater_a:
+        raise ValueError("need at least one paired label")
+    cats = sorted(set(rater_a) | set(rater_b))
+    index = {c: i for i, c in enumerate(cats)}
+    q = len(cats)
+    m = np.zeros((q, q), dtype=float)
+    for a, b in zip(rater_a, rater_b):
+        m[index[a], index[b]] += 1.0
+    return cats, m
+
+
+def cohen_kappa(rater_a: list[str], rater_b: list[str]) -> float:
+    """Cohen's kappa — chance-corrected agreement between two raters.
+
+        kappa = (p_o - p_e) / (1 - p_e)
+
+    where ``p_o`` is observed agreement and ``p_e`` the chance agreement from the
+    product of the two raters' marginals. Provided alongside :func:`gwet_ac1` so
+    the report can show the *kappa paradox*: under concentrated marginals (one
+    label dominates) ``p_e`` inflates toward ``p_o`` and kappa collapses even when
+    observed agreement is high. Returns ``1.0`` when both raters agree everywhere
+    on a single category (degenerate ``1 - p_e == 0``).
+    """
+    _cats, m = _confusion_from_pairs(rater_a, rater_b)
+    n = m.sum()
+    p_o = float(np.trace(m) / n)
+    row = m.sum(axis=1) / n
+    col = m.sum(axis=0) / n
+    p_e = float(np.dot(row, col))
+    if math.isclose(p_e, 1.0):
+        return 1.0
+    return (p_o - p_e) / (1.0 - p_e)
+
+
+def gwet_ac1(rater_a: list[str], rater_b: list[str]) -> float:
+    """Gwet's AC1 — chance-corrected agreement robust to concentrated marginals.
+
+        AC1 = (p_o - p_e) / (1 - p_e)
+
+    with the *same* observed-agreement ``p_o`` as Cohen's kappa but a different
+    chance term. Gwet models chance agreement as a random-rating event whose
+    probability is estimated from the pooled category prevalence ``pi_k``:
+
+        p_e = (1 / (q - 1)) * sum_k  pi_k * (1 - pi_k)
+
+    where ``q`` is the number of categories and ``pi_k`` is the mean marginal
+    prevalence of category ``k`` across the two raters. Because ``p_e`` here does
+    not blow up when one category dominates, AC1 stays stable in the
+    range-restriction / kappa-paradox regime where kappa under-reports (see
+    :func:`cohen_kappa`). This is the documented fix for reliability estimated on
+    a judge whose labels cluster in a narrow band.
+
+    Nominal AC1 (for unordered labels such as the judge's C/P/I grades). Uses only
+    numpy — no GPL dependency (``pingouin`` is deliberately avoided; see module
+    docstring).
+
+    Reference:
+        Gwet, K. L. (2008). "Computing inter-rater reliability and its variance
+        in the presence of high agreement." British Journal of Mathematical and
+        Statistical Psychology, 61(1), 29–48.
+    """
+    cats, m = _confusion_from_pairs(rater_a, rater_b)
+    q = len(cats)
+    n = m.sum()
+    p_o = float(np.trace(m) / n)
+    if q == 1:
+        # Only one category ever observed: raters agree by construction and the
+        # (q-1) chance normaliser is undefined. Perfect agreement.
+        return 1.0
+    # Mean marginal prevalence per category across the two raters.
+    prevalence = (m.sum(axis=1) + m.sum(axis=0)) / (2.0 * n)
+    p_e = float(np.sum(prevalence * (1.0 - prevalence)) / (q - 1))
+    if math.isclose(p_e, 1.0):
+        return 1.0
+    return (p_o - p_e) / (1.0 - p_e)

@@ -35,7 +35,9 @@ from pathlib import Path
 
 from .stats import ConfidenceInterval
 from .stats import bh_fdr
+from .stats import cohen_kappa
 from .stats import design_effect
+from .stats import gwet_ac1
 from .stats import mcnemar_paired
 from .stats import wilson_ci
 
@@ -48,6 +50,7 @@ BUCKETS = ("answer", "clarify", "abstain")
 # as a literal so report.py has no import cycle with scorers.py.
 _EX_SCORER = "deterministic_ex"
 _ABSTAIN_SCORER = "abstain_infeasible"
+_JUDGE_SCORER = "judge"
 
 # Inspect encodes Score.value as single-letter grades for the categorical
 # scorers we use: CORRECT="C", INCORRECT="I", NOANSWER="N", PARTIAL="P".
@@ -172,6 +175,102 @@ def _rows_from_log(log) -> list[SampleRow]:
             )
         )
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Judge test-retest reliability (Gwet AC1)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class JudgeReliability:
+    """Test-retest reliability of the model judge over its C/P/I labels.
+
+    Computed only when the run was executed with the opt-in judge-retest pass
+    (``NXD_EVAL_JUDGE_RETEST``), which grades each sample twice with independent
+    criteria orderings. ``ac1`` is Gwet's AC1 between the two label sets — stable
+    under the concentrated marginals that make the judge axis cluster in a narrow
+    band, where Cohen's kappa under-reports (the kappa paradox). ``kappa`` is
+    carried alongside purely to expose that gap. ``None`` fields mean the retest
+    pass was not run (no paired labels in the log). ``judge_present`` is True when
+    at least one sample carried a judge Score — it separates "judge ran but the
+    retest pass was off" (worth prompting for) from "no judge in this suite at all"
+    (a pure deterministic run, where the retest hint would be misleading noise).
+    """
+
+    n_pairs: int
+    ac1: float | None
+    kappa: float | None
+    percent_agreement: float | None
+    judge_present: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "n_pairs": self.n_pairs,
+            "ac1": self.ac1,
+            "kappa": self.kappa,
+            "percent_agreement": self.percent_agreement,
+            "judge_present": self.judge_present,
+        }
+
+
+def _judge_retest_pairs(log) -> tuple[list[str], list[str]]:
+    """Extract paired (grade_1, grade_2) judge labels from an eval log.
+
+    Present only when the judge ran with the opt-in retest pass, which stamps both
+    grades into the judge Score's metadata. Samples without both labels are
+    skipped. Returns two aligned label vectors.
+    """
+    first: list[str] = []
+    second: list[str] = []
+    for s in log.samples or []:
+        sc = _get_score(s.scores or {}, _JUDGE_SCORER)
+        if sc is None:
+            continue
+        meta = _score_meta(sc)
+        g1 = meta.get("grade_1")
+        g2 = meta.get("grade_2")
+        if g1 is None or g2 is None:
+            continue
+        first.append(str(g1))
+        second.append(str(g2))
+    return first, second
+
+
+def _judge_present(log) -> bool:
+    """True when at least one sample carries a judge Score.
+
+    Distinguishes a suite that ran the model judge (retest merely off) from a pure
+    deterministic run with no judge at all, so the report can suppress the
+    retest-hint noise in the latter case.
+    """
+    for s in log.samples or []:
+        if _get_score(s.scores or {}, _JUDGE_SCORER) is not None:
+            return True
+    return False
+
+
+def _judge_reliability(log) -> JudgeReliability:
+    """Gwet AC1 (and kappa, for contrast) of the judge's test-retest labels."""
+    first, second = _judge_retest_pairs(log)
+    n = len(first)
+    present = _judge_present(log)
+    if n == 0:
+        return JudgeReliability(
+            n_pairs=0,
+            ac1=None,
+            kappa=None,
+            percent_agreement=None,
+            judge_present=present,
+        )
+    agree = sum(1 for a, b in zip(first, second) if a == b) / n
+    return JudgeReliability(
+        n_pairs=n,
+        ac1=gwet_ac1(first, second),
+        kappa=cohen_kappa(first, second),
+        percent_agreement=agree,
+        judge_present=present,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -413,6 +512,11 @@ class Report:
     rows: list[SampleRow]
     cards: dict[str, BucketCard]
     overall: BucketCard
+    judge_reliability: JudgeReliability = field(
+        default_factory=lambda: JudgeReliability(
+            n_pairs=0, ac1=None, kappa=None, percent_agreement=None
+        )
+    )
     log_path: str | None = None
     metadata: dict = field(default_factory=dict)
 
@@ -443,6 +547,7 @@ class Report:
             rows=rows,
             cards=cards,
             overall=overall,
+            judge_reliability=_judge_reliability(log),
             log_path=log_path,
         )
 
@@ -549,6 +654,7 @@ class Report:
             "n_samples": len(self.rows),
             "overall": self.overall.to_dict(),
             "buckets": {b: self.cards[b].to_dict() for b in BUCKETS},
+            "judge_reliability": self.judge_reliability.to_dict(),
         }
         if baseline is not None:
             reg = self.regression_against(baseline)
@@ -585,6 +691,11 @@ class Report:
         # Overall card first, then per-bucket.
         for card in [self.overall] + [self.cards[b] for b in BUCKETS]:
             lines.extend(_card_markdown(card, conf_pct))
+            lines.append("")
+
+        judge_lines = _judge_markdown(self.judge_reliability)
+        if judge_lines:
+            lines.extend(judge_lines)
             lines.append("")
 
         if baseline is not None:
@@ -625,6 +736,34 @@ def _card_markdown(card: BucketCard, conf_pct: int) -> list[str]:
         f"- **governance** P={_fmt_pct(card.governance_precision)} · "
         f"R={_fmt_pct(card.governance_recall)}",
     ]
+    return lines
+
+
+def _judge_markdown(jr: JudgeReliability) -> list[str]:
+    """Render the judge test-retest reliability line.
+
+    Reports Gwet AC1 (robust under the concentrated C/P/I marginals that make the
+    judge axis cluster, where kappa under-reports) with kappa alongside for
+    contrast. When the opt-in retest pass did not run there are no paired labels,
+    so we say so rather than fabricate a coefficient — but only when a judge
+    actually ran; a pure deterministic suite (no judge Score on any sample) omits
+    the section entirely, since the retest hint would be misleading noise there.
+    """
+    if not jr.judge_present and (jr.n_pairs == 0 or jr.ac1 is None):
+        return []
+    lines = ["## judge reliability (test-retest)", ""]
+    if jr.n_pairs == 0 or jr.ac1 is None:
+        lines.append(
+            "- not measured — run with `NXD_EVAL_JUDGE_RETEST=1` to grade each "
+            "sample twice and report Gwet AC1"
+        )
+        return lines
+    kappa_str = "—" if jr.kappa is None else f"{jr.kappa:+.3f}"
+    lines.append(
+        f"- **Gwet AC1** {jr.ac1:+.3f} · κ {kappa_str} · "
+        f"agreement {_fmt_pct(jr.percent_agreement)} over {jr.n_pairs} paired "
+        "gradings"
+    )
     return lines
 
 
