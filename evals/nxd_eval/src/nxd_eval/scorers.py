@@ -451,10 +451,9 @@ def _debias_order(checks: list[str], *, seed: int) -> list[str]:
     same way order-swap neutralises candidate-position bias in a pairwise judge.
 
     Reference:
-        "Trust or Escalate: LLM Judges with Provable Guarantees for Human
-        Agreement" (ICLR 2025) — establishes position/order bias as a first-order
-        confound in LLM-as-judge and prescribes order randomisation / swapping as
-        the debiasing intervention.
+        Zheng et al., "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena"
+        (NeurIPS 2023, arXiv:2306.05685) — documents position bias as a first-order
+        confound in LLM judges and uses order-swapping as the debiasing control.
     """
     import random
 
@@ -529,8 +528,8 @@ def judge() -> Scorer:
 
     Position-bias debiasing: the criteria are presented in a per-sample randomised
     order (see :func:`_debias_order`) so no criterion holds a fixed primacy/recency
-    slot — the single-answer analogue of order-swap in a pairwise judge, per
-    "Trust or Escalate" (ICLR 2025).
+    slot — the single-answer analogue of order-swap in a pairwise judge (Zheng
+    et al., MT-Bench, NeurIPS 2023).
 
     Test-retest reliability (opt-in via the ``NXD_EVAL_JUDGE_RETEST`` env flag):
     when enabled, each sample is graded a SECOND time with an independent criteria
