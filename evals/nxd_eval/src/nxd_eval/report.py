@@ -223,15 +223,20 @@ class JudgeReliability:
     """Test-retest reliability of the model judge over its C/P/I labels.
 
     Computed only when the run was executed with the opt-in judge-retest pass
-    (``NXD_EVAL_JUDGE_RETEST``), which grades each sample twice with independent
-    criteria orderings. ``ac1`` is Gwet's AC1 between the two label sets — stable
-    under the concentrated marginals that make the judge axis cluster in a narrow
-    band, where Cohen's kappa under-reports (the kappa paradox). ``kappa`` is
-    carried alongside purely to expose that gap. ``None`` fields mean the retest
-    pass was not run (no paired labels in the log). ``judge_present`` is True when
-    at least one sample carried a judge Score — it separates "judge ran but the
-    retest pass was off" (worth prompting for) from "no judge in this suite at all"
-    (a pure deterministic run, where the retest hint would be misleading noise).
+    (``NXD_EVAL_JUDGE_RETEST``), which grades a sample a second time with the
+    criteria in a different order. Because the two gradings differ *only* in that
+    order, ``ac1`` — Gwet's AC1 between the two label sets — bounds the judge's
+    order-sensitivity over the samples whose order actually changed, not its full
+    run-to-run noise. AC1 is used because it stays stable under the concentrated
+    marginals that make the judge axis cluster in a narrow band, where Cohen's
+    kappa under-reports (the kappa paradox); ``kappa`` is carried alongside purely
+    to expose that gap. A sample whose reordering is a no-op (always for a single
+    criterion) is not graded twice, so it never contributes a self-agreeing pair.
+    ``None`` fields mean the retest pass was not run (no paired labels in the log).
+    ``judge_present`` is True when at least one sample carried a judge Score — it
+    separates "judge ran but the retest pass was off" (worth prompting for) from
+    "no judge in this suite at all" (a pure deterministic run, where the retest
+    hint would be misleading noise).
     """
 
     n_pairs: int

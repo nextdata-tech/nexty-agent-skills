@@ -498,10 +498,10 @@ def _parse_grade(text: str) -> str:
 
 
 # Env flag gating the opt-in judge test-retest pass. When set truthy, the judge
-# grades each sample a SECOND time with an independent criteria ordering; the two
-# labels are recorded so report.py can compute Gwet AC1 test-retest agreement and
-# attribute a flat judge axis to agent-weakness vs judge-noise. Off by default so
-# a normal run is not doubled.
+# grades a sample a SECOND time with the criteria in a different order (skipped
+# when the reorder is a no-op); the two labels are recorded so report.py can
+# compute Gwet AC1 agreement and attribute a flat judge axis to agent-weakness vs
+# judge order-sensitivity. Off by default so a normal run is not doubled.
 _JUDGE_RETEST_ENV = "NXD_EVAL_JUDGE_RETEST"
 
 
