@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.8.0
+  version: 0.8.1
 ---
 
 # Nexty Mesh Assets
@@ -52,19 +52,30 @@ Hand out these paths inline when the matching step comes up (drop the link at th
 
 ## Scripts
 
-The skill ships a small Python package under `scripts/`. Run the entrypoints with a Python that has the dependencies in `scripts/requirements.txt` — install into a throwaway venv:
+The skill ships a small Python package under `scripts/`. **First make it
+reachable from Bash:** some harnesses mount only docs + `SKILL.md` into the shell
+the Bash tool runs in, so `scripts/` (with its `drivers/` + `meshlib/` subpackages)
+can be absent even though the skill loaded — then every `python scripts/...` call
+fails with a *shell* "No such file or directory". Resolve a `WORKDIR` **once per
+session** (skill dir if Bash sees its scripts, else a scratch copy that preserves
+the package layout), then run all entrypoints + the venv from `$WORKDIR`. Recipe
+(probe → Glob/Read/Write copy → confirm) + rationale:
+**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** — read it
+first. Quick probe:
+
+```bash
+[ -f "$SKILL_DIR/scripts/classify_profile.py" ] && WORKDIR="$SKILL_DIR"   # else bootstrap a copy
+```
+
+Then install the dependencies from `scripts/requirements.txt` into a throwaway venv
+(Windows: `py -3 -m venv` + `.\...\Scripts\pip.exe`):
 
 ```bash
 python3 -m venv .nxd-mesh-analyzer-venv
-.nxd-mesh-analyzer-venv/bin/pip install -r scripts/requirements.txt
+.nxd-mesh-analyzer-venv/bin/pip install -r "$WORKDIR/scripts/requirements.txt"
 ```
 
-```powershell
-py -3 -m venv .nxd-mesh-analyzer-venv
-.\.nxd-mesh-analyzer-venv\Scripts\pip.exe install -r scripts\requirements.txt
-```
-
-**Entrypoints** (run as `python scripts/<name>.py`):
+**Entrypoints** (run as `python "$WORKDIR/scripts/<name>.py"`):
 
 | Script | Purpose |
 |---|---|
