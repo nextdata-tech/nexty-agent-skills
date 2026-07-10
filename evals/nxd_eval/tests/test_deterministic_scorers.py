@@ -675,3 +675,28 @@ def test_judge_omits_grade_2_when_retest_disabled(monkeypatch):
     assert s.metadata["grade_1"] == CORRECT
     assert "grade_2" not in s.metadata
     assert fake._completions == []  # exactly one generate() consumed
+
+
+def test_judge_skips_retest_when_ordering_is_noop(monkeypatch):
+    # A single criterion cannot reorder, so the retest pass would grade an
+    # IDENTICAL prompt: near-deterministic grader => grade_2 == grade_1 by
+    # construction, a self-agreeing pair that inflates the Gwet AC1 floor in
+    # report.py. With the flag ON, judge() must therefore make only ONE generate()
+    # call and stamp NO grade_2 for such a no-op sample.
+    import inspect_ai.model as im
+
+    from nxd_eval.scorers import _JUDGE_RETEST_ENV, judge
+
+    monkeypatch.setenv(_JUDGE_RETEST_ENV, "1")
+    fake = _FakeModel(["GRADE: C"])  # a second generate() would IndexError
+    monkeypatch.setattr(im, "get_model", lambda *a, **k: fake)
+
+    state = _state(
+        final="the answer",
+        metadata={"judge_checks": ["only criterion"]},
+        sample_id="q1",
+    )
+    s = _run(judge(), state, Target(""))
+    assert s.metadata["grade_1"] == CORRECT
+    assert "grade_2" not in s.metadata
+    assert fake._completions == []  # exactly one generate() consumed - no retest

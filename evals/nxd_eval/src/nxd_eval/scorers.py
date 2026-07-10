@@ -532,11 +532,14 @@ def judge() -> Scorer:
     et al., MT-Bench, NeurIPS 2023).
 
     Test-retest reliability (opt-in via the ``NXD_EVAL_JUDGE_RETEST`` env flag):
-    when enabled, each sample is graded a SECOND time with an independent criteria
+    when enabled, a sample is graded a SECOND time with an independent criteria
     ordering, and both labels are stamped into ``Score.metadata`` (``grade_1`` /
     ``grade_2``) so :mod:`nxd_eval.report` can compute Gwet AC1 between the two
-    label sets. That lets a flat judge axis be attributed to agent-weakness vs
-    judge-noise. Off by default so a normal run is not doubled.
+    label sets. The retest runs only when the reordered criteria genuinely differ
+    from the first pass (for a single check they never do), so an identical-order
+    no-op cannot stamp a self-agreeing pair that inflates the coefficient. That
+    lets a flat judge axis be attributed to agent-weakness vs judge order-
+    sensitivity. Off by default so a normal run is not doubled.
     """
     from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 
@@ -569,17 +572,31 @@ def judge() -> Scorer:
 
         score_meta: dict[str, Any] = {"n_checks": len(checks), "grade_1": grade}
 
+        # Retest pass only measures judge noise if the second grading actually
+        # differs from the first. The two passes differ ONLY in criteria order, so
+        # when the reordered list is identical to the first (guaranteed for a
+        # single check, ~50% of the time for two) the retest is a no-op: a
+        # near-deterministic grader returns grade_2 == grade_1 by construction,
+        # which would inflate the Gwet AC1 / agreement floor in report.py with a
+        # non-independent pair. Only run and stamp the retest when the ordering
+        # genuinely changed, so the coefficient reflects order-sensitivity rather
+        # than that artifact. Pairs where it did not change are simply not stamped
+        # and never enter the reliability computation.
         if _judge_retest_enabled():
-            prompt2 = _judge_prompt(
-                str(state.input), tx, checks, order_seed=base_seed ^ 0x5EED
-            )
-            result2 = await model.generate(
-                [
-                    ChatMessageSystem(content=_JUDGE_SYSTEM),
-                    ChatMessageUser(content=prompt2),
-                ]
-            )
-            score_meta["grade_2"] = _parse_grade(result2.completion)
+            retest_seed = base_seed ^ 0x5EED
+            if _debias_order(checks, seed=retest_seed) != _debias_order(
+                checks, seed=base_seed
+            ):
+                prompt2 = _judge_prompt(
+                    str(state.input), tx, checks, order_seed=retest_seed
+                )
+                result2 = await model.generate(
+                    [
+                        ChatMessageSystem(content=_JUDGE_SYSTEM),
+                        ChatMessageUser(content=prompt2),
+                    ]
+                )
+                score_meta["grade_2"] = _parse_grade(result2.completion)
 
         return Score(
             value=grade,

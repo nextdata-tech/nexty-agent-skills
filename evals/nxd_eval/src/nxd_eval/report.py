@@ -866,6 +866,11 @@ def _judge_markdown(jr: JudgeReliability) -> list[str]:
         f"agreement {_fmt_pct(jr.percent_agreement)} over {jr.n_pairs} paired "
         "gradings"
     )
+    lines.append(
+        "  - the two gradings differ only in criteria order, so this bounds the "
+        "judge's order-sensitivity (over the samples whose order actually "
+        "changed), not its full run-to-run noise"
+    )
     return lines
 
 
