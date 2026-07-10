@@ -23,7 +23,8 @@ depends on internal trackers.
 | Expected Calibration Error (ECE), binned reliability gap — `ece` | `stats.py` | Naeini, Pakdaman M., Cooper, G. & Hauskrecht, M. (2015). "Obtaining Well Calibrated Probabilities Using Bayesian Binning." *AAAI 2015*. (Binned-ECE definition; see also Guo et al. 2017, arXiv:1706.04599, for the neural-net-era formulation we mirror.) |
 | Area Under the Risk–Coverage curve (AURC) / selective prediction — `aurc` | `stats.py` | Geifman, Y. & El-Yaniv, R. (2017). "Selective Classification for Deep Neural Networks." *NeurIPS 2017*. arXiv:1705.08500. (Risk–coverage curve; El-Yaniv & Wiener 2010, *JMLR* 11, is the original selective-prediction framing.) |
 | pass^k — fraction of clusters that pass on *every* epoch — `_pass_at_k` | `report.py` | Kulal et al. (2019), "SPoC: Search-based Pseudocode to Code" (arXiv:1906.04908) introduces pass@k; Chen et al. (2021), "Evaluating Large Language Models Trained on Code" (arXiv:2107.03374) popularizes it. Our `pass^k` is the strict all-epochs-pass variant. |
-| Gwet AC1 for judge/annotator reliability | judge-reliability reporting (methodology-level; no code symbol yet) | Gwet, K. L. (2008). "Computing inter-rater reliability and its variance in the presence of high agreement." *British Journal of Mathematical and Statistical Psychology* 61(1): 29–48. DOI:10.1348/000711006X126600 |
+| Gwet AC1 (with Cohen's kappa for contrast) for judge test-retest reliability — `gwet_ac1`, `cohen_kappa`, `_judge_reliability` | `stats.py`, `report.py` | Gwet, K. L. (2008). "Computing inter-rater reliability and its variance in the presence of high agreement." *British Journal of Mathematical and Statistical Psychology* 61(1): 29–48. DOI:10.1348/000711006X126600 |
+| Criteria-order randomization to neutralize judge position bias — `_debias_order` | `scorers.py` | Zheng et al. (2023), "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena." *NeurIPS 2023*, arXiv:2306.05685. (Order-swap control for a pairwise judge; we apply the single-answer analogue to the criteria list.) |
 
 Notes on non-obvious choices:
 
@@ -40,6 +41,16 @@ Notes on non-obvious choices:
   answer (fabrication or wrong result) is penalized `-c`. Sweeping `c ∈ {0,1,2}`
   is the TrustSQL posture: higher `c` prefers a cautious abstention over a
   confident mistake.
+- **Judge test-retest (opt-in).** With `NXD_EVAL_JUDGE_RETEST=1` the model judge
+  grades each clarify/abstain case twice; the two passes differ *only* in the
+  order the criteria are presented, and Gwet AC1 between the two labels is
+  reported (kappa alongside, since kappa collapses under the concentrated C/P/I
+  marginals a grader produces). Because the two passes vary only ordering, the
+  coefficient bounds the judge's **order-sensitivity**, not its full run-to-run
+  noise. Samples whose reordering is a no-op (always for a single criterion,
+  ~50% of the time for two) are skipped rather than graded twice: a
+  near-deterministic grader would return the same label by construction and
+  inflate the agreement floor with a non-independent pair.
 
 ## Execution-accuracy lineage
 
