@@ -42,8 +42,10 @@ Notes on non-obvious choices:
   is the TrustSQL posture: higher `c` prefers a cautious abstention over a
   confident mistake.
 - **Judge test-retest (opt-in).** With `NXD_EVAL_JUDGE_RETEST=1` the model judge
-  grades each clarify/abstain case twice; the two passes differ *only* in the
-  order the criteria are presented, and Gwet AC1 between the two labels is
+  grades each case that carries judge checks twice (typically the clarify/abstain
+  cases, but the trigger is the presence of `judge_checks`, not the bucket); the
+  two passes differ *only* in the order the criteria are presented, and Gwet AC1
+  between the two labels is
   reported (kappa alongside, since kappa collapses under the concentrated C/P/I
   marginals a grader produces). Because the two passes vary only ordering, the
   coefficient bounds the judge's **order-sensitivity**, not its full run-to-run
