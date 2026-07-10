@@ -13,7 +13,15 @@ answer bucket (``answer`` / ``clarify`` / ``abstain``):
 * the Reliability Score at penalties ``c ∈ {0, 1, 2}`` (TrustSQL posture);
 * governance precision / recall — how well the agent refuses the infeasible
   cases without wrongly refusing feasible ones;
-* ``pass^k`` — the fraction of clusters that pass on *every* epoch.
+* ``pass^k`` — the fraction of clusters that pass on *every* epoch;
+* calibration / selective-prediction quality over the answered samples that
+  carry a verbalized confidence: Brier score, Expected Calibration Error (ECE),
+  and the Area Under the Risk–Coverage curve (AURC). The confidence is the
+  agent's calibrated self-report (QA-Calibration, ICLR 2025); pairing it with
+  the 0/1 correctness outcome turns the binary abstain rate into a
+  risk-coverage view (Geifman & El-Yaniv, "Selective Classification for Deep
+  Neural Networks", NeurIPS 2017). Absent confidences ⇒ the block is omitted,
+  never a crash.
 
 ``Report.to_markdown`` / ``Report.to_json`` emit the cards. Against a
 ``--baseline`` report, :meth:`Report.regression_against` reports the per-bucket
@@ -27,6 +35,7 @@ re-derived here.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
@@ -34,8 +43,13 @@ from dataclasses import field
 from pathlib import Path
 
 from .stats import ConfidenceInterval
+from .stats import aurc
 from .stats import bh_fdr
+from .stats import brier
+from .stats import cohen_kappa
 from .stats import design_effect
+from .stats import ece
+from .stats import gwet_ac1
 from .stats import mcnemar_paired
 from .stats import wilson_ci
 
@@ -48,6 +62,7 @@ BUCKETS = ("answer", "clarify", "abstain")
 # as a literal so report.py has no import cycle with scorers.py.
 _EX_SCORER = "deterministic_ex"
 _ABSTAIN_SCORER = "abstain_infeasible"
+_JUDGE_SCORER = "judge"
 
 # Inspect encodes Score.value as single-letter grades for the categorical
 # scorers we use: CORRECT="C", INCORRECT="I", NOANSWER="N", PARTIAL="P".
@@ -77,6 +92,7 @@ class SampleRow:
     feasible: bool
     passed: bool
     abstained: bool
+    confidence: float | None = None
 
     @property
     def key(self) -> str:
@@ -127,6 +143,20 @@ def _score_meta(sc) -> dict:
     return meta or {}
 
 
+def _confidence_of(meta: dict) -> float | None:
+    """A finite verbalized confidence in ``[0, 1]`` from scorer metadata, else None."""
+    val = meta.get("confidence")
+    if val is None:
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    return max(0.0, min(1.0, f))
+
+
 def _primary_passed(bucket: str, scores: dict) -> bool:
     """The correctness verdict for a sample given its bucket.
 
@@ -157,8 +187,16 @@ def _rows_from_log(log) -> list[SampleRow]:
         # feasible / abstained come from the abstain scorer's metadata when
         # present, else from the sample-level routing metadata.
         abstain_meta = _score_meta(_get_score(scores, _ABSTAIN_SCORER))
-        feasible = bool(abstain_meta.get("feasible", meta.get("feasible", bucket != "abstain")))
+        feasible = bool(
+            abstain_meta.get("feasible", meta.get("feasible", bucket != "abstain"))
+        )
         abstained = bool(abstain_meta.get("abstained", False))
+
+        # Verbalized confidence rides in the deterministic-EX scorer's metadata
+        # for answered cases (scorers.py stamps it when the agent emitted a
+        # CONFIDENCE line). Absent ⇒ None, and the sample contributes no
+        # confidence pair to the calibration metrics.
+        confidence = _confidence_of(_score_meta(_get_score(scores, _EX_SCORER)))
 
         rows.append(
             SampleRow(
@@ -169,9 +207,111 @@ def _rows_from_log(log) -> list[SampleRow]:
                 feasible=feasible,
                 passed=_primary_passed(bucket, scores),
                 abstained=abstained,
+                confidence=confidence,
             )
         )
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Judge test-retest reliability (Gwet AC1)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class JudgeReliability:
+    """Test-retest reliability of the model judge over its C/P/I labels.
+
+    Computed only when the run was executed with the opt-in judge-retest pass
+    (``NXD_EVAL_JUDGE_RETEST``), which grades a sample a second time with the
+    criteria in a different order. Because the two gradings differ *only* in that
+    order, ``ac1`` — Gwet's AC1 between the two label sets — bounds the judge's
+    order-sensitivity over the samples whose order actually changed, not its full
+    run-to-run noise. AC1 is used because it stays stable under the concentrated
+    marginals that make the judge axis cluster in a narrow band, where Cohen's
+    kappa under-reports (the kappa paradox); ``kappa`` is carried alongside purely
+    to expose that gap. A sample whose reordering is a no-op (always for a single
+    criterion) is not graded twice, so it never contributes a self-agreeing pair.
+    ``None`` fields mean the retest pass was not run (no paired labels in the log).
+    ``judge_present`` is True when at least one sample carried a judge Score — it
+    separates "judge ran but the retest pass was off" (worth prompting for) from
+    "no judge in this suite at all" (a pure deterministic run, where the retest
+    hint would be misleading noise).
+    """
+
+    n_pairs: int
+    ac1: float | None
+    kappa: float | None
+    percent_agreement: float | None
+    judge_present: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "n_pairs": self.n_pairs,
+            "ac1": self.ac1,
+            "kappa": self.kappa,
+            "percent_agreement": self.percent_agreement,
+            "judge_present": self.judge_present,
+        }
+
+
+def _judge_retest_pairs(log) -> tuple[list[str], list[str]]:
+    """Extract paired (grade_1, grade_2) judge labels from an eval log.
+
+    Present only when the judge ran with the opt-in retest pass, which stamps both
+    grades into the judge Score's metadata. Samples without both labels are
+    skipped. Returns two aligned label vectors.
+    """
+    first: list[str] = []
+    second: list[str] = []
+    for s in log.samples or []:
+        sc = _get_score(s.scores or {}, _JUDGE_SCORER)
+        if sc is None:
+            continue
+        meta = _score_meta(sc)
+        g1 = meta.get("grade_1")
+        g2 = meta.get("grade_2")
+        if g1 is None or g2 is None:
+            continue
+        first.append(str(g1))
+        second.append(str(g2))
+    return first, second
+
+
+def _judge_present(log) -> bool:
+    """True when at least one sample carries a judge Score.
+
+    Distinguishes a suite that ran the model judge (retest merely off) from a pure
+    deterministic run with no judge at all, so the report can suppress the
+    retest-hint noise in the latter case.
+    """
+    for s in log.samples or []:
+        if _get_score(s.scores or {}, _JUDGE_SCORER) is not None:
+            return True
+    return False
+
+
+def _judge_reliability(log) -> JudgeReliability:
+    """Gwet AC1 (and kappa, for contrast) of the judge's test-retest labels."""
+    first, second = _judge_retest_pairs(log)
+    n = len(first)
+    present = _judge_present(log)
+    if n == 0:
+        return JudgeReliability(
+            n_pairs=0,
+            ac1=None,
+            kappa=None,
+            percent_agreement=None,
+            judge_present=present,
+        )
+    agree = sum(1 for a, b in zip(first, second) if a == b) / n
+    return JudgeReliability(
+        n_pairs=n,
+        ac1=gwet_ac1(first, second),
+        kappa=cohen_kappa(first, second),
+        percent_agreement=agree,
+        judge_present=present,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -251,6 +391,63 @@ def _effective_n(rows: list[SampleRow]) -> EffectiveN:
 
 
 # --------------------------------------------------------------------------- #
+# Calibration / selective-prediction quality
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """Confidence-quality summary over answered samples carrying a confidence.
+
+    ``n`` is the number of (correctness, confidence) pairs the metrics were
+    computed over — always a subset of the bucket's rows, since a sample without
+    a verbalized confidence contributes nothing here. Lower is better for all
+    three: ``brier`` (mean squared error of confidence vs outcome), ``ece``
+    (Expected Calibration Error), ``aurc`` (Area Under the Risk–Coverage curve).
+    """
+
+    n: int
+    brier: float
+    ece: float
+    aurc: float
+
+    def to_dict(self) -> dict:
+        return {
+            "n": self.n,
+            "brier": self.brier,
+            "ece": self.ece,
+            "aurc": self.aurc,
+        }
+
+
+def _calibration(rows: list[SampleRow]) -> Calibration | None:
+    """Brier / ECE / AURC over the rows that carry a confidence, else None.
+
+    Builds the ``(correctness, confidence)`` pairs from every row whose
+    ``confidence`` is present, then defers to the ``stats`` primitives. Returns
+    ``None`` when no row carries a confidence — the report then omits the block
+    cleanly rather than emitting a degenerate zero. Uses the agent's calibrated
+    self-report (QA-Calibration, ICLR 2025) to build the risk-coverage view
+    (Geifman & El-Yaniv, NeurIPS 2017).
+    """
+    y_true: list[int] = []
+    y_prob: list[float] = []
+    for r in rows:
+        if r.confidence is None:
+            continue
+        y_true.append(1 if r.passed else 0)
+        y_prob.append(float(r.confidence))
+    if not y_prob:
+        return None
+    return Calibration(
+        n=len(y_prob),
+        brier=brier(y_true, y_prob),
+        ece=ece(y_true, y_prob),
+        aurc=aurc(y_true, y_prob),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Per-bucket KPI card
 # --------------------------------------------------------------------------- #
 
@@ -269,9 +466,10 @@ class BucketCard:
     pass_at_k: float  # fraction of clusters passing on every epoch
     governance_precision: float | None
     governance_recall: float | None
+    calibration: Calibration | None = None  # None when no confidences present
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "bucket": self.bucket,
             "n": self.n,
             "passed": self.passed,
@@ -288,6 +486,9 @@ class BucketCard:
             "governance_precision": self.governance_precision,
             "governance_recall": self.governance_recall,
         }
+        if self.calibration is not None:
+            out["calibration"] = self.calibration.to_dict()
+        return out
 
 
 def _reliability(rows: list[SampleRow], c: float) -> float:
@@ -376,6 +577,7 @@ def _card(bucket: str, rows: list[SampleRow], *, alpha: float) -> BucketCard:
         pass_at_k=_pass_at_k(rows),
         governance_precision=gp,
         governance_recall=gr,
+        calibration=_calibration(rows),
     )
 
 
@@ -413,6 +615,11 @@ class Report:
     rows: list[SampleRow]
     cards: dict[str, BucketCard]
     overall: BucketCard
+    judge_reliability: JudgeReliability = field(
+        default_factory=lambda: JudgeReliability(
+            n_pairs=0, ac1=None, kappa=None, percent_agreement=None
+        )
+    )
     log_path: str | None = None
     metadata: dict = field(default_factory=dict)
 
@@ -443,6 +650,7 @@ class Report:
             rows=rows,
             cards=cards,
             overall=overall,
+            judge_reliability=_judge_reliability(log),
             log_path=log_path,
         )
 
@@ -460,9 +668,7 @@ class Report:
 
         p = str(path)
         log = read_eval_log(p)
-        return cls.from_log(
-            log, alpha=alpha, suite=suite, variant=variant, log_path=p
-        )
+        return cls.from_log(log, alpha=alpha, suite=suite, variant=variant, log_path=p)
 
     # ---- accuracy accessor certify() gates on ---- #
 
@@ -549,6 +755,7 @@ class Report:
             "n_samples": len(self.rows),
             "overall": self.overall.to_dict(),
             "buckets": {b: self.cards[b].to_dict() for b in BUCKETS},
+            "judge_reliability": self.judge_reliability.to_dict(),
         }
         if baseline is not None:
             reg = self.regression_against(baseline)
@@ -585,6 +792,11 @@ class Report:
         # Overall card first, then per-bucket.
         for card in [self.overall] + [self.cards[b] for b in BUCKETS]:
             lines.extend(_card_markdown(card, conf_pct))
+            lines.append("")
+
+        judge_lines = _judge_markdown(self.judge_reliability)
+        if judge_lines:
+            lines.extend(judge_lines)
             lines.append("")
 
         if baseline is not None:
@@ -625,6 +837,45 @@ def _card_markdown(card: BucketCard, conf_pct: int) -> list[str]:
         f"- **governance** P={_fmt_pct(card.governance_precision)} · "
         f"R={_fmt_pct(card.governance_recall)}",
     ]
+    cal = card.calibration
+    if cal is not None:
+        lines.append(
+            f"- **calibration** (n={cal.n}) Brier {cal.brier:.3f} · "
+            f"ECE {cal.ece:.3f} · AURC {cal.aurc:.3f}"
+        )
+    return lines
+
+
+def _judge_markdown(jr: JudgeReliability) -> list[str]:
+    """Render the judge test-retest reliability line.
+
+    Reports Gwet AC1 (robust under the concentrated C/P/I marginals that make the
+    judge axis cluster, where kappa under-reports) with kappa alongside for
+    contrast. When the opt-in retest pass did not run there are no paired labels,
+    so we say so rather than fabricate a coefficient — but only when a judge
+    actually ran; a pure deterministic suite (no judge Score on any sample) omits
+    the section entirely, since the retest hint would be misleading noise there.
+    """
+    if not jr.judge_present and (jr.n_pairs == 0 or jr.ac1 is None):
+        return []
+    lines = ["## judge reliability (test-retest)", ""]
+    if jr.n_pairs == 0 or jr.ac1 is None:
+        lines.append(
+            "- not measured — run with `NXD_EVAL_JUDGE_RETEST=1` to grade each "
+            "sample twice and report Gwet AC1"
+        )
+        return lines
+    kappa_str = "—" if jr.kappa is None else f"{jr.kappa:+.3f}"
+    lines.append(
+        f"- **Gwet AC1** {jr.ac1:+.3f} · κ {kappa_str} · "
+        f"agreement {_fmt_pct(jr.percent_agreement)} over {jr.n_pairs} paired "
+        "gradings"
+    )
+    lines.append(
+        "  - the two gradings differ only in criteria order, so this bounds the "
+        "judge's order-sensitivity (over the samples whose order actually "
+        "changed), not its full run-to-run noise"
+    )
     return lines
 
 

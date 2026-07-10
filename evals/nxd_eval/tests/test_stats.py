@@ -155,15 +155,34 @@ def test_ece_in_unit_range():
 
 
 def test_ece_golden_value():
-    # Pin the exact ECE so the hand-rolled bin-weighting / digitize logic can't
-    # silently drift. Five samples, n_bins=5 (edges every 0.2): the three
-    # positives land in bins [0.8,1.0), [0.8,1.0)→wait, 0.9,0.8,0.7 fall in the
-    # top two populated bins, the two negatives (0.2, 0.1) in the low bins. Each
-    # populated bin's |accuracy - mean_confidence| weighted by its sample share
-    # sums to 1/6. Recomputed independently from calibration_curve + bin counts.
+    # Pin the exact ECE so the hand-rolled bin-weighting can't silently drift.
+    # Five samples, n_bins=5 (edges every 0.2). Bins are assigned exactly as
+    # sklearn's calibration_curve does — ``searchsorted(edges[1:-1], p)`` — so
+    # 0.8 lands on its interior edge in the [0.6,0.8) bin, giving populated bins
+    # {0.1,0.2}, {0.7,0.8}, {0.9} with mean confidences 0.15 / 0.75 / 0.90 and
+    # accuracies 0 / 1 / 1. Weighted |acc - conf| sums to 0.18. Recomputed
+    # independently from calibration_curve + bin counts.
     y_true = [1, 1, 1, 0, 0]
     y_prob = [0.9, 0.8, 0.7, 0.2, 0.1]
-    assert math.isclose(S.ece(y_true, y_prob, n_bins=5), 1.0 / 6.0, rel_tol=1e-6)
+    assert math.isclose(S.ece(y_true, y_prob, n_bins=5), 0.18, rel_tol=1e-6)
+
+
+def test_ece_interior_edge_boundary_values():
+    # Confidences sitting exactly on interior bin edges must be weighted in the
+    # SAME bin the calibration curve assigns them (sklearn uses searchsorted
+    # side='left'). All confidences at 0.5 collapse to a single bin: accuracy
+    # 0.5, mean confidence 0.5 ⇒ ECE exactly 0.
+    y_true = [1, 0, 1, 0]
+    y_prob = [0.5, 0.5, 0.5, 0.5]
+    assert math.isclose(S.ece(y_true, y_prob, n_bins=10), 0.0, abs_tol=1e-9)
+
+    # A mix straddling the 0.2 edge stays finite and in range with no
+    # bin-count/curve desync (which would trip the equal-weight fallback).
+    y_true2 = [1, 1, 0, 0]
+    y_prob2 = [0.2, 0.4, 0.2, 0.6]
+    e = S.ece(y_true2, y_prob2, n_bins=5)
+    assert 0.0 <= e <= 1.0
+    assert math.isfinite(e)
 
 
 def test_aurc_ranks_confidence_quality():
@@ -191,3 +210,70 @@ def test_aurc_golden_value():
 
 def test_aurc_empty_is_zero():
     assert S.aurc([], []) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Gwet AC1 / Cohen kappa — chance-corrected agreement
+# --------------------------------------------------------------------------- #
+
+
+def test_ac1_perfect_agreement_is_one():
+    a = ["C", "P", "I", "C"]
+    assert math.isclose(S.gwet_ac1(a, a), 1.0, abs_tol=1e-12)
+    assert math.isclose(S.cohen_kappa(a, a), 1.0, abs_tol=1e-12)
+
+
+def test_ac1_single_category_is_one():
+    # Both raters only ever say "C": perfect agreement, no (q-1) blow-up.
+    a = ["C", "C", "C"]
+    assert S.gwet_ac1(a, a) == 1.0
+    assert S.cohen_kappa(a, a) == 1.0
+
+
+def test_ac1_greater_than_kappa_under_concentrated_marginals():
+    # The kappa paradox: high observed agreement but one label ("C") dominates the
+    # marginals, so kappa's chance term inflates and kappa collapses toward 0 —
+    # while Gwet AC1 stays high. 14/15 agree; the marginals are heavily skewed to
+    # "C". This is exactly the range-restriction regime the judge axis sits in.
+    a = ["C"] * 13 + ["I", "C"]
+    b = ["C"] * 13 + ["C", "I"]
+    ac1 = S.gwet_ac1(a, b)
+    kappa = S.cohen_kappa(a, b)
+    # Both see the same 13/15 observed agreement, but AC1 must exceed kappa here.
+    assert ac1 > kappa
+    # And the gap is large: kappa under-reports badly (near/below 0) while AC1
+    # reflects the genuinely high agreement.
+    assert ac1 > 0.8
+    assert kappa < 0.2
+
+
+def test_ac1_formula_hand_computed():
+    # Two categories, n=4, 3 agreements. Pin AC1 to its closed form so the
+    # prevalence / (q-1) chance term can't silently drift.
+    #   a = [C, C, C, I], b = [C, C, I, I]
+    #   p_o = 3/4 = 0.75
+    #   marginals: C -> (3+2)/8 = 0.625, I -> (1+2)/8 = 0.375
+    #   p_e = [0.625*0.375 + 0.375*0.625] / (2-1) = 0.46875
+    #   AC1 = (0.75 - 0.46875) / (1 - 0.46875) = 0.28125 / 0.53125
+    a = ["C", "C", "C", "I"]
+    b = ["C", "C", "I", "I"]
+    expected = (0.75 - 0.46875) / (1.0 - 0.46875)
+    assert math.isclose(S.gwet_ac1(a, b), expected, rel_tol=1e-12)
+
+
+def test_ac1_length_mismatch_raises():
+    try:
+        S.gwet_ac1(["C", "P"], ["C"])
+    except ValueError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError on mismatched lengths")
+
+
+def test_ac1_empty_raises():
+    try:
+        S.gwet_ac1([], [])
+    except ValueError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError on empty input")

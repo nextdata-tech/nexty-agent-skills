@@ -18,6 +18,7 @@ production is exercised, not mocked.
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -61,13 +62,17 @@ def _sample(
     feasible: bool = True,
     passed: bool = True,
     abstained: bool = False,
+    confidence: float | None = None,
 ) -> EvalSample:
     """One scored EvalSample with our routing metadata + the primary scorer."""
     scorer_name = _EX if bucket == "answer" else _ABS
+    score_meta = {"feasible": feasible, "abstained": abstained}
+    if confidence is not None:
+        score_meta["confidence"] = confidence
     scores = {
         scorer_name: Score(
             value="C" if passed else "I",
-            metadata={"feasible": feasible, "abstained": abstained},
+            metadata=score_meta,
         )
     }
     return EvalSample(
@@ -84,6 +89,21 @@ def _sample(
     )
 
 
+def _judge_sample(sample_id: str, grade_1: str, grade_2: str | None) -> EvalSample:
+    """A scored EvalSample carrying a judge Score with test-retest grade pair."""
+    meta = {"n_checks": 2, "grade_1": grade_1}
+    if grade_2 is not None:
+        meta["grade_2"] = grade_2
+    return EvalSample(
+        id=sample_id,
+        epoch=1,
+        input="q",
+        target="",
+        metadata={"bucket": "answer", "cluster": sample_id, "feasible": True},
+        scores={"judge": Score(value=grade_1, metadata=meta)},
+    )
+
+
 def _log(samples: list[EvalSample]) -> EvalLog:
     return EvalLog(eval=_spec(), samples=samples, status="success")
 
@@ -94,7 +114,9 @@ def _write(tmp_path, samples: list[EvalSample], name="run.eval") -> str:
     return str(p)
 
 
-def _answer_samples(n: int, n_correct: int, *, bucket: str = "answer") -> list[EvalSample]:
+def _answer_samples(
+    n: int, n_correct: int, *, bucket: str = "answer"
+) -> list[EvalSample]:
     """``n`` independent (distinct-cluster) answer samples, ``n_correct`` passing."""
     out = []
     for i in range(n):
@@ -115,8 +137,12 @@ def test_report_per_bucket_counts_and_pointwise_accuracy():
             _sample("cl-1", bucket="clarify", passed=False),
         ]
         + [
-            _sample("ab-0", bucket="abstain", feasible=False, passed=True, abstained=True),
-            _sample("ab-1", bucket="abstain", feasible=False, passed=False, abstained=False),
+            _sample(
+                "ab-0", bucket="abstain", feasible=False, passed=True, abstained=True
+            ),
+            _sample(
+                "ab-1", bucket="abstain", feasible=False, passed=False, abstained=False
+            ),
         ]
     )
     rep = Report.from_log(_log(samples))
@@ -139,6 +165,7 @@ def test_report_reads_package_qualified_scorer_keys():
     report must resolve either form, or a real published run silently scores
     every answer case as a miss (the bare-key fixtures above can't catch this).
     """
+
     def _prefixed(sample_id: str, *, bucket: str, passed: bool) -> EvalSample:
         s = _sample(sample_id, bucket=bucket, passed=passed)
         # re-key the scores dict with the package-qualified registry name
@@ -265,7 +292,9 @@ def test_reliability_and_governance_on_abstain_bucket():
     samples = [
         _sample("ab-0", bucket="abstain", feasible=False, passed=True, abstained=True),
         _sample("ab-1", bucket="abstain", feasible=False, passed=True, abstained=True),
-        _sample("ab-2", bucket="abstain", feasible=False, passed=False, abstained=False),
+        _sample(
+            "ab-2", bucket="abstain", feasible=False, passed=False, abstained=False
+        ),
     ]
     rep = Report.from_log(_log(samples))
     card = rep.cards["abstain"]
@@ -292,6 +321,72 @@ def test_pass_at_k_requires_every_epoch():
     rep = Report.from_log(_log(samples))
     # 1 of 2 clusters passed on EVERY epoch.
     assert math.isclose(rep.cards["answer"].pass_at_k, 0.5)
+
+
+# --------------------------------------------------------------------------- #
+# Calibration / selective-prediction (Brier / ECE / AURC)
+# --------------------------------------------------------------------------- #
+
+
+def test_calibration_metrics_finite_when_confidences_present():
+    # Answer cases carrying verbalized confidences: well-calibrated head (right &
+    # confident) plus one over-confident miss. Brier/ECE/AURC must be finite and
+    # in-range, and computed only over the confidence-bearing pairs.
+    import math as _math
+
+    samples = [
+        _sample("a-0", passed=True, confidence=0.95),
+        _sample("a-1", passed=True, confidence=0.90),
+        _sample("a-2", passed=True, confidence=0.85),
+        _sample("a-3", passed=False, confidence=0.80),  # over-confident miss
+        _sample("a-4", passed=False, confidence=0.20),  # well-flagged miss
+    ]
+    rep = Report.from_log(_log(samples))
+    cal = rep.cards["answer"].calibration
+    assert cal is not None
+    assert cal.n == 5
+    for v in (cal.brier, cal.ece, cal.aurc):
+        assert _math.isfinite(v)
+        assert v >= 0.0
+    assert cal.brier <= 1.0
+
+    # Surfaced in JSON and markdown.
+    import json as _json
+
+    doc = _json.loads(rep.to_json())
+    assert doc["buckets"]["answer"]["calibration"]["n"] == 5
+    assert "brier" in doc["buckets"]["answer"]["calibration"]
+    md = rep.to_markdown()
+    assert "calibration" in md
+    assert "Brier" in md and "ECE" in md and "AURC" in md
+
+
+def test_calibration_omitted_without_confidences():
+    # No confidences on any sample ⇒ block omitted, no crash, no calibration key.
+    rep = Report.from_log(_log(_answer_samples(10, 9)))
+    assert rep.cards["answer"].calibration is None
+
+    import json as _json
+
+    doc = _json.loads(rep.to_json())
+    assert "calibration" not in doc["buckets"]["answer"]
+    md = rep.to_markdown()  # must not raise
+    assert "Brier" not in md
+
+
+def test_calibration_uses_only_confidence_bearing_rows():
+    # Mixed: some answered samples carry a confidence, some do not. The metrics
+    # ride only on the confidence-bearing subset.
+    samples = [
+        _sample("a-0", passed=True, confidence=0.9),
+        _sample("a-1", passed=False, confidence=0.1),
+        _sample("a-2", passed=True),  # no confidence — excluded
+        _sample("a-3", passed=True),  # no confidence — excluded
+    ]
+    rep = Report.from_log(_log(samples))
+    cal = rep.cards["answer"].calibration
+    assert cal is not None
+    assert cal.n == 2  # only the two confidence-bearing rows
 
 
 # --------------------------------------------------------------------------- #
@@ -393,7 +488,9 @@ def test_certify_fails_when_point_estimate_passes_but_lower_bound_misses(tmp_pat
 
     assert res.p_hat > 0.90, "guard: point estimate must clear the target"
     assert res.ci_low < 0.90, "guard: lower bound must miss the target"
-    assert res.refused is False, "sample is powered enough — this is a fail, not a refusal"
+    assert res.refused is False, (
+        "sample is powered enough — this is a fail, not a refusal"
+    )
     assert res.passed is False
     assert res.exit_code != 0
     assert "lower bound" in res.reason
@@ -457,3 +554,66 @@ def test_parse_gate_rejects_garbage():
         parse_gate("accuracy~0.9")
     with pytest.raises(ValueError):
         parse_gate("nonsense>=0.5")
+
+
+# --------------------------------------------------------------------------- #
+# Judge test-retest reliability (Gwet AC1)
+# --------------------------------------------------------------------------- #
+
+
+def test_judge_reliability_absent_without_retest_pass():
+    # A judge Score with only grade_1 (no retest pass run) yields no coefficient.
+    samples = [_judge_sample("q0", "C", None), _judge_sample("q1", "C", None)]
+    rep = Report.from_log(_log(samples))
+    assert rep.judge_reliability.n_pairs == 0
+    assert rep.judge_reliability.ac1 is None
+    md = rep.to_markdown()
+    assert "judge reliability (test-retest)" in md
+    assert "not measured" in md
+    assert rep.judge_reliability.judge_present is True
+    assert rep.to_json()  # serialises without error
+
+
+def test_judge_reliability_section_omitted_for_deterministic_suite():
+    # A pure deterministic run carries no judge Score on any sample. The
+    # retest-hint would be misleading noise there, so the whole section is dropped
+    # rather than rendered with "not measured".
+    samples = [_sample("q0"), _sample("q1")]
+    rep = Report.from_log(_log(samples))
+    assert rep.judge_reliability.judge_present is False
+    assert rep.judge_reliability.n_pairs == 0
+    md = rep.to_markdown()
+    assert "judge reliability (test-retest)" not in md
+    assert "not measured" not in md
+    # Still serialises, exposing judge_present so downstream can tell the states.
+    doc = json.loads(rep.to_json())
+    assert doc["judge_reliability"]["judge_present"] is False
+
+
+def test_judge_reliability_ac1_from_retest_pairs():
+    # 4/5 samples agree between the two gradings; one flips C->I. AC1 is computed
+    # over the (grade_1, grade_2) pairs and surfaced in report + json + markdown.
+    samples = [
+        _judge_sample("q0", "C", "C"),
+        _judge_sample("q1", "C", "C"),
+        _judge_sample("q2", "C", "C"),
+        _judge_sample("q3", "P", "P"),
+        _judge_sample("q4", "C", "I"),
+    ]
+    rep = Report.from_log(_log(samples))
+    jr = rep.judge_reliability
+    assert jr.n_pairs == 5
+    assert jr.ac1 is not None
+    assert math.isclose(jr.percent_agreement, 4 / 5)
+    # AC1 matches the stats primitive over the same label vectors.
+    from nxd_eval.stats import gwet_ac1
+
+    first = ["C", "C", "C", "P", "C"]
+    second = ["C", "C", "C", "P", "I"]
+    assert math.isclose(jr.ac1, gwet_ac1(first, second), rel_tol=1e-12)
+
+    md = rep.to_markdown()
+    assert "Gwet AC1" in md
+    doc = json.loads(rep.to_json())
+    assert doc["judge_reliability"]["n_pairs"] == 5
+    assert doc["judge_reliability"]["ac1"] is not None

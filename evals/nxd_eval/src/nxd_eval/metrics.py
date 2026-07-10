@@ -17,6 +17,13 @@ Two metrics live here:
 
 Both are real Inspect metrics: ``@metric`` decorated, ``list[SampleScore] ->
 Value``, no model call.
+
+References (see ``METHODOLOGY.md`` for the full metric→paper table):
+
+* Wilson score interval — Wilson (1927), JASA 22(158):209–212.
+* TrustSQL reliability score (asymmetric ``-c`` penalty) — Lee et al. (2024),
+  "TrustSQL: Benchmarking Text-to-SQL Reliability with Penalty-Based Scoring,"
+  arXiv:2403.15879.
 """
 
 from __future__ import annotations
