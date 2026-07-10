@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.8.0
+  version: 0.8.1
 ---
 
 # nxd Data Product Query
@@ -86,14 +86,12 @@ A locked-down mode for queries that must demonstrably go through MCP and nothing
 
 ## Step 0: Make `scripts/` reachable from Bash (do this before anything else)
 
-This skill is **script-first**. Some harnesses mount only docs + `SKILL.md` into
-the Bash sandbox, so `scripts/` can be absent even though the skill loaded — then
-every `python3 scripts/...` call fails with a *shell* "No such file or directory".
-Resolve a `WORKDIR` **once per session** (skill dir if Bash sees its scripts, else
-a scratch copy), then run all later `scripts/...` commands + the **Scripts** venv
-from `$WORKDIR`. Recipe (probe → Glob/Read/Write copy → confirm) +
-rationale: **[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** —
-read it before Step 1. Quick probe:
+This skill is **script-first**, and some harnesses don't mount `scripts/` into the
+Bash sandbox. Resolve a `WORKDIR` **once per session** (skill dir if Bash sees its
+scripts, else a scratch copy) and run all later `scripts/...` commands + the
+**Scripts** venv from it. Full recipe + rationale:
+**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** — read before
+Step 1. Quick probe:
 
 ```bash
 [ -f "$SKILL_DIR/scripts/find_mesh.py" ] && WORKDIR="$SKILL_DIR"   # else bootstrap a copy
