@@ -7,10 +7,8 @@ cryptography>=42.0           # key-pair lease: PEM private_key -> DER (query_sql
 sentence-transformers>=2.6
 pinecone-client>=4.0
 
-# NOTE: the skill itself needs NO nxd wheel — discovery, strict mode, and
-# default-mode SQL/file/vector run on the deps above. The only script importing
-# `nxd.experimental.semantic` is the EXPERIMENTAL, non-skill `cross_dp_compile.py`
-# (see README.md). If you explicitly opt into running that reference compiler
-# (NXD_ALLOW_EXPERIMENTAL_CROSS_DP=1), install separately:
-#     pip install 'nxd-data-product>=0.41.100'   # SemanticRegistry.model(data_product=, table=)
-# It is intentionally NOT pinned here so a normal skill install never pulls it.
+# NOTE: the skill needs NO nxd wheel. Discovery, SQL/file/vector reads, and both
+# single-DP and CROSS-DP semantic queries all run on the deps above — cross-DP is
+# compiled + executed SERVER-SIDE by the platform query system DP (called via the
+# `query-system-dp-<env>__run_semantic_query` gateway tool), so the client never
+# imports the `nxd.experimental.semantic` compiler.
