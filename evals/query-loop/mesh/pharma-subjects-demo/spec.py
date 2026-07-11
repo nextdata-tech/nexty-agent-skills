@@ -77,6 +77,11 @@ spec = (
         .startup_timeout(600)
     )
     .output(_storage)
+    # Deploy on the `demo` env so downstream DPs whose
+    # `.input(...).environment("demo")` reference this spine resolve it at
+    # `pharma-subjects-demo-demo` (the crosswalk hub's upstream-loader 404s
+    # otherwise — the upstream must live where the input says it does).
+    .environment("demo")
     # Auto-wire 4 governed MCP tools (list_models, semantic_model, describe_model,
     # run_semantic_query) reading kernel-delivered payloads.
     .semantic_tools(service="mcp-api-service-k8s")
