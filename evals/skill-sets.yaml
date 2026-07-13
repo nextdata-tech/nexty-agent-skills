@@ -4,7 +4,7 @@ skill_sets:
     skills: []
 
   current_pack:
-    description: "Shipped customer-facing skill pack (all 13 skills, v0.8.1)."
+    description: "Shipped customer-facing skill pack (all 13 skills, v0.9.0)."
     skills:
       - "src/nxd-setup"
       - "src/nxd-data-product-builder"
