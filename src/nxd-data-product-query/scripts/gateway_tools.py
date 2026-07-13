@@ -115,6 +115,12 @@ def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
 def _open(endpoints: list[str], token: str, timeout: float) -> McpClient:
     """Open a session against the first multiplexer URL that initialises.
 
+    Falls through to the next candidate on 401/403 too, not just 404/502-504:
+    auth failures are per-host (e.g. a ``dp.<domain>`` vhost can require a
+    different auth path than ``<host>/dp/``), so a 401 on one candidate does
+    not mean the *next* candidate is unreachable — only that this host
+    rejected this token.
+
     On total failure, report EVERY candidate with its own error (a 401 on one
     host and a 404 on another point at different fixes — auth vs wrong path —
     so collapsing them into one merged/last-wins message hides the signal).
@@ -127,7 +133,7 @@ def _open(endpoints: list[str], token: str, timeout: float) -> McpClient:
             return c
         except McpError as exc:
             failures.append(f"  {ep} -> MCP {exc.code}: {exc.message}")
-            if exc.code not in (404, 502, 503, 504):
+            if exc.code not in (401, 403, 404, 502, 503, 504):
                 raise
         except Exception as exc:  # noqa: BLE001
             failures.append(f"  {ep} -> {type(exc).__name__}: {exc}")
