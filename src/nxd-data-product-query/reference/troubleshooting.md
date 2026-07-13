@@ -7,6 +7,7 @@ confirm which before changing the query.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `401 Unauthorized` from a port call | Leased credential or PAT expired (`tokens.json` `expiry` passed), or the wrong auth header. DP REST uses `x-nextdata-token`, NOT `Authorization: Bearer`. | Re-run `nxd login` (or **nxd-setup**) and re-request `connect`; send the PAT as `x-nextdata-token`. |
+| Gateway call (`gateway_tools.py` / `mcp_call.py`) returns `403`, but the same token gets `200` from the DP REST API | The gateway only accepts a **PAT** (`nxdpat_…`) on `X-Nextdata-Token` — a plain OAuth session token from `nxd login` is rejected even though REST accepts it. Not an expiry issue. | Check `$TOKEN_FILE` starts with `nxdpat_`; if not, ask the user to run `nxd create personal-access-token` or `nxd mcp config` to mint one, then re-read the token file. See SKILL.md Step 1. |
 | `403` / `SignatureDoesNotMatch` fetching a file URL | The presigned URL TTL elapsed mid-session (they are short-lived). | Re-request `connect` for a fresh URL; don't reuse a cached one past its TTL. |
 | `connect` returns `unsupported` | The port's driver has no query recipe wired, or the infra profile couldn't be resolved. | Resolve the infra profile from the active mesh; confirm the port's driver type via `gateway_tools.py details --dp <dp> --outputs`. |
 | `connect` returns `approval_pending` | Access requires a pending approval. | Stop. Surface the `message` / `tracking_url` to the user. Do NOT poll. |

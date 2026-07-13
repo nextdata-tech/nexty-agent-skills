@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.9.0
+  version: 0.9.1
 ---
 
 # nxd Data Product Query
@@ -104,6 +104,8 @@ python3 scripts/find_mesh.py
 - Use the emitted `token_file` path as `$TOKEN_FILE` in later commands. The default token-file directory is the OS temp directory (`/tmp/...` on POSIX/WSL, `%TEMP%\...` on Windows), so do not hardcode `/tmp`.
 
 If neither file is present or no usable token is found, tell the user to run the **nxd-setup** skill first — and point them at the per-mesh setup docs at `<app_url>/docs/#/tutorials/cli/setup` (resolve `<app_url>` from `find_mesh.py`'s `app_url`; see **Platform docs** below).
+
+**The MCP gateway requires a PAT — a plain OAuth session token 403s.** `find_mesh.py` only checks token *presence*, not type. A token from `nxd login` alone authenticates the DP REST API fine but is rejected by the gateway (`gateway_tools.py`, `mcp_call.py`) with 403. Check the token in `$TOKEN_FILE` starts with `nxdpat_`; if not, the user needs to mint one — `nxd create personal-access-token` or `nxd mcp config` (either mints/stores a PAT for the active mesh). This is a step **you cannot do on the user's behalf**; ask them to run it, then re-read `$TOKEN_FILE`.
 
 **Token lifecycle / 401 recovery.** PATs in `~/.nxd/tokens.json` carry an `expiry`. The nxd CLI itself auto-refreshes the entry when any `nxd` command runs (e.g. `nxd whoami`); the skill's scripts only **read** the file, they do not refresh it. If a per-DP call returns `401 Unauthorized`, fail fast with a message telling the user to run any `nxd` CLI command (the simplest is `nxd whoami`) to refresh, then re-pull the catalogue. Do not silently drop endpoints that 401 — that turns into ghost data. The fix is one line: token file is regenerated from `~/.nxd/tokens.json` after the refresh and passed via `--token-file` to the next call.
 
@@ -366,14 +368,17 @@ The skill itself never prints tokens, presigned URLs, or DB passwords back to th
 **Token + header by surface.** The same token file feeds both surfaces, but the
 wire header differs and `mcp_http.py` / `nxd_api.py` handle it for you:
 
-- **MCP gateway** (`gateway_tools.py`, `mcp_call.py`) — a **PAT**
-  (`nxdpat_…`, from `nxd mcp config` / `nxd login`) is sent on **`X-Nextdata-Token`**
-  (the documented MCP auth); an OAuth session token goes on `Authorization: Bearer`.
-  The two are mutually exclusive on the gateway — `mcp_http.py` picks by token type.
-- **DP REST API** (`list_*`, `connect_port.py`, …) — uses `x-nextdata-token`.
+- **MCP gateway** (`gateway_tools.py`, `mcp_call.py`) — requires a **PAT**
+  (`nxdpat_…`, minted via `nxd create personal-access-token` / `nxd mcp config`)
+  sent on **`X-Nextdata-Token`** — the only auth the gateway accepts. A plain
+  OAuth session token (from `nxd login`) 403s here even though it authenticates
+  fine against REST — see **Step 1** and the troubleshooting table.
+- **DP REST API** (`list_*`, `connect_port.py`, …) — accepts either token kind on `x-nextdata-token`.
 
-A `401` on either means the token is missing/expired, **not** the wrong kind:
-refresh a PAT (`nxd mcp config`) or an OAuth session token (`nxd whoami`), then retry.
+A `401` on either surface means the token is missing/expired: refresh a PAT
+(`nxd mcp config`) or an OAuth session token (`nxd whoami`), then retry. A
+`403` on the gateway with a token that works against REST means the token is
+the wrong *kind*, not expired — mint a PAT (see Step 1).
 
 ---
 
@@ -411,6 +416,8 @@ Each script writes secrets only to `--out` files (never stdout) and reads tokens
 - **`connect` returns `approval_pending`** — stop and surface the `message` / `tracking_url` to the user. Do not poll.
 - **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `<port_credentials_file>` for the session; re-request if the TTL passes.
 - **Vector store embedding model mismatch** — querying with a different embedding model from the one the DP used to index gives nonsense results. Always confirm the model from the DP's `description` / `/v1/info` before computing the query vector.
+- **Local `*.nxd.local` cluster + `requests` SSL errors despite a correct CA bundle** — `REQUESTS_CA_BUNDLE` pointed at the cluster CA (`shared/charts/nxd/localCerts/nxdCA.crt`) is the right first fix, but Python `requests` can still fail TLS verification against a local cluster even when `curl` against the same host succeeds. If `requests` still errors after confirming the bundle path, set `NXD_MCP_INSECURE=1` (skips TLS verification in `mcp_http.py` — local dev only, never against a real mesh).
+- **`find_mesh.py --mesh <name>` fails but a `config.yaml.<name>` file exists** — a saved-but-inactive config variant isn't the same as a registered mesh; `find_mesh.py` only reads `meshes.json` + the *active* `config.yaml` (no `--config` flag). Copy `~/.nxd/config.yaml.<name>` over `~/.nxd/config.yaml` to make it active, then re-run. If the mesh is still unreachable after that, it's a network problem (VPN) between you and that mesh — a prerequisite this skill can't fix.
 - **One gateway session per query** — the DP set + each DP's tools change (new DP, redeploy, breaker flip). Don't reuse a tool list across queries; re-run `gateway_tools.py` per question. Use `nxd mcp client` only when the user explicitly wants an interactive MCP session.
 - **Cross-DP join not resolvable** — if `query-system-dp-<env>__run_semantic_query` returns a `CompileError` "no join path connects model X to model Y", the two models are not linked by any published join edge. A cross-DP edge only exists when the owning DP's `semantic_model` declares the join with a `to_data_product` marker (the crosswalk/fact DP publishes it, not the target). The right answer is "these concepts aren't joinable in the mesh" — do NOT hand-write a join or guess from column names. Add the missing `to_data_product` join edge to the source DP's model and redeploy, or ask the user to narrow the question.
 

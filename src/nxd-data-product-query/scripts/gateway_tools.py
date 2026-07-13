@@ -26,7 +26,8 @@ Bearer`, keyed on token type). Pass the token via `--token-file` (the
 find_mesh.py token_file) or let it resolve from the active mesh.
 
 Endpoint: the multiplexer lives at `<base>/dp/mcp/` (this mesh) or `<base>/mcp/`,
-derived from the mesh `api_url` (strip `/api`). Override with `--endpoint`.
+derived from the mesh `api_url` (strip `/api`). Override with `--endpoint`, or
+set `NXD_MCP_URL` (checked first, ahead of every derived candidate).
 
 CLI (writes JSON to --out, or stdout if omitted — none of this is secret):
 
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -67,8 +69,12 @@ TOOL_EVENTS = "proxy__getDataProductEvents"
 def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
     """Candidate multiplexer URLs, in priority order.
 
-    The mesh MCP multiplexer (mcp-proxy-api) is exposed differently per
-    deployment, so try the known patterns:
+    Highest priority: an explicit override — the ``--endpoint`` flag, or the
+    ``NXD_MCP_URL`` environment variable (checked when no flag is given). Both
+    skip derivation entirely and are tried alone.
+
+    Otherwise the mesh MCP multiplexer (mcp-proxy-api) is exposed differently
+    per deployment, so derive every known pattern from the mesh ``api_url``:
 
     - **Hosted multi-host meshes** (e.g. ``api.<domain>`` / ``app.<domain>`` /
       ``dp.<domain>``): the gateway lives on the **``dp.<domain>``** host at
@@ -80,11 +86,16 @@ def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
       ``<base>/dp/mcp/`` (envoy ``/dp/mcp/`` prefix), with ``<base>/mcp/`` as a
       generic fallback.
 
-    Derived from the mesh api_url (strip a trailing ``/api``). Returns every
-    candidate; ``_open`` tries them in order until one initialises.
+    Derived from the mesh api_url (strip a trailing ``/api``) — no endpoint
+    host is ever hard-coded; every candidate below is built from the mesh's
+    own discovered ``api_url``. Returns every candidate; ``_open`` tries them
+    in order until one initialises.
     """
     if override:
         return [override]
+    env_override = os.environ.get("NXD_MCP_URL")
+    if env_override:
+        return [env_override]
     base = api_url.rstrip("/")
     if base.endswith("/api"):
         base = base[: -len("/api")]
@@ -102,21 +113,33 @@ def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
 
 
 def _open(endpoints: list[str], token: str, timeout: float) -> McpClient:
-    """Open a session against the first multiplexer URL that initialises."""
-    last: Exception | None = None
+    """Open a session against the first multiplexer URL that initialises.
+
+    Falls through to the next candidate on 401/403 too, not just 404/502-504:
+    auth failures are per-host (e.g. a ``dp.<domain>`` vhost can require a
+    different auth path than ``<host>/dp/``), so a 401 on one candidate does
+    not mean the *next* candidate is unreachable — only that this host
+    rejected this token.
+
+    On total failure, report EVERY candidate with its own error (a 401 on one
+    host and a 404 on another point at different fixes — auth vs wrong path —
+    so collapsing them into one merged/last-wins message hides the signal).
+    """
+    failures: list[str] = []
     for ep in endpoints:
         try:
             c = McpClient(endpoint=ep, token=token, timeout=timeout)
             c.initialize()
             return c
         except McpError as exc:
-            last = exc
-            if exc.code not in (404, 502, 503, 504):
+            failures.append(f"  {ep} -> MCP {exc.code}: {exc.message}")
+            if exc.code not in (401, 403, 404, 502, 503, 504):
                 raise
         except Exception as exc:  # noqa: BLE001
-            last = exc
+            failures.append(f"  {ep} -> {type(exc).__name__}: {exc}")
+    detail = "\n".join(failures)
     raise SystemExit(
-        f"could not reach the MCP gateway at any of {endpoints}: {last}"
+        f"could not reach the MCP gateway at any of {len(endpoints)} candidate(s):\n{detail}"
     )
 
 
@@ -211,7 +234,10 @@ def main() -> None:
     ap.add_argument("--debug", action="store_true", help="logs: include DEBUG lines")
     ap.add_argument("--mesh", help="mesh name when several are configured")
     ap.add_argument("--token-file", help="file holding the bearer/PAT token (preferred)")
-    ap.add_argument("--endpoint", help="override the multiplexer URL")
+    ap.add_argument(
+        "--endpoint",
+        help="override the multiplexer URL (else NXD_MCP_URL env var, else derived from api_url)",
+    )
     ap.add_argument("--out", help="write JSON here instead of stdout")
     ap.add_argument("--timeout", type=float, default=40.0)
     args = ap.parse_args()
