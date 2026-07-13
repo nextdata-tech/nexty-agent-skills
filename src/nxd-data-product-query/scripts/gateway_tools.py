@@ -102,21 +102,27 @@ def _proxy_endpoints(api_url: str, override: str | None) -> list[str]:
 
 
 def _open(endpoints: list[str], token: str, timeout: float) -> McpClient:
-    """Open a session against the first multiplexer URL that initialises."""
-    last: Exception | None = None
+    """Open a session against the first multiplexer URL that initialises.
+
+    On total failure, report EVERY candidate with its own error (a 401 on one
+    host and a 404 on another point at different fixes — auth vs wrong path —
+    so collapsing them into one merged/last-wins message hides the signal).
+    """
+    failures: list[str] = []
     for ep in endpoints:
         try:
             c = McpClient(endpoint=ep, token=token, timeout=timeout)
             c.initialize()
             return c
         except McpError as exc:
-            last = exc
+            failures.append(f"  {ep} -> MCP {exc.code}: {exc.message}")
             if exc.code not in (404, 502, 503, 504):
                 raise
         except Exception as exc:  # noqa: BLE001
-            last = exc
+            failures.append(f"  {ep} -> {type(exc).__name__}: {exc}")
+    detail = "\n".join(failures)
     raise SystemExit(
-        f"could not reach the MCP gateway at any of {endpoints}: {last}"
+        f"could not reach the MCP gateway at any of {len(endpoints)} candidate(s):\n{detail}"
     )
 
 

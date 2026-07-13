@@ -8,6 +8,15 @@ written only to --out (default under the OS temp directory with mode 600), never
 to stdout — so the rest of the skill can pipe / --token-file it
 into the other scripts without it leaking into chat.
 
+app_url / docs_base: meshes.json entries carry an explicit app_url written by
+the nxd-setup skill; that value is used as-is. Legacy single-mesh setups with
+no meshes.json registry (config.yaml url/meshes only) carry no app_url field,
+so nxd_api.discover_meshes derives one from api_url the same way the platform
+does (api.<sub> -> app.<sub> for multi-host meshes; <host>/app for single-host
+meshes) — see `_derive_app_url` in nxd_api.py. Either way, docs_base below is
+always populated when a mesh resolves, so the `<app_url>/docs/#/...` link
+instructions in SKILL.md aren't a dead end on legacy setups.
+
 Exit 0 on success. Exit 2 with a JSON list of meshes when --mesh is omitted
 and multiple are configured. Exit 1 on hard error.
 """
