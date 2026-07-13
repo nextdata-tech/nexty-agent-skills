@@ -6,7 +6,7 @@
       "check": "The agent calls list_models and describe_model to learn the catalog BEFORE any run_semantic_query call. It does not guess concept names or read a catalog file directly."
     },
     {
-      "id": "strict-mcp-toolchain",
+      "id": "governed-mcp-toolchain",
       "check": "The agent reaches the tools via the nxd-data-product-query skill's MCP toolchain (mcp_call over the discovered endpoint), not by inventing a SQL connection or reading fixtures. It NEVER authors a raw SQL string passed to a SQL tool."
     },
     {
