@@ -24,6 +24,24 @@ the tools, never read the files):
 | `semantic.json` | The authoritative **physical** mapping (table, grain, columns, PII). Drives the genuine `SemanticRegistry` + the governed PII mask. Never shown to the agent. |
 | `seed.sql` | DROP+CREATE+INSERT base-table fixtures, loaded into the base schema once per server start. |
 
+### Cross-DP mesh scenarios
+
+The same four fixtures also model a **cross-DP mesh** (`pharma-cross-dp-mesh-query`):
+give each model in `semantic.json` a `data_product` label and declare the joins
+that connect them — including a crosswalk/bridge model — and the genuine
+`compile_selection` resolves the multi-hop join path with a BFS rooted at the
+spine, pre-aggregates each fact at its own grain, and DISTINCT-collapses the
+bridge. That is exactly what the deployed mesh gateway does after harvesting each
+member DP's `semantic_model` and folding the cross-DP join edges into ONE merged
+registry — so a single `run_semantic_query` reaching a metric in one DP sliced by
+a dimension in another is the real compiler, fan-out-safe. `catalog.json` names
+the owning `data_product` per model (and `to_data_product` per join) so the
+agent's `describe_model` view shows the mesh is multi-DP; an unauthorized member
+is simply absent from the catalog (an entitlement probe). The `data_product`
+label is provenance only — the compile decision is driven by join topology, not
+the label — and physical tables stay bare-named so they bind to the governed
+masked views.
+
 ## How run.py drives it (production-faithful)
 
 The `nxd-data-product-query` skill discovers DP MCP endpoints exactly as in
@@ -49,7 +67,7 @@ written to disk by this server.
 ## The nxd dependency (matched-wheel)
 
 `run_semantic_query` imports the real compiler from the `nxd_data_product`
-wheel (NEX-620/621), which is **not on a public index** — a PyPI package named
+wheel, which is **not on a public index** — a PyPI package named
 `nxd-data-product` is an unrelated stub. Provide the real one one of two ways:
 
 ```bash
