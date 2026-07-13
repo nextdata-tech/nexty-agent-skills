@@ -165,6 +165,13 @@ site_subjects_model = (
                             "to_model": "subjects",
                             "to_column": "SUBJECT_ID",
                             "cardinality": "many_to_one",
+                            # CROSS-DP edge: subjects is owned by another DP and is
+                            # NOT declared here. The owner label makes the kernel's
+                            # referential check skip the local-model requirement so
+                            # this join survives compile and reaches the harvest;
+                            # the mesh resolves subjects at query time by its
+                            # globally-unique bare model name.
+                            "to_data_product": "pharma-subjects-demo",
                         },
                     ]
                 },

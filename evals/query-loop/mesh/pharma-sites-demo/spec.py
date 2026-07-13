@@ -93,6 +93,10 @@ spec = (
         code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
+    # Deploy on the `demo` env so downstream fact DPs whose
+    # `.input("pharma-sites-demo").environment("demo")` reference this crosswalk
+    # hub resolve it at `pharma-sites-demo-demo`. Keeps the whole mesh on one env.
+    .environment("demo")
     # Glossary links — tie this DP to the governed pharma glossary terms it
     # surfaces (the `site` dimension it owns + the `subject` spine it crosswalks).
     .link(

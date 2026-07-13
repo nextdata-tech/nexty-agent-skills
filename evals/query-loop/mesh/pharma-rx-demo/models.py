@@ -104,6 +104,9 @@ dispenses_model = (
                     "to_model": "site_subjects",
                     "to_column": "SUBJECT_ID",
                     "cardinality": "many_to_one",
+                    # CROSS-DP edge: site_subjects owned by pharma-sites-demo, not
+                    # declared here — owner label carries the join through compile.
+                    "to_data_product": "pharma-sites-demo",
                 },
             ),
             # Cross-DP FK -> product dimension owned by pharma-product-demo (N:1).
@@ -119,6 +122,9 @@ dispenses_model = (
                     "to_model": "products",
                     "to_column": "PRODUCT_ID",
                     "cardinality": "many_to_one",
+                    # CROSS-DP edge: products owned by pharma-product-demo, not
+                    # declared here — owner label carries the join through compile.
+                    "to_data_product": "pharma-product-demo",
                 },
             ),
             "UNITS": _annotate(

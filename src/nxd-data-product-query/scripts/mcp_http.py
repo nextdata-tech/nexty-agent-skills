@@ -1,4 +1,6 @@
-"""Minimal MCP Streamable-HTTP client used by the strict-mode scripts.
+"""Minimal MCP Streamable-HTTP client — the shared transport for every MCP call
+the skill makes (gateway discovery via ``gateway_tools.py``, one-shot tool calls
+via ``mcp_call.py``, including the platform's cross-DP ``run_semantic_query``).
 
 The platform exposes per-DP MCP servers behind a proxy at
 ``https://<dp-host>/<dp>/rpcs/<port>/mcp/``. Streamable HTTP works as:

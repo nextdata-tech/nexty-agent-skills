@@ -91,6 +91,9 @@ spec = (
         .startup_timeout(600)
     )
     .output(_storage)
+    # Deploy on the `demo` env so this fact's `.input(...).environment("demo")`
+    # edges resolve against the demo-env upstreams. Whole mesh on one env.
+    .environment("demo")
     # Auto-wire 4 governed MCP tools (list_models, semantic_model, describe_model,
     # run_semantic_query) reading kernel-delivered payloads.
     .semantic_tools(service="mcp-api-service-k8s")

@@ -124,7 +124,7 @@ def _unwrap(result: dict[str, Any]) -> Any:
     """Unwrap an MCP ``tools/call`` envelope to its JSON payload.
 
     Prefer ``structuredContent``; else stitch text blocks and try JSON; else
-    return the raw envelope. Mirrors mcp_call.py / semantic_relations.py.
+    return the raw envelope. Mirrors the unwrap in ``mcp_call.py``.
     """
     if not isinstance(result, dict):
         return result
@@ -166,8 +166,8 @@ def _dp_tools_by_owner(c: McpClient, dp: str | None) -> dict[str, Any]:
     """Group the multiplexer's per-DP tools (``<fn>__<hash>``) by hash.
 
     The multiplexer namespaces each DP's MCP tools with a ``__<hash>`` suffix.
-    This is the discovery the old list_outputs.py rpc-port branch + strict-mode
-    Stage 2 produced — now a single tools/list. The hash is opaque, but every
+    This is the discovery the old list_outputs.py rpc-port branch produced —
+    now a single tools/list. The hash is opaque, but every
     per-DP tool description is prefixed ``(data product: <fullName>, port: ...)``
     so when ``--dp`` is given we filter to the group whose descriptions name that
     DP. Without --dp we return the full grouping.

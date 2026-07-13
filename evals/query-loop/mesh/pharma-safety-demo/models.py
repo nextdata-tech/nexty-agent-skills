@@ -97,6 +97,11 @@ adverse_events_model = (
                     "to_model": "site_subjects",
                     "to_column": "SUBJECT_ID",
                     "cardinality": "many_to_one",
+                    # CROSS-DP edge: site_subjects is owned by pharma-sites-demo and
+                    # is NOT declared here. The owner label lets this join survive
+                    # the kernel's referential check and reach the harvest; the mesh
+                    # resolves the crosswalk at query time by bare model name.
+                    "to_data_product": "pharma-sites-demo",
                 },
             ),
             "AE_TERM": _annotate(

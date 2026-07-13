@@ -1,32 +1,35 @@
-"""Strict mode — one-shot MCP ``tools/call`` against a DP MCP endpoint.
+"""One-shot MCP ``tools/call`` against a DP (or gateway) MCP endpoint.
 
-Thin CLI wrapper over ``mcp_http.call_tool_one_shot`` so a validated plan
-step can be executed without writing Python glue per call. Opens an MCP
-session (``initialize`` → ``notifications/initialized``), calls one
-tool, closes the session, writes the unwrapped tool result to disk.
+Thin CLI wrapper over ``mcp_http.call_tool_one_shot``: opens an MCP session
+(``initialize`` → ``notifications/initialized``), calls one tool, closes the
+session, writes the unwrapped tool result to disk. The general-purpose way the
+skill invokes any MCP tool without writing Python glue per call.
 
-Used by the strict-mode flow once ``plan_validator.py`` returns
-``passed=true`` — walk ``plan.steps[]``, invoke this script per step
-with the resolved ``request`` payload, collect the per-step result
-files into the final response.
+Used by the default query flow to call:
+  - a DP's RPC/MCP-port tools (Step 6d),
+  - a DP's semantic-layer ``run_semantic_query`` (single-DP, Step 6f), and
+  - the platform's built-in CROSS-DP ``run_semantic_query`` (the
+    ``query-system-dp-<env>__run_semantic_query`` gateway tool, Step 6d). The
+    query system DP merges every entitled member's registry server-side and
+    compiles + executes one governed cross-DP JOIN, so a cross-DP selection is
+    called exactly like a single-DP one — same ``{measures, dimensions,
+    filters, order_by, limit}`` args, no client-side merge.
 
-Endpoint URL is taken from the gateway catalogue
-(``endpoints[*].endpoint`` written by ``mcp_gateway.py``). The
-bearer token comes from ``--token-file`` (preferred) or, falling back,
-from the active mesh entry the way ``mcp_gateway.py`` resolves it.
+Endpoint URL is a DP MCP endpoint (``endpoints[*].endpoint`` from the gateway
+catalogue) or the mesh MCP gateway itself for a built-in tool. The bearer token
+comes from ``--token-file`` (preferred) or the active mesh entry.
 
-Never writes secrets to stdout or to the chat. Tool responses go to
-``--out`` (default ``/tmp/nxd-mcp-call.json``); stdout carries only a
-status summary.
+Never writes secrets to stdout or to the chat. Tool responses go to ``--out``
+(default ``/tmp/nxd-mcp-call.json``); stdout carries only a status summary.
 
 CLI:
 
     python3 mcp_call.py \\
-        --endpoint https://dp.<mesh>.<domain>/<dp>/rpcs/<port>/mcp/ \\
-        --tool <tool-name> \\
-        --args '<json>' \\
-        --token-file /tmp/strict-tok.txt \\
-        --out /tmp/nxd-step-s1.json
+        --endpoint https://<mesh>.<domain>/dp/mcp/ \\
+        --tool query-system-dp-<env>__run_semantic_query \\
+        --args '{"measures": ["..."], "dimensions": ["..."]}' \\
+        --token-file /tmp/nxd.tok \\
+        --out /tmp/nxd-query.json
 """
 
 from __future__ import annotations
@@ -44,9 +47,8 @@ from nxd_api import read_token, resolve_mesh
 def _unwrap_tool_result(result: dict[str, Any]) -> Any:
     """MCP ``tools/call`` returns ``{content: [...], structuredContent?: {...}, isError?: bool}``.
 
-    Mirrors the unwrap in ``semantic_relations.py``: prefer
-    ``structuredContent`` when present; otherwise stitch any text blocks
-    from ``content`` together and try to parse as JSON; fall back to
+    Prefer ``structuredContent`` when present; otherwise stitch any text
+    blocks from ``content`` together and try to parse as JSON; fall back to
     the raw result so the caller can still inspect it.
     """
     if not isinstance(result, dict):

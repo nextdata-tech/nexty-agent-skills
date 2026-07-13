@@ -80,6 +80,10 @@ spec = (
         code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute").startup_timeout(600)
     )
     .output(_storage)
+    # Deploy on the `demo` env so pharma-rx-demo's
+    # `.input("pharma-product-demo").environment("demo")` resolves this far dim at
+    # `pharma-product-demo-demo`.
+    .environment("demo")
     .link(Predicate.GlossaryTerm, "/data-product/demo/pharma-glossary-demo#/terms/product")
     # Auto-wire 4 governed MCP tools (list_models, semantic_model,
     # describe_model, run_semantic_query) reading kernel-delivered payloads.
