@@ -83,8 +83,8 @@ def _derive_app_url(api_url: str) -> str:
         app_host = ".".join(["app"] + labels[1:])
         port = f":{parsed.port}" if parsed.port else ""
         return f"{scheme}://{app_host}{port}"
-    # Single-host mesh: same host, /app path. Strip a trailing /api first so
-    # we don't end up with .../api/app.
+    # Single-host mesh: same host, /app path. netloc excludes the path, so a
+    # trailing /api on the api_url can't leak into .../api/app.
     netloc = parsed.netloc or host
     return f"{scheme}://{netloc}/app"
 
