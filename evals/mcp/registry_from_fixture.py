@@ -57,7 +57,7 @@ def build_registry(spec: dict[str, Any]):
 
     ``spec`` shape (see fixtures/.../semantic.json):
         {
-          "models": [{"name", "table", "grain", "description"?}],
+          "models": [{"name", "table", "grain", "description"?, "data_product"?}],
           "dimensions": [{"name","model","column","type"?,"pii"?,"description"?}],
           "metrics": [{"name","model","agg","column"?,"boolean"?,"description"?}],
           "joins": [{"left","right","on":[[l,r],...],"cardinality"?}]
@@ -65,10 +65,19 @@ def build_registry(spec: dict[str, Any]):
     """
     reg = SemanticRegistry()
     for m in spec.get("models", []):
+        # data_product is provenance metadata for the merged (cross-DP) registry —
+        # it names the member DP a model was harvested from, mirroring how the mesh
+        # gateway folds member semantic_models into one registry. It does NOT change
+        # the compile decision (join topology does), so single-DP fixtures omit it.
+        # We deliberately do NOT forward a physical ``table``: every base table in
+        # this harness lives in ONE governed schema keyed by model name, so a bare
+        # name is what binds to the masked view — a qualified DB.SCHEMA.TABLE would
+        # miss it.
         reg.model(
             m["name"],
             grain=m["grain"],
             description=m.get("description", ""),
+            data_product=m.get("data_product", ""),
         )
     for d in spec.get("dimensions", []):
         reg.dimension(

@@ -461,15 +461,25 @@ def semantic_http_server(scenario_dir: Path, mcp_spec: dict):
         cmd, cwd=str(MCP_DIR), env=dict(os.environ),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+    # Isolate the agent from any live mesh session on the host. The query
+    # skill's scripts resolve the active mesh from NXD_HOME (default ~/.nxd);
+    # if the machine running the eval has a valid `nxd login` session, mesh
+    # discovery hijacks the cell to the LIVE mesh and the graded run measures
+    # live data instead of the fixtures behind the stub server. An empty
+    # NXD_HOME reproduces the CI condition (no local mesh config), so
+    # discovery falls through to `nxd mcp health` — the fake nxd on PATH.
+    nxd_home = tempfile.mkdtemp(prefix="eval-nxd-home-")
     try:
         _wait_for_http(endpoint, proc, timeout_s=60)
         env = {
             "EVAL_MCP_ENDPOINT": endpoint,
             "EVAL_MCP_DP": dp,
             "EVAL_MCP_TOOL_COUNT": str(tool_count),
+            "NXD_HOME": nxd_home,
         }
         yield endpoint, env
     finally:
+        shutil.rmtree(nxd_home, ignore_errors=True)
         proc.terminate()
         try:
             proc.wait(timeout=10)

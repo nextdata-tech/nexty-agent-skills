@@ -1,0 +1,99 @@
+{
+  "date": "2026-07-13",
+  "label": "nxd-data-product-query: cross-dp mesh gateway scenario (new)",
+  "notes": "New scenario pharma-cross-dp-mesh-query: a merged multi-DP semantic mesh behind one gateway (subjects spine, sites+crosswalk, labs/rx facts, product far-dim) with numeric fan-out discriminators (chasm US titer 300 / units 90; crosswalk NA 300 vs naive 450), confusable metrics, cross-boundary PII masking, and an absent safety member as an entitlement probe. Single after-run: the scenario is new in this PR, so there is no before variant of the skill to compare. First run was discarded as a harness defect, not a skill signal: the host had a live nxd session and mesh discovery hijacked the cell to the live mesh (fixed in the same PR by isolating NXD_HOME per MCP cell).",
+  "plugin_version": "0.9.1",
+  "reports": {
+    "after-v0.9.1": {
+      "elapsed_s": 390.1,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "pharma-cross-dp-mesh-query",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 40,
+            "duration_ms": 357574,
+            "total_cost_usd": 1.6273981999999996,
+            "input_tokens": 78,
+            "output_tokens": 19733,
+            "is_error": false,
+            "tool_calls": 38
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models then describe_model for all six models via the MCP gateway before any run_semantic_query call, with no catalog-file guessing."
+              },
+              {
+                "id": "cross-dp-mesh-recognized",
+                "pass": true,
+                "why": "The agent's discovery table and joins narrative explicitly assign each model to its owning member DP (subjects-demo, sites-demo, labs-demo, rx-demo, product-demo) and note the gateway compiles cross-DP joins server-side."
+              },
+              {
+                "id": "governed-mcp-toolchain",
+                "pass": true,
+                "why": "The agent discovered the endpoint via `nxd mcp health` and called the tools through the skill's McpClient/mcp_call toolchain, only ever invoking run_semantic_query and never authoring a raw SQL string to a SQL tool."
+              },
+              {
+                "id": "q1-subject-count",
+                "pass": true,
+                "why": "It ran subject_count on the subjects model and answered 4 from the returned row."
+              },
+              {
+                "id": "q2-two-dp-far-dim",
+                "pass": true,
+                "why": "It sliced units_dispensed by product_modality via the dispenses\u2192products cross-DP join and returned vaccine 65, antibody 40, small_molecule 25."
+              },
+              {
+                "id": "q3-chasm-two-facts-fanout-safe",
+                "pass": true,
+                "why": "It recognized the two-fact chasm, relied on per-grain CTE pre-aggregation, and reported the correct fan-out-safe US totals of titer 300 / units 90."
+              },
+              {
+                "id": "q4-crosswalk-region-fanout-safe",
+                "pass": true,
+                "why": "Titer by site_region through the site_subjects crosswalk returned the correct NA 300 / EU 120, not the naive double-counted NA 450."
+              },
+              {
+                "id": "q5-confusable-titer-clarifies",
+                "pass": true,
+                "why": "The agent surfaced the titer_sum vs titer_avg ambiguity and explicitly asked which the analyst wants rather than silently picking one."
+              },
+              {
+                "id": "q6-confusable-dispensed-clarifies",
+                "pass": true,
+                "why": "It distinguished units_dispensed from dispense_count and echoed why it chose units for 'how much dispensed' by channel."
+              },
+              {
+                "id": "q7-pii-prescriber-across-boundary",
+                "pass": true,
+                "why": "It flagged prescriber_npi as PII, showed the gateway masks it to null, refused to present a raw per-prescriber breakdown, and did not fall back to raw SQL."
+              },
+              {
+                "id": "q8-entitlement-absent-member-honest",
+                "pass": true,
+                "why": "It reported that no adverse-event/safety model exists in the discovered catalog and refused to fabricate a serious_ae count."
+              },
+              {
+                "id": "echoes-selections",
+                "pass": true,
+                "why": "Each answer restates the resolved metric/dimension selection in plain language, names the member DPs spanned, and distinguishes the confusable metrics before reporting results."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent discovered the cross-DP mesh via governed MCP tools before querying, produced all fan-out-safe correct numbers, clarified both confusable metrics, surfaced PII governance, and honestly reported the absent adverse-event member."
+          }
+        }
+      ]
+    }
+  }
+}
