@@ -1,6 +1,6 @@
 ---
 name: nxd-semantic-data-product
-description: Builds a governed text-to-SQL / metrics / semantic-layer data product on Nextdata OS, exposing curated metrics and dimensions over MCP so an AI agent can answer natural-language questions without writing raw SQL. Use when the task is to create or extend a data product that lets agents query business metrics by name (e.g. order_count, revenue) sliced by dimensions (e.g. region, product_category), when you need NL-to-SQL governance over a Snowflake data product, or when exposing a semantic layer as an MCP server tool set. The author writes only per-field semantic annotations on the models; the one-line .semantic_tools() spec flag auto-generates the four governed MCP tools from the installed nxd.data_product wheel (nxd.experimental.semantic) — imported, not vendored.
+description: Builds a governed text-to-SQL / metrics / semantic-layer data product on Nextdata OS, exposing curated metrics and dimensions over MCP so an AI agent can answer natural-language questions without writing raw SQL. Use when the task is to create or extend a data product that lets agents query business metrics by name (e.g. order_count, revenue) sliced by dimensions (e.g. region, product_category), when you need NL-to-SQL governance over a Snowflake data product, or when exposing a semantic layer as an MCP server tool set. Also covers INFERRING the semantic model when no schema doc exists — profiling a materialized source table (local DuckDB sample) and deriving grains, metrics, dimensions, joins, and PII flags from the profile plus the user's natural-language questions. The author writes only per-field semantic annotations on the models; the one-line .semantic_tools() spec flag auto-generates the four governed MCP tools from the installed nxd.data_product wheel (nxd.experimental.semantic) — imported, not vendored.
 allowed-tools:
   - Bash
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.9.1
+  version: 0.11.0
 ---
 
 # nxd-semantic-data-product skill
@@ -67,6 +67,136 @@ Interview the user or read the table DDL to establish, per source table:
    model's join key, naming `to_model` (the ONE side), `to_column`, and
    `cardinality: many_to_one`. Cross-model dimension reach is **auto-derived**
    from N:1 joins by the compiler.
+
+### Step 1-alt — Infer from a profiled source + the user's questions
+
+When there is **no schema doc** — only a materialized sample of the source and
+the user's natural-language questions — derive the Step-1 vocabulary yourself.
+Steps 2–4 (models.py / transform.py / spec.py) are then **unchanged**.
+
+**1. Profile the materialized tables → `schema.json`.** A sample load (e.g.
+dlt) lands each source table as `main.<name>` in a local DuckDB file.
+Introspect ALL of them in one pass with the nxd-mesh-analyzer skill's profiler
+(DuckDB mode — needs the `duckdb` package, e.g. `uv run --with duckdb`) and
+**save the combined document as `schema.json`**:
+
+```bash
+python <nxd-mesh-analyzer>/scripts/profile_tabular.py sample.duckdb <table1> <table2> ... > schema.json
+```
+
+With two or more tables the profiler emits ONE combined document —
+`{"path": ..., "format": "duckdb", "tables": {<table>: <profile>, ...}}` —
+where each table's profile carries, per column: `declared_type`, `nullable`,
+`null_pct`, `distinct_count`, `cardinality` (distinct/total, exact full-table),
+`sample_values`, plus freshness hints. `schema.json` is the **handoff artifact**
+between profiling and inference: keep it in the workspace, do the inference by
+READING it (re-query the DuckDB file only for targeted follow-ups, e.g. the
+join-containment probe below), and leave it in place as the evidence for how
+the model was derived. **Ground the model in this profile — annotate only
+columns that exist in it; never invent or rename columns.**
+
+**2. Classify each column from its profile signals:**
+
+| Profile signal | Likely role |
+|---|---|
+| `cardinality` == 1.0 AND `null_pct` == 0 (exact full-table), id-ish name (`*_id`, `*_key`, uuid samples) | **grain** candidate (the model's entity key) |
+| id-ish name, cardinality < 1.0, values match another table's grain | **join** key candidate (MANY side → `to_model`, `many_to_one`) — validate before declaring (see below) |
+| numeric (`DOUBLE`/`DECIMAL`/amount-ish name), not an id, **additive** (see below) | **metric** candidate |
+| `BOOLEAN` / true-false samples | boolean-flag **metric** (`"boolean": true` — MUST pair with `"agg": "sum"`) and/or dimension |
+| low-cardinality string (`segment`, `status`, `channel`, country codes) | **dimension** (`type: "string"`) |
+| `DATE`/`TIMESTAMP` (freshness hints) | **dimension** (`type: "date"`) |
+| samples look like emails, names, phones, addresses | dimension with **`"pii": true`** — flag from the DATA, even if no question asks for it (NULLs in some rows don't unmark it) |
+
+**Grain selection.** Trust only the exact full-table `cardinality` (DuckDB
+mode computes it over the whole table; a sample-only profile can fake
+uniqueness). If SEVERAL columns are fully unique, prefer the one whose name
+matches the table's entity (`orders` → `order_id`) and/or the one other
+tables' FK candidates point at. If NO single column is unique, use a
+**composite grain** — a `{"kind": "grain"}` blob on each component column
+(the grammar supports it); confirm the combination is unique with a targeted
+`COUNT(*) vs COUNT(DISTINCT (a, b))` query.
+
+**Join validation.** Never declare a join from name similarity or a handful of
+overlapping `sample_values` alone. Before writing the blob, verify BOTH:
+
+- **Containment** — every non-null FK value resolves on the ONE side:
+  `SELECT COUNT(*) FROM <many> WHERE <fk> IS NOT NULL AND <fk> NOT IN
+  (SELECT <to_column> FROM <one>)` must be 0 (or explain the orphans).
+- **Uniqueness of the ONE side** — `to_column` must be the target model's
+  grain (full-table cardinality 1.0), or `many_to_one` is a lie.
+
+Declare the blob on the MANY-side FK with explicit `to_model` and `to_column`.
+If the samples simply don't overlap, that is evidence AGAINST the join — probe
+or ask; don't assume.
+
+**Additive vs non-additive numerics.** A numeric column is a `sum` metric only
+if it is **additive across rows** (amounts, quantities, per-row durations).
+Balances, scores, points, percentages, rates, and point-in-time snapshots
+(e.g. `loyalty_points`, `account_balance`, `discount_pct`) are NOT sum
+metrics — summing them answers nothing. Declare an aggregation over such a
+column only when a question justifies it (`avg`/`min`/`max` can be legitimate);
+otherwise leave it unannotated or expose it as a `number` dimension.
+
+**DuckDB declared type → `AttributeSpec` data type** (for the `models.py`
+attributes):
+
+| DuckDB `declared_type` | `nxd.spec.data_types` |
+|---|---|
+| `VARCHAR` / `TEXT` | `string()` |
+| `TINYINT`/`SMALLINT`/`INTEGER`/`BIGINT`/`HUGEINT` | `int64()` |
+| `DOUBLE` / `FLOAT` / `REAL` | `float64()` |
+| `DECIMAL(p,s)` / `NUMERIC` | `decimal(p, s)` (or `float64()` if precision is not load-bearing) |
+| `BOOLEAN` | `boolean()` |
+| `DATE` | `date32()` |
+| `TIMESTAMP` / `TIMESTAMPTZ` | `timestamp()` |
+
+**3. Let the QUESTIONS drive what you declare** — the profile says what a
+column *could* be; the questions say what it *must* be:
+
+- "total/revenue/spend ..." → a `sum` metric on the money column.
+- "how many X ..." over a flag ("churned", "first-time") → a metric on the
+  boolean column with **`"agg": "sum"` AND `"boolean": true`** — the dialect
+  defines the boolean CASE-sum ONLY for `sum` (`SUM(CASE WHEN ... THEN 1 ELSE
+  0 END)`); `"boolean": true` with any other agg is invalid. Never a plain
+  numeric SUM of a flag.
+- "average ..." → `avg`. "how many distinct/top N by count" → `count` /
+  `count_distinct` on the grain/key. A column serving two aggs gets a
+  `{"roles": [...]}` wrapper.
+- "by/per <attribute>" → that column is a dimension.
+- A question slicing one table's metric by another table's attribute
+  (e.g. orders by customer country) → declare the validated N:1 **join** on the
+  MANY-side FK; the compiler auto-derives the cross-model dimension reach.
+- "per order / per customer ..." confirms the **grain** of each model (one row
+  per entity — cross-check against exact full-table cardinality 1.0).
+
+Declare what the questions need plus the obviously useful dimensions; don't
+exhaustively annotate every column, and don't declare metrics no question
+motivates (that is how non-additive numerics end up as nonsense `sum`s).
+
+**3b. Surface ambiguity — don't silently resolve it.** The role grammar has
+**no filtered metrics, no derived ratios, and no default filters**: a metric is
+exactly `<agg>(<column>)`. When a question's business definition is ambiguous
+against the profiled data, do NOT hard-code one interpretation silently:
+
+- *Status-qualified totals* — "total revenue" over a table whose `status`
+  samples include `refunded` / `cancelled`: the metric can only be the
+  unconditional `sum`. Say so in the metric `description` (e.g. "Gross order
+  amount across ALL statuses, including refunded and cancelled") AND declare
+  the status column as a dimension so consumers filter at query time.
+- *Derived ratios* ("revenue per customer", "churn rate") — not expressible as
+  one metric; expose the component metrics and state that the ratio is
+  computed by the caller from two queries.
+- If you are in an interactive session, ask (AskUserQuestion) instead of
+  guessing; in a non-interactive run, record the ambiguity and your chosen
+  interpretation in the metric descriptions and in your final report.
+
+**4. Naming invariant.** Each `semantic_model(name)` argument is the **bare
+unquoted lowercase physical table name** — `semantic_model("customers")` for
+the table profiled as `main.customers` (never `"main.customers"`, never a
+prettified rename). Attribute names must match the profiled column names
+**byte-exactly** (post-dlt snake_case preserved — `customer_id`, not
+`CUSTOMER_ID`). The transform seeds those same tables (unquoted), so compiler,
+seed, and profile all resolve to one object.
 
 ### Step 2 — Author `models.py` with per-field `__nxd_semantic__` annotations
 

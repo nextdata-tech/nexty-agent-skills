@@ -22,6 +22,12 @@ Usage:
 <target_dir> is the root of the data product directory (the directory that will
 contain spec.py). All modules are created as flat siblings.
 
+The stubs serve both authoring flows: transcribing a hand-provided schema AND
+the inference flow (SKILL.md "Step 1-alt"), where the vocabulary is derived
+from a profiled DuckDB sample table (nxd-mesh-analyzer's profile_tabular.py in
+DuckDB mode) plus the user's questions. Either way, fill the placeholders with
+the derived models/dimensions/metrics/joins.
+
 THREE WIRING CONSTRAINTS
 ------------------------------------------------------------------------------
 1. The SEMANTIC VOCABULARY lives as per-field `__nxd_semantic__` JSON blobs on

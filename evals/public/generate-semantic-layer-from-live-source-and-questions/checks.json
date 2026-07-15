@@ -1,0 +1,77 @@
+{
+  "name": "Generate a Semantic-Layer Data Product from a Live Source and Questions",
+  "checks": [
+    {
+      "id": "profiled-source-before-authoring",
+      "check": "The trace shows the agent materialized source.duckdb (ran build_fixture.py) and then actually introspected BOTH main.customers and main.orders (profile_tabular.py DuckDB mode / DESCRIBE / a sampled SELECT with per-column stats) BEFORE authoring models.py. An agent that writes the model without inspecting the DuckDB tables fails this check."
+    },
+    {
+      "id": "schema-json-handoff",
+      "check": "The agent saved the combined profile of BOTH tables to a schema.json workspace file (e.g. `profile_tabular.py source.duckdb customers orders > schema.json`, or an equivalent single combined document) BEFORE inferring roles, and the inference visibly works from that artifact (reads it / cites its stats) rather than from memory of ad-hoc queries. schema.json must survive to the end of the run (the acceptance test verifies it against the live tables)."
+    },
+    {
+      "id": "models-match-profiled-columns",
+      "check": "models.py declares the two profiled semantic_model(...) objects under their BARE physical table names — semantic_model(\"customers\") and semantic_model(\"orders\") (not \"main.customers\", not renamed e.g. customer_profile/order_event). A third marker model (e.g. semantic_smoke_marker, carrying no semantic roles) is EXPECTED per the canonical pattern and must not be counted against the agent. Every annotated attribute is a column that exists in the profiled tables (customers: customer_id, email, full_name, country, segment, is_churned, signup_date, loyalty_points; orders: order_id, customer_id, order_date, channel, status, amount_usd) with the identifier matching BYTE-EXACTLY, case-sensitive — CUSTOMER_ID instead of the profiled customer_id fails. No invented or renamed columns."
+    },
+    {
+      "id": "grains-inferred-correctly",
+      "check": "The customers model carries a {\"kind\": \"grain\"} __nxd_semantic__ blob on customer_id and the orders model carries one on order_id (directly or inside a {\"roles\": [...]} wrapper) — the unique-key columns the profile shows at exact full-table cardinality 1.0. Grain on any other column (e.g. customer_id in orders, or segment) fails."
+    },
+    {
+      "id": "revenue-question-sum-metric",
+      "check": "Question 1 (total revenue by sales channel) is answerable: a {\"kind\": \"metric\"} blob with agg \"sum\" on orders.amount_usd (with a meaningful concept name and non-empty description), plus a dimension blob on orders.channel. The revenue metric is not avg/count, and it is a __nxd_semantic__ blob, not a fluent SemanticRegistry().metric() call."
+    },
+    {
+      "id": "revenue-ambiguity-surfaced",
+      "check": "The profile shows orders.status contains refunded and cancelled rows, and the role grammar has no filtered metrics — so \"total revenue\" is genuinely ambiguous. The agent surfaced this rather than silently summing: the revenue metric's description states the chosen interpretation (e.g. gross across ALL statuses, including refunded/cancelled), orders.status is declared as a dimension so consumers can filter at query time, and the final answer explicitly calls the ambiguity + resolution out. An agent that just declared SUM(amount_usd) with no acknowledgment of the status ambiguity fails."
+    },
+    {
+      "id": "avg-order-value-metric",
+      "check": "Question 4 (average order value) is answerable: a metric with agg \"avg\" on orders.amount_usd. Since amount_usd also carries the sum metric, the two coexist via a {\"roles\": [...]} multi-role wrapper (or an equivalent post-hoc roles patch), not two conflicting single-role blobs."
+    },
+    {
+      "id": "churn-question-boolean-metric",
+      "check": "Question 2 (churned customers per segment) is answerable: a metric blob on customers.is_churned sets BOTH \"boolean\": true AND \"agg\": \"sum\" — the dialect defines the boolean CASE-sum only for sum, so boolean:true with count/avg/any other agg fails, as does a plain numeric SUM without boolean:true. Plus a dimension blob on customers.segment."
+    },
+    {
+      "id": "cross-table-question-join-declared",
+      "check": "Question 3 (which countries place the most orders) forces the cross-table path, and the agent inferred AND validated it: the orders model's customer_id attribute carries a {\"kind\": \"join\", \"to_model\": \"customers\", \"cardinality\": \"many_to_one\"} blob (directly or in a roles wrapper) whose to_column is \"customer_id\" (or omitted, which defaults to the same column name); there is a country dimension on customers; and an order-count metric exists (agg \"count\" or \"count_distinct\" on order_id). The join is declared on the MANY side (orders), not on customers."
+    },
+    {
+      "id": "pii-inferred-from-profile",
+      "check": "The email and full_name dimension blobs set \"pii\": true — inferred from the profiled sample values (emails, person names), since no input document states it; the NULLs present in some email/full_name rows do not excuse skipping the flag — and no other column is marked pii."
+    },
+    {
+      "id": "question-driven-not-broad",
+      "check": "The declared metrics are question-driven, not a blanket annotation of every numeric column: in particular there is NO sum metric on customers.loyalty_points (a point-in-time balance no question asks about — summing it is meaningless; leaving it unannotated, or a dimension, is correct). The final answer includes the required question→concept mapping tying each of the four questions to the specific declared metrics/dimensions/joins that answer it."
+    },
+    {
+      "id": "acceptance-check-passed",
+      "check": "The trace shows the agent ran the shipped fixtures acceptance test (check_semantic_model.py) against its FINAL models.py + source.duckdb and it printed \"ALL CHECKS PASSED\" — i.e. the four stakeholder queries were actually executed from the declared concepts and matched. A run that never executes the acceptance test, finishes while it still fails, or edits/replaces check_semantic_model.py to make it pass, fails this check."
+    },
+    {
+      "id": "final-answer-contains-artifacts",
+      "check": "The final answer reproduces the complete final models.py verbatim (so the annotations are inspectable end-to-end, not just glimpsed in truncated tool output), and its contents are consistent with what the trace shows was written and verified."
+    },
+    {
+      "id": "semantic-tools-flag-used",
+      "check": "spec.py exposes the MCP tools via a single .semantic_tools(service=...) call. It does NOT hand-wire build_semantic_tools + rpc_function + rpc_server, and does NOT call data_product_rpc_output() directly (that raises ValidationError alongside .semantic_tools())."
+    },
+    {
+      "id": "models-promised",
+      "check": "spec.py promises every annotated model (customers and orders, plus the marker model) on a plain storage(...) port via data_product_output().promise(...), so their attributes reach the kernel manifest and the .nxd/semantic/<model>.json payloads. The storage port is NOT configured with as_view(...)."
+    },
+    {
+      "id": "transform-seeds-profiled-tables-no-view-ddl",
+      "check": "transform.py seeds base tables whose UNQUOTED names match the model/table names (customers, orders) with columns matching the profiled schema, and is wired via .transform(code(transform)...). There is NO @on_provision hook, NO .provision(...) call, and NO semantic-view (CREATE VIEW / SEMANTIC VIEW) DDL anywhere."
+    },
+    {
+      "id": "compiler-not-vendored",
+      "check": "The agent does NOT re-implement or vendor the compiler / tool factory (no hand-written compile_selection, filter, or aggregation logic, no copied nxd.experimental.semantic source). The tools are auto-generated by the .semantic_tools() flag from the installed wheel."
+    },
+    {
+      "id": "dependencies-present",
+      "check": "The project's dependency file lists nxd.data_product[spec], nxd.drivers[rpc], snowflake-connector-python[pandas], pandas, and pyyaml (>=6.0.2) for the split-pod manifest fallback."
+    }
+  ]
+}

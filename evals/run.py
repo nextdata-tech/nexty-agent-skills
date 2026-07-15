@@ -282,15 +282,23 @@ def agent_task_from_prompt(prompt_md: str) -> str:
     Strategy: take the text under "Task for the agent:" up to the next section
     header. If there's no such header (build-brief style prompts), fall back to
     everything before "Success checks:" — which still strips the rubric.
+
+    Both the task line and the section headers may be written as plain lines
+    ("Task for the agent:") or markdown headings ("## Task for the agent") —
+    match either, or a heading-styled prompt leaks the whole spec (intro,
+    artifacts, stopgap notes) to the agent and the no-skills baseline.
     """
     lines = prompt_md.splitlines()
     section_re = re.compile(
-        r"^\s*(Required artifacts|Success checks|Constraints|Expected final)",
+        r"^\s*(?:#{1,6}\s*)?"
+        r"(Required artifacts|Success checks|Constraints|Expected final|"
+        r"Note on the annotation)",
         re.IGNORECASE,
     )
     task_start = None
     for i, line in enumerate(lines):
-        if re.match(r"^\s*Task for the agent:\s*$", line, re.IGNORECASE):
+        if re.match(r"^\s*(?:#{1,6}\s*)?Task for the agent:?\s*$", line,
+                    re.IGNORECASE):
             task_start = i + 1
             break
 
@@ -307,7 +315,7 @@ def agent_task_from_prompt(prompt_md: str) -> str:
     # Fallback: drop everything from "Success checks:" onward.
     cut = len(lines)
     for i, line in enumerate(lines):
-        if re.match(r"^\s*Success checks:\s*$", line, re.IGNORECASE):
+        if re.match(r"^\s*(?:#{1,6}\s*)?Success checks:?\s*$", line, re.IGNORECASE):
             cut = i
             break
     return "\n".join(lines[:cut]).strip()

@@ -82,7 +82,7 @@ python3 -m venv .nxd-mesh-analyzer-venv
 | `classify_profile.py <profile>` | Parse the profile, classify every service, list the inspectable (Storage/API) ones. |
 | `inspect_service.py <profile> <service>... --out FILE` | Connect read-only, inventory each service with schema-fingerprint grouping, de-duplicate shared stores, write inventory JSON. |
 | `match_assets.py <inventory.json>... [--flow SRC:DST]` | Match candidate input/output pairs, classify, and write the report + models markdown. `--flow` (repeatable) scopes matching to declared architecture flows. |
-| `profile_tabular.py <path>` | Read-only local-file profiler for CSV/JSON/JSONL/Parquet sources that aren't live services. Prints an inferred schema (types, nullability, sample values, partition/freshness hints) as JSON. Used by the offline discovery pass. |
+| `profile_tabular.py <path>` / `profile_tabular.py <db.duckdb> <table>...` | Read-only local profiler. File mode: CSV/JSON/JSONL/Parquet sources that aren't live services. DuckDB mode: materialized `main.<table>` tables (e.g. a dlt sample load), enriched with exact full-table nullability/cardinality; two or more tables emit ONE combined document (redirect to `schema.json` as the profiling→inference handoff artifact). Prints an inferred schema (types, nullability, sample values, partition/freshness hints) as JSON. Used by the offline discovery pass and by nxd-semantic-data-product's Step 1-alt. |
 
 **Layout** — service-type code is isolated from generic code:
 

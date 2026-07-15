@@ -1,8 +1,35 @@
 #!/usr/bin/env python3
 """Profile local tabular samples for offline mesh discovery.
 
-The script is intentionally read-only: it prints a JSON profile to stdout and
-does not write files.
+Two modes, one output shape:
+
+  File mode:    profile_tabular.py <path.csv|.json|.jsonl|.ndjson|.parquet>
+  DuckDB mode:  profile_tabular.py <path.duckdb|.ddb|.db> <table> [<table> ...]
+
+File mode reads up to MAX_ROWS records and infers per-column type, null
+presence, and sample values. DuckDB mode profiles MATERIALIZED tables
+(``main.<table>``, e.g. ones written by a dlt sample load): it runs ``DESCRIBE``
+plus a sampled ``SELECT`` (capped at MAX_ROWS) through the same row-profiling
+logic, then enriches every column with exact full-table statistics —
+``declared_type`` (from DESCRIBE), ``nullable``, ``null_pct``,
+``distinct_count``, and ``cardinality`` (COUNT(DISTINCT col) / COUNT(*)) — all
+computed over the FULL table, not the sample. Both modes emit the same
+per-column JSON shape; file mode's nullable/null_pct/cardinality are computed
+over the sampled rows only.
+
+With ONE table, DuckDB mode prints that table's profile document. With TWO OR
+MORE tables it prints one combined document — ``{"path": ..., "format":
+"duckdb", "tables": {<table>: <profile>, ...}}`` — suitable for redirecting to
+a ``schema.json`` handoff artifact:
+
+  profile_tabular.py source.duckdb customers orders > schema.json
+
+DuckDB mode requires the ``duckdb`` package (not a stdlib dep). If it is not
+importable, run via ``uv run --with duckdb python profile_tabular.py ...`` or
+``pip install duckdb``.
+
+The script is intentionally read-only: it prints a JSON profile to stdout,
+opens DuckDB files read-only, and does not write files.
 """
 
 from __future__ import annotations
@@ -76,9 +103,18 @@ def profile_rows(path: Path, rows: list[dict[str, Any]], total_rows: int | None)
             samples.append(value)
             if len(samples) >= MAX_SAMPLE_VALUES:
                 break
+        non_null = [value for value in values if value not in (None, "")]
+        distinct = len({str(value) for value in non_null})
+        n = len(values)
         columns[name] = {
             "inferred_type": merge_types(types),
             "nullable": types.get("null", 0) > 0,
+            # Over the PROFILED rows (DuckDB mode overwrites these with exact
+            # full-table numbers). cardinality ~1.0 => key/grain candidate;
+            # low => dimension candidate.
+            "null_pct": round(100.0 * (n - len(non_null)) / n, 2) if n else 0.0,
+            "distinct_count": distinct,
+            "cardinality": round(distinct / n, 4) if n else 0.0,
             "observed_types": dict(types),
             "sample_values": samples,
         }
@@ -155,17 +191,145 @@ def read_parquet(path: Path) -> tuple[list[dict[str, Any]], int | None]:
     return rows, total
 
 
+DUCKDB_SUFFIXES = {".duckdb", ".ddb", ".db"}
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _inferred_from_declared(declared: str) -> str:
+    """Map a DuckDB declared type to the row-profiler's inferred_type vocabulary.
+
+    Used when the sampled rows could not establish a type for a column — an
+    empty table, or a column DESCRIBE reports that the sample never carried —
+    so DuckDB mode always emits the full common column shape."""
+    upper = declared.upper()
+    if "BOOL" in upper:
+        return "boolean"
+    if "DATE" in upper or "TIMESTAMP" in upper:
+        return "date_or_timestamp"
+    if "INTERVAL" in upper:
+        return "string"
+    if any(t in upper for t in ("TINYINT", "SMALLINT", "INT", "BIGINT", "HUGEINT")):
+        return "integer"
+    if any(t in upper for t in ("DOUBLE", "FLOAT", "DECIMAL", "NUMERIC", "REAL")):
+        return "number"
+    return "string"
+
+
+def profile_duckdb(path: Path, table: str) -> dict[str, Any]:
+    """Profile a materialized DuckDB table (``main.<table>``).
+
+    DESCRIBE + a sampled SELECT feed the shared row profiler; every column is
+    then enriched with exact full-table stats: declared_type, null_pct,
+    distinct_count, and cardinality (COUNT(DISTINCT col) / COUNT(*)).
+    """
+    try:
+        import duckdb  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "DuckDB profiling requires the duckdb package: run via "
+            "`uv run --with duckdb python profile_tabular.py ...` or "
+            "`pip install duckdb`"
+        ) from exc
+
+    con = duckdb.connect(str(path), read_only=True)
+    try:
+        rel = f"main.{_quote_ident(table)}"
+        described = con.execute(f"DESCRIBE {rel}").fetchall()
+        col_names = [row[0] for row in described]
+        declared_types = {row[0]: row[1] for row in described}
+
+        total = con.execute(f"SELECT COUNT(*) FROM {rel}").fetchone()[0]
+        sampled = con.execute(f"SELECT * FROM {rel} LIMIT {MAX_ROWS}").fetchall()
+        rows = [dict(zip(col_names, values)) for values in sampled]
+
+        profile = profile_rows(path, rows, total)
+        profile["format"] = "duckdb"
+        profile["table"] = f"main.{table}"
+
+        for name in col_names:
+            qi = _quote_ident(name)
+            n_non_null, n_distinct = con.execute(
+                f"SELECT COUNT({qi}), COUNT(DISTINCT {qi}) FROM {rel}"
+            ).fetchone()
+            # Full common shape even when the sample established nothing for
+            # this column (empty table): default every row-profiler field.
+            column = profile["columns"].setdefault(name, {
+                "inferred_type": _inferred_from_declared(declared_types[name]),
+                "nullable": False,
+                "null_pct": 0.0,
+                "distinct_count": 0,
+                "cardinality": 0.0,
+                "observed_types": {},
+                "sample_values": [],
+            })
+            column["declared_type"] = declared_types[name]
+            # Exact full-table stats override the sample-derived numbers —
+            # including nullable, so a null past the sampled rows can never
+            # yield the contradictory `nullable: false` + `null_pct > 0`.
+            column["nullable"] = n_non_null < total
+            column["null_pct"] = (
+                round(100.0 * (total - n_non_null) / total, 2) if total else 0.0
+            )
+            column["distinct_count"] = n_distinct
+            column["cardinality"] = round(n_distinct / total, 4) if total else 0.0
+
+        # Declared DATE/TIMESTAMP columns are freshness hints even when the
+        # column name carries no date-ish suffix.
+        hints = set(profile["partition_or_freshness_hints"])
+        for name, declared in declared_types.items():
+            upper = declared.upper()
+            if "DATE" in upper or "TIMESTAMP" in upper:
+                hints.add(name)
+        profile["partition_or_freshness_hints"] = sorted(hints)
+        return profile
+    finally:
+        con.close()
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: profile_tabular.py <csv|json|jsonl|parquet-path>", file=sys.stderr)
+    argv = sys.argv[1:]
+    if not argv:
+        print(
+            "usage: profile_tabular.py <csv|json|jsonl|parquet-path>\n"
+            "       profile_tabular.py <duckdb-path> <table> [<table> ...]",
+            file=sys.stderr,
+        )
         return 2
 
-    path = Path(sys.argv[1]).expanduser().resolve()
+    path = Path(argv[0]).expanduser().resolve()
     if not path.exists():
         print(f"not found: {path}", file=sys.stderr)
         return 2
 
     suffix = path.suffix.lower()
+    if suffix in DUCKDB_SUFFIXES:
+        tables = argv[1:]
+        if not tables:
+            print("duckdb mode requires at least one table name: "
+                  f"profile_tabular.py {path} <table> [<table> ...]",
+                  file=sys.stderr)
+            return 2
+        try:
+            profiles = {table: profile_duckdb(path, table) for table in tables}
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if len(tables) == 1:
+            document: dict[str, Any] = profiles[tables[0]]
+        else:
+            # Combined multi-table document — the schema.json handoff shape.
+            document = {"path": str(path), "format": "duckdb", "tables": profiles}
+        print(json.dumps(document, indent=2, default=str))
+        return 0
+
+    if len(argv) > 1:
+        print(f"table names only apply to DuckDB files, not {suffix}",
+              file=sys.stderr)
+        return 2
+
     if suffix == ".csv":
         rows, total = read_csv(path)
     elif suffix == ".json":
