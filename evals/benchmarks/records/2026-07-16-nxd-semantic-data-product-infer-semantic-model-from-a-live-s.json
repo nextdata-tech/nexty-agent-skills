@@ -1,7 +1,7 @@
 {
   "date": "2026-07-16",
   "label": "nxd-semantic-data-product: infer semantic model from a live source + questions (new scenario)",
-  "notes": "New scenario generate-semantic-layer-from-live-source-and-questions: no schema document is given \u2014 the agent must materialize the landed DuckDB sample, profile both tables into schema.json, and INFER grains/dimensions/metrics/joins/PII from that profile plus four stakeholder questions, then prove them answerable via the shipped acceptance test. The scenario is new in this PR, so there is no before variant of the skill; lift is current_pack vs the equally-informed no_skills baseline. current_pack scored 18/19 vs no_skills 15/19: the baseline authored a passing models.py but never produced spec.py, transform.py, or a dependency manifest (checks 15/16/17/19), while the skill produced the full data product and missed only dependencies-present. No runs were discarded \u2014 both cells ran clean with no harness defect (no live-session hijack, no setup crash, no auth/timeout error). Plugin v0.9.1. The current_pack passing acceptance run printed MODELS_SHA256: 8b58031b7087824ca9178e09e1b41dd06bb91e9fa58971b170f808b2576b4004.",
+  "notes": "New scenario generate-semantic-layer-from-live-source-and-questions: no schema document is given \u2014 the agent must materialize the landed DuckDB sample, profile both tables into schema.json, and INFER grains/dimensions/metrics/joins/PII from that profile plus four stakeholder questions, then prove them answerable via the shipped acceptance test. The scenario is new in this PR, so there is no before variant of the skill; lift is current_pack vs the equally-informed no_skills baseline. current_pack scored 18/19 vs no_skills 15/19: the baseline authored a passing models.py but never produced spec.py, transform.py, or a dependency manifest (checks 15/16/17/19), while the skill produced the full data product and missed only dependencies-present. No runs were discarded \u2014 both cells ran clean with no harness defect (no live-session hijack, no setup crash, no auth/timeout error). Plugin v0.9.1. The current_pack passing acceptance run printed MODELS_SHA256: 8b58031b7087824ca9178e09e1b41dd06bb91e9fa58971b170f808b2576b4004. RE-RUN 2026-07-16 (after-deps-fix, commit 9af1bf0 promoted requirements.txt from a footnote to an explicit required Step 5 with the pinned 5-dep list): current_pack scored 15/19 \u2014 dependencies-present did NOT flip to pass, it still fails. This pass regressed further upstream than the prior 18/19 run: the agent authored and validated an excellent models.py (passing the acceptance test, digest MODELS_SHA256 ea9783f524a0d1cc92254df7d1ac697d148e87de35a7b918d834cedd0f8acf76) but then stopped, never authoring spec.py, transform.py, or requirements.txt \u2014 so semantic-tools-flag-used, models-promised, transform-seeds-profiled-tables, and dependencies-present all failed. Not discarded: the cell ran clean with no harness defect (ok=true, no error, no live-session hijack, no setup crash, no auth/timeout). The requirements.txt promotion could not be verified as flipping dependencies-present because the agent never reached the packaging phase this pass \u2014 a real signal of run-to-run nondeterminism in whether the agent completes the full data-product packaging, not just the dependency footnote.",
   "plugin_version": "0.9.1",
   "reports": {
     "after-v0.9.1": {
@@ -242,6 +242,132 @@
             ],
             "overall_pass": false,
             "summary": "The agent correctly profiled the source, wrote schema.json, and authored a fully-passing models.py with all roles/ambiguities/digest checks satisfied, but it never authored spec.py, transform.py, or the dependency file, failing checks 15, 16, 17, and 19."
+          }
+        }
+      ]
+    },
+    "after-deps-fix": {
+      "elapsed_s": 332.2,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-semantic-layer-from-live-source-and-questions",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 15,
+            "duration_ms": 259619,
+            "total_cost_usd": 0.7341021,
+            "input_tokens": 25,
+            "output_tokens": 13135,
+            "is_error": false,
+            "tool_calls": 13
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "profiled-source-before-authoring",
+                "pass": true,
+                "why": "The trace shows build_fixture.py materialized source.duckdb, then profile_source.py introspected both customers and orders via DuckDB producing per-column stats, all before models.py was written."
+              },
+              {
+                "id": "schema-json-handoff",
+                "pass": true,
+                "why": "profile_source.py wrote a combined schema.json for both tables before models.py, the models.py docstring cites its cardinality/null_pct stats, and schema.json survived to the final ls and passed the acceptance test's schema-json-artifact check."
+              },
+              {
+                "id": "models-match-profiled-columns",
+                "pass": true,
+                "why": "models.py declares semantic_model(\"customers\") and semantic_model(\"orders\") under bare names, and every annotated attribute uses a byte-exact profiled column name (confirmed by PASS columns-exist-exact / attr-name-byte-exact)."
+              },
+              {
+                "id": "grains-inferred-correctly",
+                "pass": true,
+                "why": "customer_id carries {\"kind\":\"grain\"} and order_id carries {\"kind\":\"grain\"} (in roles wrappers), with no grain on any other column, matching PASS grain-customers/grain-orders."
+              },
+              {
+                "id": "revenue-question-sum-metric",
+                "pass": true,
+                "why": "amount_usd has a __nxd_semantic__ metric blob agg \"sum\" named revenue with a real description, plus a sales_channel dimension on orders.channel."
+              },
+              {
+                "id": "revenue-ambiguity-surfaced",
+                "pass": true,
+                "why": "The revenue description states it is the unconditional gross sum across all statuses including refunded/cancelled, status is declared as the order_status dimension, and the final answer explicitly calls out the ambiguity and resolution."
+              },
+              {
+                "id": "avg-order-value-metric",
+                "pass": true,
+                "why": "amount_usd carries an avg metric (average_order_value) coexisting with the sum metric inside a single {\"roles\":[...]} multi-role wrapper."
+              },
+              {
+                "id": "churn-question-boolean-metric",
+                "pass": true,
+                "why": "is_churned's metric blob sets both \"boolean\": true and \"agg\": \"sum\", and customers.segment is declared as the customer_segment dimension."
+              },
+              {
+                "id": "cross-table-question-join-declared",
+                "pass": true,
+                "why": "orders.customer_id carries a join blob to_model customers, to_column customer_id, cardinality many_to_one (on the many side), with a customer_country dimension and a count_distinct order_count metric on order_id."
+              },
+              {
+                "id": "pii-inferred-from-profile",
+                "pass": true,
+                "why": "The email and full_name dimension blobs both set \"pii\": true and no other column is flagged pii."
+              },
+              {
+                "id": "question-driven-not-broad",
+                "pass": true,
+                "why": "loyalty_points is left unannotated with no sum metric, and the final answer includes the required four-question\u2192concept mapping."
+              },
+              {
+                "id": "acceptance-check-passed",
+                "pass": true,
+                "why": "The agent ran the unedited check_semantic_model.py against its final models.py and source.duckdb, printing ALL CHECKS PASSED (14/14) with the four stakeholder queries executed."
+              },
+              {
+                "id": "final-answer-digest-matches-validated-models",
+                "pass": true,
+                "why": "The harness confirms the marked source matches MODELS_SHA256 ea9783..., and the trace shows models.py was unchanged after the passing run (re-run and sha256sum both reproduce the same digest), so the digest is from the passing run."
+              },
+              {
+                "id": "final-answer-contains-artifacts",
+                "pass": true,
+                "why": "The final answer reproduces the complete models.py verbatim between the markers, consistent with what the trace wrote and validated."
+              },
+              {
+                "id": "semantic-tools-flag-used",
+                "pass": false,
+                "why": "The agent never created a spec.py at all (final ls shows only models.py, profile_source.py, schema.json plus fixtures), so no .semantic_tools() call exists."
+              },
+              {
+                "id": "models-promised",
+                "pass": false,
+                "why": "There is no spec.py and no marker model, so no models are promised on a storage port via data_product_output().promise(...)."
+              },
+              {
+                "id": "transform-seeds-profiled-tables-no-view-ddl",
+                "pass": false,
+                "why": "No transform.py was authored (absent from the final ls), so base tables are never seeded via .transform(code(...))."
+              },
+              {
+                "id": "compiler-not-vendored",
+                "pass": true,
+                "why": "The agent only wrote __nxd_semantic__ role blobs via a small _annotate helper and did not re-implement or copy any compile/filter/aggregation logic from nxd.experimental.semantic."
+              },
+              {
+                "id": "dependencies-present",
+                "pass": false,
+                "why": "No dependency file (pyproject.toml/requirements.txt) exists in the workspace, so nxd.data_product[spec], nxd.drivers[rpc], snowflake-connector-python[pandas], pandas, and pyyaml are not listed."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent correctly profiled, inferred, and validated an excellent models.py that passes the acceptance test and matches its digest, but it never authored spec.py, transform.py, or a dependency file, failing four data-product packaging checks."
           }
         }
       ]
