@@ -79,7 +79,7 @@
     },
     {
       "id": "dependencies-present",
-      "check": "The project's dependency file lists nxd.data_product[spec], nxd.drivers[rpc], snowflake-connector-python[pandas], pandas, and pyyaml (>=6.0.2) for the split-pod manifest fallback."
+      "check": "The project's dependency file lists the runtime this local-source data product actually uses: nxd.data_product[spec], duckdb (the local output-port backend the transform and semantic tools run against), pandas, and pyyaml (>=6.0.2, for the .semantic_tools() manifest fallback). It must NOT require snowflake-connector-python — the source and the acceptance test are DuckDB, so a Snowflake connector is the wrong backend for this scenario."
     }
   ]
 }

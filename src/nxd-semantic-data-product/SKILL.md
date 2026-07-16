@@ -410,23 +410,20 @@ Key facts:
 
 ### Step 5 — Emit `requirements.txt` (REQUIRED deliverable)
 
-The data product is not complete without its dependency file. **Write a
-`requirements.txt`** (alongside `spec.py` / `models.py` / `transform.py`) listing
-exactly:
+**Write a `requirements.txt`** (alongside `spec.py` / `models.py` / `transform.py`).
+The flow-neutral entries are always `nxd.data_product[spec]`, `pandas`, and
+`pyyaml>=6.0.2`. Then add the **storage runtime for your output backend**
+(backend-dependent — list the one your DP actually uses):
 
-```
-nxd.data_product[spec]
-nxd.drivers[rpc]
-snowflake-connector-python[pandas]
-pandas
-pyyaml>=6.0.2
-```
+- **Local DuckDB flow** (profiled-from-a-local-sample): add `duckdb` — the transform
+  and semantic tools run against DuckDB. Do NOT add a Snowflake connector.
+- **Snowflake/warehouse flow** (platform): add `snowflake-connector-python[pandas]`
+  and `nxd.drivers[rpc]` for the split-pod topology.
 
-Do not skip this file — without it the compute pod can't install its runtime and
-the DP is unshippable. All five are load-bearing: the wheel + RPC driver the tools
-run on, the storage runtime, and `pyyaml` for the `.semantic_tools()` split-pod
-manifest fallback (`_manifest_compile` compiles the blobs from `models.yaml` when
-the MCP pod runs no kernel). See `reference/runtime-and-dependencies.md`.
+Without this file the compute pod can't install its runtime. `pyyaml` powers the
+`.semantic_tools()` manifest fallback (`_manifest_compile` compiles the blobs from
+`models.yaml` when the MCP pod runs no kernel). See
+`reference/runtime-and-dependencies.md`.
 
 ---
 
@@ -493,7 +490,4 @@ is finished. Before reporting done, confirm all four files exist in the workspac
 | `reference/scripts/templates/semantic_dp.py.tmpl` | Complete models.py + transform.py + spec.py example |
 | `reference/scripts/scaffold_semantic_dp.py` | Scaffold automation (writes models/transform stubs + requirements, prints spec wiring) |
 
-## Consuming the deployed DP
-
-This skill is the **producer** side. To **query** a deployed DP (NL question →
-concept selection → governed SQL), use the **nxd-data-product-query** skill.
+This skill is the **producer** side; to **query** a deployed DP, use the **nxd-data-product-query** skill.
