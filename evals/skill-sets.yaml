@@ -39,6 +39,7 @@ skill_sets:
       - "src/nxd-debugging-data-products"
       - "src/nxd-semantic-data-product"
       - "src/nxd-eval-harness"
+      - "src/nxd-pocket-loop"
       # Under evaluation (NEX-783): desktop DP closure generation.
       - "src/nxd-generate-dp"
 
