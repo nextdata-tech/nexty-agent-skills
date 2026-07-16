@@ -105,12 +105,10 @@ make those base tables exist with data.
   `.transform(...)` only if cold-boot contention (heavy snowflake/pandas deps under
   mesh-wide launch) trips `Timeout waiting for execution to start`.
 
-> The OLD pattern split work across a `provision.py` `@on_provision` DDL hook (table
-> structure + `<MODEL>_SEMANTIC` view) and a data-only transform. Under
-> `.semantic_tools()` that split is gone: no view object is created, and the
-> transform owns base-table creation via `CREATE OR REPLACE TABLE`. If you are
-> migrating an old-pattern DP, delete `provision.py`, drop the `.provision(...)`
-> call, and fold the table creation into the transform.
+> Under `.semantic_tools()` no view object is created: the transform owns
+> base-table creation via `CREATE OR REPLACE TABLE`, and `run_semantic_query`
+> compiles against those base tables directly. There is no `provision.py` and no
+> `<MODEL>_SEMANTIC` view.
 
 ---
 

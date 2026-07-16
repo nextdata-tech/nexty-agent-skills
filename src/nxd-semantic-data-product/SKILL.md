@@ -39,10 +39,7 @@ compiler, dialect, and tool factory ship in the `nxd.data_product` wheel as
 
 See `reference/overview.md` for the design and how annotations flow to the tools.
 
-> **This skill teaches the `.semantic_tools()` pattern.** It replaces the older
-> hand-wired `registry.py` + `tools.py` + `provision.py` +
-> `data_product_rpc_output()` loop. If you find a DP on the old pattern, migrate it
-> (see "Migrating an old-pattern DP" below).
+> **This skill teaches the `.semantic_tools()` pattern.**
 
 ---
 
@@ -368,7 +365,7 @@ spec = (
     )
     .output(_storage)
     # ONE line — auto-wires the four tools + the mcp-api port (defaults
-    # port_name="mcp-api", mcp_path="/mcp"). Replaces the old hand-wired RPC loop.
+    # port_name="mcp-api", mcp_path="/mcp").
     .semantic_tools(service="<mcp-service-name>")
 )
 ```
@@ -423,36 +420,12 @@ downstream transform seeds only its own base tables. See
 
 ---
 
-## Migrating an old-pattern DP
-
-If a DP still uses `registry.py` + `tools.py` + `provision.py` +
-`data_product_rpc_output()`:
-
-1. **Move the vocabulary into `models.py`.** For each registry `.model()` /
-   `.dimension()` / `.metric()` / `.join()`, write the equivalent
-   `__nxd_semantic__` blob on the matching attribute (Step 2). Promise every model.
-2. **Delete `registry.py` and `tools.py`** — the four tools are auto-generated.
-3. **Delete `provision.py` and the view DDL.** Fold any base-table creation into
-   the transform as `CREATE OR REPLACE TABLE` (Step 3); drop the `.provision(...)`
-   call and the `<MODEL>_SEMANTIC` view entirely.
-4. **Replace the spec RPC block** (`build_semantic_tools` + the `rpc_function`
-   loop + `rpc_server(...)` port) with one `.semantic_tools(service=...)` call, and
-   **add `pyyaml>=6.0.2`** to `requirements.txt`.
-5. Keep `.startup_timeout(...)` off — not in the canonical pattern; add it back on
-   `.transform(...)` only if cold-boot contention demands it (never on a provision
-   call — there is no provision call anymore).
-
-The 8 mesh DPs under `evals/query-loop/mesh/` are migrated reference examples.
-
----
-
 ## Invariants — NEVER violate these
 
 - **Never re-implement the compiler or MCP tools.** They live in
   `nxd.experimental.semantic` (shipped with the `nxd.data_product` wheel) and are
   auto-wired by `.semantic_tools()`. Import; never copy.
-- **One flag, not a hand-wired loop.** Use `.semantic_tools(service=...)`. Do NOT
-  hand-write `build_semantic_tools` + `rpc_function` + `rpc_server` — and never
+- **Use `.semantic_tools(service=...)`.** It IS the RPC output — never
   call `data_product_rpc_output()` alongside it (raises `ValidationError`).
 - **Promise every annotated model.** Un-promised model → no manifest attributes →
   no `.nxd/semantic/<model>.json` payload → that model is invisible to the tools.
