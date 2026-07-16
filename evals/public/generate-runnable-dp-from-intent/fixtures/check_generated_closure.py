@@ -49,9 +49,9 @@ from pathlib import Path
 
 SEMANTIC_KEY = "__nxd_semantic__"
 
-DUCKDB_STORAGE_DRIVER = "nxd:local/duckdb-storage:0.1.0"
+DUCKDB_STORAGE_DRIVER = "nxd:local/duckdb/storage:0.1.0"
 GENERIC_SECRETS_DRIVER = "nxd:generic-secrets:1.0.0"
-PYTHON_COMPUTE_DRIVER = "nxd:local/python-compute:0.1.0"
+PYTHON_COMPUTE_DRIVER = "nxd:local/python/compute:0.1.0"
 STAGING_PLACEHOLDER = "__NXD_STAGING_DATA__"
 
 REQUIRED_FILES = [

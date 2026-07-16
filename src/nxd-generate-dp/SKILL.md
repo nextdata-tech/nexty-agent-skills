@@ -44,8 +44,8 @@ the artifact, and stands up the semantic MCP endpoint over it.
 ├── transform/
 │   └── main.py            # the dlt-through-port ingest (standalone entrypoint)
 ├── requirements.txt       # proven pins (below)
-├── deployment-spec.yaml   # services: duckdb-storage output + generic-secrets
-├── manifest.yaml          # executor (python-compute) + output port config
+├── deployment-spec.yaml   # services: DuckDB storage output + generic-secrets
+├── manifest.yaml          # executor (Python compute) + output port config
 ├── models.yaml            # promised models + attributes (kernel-parsed)
 ├── csv-source-path        # one line: relative path to the CSV export root
 └── data/                  # the connector export: data/<model>/*.csv
@@ -62,7 +62,7 @@ materialize the YAMLs yourself, exactly in the shapes below).
 > Layout note: unlike the k8s `.semantic_tools()` topology (modules flat at
 > the DP root, no subdir), the desktop closure keeps the transform at
 > `transform/main.py` — that is the directory the snapshot pins and the local
-> python-compute driver executes.
+> Python compute driver executes.
 
 ---
 
@@ -233,7 +233,7 @@ Reuse the nxd-semantic-data-product spec pattern (promise every annotated
 model, one `.semantic_tools(service=...)`, never `data_product_rpc_output()`).
 Desktop differences: the storage port is the local DuckDB `output` service,
 and there is **no `code(transform)` wiring** — on desktop the executor is
-declared in `manifest.yaml` (python-compute) and the transform registers
+declared in `manifest.yaml` (Python compute) and the transform registers
 itself via `@data_product.on_transform()`.
 
 ```python
@@ -276,7 +276,7 @@ the manifest; an extra invented one breaks the closure-wide name agreement.
 environment: desktop
 infraProfile: in-memory
 services:
-  - driver: nxd:local/duckdb-storage:0.1.0
+  - driver: nxd:local/duckdb/storage:0.1.0
     environment: desktop
     infraService: output
     name: output
@@ -294,7 +294,7 @@ domain: desktop.local
 inputs: {}
 name: <dp-name>
 executor:
-  driver: nxd:local/python-compute:0.1.0
+  driver: nxd:local/python/compute:0.1.0
   secrets:
     - csv-source
 output:
