@@ -1,0 +1,11 @@
+customer_id,email,full_name,country,segment,is_churned,signup_date,loyalty_points
+C001,ana.souza@example.com,Ana Souza,BR,Enterprise,false,2023-02-14,1250
+C002,liam.walsh@example.org,Liam Walsh,IE,SMB,false,2023-06-02,310
+C003,yuki.tanaka@example.com,Yuki Tanaka,JP,Consumer,true,2022-11-20,80
+C004,marta.kowalska@example.net,,PL,SMB,false,2024-01-09,445
+C005,derek.hughes@example.com,Derek Hughes,US,Enterprise,false,2022-08-30,2210
+C006,chloe.martin@example.fr,Chloe Martin,FR,Consumer,true,2023-09-17,
+C007,,Sofia Ricci,US,Consumer,false,2024-03-25,120
+C008,tom.becker@example.de,Tom Becker,DE,SMB,true,2023-01-05,205
+C009,nina.eriksen@example.no,Nina Eriksen,US,Enterprise,false,2024-05-11,980
+C010,raj.patel@example.co.uk,Raj Patel,GB,SMB,false,2023-04-19,560
