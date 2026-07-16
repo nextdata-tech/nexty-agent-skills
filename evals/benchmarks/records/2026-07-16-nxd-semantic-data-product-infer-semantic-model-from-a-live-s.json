@@ -1,0 +1,250 @@
+{
+  "date": "2026-07-16",
+  "label": "nxd-semantic-data-product: infer semantic model from a live source + questions (new scenario)",
+  "notes": "New scenario generate-semantic-layer-from-live-source-and-questions: no schema document is given \u2014 the agent must materialize the landed DuckDB sample, profile both tables into schema.json, and INFER grains/dimensions/metrics/joins/PII from that profile plus four stakeholder questions, then prove them answerable via the shipped acceptance test. The scenario is new in this PR, so there is no before variant of the skill; lift is current_pack vs the equally-informed no_skills baseline. current_pack scored 18/19 vs no_skills 15/19: the baseline authored a passing models.py but never produced spec.py, transform.py, or a dependency manifest (checks 15/16/17/19), while the skill produced the full data product and missed only dependencies-present. No runs were discarded \u2014 both cells ran clean with no harness defect (no live-session hijack, no setup crash, no auth/timeout error). Plugin v0.9.1. The current_pack passing acceptance run printed MODELS_SHA256: 8b58031b7087824ca9178e09e1b41dd06bb91e9fa58971b170f808b2576b4004.",
+  "plugin_version": "0.9.1",
+  "reports": {
+    "after-v0.9.1": {
+      "elapsed_s": 431.1,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 2,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-semantic-layer-from-live-source-and-questions",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 18,
+            "duration_ms": 261579,
+            "total_cost_usd": 0.8094017999999998,
+            "input_tokens": 29,
+            "output_tokens": 13235,
+            "is_error": false,
+            "tool_calls": 16
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "profiled-source-before-authoring",
+                "pass": true,
+                "why": "The trace shows build_fixture.py run to materialize source.duckdb, then profile_source.py (DESCRIBE + sampled rows + per-column null%/cardinality) run over both main.customers and main.orders, all before models.py was written."
+              },
+              {
+                "id": "schema-json-handoff",
+                "pass": true,
+                "why": "The combined profile of both tables was written to schema.json before models.py, the model docstring cites its stats (cardinality 1.0, null rates), and the acceptance test's schema-json-artifact check passed, proving it survived to the end."
+              },
+              {
+                "id": "models-match-profiled-columns",
+                "pass": true,
+                "why": "models.py declares semantic_model(\"customers\") and semantic_model(\"orders\") under bare names, and every annotated attribute uses byte-exact profiled column identifiers with no invented/renamed columns."
+              },
+              {
+                "id": "grains-inferred-correctly",
+                "pass": true,
+                "why": "customers.customer_id carries {\"kind\":\"grain\"} and orders.order_id carries a grain blob inside its roles wrapper, matching the columns at cardinality 1.0."
+              },
+              {
+                "id": "revenue-question-sum-metric",
+                "pass": true,
+                "why": "total_revenue is a __nxd_semantic__ metric blob with agg \"sum\" on orders.amount_usd plus a named description, and channel is declared as the sales_channel dimension."
+              },
+              {
+                "id": "revenue-ambiguity-surfaced",
+                "pass": true,
+                "why": "The metric description states the sum spans ALL statuses including refunded/cancelled, orders.status is declared a dimension for query-time filtering, and the final answer explicitly calls out the ambiguity and resolution."
+              },
+              {
+                "id": "avg-order-value-metric",
+                "pass": true,
+                "why": "average_order_value (agg \"avg\") coexists with total_revenue (agg \"sum\") on amount_usd via a {\"roles\":[...]} multi-role wrapper."
+              },
+              {
+                "id": "churn-question-boolean-metric",
+                "pass": true,
+                "why": "customers.is_churned carries a metric blob with both \"boolean\": true and \"agg\": \"sum\", and segment is declared as a dimension."
+              },
+              {
+                "id": "cross-table-question-join-declared",
+                "pass": true,
+                "why": "orders.customer_id carries a join blob to_model \"customers\", to_column \"customer_id\", many_to_one (on the many side), with a country dimension on customers and an order_count count_distinct metric on order_id."
+              },
+              {
+                "id": "pii-inferred-from-profile",
+                "pass": true,
+                "why": "email and full_name dimension blobs set \"pii\": true and no other column is flagged, inferred from the profiled sample values."
+              },
+              {
+                "id": "question-driven-not-broad",
+                "pass": true,
+                "why": "loyalty_points is left as a plain unannotated AttributeSpec (no sum metric), and the final answer includes the required question\u2192concept mapping for all four questions."
+              },
+              {
+                "id": "acceptance-check-passed",
+                "pass": true,
+                "why": "check_semantic_model.py was run against the final models.py + source.duckdb and printed ALL CHECKS PASSED (14/14) without the test being edited."
+              },
+              {
+                "id": "final-answer-digest-matches-validated-models",
+                "pass": true,
+                "why": "The harness confirms the marked source matches the reported MODELS_SHA256 (SATISFIED), and the trace shows that digest was printed by the final ALL-CHECKS-PASSED run over the unchanged models.py, not an earlier failing run."
+              },
+              {
+                "id": "final-answer-contains-artifacts",
+                "pass": true,
+                "why": "The final answer reproduces the complete models.py verbatim between the markers, consistent with the file written and validated in the trace."
+              },
+              {
+                "id": "semantic-tools-flag-used",
+                "pass": true,
+                "why": "spec.py's docstring states exposure via the single .semantic_tools() flag and its visible imports (code, data_product, data_product_output, storage) include none of the forbidden hand-wiring (build_semantic_tools/rpc_function/rpc_server/data_product_rpc_output)."
+              },
+              {
+                "id": "models-promised",
+                "pass": true,
+                "why": "spec.py imports customers and orders from models and builds a storage()-based port with data_product_output, consistent with promising the annotated models on a plain storage port with no evidence of as_view."
+              },
+              {
+                "id": "transform-seeds-profiled-tables-no-view-ddl",
+                "pass": true,
+                "why": "transform.py seeds the base customers/orders tables and its docstring explicitly states no semantic-view DDL and no @on_provision hook, with spec.py importing code and transform for the .transform(code(transform)...) wiring."
+              },
+              {
+                "id": "compiler-not-vendored",
+                "pass": true,
+                "why": "models.py only injects __nxd_semantic__ JSON blobs via _annotate and relies on .semantic_tools() to auto-generate tools; no compile/filter/aggregation logic or copied compiler source is present."
+              },
+              {
+                "id": "dependencies-present",
+                "pass": false,
+                "why": "The trace shows no dependency file (pyproject.toml/requirements) was ever created listing nxd.data_product[spec], nxd.drivers[rpc], snowflake-connector-python[pandas], pandas, and pyyaml \u2014 the workspace started with only the three fixtures and the agent added no manifest."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The model authoring, ambiguity handling, acceptance test, and digest provenance are all excellent, but no dependency manifest listing the required split-pod fallback packages was ever created, failing dependencies-present."
+          }
+        },
+        {
+          "skill_set": "no_skills",
+          "scenario": "generate-semantic-layer-from-live-source-and-questions",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 20,
+            "duration_ms": 216634,
+            "total_cost_usd": 0.8070742,
+            "input_tokens": 702,
+            "output_tokens": 13839,
+            "is_error": false,
+            "tool_calls": 19
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "profiled-source-before-authoring",
+                "pass": true,
+                "why": "The trace shows the agent ran build_fixture.py to materialize source.duckdb and then ran a DuckDB DESCRIBE+null%/cardinality/sample profiling script over both tables before the Write of models.py."
+              },
+              {
+                "id": "schema-json-handoff",
+                "pass": true,
+                "why": "The combined profile was written to schema.json before authoring (assistant states 'schema.json is written' before writing models.py), the acceptance test's schema-json-artifact check PASSED against the live tables, and the final answer cites schema.json stats (e.g. '10% null each, per schema.json')."
+              },
+              {
+                "id": "models-match-profiled-columns",
+                "pass": true,
+                "why": "models.py declares semantic_model(\"customers\") and semantic_model(\"orders\") under bare names and every annotated key is a byte-exact profiled column with no renames or inventions."
+              },
+              {
+                "id": "grains-inferred-correctly",
+                "pass": true,
+                "why": "customer_id in customers and order_id in orders each carry a {\"kind\":\"grain\"} blob inside a roles wrapper, and no other column is a grain."
+              },
+              {
+                "id": "revenue-question-sum-metric",
+                "pass": true,
+                "why": "orders.amount_usd carries a metric blob total_revenue with agg \"sum\" and a description, and orders.channel is a dimension (sales_channel), authored via semantic_annotation not a fluent call."
+              },
+              {
+                "id": "revenue-ambiguity-surfaced",
+                "pass": true,
+                "why": "The total_revenue description states it sums unconditionally across all statuses (gross), order_status is declared a dimension for query-time filtering, and section (d) explicitly calls out the refunded/cancelled ambiguity and resolution."
+              },
+              {
+                "id": "avg-order-value-metric",
+                "pass": true,
+                "why": "amount_usd carries both a sum (total_revenue) and an avg (average_order_value) metric inside a single {\"roles\":[...]} multi-role wrapper."
+              },
+              {
+                "id": "churn-question-boolean-metric",
+                "pass": true,
+                "why": "customers.is_churned has a metric blob with both \"boolean\": True and \"agg\": \"sum\", plus a dimension on customers.segment."
+              },
+              {
+                "id": "cross-table-question-join-declared",
+                "pass": true,
+                "why": "orders.customer_id carries a join blob to_model \"customers\", to_column \"customer_id\", many_to_one on the many side, customers.country is a dimension, and order_count is a count metric on order_id."
+              },
+              {
+                "id": "pii-inferred-from-profile",
+                "pass": true,
+                "why": "email and full_name dimension blobs set \"pii\": True and no other column is flagged pii."
+              },
+              {
+                "id": "question-driven-not-broad",
+                "pass": true,
+                "why": "loyalty_points is left unannotated (attribute(integer()) with no roles), and the final answer includes the four-question\u2192concept mapping."
+              },
+              {
+                "id": "acceptance-check-passed",
+                "pass": true,
+                "why": "The trace shows check_semantic_model.py run against the final models.py + source.duckdb printing 'ALL CHECKS PASSED (14/14)' with no edits to the test."
+              },
+              {
+                "id": "final-answer-digest-matches-validated-models",
+                "pass": true,
+                "why": "The harness confirms the marked source matches reported MODELS_SHA256 9434eaed..., and that digest was printed by the single acceptance run that passed (ALL CHECKS PASSED), so provenance is the passing run."
+              },
+              {
+                "id": "final-answer-contains-artifacts",
+                "pass": true,
+                "why": "The final answer reproduces the complete models.py verbatim and it hashes to the validated digest, consistent with what was written and verified."
+              },
+              {
+                "id": "semantic-tools-flag-used",
+                "pass": false,
+                "why": "The agent never authored a spec.py at all (only explored example spec files), so there is no .semantic_tools(service=...) call."
+              },
+              {
+                "id": "models-promised",
+                "pass": false,
+                "why": "No spec.py was authored, so no data_product_output().promise(...) of the models on a storage port exists."
+              },
+              {
+                "id": "transform-seeds-profiled-tables-no-view-ddl",
+                "pass": false,
+                "why": "No transform.py was authored to seed the base tables via .transform(code(transform)...)."
+              },
+              {
+                "id": "compiler-not-vendored",
+                "pass": true,
+                "why": "The agent wrote no hand-rolled compile/filter/aggregation logic and copied no nxd.experimental.semantic source."
+              },
+              {
+                "id": "dependencies-present",
+                "pass": false,
+                "why": "No project dependency file was authored listing nxd.data_product[spec], nxd.drivers[rpc], snowflake-connector-python[pandas], pandas, and pyyaml."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent correctly profiled the source, wrote schema.json, and authored a fully-passing models.py with all roles/ambiguities/digest checks satisfied, but it never authored spec.py, transform.py, or the dependency file, failing checks 15, 16, 17, and 19."
+          }
+        }
+      ]
+    }
+  }
+}
