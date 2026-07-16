@@ -19,7 +19,6 @@ skill_sets:
       - "src/nxd-debugging-data-products"
       - "src/nxd-semantic-data-product"
       - "src/nxd-eval-harness"
-      - "src/nxd-pocket-loop"
       - "src/nxd-generate-dp"
 
   # Staging slot for skills under evaluation before promotion to current_pack.
