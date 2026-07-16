@@ -9,6 +9,10 @@ comparing the rows against reference queries. A model that only *looks*
 plausible — wrong join target, boolean flag summed numerically, metric on the
 wrong column — fails here at "query time" instead of at pod boot.
 
+It also gates on data-product COMPLETENESS: a validated ``models.py`` is a
+milestone, not the finish line, so this test only passes once ``spec.py``,
+``transform.py``, and ``requirements.txt`` also exist alongside it.
+
 Usage (from the workspace root; duckdb package required):
 
     uv run --with duckdb python check_semantic_model.py \
@@ -540,6 +544,20 @@ def main() -> int:
         print(f"MODELS_SHA256: {digest}")
         return 1
     failures = run_checks(registry, attr_names, duck_path, schema_path)
+    # Completeness gate: a validated models.py is not a finished data product.
+    # The DP is complete only when its sibling artifacts exist too, so passing
+    # this test genuinely means the whole DP was authored — not just the model.
+    dp_dir = models_path.resolve().parent
+    for required_name in ("spec.py", "transform.py", "requirements.txt"):
+        if not (dp_dir / required_name).exists():
+            failures.append(
+                (
+                    "dp-complete",
+                    f"{required_name} is missing — the data product is incomplete. "
+                    f"A validated models.py is a milestone, not the finish line: "
+                    f"author spec.py, transform.py, and requirements.txt before finishing.",
+                )
+            )
     print(f"MODELS_SHA256: {digest}")
     return 1 if failures else 0
 
