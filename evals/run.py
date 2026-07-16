@@ -282,15 +282,23 @@ def agent_task_from_prompt(prompt_md: str) -> str:
     Strategy: take the text under "Task for the agent:" up to the next section
     header. If there's no such header (build-brief style prompts), fall back to
     everything before "Success checks:" — which still strips the rubric.
+
+    Both the task line and the section headers may be written as plain lines
+    ("Task for the agent:") or markdown headings ("## Task for the agent") —
+    match either, or a heading-styled prompt leaks the whole spec (intro,
+    artifacts, stopgap notes) to the agent and the no-skills baseline.
     """
     lines = prompt_md.splitlines()
     section_re = re.compile(
-        r"^\s*(Required artifacts|Success checks|Constraints|Expected final)",
+        r"^\s*(?:#{1,6}\s*)?"
+        r"(Required artifacts|Success checks|Constraints|Expected final|"
+        r"Note on the annotation)",
         re.IGNORECASE,
     )
     task_start = None
     for i, line in enumerate(lines):
-        if re.match(r"^\s*Task for the agent:\s*$", line, re.IGNORECASE):
+        if re.match(r"^\s*(?:#{1,6}\s*)?Task for the agent:?\s*$", line,
+                    re.IGNORECASE):
             task_start = i + 1
             break
 
@@ -307,7 +315,7 @@ def agent_task_from_prompt(prompt_md: str) -> str:
     # Fallback: drop everything from "Success checks:" onward.
     cut = len(lines)
     for i, line in enumerate(lines):
-        if re.match(r"^\s*Success checks:\s*$", line, re.IGNORECASE):
+        if re.match(r"^\s*(?:#{1,6}\s*)?Success checks:?\s*$", line, re.IGNORECASE):
             cut = i
             break
     return "\n".join(lines[:cut]).strip()
@@ -610,6 +618,17 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
     check_lines = "\n".join(
         f'  {i + 1}. [id={c["id"]}] {c["check"]}' for i, c in enumerate(checks["checks"])
     )
+    # Opt-in mechanical facts the harness computed itself (not the agent's word)
+    # — e.g. re-hashing the reproduced models.py to tie it to the reported
+    # digest. Only present when the scenario declares it in checks.json.
+    tie = digest_tie_fact(final_answer, checks.get("digest_tie"))
+    mechanical = ""
+    if tie:
+        mechanical = (
+            "\n--- HARNESS-VERIFIED FACTS (computed mechanically by the runner, "
+            "NOT the agent's claims — treat as ground truth and let them "
+            "override anything the agent asserts) ---\n" + tie + "\n"
+        )
     return f"""Scenario name: {checks.get("name", scenario_dir.name)}
 
 --- SCENARIO DEFINITION (for your context only) ---
@@ -625,12 +644,16 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 
 --- AGENT FINAL ANSWER ---
 {final_answer}
-
+{mechanical}
 --- INSTRUCTIONS ---
 Grade every check as pass or fail with a one-sentence justification grounded in
 the trace and final answer. A "did the agent inspect X" check passes only if the
 trace shows the corresponding tool call/result. Give an overall pass only if ALL
-checks pass.
+checks pass. Where a HARNESS-VERIFIED FACTS block is present, it is authoritative
+for exactly what it states and no more: it settles whether the final-answer
+source matches the reported digest (use it, not the agent's self-report, for
+that), but it does NOT establish that the digest came from a passing acceptance
+run — grade that provenance from the trace.
 
 Respond with ONE JSON object and nothing else, in this exact shape:
 {{"checks": [{{"id": "<id>", "pass": true|false, "why": "<one sentence>"}}],
@@ -685,6 +708,155 @@ def _extract_json(text: str) -> dict | None:
         return json.loads(candidate)
     except json.JSONDecodeError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Mechanical digest tie (opt-in per scenario).
+#
+# Some scenarios ship an acceptance test that prints ``MODELS_SHA256: <hex>``
+# — the sha256 of the exact file it validated — and require the agent to echo
+# that line beside the file's full source in the final answer. A self-reported
+# digest is not a genuine tie: the agent could paste file B's source while
+# copying file A's passing digest. To make the tie MECHANICAL, the harness
+# re-extracts the reproduced source from the final answer, hashes it itself,
+# and states the match/mismatch as fact for the judge — the judge no longer
+# takes the agent's word for it.
+#
+# The reproduced source is located by an UNAMBIGUOUS SENTINEL, not by fence
+# heuristics: the agent must wrap its one authoritative models.py between
+# ``===BEGIN FINAL models.py===`` / ``===END FINAL models.py===`` marker lines.
+# Exactly one pair is required — zero pairs => UNSATISFIED, two-or-more pairs
+# => fail closed (ambiguous, never guess which is authoritative). This kills
+# the decoy-block bypass (a second "reference" block can't be selected over
+# the marked one) and removes fence-format fragility (```py, ```python, or an
+# unlabeled/absent fence inside the markers are all fine — the markers, not
+# the fence, delimit the block).
+#
+# What it proves is exactly: the marked final-answer source hashes (or does
+# not hash) to the reported MODELS_SHA256. It does NOT prove that digest came
+# from a PASSING checker run — that provenance stays judge-graded from the
+# trace.
+#
+# Opt-in and guarded: only scenarios that declare ``"digest_tie"`` in
+# checks.json activate this; every other scenario is untouched.
+# ---------------------------------------------------------------------------
+
+def _marker_names(filename: str) -> tuple[str, str]:
+    return (f"===BEGIN FINAL {filename}===", f"===END FINAL {filename}===")
+
+
+def _strip_optional_fence(block: str) -> str:
+    """If the marked content is itself wrapped in a single code fence, drop the
+    fence lines — the digest is over the source, not the ``` decoration. A
+    fence anywhere other than the first/last non-empty lines is left intact
+    (it is part of the source, not decoration)."""
+    lines = block.split("\n")
+    # Trim leading/trailing wholly-blank lines for fence detection only.
+    start = 0
+    end = len(lines)
+    while start < end and lines[start].strip() == "":
+        start += 1
+    while end > start and lines[end - 1].strip() == "":
+        end -= 1
+    if end - start >= 2 and lines[start].lstrip().startswith("```") \
+            and lines[end - 1].strip() == "```":
+        return "\n".join(lines[start + 1:end - 1])
+    return block
+
+
+def _extract_marked_source(text: str, filename: str) -> tuple[str | None, str]:
+    """Return ``(source, status)`` for the sentinel-delimited authoritative
+    ``filename``. ``status`` is one of "ok", "none", "ambiguous". Exactly one
+    marker pair yields the content between them (optional inner fence stripped);
+    zero pairs => (None, "none"); more than one begin OR end marker =>
+    (None, "ambiguous") — fail closed, never pick one."""
+    if not text:
+        return None, "none"
+    begin, end = _marker_names(filename)
+    b_idx = [m.start() for m in re.finditer(re.escape(begin), text)]
+    e_idx = [m.start() for m in re.finditer(re.escape(end), text)]
+    if len(b_idx) == 0 and len(e_idx) == 0:
+        return None, "none"
+    if len(b_idx) != 1 or len(e_idx) != 1:
+        return None, "ambiguous"
+    b, e = b_idx[0], e_idx[0]
+    if e <= b:
+        return None, "ambiguous"
+    inner = text[b + len(begin):e]
+    # Drop the newline immediately after the BEGIN marker and before the END
+    # marker (the markers live on their own lines); keep the source between.
+    inner = inner[1:] if inner.startswith("\n") else inner
+    inner = inner[:-1] if inner.endswith("\n") else inner
+    return _strip_optional_fence(inner), "ok"
+
+
+def _reported_digest(text: str, label: str = "MODELS_SHA256") -> str | None:
+    """The last self-reported ``<LABEL>: <hex>`` digest in the final answer."""
+    if not text:
+        return None
+    matches = re.findall(rf"{re.escape(label)}\s*:\s*([0-9a-fA-F]{{64}})", text)
+    return matches[-1].lower() if matches else None
+
+
+def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
+    """Produce a mechanical statement for the judge tying the marked source to
+    the self-reported digest, or None when the scenario doesn't opt in.
+
+    ``cfg`` (checks.json ``digest_tie``) keys: ``filename`` (default
+    "models.py"), ``label`` (default "MODELS_SHA256")."""
+    if not cfg:
+        return None
+    filename = cfg.get("filename", "models.py")
+    label = cfg.get("label", "MODELS_SHA256")
+    begin, end = _marker_names(filename)
+
+    reported = _reported_digest(final_answer, label)
+    source, status = _extract_marked_source(final_answer, filename)
+
+    if status == "ambiguous":
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED (fail-closed) — the final "
+                f"answer contains more than one `{begin}` / `{end}` marker pair "
+                f"(or a malformed pair), so the one authoritative {filename} is "
+                f"ambiguous. The harness refuses to guess which block is final; "
+                f"treat any digest-tie check as FAILED.")
+    if source is None and reported is None:
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED — the final answer contains "
+                f"neither a `{begin}` ... `{end}` marked {filename} nor a "
+                f"{label} digest line.")
+    if source is None:
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED — the final answer has no "
+                f"`{begin}` ... `{end}` marked {filename}, so the reported "
+                f"{label} cannot be tied to any source.")
+    if reported is None:
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED — the marked {filename} is "
+                f"present but the final answer has no {label} digest line to "
+                f"tie it to.")
+
+    # Hash the marked source exactly, plus trailing-newline and line-ending
+    # variants, so a genuine reproduction that differs only in a final newline
+    # or in CRLF-vs-LF line endings (e.g. a Windows paste) still ties.
+    # Deliberately narrow: only whole-block trailing newline and the newline
+    # STYLE flex — different source content can never coincide.
+    bases = {source, source.replace("\r\n", "\n").replace("\r", "\n")}
+    variants = {
+        v
+        for base in bases
+        for v in (base, base + "\n", base.rstrip("\n"), base.rstrip("\n") + "\n")
+    }
+    computed = {hashlib.sha256(v.encode("utf-8")).hexdigest() for v in variants}
+    if reported in computed:
+        return (f"MECHANICAL DIGEST TIE: SATISFIED — the harness re-hashed the "
+                f"{filename} the final answer marked with `{begin}` ... `{end}` "
+                f"and it MATCHES the reported {label}: {reported}. This proves "
+                f"ONLY that the final-answer {filename} source equals the source "
+                f"that digest was computed over; whether that digest came from a "
+                f"PASSING acceptance run remains to be graded from the trace.")
+    return (f"MECHANICAL DIGEST TIE: MISMATCH — the {filename} the final answer "
+            f"marked with `{begin}` ... `{end}` hashes to {sorted(computed)[0]}, "
+            f"which does NOT equal the reported {label}: {reported}. The marked "
+            f"final-answer source is NOT the source that digest was computed "
+            f"over (e.g. a digest copied from a different file). Treat any "
+            f"digest-tie check as FAILED.")
 
 
 def _fixtures_fingerprint(scenario_dir: Path) -> str:

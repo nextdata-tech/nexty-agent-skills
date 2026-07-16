@@ -6,7 +6,7 @@ Writes placeholder models.py, transform.py, requirements.txt FLAT at the DP root
 
 The four governed MCP tools (list_models, semantic_model, describe_model,
 run_semantic_query) are auto-generated at pod boot by the `.semantic_tools()`
-spec flag. You do NOT author registry.py, tools.py, or provision.py — the kernel
+spec flag. You author only models.py, transform.py, and spec.py — the kernel
 compiles per-field `__nxd_semantic__` blobs on the promised models' attributes
 into typed SemanticRegistry payloads, delivers them to
 `<root>/.nxd/semantic/<model>.json` at startup, and the entrypoints module reads
@@ -21,6 +21,12 @@ Usage:
 
 <target_dir> is the root of the data product directory (the directory that will
 contain spec.py). All modules are created as flat siblings.
+
+The stubs serve both authoring flows: transcribing a hand-provided schema AND
+the inference flow (SKILL.md "Step 1-alt"), where the vocabulary is derived
+from a profiled DuckDB sample table (nxd-mesh-analyzer's profile_tabular.py in
+DuckDB mode) plus the user's questions. Either way, fill the placeholders with
+the derived models/dimensions/metrics/joins.
 
 THREE WIRING CONSTRAINTS
 ------------------------------------------------------------------------------
@@ -75,7 +81,7 @@ The kernel reads each promised model's `__nxd_semantic__` attribute blobs,
 compiles them into a typed SemanticRegistry, and delivers the result to the DP
 pod at boot as `<root>/.nxd/semantic/<model>.json`. At runtime the four MCP tools
 (list_models, semantic_model, describe_model, run_semantic_query) are rebuilt
-from those payloads — no registry.py / tools.py to author.
+from those payloads — you author no tool code yourself.
 
 MISSING SEAM: AttributeSpec has no public setter for per-field metadata.
 The blobs are injected here by writing the private `_metadata` dict directly via

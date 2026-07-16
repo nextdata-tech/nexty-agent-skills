@@ -90,7 +90,10 @@ columns form a composite grain.
 - `agg` — one of the six closed aggregations (see below). Required.
 - `boolean` — `true` when the column is a flag; SQL becomes a CASE-sum
   (`SUM(CASE WHEN ... THEN 1 ELSE 0 END)`), robust to BOOLEAN and VARCHAR physical
-  types, instead of a numeric cast-sum. Default `false`.
+  types, instead of a numeric cast-sum. Default `false`. **Requires
+  `agg: "sum"`** — the dialect defines the boolean CASE expression only for
+  `sum` (see `compiler-and-routing.md`); `boolean: true` with any other agg is
+  invalid.
 - `extra_dimensions` — explicit override of the dimensions this metric can be
   sliced by. **Leave unset** to let the compiler auto-derive cross-model reach from
   N:1 joins. Use only when the auto-derived set is wrong.
