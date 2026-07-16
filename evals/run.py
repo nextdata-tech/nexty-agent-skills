@@ -618,6 +618,17 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
     check_lines = "\n".join(
         f'  {i + 1}. [id={c["id"]}] {c["check"]}' for i, c in enumerate(checks["checks"])
     )
+    # Opt-in mechanical facts the harness computed itself (not the agent's word)
+    # — e.g. re-hashing the reproduced models.py to tie it to the reported
+    # digest. Only present when the scenario declares it in checks.json.
+    tie = digest_tie_fact(final_answer, checks.get("digest_tie"))
+    mechanical = ""
+    if tie:
+        mechanical = (
+            "\n--- HARNESS-VERIFIED FACTS (computed mechanically by the runner, "
+            "NOT the agent's claims — treat as ground truth and let them "
+            "override anything the agent asserts) ---\n" + tie + "\n"
+        )
     return f"""Scenario name: {checks.get("name", scenario_dir.name)}
 
 --- SCENARIO DEFINITION (for your context only) ---
@@ -633,12 +644,13 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 
 --- AGENT FINAL ANSWER ---
 {final_answer}
-
+{mechanical}
 --- INSTRUCTIONS ---
 Grade every check as pass or fail with a one-sentence justification grounded in
 the trace and final answer. A "did the agent inspect X" check passes only if the
 trace shows the corresponding tool call/result. Give an overall pass only if ALL
-checks pass.
+checks pass. Where a HARNESS-VERIFIED FACTS block is present, it is authoritative:
+grade the tied check from that fact, not from the agent's self-report.
 
 Respond with ONE JSON object and nothing else, in this exact shape:
 {{"checks": [{{"id": "<id>", "pass": true|false, "why": "<one sentence>"}}],
@@ -693,6 +705,108 @@ def _extract_json(text: str) -> dict | None:
         return json.loads(candidate)
     except json.JSONDecodeError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Mechanical digest tie (opt-in per scenario).
+#
+# Some scenarios ship an acceptance test that prints ``MODELS_SHA256: <hex>``
+# — the sha256 of the exact file it validated — and require the agent to echo
+# that line beside the file's full source in the final answer. A self-reported
+# digest is not a genuine tie: the agent could paste file B's source while
+# copying file A's passing digest. To make the tie MECHANICAL, the harness
+# re-extracts the reproduced source from the final answer, hashes it itself,
+# and states the match/mismatch as fact for the judge — the judge no longer
+# takes the agent's word for it.
+#
+# Opt-in and guarded: only scenarios that declare ``"digest_tie"`` in
+# checks.json activate this; every other scenario is untouched.
+# ---------------------------------------------------------------------------
+
+def _extract_code_block(text: str, filename: str, language: str) -> str | None:
+    """Best-effort extract the reproduced source of ``filename`` from a final
+    answer. Prefers a fenced block whose immediately-preceding text names the
+    file, then one whose own header comment does; falls back to the longest
+    fenced block in the declared language. Returns the raw block text (as the
+    agent reproduced it) or None."""
+    if not text:
+        return None
+    lang = re.escape(language)
+    # All fenced blocks in the target language, with the char offset of each.
+    blocks = [
+        (m.start(), m.group(1))
+        for m in re.finditer(rf"```(?:{lang})[^\n]*\n(.*?)```", text, re.DOTALL)
+    ]
+    if not blocks:
+        return None
+    fname = re.escape(filename)
+    # Prefer a block whose preamble (last ~200 chars before the fence) mentions
+    # the filename — the "here is models.py" heading.
+    for start, body in blocks:
+        if re.search(fname, text[max(0, start - 200):start]):
+            return body
+    # Else a block that references the filename in its own header; else longest.
+    for _start, body in blocks:
+        if re.search(fname, body[:200]):
+            return body
+    return max((b for _s, b in blocks), key=len)
+
+
+def _reported_digest(text: str, label: str = "MODELS_SHA256") -> str | None:
+    """The last self-reported ``<LABEL>: <hex>`` digest in the final answer."""
+    if not text:
+        return None
+    matches = re.findall(rf"{re.escape(label)}\s*:\s*([0-9a-fA-F]{{64}})", text)
+    return matches[-1].lower() if matches else None
+
+
+def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
+    """Produce a mechanical statement for the judge tying the reproduced source
+    to the self-reported digest, or None when the scenario doesn't opt in.
+
+    ``cfg`` (checks.json ``digest_tie``) keys: ``filename`` (default
+    "models.py"), ``language`` (default "python"), ``label`` (default
+    "MODELS_SHA256")."""
+    if not cfg:
+        return None
+    filename = cfg.get("filename", "models.py")
+    language = cfg.get("language", "python")
+    label = cfg.get("label", "MODELS_SHA256")
+
+    reported = _reported_digest(final_answer, label)
+    block = _extract_code_block(final_answer, filename, language)
+    if reported is None and block is None:
+        return (f"MECHANICAL DIGEST TIE: the final answer contains neither a "
+                f"{label} line nor a reproduced {filename} block — the digest "
+                f"tie is UNSATISFIED.")
+    if reported is None:
+        return (f"MECHANICAL DIGEST TIE: the final answer reproduces a "
+                f"{filename} block but no {label} digest line — UNSATISFIED.")
+    if block is None:
+        return (f"MECHANICAL DIGEST TIE: the final answer reports {label}: "
+                f"{reported} but does not reproduce the {filename} source — "
+                f"the digest cannot be tied to any file — UNSATISFIED.")
+    # Hash the reproduced block exactly as pasted, and — because whitespace
+    # (a trailing newline) is easy to lose in a paste — also try newline
+    # variants, so a genuine reproduction is not failed on a cosmetic diff.
+    variants = {
+        block,
+        block if block.endswith("\n") else block + "\n",
+        block.rstrip("\n") + "\n",
+        block.rstrip("\n"),
+    }
+    computed = {hashlib.sha256(v.encode("utf-8")).hexdigest() for v in variants}
+    if reported in computed:
+        return (f"MECHANICAL DIGEST TIE: SATISFIED — the harness re-hashed the "
+                f"{filename} reproduced in the final answer and it MATCHES the "
+                f"self-reported {label}: {reported}. The graded source is "
+                f"provably the validated file.")
+    return (f"MECHANICAL DIGEST TIE: MISMATCH — the {filename} reproduced in "
+            f"the final answer hashes to {sorted(computed)[0]} (and whitespace "
+            f"variants), which does NOT equal the self-reported {label}: "
+            f"{reported}. The reproduced source is NOT the file that passed; "
+            f"the digest was copied from a different file. Treat any "
+            f"digest-tie check as FAILED.")
 
 
 def _fixtures_fingerprint(scenario_dir: Path) -> str:

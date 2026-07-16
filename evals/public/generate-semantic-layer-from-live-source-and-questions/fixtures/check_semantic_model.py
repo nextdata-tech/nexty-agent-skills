@@ -182,6 +182,27 @@ def _by_kind(columns: dict[str, list[dict]], kind: str) -> list[tuple[str, dict]
             for role in roles if role.get("kind") == kind]
 
 
+_MISSING = object()
+
+
+def _resolve_to_column(role: dict, fallback: str) -> tuple[str | None, str | None]:
+    """Resolve a join role's target column.
+
+    Only an ABSENT ``to_column`` key defaults to ``fallback`` (same column
+    name). A key that is PRESENT is validated as-is: an empty string, a
+    non-string, or any other falsy value is an explicit — and invalid —
+    declaration, not an omission, so it must not silently fall back and pass.
+
+    Returns ``(to_column, error)``: exactly one is non-None.
+    """
+    raw = role.get("to_column", _MISSING)
+    if raw is _MISSING:
+        return fallback, None
+    if not isinstance(raw, str) or not raw:
+        return None, f"to_column {raw!r} is present but not a non-empty column name"
+    return raw, None
+
+
 def run_checks(registry, attr_names, duck_path: Path, schema_path: Path) -> list[tuple[str, str]]:
     import duckdb
 
@@ -281,7 +302,10 @@ def run_checks(registry, attr_names, duck_path: Path, schema_path: Path) -> list
              if role.get("to_model") == "customers" and col in live["orders"]]
     join_ok, join_why, join_edge = False, "no orders→customers join declared", None
     for col, role in joins:
-        to_col = role.get("to_column") or col
+        to_col, to_err = _resolve_to_column(role, col)
+        if to_err:
+            join_why = to_err
+            continue
         if to_col not in live["customers"]:
             join_why = f"to_column {to_col!r} not on customers"
             continue
@@ -323,7 +347,10 @@ def run_checks(registry, attr_names, duck_path: Path, schema_path: Path) -> list
             if target not in live:
                 join_errs.append(f"{loc}: to_model {target!r} is not a profiled table")
                 continue
-            to_col = role.get("to_column") or col
+            to_col, to_err = _resolve_to_column(role, col)
+            if to_err:
+                join_errs.append(f"{loc}: {to_err}")
+                continue
             if to_col not in live[target]:
                 join_errs.append(f"{loc}: to_column {to_col!r} not on {target}")
                 continue
@@ -431,16 +458,19 @@ def run_checks(registry, attr_names, duck_path: Path, schema_path: Path) -> list
         try:
             doc = json.loads(schema_path.read_text(encoding="utf-8"))
             tables = doc.get("tables") if isinstance(doc, dict) else None
-            missing = {"customers", "orders"} - set(tables or {})
+            # Guard the shape BEFORE iterating: a non-dict ``tables`` (e.g.
+            # {"tables": 123}) must yield a named FAIL, never an uncaught
+            # TypeError from set()/subscripting a non-mapping.
             if not isinstance(tables, dict):
                 why = 'schema.json is not the combined {"tables": {...}} document'
-            elif missing:
-                why = f"tables missing from schema.json: {sorted(missing)}"
+            elif {"customers", "orders"} - set(tables):
+                why = ("tables missing from schema.json: "
+                       f"{sorted({'customers', 'orders'} - set(tables))}")
             else:
                 problems: list[str] = []
                 for t in ("customers", "orders"):
-                    entry = tables[t] if isinstance(tables[t], dict) else {}
-                    columns = entry.get("columns")
+                    entry = tables[t]
+                    columns = entry.get("columns") if isinstance(entry, dict) else None
                     if not isinstance(columns, dict):
                         problems.append(f"{t}: no per-column profile mapping")
                         continue
@@ -463,8 +493,8 @@ def run_checks(registry, attr_names, duck_path: Path, schema_path: Path) -> list
                         if absent:
                             problems.append(f"{t}.{name}: missing stats {absent}")
                 ok, why = not problems, "; ".join(problems[:4])
-        except (json.JSONDecodeError, AttributeError) as exc:
-            why = f"schema.json unreadable: {exc}"
+        except (json.JSONDecodeError, AttributeError, TypeError) as exc:
+            why = f"schema.json unreadable or malformed: {exc}"
     check("schema-json-artifact", ok, why)
 
     _emit(passed, failures)

@@ -1,5 +1,10 @@
 {
   "name": "Generate a Semantic-Layer Data Product from a Live Source and Questions",
+  "digest_tie": {
+    "filename": "models.py",
+    "language": "python",
+    "label": "MODELS_SHA256"
+  },
   "checks": [
     {
       "id": "profiled-source-before-authoring",
@@ -51,7 +56,7 @@
     },
     {
       "id": "final-answer-digest-matches-validated-models",
-      "check": "The acceptance test prints a `MODELS_SHA256: <hex>` line — the sha256 of the exact models.py it validated. The final answer must reproduce, verbatim, the digest line printed by the FINAL PASSING acceptance run visible in the trace (the run that printed ALL CHECKS PASSED). This ties the models.py reproduced in the final answer to the file that actually passed: a final answer that omits the digest line, states a digest different from that passing run's, or only echoes a digest from an earlier failing run, fails this check."
+      "check": "The acceptance test prints a `MODELS_SHA256: <hex>` line — the sha256 of the exact models.py it validated. The final answer must (a) reproduce, verbatim, the digest line printed by the FINAL PASSING acceptance run visible in the trace (the run that printed ALL CHECKS PASSED), and (b) that digest must match the models.py reproduced in the final answer. The runner independently re-hashes the reproduced models.py and reports a HARNESS-VERIFIED FACTS block stating whether the tie is SATISFIED or a MISMATCH — grade this check from that mechanical fact, which is authoritative over anything the agent claims. Fails if the fact reports MISMATCH/UNSATISFIED, if the digest line is absent, or if the trace shows the digest came from a failing rather than the passing run."
     },
     {
       "id": "final-answer-contains-artifacts",
