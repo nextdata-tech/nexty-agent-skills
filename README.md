@@ -253,6 +253,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
 | `nxd-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
 | `nxd-eval-harness` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
+| `nxd-generate-dp` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
 
 ## Usage
 

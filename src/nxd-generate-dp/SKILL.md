@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.1.0
+  version: 0.9.1
 ---
 
 # nxd-generate-dp skill
