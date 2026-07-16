@@ -1,0 +1,61 @@
+{
+  "name": "Generate a Runnable Data Product from Intent",
+  "checks": [
+    {
+      "id": "read-inputs-before-generating",
+      "check": "The trace shows the agent actually read BOTH inputs before authoring the closure: inferred_model.json (the handed-off semantic model) and the CSV files/headers under data/ (at minimum the headers of data/customers/customers.csv and data/orders/orders.csv). An agent that writes models.yaml or the transform without inspecting the connector export fails this check."
+    },
+    {
+      "id": "closure-complete",
+      "check": "The agent generated ALL closure artifacts at the workspace root: spec.py, models.py, transform/main.py (in a transform/ subdirectory, not flat), requirements.txt, deployment-spec.yaml, manifest.yaml, models.yaml, and csv-source-path. The csv-source-path file contains a RELATIVE path (data) — not an absolute path."
+    },
+    {
+      "id": "naming-invariant-held",
+      "check": "One lowercase name per model, byte-identical across all surfaces: semantic_model(\"customers\")/semantic_model(\"orders\") in models.py (bare physical names — not main.customers, not renamed), the models.yaml model names, the manifest.yaml model_tables entries as an IDENTITY map (customers: customers, orders: orders — key equals value), and the data/<model>/ connector subdirectories. Any cased, prettified, qualified, or diverging name on any surface fails."
+    },
+    {
+      "id": "transform-dlt-through-port",
+      "check": "transform/main.py is the dlt-through-port shape: an @data_product.on_transform() function whose FIRST parameter is named output (matching the manifest port name) and typed DuckDbOutput, plus a secrets parameter; it builds dlt filesystem(bucket_url=..., file_glob=\"*.csv\") | read_csv() readers per model, runs them through dlt.pipeline(destination=dlt.destinations.duckdb(credentials=output.path), dataset_name=output.schema) with table names taken from output.model_tables, and write_disposition \"replace\". It does NOT write via duckdb.connect, contains NO CREATE TABLE/VIEW DDL, and does NOT hard-code any staging path."
+    },
+    {
+      "id": "transform-readback-and-marker",
+      "check": "The transform reads back what dlt actually produced (pipeline.default_schema.data_table_names()) and raises if it differs from the promised output.model_tables values — the naming invariant's runtime tripwire — and touches a .transform-complete file in the run directory (the parent of output.path) only after that check passes. It also ends with the if __name__ == \"__main__\": data_product.main() entrypoint."
+    },
+    {
+      "id": "connector-via-secrets",
+      "check": "The transform obtains the CSV source root exclusively from secrets[\"csv_source\"] (the generic-secrets service payload) — no hard-coded absolute source directory — and keeps dlt state run-local (a pipelines_dir under the run directory and DLT_DATA_DIR set), never defaulting to ~/.dlt."
+    },
+    {
+      "id": "wiring-matches-s0-shape",
+      "check": "The wiring matches the proven S0 closure shape exactly: deployment-spec.yaml declares the output service with driver nxd:local/duckdb-storage:0.1.0 and the csv-source service with driver nxd:generic-secrets:1.0.0; manifest.yaml declares executor driver nxd:local/python-compute:0.1.0 with csv-source listed under executor.secrets, and a single output port named output (service output) whose config carries model_tables and schema: main; models.yaml declares every promised model with every CSV-header column as an attribute, byte-exact, with data-types consistent with inferred_model.json."
+    },
+    {
+      "id": "staging-placeholder-verbatim",
+      "check": "manifest.yaml's output port config carries path: __NXD_STAGING_DATA__ VERBATIM — the supervisor substitutes the per-run staging path at snapshot-pin time. A real filesystem path (or a missing placeholder) fails this check, as does the placeholder leaking into the transform code."
+    },
+    {
+      "id": "spec-promises-and-semantic-tools",
+      "check": "spec.py promises exactly the two inferred models (customers and orders) via data_product_output().promise(...) on a storage port, and exposes the MCP tools via a single .semantic_tools(service=...) call. It does NOT call data_product_rpc_output() (raises ValidationError alongside .semantic_tools()) and does not hand-wire build_semantic_tools/rpc_function/rpc_server. No invented extra models (the desktop closure needs no marker model — produce-verification is the .transform-complete file)."
+    },
+    {
+      "id": "blobs-placed-verbatim",
+      "check": "models.py places the PROVIDED inferred blobs faithfully as per-field __nxd_semantic__ annotations: grain on customers.customer_id; the multi-role wrapper on orders.order_id (grain + order_count count_distinct) and on orders.amount_usd (revenue sum + avg_order_value avg) preserved; the many_to_one join on orders.customer_id to customers; pii: true on email and full_name; loyalty_points left UNANNOTATED. The agent did not redesign, rename, add, or drop roles relative to inferred_model.json, and every attribute name is a byte-exact CSV header column."
+    },
+    {
+      "id": "requirements-pinned",
+      "check": "requirements.txt pins the proven versions dlt[duckdb]==1.28.2 and duckdb==1.5.4, and includes pandas (required by dlt's read_csv) and the nxd wheel dependency."
+    },
+    {
+      "id": "acceptance-check-passed",
+      "check": "The trace shows the agent ran the shipped acceptance test (check_generated_closure.py) against its FINAL closure and it printed \"ALL CHECKS PASSED\" — i.e. the generated transform was actually EXECUTED against data/ and the produced DuckDB verified. A run that never executes the acceptance test, finishes while it still fails, or edits/replaces check_generated_closure.py to make it pass, fails this check."
+    },
+    {
+      "id": "final-answer-artifacts",
+      "check": "The final answer contains: the closure file inventory, transform/main.py reproduced verbatim (consistent with what the trace shows was written and verified), the model→table mapping with an explicit confirmation of the naming invariant across the five surfaces (models.py, models.yaml, manifest model_tables, data/ subdirs, physical main.<name> tables), and the acceptance-test result."
+    },
+    {
+      "id": "no-fabricated-boot",
+      "check": "The agent does not fabricate an S0 supervisor/kernel boot or invent semantic MCP query output — no supervisor exists in the workspace. All runnability claims are grounded in the executed acceptance test (and any honest note that a full supervisor boot is the next step outside this environment is acceptable)."
+    }
+  ]
+}
