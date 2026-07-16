@@ -37,13 +37,18 @@ CREATE OR REPLACE TABLE orders (
     amount_usd  DOUBLE
 );
 
+-- amount_usd deliberately carries a DUPLICATE value (O1006/O1019, same
+-- customer + channel) and a NULL (O1025, cancelled before capture): a count
+-- or count_distinct metric declared on amount_usd instead of order_id
+-- therefore yields a DIFFERENT number than the true order count and can
+-- never pass the acceptance test by accidental equivalence.
 INSERT INTO orders VALUES
     ('O1001', 'C001', DATE '2026-01-04', 'web',     'completed',  420.00),
     ('O1002', 'C001', DATE '2026-01-19', 'web',     'completed',  185.50),
     ('O1003', 'C002', DATE '2026-01-22', 'mobile',  'completed',   62.10),
     ('O1004', 'C003', DATE '2026-01-25', 'web',     'refunded',    99.99),
     ('O1005', 'C004', DATE '2026-02-01', 'partner', 'completed',  310.00),
-    ('O1006', 'C005', DATE '2026-02-03', 'web',     'completed', 1240.00),
+    ('O1006', 'C005', DATE '2026-02-03', 'web',     'completed', 1410.00),
     ('O1007', 'C005', DATE '2026-02-08', 'partner', 'completed',  875.25),
     ('O1008', 'C006', DATE '2026-02-10', 'mobile',  'cancelled',   45.00),
     ('O1009', 'C007', DATE '2026-02-14', 'mobile',  'completed',   72.80),
@@ -56,9 +61,10 @@ INSERT INTO orders VALUES
     ('O1016', 'C001', DATE '2026-03-12', 'partner', 'completed',  505.00),
     ('O1017', 'C002', DATE '2026-03-15', 'web',     'completed',  118.90),
     ('O1018', 'C004', DATE '2026-03-19', 'mobile',  'completed',   96.30),
-    ('O1019', 'C005', DATE '2026-03-22', 'web',     'completed', 1580.00),
+    ('O1019', 'C005', DATE '2026-03-22', 'web',     'completed', 1410.00),
     ('O1020', 'C007', DATE '2026-03-26', 'mobile',  'cancelled',   58.00),
     ('O1021', 'C009', DATE '2026-03-29', 'partner', 'completed',  720.50),
     ('O1022', 'C010', DATE '2026-04-02', 'web',     'completed',  201.00),
     ('O1023', 'C005', DATE '2026-04-06', 'web',     'completed',  990.10),
-    ('O1024', 'C002', DATE '2026-04-09', 'mobile',  'completed',   74.45);
+    ('O1024', 'C002', DATE '2026-04-09', 'mobile',  'completed',   74.45),
+    ('O1025', 'C003', DATE '2026-04-12', 'mobile',  'cancelled',     NULL);

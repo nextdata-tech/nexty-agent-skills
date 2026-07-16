@@ -50,6 +50,10 @@
       "check": "The trace shows the agent ran the shipped fixtures acceptance test (check_semantic_model.py) against its FINAL models.py + source.duckdb and it printed \"ALL CHECKS PASSED\" — i.e. the four stakeholder queries were actually executed from the declared concepts and matched. A run that never executes the acceptance test, finishes while it still fails, or edits/replaces check_semantic_model.py to make it pass, fails this check."
     },
     {
+      "id": "final-answer-digest-matches-validated-models",
+      "check": "The acceptance test prints a `MODELS_SHA256: <hex>` line — the sha256 of the exact models.py it validated. The final answer must reproduce, verbatim, the digest line printed by the FINAL PASSING acceptance run visible in the trace (the run that printed ALL CHECKS PASSED). This ties the models.py reproduced in the final answer to the file that actually passed: a final answer that omits the digest line, states a digest different from that passing run's, or only echoes a digest from an earlier failing run, fails this check."
+    },
+    {
       "id": "final-answer-contains-artifacts",
       "check": "The final answer reproduces the complete final models.py verbatim (so the annotations are inspectable end-to-end, not just glimpsed in truncated tool output), and its contents are consistent with what the trace shows was written and verified."
     },

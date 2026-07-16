@@ -21,12 +21,16 @@ Notes:
   * "Total revenue" compiles to the unconditional SUM — the role grammar has
     no filtered metrics. How the refunded/cancelled ambiguity is surfaced and
     documented is graded separately, not here.
+  * The output always ends with ``MODELS_SHA256: <hex>`` — the sha256 of the
+    exact models.py this run validated. Reproduce that line verbatim in your
+    final answer so the graded models.py is provably the one that passed.
 
 Exit 0 and ``ALL CHECKS PASSED`` when everything holds; exit 1 otherwise.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import types
@@ -121,24 +125,38 @@ def _install_stubs() -> None:
     nxd.spec = spec
 
 
-def load_models(models_path: Path) -> dict[str, dict[str, list[dict]]]:
-    """Exec models.py under the stubs → {model: {column: [role, ...]}}."""
+def load_models(
+    models_path: Path,
+) -> tuple[dict[str, dict[str, list[dict]]], dict[str, dict[str, str]]]:
+    """Exec models.py under the stubs.
+
+    Returns ``(registry, attr_names)``:
+      * registry:   {model: {schema key: [role, ...]}} for annotated attributes
+      * attr_names: {model: {schema key: AttributeSpec.name}} for EVERY schema
+        attribute — the physical binding the kernel uses, validated byte-exact
+        against the mapping key (a correct key with a diverging
+        ``AttributeSpec(name=...)`` must not escape).
+    """
     _install_stubs()
     source = models_path.read_text(encoding="utf-8")
     namespace = {"__name__": "models", "__file__": str(models_path)}
     exec(compile(source, str(models_path), "exec"), namespace)  # noqa: S102
 
     registry: dict[str, dict[str, list[dict]]] = {}
+    attr_names: dict[str, dict[str, str]] = {}
     for model in _MODELS:
         columns: dict[str, list[dict]] = {}
+        names: dict[str, str] = {}
         for col, attr in model._attributes.items():
+            names[col] = attr.name
             raw = attr._metadata.get(SEMANTIC_KEY)
             if raw is None:
                 continue
             blob = json.loads(raw) if isinstance(raw, str) else raw
             columns[col] = blob["roles"] if "roles" in blob else [blob]
         registry[model.name] = columns
-    return registry
+        attr_names[model.name] = names
+    return registry, attr_names
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +182,7 @@ def _by_kind(columns: dict[str, list[dict]], kind: str) -> list[tuple[str, dict]
             for role in roles if role.get("kind") == kind]
 
 
-def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, str]]:
+def run_checks(registry, attr_names, duck_path: Path, schema_path: Path) -> list[tuple[str, str]]:
     import duckdb
 
     con = duckdb.connect(str(duck_path), read_only=True)
@@ -175,8 +193,11 @@ def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, 
         (passed.append(check_id) if ok else failures.append((check_id, why)))
 
     live: dict[str, list[str]] = {}
+    live_types: dict[str, dict[str, str]] = {}
     for table in ("customers", "orders"):
-        live[table] = [r[0] for r in con.execute(f"DESCRIBE main.{_qi(table)}").fetchall()]
+        described = con.execute(f"DESCRIBE main.{_qi(table)}").fetchall()
+        live[table] = [r[0] for r in described]
+        live_types[table] = {r[0]: r[1] for r in described}
 
     # 1. Both profiled models declared under their bare physical names.
     profiled = {name: cols for name, cols in registry.items() if name in live}
@@ -190,6 +211,17 @@ def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, 
     bad = [f"{m}.{c}" for m, cols in profiled.items() for c in cols
            if c not in live[m]]
     check("columns-exist-exact", not bad, f"not in profiled tables: {bad}")
+
+    # 2b. AttributeSpec.name binds byte-exactly too (case-sensitive): a correct
+    #     mapping key carrying a diverging AttributeSpec(name=...) — e.g. an
+    #     uppercased physical name — must not escape via the key alone.
+    bad_names = [
+        f"{m}.{c}: AttributeSpec(name={n!r}) != profiled column {c!r}"
+        for m in profiled
+        for c, n in attr_names.get(m, {}).items()
+        if n != c
+    ]
+    check("attr-name-byte-exact", not bad_names, "; ".join(bad_names[:4]))
 
     # 3. Role grammar.
     grammar_errs: list[str] = []
@@ -275,6 +307,42 @@ def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, 
         check("join-declared-on-many-side", False,
               "customers declares a join to orders — belongs on the MANY side")
 
+    # 5b. EVERY declared join blob must be structurally valid — one good
+    #     orders→customers edge does not excuse additional broken joins.
+    join_errs: list[str] = []
+    for model, cols in registry.items():
+        for col, role in _by_kind(cols, "join"):
+            loc = f"{model}.{col}"
+            target = role.get("to_model")
+            if model not in live:
+                join_errs.append(f"{loc}: join declared on non-profiled model {model!r}")
+                continue
+            if col not in live[model]:
+                join_errs.append(f"{loc}: join column not on live table {model}")
+                continue
+            if target not in live:
+                join_errs.append(f"{loc}: to_model {target!r} is not a profiled table")
+                continue
+            to_col = role.get("to_column") or col
+            if to_col not in live[target]:
+                join_errs.append(f"{loc}: to_column {to_col!r} not on {target}")
+                continue
+            t_total, t_distinct = con.execute(
+                f"SELECT COUNT(*), COUNT(DISTINCT {_qi(to_col)}) "
+                f"FROM main.{_qi(target)}"
+            ).fetchone()
+            if t_distinct != t_total:
+                join_errs.append(f"{loc}: to_column {to_col} not unique on {target}")
+                continue
+            orphans = con.execute(
+                f"SELECT COUNT(*) FROM main.{_qi(model)} WHERE {_qi(col)} IS NOT NULL "
+                f"AND {_qi(col)} NOT IN (SELECT {_qi(to_col)} FROM main.{_qi(target)} "
+                f"WHERE {_qi(to_col)} IS NOT NULL)"
+            ).fetchone()[0]
+            if orphans:
+                join_errs.append(f"{loc}: {orphans} orphan values via {col}->{to_col}")
+    check("joins-all-valid", not join_errs, "; ".join(join_errs[:4]))
+
     # 6. Answerability — execute each stakeholder question from the declared
     #    concepts and compare rows against a reference query.
     o, c = profiled["orders"], profiled["customers"]
@@ -320,6 +388,9 @@ def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, 
           "no (boolean sum metric x dimension) on customers reproduces churn by segment")
 
     # Q3: which countries place the most orders (cross-table via the join).
+    # The order count must be declared on the order identifier itself — a
+    # count/count_distinct on any other column is a different concept, even
+    # if its number happens to coincide on today's data.
     q3 = False
     if join_ok:
         fk, to_col = join_edge
@@ -329,6 +400,8 @@ def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, 
                     "JOIN main.customers ct ON o.customer_id = ct.customer_id GROUP BY 1")
         for agg_name, expr in (("count", "COUNT({m})"), ("count_distinct", "COUNT(DISTINCT {m})")):
             for m in metrics(o, "orders", agg={agg_name}):
+                if m != "order_id":
+                    continue
                 for d in dims(c, "customers"):
                     sql = (f"SELECT ct.{_qi(d)}, " + expr.format(m="o." + _qi(m))
                            + f" FROM main.orders o JOIN main.customers ct "
@@ -336,8 +409,8 @@ def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, 
                     if _rows(con, sql) == ref:
                         q3 = True
     check("q3-orders-by-country", q3,
-          "no (count metric on orders x customers dimension) via the declared join "
-          "reproduces order counts by country")
+          "no (count/count_distinct metric on orders.order_id x customers dimension) "
+          "via the declared join reproduces order counts by country")
 
     # Q4: average order value.
     ref = _rows(con, "SELECT AVG(amount_usd) FROM main.orders")
@@ -347,21 +420,49 @@ def run_checks(registry, duck_path: Path, schema_path: Path) -> list[tuple[str, 
     )
     check("q4-average-order-value", q4, "no avg metric on orders reproduces AOV")
 
-    # 7. schema.json handoff artifact exists and matches the live tables.
+    # 7. schema.json handoff artifact: the combined multi-table document
+    #    ({"tables": {...}}), matching the live tables not just by column
+    #    NAMES but structurally — per-column declared_type equal to the live
+    #    DESCRIBE type, plus the profile stats (null_pct / cardinality /
+    #    sample_values) actually present. Values are not re-derived here; the
+    #    point is that the artifact is a real profile, not a name list.
     ok, why = False, f"{schema_path.name} missing"
     if schema_path.exists():
         try:
             doc = json.loads(schema_path.read_text(encoding="utf-8"))
-            tables = doc.get("tables", {})
-            missing = {"customers", "orders"} - set(tables)
-            if missing:
+            tables = doc.get("tables") if isinstance(doc, dict) else None
+            missing = {"customers", "orders"} - set(tables or {})
+            if not isinstance(tables, dict):
+                why = 'schema.json is not the combined {"tables": {...}} document'
+            elif missing:
                 why = f"tables missing from schema.json: {sorted(missing)}"
             else:
-                drift = [
-                    t for t in ("customers", "orders")
-                    if sorted(tables[t].get("columns", {})) != sorted(live[t])
-                ]
-                ok, why = not drift, f"column drift vs live tables: {drift}"
+                problems: list[str] = []
+                for t in ("customers", "orders"):
+                    entry = tables[t] if isinstance(tables[t], dict) else {}
+                    columns = entry.get("columns")
+                    if not isinstance(columns, dict):
+                        problems.append(f"{t}: no per-column profile mapping")
+                        continue
+                    if sorted(columns) != sorted(live[t]):
+                        problems.append(f"{t}: column drift vs live table")
+                        continue
+                    for name in live[t]:
+                        col = columns[name]
+                        if not isinstance(col, dict):
+                            problems.append(f"{t}.{name}: not a profile object")
+                            continue
+                        declared = col.get("declared_type")
+                        if (str(declared or "").upper()
+                                != live_types[t][name].upper()):
+                            problems.append(
+                                f"{t}.{name}: declared_type {declared!r} != "
+                                f"live {live_types[t][name]!r}")
+                        absent = [k for k in ("null_pct", "cardinality",
+                                              "sample_values") if k not in col]
+                        if absent:
+                            problems.append(f"{t}.{name}: missing stats {absent}")
+                ok, why = not problems, "; ".join(problems[:4])
         except (json.JSONDecodeError, AttributeError) as exc:
             why = f"schema.json unreadable: {exc}"
     check("schema-json-artifact", ok, why)
@@ -392,12 +493,19 @@ def main() -> int:
         if not required.exists():
             print(f"not found: {required}", file=sys.stderr)
             return 2
+    # Digest of the exact bytes validated below — the final answer must echo
+    # the MODELS_SHA256 line so the reproduced models.py is provably the one
+    # that passed this run.
+    digest = hashlib.sha256(models_path.read_bytes()).hexdigest()
     try:
-        registry = load_models(models_path)
+        registry, attr_names = load_models(models_path)
     except Exception as exc:  # noqa: BLE001 — surface the author error verbatim
         print(f"FAIL load-models: executing {models_path} raised {exc!r}")
+        print(f"MODELS_SHA256: {digest}")
         return 1
-    return 1 if run_checks(registry, duck_path, schema_path) else 0
+    failures = run_checks(registry, attr_names, duck_path, schema_path)
+    print(f"MODELS_SHA256: {digest}")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
