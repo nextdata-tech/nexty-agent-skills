@@ -400,7 +400,13 @@ Key facts:
 - **Plain `storage(...)`** — never `.config(...).as_view(...)` (the facade is
   mutually exclusive with `.transform()`).
 
-Add to `requirements.txt`:
+---
+
+### Step 5 — Emit `requirements.txt` (REQUIRED deliverable)
+
+The data product is not complete without its dependency file. **Write a
+`requirements.txt`** (alongside `spec.py` / `models.py` / `transform.py`) listing
+exactly:
 
 ```
 nxd.data_product[spec]
@@ -410,14 +416,20 @@ pandas
 pyyaml>=6.0.2
 ```
 
-`pyyaml` powers the `.semantic_tools()` manifest fallback (`_manifest_compile`):
-in the split-pod k8s/rpc topology the MCP server pod runs no kernel, so the tools
-compile the same `__nxd_semantic__` blobs from the bundled `models.yaml` instead
-of `.nxd/semantic/*.json`. See `reference/runtime-and-dependencies.md`.
+Do not skip this file — a DP that authors the model, spec, and transform but
+never writes `requirements.txt` is unshippable (the compute pod can't install its
+runtime). All five entries are load-bearing: `nxd.data_product[spec]` +
+`nxd.drivers[rpc]` are the wheel + RPC driver the tools run on;
+`snowflake-connector-python[pandas]` + `pandas` are the storage runtime; and
+`pyyaml>=6.0.2` powers the `.semantic_tools()` manifest fallback
+(`_manifest_compile`) — in the split-pod k8s/rpc topology the MCP server pod runs
+no kernel, so the tools compile the same `__nxd_semantic__` blobs from the bundled
+`models.yaml` instead of `.nxd/semantic/*.json`. See
+`reference/runtime-and-dependencies.md`.
 
 ---
 
-### Step 5 — Glossary links and cross-DP lineage (optional)
+### Step 6 — Glossary links and cross-DP lineage (optional)
 
 `semantic_model(...).link(Predicate.GlossaryTerm, "<term-uri>")` attaches
 governed glossary terms (model-level and, with an attribute name as the first
