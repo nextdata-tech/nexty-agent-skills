@@ -832,11 +832,17 @@ def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
                 f"present but the final answer has no {label} digest line to "
                 f"tie it to.")
 
-    # Hash the marked source exactly, plus a trailing-newline variant, so a
-    # genuine reproduction that dropped/added only a final newline still ties.
-    # Deliberately narrow: only the whole-block trailing newline flexes —
-    # different source can never coincide.
-    variants = {source, source + "\n", source.rstrip("\n"), source.rstrip("\n") + "\n"}
+    # Hash the marked source exactly, plus trailing-newline and line-ending
+    # variants, so a genuine reproduction that differs only in a final newline
+    # or in CRLF-vs-LF line endings (e.g. a Windows paste) still ties.
+    # Deliberately narrow: only whole-block trailing newline and the newline
+    # STYLE flex — different source content can never coincide.
+    bases = {source, source.replace("\r\n", "\n").replace("\r", "\n")}
+    variants = {
+        v
+        for base in bases
+        for v in (base, base + "\n", base.rstrip("\n"), base.rstrip("\n") + "\n")
+    }
     computed = {hashlib.sha256(v.encode("utf-8")).hexdigest() for v in variants}
     if reported in computed:
         return (f"MECHANICAL DIGEST TIE: SATISFIED — the harness re-hashed the "
