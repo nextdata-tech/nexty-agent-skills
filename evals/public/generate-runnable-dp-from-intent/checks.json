@@ -27,7 +27,7 @@
     },
     {
       "id": "wiring-matches-s0-shape",
-      "check": "The wiring matches the proven S0 closure shape exactly: deployment-spec.yaml declares the output service with driver nxd:local/duckdb-storage:0.1.0 and the csv-source service with driver nxd:generic-secrets:1.0.0; manifest.yaml declares executor driver nxd:local/python-compute:0.1.0 with csv-source listed under executor.secrets, and a single output port named output (service output) whose config carries model_tables and schema: main; models.yaml declares every promised model with every CSV-header column as an attribute, byte-exact, with data-types consistent with inferred_model.json."
+      "check": "The wiring matches the proven S0 closure shape exactly: deployment-spec.yaml declares the output service with driver nxd:local/duckdb/storage:0.1.0 and the csv-source service with driver nxd:generic-secrets:1.0.0; manifest.yaml declares executor driver nxd:local/python/compute:0.1.0 with csv-source listed under executor.secrets, and a single output port named output (service output) whose config carries model_tables and schema: main; models.yaml declares every promised model with every CSV-header column as an attribute, byte-exact, with data-types consistent with inferred_model.json."
     },
     {
       "id": "staging-placeholder-verbatim",
