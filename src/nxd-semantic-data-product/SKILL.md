@@ -41,6 +41,20 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 
 > **This skill teaches the `.semantic_tools()` pattern.**
 
+> **Two flows use the inference in this skill — pick the right one before continuing.**
+> - **Regular platform flow (this skill):** a governed semantic DP on the Nextdata OS
+>   platform — Snowflake/warehouse output, the split-pod k8s `.semantic_tools()`
+>   topology, and a deploy step. The workflow, credential, deploy, and "consuming a
+>   deployed DP" sections below assume this flow.
+> - **Local end-to-end flow:** the AI generates **and runs** the whole data product
+>   locally on the desktop supervisor. That DP has a **different shape** — a local
+>   DuckDB output port, dlt-in-transform ingestion, and a local Python executor — and
+>   that shape is owned by the **nxd-generate-dp** skill. Use this skill only for the
+>   shape-neutral part it shares (profiling a source, inferring the model, writing the
+>   `__nxd_semantic__` annotations), then hand off to nxd-generate-dp. **Do NOT follow
+>   the Snowflake / credential / deploy / consume steps below in the local flow** —
+>   they are platform-only and produce the wrong DP shape locally.
+
 ---
 
 ## Workflow
