@@ -1,6 +1,6 @@
 ---
 name: nxd-semantic-data-product
-description: Builds a governed text-to-SQL / metrics / semantic-layer data product on Nextdata OS, exposing curated metrics and dimensions over MCP so an AI agent can answer natural-language questions without writing raw SQL. Use when the task is to create or extend a data product that lets agents query business metrics by name (e.g. order_count, revenue) sliced by dimensions (e.g. region, product_category), when you need NL-to-SQL governance over a Snowflake data product, or when exposing a semantic layer as an MCP server tool set. Also covers INFERRING the semantic model when no schema doc exists — profiling a materialized source table (local DuckDB sample) and deriving grains, metrics, dimensions, joins, and PII flags from the profile plus the user's natural-language questions. The author writes only per-field semantic annotations on the models; the one-line .semantic_tools() spec flag auto-generates the four governed MCP tools from the installed nxd.data_product wheel (nxd.experimental.semantic) — imported, not vendored.
+description: Builds a governed text-to-SQL / metrics / semantic-layer data product on Nextdata OS, exposing curated metrics and dimensions over MCP so an AI agent can answer natural-language questions without writing raw SQL. Use when the task is to create or extend a data product that lets agents query business metrics by name (e.g. order_count, revenue) sliced by dimensions (e.g. region, product_category), when you need NL-to-SQL governance over a Snowflake data product, or when exposing a semantic layer as an MCP server tool set. Also covers INFERRING the semantic model when no schema doc exists — profiling a materialized source table (local DuckDB sample) and deriving grains, metrics, dimensions, joins, and PII flags from the profile plus the user's natural-language questions. The author writes only per-field semantic annotations on the models; the one-line .semantic_tools() spec flag auto-generates the four governed MCP tools from the installed nxd.data_product wheel.
 allowed-tools:
   - Bash
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.11.0
+  version: 0.9.1
 ---
 
 # nxd-semantic-data-product skill
@@ -26,11 +26,9 @@ DP boundary.
 
 **You author only the per-field semantic annotations on the models.** A single
 `.semantic_tools(service=...)` flag on the spec auto-generates the four governed
-MCP tools at pod boot. The kernel compiles the annotations into typed payloads;
-the compiler, dialect, and tool factory ship in the `nxd.data_product` wheel as
-`nxd.experimental.semantic` — imported, not vendored.
-
-The four auto-generated tools:
+MCP tools at pod boot. The kernel compiles the annotations into typed payloads; the
+compiler, dialect, and tool factory ship in the `nxd.data_product` wheel as
+`nxd.experimental.semantic` — imported, not vendored. The four tools:
 
 | Tool | Purpose |
 |------|---------|
@@ -41,10 +39,10 @@ The four auto-generated tools:
 
 See `reference/overview.md` for the design and how annotations flow to the tools.
 
-> **This skill teaches the `.semantic_tools()` pattern.** It
-> replaces the older hand-wired `registry.py` + `tools.py` + `provision.py` +
-> `data_product_rpc_output()` 4-tool loop. If you find a DP on the old pattern,
-> migrate it (see "Migrating an old-pattern DP" below).
+> **This skill teaches the `.semantic_tools()` pattern.** It replaces the older
+> hand-wired `registry.py` + `tools.py` + `provision.py` +
+> `data_product_rpc_output()` loop. If you find a DP on the old pattern, migrate it
+> (see "Migrating an old-pattern DP" below).
 
 ---
 
@@ -54,45 +52,43 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 
 Interview the user or read the table DDL to establish, per source table:
 
-1. **Model** — the physical table. A unique name + the **grain** column (the
+1. **Model** — the physical table: a unique name + the **grain** column (the
    entity key, e.g. `order_id`) + an optional description.
 2. **Dimensions** — columns an agent can group or filter by. Each: a concept
-   `name`, the physical `column` it lives on, a logical `type`
-   (`string` / `date` / `number`), a `description`, and `pii: true` if governed.
+   `name`, the physical `column`, a logical `type` (`string` / `date` / `number`),
+   a `description`, and `pii: true` if governed.
 3. **Metrics** — named aggregated measures. Each: a concept `name`, the physical
-   `column` it aggregates, the `agg` function
-   (`count`, `count_distinct`, `sum`, `avg`, `min`, `max`), a `description`, and
-   `boolean: true` if the column is a flag that counts truthy rows.
-4. **Joins** — documented N:1 relationships. Each: declared on the MANY-side
-   model's join key, naming `to_model` (the ONE side), `to_column`, and
-   `cardinality: many_to_one`. Cross-model dimension reach is **auto-derived**
-   from N:1 joins by the compiler.
+   `column` it aggregates, the `agg` function (`count`, `count_distinct`, `sum`,
+   `avg`, `min`, `max`), a `description`, and `boolean: true` for a flag that counts
+   truthy rows.
+4. **Joins** — documented N:1 relationships, declared on the MANY-side model's join
+   key: `to_model` (the ONE side), `to_column`, `cardinality: many_to_one`.
+   Cross-model dimension reach is **auto-derived** from N:1 joins by the compiler.
 
 ### Step 1-alt — Infer from a profiled source + the user's questions
 
-When there is **no schema doc** — only a materialized sample of the source and
-the user's natural-language questions — derive the Step-1 vocabulary yourself.
-Steps 2–4 (models.py / transform.py / spec.py) are then **unchanged**.
+When there is **no schema doc** — only a materialized sample of the source and the
+user's natural-language questions — derive the Step-1 vocabulary yourself. Steps
+2–4 (models.py / transform.py / spec.py) are then **unchanged**.
 
-**1. Profile the materialized tables → `schema.json`.** A sample load (e.g.
-dlt) lands each source table as `main.<name>` in a local DuckDB file.
-Introspect ALL of them in one pass with the nxd-mesh-analyzer skill's profiler
-(DuckDB mode — needs the `duckdb` package, e.g. `uv run --with duckdb`) and
-**save the combined document as `schema.json`**:
+**1. Profile the materialized tables → `schema.json`.** A sample load (e.g. dlt)
+lands each source table as `main.<name>` in a local DuckDB file. Introspect ALL of
+them in one pass with the nxd-mesh-analyzer skill's profiler (DuckDB mode — needs
+the `duckdb` package, e.g. `uv run --with duckdb`) and **save the combined document
+as `schema.json`**:
 
 ```bash
 python <nxd-mesh-analyzer>/scripts/profile_tabular.py sample.duckdb <table1> <table2> ... > schema.json
 ```
 
 With two or more tables the profiler emits ONE combined document —
-`{"path": ..., "format": "duckdb", "tables": {<table>: <profile>, ...}}` —
-where each table's profile carries, per column: `declared_type`, `nullable`,
-`null_pct`, `distinct_count`, `cardinality` (distinct/total, exact full-table),
-`sample_values`, plus freshness hints. `schema.json` is the **handoff artifact**
-between profiling and inference: keep it in the workspace, do the inference by
-READING it (re-query the DuckDB file only for targeted follow-ups, e.g. the
-join-containment probe below), and leave it in place as the evidence for how
-the model was derived. **Ground the model in this profile — annotate only
+`{"path": ..., "format": "duckdb", "tables": {<table>: <profile>, ...}}` — where
+each table's profile carries, per column: `declared_type`, `nullable`, `null_pct`,
+`distinct_count`, `cardinality` (distinct/total, exact full-table), `sample_values`,
+plus freshness hints. `schema.json` is the **handoff artifact**: keep it in the
+workspace, infer by READING it (re-query the DuckDB file only for targeted
+follow-ups like the join-containment probe below), and leave it as the evidence
+for how the model was derived. **Ground the model in this profile — annotate only
 columns that exist in it; never invent or rename columns.**
 
 **2. Classify each column from its profile signals:**
@@ -107,14 +103,13 @@ columns that exist in it; never invent or rename columns.**
 | `DATE`/`TIMESTAMP` (freshness hints) | **dimension** (`type: "date"`) |
 | samples look like emails, names, phones, addresses | dimension with **`"pii": true`** — flag from the DATA, even if no question asks for it (NULLs in some rows don't unmark it) |
 
-**Grain selection.** Trust only the exact full-table `cardinality` (DuckDB
-mode computes it over the whole table; a sample-only profile can fake
-uniqueness). If SEVERAL columns are fully unique, prefer the one whose name
-matches the table's entity (`orders` → `order_id`) and/or the one other
-tables' FK candidates point at. If NO single column is unique, use a
-**composite grain** — a `{"kind": "grain"}` blob on each component column
-(the grammar supports it); confirm the combination is unique with a targeted
-`COUNT(*) vs COUNT(DISTINCT (a, b))` query.
+**Grain selection.** Trust only the exact full-table `cardinality` (DuckDB mode
+computes it over the whole table; a sample-only profile can fake uniqueness). If
+SEVERAL columns are fully unique, prefer the one whose name matches the table's
+entity (`orders` → `order_id`) and/or the one other tables' FK candidates point
+at. If NO single column is unique, use a **composite grain** — a `{"kind":
+"grain"}` blob on each component column; confirm the combination is unique with a
+targeted `COUNT(*) vs COUNT(DISTINCT (a, b))` query.
 
 **Join validation.** Never declare a join from name similarity or a handful of
 overlapping `sample_values` alone. Before writing the blob, verify BOTH:
@@ -122,20 +117,19 @@ overlapping `sample_values` alone. Before writing the blob, verify BOTH:
 - **Containment** — every non-null FK value resolves on the ONE side:
   `SELECT COUNT(*) FROM <many> WHERE <fk> IS NOT NULL AND <fk> NOT IN
   (SELECT <to_column> FROM <one>)` must be 0 (or explain the orphans).
-- **Uniqueness of the ONE side** — `to_column` must be the target model's
-  grain (full-table cardinality 1.0), or `many_to_one` is a lie.
+- **Uniqueness of the ONE side** — `to_column` must be the target model's grain
+  (full-table cardinality 1.0), or `many_to_one` is a lie.
 
-Declare the blob on the MANY-side FK with explicit `to_model` and `to_column`.
-If the samples simply don't overlap, that is evidence AGAINST the join — probe
-or ask; don't assume.
+Declare the blob on the MANY-side FK with explicit `to_model` and `to_column`. If
+the samples don't overlap, that is evidence AGAINST the join — probe or ask.
 
-**Additive vs non-additive numerics.** A numeric column is a `sum` metric only
-if it is **additive across rows** (amounts, quantities, per-row durations).
-Balances, scores, points, percentages, rates, and point-in-time snapshots
-(e.g. `loyalty_points`, `account_balance`, `discount_pct`) are NOT sum
-metrics — summing them answers nothing. Declare an aggregation over such a
-column only when a question justifies it (`avg`/`min`/`max` can be legitimate);
-otherwise leave it unannotated or expose it as a `number` dimension.
+**Additive vs non-additive numerics.** A numeric column is a `sum` metric only if
+it is **additive across rows** (amounts, quantities, per-row durations). Balances,
+scores, points, percentages, rates, and point-in-time snapshots (e.g.
+`loyalty_points`, `account_balance`, `discount_pct`) are NOT sum metrics — summing
+them answers nothing. Aggregate such a column only when a question justifies it
+(`avg`/`min`/`max` can be legitimate); otherwise leave it unannotated or expose it
+as a `number` dimension.
 
 **DuckDB declared type → `AttributeSpec` data type** (for the `models.py`
 attributes):
@@ -161,62 +155,59 @@ column *could* be; the questions say what it *must* be:
   numeric SUM of a flag.
 - "average ..." → `avg`. "how many distinct/top N by count" → `count` /
   `count_distinct` on the grain/key. A column serving two aggs gets a
-  `{"roles": [...]}` wrapper.
-- "by/per <attribute>" → that column is a dimension.
-- A question slicing one table's metric by another table's attribute
-  (e.g. orders by customer country) → declare the validated N:1 **join** on the
-  MANY-side FK; the compiler auto-derives the cross-model dimension reach.
-- "per order / per customer ..." confirms the **grain** of each model (one row
-  per entity — cross-check against exact full-table cardinality 1.0).
+  `{"roles": [...]}` wrapper. "by/per <attribute>" → that column is a dimension.
+- A question slicing one table's metric by another table's attribute (e.g. orders
+  by customer country) → declare the validated N:1 **join** on the MANY-side FK;
+  the compiler auto-derives the cross-model dimension reach.
+- "per order / per customer ..." confirms the **grain** of each model (one row per
+  entity — cross-check against exact full-table cardinality 1.0).
 
 Declare what the questions need plus the obviously useful dimensions; don't
-exhaustively annotate every column, and don't declare metrics no question
-motivates (that is how non-additive numerics end up as nonsense `sum`s).
+exhaustively annotate every column, and don't declare metrics no question motivates
+(that is how non-additive numerics end up as nonsense `sum`s).
 
 **3b. Surface ambiguity — don't silently resolve it.** The role grammar has
 **no filtered metrics, no derived ratios, and no default filters**: a metric is
 exactly `<agg>(<column>)`. When a question's business definition is ambiguous
 against the profiled data, do NOT hard-code one interpretation silently:
 
-- *Status-qualified totals* — "total revenue" over a table whose `status`
-  samples include `refunded` / `cancelled`: the metric can only be the
-  unconditional `sum`. Say so in the metric `description` (e.g. "Gross order
-  amount across ALL statuses, including refunded and cancelled") AND declare
-  the status column as a dimension so consumers filter at query time.
-- *Derived ratios* ("revenue per customer", "churn rate") — not expressible as
-  one metric; expose the component metrics and state that the ratio is
-  computed by the caller from two queries.
-- If you are in an interactive session, ask (AskUserQuestion) instead of
-  guessing; in a non-interactive run, record the ambiguity and your chosen
-  interpretation in the metric descriptions and in your final report.
+- *Status-qualified totals* — "total revenue" over a table whose `status` samples
+  include `refunded` / `cancelled`: the metric can only be the unconditional
+  `sum`. Say so in the metric `description` (e.g. "Gross order amount across ALL
+  statuses, including refunded and cancelled") AND declare the status column as a
+  dimension so consumers filter at query time.
+- *Derived ratios* ("revenue per customer", "churn rate") — not expressible as one
+  metric; expose the component metrics and state that the ratio is computed by the
+  caller from two queries.
+- In an interactive session, ask (AskUserQuestion) instead of guessing; in a
+  non-interactive run, record the ambiguity and your chosen interpretation in the
+  metric descriptions and your final report.
 
 **4. Naming invariant.** Each `semantic_model(name)` argument is the **bare
-unquoted lowercase physical table name** — `semantic_model("customers")` for
-the table profiled as `main.customers` (never `"main.customers"`, never a
-prettified rename). Attribute names must match the profiled column names
-**byte-exactly** (post-dlt snake_case preserved — `customer_id`, not
-`CUSTOMER_ID`). The transform seeds those same tables (unquoted), so compiler,
-seed, and profile all resolve to one object.
+unquoted lowercase physical table name** — `semantic_model("customers")` for the
+table profiled as `main.customers` (never `"main.customers"`, never a prettified
+rename). Attribute names must match the profiled column names **byte-exactly**
+(post-dlt snake_case preserved — `customer_id`, not `CUSTOMER_ID`). The transform
+seeds those same tables (unquoted), so compiler, seed, and profile resolve to one
+object.
 
 ### Step 2 — Author `models.py` with per-field `__nxd_semantic__` annotations
 
 The semantic vocabulary is declared as a reserved `__nxd_semantic__` JSON blob on
 each model attribute. The kernel reads those blobs from every **promised** model's
-manifest, compiles them into a typed `SemanticRegistry`, and delivers the result
-to the pod at boot as `<root>/.nxd/semantic/<model>.json`. The runtime rebuilds
-the four tools from those payloads.
+manifest, compiles them into a typed `SemanticRegistry`, and delivers it to the pod
+at boot as `<root>/.nxd/semantic/<model>.json`; the runtime rebuilds the four tools
+from those payloads.
 
-> **STOPGAP — the public author API is not yet available.** `AttributeSpec` has no public
+> **STOPGAP — no public author API yet.** `AttributeSpec` has no public
 > `.semantic_annotation()` setter, so the blob is injected by writing the
-> **private** `_metadata` dict directly via an `_annotate()` helper. This is the
-> only mechanism available until a public `AttributeSpec.semantic_annotation()` API
-> ships. Keep the injection
-> isolated to `models.py` and clearly marked; replace `_annotate()` with the
-> public setter once it ships. Verify its status before publishing — if a
-> public `AttributeSpec.semantic_annotation(blob)` exists in your wheel, use it.
+> **private** `_metadata` dict directly via an `_annotate()` helper — the only
+> mechanism until that public API ships. Keep the injection isolated to
+> `models.py` and clearly marked. Before publishing, verify the wheel: if a public
+> `AttributeSpec.semantic_annotation(blob)` exists, use it instead of `_annotate()`.
 
-Keep every module **flat at the DP root** — `models.py`, `transform.py`,
-`spec.py` are siblings. No `transform/` subdir package.
+Keep every module **flat at the DP root** — `models.py`, `transform.py`, `spec.py`
+are siblings. No `transform/` subdir package.
 
 ```python
 # models.py
@@ -269,17 +260,14 @@ orders = (
     )
 )
 
-# COUNT on the grain column — patch a full roles list post-hoc (the bare
-# {"kind": ...} shorthand has no inline multi-role form; the roles list REPLACES
-# the bare-grain blob).
-_annotate(
-    orders._attributes["ORDER_ID"],
-    {"roles": [
-        {"kind": "grain"},
-        {"kind": "metric", "name": "order_count", "agg": "count_distinct",
-         "description": "Distinct orders placed."},
-    ]},
-)
+# To put COUNT on the grain column, patch a full {"roles": [...]} list post-hoc
+# (the bare {"kind": "grain"} shorthand has no inline multi-role form; the roles
+# list REPLACES the bare-grain blob):
+_annotate(orders._attributes["ORDER_ID"], {"roles": [
+    {"kind": "grain"},
+    {"kind": "metric", "name": "order_count", "agg": "count_distinct",
+     "description": "Distinct orders placed."},
+]})
 ```
 
 **Role grammar** (one blob per column):
@@ -292,8 +280,8 @@ _annotate(
 | join | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
 | multi-role | `{"roles": [ {...}, {...} ]}` |
 
-See `reference/registry-authoring.md` for the full role vocabulary, the
-auto-derivation rules, and a worked generic example.
+See `reference/registry-authoring.md` for the full role vocabulary,
+auto-derivation rules, and a worked example.
 
 ### Step 3 — Author `transform.py` to seed the base tables (no DDL view)
 
@@ -317,7 +305,6 @@ def transform(snowflake: Snowflake) -> None:
         return
     fqn = (f"{snowflake.database}.{snowflake.schema}."
            if snowflake.database else f"{snowflake.schema}.")
-
     rows = pd.DataFrame([
         {"ORDER_ID": 101, "REGION": "EMEA", "PRODUCT_ID": 1, "REVENUE_USD": 100.0},
         {"ORDER_ID": 102, "REGION": "AMER", "PRODUCT_ID": 2, "REVENUE_USD": 250.0},
@@ -328,39 +315,34 @@ def transform(snowflake: Snowflake) -> None:
         ocsp_fail_open=True, **snowflake.connector_params(),
     )
     try:
-        cur = conn.cursor()
-        try:
-            # Create UNQUOTED so Snowflake folds to upper-case — the compiler
-            # references the base table unquoted too, so both resolve to the same
-            # upper-cased object.
-            cur.execute(
-                f"CREATE OR REPLACE TABLE {fqn}orders "
-                "(ORDER_ID NUMBER, REGION VARCHAR, PRODUCT_ID NUMBER, REVENUE_USD FLOAT)"
-            )
-            write_pandas(conn, rows, "ORDERS",
-                         database=snowflake.database, schema=snowflake.schema)
-            # Marker row (the promised marker model).
-            managed = snowflake.full_table_name("semantic_smoke_marker")
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
-            write_pandas(conn, pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": "n/a"}]),
-                         managed.split(".")[-1].strip('"'),
-                         database=snowflake.database, schema=snowflake.schema)
-        finally:
-            cur.close()
+        # Create UNQUOTED so Snowflake folds to upper-case — the compiler
+        # references the base table unquoted too, so both resolve to one object.
+        conn.cursor().execute(
+            f"CREATE OR REPLACE TABLE {fqn}orders "
+            "(ORDER_ID NUMBER, REGION VARCHAR, PRODUCT_ID NUMBER, REVENUE_USD FLOAT)"
+        )
+        write_pandas(conn, rows, "ORDERS",
+                     database=snowflake.database, schema=snowflake.schema)
+        # Marker row (the promised marker model).
+        managed = snowflake.full_table_name("semantic_smoke_marker")
+        conn.cursor().execute(f"TRUNCATE TABLE IF EXISTS {managed}")
+        write_pandas(conn, pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": "n/a"}]),
+                     managed.split(".")[-1].strip('"'),
+                     database=snowflake.database, schema=snowflake.schema)
     finally:
         conn.close()
 ```
 
 The transform's param name (`snowflake`) MUST match the storage output port name;
-it is injected as a typed `Snowflake` handle. **Never type it `Any`** — an
-untyped param gets a raw `Context` with no driver methods.
+it is injected as a typed `Snowflake` handle. **Never type it `Any`** — an untyped
+param gets a raw `Context` with no driver methods.
 
 ### Step 4 — Wire `spec.py`: transform + storage port + `.semantic_tools()`
 
 `.semantic_tools(service=...)` auto-wires the four MCP tools + an mcp-api port.
 **Promise every annotated model** on the storage port so its attributes reach the
-kernel-generated manifest (and thus the `.nxd/semantic/<model>.json` payloads).
-Add the marker model so produce-verification passes.
+kernel-generated manifest (and thus the `.nxd/semantic/<model>.json` payloads); add
+the marker model so produce-verification passes.
 
 ```python
 # spec.py
@@ -385,9 +367,8 @@ spec = (
         code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/<compute>")
     )
     .output(_storage)
-    # ONE line — auto-wires list_models, semantic_model, describe_model,
-    # run_semantic_query + the mcp-api port (default port_name="mcp-api",
-    # mcp_path="/mcp"). Replaces the old build_semantic_tools + 4x rpc_function loop.
+    # ONE line — auto-wires the four tools + the mcp-api port (defaults
+    # port_name="mcp-api", mcp_path="/mcp"). Replaces the old hand-wired RPC loop.
     .semantic_tools(service="<mcp-service-name>")
 )
 ```
@@ -397,16 +378,14 @@ spec = (
 
 Key facts:
 - **Do NOT also call `data_product_rpc_output()`.** `.semantic_tools()` IS the RPC
-  output; calling it when an RPC output already exists (or twice) raises
+  output; adding another (or calling it twice) raises
   `ValidationError("Data Product has RPC Output already configured")`.
-- **Promise every annotated model**, or its attributes never reach the manifest
-  and its `.nxd/semantic/<model>.json` payload is never written.
-- **A `.transform(...)` is required** — it seeds the base tables the tools query
-  AND bundles the sibling `models.py` (the `**/*.py` glob runs on the
-  transform/compute path).
-- **No `@on_provision`, no view DDL.** `run_semantic_query` compiles against the
-  base tables directly. (The older provision-hook + `<MODEL>_SEMANTIC` view split
-  is obsolete under `.semantic_tools()`.)
+- **Promise every annotated model**, or its attributes never reach the manifest and
+  its `.nxd/semantic/<model>.json` payload is never written.
+- **A `.transform(...)` is required** — it seeds the base tables the tools query AND
+  bundles the sibling `models.py` (the `**/*.py` glob runs on the compute path).
+- **No `@on_provision`, no view DDL** — `run_semantic_query` compiles against the
+  base tables directly.
 - **Plain `storage(...)`** — never `.config(...).as_view(...)` (the facade is
   mutually exclusive with `.transform()`).
 
@@ -420,42 +399,21 @@ pandas
 pyyaml>=6.0.2
 ```
 
-`pyyaml` is needed by the `.semantic_tools()` manifest fallback
-(`_manifest_compile`) — in the split-pod k8s/rpc topology the MCP server pod runs
-no kernel, so the tools compile the same `__nxd_semantic__` blobs from the bundled
-`models.yaml` instead of from `.nxd/semantic/*.json`. See
-`reference/runtime-and-dependencies.md`.
+`pyyaml` powers the `.semantic_tools()` manifest fallback (`_manifest_compile`):
+in the split-pod k8s/rpc topology the MCP server pod runs no kernel, so the tools
+compile the same `__nxd_semantic__` blobs from the bundled `models.yaml` instead
+of `.nxd/semantic/*.json`. See `reference/runtime-and-dependencies.md`.
 
 ---
 
 ### Step 5 — Glossary links and cross-DP lineage (optional)
 
-`semantic_model(...).link(...)` attaches governed glossary terms (model-level and
-per-attribute); `attribute(...).referencing(...)` declares a cross-DP foreign key
-the discover UI renders as a SEMANTIC RELATIONSHIP.
-
-```python
-# models.py — glossary links + a cross-DP FK on a downstream fact.
-from nxd.spec import Predicate, attribute
-
-orders = (
-    semantic_model("orders")
-    .link(Predicate.GlossaryTerm, "/data-product/demo/glossary-dp#/terms/order")
-    .link("REGION", Predicate.GlossaryTerm,
-          "/data-product/demo/glossary-dp#/terms/region")
-    .schema({
-        # SUBJECT_ID is a cross-DP FK to an upstream spine.
-        "SUBJECT_ID": _annotate(
-            attribute(int64(), "SUBJECT_ID").referencing(
-                data_product="pharma-subjects-demo", model="subjects",
-                attribute=["SUBJECT_ID"]),
-            {"kind": "dimension", "name": "subject_id",
-             "description": "Subject FK.", "type": "number"},
-        ),
-        ...
-    })
-)
-```
+`semantic_model(...).link(Predicate.GlossaryTerm, "<term-uri>")` attaches
+governed glossary terms (model-level and, with an attribute name as the first
+arg, per-attribute). `attribute(int64(), "SUBJECT_ID").referencing(data_product=...,
+model=..., attribute=[...])` on a schema attribute (still wrapped in `_annotate`
+with its dimension blob) declares a cross-DP foreign key the discover UI renders
+as a SEMANTIC RELATIONSHIP.
 
 Declare the runtime dependency with `.input(...).source(...)` in `spec.py`
 (before `.transform()`); the `.referencing(...)` makes the FK render as a semantic
@@ -473,16 +431,16 @@ If a DP still uses `registry.py` + `tools.py` + `provision.py` +
 1. **Move the vocabulary into `models.py`.** For each registry `.model()` /
    `.dimension()` / `.metric()` / `.join()`, write the equivalent
    `__nxd_semantic__` blob on the matching attribute (Step 2). Promise every model.
-2. **Delete `registry.py` and `tools.py`.** The four tools are auto-generated.
+2. **Delete `registry.py` and `tools.py`** — the four tools are auto-generated.
 3. **Delete `provision.py` and the view DDL.** Fold any base-table creation into
-   the transform as `CREATE OR REPLACE TABLE` (Step 3). Drop the `.provision(...)`
+   the transform as `CREATE OR REPLACE TABLE` (Step 3); drop the `.provision(...)`
    call and the `<MODEL>_SEMANTIC` view entirely.
 4. **Replace the spec RPC block** (`build_semantic_tools` + the `rpc_function`
-   loop + `rpc_server(...)` port) with one `.semantic_tools(service=...)` call.
-5. **Add `pyyaml>=6.0.2`** to `requirements.txt`.
-6. Keep `.startup_timeout(...)` off — it is not in the canonical pattern; add it
-   back on `.transform(...)` only if cold-boot contention demands it (never on a
-   provision call — there is no provision call anymore).
+   loop + `rpc_server(...)` port) with one `.semantic_tools(service=...)` call, and
+   **add `pyyaml>=6.0.2`** to `requirements.txt`.
+5. Keep `.startup_timeout(...)` off — not in the canonical pattern; add it back on
+   `.transform(...)` only if cold-boot contention demands it (never on a provision
+   call — there is no provision call anymore).
 
 The 8 mesh DPs under `evals/query-loop/mesh/` are migrated reference examples.
 
@@ -513,12 +471,9 @@ The 8 mesh DPs under `evals/query-loop/mesh/` are migrated reference examples.
 - **All modules flat at the DP root**: never a `transform/` subdir; import flat.
 - **`pyyaml>=6.0.2` in requirements** for the split-pod manifest fallback.
 - **Matched wheel version set**: `core` + `drivers` + `data_product` all the same
-  version (and recent enough to carry `.semantic_tools()` / the kernel's semantic emitter).
-  A stale `core` fails at runtime with
-  `Error deserializing context: missing field secret_password`. See
-  `reference/runtime-and-dependencies.md`.
-
----
+  version, recent enough to carry `.semantic_tools()` / the kernel's semantic
+  emitter. A stale `core` fails at runtime with `Error deserializing context:
+  missing field secret_password`. See `reference/runtime-and-dependencies.md`.
 
 ## Reference docs
 
@@ -531,13 +486,11 @@ The 8 mesh DPs under `evals/query-loop/mesh/` are migrated reference examples.
 | `reference/scripts/templates/semantic_dp.py.tmpl` | Complete models.py + transform.py + spec.py example |
 | `reference/scripts/scaffold_semantic_dp.py` | Scaffold automation (writes models/transform stubs + requirements, prints spec wiring) |
 
----
-
 ## Consuming the deployed DP
 
-This skill is the **producer** side — it builds the semantic-layer DP and its
-four MCP tools. To **query** a deployed one (natural-language question → concept
+This skill is the **producer** side — it builds the semantic-layer DP and its four
+MCP tools. To **query** a deployed one (natural-language question → concept
 selection → governed SQL), use the **nxd-data-product-query** skill: its
-"Semantic-layer MCP ports" section drives the
-`list_models` / `describe_model` / `run_semantic_query` discover→select→run
-protocol and the grain-safety (chasm-trap) recovery against a live mesh.
+"Semantic-layer MCP ports" section drives the `list_models` / `describe_model` /
+`run_semantic_query` discover→select→run protocol and the grain-safety
+(chasm-trap) recovery against a live mesh.
