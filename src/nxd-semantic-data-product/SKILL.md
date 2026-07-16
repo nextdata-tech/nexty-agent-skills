@@ -59,6 +59,12 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 
 ## Workflow
 
+> **The data product is FOUR files, not one:** `models.py` + `spec.py` +
+> `transform.py` + `requirements.txt`. A validated `models.py` is a milestone, NOT
+> the finish line — passing the acceptance test still leaves an unshippable DP if
+> the other three are missing. Carry the work through every step to all four files
+> (Step 7 checks completeness) before reporting done.
+
 ### Step 1 — Derive the semantic vocabulary from the schema
 
 Interview the user or read the table DDL to establish, per source table:
@@ -416,16 +422,11 @@ pandas
 pyyaml>=6.0.2
 ```
 
-Do not skip this file — a DP that authors the model, spec, and transform but
-never writes `requirements.txt` is unshippable (the compute pod can't install its
-runtime). All five entries are load-bearing: `nxd.data_product[spec]` +
-`nxd.drivers[rpc]` are the wheel + RPC driver the tools run on;
-`snowflake-connector-python[pandas]` + `pandas` are the storage runtime; and
-`pyyaml>=6.0.2` powers the `.semantic_tools()` manifest fallback
-(`_manifest_compile`) — in the split-pod k8s/rpc topology the MCP server pod runs
-no kernel, so the tools compile the same `__nxd_semantic__` blobs from the bundled
-`models.yaml` instead of `.nxd/semantic/*.json`. See
-`reference/runtime-and-dependencies.md`.
+Do not skip this file — without it the compute pod can't install its runtime and
+the DP is unshippable. All five are load-bearing: the wheel + RPC driver the tools
+run on, the storage runtime, and `pyyaml` for the `.semantic_tools()` split-pod
+manifest fallback (`_manifest_compile` compiles the blobs from `models.yaml` when
+the MCP pod runs no kernel). See `reference/runtime-and-dependencies.md`.
 
 ---
 
@@ -443,6 +444,15 @@ Declare the runtime dependency with `.input(...).source(...)` in `spec.py`
 relationship. Cross-DP joins resolve at QUERY time via the live mesh — the
 downstream transform seeds only its own base tables. See
 `reference/runtime-and-dependencies.md` for the full lineage form.
+
+---
+
+### Step 7 — Verify the DP is complete before reporting done
+
+The acceptance test validates `models.py` only — passing it does NOT mean the DP
+is finished. Before reporting done, confirm all four files exist in the workspace:
+`models.py` (validated), `spec.py` (Step 4), `transform.py` (Step 3),
+`requirements.txt` (Step 5). If any is missing, the DP is incomplete — author it.
 
 ---
 
@@ -468,11 +478,9 @@ downstream transform seeds only its own base tables. See
 - **Read-only, 200-row cap**: the query path is aggregated and capped. No raw-SQL
   passthrough.
 - **All modules flat at the DP root**: never a `transform/` subdir; import flat.
-- **`pyyaml>=6.0.2` in requirements** for the split-pod manifest fallback.
 - **Matched wheel version set**: `core` + `drivers` + `data_product` all the same
-  version, recent enough to carry `.semantic_tools()` / the kernel's semantic
-  emitter. A stale `core` fails at runtime with `Error deserializing context:
-  missing field secret_password`. See `reference/runtime-and-dependencies.md`.
+  version, recent enough to carry `.semantic_tools()`. A stale `core` fails at
+  runtime (`missing field secret_password`). See `reference/runtime-and-dependencies.md`.
 
 ## Reference docs
 
@@ -487,9 +495,5 @@ downstream transform seeds only its own base tables. See
 
 ## Consuming the deployed DP
 
-This skill is the **producer** side — it builds the semantic-layer DP and its four
-MCP tools. To **query** a deployed one (natural-language question → concept
-selection → governed SQL), use the **nxd-data-product-query** skill: its
-"Semantic-layer MCP ports" section drives the `list_models` / `describe_model` /
-`run_semantic_query` discover→select→run protocol and the grain-safety
-(chasm-trap) recovery against a live mesh.
+This skill is the **producer** side. To **query** a deployed DP (NL question →
+concept selection → governed SQL), use the **nxd-data-product-query** skill.
