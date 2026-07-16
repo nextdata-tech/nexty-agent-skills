@@ -49,12 +49,11 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 > - **Local end-to-end flow:** the AI generates **and runs** the whole data product
 >   locally on a desktop supervisor. That DP has a **different shape** — a local
 >   DuckDB output port, dlt-in-transform ingestion, and a local Python executor —
->   assembled by a companion code-generation skill that ships separately. Use this
->   skill only for the shape-neutral part it shares: profiling a source, inferring the
->   model, and writing the `__nxd_semantic__` annotations. **Do NOT follow the
->   Snowflake / credential / deploy / consume steps below in the local flow** — they
->   are platform-only and produce the wrong DP shape locally; the local closure
->   (spec, transform, ports) is authored by that separate code-generation skill.
+>   owned by the **nxd-generate-dp** skill. Use this skill only for the shape-neutral
+>   part it shares: profiling a source, inferring the model, and writing the
+>   `__nxd_semantic__` annotations, then hand off to nxd-generate-dp for the closure.
+>   **Do NOT follow the Snowflake / credential / deploy / consume steps below in the
+>   local flow** — they are platform-only and produce the wrong DP shape locally.
 
 ---
 
