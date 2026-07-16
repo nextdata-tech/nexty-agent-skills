@@ -649,8 +649,11 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 Grade every check as pass or fail with a one-sentence justification grounded in
 the trace and final answer. A "did the agent inspect X" check passes only if the
 trace shows the corresponding tool call/result. Give an overall pass only if ALL
-checks pass. Where a HARNESS-VERIFIED FACTS block is present, it is authoritative:
-grade the tied check from that fact, not from the agent's self-report.
+checks pass. Where a HARNESS-VERIFIED FACTS block is present, it is authoritative
+for exactly what it states and no more: it settles whether the final-answer
+source matches the reported digest (use it, not the agent's self-report, for
+that), but it does NOT establish that the digest came from a passing acceptance
+run — grade that provenance from the trace.
 
 Respond with ONE JSON object and nothing else, in this exact shape:
 {{"checks": [{{"id": "<id>", "pass": true|false, "why": "<one sentence>"}}],
@@ -719,37 +722,72 @@ def _extract_json(text: str) -> dict | None:
 # and states the match/mismatch as fact for the judge — the judge no longer
 # takes the agent's word for it.
 #
+# The reproduced source is located by an UNAMBIGUOUS SENTINEL, not by fence
+# heuristics: the agent must wrap its one authoritative models.py between
+# ``===BEGIN FINAL models.py===`` / ``===END FINAL models.py===`` marker lines.
+# Exactly one pair is required — zero pairs => UNSATISFIED, two-or-more pairs
+# => fail closed (ambiguous, never guess which is authoritative). This kills
+# the decoy-block bypass (a second "reference" block can't be selected over
+# the marked one) and removes fence-format fragility (```py, ```python, or an
+# unlabeled/absent fence inside the markers are all fine — the markers, not
+# the fence, delimit the block).
+#
+# What it proves is exactly: the marked final-answer source hashes (or does
+# not hash) to the reported MODELS_SHA256. It does NOT prove that digest came
+# from a PASSING checker run — that provenance stays judge-graded from the
+# trace.
+#
 # Opt-in and guarded: only scenarios that declare ``"digest_tie"`` in
 # checks.json activate this; every other scenario is untouched.
 # ---------------------------------------------------------------------------
 
-def _extract_code_block(text: str, filename: str, language: str) -> str | None:
-    """Best-effort extract the reproduced source of ``filename`` from a final
-    answer. Prefers a fenced block whose immediately-preceding text names the
-    file, then one whose own header comment does; falls back to the longest
-    fenced block in the declared language. Returns the raw block text (as the
-    agent reproduced it) or None."""
+def _marker_names(filename: str) -> tuple[str, str]:
+    return (f"===BEGIN FINAL {filename}===", f"===END FINAL {filename}===")
+
+
+def _strip_optional_fence(block: str) -> str:
+    """If the marked content is itself wrapped in a single code fence, drop the
+    fence lines — the digest is over the source, not the ``` decoration. A
+    fence anywhere other than the first/last non-empty lines is left intact
+    (it is part of the source, not decoration)."""
+    lines = block.split("\n")
+    # Trim leading/trailing wholly-blank lines for fence detection only.
+    start = 0
+    end = len(lines)
+    while start < end and lines[start].strip() == "":
+        start += 1
+    while end > start and lines[end - 1].strip() == "":
+        end -= 1
+    if end - start >= 2 and lines[start].lstrip().startswith("```") \
+            and lines[end - 1].strip() == "```":
+        return "\n".join(lines[start + 1:end - 1])
+    return block
+
+
+def _extract_marked_source(text: str, filename: str) -> tuple[str | None, str]:
+    """Return ``(source, status)`` for the sentinel-delimited authoritative
+    ``filename``. ``status`` is one of "ok", "none", "ambiguous". Exactly one
+    marker pair yields the content between them (optional inner fence stripped);
+    zero pairs => (None, "none"); more than one begin OR end marker =>
+    (None, "ambiguous") — fail closed, never pick one."""
     if not text:
-        return None
-    lang = re.escape(language)
-    # All fenced blocks in the target language, with the char offset of each.
-    blocks = [
-        (m.start(), m.group(1))
-        for m in re.finditer(rf"```(?:{lang})[^\n]*\n(.*?)```", text, re.DOTALL)
-    ]
-    if not blocks:
-        return None
-    fname = re.escape(filename)
-    # Prefer a block whose preamble (last ~200 chars before the fence) mentions
-    # the filename — the "here is models.py" heading.
-    for start, body in blocks:
-        if re.search(fname, text[max(0, start - 200):start]):
-            return body
-    # Else a block that references the filename in its own header; else longest.
-    for _start, body in blocks:
-        if re.search(fname, body[:200]):
-            return body
-    return max((b for _s, b in blocks), key=len)
+        return None, "none"
+    begin, end = _marker_names(filename)
+    b_idx = [m.start() for m in re.finditer(re.escape(begin), text)]
+    e_idx = [m.start() for m in re.finditer(re.escape(end), text)]
+    if len(b_idx) == 0 and len(e_idx) == 0:
+        return None, "none"
+    if len(b_idx) != 1 or len(e_idx) != 1:
+        return None, "ambiguous"
+    b, e = b_idx[0], e_idx[0]
+    if e <= b:
+        return None, "ambiguous"
+    inner = text[b + len(begin):e]
+    # Drop the newline immediately after the BEGIN marker and before the END
+    # marker (the markers live on their own lines); keep the source between.
+    inner = inner[1:] if inner.startswith("\n") else inner
+    inner = inner[:-1] if inner.endswith("\n") else inner
+    return _strip_optional_fence(inner), "ok"
 
 
 def _reported_digest(text: str, label: str = "MODELS_SHA256") -> str | None:
@@ -761,51 +799,57 @@ def _reported_digest(text: str, label: str = "MODELS_SHA256") -> str | None:
 
 
 def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
-    """Produce a mechanical statement for the judge tying the reproduced source
-    to the self-reported digest, or None when the scenario doesn't opt in.
+    """Produce a mechanical statement for the judge tying the marked source to
+    the self-reported digest, or None when the scenario doesn't opt in.
 
     ``cfg`` (checks.json ``digest_tie``) keys: ``filename`` (default
-    "models.py"), ``language`` (default "python"), ``label`` (default
-    "MODELS_SHA256")."""
+    "models.py"), ``label`` (default "MODELS_SHA256")."""
     if not cfg:
         return None
     filename = cfg.get("filename", "models.py")
-    language = cfg.get("language", "python")
     label = cfg.get("label", "MODELS_SHA256")
+    begin, end = _marker_names(filename)
 
     reported = _reported_digest(final_answer, label)
-    block = _extract_code_block(final_answer, filename, language)
-    if reported is None and block is None:
-        return (f"MECHANICAL DIGEST TIE: the final answer contains neither a "
-                f"{label} line nor a reproduced {filename} block — the digest "
-                f"tie is UNSATISFIED.")
+    source, status = _extract_marked_source(final_answer, filename)
+
+    if status == "ambiguous":
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED (fail-closed) — the final "
+                f"answer contains more than one `{begin}` / `{end}` marker pair "
+                f"(or a malformed pair), so the one authoritative {filename} is "
+                f"ambiguous. The harness refuses to guess which block is final; "
+                f"treat any digest-tie check as FAILED.")
+    if source is None and reported is None:
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED — the final answer contains "
+                f"neither a `{begin}` ... `{end}` marked {filename} nor a "
+                f"{label} digest line.")
+    if source is None:
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED — the final answer has no "
+                f"`{begin}` ... `{end}` marked {filename}, so the reported "
+                f"{label} cannot be tied to any source.")
     if reported is None:
-        return (f"MECHANICAL DIGEST TIE: the final answer reproduces a "
-                f"{filename} block but no {label} digest line — UNSATISFIED.")
-    if block is None:
-        return (f"MECHANICAL DIGEST TIE: the final answer reports {label}: "
-                f"{reported} but does not reproduce the {filename} source — "
-                f"the digest cannot be tied to any file — UNSATISFIED.")
-    # Hash the reproduced block exactly as pasted, and — because whitespace
-    # (a trailing newline) is easy to lose in a paste — also try newline
-    # variants, so a genuine reproduction is not failed on a cosmetic diff.
-    variants = {
-        block,
-        block if block.endswith("\n") else block + "\n",
-        block.rstrip("\n") + "\n",
-        block.rstrip("\n"),
-    }
+        return (f"MECHANICAL DIGEST TIE: UNSATISFIED — the marked {filename} is "
+                f"present but the final answer has no {label} digest line to "
+                f"tie it to.")
+
+    # Hash the marked source exactly, plus a trailing-newline variant, so a
+    # genuine reproduction that dropped/added only a final newline still ties.
+    # Deliberately narrow: only the whole-block trailing newline flexes —
+    # different source can never coincide.
+    variants = {source, source + "\n", source.rstrip("\n"), source.rstrip("\n") + "\n"}
     computed = {hashlib.sha256(v.encode("utf-8")).hexdigest() for v in variants}
     if reported in computed:
         return (f"MECHANICAL DIGEST TIE: SATISFIED — the harness re-hashed the "
-                f"{filename} reproduced in the final answer and it MATCHES the "
-                f"self-reported {label}: {reported}. The graded source is "
-                f"provably the validated file.")
-    return (f"MECHANICAL DIGEST TIE: MISMATCH — the {filename} reproduced in "
-            f"the final answer hashes to {sorted(computed)[0]} (and whitespace "
-            f"variants), which does NOT equal the self-reported {label}: "
-            f"{reported}. The reproduced source is NOT the file that passed; "
-            f"the digest was copied from a different file. Treat any "
+                f"{filename} the final answer marked with `{begin}` ... `{end}` "
+                f"and it MATCHES the reported {label}: {reported}. This proves "
+                f"ONLY that the final-answer {filename} source equals the source "
+                f"that digest was computed over; whether that digest came from a "
+                f"PASSING acceptance run remains to be graded from the trace.")
+    return (f"MECHANICAL DIGEST TIE: MISMATCH — the {filename} the final answer "
+            f"marked with `{begin}` ... `{end}` hashes to {sorted(computed)[0]}, "
+            f"which does NOT equal the reported {label}: {reported}. The marked "
+            f"final-answer source is NOT the source that digest was computed "
+            f"over (e.g. a digest copied from a different file). Treat any "
             f"digest-tie check as FAILED.")
 
 

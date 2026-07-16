@@ -2,7 +2,6 @@
   "name": "Generate a Semantic-Layer Data Product from a Live Source and Questions",
   "digest_tie": {
     "filename": "models.py",
-    "language": "python",
     "label": "MODELS_SHA256"
   },
   "checks": [
@@ -56,7 +55,7 @@
     },
     {
       "id": "final-answer-digest-matches-validated-models",
-      "check": "The acceptance test prints a `MODELS_SHA256: <hex>` line — the sha256 of the exact models.py it validated. The final answer must (a) reproduce, verbatim, the digest line printed by the FINAL PASSING acceptance run visible in the trace (the run that printed ALL CHECKS PASSED), and (b) that digest must match the models.py reproduced in the final answer. The runner independently re-hashes the reproduced models.py and reports a HARNESS-VERIFIED FACTS block stating whether the tie is SATISFIED or a MISMATCH — grade this check from that mechanical fact, which is authoritative over anything the agent claims. Fails if the fact reports MISMATCH/UNSATISFIED, if the digest line is absent, or if the trace shows the digest came from a failing rather than the passing run."
+      "check": "The acceptance test prints a `MODELS_SHA256: <hex>` line — the sha256 of the exact models.py it validated. Two things must both hold. (1) SOURCE-TO-DIGEST TIE (mechanical): the final answer wraps exactly one authoritative models.py between `===BEGIN FINAL models.py===` / `===END FINAL models.py===` markers, and that marked source matches the reported MODELS_SHA256. The runner re-hashes the marked source and emits a HARNESS-VERIFIED FACTS block reporting SATISFIED, MISMATCH, or UNSATISFIED (zero markers, or fail-closed on more than one marker pair) — grade this part FROM THAT FACT, which is authoritative over the agent's claims; SATISFIED is required. (2) PASSING-RUN PROVENANCE (judge-graded from the trace, NOT proven by the mechanical tie): the reported digest line must be the one printed by the FINAL run that printed ALL CHECKS PASSED — not a digest echoed from an earlier FAILING run. Fail if the mechanical fact is MISMATCH/UNSATISFIED, or if the trace shows the reported digest came from a failing rather than the passing run."
     },
     {
       "id": "final-answer-contains-artifacts",

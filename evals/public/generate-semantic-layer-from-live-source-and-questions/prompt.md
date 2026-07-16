@@ -17,6 +17,16 @@ Build a Nextdata OS semantic-layer data product that lets an AI agent answer the
 5. Verify your model answers the questions: run the shipped acceptance test — `uv run --with duckdb python check_semantic_model.py` (it loads your `models.py`, validates the roles against `source.duckdb`, and executes all four stakeholder questions from your declared concepts). It must print `ALL CHECKS PASSED`. If it fails, fix the model and re-run; do not finish with a failing check, and do not edit the acceptance test itself. Every run also prints a `MODELS_SHA256: <hex>` line — the sha256 of the exact `models.py` it validated.
 6. In your final answer, include: (a) the complete final `models.py` verbatim, (b) the acceptance-test result, (c) a question→concept mapping — for each of the four questions, which declared metrics/dimensions/joins answer it — (d) any business-definition ambiguities you hit and the interpretation you chose, and (e) the exact `MODELS_SHA256: <hex>` line printed by your final PASSING acceptance-test run — it must be the digest of the same `models.py` you reproduce in (a), copied verbatim, not recomputed or invented.
 
+   For (a), wrap your one authoritative final `models.py` — the exact source the `MODELS_SHA256` digest is over — between two marker lines, each on its own line, with NOTHING else on those lines:
+
+   ```
+   ===BEGIN FINAL models.py===
+   <the complete final models.py source>
+   ===END FINAL models.py===
+   ```
+
+   The source between the markers is what the runner re-hashes to confirm it matches your reported digest, so it must be the final validated file. Emit **exactly one** such marker pair (a second, decoy, or "reference" copy inside its own marker pair makes the authoritative file ambiguous and fails the tie). A code fence (```` ```python ````, ```` ```py ````, or none) immediately inside the markers is optional and ignored — the markers, not the fence, delimit the file.
+
 ## Stakeholder questions
 
 1. "What's our total revenue by sales channel?"

@@ -23,7 +23,9 @@ Notes:
     documented is graded separately, not here.
   * The output always ends with ``MODELS_SHA256: <hex>`` — the sha256 of the
     exact models.py this run validated. Reproduce that line verbatim in your
-    final answer so the graded models.py is provably the one that passed.
+    final answer AND reproduce this same models.py between the marker lines
+    ``===BEGIN FINAL models.py===`` / ``===END FINAL models.py===`` so the
+    runner can re-hash the marked source and tie it to this digest.
 
 Exit 0 and ``ALL CHECKS PASSED`` when everything holds; exit 1 otherwise.
 """
@@ -523,9 +525,13 @@ def main() -> int:
         if not required.exists():
             print(f"not found: {required}", file=sys.stderr)
             return 2
-    # Digest of the exact bytes validated below — the final answer must echo
-    # the MODELS_SHA256 line so the reproduced models.py is provably the one
-    # that passed this run.
+    # Digest over the exact content of the models.py validated below. The
+    # canonical content is this file's bytes; the final answer must (a) echo
+    # the MODELS_SHA256 line and (b) reproduce this same source between its
+    # ``===BEGIN FINAL models.py===`` / ``===END FINAL models.py===`` markers,
+    # so the harness can re-hash the marked source and tie it to this digest.
+    # (The harness tolerates only a differing trailing newline, so pasting the
+    # source with or without its final newline still matches.)
     digest = hashlib.sha256(models_path.read_bytes()).hexdigest()
     try:
         registry, attr_names = load_models(models_path)
