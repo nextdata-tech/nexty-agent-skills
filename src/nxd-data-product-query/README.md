@@ -75,8 +75,8 @@ where a missing field (e.g. a richer `describe_model`) would have to be added.
 ### The kit
 
 The compiler, dialect, and the **MCP tool factory** `build_semantic_tools` ship in
-the `nxd.data_product` wheel as the importable package `nxd.experimental.semantic`
-(nxd#6902). A DP imports it at runtime; it is **not** vendored or copied.
+the `nxd.data_product` wheel as the importable package `nxd.experimental.semantic`.
+A DP imports it at runtime; it is **not** vendored or copied.
 
 ```python
 from nxd.experimental.semantic import (
@@ -85,8 +85,9 @@ from nxd.experimental.semantic import (
 )
 ```
 
-The `experimental` namespace is a stopgap — once **ADR-026** lands, the public
-names migrate into the first-class `nxd.spec` DSL. The names are already
+The `experimental` namespace is a stopgap — once the first-class `nxd.spec`
+measure/dimension DSL lands, the public
+names migrate into it. The names are already
 pre-aligned, so the migration is a mechanical import-path change.
 
 ### Registry → tools
@@ -167,7 +168,7 @@ Authoritative detail lives in the generator skill:
 ## 4. Deferred work and product-side gaps
 
 Documented here (not in the query flow) so the agent isn't cluttered with work it
-can't do. Tracked on **NEX-620** as ADR-026 convergence candidates.
+can't do. These are candidates for convergence with a future first-class `nxd.spec` measure/dimension DSL.
 
 ### Deferred — could be built client-side later
 
@@ -192,33 +193,20 @@ encodings. (See the value-mismatch row in `SKILL.md`'s troubleshooting table.)
 
 ---
 
-## `scripts/cross_dp_compile.py` — experimental, NOT part of the skill
+## Cross-DP queries — handled server-side by the platform
 
-`scripts/cross_dp_compile.py` is an **experimental** client-side cross-DP
-compiler: it harvests each DP's `semantic_model` payload, merges them into one
-schema-qualified registry, and compiles a single fan-out-safe cross-schema SQL.
-It is intentionally **not referenced by `SKILL.md`, the scripts table, or any
-`reference/` doc** — the skill never invokes it.
+Questions that span two or more data products (a metric on one DP grouped by a
+dimension on another, joined through a crosswalk) are compiled and executed
+**server-side** by the platform's query system DP. The skill calls the built-in
+`query-system-dp-<env>__run_semantic_query` tool on the mesh MCP gateway exactly
+like a single-DP semantic query — the platform harvests every entitled member's
+registry, merges them into one cross-DP registry (following each join's
+`to_data_product` owner edge), authorization-gates each touched member, resolves
+per-member warehouse credentials, and runs ONE fan-out-safe cross-DP JOIN. The
+client never harvests, merges, or compiles cross-DP SQL itself, and needs no nxd
+wheel. See `SKILL.md` §6d ("Cross-DP questions").
 
-Why it is parked here and not wired in: a cross-DP eval (commit #47,
-`evals/cross-dp-joins/`) compared it head-to-head with strict mode on the live
-mesh. Verdict — the compiler is the better cross-DP *engine* but is only safely
-deployable **server-side**, because client-side it fails on two boundaries the
-skill must respect:
-
-1. **Authorization.** A credential leased from one DP's output port is scoped to
-   that DP's schema. The compiler's single cross-schema SQL needs USAGE on every
-   schema it spans → `002003 … not authorized`. A per-DP lease cannot authorize a
-   cross-DP query by construction.
-2. **Execution locus.** Snowflake's network policy admits the platform egress IP,
-   not an arbitrary client → `250001 Could not connect`.
-
-**The skill's canonical cross-DP path is strict mode**: discover + validate the
-join via `semantic_model` (the join edge must be published in a DP's
-`registry.py`), then execute as N single-DP `run_semantic_query` MCP calls
-(each within its own DP's grant) and merge the already-authorized partials
-client-side. Strict mode never crosses a DP boundary — that is exactly why it is
-client-runnable. See `reference/strict-mode.md`.
-
-`cross_dp_compile.py` stays in-tree only as the reference implementation for the
-eventual **server-side** cross-DP endpoint. Do not add it to the skill flow.
+A cross-DP join is only selectable when the owning DP's `semantic_model` publishes
+the join edge with a `to_data_product` marker; if it doesn't, the concepts are not
+joinable and `run_semantic_query` raises a `CompileError` — do not hand-write a
+join client-side.

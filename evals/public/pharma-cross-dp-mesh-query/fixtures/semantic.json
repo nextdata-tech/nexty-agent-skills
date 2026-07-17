@@ -1,0 +1,35 @@
+{
+  "comment": "PHYSICAL mapping for the CROSS-DP stubbed MCP server. Models the deployed pharma mesh as the ONE merged SemanticRegistry the gateway builds after harvesting each member DP's semantic_model payload and folding cross-DP join edges (to_data_product markers) by owner. Each model carries its owning data_product so the compiled plan is genuinely cross-schema; the crosswalk (site_subjects) is the DISTINCT-collapsed bridge; assays/dispenses are MANY-per-subject facts keyed SUBJECT_ID. Exercises: 2-DP join, chasm (two facts different grains), 3-DP crosswalk path (labs -> subjects -> site_subjects -> sites), far-dim (rx -> products), cross-boundary PII refusal/masking. NEVER shown to the agent. Seed in seed.sql; agent-facing logical surface in catalog.json.",
+  "models": [
+    {"name": "subjects", "table": "subjects", "grain": "SUBJECT_ID", "data_product": "pharma-subjects-demo", "description": "Subject spine — one row per clinical-trial subject."},
+    {"name": "sites", "table": "sites", "grain": "SITE_ID", "data_product": "pharma-sites-demo", "description": "Trial sites — one row per site."},
+    {"name": "site_subjects", "table": "site_subjects", "grain": "SITE_SUBJECT_ID", "data_product": "pharma-sites-demo", "description": "Site<->subject crosswalk (bridge) — a subject may enroll at multiple sites."},
+    {"name": "assays", "table": "assays", "grain": "ASSAY_ID", "data_product": "pharma-labs-demo", "description": "Lab assays — MANY per subject."},
+    {"name": "dispenses", "table": "dispenses", "grain": "DISPENSE_ID", "data_product": "pharma-rx-demo", "description": "Drug dispenses — MANY per subject."},
+    {"name": "products", "table": "products", "grain": "PRODUCT_ID", "data_product": "pharma-product-demo", "description": "Products — one row per product."}
+  ],
+  "dimensions": [
+    {"name": "subject_country", "model": "subjects", "column": "SUBJECT_COUNTRY", "type": "string", "pii": false, "description": "Subject billing country."},
+    {"name": "subject_mrn", "model": "subjects", "column": "SUBJECT_MRN", "type": "string", "pii": true, "description": "Subject medical record number. PII."},
+    {"name": "site_region", "model": "sites", "column": "SITE_REGION", "type": "string", "pii": false, "description": "Trial-site region (NA, EU, APAC)."},
+    {"name": "assay_type", "model": "assays", "column": "ASSAY_TYPE", "type": "string", "pii": false, "description": "Assay type."},
+    {"name": "dispense_channel", "model": "dispenses", "column": "DISPENSE_CHANNEL", "type": "string", "pii": false, "description": "Dispense channel (pharmacy, mail, clinic)."},
+    {"name": "prescriber_npi", "model": "dispenses", "column": "PRESCRIBER_NPI", "type": "string", "pii": true, "description": "Prescriber NPI. PII."},
+    {"name": "product_modality", "model": "products", "column": "MODALITY", "type": "string", "pii": false, "description": "Product modality (vaccine, antibody, small_molecule)."}
+  ],
+  "metrics": [
+    {"name": "subject_count", "model": "subjects", "agg": "COUNT_DISTINCT", "column": "SUBJECT_ID", "description": "Distinct subjects."},
+    {"name": "site_count", "model": "sites", "agg": "COUNT_DISTINCT", "column": "SITE_ID", "description": "Distinct trial sites."},
+    {"name": "titer_sum", "model": "assays", "agg": "SUM", "column": "TITER", "description": "Sum of assay titer."},
+    {"name": "titer_avg", "model": "assays", "agg": "AVG", "column": "TITER", "description": "Mean assay titer."},
+    {"name": "units_dispensed", "model": "dispenses", "agg": "SUM", "column": "UNITS", "description": "Total units dispensed."},
+    {"name": "dispense_count", "model": "dispenses", "agg": "COUNT_DISTINCT", "column": "DISPENSE_ID", "description": "Distinct dispenses."}
+  ],
+  "joins": [
+    {"left": "assays", "right": "subjects", "on": [["SUBJECT_ID", "SUBJECT_ID"]], "cardinality": "many_to_one"},
+    {"left": "dispenses", "right": "subjects", "on": [["SUBJECT_ID", "SUBJECT_ID"]], "cardinality": "many_to_one"},
+    {"left": "dispenses", "right": "products", "on": [["PRODUCT_ID", "PRODUCT_ID"]], "cardinality": "many_to_one"},
+    {"left": "site_subjects", "right": "subjects", "on": [["SUBJECT_ID", "SUBJECT_ID"]], "cardinality": "many_to_one"},
+    {"left": "site_subjects", "right": "sites", "on": [["SITE_ID", "SITE_ID"]], "cardinality": "many_to_one"}
+  ]
+}

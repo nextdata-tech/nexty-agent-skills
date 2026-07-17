@@ -1,0 +1,281 @@
+{
+  "date": "2026-07-13",
+  "label": "nxd-data-product-query: platform-routed cross-dp joins replace client-side compiler",
+  "notes": "Cross-DP queries now route through the platform's query system DP (server-side harvest/merge/gate/join); strict mode and the client-side compiler are removed. Scenario prompt/checks modernized off the strict-mode framing in the same PR (numeric fan-out discriminators). run2's single q6 miss (confusable dispensed metric) did not reproduce in run3 \u2014 single-run nondeterminism, not a regression; run1 against the stale strict-mode prompt was discarded.",
+  "plugin_version": "0.9.0",
+  "reports": {
+    "before-v0.8.1": {
+      "elapsed_s": 529.7,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "pharma-mesh-query-loop",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 41,
+            "duration_ms": 403609,
+            "total_cost_usd": 1.4730949,
+            "input_tokens": 80,
+            "output_tokens": 15776,
+            "is_error": false,
+            "tool_calls": 39
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models and describe_model (all 5 models) called and returned before the first run_semantic_query, with concept names taken from the describe output rather than guessed or read from a catalog file."
+              },
+              {
+                "id": "strict-mcp-toolchain",
+                "pass": true,
+                "why": "The agent invoked the nxd-data-product-query skill and reached the three tools via the skill's own mcp_http MCP client over the discovered EVAL_MCP_ENDPOINT, never inventing a SQL connection, reading fixtures, or authoring a raw SQL string (compiled_sql was returned by run_semantic_query)."
+              },
+              {
+                "id": "q1-subject-count",
+                "pass": true,
+                "why": "Q1 ran run_semantic_query with measures=[subject_count] on subjects and answered '4 subjects' from the returned row."
+              },
+              {
+                "id": "q3-chasm-two-facts",
+                "pass": true,
+                "why": "Q3 explicitly recognized titer (assays) and units_dispensed (dispenses) as different grains, ran them as two separate per-model queries sliced by subject_country, and presented both without a single combined fan-out call."
+              },
+              {
+                "id": "q4-triple-fanout",
+                "pass": true,
+                "why": "Q4 ran visit_duration_min, titer_sum, and units_dispensed as three separate per-grain queries sharing subject_country and combined the results in presentation only, never merging grains in one call."
+              },
+              {
+                "id": "q5-confusable-titer-clarifies",
+                "pass": true,
+                "why": "For Q5 the agent surfaced the titer_sum vs titer_avg ambiguity and asked the analyst which was meant instead of silently picking one."
+              },
+              {
+                "id": "q6-confusable-dispensed-clarifies",
+                "pass": true,
+                "why": "Q6 echoed the resolved choice as 'units_dispensed (the quantity metric, matching how much)', framing it as the sum-of-units quantity rather than a count, so it did not silently guess."
+              },
+              {
+                "id": "q7-boolean-flag-metric",
+                "pass": true,
+                "why": "Q7 selected serious_ae_count (the serious-only flag metric) by ae_term, not ae_count."
+              },
+              {
+                "id": "q8-plain-count-default",
+                "pass": true,
+                "why": "Q8 selected ae_count (all adverse events) by ae_term as the default plain reading."
+              },
+              {
+                "id": "q9-pii-prescriber",
+                "pass": true,
+                "why": "Q9 flagged prescriber_npi as pii:true, noted it is not in units_dispensed's compatible_dimensions and would be rejected/governed, and declined to return prescriber identities."
+              },
+              {
+                "id": "q10-confusable-visits-not-subjects",
+                "pass": true,
+                "why": "Q10 selected visit_count on the visits grain by visit_type, not subject_count."
+              },
+              {
+                "id": "echoes-selections",
+                "pass": true,
+                "why": "For every question the agent restated the resolved metric/dimension selection in plain language using describe_model meanings and explicitly distinguished confusable metrics."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent discovered the catalog before querying, stayed on the strict MCP path with no raw SQL, correctly resolved every confusable metric and PII/chasm case (clarifying Q5/Q9), so all 12 checks pass."
+          }
+        }
+      ]
+    },
+    "after-v0.9.0-run2": {
+      "elapsed_s": 477.9,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "pharma-mesh-query-loop",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 47,
+            "duration_ms": 415101,
+            "total_cost_usd": 1.8367136000000004,
+            "input_tokens": 91,
+            "output_tokens": 18747,
+            "is_error": false,
+            "tool_calls": 45
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models and describe_model (for every model) called and returned before the first run_semantic_query, with no guessing of concept names."
+              },
+              {
+                "id": "strict-mcp-toolchain",
+                "pass": true,
+                "why": "The agent reached the tools via the skill's mcp_http McpClient against the discovered pharma-stub endpoint and never authored a raw SQL string \u2014 all shown SQL was compiler-generated."
+              },
+              {
+                "id": "q1-subject-count",
+                "pass": true,
+                "why": "Q1 ran subject_count on the subjects model and answered 4 from the returned row."
+              },
+              {
+                "id": "q3-chasm-two-facts",
+                "pass": true,
+                "why": "Q3 combined titer_sum and units_dispensed by subject_country in one fan-out-safe call, yielding correct per-grain US totals of 300 and 90."
+              },
+              {
+                "id": "q4-triple-fanout",
+                "pass": true,
+                "why": "Q4 combined visit_duration_min, titer_sum, and units_dispensed by country with correct per-grain US totals of 240, 300, and 90 (no double-counting)."
+              },
+              {
+                "id": "q5-confusable-titer-clarifies",
+                "pass": true,
+                "why": "The agent surfaced the titer_sum vs titer_avg ambiguity for 'titer level' and explicitly asked which metric rather than guessing."
+              },
+              {
+                "id": "q6-confusable-dispensed-clarifies",
+                "pass": false,
+                "why": "For Q6 the agent silently picked units_dispensed and never surfaced or distinguished the confusable dispense_count metric, unlike its explicit handling of the other confusables."
+              },
+              {
+                "id": "q7-boolean-flag-metric",
+                "pass": true,
+                "why": "Q7 selected serious_ae_count (the serious-only flag metric) by ae_term, not ae_count."
+              },
+              {
+                "id": "q8-plain-count-default",
+                "pass": true,
+                "why": "Q8 selected ae_count (all adverse events) by ae_term as the default plain reading."
+              },
+              {
+                "id": "q9-pii-prescriber",
+                "pass": true,
+                "why": "The agent flagged prescriber_npi as PII/governed and noted the values were masked to null server-side rather than exposing prescriber identities."
+              },
+              {
+                "id": "q10-confusable-visits-not-subjects",
+                "pass": true,
+                "why": "Q10 selected visit_count by visit_type, not subject_count."
+              },
+              {
+                "id": "echoes-selections",
+                "pass": true,
+                "why": "Before each query the agent restated the resolved metric/dimension selection in plain language, distinguishing confusables like titer_sum vs titer_avg and serious_ae_count vs ae_count."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent executed the governed toolchain correctly on nearly every check, but failed q6 by silently choosing units_dispensed without distinguishing the confusable dispense_count metric."
+          }
+        }
+      ]
+    },
+    "after-v0.9.0-run3": {
+      "elapsed_s": 302.0,
+      "agent_model": "sonnet",
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "pharma-mesh-query-loop",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 35,
+            "duration_ms": 246919,
+            "total_cost_usd": 1.4137709000000003,
+            "input_tokens": 65,
+            "output_tokens": 14553,
+            "is_error": false,
+            "tool_calls": 33
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "discovery-before-query",
+                "pass": true,
+                "why": "The trace shows list_models and describe_model (for all five models) executed before any run_semantic_query call, and concept names were taken from the catalog, not guessed."
+              },
+              {
+                "id": "strict-mcp-toolchain",
+                "pass": true,
+                "why": "The agent discovered the endpoint via `nxd mcp health` and called the genuine list_models/describe_model/run_semantic_query MCP tools over a Streamable-HTTP MCP session, never inventing a SQL connection, reading fixtures, or authoring raw SQL (the compiled SQL was returned by the platform)."
+              },
+              {
+                "id": "q1-subject-count",
+                "pass": true,
+                "why": "Q1 ran subject_count on the subjects model and answered 4 from the returned rows."
+              },
+              {
+                "id": "q3-chasm-two-facts",
+                "pass": true,
+                "why": "Q3 returned per-grain values (US titer 300, units 90) via a compiler-pre-aggregated join (agg_assays/agg_dispenses CTEs), not inflated double-counted totals."
+              },
+              {
+                "id": "q4-triple-fanout",
+                "pass": true,
+                "why": "Q4 returned fan-out-safe per-grain US values of visit duration 240, titer 300, and units 90 via per-subject pre-aggregation before joining."
+              },
+              {
+                "id": "q5-confusable-titer-clarifies",
+                "pass": true,
+                "why": "For Q5 the agent surfaced the titer_sum vs titer_avg ambiguity and asked the user to choose rather than silently picking one."
+              },
+              {
+                "id": "q6-confusable-dispensed-clarifies",
+                "pass": true,
+                "why": "For Q6 the agent explicitly chose units_dispensed over dispense_count and echoed that distinction rather than silently guessing."
+              },
+              {
+                "id": "q7-boolean-flag-metric",
+                "pass": true,
+                "why": "Q7 selected serious_ae_count (the serious-only flag metric) by ae_term, not ae_count."
+              },
+              {
+                "id": "q8-plain-count-default",
+                "pass": true,
+                "why": "Q8 selected ae_count (all adverse events) by ae_term as the plain-count default."
+              },
+              {
+                "id": "q9-pii-prescriber",
+                "pass": true,
+                "why": "For Q9 the agent flagged prescriber_npi as PII/governed, reported the dimension was masked to null, and did not return prescriber identities."
+              },
+              {
+                "id": "q10-confusable-visits-not-subjects",
+                "pass": true,
+                "why": "Q10 selected visit_count on the visits grain (explicitly not subject_count) by visit_type."
+              },
+              {
+                "id": "echoes-selections",
+                "pass": true,
+                "why": "For every question the final answer restates the resolved metric/dimension selection in plain language using describe_model meanings and calls out the confusable alternatives it rejected."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent discovered the catalog via the MCP toolchain before querying, picked the correct confusable metrics or clarified, returned fan-out-safe per-grain numbers, surfaced PII governance, authored no raw SQL, and echoed each selection \u2014 all checks pass."
+          }
+        }
+      ]
+    }
+  }
+}

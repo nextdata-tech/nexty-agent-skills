@@ -1,12 +1,18 @@
-"""Scorer for the cross-DP join-strategy eval.
+"""CLI / report layer for the cross-DP join-strategy eval.
 
-Consumes a results JSON (one record per question x strategy x trial), and for
-each (question, strategy) computes five axes:
+The pure scoring surface (`score_one`, `fanout_of`, `matches_compiler`,
+`distinct_results`, `_remap_gold_record`, `COMPILER_STRATEGY`) is OWNED by
+nxd_eval and imported below (`from nxd_eval._ex_core.score import …`). This
+module adds only the experiment-specific layer: loading GOLD_CROSS_DP from the
+external text-to-SQL PoC, collapsing trial records into a matrix, and emitting
+CSV / markdown. That layer needs the PoC checkout (and, upstream, live
+Snowflake), so it stays here rather than in the shipping wheel.
 
-  acc              accuracy vs the frozen gold record (PASS/FAIL/ABSTAIN/ERROR/N/A),
-                   reusing the PoC's scoring.score_accuracy.
-  fanout           fan-out safety of the emitted SQL (FANOUT_SAFE/FANOUT_RISK/N/A),
-                   reusing the PoC's structure_check.fanout_safe.
+Consumes a results JSON (one record per question x strategy x trial) and, per
+(question, strategy), computes five axes:
+
+  acc              accuracy vs the frozen gold record (PASS/FAIL/ABSTAIN/ERROR/N/A).
+  fanout           fan-out safety of the emitted SQL (FANOUT_SAFE/FANOUT_RISK/N/A).
   matches_compiler whether this strategy's executed rows set-equal the COMPILER
                    strategy's executed rows for the same question (the
                    compiler-as-oracle axis). Strategy A is the oracle and always
@@ -16,9 +22,8 @@ each (question, strategy) computes five axes:
                    distinct normalized row-sets (1 == deterministic output).
   abstained        whether any trial abstained.
 
-Everything here is a pure function over plain dicts plus the PoC scoring/
-structure_check modules. No network, no Snowflake. `main(results_json)` reads a
-results file and writes the matrix to report/ as both CSV and markdown.
+`main(results_json)` reads a results file and writes the matrix to report/ as
+both CSV and markdown.
 
 RESULTS JSON shape (list of trial records):
 
@@ -43,81 +48,39 @@ The COMPILER strategy id defaults to "A" (configurable via COMPILER_STRATEGY).
 from __future__ import annotations
 
 import csv
-import importlib.util
 import json
+import os
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 # --------------------------------------------------------------------------- #
-# PoC harness import
+# Deterministic-EX scoring core
 # --------------------------------------------------------------------------- #
-# The scorer reuses the frozen-gold PoC's scoring + structure_check verbatim so
-# the eval and the PoC can never drift on what "PASS" or "FANOUT_SAFE" means.
-# Resolve the PoC harness dir from an env override or the known worktree path.
+# The pure scoring surface is OWNED by nxd_eval (`nxd_eval._ex_core.score`) and
+# imported here, so the eval and this experiment can never drift on what "PASS"
+# or "FANOUT_SAFE" means. This module keeps only the CLI/report layer
+# (gold-loading from the PoC, matrix assembly, CSV/markdown emit, `main`), which
+# depends on the external text-to-SQL PoC checkout and live Snowflake and so
+# does not belong in the shipping wheel. Requires nxd_eval importable — install
+# it (`uv pip install nxd-eval`) or run with `evals/nxd_eval/src` on PYTHONPATH.
+from nxd_eval._ex_core.score import COMPILER_STRATEGY
+from nxd_eval._ex_core.score import _remap_gold_record
+from nxd_eval._ex_core.score import distinct_results
+from nxd_eval._ex_core.score import fanout_of
+from nxd_eval._ex_core.score import matches_compiler
+from nxd_eval._ex_core.score import score_one
 
-import os
-
+# The external text-to-SQL PoC checkout — the source of GOLD_CROSS_DP and the
+# freeze helpers this CLI layer loads. Resolved from an env override or the known
+# worktree path; only the cross-DP experiment needs it (the shipping wheel does
+# not). run_eval.py reads this to put the PoC's gold modules on sys.path.
 _POC_ROOT_ENV = os.environ.get("T2SQL_POC_ROOT")
 _POC_ROOT_DEFAULT = (
     "/Volumes/PRO-G40/projects/nxd/.claude/worktrees/t2sql-exp/examples/t2sql-poc"
 )
 POC_ROOT = Path(_POC_ROOT_ENV or _POC_ROOT_DEFAULT)
-
-if str(POC_ROOT) not in sys.path:
-    sys.path.insert(0, str(POC_ROOT))
-
-
-def _load_poc_module(name: str):
-    """Load a PoC harness submodule by file path.
-
-    The PoC's `harness/__init__.py` eagerly imports `executor`, which needs
-    `snowflake.connector` — a dep the offline scorer must not require. Loading
-    scoring/structure_check directly by file path bypasses that package import.
-    """
-    path = POC_ROOT / "harness" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"_poc_{name}", path)
-    if spec is None or spec.loader is None:  # pragma: no cover
-        raise ImportError(f"cannot load PoC module {name} from {path}")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-scoring = _load_poc_module("scoring")  # noqa: E402
-structure_check = _load_poc_module("structure_check")  # noqa: E402
-
-# Strategy id treated as the compiler oracle for the matches_compiler axis.
-COMPILER_STRATEGY = "A"
-
-
-# --------------------------------------------------------------------------- #
-# Gold loading + remap (PoC `id` -> scoring `question_id`)
-# --------------------------------------------------------------------------- #
-
-
-def _remap_gold_record(rec: dict, frozen_rows: dict | None) -> dict:
-    """Remap a raw GOLD_CROSS_DP record into the scoring.score_accuracy shape.
-
-    PoC gold keys differ from what scoring reads:
-      id              -> question_id
-      expect_abstain  (list[str])  -> expects_abstain ({strategy: True})
-      rows            injected from the frozen oracle ({id: {"rows": [...]}})
-
-    `frozen_rows` is the freeze_gold.freeze() output keyed by gold id; pass None
-    to leave rows absent (rows-equality then always fails, surfacing missing
-    oracle wiring rather than silently passing).
-    """
-    out = dict(rec)
-    qid = rec.get("id")
-    out["question_id"] = qid
-    expect_list = rec.get("expect_abstain") or []
-    out["expects_abstain"] = {a: True for a in expect_list}
-    if frozen_rows is not None:
-        out["rows"] = (frozen_rows.get(qid) or {}).get("rows")
-    return out
 
 
 def load_gold(frozen_path: str | Path | None = None) -> dict[str, dict]:
@@ -137,145 +100,6 @@ def load_gold(frozen_path: str | Path | None = None) -> dict[str, dict]:
         remapped = _remap_gold_record(rec, frozen_rows)
         out[remapped["question_id"]] = remapped
     return out
-
-
-# --------------------------------------------------------------------------- #
-# Pure scoring helpers
-# --------------------------------------------------------------------------- #
-
-
-def _norm_rowset(rows: list[dict] | None) -> frozenset[tuple]:
-    """Order-independent, name-blind signature of a row-set for set-equality.
-
-    Lowercases column names, normalizes values via scoring._norm_value, and
-    reduces each row to scoring._row_signature (value multiset, column-name
-    blind, numeric-tolerant). Returns a frozenset of row signatures — DISTINCT
-    rows only, which is the contract for the compiler-as-oracle and determinism
-    axes (both ask "is this the same set of answers", not "same multiplicity").
-    """
-    if rows is None:
-        return frozenset()
-    sigs = set()
-    for raw in rows:
-        nrow = {scoring._norm_key(k): scoring._norm_value(v) for k, v in raw.items()}
-        sigs.add(scoring._row_signature(nrow, scoring._ALL_COLS))
-    return frozenset(sigs)
-
-
-def score_one(
-    trial: dict, gold_record: dict, *, strategy_for_abstain: str | None = None
-) -> str:
-    """Accuracy for a single trial via the PoC scorer.
-
-    `strategy_for_abstain` is the `approach` key scoring uses to read
-    expects_abstain; defaults to the trial's own strategy.
-    """
-    approach = strategy_for_abstain or trial.get("strategy")
-    verdict = scoring.score_accuracy(
-        trial.get("rows"),
-        gold_record,
-        abstained=bool(trial.get("abstained")),
-        approach=approach,
-        errored=bool(trial.get("errored")),
-    )
-    # CP1 hardening (harness layer): the PoC's PASS is column-name blind, so two
-    # numeric measures SWAPPED still score PASS. When gold has >=2 numeric measure
-    # columns, re-validate name-aware and downgrade a name-mismatch PASS to FAIL.
-    # Only touches the answered-PASS path — ABSTAIN/ERROR/N/A/FAIL are unchanged.
-    if verdict == "PASS" and not bool(trial.get("abstained")) and not bool(
-        trial.get("errored")
-    ):
-        gold_rows = gold_record.get("rows")
-        mode = (gold_record.get("equality_mode") or "set") if gold_record else "set"
-        if not rows_equal_name_aware(trial.get("rows"), gold_rows, mode):
-            return "FAIL"
-    return verdict
-
-
-def fanout_of(sql: str | None) -> str:
-    """Fan-out verdict for an emitted SQL string (FANOUT_SAFE/RISK/N/A).
-
-    Delegates to structure_check.verdict, which returns "N/A" for a None/empty
-    SQL (an abstain or a strategy that merges client-side without emitting SQL).
-    """
-    return structure_check.verdict(sql)
-
-
-# --------------------------------------------------------------------------- #
-# Multi-measure name-aware accuracy guard (harness layer; CP1 hardening)
-# --------------------------------------------------------------------------- #
-# The PoC's scoring.rows_equal compares a VALUE-multiset that is column-name
-# blind: a row with two numeric measures SWAPPED (e.g. {revenue: 5, cost: 95}
-# vs {revenue: 95, cost: 5}) scores PASS because the multiset {5, 95} is
-# identical. That is fine for single-measure questions but unsafe once a gold
-# record carries >=2 numeric measure columns. We HARDEN that case here, in the
-# harness, WITHOUT editing the shared PoC scoring.py: when the gold rows have
-# >=2 numeric columns, we additionally require a name-aware match on the numeric
-# cells (compare (col_name, value) pairs), falling back to the PoC verdict for
-# the single-/zero-measure case so existing behavior is unchanged.
-
-
-def _numeric_cells_named(rows: list[dict]) -> Counter:
-    """Multiset of (normalized_col_name, bucketed_numeric_value) over numeric cells.
-
-    Mirrors the PoC normalization: column names via scoring._norm_key, values via
-    scoring._norm_value, numeric values bucketed to scoring's numeric tolerance so
-    3.0000001 and 3.0 collapse (same as scoring._row_signature under _ALL_COLS).
-    Non-numeric / None / bool cells are ignored — this guard only constrains the
-    numeric measures, leaving label/dimension matching to the PoC scorer.
-    """
-    out: Counter = Counter()
-    for raw in rows or []:
-        for k, v in raw.items():
-            nv = scoring._norm_value(v)
-            if isinstance(nv, bool) or not isinstance(nv, float):
-                continue
-            bucket = round(nv / scoring._NUMERIC_TOL)
-            out[(scoring._norm_key(k), bucket)] += 1
-    return out
-
-
-def rows_equal_name_aware(
-    actual: list[dict] | None, gold_rows: list[dict] | None, mode: str
-) -> bool:
-    """Harness wrapper over scoring.rows_equal that hardens the multi-measure case.
-
-    Returns the PoC verdict for zero-/single-numeric-measure gold rows. When the
-    gold record has >=2 numeric measure columns, additionally require the numeric
-    cells to match name-aware (so two measures SWAPPED no longer scores PASS).
-    """
-    base = scoring.rows_equal(actual, gold_rows, mode)
-    if not base or actual is None or gold_rows is None:
-        return base
-    # Only tighten when gold genuinely has >=2 distinct numeric measure columns.
-    gold_numeric_cols = scoring._numeric_cols([scoring._norm_row(r) for r in gold_rows])
-    if len(gold_numeric_cols) < 2:
-        return base
-    return _numeric_cells_named(actual) == _numeric_cells_named(gold_rows)
-
-
-def matches_compiler(
-    rows: list[dict] | None, compiler_rows: list[dict] | None
-) -> bool:
-    """Set-equality of this strategy's rows vs the compiler's executed rows.
-
-    Name-blind, numeric-tolerant, DISTINCT-row comparison (the same normalization
-    rows_equal uses). When the compiler produced no rows for the question (None),
-    there is no oracle to match against — return False so the gap is visible.
-    """
-    if compiler_rows is None:
-        return False
-    return _norm_rowset(rows) == _norm_rowset(compiler_rows)
-
-
-def distinct_results(trials: list[dict]) -> int:
-    """Count distinct normalized row-sets across N trials of one (q, strategy).
-
-    Errored/abstained trials contribute an empty row-set; a strategy that
-    sometimes answers and sometimes abstains therefore reads as non-deterministic
-    (distinct > 1), which is the intended signal.
-    """
-    return len({_norm_rowset(t.get("rows")) for t in trials})
 
 
 # --------------------------------------------------------------------------- #

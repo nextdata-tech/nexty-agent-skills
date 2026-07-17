@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.6.1
+  version: 0.9.1
 ---
 
 # Nexty Mesh Assets
@@ -52,26 +52,37 @@ Hand out these paths inline when the matching step comes up (drop the link at th
 
 ## Scripts
 
-The skill ships a small Python package under `scripts/`. Run the entrypoints with a Python that has the dependencies in `scripts/requirements.txt` — install into a throwaway venv:
+The skill ships a small Python package under `scripts/`. **First make it
+reachable from Bash:** some harnesses mount only docs + `SKILL.md` into the shell
+the Bash tool runs in, so `scripts/` (with its `drivers/` + `meshlib/` subpackages)
+can be absent even though the skill loaded — then every `python scripts/...` call
+fails with a *shell* "No such file or directory". Resolve a `WORKDIR` **once per
+session** (skill dir if Bash sees its scripts, else a scratch copy that preserves
+the package layout), then run all entrypoints + the venv from `$WORKDIR`. Recipe
+(probe → Glob/Read/Write copy → confirm) + rationale:
+**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** — read it
+first. Quick probe:
+
+```bash
+[ -f "$SKILL_DIR/scripts/classify_profile.py" ] && WORKDIR="$SKILL_DIR"   # else bootstrap a copy
+```
+
+Then install the dependencies from `scripts/requirements.txt` into a throwaway venv
+(Windows: `py -3 -m venv` + `.\...\Scripts\pip.exe`):
 
 ```bash
 python3 -m venv .nxd-mesh-analyzer-venv
-.nxd-mesh-analyzer-venv/bin/pip install -r scripts/requirements.txt
+.nxd-mesh-analyzer-venv/bin/pip install -r "$WORKDIR/scripts/requirements.txt"
 ```
 
-```powershell
-py -3 -m venv .nxd-mesh-analyzer-venv
-.\.nxd-mesh-analyzer-venv\Scripts\pip.exe install -r scripts\requirements.txt
-```
-
-**Entrypoints** (run as `python scripts/<name>.py`):
+**Entrypoints** (run as `python "$WORKDIR/scripts/<name>.py"`):
 
 | Script | Purpose |
 |---|---|
 | `classify_profile.py <profile>` | Parse the profile, classify every service, list the inspectable (Storage/API) ones. |
 | `inspect_service.py <profile> <service>... --out FILE` | Connect read-only, inventory each service with schema-fingerprint grouping, de-duplicate shared stores, write inventory JSON. |
 | `match_assets.py <inventory.json>... [--flow SRC:DST]` | Match candidate input/output pairs, classify, and write the report + models markdown. `--flow` (repeatable) scopes matching to declared architecture flows. |
-| `profile_tabular.py <path>` | Read-only local-file profiler for CSV/JSON/JSONL/Parquet sources that aren't live services. Prints an inferred schema (types, nullability, sample values, partition/freshness hints) as JSON. Used by the offline discovery pass. |
+| `profile_tabular.py <path>` / `profile_tabular.py <db.duckdb> <table>...` | Read-only local profiler. File mode: CSV/JSON/JSONL/Parquet sources that aren't live services. DuckDB mode: materialized `main.<table>` tables (e.g. a dlt sample load), enriched with exact full-table nullability/cardinality; two or more tables emit ONE combined document (redirect to `schema.json` as the profiling→inference handoff artifact). Prints an inferred schema (types, nullability, sample values, partition/freshness hints) as JSON. Used by the offline discovery pass and by nxd-semantic-data-product's Step 1-alt. |
 
 **Layout** — service-type code is isolated from generic code:
 

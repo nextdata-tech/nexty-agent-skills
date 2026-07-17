@@ -1,0 +1,44 @@
+[project]
+name = "nxd-eval"
+version = "0.1.0"
+description = "Inspect-based evaluation framework for the Nexty skill pack — deterministic-EX + judged scoring with a Wilson/McNemar/FDR statistics contract."
+requires-python = ">=3.11"
+dependencies = [
+    "inspect_ai==0.3.130",     # pinned known-good 0.3.x; the agent/MCP surface churns — do NOT float
+    "statsmodels>=0.14",       # proportion_confint(wilson), contingency_tables.mcnemar, multitest.multipletests
+    "scipy>=1.11",
+    "scikit-learn>=1.4",       # brier_score_loss, calibration_curve
+    "mcp>=1.2.0",              # matches evals/mcp; MCP client types + stub server
+    "sqlglot>=25",             # vendored EX core normalizes agent SQL in the deterministic scoring path (guarded import)
+]
+
+[project.optional-dependencies]
+# Model-provider SDKs. The framework is vendor-agnostic: it passes the
+# `provider/model` string straight to Inspect (`agent_model=`/`grader_model=`),
+# which routes by prefix. Install the extra for whichever vendor you run
+# (`uv sync --extra openai`, `--extra anthropic`, …). Kept as extras so the
+# stats/scoring unit tests install with no provider SDK at all.
+anthropic = ["anthropic>=0.40"]   # anthropic/<model>
+openai = ["openai>=1.40"]         # openai/<model>  (also OpenAI-compatible endpoints via OPENAI_BASE_URL)
+google = ["google-genai>=0.3"]    # google/<model>
+
+[dependency-groups]
+# Test runner for the framework's own unit tests. A uv default group (installed
+# by `uv run --project evals/nxd_eval`), NOT a package dependency — the shipped
+# framework does not depend on pytest. anyio ships transitively with inspect_ai.
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# src-layout: the importable package is src/nxd_eval, EX core vendored under it.
+packages = ["src/nxd_eval"]
+
+[tool.uv]
+package = true                # distributable wheel served from the NXD pip registry
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

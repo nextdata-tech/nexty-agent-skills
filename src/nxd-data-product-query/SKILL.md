@@ -1,6 +1,6 @@
 ---
 name: nxd-data-product-query
-description: Query a deployed Nextdata OS Data Product. Discovers the active mesh from local nxd settings, then does ALL discovery — Data Products, output ports, model attributes, health, glossary — through the mesh MCP gateway multiplexer in one MCP session, not the per-DP REST API. For direct-store reads it leases a credential from the per-DP REST API (the one thing the gateway cannot do) and routes by output-port driver: SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone); RPC/MCP ports are called as gateway tools. Turns natural-language questions into concrete queries. Also supports an opt-in strict MCP-only mode that disables direct-store access, builds a plan from semantic_model relationships, and gates execution on a validator. Use when the user asks to "query a data product", "read from an output port", "search a named DP", "use strict mode", or "MCP-only".
+description: Query a deployed Nextdata OS Data Product. Discovers the active mesh from local nxd settings, then does ALL discovery — Data Products, output ports, model attributes, health, glossary — through the mesh MCP gateway multiplexer in one session, not per-DP REST. Direct-store reads lease a credential from the per-DP REST API (the one thing the gateway cannot do) and route by output-port driver: SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone); RPC/MCP ports are called as gateway tools. Turns natural-language questions into concrete queries. Semantic questions — single-DP and cross-DP alike — go through the governed `run_semantic_query` tool; the platform compiles and executes, merging cross-DP joins server-side in the query system DP. Use when the user asks to "query a data product", "read from an output port", "search a named DP", or "join across data products".
 allowed-tools:
   - Bash
   - Read
@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.6.1
+  version: 0.9.1
 ---
 
 # nxd Data Product Query
@@ -68,23 +68,24 @@ The user may pass any of these in the request — collect the rest interactively
 - **Output port** — port `name` (illustrative examples: a `pgvector` port, an `adls` file port, a relational `*-out` port). If missing, prompt with `gateway_tools.py details --dp <dp> --outputs` (data ports) + `gateway_tools.py tools --dp <dp>` (MCP/RPC tools).
 - **Infra-profile** — only needed when a port's `connect` returns `unsupported` (Step 5). Derive it from the port / mesh — `nxd ls infra-profiles` against the active mesh — or ask the user; do not assume a local file (see Step 5).
 - **Query** — natural-language question, or a SQL string, or a vector-search description, or an MCP function + args. If missing, ask.
-- **Strict mode** (`--strict`) — opt-in MCP-only mode. When the user asks for "strict mode", "MCP-only", "no direct access", or passes the flag explicitly, follow **Strict Mode** below instead of the default routing in Step 6. Strict mode disables every data-source-direct path (SQL, presigned-URL fetch, pgvector dial, external API) and only allows mediated access via MCP.
 
 ---
 
-## Strict mode (MCP-only, plan-verified)
+## Step 0: Make `scripts/` reachable from Bash (do this before anything else)
 
-A locked-down mode for queries that must demonstrably go through MCP and nothing else. Data access only via DP MCP endpoints (discovered through the mesh MCP gateway); cross-DP relationships only via the `semantic_model` MCP endpoint on each DP; every query produces a human-readable plan that an **independent validator** checks before execution; if validation fails, the query fails — no fallback to direct-store routing in the same run.
+This skill is **script-first**, and some harnesses don't mount `scripts/` into the
+Bash sandbox. Resolve a `WORKDIR` **once per session** (skill dir if Bash sees its
+scripts, else a scratch copy) and run all later `scripts/...` commands + the
+**Scripts** venv from it. Full recipe + rationale:
+**[reference/scripts-bootstrap.md](reference/scripts-bootstrap.md)** — read before
+Step 1. Quick probe:
 
-**When to use.** The user explicitly asks for "strict mode", "MCP-only", or "no direct access", or passes the `--strict` flag. Otherwise default to the Step-6 routing below.
+```bash
+[ -f "$SKILL_DIR/scripts/find_mesh.py" ] && WORKDIR="$SKILL_DIR"   # else bootstrap a copy
+python3 "$WORKDIR/scripts/find_mesh.py" --help >/dev/null && echo "scripts reachable"
+```
 
-**The full strict-mode contract** — five rules, one-session multiplexer discovery, plan JSON shape, the five concrete validation checks, generator-↔-validator retry loop, abstain rules, output shape, and known limitations — lives in [reference/strict-mode.md](reference/strict-mode.md). Read it before running a strict-mode query and again whenever the supporting scripts change.
-
-**Strict-mode scripts** (all under `scripts/`, all per-query and cache-free): `mcp_gateway.py` (multiplexer discovery — health + one `tools/list`), `semantic_relations.py` (harvest `semantic_model` responses into a relations bundle), `plan_validator.py` (pure local five-check validator), `mcp_call.py` (one-shot MCP `tools/call` from a validated plan step), `mcp_http.py` (minimal MCP Streamable-HTTP client used by the others).
-
----
-
-## Step 1: Locate mesh + auth (do this first)
+## Step 1: Locate mesh + auth
 
 Mesh/env selection is the **first** thing this skill resolves — everything else (api host, doc links, infra-profile lookups) derives from it. nxd-setup owns this config; this skill only reads it.
 
@@ -103,6 +104,8 @@ python3 scripts/find_mesh.py
 - Use the emitted `token_file` path as `$TOKEN_FILE` in later commands. The default token-file directory is the OS temp directory (`/tmp/...` on POSIX/WSL, `%TEMP%\...` on Windows), so do not hardcode `/tmp`.
 
 If neither file is present or no usable token is found, tell the user to run the **nxd-setup** skill first — and point them at the per-mesh setup docs at `<app_url>/docs/#/tutorials/cli/setup` (resolve `<app_url>` from `find_mesh.py`'s `app_url`; see **Platform docs** below).
+
+**The MCP gateway requires a PAT — a plain OAuth session token 403s.** `find_mesh.py` only checks token *presence*, not type. A token from `nxd login` alone authenticates the DP REST API fine but is rejected by the gateway (`gateway_tools.py`, `mcp_call.py`) with 403. Check the token in `$TOKEN_FILE` starts with `nxdpat_`; if not, the user needs to mint one — `nxd create personal-access-token` or `nxd mcp config` (either mints/stores a PAT for the active mesh). This is a step **you cannot do on the user's behalf**; ask them to run it, then re-read `$TOKEN_FILE`.
 
 **Token lifecycle / 401 recovery.** PATs in `~/.nxd/tokens.json` carry an `expiry`. The nxd CLI itself auto-refreshes the entry when any `nxd` command runs (e.g. `nxd whoami`); the skill's scripts only **read** the file, they do not refresh it. If a per-DP call returns `401 Unauthorized`, fail fast with a message telling the user to run any `nxd` CLI command (the simplest is `nxd whoami`) to refresh, then re-pull the catalogue. Do not silently drop endpoints that 401 — that turns into ghost data. The fix is one line: token file is regenerated from `~/.nxd/tokens.json` after the refresh and passed via `--token-file` to the next call.
 
@@ -203,8 +206,6 @@ python3 scripts/connect_port.py --dp <fullName> --port <port> --api-url "$API_UR
 
 The infra-service driver (from the port's `infra_service_name` in the infra profile, or from the `leased_credential.details.type_hint` when present) decides which path runs. If **neither** is present, do not assume a driver — resolve the profile from the mesh (`nxd ls infra-profiles` against the active mesh) or ask the user which service the port targets (`AskUserQuestion`).
 
-> **Strict mode skips this entire section.** If the user opted into **Strict Mode** (above), do not run any of 6a–6e. Strict mode allows only MCP-mediated access via the mesh MCP gateway + a plan-validation pass. To leave strict mode, the user must explicitly drop the flag.
-
 ### 6a. Relational SQL — Snowflake, Postgres, BigQuery, Redshift, Databricks-SQL, DuckDB
 
 The leased credential carries `username`, `password` / `private_key`, plus the location's `host`, `port`, `database`, `schema`. Run SQL via:
@@ -260,9 +261,10 @@ python3 scripts/mcp_call.py \
 #### Semantic-layer MCP ports (`list_models` / `run_semantic_query`)
 
 A DP built with the **nxd-semantic-data-product** skill exposes a governed
-text-to-SQL surface as three RPC functions: `list_models`, `describe_model`,
-`run_semantic_query`. Treat them as a navigational discover→select→run
-protocol, not as free-form SQL:
+text-to-SQL surface as four RPC functions: `list_models`, `describe_model`,
+`run_semantic_query`, and `semantic_model` (raw per-model registry projection,
+including any `to_data_product` cross-DP join edges the DP publishes). Treat the
+first three as a discover→select→run protocol, not free-form SQL:
 
 1. **Discover — `list_models`.** Call `list_models` first to see the available
    semantic models (entities), their grains, and how they join. Never guess
@@ -280,18 +282,35 @@ protocol, not as free-form SQL:
    `{"measures": ["total_revenue"], "dimensions": ["country"]}`). Do NOT pass a
    `sql` key or a raw SQL string — the DP compiles the selection itself and
    returns the `compiled_sql` (aggregated, read-only, row-capped) plus rows.
-4. **Grain-safe navigation — one query per model.** Because each
-   `describe_model` response is exactly one grain, grain boundaries are visible
-   before you query. To answer a question that spans two grains (e.g. a
-   customer-grain model and an order-grain model): call `describe_model` on each,
-   then issue **one `run_semantic_query` per model** (sharing any compatible
-   dimension, e.g. `country`) and present the result sets separately. Do not
-   attempt to merge all measures into a single call — it will fail with a
-   `CompileError` ("metrics span multiple grains"), and combining them in a
-   hand-written join would double-count via fan-out.
+4. **Grain-safe navigation.** Because each `describe_model` response is exactly
+   one grain, grain boundaries are visible before you query. Combining measures
+   from **join-reachable** models in ONE `run_semantic_query` call is safe — the
+   compiler pre-aggregates each measure at its own grain before joining, so
+   joinable models never double-count (fan-out-safe). Only measures whose grains
+   are NOT connected by any documented join are incompatible and raise a
+   `CompileError` at compile time; for those, issue one query per model and
+   present the result sets separately.
 
-Call these functions exactly like any other MCP tool — `mcp_call.py` against the
-multiplexer (§6d above), using the `<function>__<hash>` wire name.
+**Cross-DP questions — `run_semantic_query` still, on the platform query DP.**
+When a question spans models owned by DIFFERENT data products (e.g. a metric on
+DP A grouped by a dimension on DP B, joined through a crosswalk), do NOT harvest
+and merge per-DP registries yourself, and do NOT call a member DP's own
+`run_semantic_query` (it only knows its own registry). Call the platform's
+built-in cross-DP tool on the mesh MCP gateway:
+**`query-system-dp-<env>__run_semantic_query`** (confirm the exact wire name via
+`gateway_tools.py tools` — it is a proxy built-in, so it appears in the gateway
+`tools/list` without a `__<hash>` suffix). The query system DP harvests every
+entitled member's registry, merges them into one cross-DP registry (using each
+join's `to_data_product` owner edge), authorization-gates each touched member,
+resolves per-member warehouse credentials, and compiles + executes ONE
+fan-out-safe cross-DP JOIN server-side. The request is identical to a single-DP
+call — `{measures, dimensions, filters, order_by, limit}` of concept names — the
+merge/gate/execute all happen platform-side. Discover the mesh-wide concept
+vocabulary with the same built-in `query-system-dp-<env>__{list_models,
+describe_model}` tools.
+
+Call all these functions exactly like any other MCP tool — `mcp_call.py` against
+the multiplexer (§6d above), using the wire name from `gateway_tools.py tools`.
 
 ### 6e. External API ports — `driver: api`
 
@@ -334,73 +353,6 @@ carries `compiled_sql`, `rows`, `row_count`, `truncated`, `error`; on non-empty 
 > `DISTINCT` read, not reachable from the three tools). See the [README](README.md)
 > for both; the value-mismatch symptom is the table row below.
 
-### 6g. Cross-DP semantic query — `run_cross_dp_query` (the governed MCP path)
-
-When the question spans **two or more DPs** (a metric on DP A grouped by a
-dimension on DP B, joined on a key declared in a `semantic_model` payload), do
-**not** lease a credential and compile/run SQL on the client — a per-DP lease is
-single-schema-scoped and the warehouse network policy admits only the platform
-egress IP, so the client cannot run the join.
-
-The mesh exposes a **server-side cross-DP compiler as one governed MCP tool**,
-`run_cross_dp_query`, served by a cross-DP facade DP (e.g. `cross-dp-query-demo`):
-it merges the member DPs' registries, compiles ONE fan-out-safe cross-schema SQL,
-and runs it **in-pod** under a cross-DP-scoped role — the only locus that can both
-reach and authorize. You never write SQL; the same PII / mixed-grain governance
-the per-DP `run_semantic_query` enforces applies here.
-
-**Protocol** (MCP-only — works in default mode and strict mode alike):
-
-1. Find the facade DP + its tool: `gateway_tools.py tools` → the tool whose base
-   name is `run_cross_dp_query`. Confirm it on the gateway every query (no cache).
-2. For **each DP** your question touches, call its `semantic_model` tool and keep
-   the raw payload (the JSON the tool returns).
-3. Call `run_cross_dp_query` with:
-   - `registry_payloads`: the list of those `semantic_model` payloads (dict or
-     JSON string each) — include exactly the DPs the question spans; the set is
-     dynamic, no redeploy when the mesh changes.
-   - `measures`, `dimensions`, `filters` — the concept selection, same vocabulary
-     as `run_semantic_query`.
-
-```bash
-# each member DP's semantic_model payload, then the cross-DP call
-python3 scripts/mcp_call.py --endpoint "$BASE" --tool semantic_model__<hashA> --args '{}' \
-    --token-file "$TOK" --out /tmp/pA.json
-python3 scripts/mcp_call.py --endpoint "$BASE" --tool semantic_model__<hashB> --args '{}' \
-    --token-file "$TOK" --out /tmp/pB.json
-python3 scripts/mcp_call.py --endpoint "$BASE" --tool run_cross_dp_query__<facade-hash> \
-    --args '{"registry_payloads": [<pA-json-string>, <pB-json-string>],
-             "measures": ["<metric>"], "dimensions": ["<dim>"]}' \
-    --token-file "$TOK" --out /tmp/xdp.json
-```
-
-The cross-DP join must be **declared** in some member DP's `registry.py` (a foreign
-model stub with `data_product=` + physical `table=`, plus the `.join()` on-key) so
-its `semantic_model` payload publishes the edge — otherwise the selection is not
-join-reachable and the tool returns an error, not a wrong number. PII on the join
-key or a PII output dimension is denied (`PII dimension excluded from cross-model
-reach`) — that is governance, not a transient failure; do not retry.
-
-**In strict mode, this IS the cross-DP path — wrapped in the plan→validate→execute
-gate.** Strict mode does NOT stitch per-DP `run_semantic_query` calls for a
-cross-DP join (when the join key is PII no leg may return it, so there is nothing
-to stitch — strict mode would have to abstain). Instead the join is **one plan
-step** whose `mcp_function` is `run_cross_dp_query__<facade-hash>` and whose
-`request` carries `registry_payloads` + the selection; `relationships_used[*]`
-cites the cross-DP join from the relations bundle. `plan_validator.py` then passes
-only when the facade `(dp, mcp_function)` is in the gateway `function_index`
-(Rule 3) **and** the join matches the bundle (Rule 4). On pass, execute that one
-step via `mcp_call.py`; on fail, abstain — never fall back to direct SQL or the
-experimental client compiler. Full flow + plan shape: [reference/strict-mode.md](reference/strict-mode.md) class (c).
-
-> **`run_cross_dp_query` vs `scripts/cross_dp_compile.py`.** They run the *same*
-> shipped compiler. `run_cross_dp_query` is the **deployable, governed, in-pod**
-> form — the path the skill uses. `scripts/cross_dp_compile.py` is an
-> **experimental client-side** stand-in that is **NOT part of the skill flow**
-> (it fails on client authorization + network locus); it is guarded behind
-> `NXD_ALLOW_EXPERIMENTAL_CROSS_DP=1` and documented in the [README](README.md).
-> Never route a cross-DP query through it.
-
 ---
 
 ## Credentials on the command line
@@ -416,29 +368,29 @@ The skill itself never prints tokens, presigned URLs, or DB passwords back to th
 **Token + header by surface.** The same token file feeds both surfaces, but the
 wire header differs and `mcp_http.py` / `nxd_api.py` handle it for you:
 
-- **MCP gateway** (`gateway_tools.py`, strict-mode scripts) — a **PAT**
-  (`nxdpat_…`, from `nxd mcp config` / `nxd login`) is sent on **`X-Nextdata-Token`**
-  (the documented MCP auth); an OAuth session token goes on `Authorization: Bearer`.
-  The two are mutually exclusive on the gateway — `mcp_http.py` picks by token type.
-- **DP REST API** (`list_*`, `connect_port.py`, …) — uses `x-nextdata-token`.
+- **MCP gateway** (`gateway_tools.py`, `mcp_call.py`) — requires a **PAT**
+  (`nxdpat_…`, minted via `nxd create personal-access-token` / `nxd mcp config`)
+  sent on **`X-Nextdata-Token`** — the only auth the gateway accepts. A plain
+  OAuth session token (from `nxd login`) 403s here even though it authenticates
+  fine against REST — see **Step 1** and the troubleshooting table.
+- **DP REST API** (`list_*`, `connect_port.py`, …) — accepts either token kind on `x-nextdata-token`.
 
-A `401` on either means the token is missing/expired, **not** the wrong kind:
-refresh a PAT (`nxd mcp config`) or an OAuth session token (`nxd whoami`), then retry.
+A `401` on either surface means the token is missing/expired: refresh a PAT
+(`nxd mcp config`) or an OAuth session token (`nxd whoami`), then retry. A
+`403` on the gateway with a token that works against REST means the token is
+the wrong *kind*, not expired — mint a PAT (see Step 1).
 
 ---
 
 ## Scripts
 
-The skill ships small Python entrypoints under `scripts/`. Install dependencies into a throwaway venv:
+The skill ships small Python entrypoints under `scripts/`. Resolve `$WORKDIR`
+first (**Step 0**), then install dependencies into a throwaway venv (Windows:
+`py -3 -m venv` + `.\...\Scripts\pip.exe`):
 
 ```bash
 python3 -m venv .nxd-data-product-query-venv
-.nxd-data-product-query-venv/bin/pip install -r scripts/requirements.txt
-```
-
-```powershell
-py -3 -m venv .nxd-data-product-query-venv
-.\.nxd-data-product-query-venv\Scripts\pip.exe install -r scripts\requirements.txt
+.nxd-data-product-query-venv/bin/pip install -r "$WORKDIR/scripts/requirements.txt"
 ```
 
 | Script | Purpose |
@@ -450,11 +402,8 @@ py -3 -m venv .nxd-data-product-query-venv
 | `fetch_file.py` | Download a leased presigned URL, preview / SQL-query the file with DuckDB |
 | `embed_query.py` | Compute an embedding for a query string using a named model |
 | `vector_search.py` | Vector similarity search against pgvector / Pinecone |
-| `mcp_http.py` | (Strict mode) Minimal MCP Streamable-HTTP client used by the strict-mode scripts — handles `initialize`, session id, `tools/list`, `tools/call` |
-| `mcp_gateway.py` | (Strict mode) Sources the catalogue from the **MCP multiplexer** in one session — `proxy__getDataProductsHealth` + one `tools/list` (no `nxd mcp health` subprocess, no per-DP fan-out). Tools grouped by `__<hash>`. **Re-run every query** — the DP set + tools are not stable |
-| `semantic_relations.py` | (Strict mode) For each gateway DP whose tools include a name matching `^semantic[_-]?models?$` (regex overridable), calls that tool and merges the response into a single relations bundle. **Re-run every query** |
-| `plan_validator.py` | (Strict mode) Pure local plan validator. Checks the plan against the gateway catalogue + relations bundle. Emits `{passed, checks, failures}`. Network-free — caller must keep the catalogue + relations fresh |
-| `mcp_call.py` | One-shot CLI over `mcp_http.call_tool_one_shot` — opens an MCP session, calls one tool (via the multiplexer, `<function>__<hash>`), writes the unwrapped result to `--out`. Used for default-mode RPC/MCP calls (§6d) and to execute each step of a validated strict-mode plan (Rule 5) |
+| `mcp_http.py` | Minimal MCP Streamable-HTTP client — the shared transport under `gateway_tools.py` + `mcp_call.py` (handles `initialize`, session id, `tools/list`, `tools/call`) |
+| `mcp_call.py` | One-shot CLI over `mcp_http.call_tool_one_shot` — opens an MCP session, calls one tool, writes the unwrapped result to `--out`. Used for RPC/MCP calls (§6d), single-DP `run_semantic_query` (§6f), and the platform cross-DP `query-system-dp-<env>__run_semantic_query` built-in (§6d) |
 
 Each script writes secrets only to `--out` files (never stdout) and reads tokens via `--token-file` or stdin.
 
@@ -467,32 +416,20 @@ Each script writes secrets only to `--out` files (never stdout) and reads tokens
 - **`connect` returns `approval_pending`** — stop and surface the `message` / `tracking_url` to the user. Do not poll.
 - **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `<port_credentials_file>` for the session; re-request if the TTL passes.
 - **Vector store embedding model mismatch** — querying with a different embedding model from the one the DP used to index gives nonsense results. Always confirm the model from the DP's `description` / `/v1/info` before computing the query vector.
+- **Local `*.nxd.local` cluster + `requests` SSL errors despite a correct CA bundle** — `REQUESTS_CA_BUNDLE` pointed at the cluster CA (`shared/charts/nxd/localCerts/nxdCA.crt`) is the right first fix, but Python `requests` can still fail TLS verification against a local cluster even when `curl` against the same host succeeds. If `requests` still errors after confirming the bundle path, set `NXD_MCP_INSECURE=1` (skips TLS verification in `mcp_http.py` — local dev only, never against a real mesh).
+- **`find_mesh.py --mesh <name>` fails but a `config.yaml.<name>` file exists** — a saved-but-inactive config variant isn't the same as a registered mesh; `find_mesh.py` only reads `meshes.json` + the *active* `config.yaml` (no `--config` flag). Copy `~/.nxd/config.yaml.<name>` over `~/.nxd/config.yaml` to make it active, then re-run. If the mesh is still unreachable after that, it's a network problem (VPN) between you and that mesh — a prerequisite this skill can't fix.
 - **One gateway session per query** — the DP set + each DP's tools change (new DP, redeploy, breaker flip). Don't reuse a tool list across queries; re-run `gateway_tools.py` per question. Use `nxd mcp client` only when the user explicitly wants an interactive MCP session.
-- **Strict mode validation failures are terminal** — when `plan_validator.py` returns `passed=false`, do **not** fall back to default routing in the same run. Return the failure to the user and stop. Falling back silently would defeat the rule. If the user wants the fallback, they must explicitly drop strict mode.
-- **Strict mode + unknown relationships** — if a join the question seems to need is not present in any `semantic_model` MCP response, the right answer is "I can't do this in strict mode" — not "I'll guess from column names". Add the missing relationship to the source DP's `semantic_model` and redeploy, or ask the user to drop strict mode.
+- **Cross-DP join not resolvable** — if `query-system-dp-<env>__run_semantic_query` returns a `CompileError` "no join path connects model X to model Y", the two models are not linked by any published join edge. A cross-DP edge only exists when the owning DP's `semantic_model` declares the join with a `to_data_product` marker (the crosswalk/fact DP publishes it, not the target). The right answer is "these concepts aren't joinable in the mesh" — do NOT hand-write a join or guess from column names. Add the missing `to_data_product` join edge to the source DP's model and redeploy, or ask the user to narrow the question.
 
 ---
 
 ## Troubleshooting query-time failures
 
-Symptom → cause → fix for failures hit while querying a port. Diagnose before
-retrying: the same symptom (e.g. an empty result) has more than one cause, so
-confirm which before changing the query.
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `401 Unauthorized` from a port call | Leased credential or PAT expired (`tokens.json` `expiry` passed), or the wrong auth header. DP REST uses `x-nextdata-token`, NOT `Authorization: Bearer`. | Re-run `nxd login` (or **nxd-setup**) and re-request `connect`; send the PAT as `x-nextdata-token`. |
-| `403` / `SignatureDoesNotMatch` fetching a file URL | The presigned URL TTL elapsed mid-session (they are short-lived). | Re-request `connect` for a fresh URL; don't reuse a cached one past its TTL. |
-| `connect` returns `unsupported` | The port's driver has no query recipe wired, or the infra profile couldn't be resolved. | Resolve the infra profile from the active mesh; confirm the port's driver type via `gateway_tools.py details --dp <dp> --outputs`. |
-| `connect` returns `approval_pending` | Access requires a pending approval. | Stop. Surface the `message` / `tracking_url` to the user. Do NOT poll. |
-| Vector search returns nonsense / irrelevant hits | Query embedded with a different model than the DP indexed with. | Read the index model from the DP `description` / `/v1/info`; embed the query with that exact model. |
-| Vector search errors with a dimension mismatch | Query vector dimension ≠ the indexed column dimension. | Match the embedding model so dimensions agree (e.g. 384 vs 1536). |
-| SQL query against a pgvector port returns 0 rows | Querying the metadata table by the wrong table name, or the DP hasn't run yet (no data). | Confirm the physical table name (model name, lowercased) and that the DP reached `STARTED` with a successful run. |
-| RPC/MCP call fails to connect / 404 | Wrong tool wire name or trailing-slash mismatch on the multiplexer endpoint; or the DP MCP port is unhealthy. | Re-confirm the `<function>__<hash>` name from `gateway_tools.py tools --dp <dp>` and check `gateway_tools.py health`; if the port itself is failing, debug the DP with **nxd-debugging-data-products**. |
-| `run_semantic_query` returns "metrics span multiple grains" | Metrics from two different-grain models were combined in one call (chasm-trap guard) — correct governance, not a transient error. | Do NOT retry the same combined call. Call `describe_model` on each model to confirm grain membership, then issue one `run_semantic_query` per model sharing a compatible dimension; present the result sets separately. See §6d "Semantic-layer MCP ports". |
-| `run_semantic_query` returns `error: "dimension X is not compatible with metric Y"` | The dimension can't slice that metric (not in `compatible_dimensions`, no join reaching it). | Re-pick from `describe_model`'s `compatible_dimensions` / `joins.reaches_dimensions`; re-run the §6f gate. |
-| Filtered semantic query returns 0 rows, but the unfiltered query returns rows | Likely a **value mismatch** — the NL literal (`"California"`) doesn't match the stored encoding (`"CA"`); structural validation can't catch it (the dimension exists, only the value diverges). | Surface to the user; ask for the stored form or drop the filter. Do **NOT** retry with invented encodings. Durable fix is server-side value-linking (§6f "Not yet built"). |
-
-When the failure is the Data Product itself (port unhealthy, no data produced,
-RPC pod crashing) rather than the query, switch to the
+Symptom → cause → fix for failures hit while querying a port lives in
+**[reference/troubleshooting.md](reference/troubleshooting.md)** (auth/TTL 401·403,
+`connect` `unsupported`/`approval_pending`, vector model/dimension mismatch,
+pgvector 0-rows, RPC 404, and the `run_semantic_query` grain/dimension/value-match
+cases). Diagnose before retrying — the same symptom (e.g. an empty result) has
+more than one cause. When the failure is the Data Product itself (port unhealthy,
+no data, RPC pod crashing) rather than the query, switch to the
 **nxd-debugging-data-products** skill.

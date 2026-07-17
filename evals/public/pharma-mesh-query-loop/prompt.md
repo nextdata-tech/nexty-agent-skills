@@ -1,4 +1,4 @@
-# Scenario: Query a Pharma Semantic Mesh (strict MCP)
+# Scenario: Query a Pharma Semantic Mesh (governed MCP)
 
 A clinical-data analyst has a Nextdata OS data product exposing a **pharma semantic
 mesh** over three governed MCP tools — `list_models`, `describe_model`,
@@ -9,8 +9,8 @@ loosely matches a question) and **PII dimensions** that don't fit every grain.
 
 ## Task for the agent
 
-Answer the analyst's questions below **using the strict MCP-only mode** of the
-`nxd-data-product-query` skill: discover the catalog via `list_models` /
+Answer the analyst's questions below **using the governed semantic protocol** of
+the `nxd-data-product-query` skill: discover the catalog via `list_models` /
 `describe_model`, build a concept-name selection, run the intent gate, and call
 `run_semantic_query` (never author raw SQL). For each question, restate what
 you'll run in plain language before executing, and clarify rather than guess when
@@ -38,7 +38,7 @@ The analyst asks, in turn:
 ## Grading
 
 Machine-graded against `checks.json` after the agent completes (checks not
-revealed to the agent). In short: discover before querying, use the strict-mode
+revealed to the agent). In short: discover before querying, use the skill's
 MCP toolchain, pick the right metric for each confusable question (or clarify),
 get the fan-out-safe answer for multi-fact questions, surface PII governance, and
 never author raw SQL.

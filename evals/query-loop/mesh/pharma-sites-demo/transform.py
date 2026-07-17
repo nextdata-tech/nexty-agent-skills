@@ -1,14 +1,22 @@
 """Transform for pharma-sites-demo — the MANY_TO_MANY crosswalk HUB of the mesh.
 
-Seeds the ROWS of this DP's OWN base tables (`SITES` + the promised
-`site_subjects` managed table). The table STRUCTURES and the single-table
-`SITE_SUBJECTS_SEMANTIC` view are created earlier by the `@on_provision` hook
-(provision.py), which runs in Phase A before this transform. This transform only
-writes the data the output-port promise verifies.
+Self-seeded (NEW .semantic_tools() pattern). Two jobs, all in this DP's OWN
+Snowflake schema:
 
-The `.transform()` is also what bundles the sibling `registry.py` / `tools.py` /
-`provision.py` modules into the image (the `**/*.py` glob runs on the
-transform/compute path).
+1.  Seed BOTH base tables — the site dimension (``sites``) and the crosswalk hub
+    (``site_subjects``) — with ``CREATE OR REPLACE TABLE`` + ``write_pandas``.
+    The names are UNQUOTED so Snowflake folds them to upper-case, matching the
+    compiler's base-table SQL (which references the table names unquoted too), so
+    both resolve to the same upper-cased objects.
+2.  Write a one-row marker table (``sites_smoke_marker``) — the produce-verified
+    promised model — via ``full_table_name(...)`` so the storage port's
+    produce-verification passes.
+
+The old registry.py / tools.py / provision.py modules and the single-table
+semantic view are removed. The auto-generated ``run_semantic_query`` (wired by
+``.semantic_tools()``) compiles governed SQL against the base tables directly,
+reading the kernel-delivered ``<root>/.nxd/semantic/<model>.json`` payloads. No
+pre-provisioned view is required.
 """
 
 import pandas as pd
@@ -68,41 +76,43 @@ def transform(snowflake: Snowflake) -> None:
         **snowflake.connector_params(),
     )
     try:
-        # 1a) Seed the site DIMENSION rows (table created by the provision hook).
-        #     Truncate-and-load so repeated runs stay deterministic (the provision
-        #     hook created the table with CREATE TABLE IF NOT EXISTS, so it may
-        #     already hold rows from a prior run).
         cur = conn.cursor()
         try:
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {fqn}sites")
-        finally:
-            cur.close()
-        write_pandas(
-            conn,
-            sites,
-            "SITES",
-            database=snowflake.database,
-            schema=snowflake.schema,
-        )
-        print(f"SEMVIEW_DIAG seeded {fqn}sites rows={len(sites)}")
+            # Seed the two base tables (names match the spec models).
+            # Create UNQUOTED so Snowflake folds to upper-case — the compiler's
+            # base-table SQL references the table names unquoted too, so both
+            # resolve to the same upper-cased objects.
+            for name, df, cols in [
+                ("sites", sites, "SITE_ID NUMBER, SITE_REGION VARCHAR"),
+                (
+                    "site_subjects",
+                    site_subjects,
+                    "SITE_ID NUMBER, SUBJECT_ID NUMBER",
+                ),
+            ]:
+                cur.execute(f"CREATE OR REPLACE TABLE {fqn}{name} ({cols})")
+                write_pandas(
+                    conn,
+                    df,
+                    name.upper(),
+                    database=snowflake.database,
+                    schema=snowflake.schema,
+                )
+                print(f"SEMVIEW_DIAG seeded {fqn}{name} rows={len(df)}")
 
-        # 1b) Seed the PROMISED `site_subjects` crosswalk model's MANAGED table.
-        #     full_table_name("site_subjects") returns the exact table the storage
-        #     driver verifies the promise against, so produce-verification passes
-        #     against the REAL model.
-        managed = snowflake.full_table_name("site_subjects")
-        cur = conn.cursor()
-        try:
+            # Write the marker row (produce-verified promised model).
+            managed = snowflake.full_table_name("sites_smoke_marker")
+            marker_bare = managed.split(".")[-1].strip('"')
             cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
+            write_pandas(
+                conn,
+                pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": "n/a"}]),
+                marker_bare,
+                database=snowflake.database,
+                schema=snowflake.schema,
+            )
+            print(f"SEMVIEW_DIAG marker written to {managed}")
         finally:
             cur.close()
-        write_pandas(
-            conn,
-            site_subjects,
-            managed.split(".")[-1].strip('"'),
-            database=snowflake.database,
-            schema=snowflake.schema,
-        )
-        print(f"SEMVIEW_DIAG seeded {managed} rows={len(site_subjects)}")
     finally:
         conn.close()

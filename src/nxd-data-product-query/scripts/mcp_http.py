@@ -1,4 +1,6 @@
-"""Minimal MCP Streamable-HTTP client used by the strict-mode scripts.
+"""Minimal MCP Streamable-HTTP client — the shared transport for every MCP call
+the skill makes (gateway discovery via ``gateway_tools.py``, one-shot tool calls
+via ``mcp_call.py``, including the platform's cross-DP ``run_semantic_query``).
 
 The platform exposes per-DP MCP servers behind a proxy at
 ``https://<dp-host>/<dp>/rpcs/<port>/mcp/``. Streamable HTTP works as:
@@ -7,10 +9,11 @@ The platform exposes per-DP MCP servers behind a proxy at
 2. ``POST /mcp/`` ``notifications/initialized`` (no id) → 202 ack.
 3. ``POST /mcp/`` ``tools/list`` / ``tools/call`` with the same session id.
 
-Auth: the wire header depends on the token TYPE (see ``_auth_header``). A PAT
-(``nxdpat_…``, the token ``nxd mcp config`` / ``nxd login`` provision) goes in
-``X-Nextdata-Token`` — the documented MCP auth; an OAuth session token goes in
-``Authorization: Bearer``. The two are mutually exclusive on the gateway.
+Auth: the gateway requires a PAT (``nxdpat_…``, minted via ``nxd mcp config`` /
+``nxd create personal-access-token``) sent on ``X-Nextdata-Token`` — the
+documented and only accepted MCP auth. A plain OAuth session token (from
+``nxd login``) is rejected here with 403, even though the same token
+authenticates fine against the DP REST API — see ``_auth_header``.
 
 Use via:
 
@@ -77,16 +80,22 @@ def _auth_header(token: str) -> dict[str, str]:
     Verified live against the mesh MCP gateway (``/dp/mcp``) and documented in
     nxd ``components/docs/basics/using_mcp.md`` /
     ``components/docs/dp_development/mcp_tools.md`` (every MCP example uses
-    ``X-Nextdata-Token: <PAT>``):
+    ``X-Nextdata-Token: <PAT>``). Only a PAT is accepted by the gateway — a
+    plain OAuth session token (from ``nxd login``) 403s here even though the
+    same token works fine against the DP REST API:
 
         header                 PAT (nxdpat_…)   OAuth session token
-        X-Nextdata-Token       200              401
-        Authorization: Bearer  401              200
+        X-Nextdata-Token       200              403
+        Authorization: Bearer  403              403
 
-    Sending BOTH headers 401s. So send exactly one, keyed on the token kind:
+    Sending BOTH headers also 403s. So send exactly one, keyed on the token
+    kind:
       - PAT (``nxdpat_`` prefix, the token ``nxd mcp config`` / ``nxd login``
-        provision) → ``X-Nextdata-Token`` — the documented MCP auth.
-      - anything else (an OAuth JWT session token) → ``Authorization: Bearer``.
+        provision) → ``X-Nextdata-Token`` — the documented MCP auth, and the
+        only header/token pair the gateway actually accepts.
+      - anything else (an OAuth JWT session token) → ``Authorization: Bearer``,
+        kept for completeness but expect a 403 on the gateway — mint a PAT
+        instead (see SKILL.md Step 1).
     """
     if token.startswith("nxdpat_"):
         return {"X-Nextdata-Token": token}

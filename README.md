@@ -69,17 +69,28 @@ Curated by our field engineers. Brings the patterns, skills, and tools your AI a
 
 ## Quick Install
 
+From a clone of this repo, the first-party installer handles every Claude target:
+
+```bash
+git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
+cd nexty-agent-skills
+./scripts/install.sh --code        # Claude Code: copy skills to ~/.claude/skills
+./scripts/install.sh --desktop     # Claude Desktop / Cowork: install + enable (no upload)
+./scripts/install.sh --all         # all targets
+```
+
+`scripts/install.sh` validates the pack (`scripts/validate_skills.py`), initializes the
+examples submodule, and installs without any third-party CLI. See
+[Installer reference](#installer-scriptsinstallsh) below for targets, scope, and uninstall.
+
+### Alternative: Vercel Skills CLI
+
 ```bash
 npx skills add nextdata-tech/nexty-agent-skills --all -y
 ```
 
-The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right location for each agent automatically.
-
-For Windows PowerShell, run the same command in PowerShell:
-
-```powershell
-npx skills add nextdata-tech/nexty-agent-skills --all -y
-```
+The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs skills to the right
+location for each agent automatically. On Windows PowerShell, run the same command.
 
 ### Claude Code plugin distribution
 
@@ -131,6 +142,53 @@ Before submitting to the community marketplace:
 
 The official Anthropic & Partners directory is separate from the community marketplace and should be treated as a later partner/curation conversation.
 
+### Installer (`scripts/install.sh`)
+
+The first-party installer is the canonical path. It is pure bash + `python3` (no `npx`,
+no `jq`), validates the pack before installing, and supports a clean uninstall.
+
+```bash
+scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
+```
+
+**Targets** (default `--code`): `--code` `--desktop` `--cowork` `--all`.
+
+| Target | What it does |
+|--------|--------------|
+| `--code` | Copies each skill to `~/.claude/skills/<skill>/` (global) or `./.claude/skills/` with `--project`. Full submodule, no size cap. Idempotent (`rsync --delete`). |
+| `--desktop` / `--cowork` | Both are "local-agent-mode". Installs the pack as a local marketplace plugin and enables it — no manual upload. Restart Claude Desktop to load it. `--zip` switches to the build-zip + manual-upload fallback. macOS only. |
+
+**Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
+
+**Examples**
+
+```bash
+scripts/install.sh --code                       # global Claude Code install (default)
+scripts/install.sh --code --project             # current project only
+scripts/install.sh --code --skills "nxd-setup nxd-data-product-builder"
+scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
+scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
+scripts/install.sh --all                        # every target
+scripts/install.sh status --code                # show what's installed
+scripts/install.sh uninstall --desktop          # remove + disable the Desktop/Cowork plugin
+scripts/install.sh --code --dry-run             # print actions, change nothing
+```
+
+Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
+`-y/--yes`, `--verbose`.
+
+#### How the Claude Desktop / Cowork install works
+
+Desktop and Cowork ("local-agent-mode") load plugins from a local marketplace store
+under `~/Library/Application Support/Claude/local-agent-mode-sessions/<accountId>/<deviceId>/`.
+The installer mirrors what the **Browse plugins** UI writes to disk — it materializes a
+marketplace checkout and a plugin cache, then registers the plugin across
+`known_marketplaces.json`, `installed_plugins.json`, and `cowork_settings.json`
+(which carries the `enabledPlugins` flag, so the plugin installs **enabled**, not disabled).
+Every file is backed up before it's edited, and `uninstall --desktop` reverses all of it.
+Restart Claude Desktop after installing for it to pick up the change. macOS only;
+use `--zip` for the manual-upload fallback.
+
 ### Manual install
 
 ```bash
@@ -165,6 +223,14 @@ npx skills remove --all -y; rm -rf .agents .claude/skills skills-lock.json; npx 
 
 ## Uninstall
 
+With the first-party installer:
+
+```bash
+scripts/install.sh uninstall --code     # or --desktop, --cowork, --all
+```
+
+Or, if you installed via the Vercel Skills CLI:
+
 ```bash
 npx skills remove --all -y
 rm -rf .agents .claude/skills skills-lock.json
@@ -186,6 +252,9 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
 | `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
 | `nxd-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
+| `nxd-eval-harness` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
+| `nxd-generate-dp` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
+| `nxd-pocket-loop` | Drive the local Nexty Pocket loop end to end — infer a semantic model, generate a runnable data product, serve it on the local desktop supervisor, answer natural-language questions against it, and refine wrong answers back into a regenerate |
 
 ## Usage
 
@@ -539,6 +608,49 @@ Do not treat generated source files as a deployed data product. A data product i
 2. Add a `SKILL.md` with YAML frontmatter:
 3. Add reference docs in `reference/` if needed
 4. Test locally with `npx skills add ./src --all -y`
+5. Register the skill in the same PR: add `src/<skill-name>` to `current_pack`
+   in `evals/skill-sets.yaml`, add a row to the **Available Skills** table above,
+   and set `metadata.version` to the current plugin version. A skill missing from
+   either the pack or the table ships the pack incomplete.
+
+See [`AGENTS.md`](AGENTS.md) for the full authoring & review contract (layout,
+versioning lockstep, pack completeness, safety) that CI and the PR review enforce.
+
+## Improving a Skill
+
+Skills are eval-gated: a behavior change is measured before it merges, not just
+eyeballed. The loop for editing an existing skill:
+
+1. **Edit** the `SKILL.md` / `reference/` files under `src/<skill>/`.
+2. **Validate** conventions and packaging:
+   ```bash
+   python3 scripts/validate_skills.py --root .
+   ./build-skills.sh
+   ```
+3. **Benchmark** the change (skip only for pure packaging/typo fixes). Run the
+   skill's eval scenario(s) on `main` and on your branch, then record the diff:
+   ```bash
+   python3 evals/run.py --skill-set current_pack \
+     --scenario <scenario> --report /tmp/eval-before.json   # on main
+   python3 evals/run.py --skill-set current_pack \
+     --scenario <scenario> --report /tmp/eval-after.json    # on your branch
+
+   python3 evals/benchmark_record.py \
+     --label "<skill>: <what changed>" \
+     --report before=/tmp/eval-before.json \
+     --report after=/tmp/eval-after.json \
+     --notes "<why>"
+   ```
+   This appends a before/after entry to `evals/benchmarks/ledger.md` — the repo's
+   history of skill quality and efficiency (judge checks, turns, tool calls,
+   tokens). Commit it in the same PR as the change it measures.
+4. **Bump the version** if behavior changed — plugin version is authoritative and
+   kept in lockstep across `.claude-plugin/plugin.json`,
+   `.claude-plugin/marketplace.json`, and every `src/*/SKILL.md` `metadata.version`.
+
+Full harness details — variants (`no_skills` / `current_pack` / `candidate_pack`),
+KPIs, scenario authoring, and the regression/efficiency gate — are in
+[`evals/README.md`](evals/README.md).
 
 ### Conventions
 

@@ -4,7 +4,7 @@ skill_sets:
     skills: []
 
   current_pack:
-    description: "Shipped customer-facing skill pack (all 12 skills, v0.4.0)."
+    description: "Shipped customer-facing skill pack (all 15 skills, v0.9.1)."
     skills:
       - "src/nxd-setup"
       - "src/nxd-data-product-builder"
@@ -18,9 +18,12 @@ skill_sets:
       - "src/nxd-complying-with-failing-policy"
       - "src/nxd-debugging-data-products"
       - "src/nxd-semantic-data-product"
+      - "src/nxd-eval-harness"
+      - "src/nxd-pocket-loop"
+      - "src/nxd-generate-dp"
 
   # Staging slot for skills under evaluation before promotion to current_pack.
-  # Currently identical to the shipped pack — add new experimental skills here.
+  # Add new experimental skills here.
   candidate_pack:
     description: "Shipped pack plus any skills under evaluation."
     skills:
@@ -36,4 +39,8 @@ skill_sets:
       - "src/nxd-complying-with-failing-policy"
       - "src/nxd-debugging-data-products"
       - "src/nxd-semantic-data-product"
+      - "src/nxd-eval-harness"
+      - "src/nxd-pocket-loop"
+      # Under evaluation (NEX-783): desktop DP closure generation.
+      - "src/nxd-generate-dp"
 

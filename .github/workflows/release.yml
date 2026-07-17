@@ -59,7 +59,7 @@ jobs:
       - name: Validate skills
         run: python3 scripts/validate_skills.py --root .
 
-      # build-skills.sh writes src/<skill>/<skill>.zip and a copy at repo root.
+      # build-skills.sh writes one zip per skill into build/<skill>.zip.
       # It only prints an "OVER CAP" status; it never exits non-zero, so we grep.
       - name: Build skill zips and enforce the 200-entry Claude Desktop cap
         run: |
@@ -72,16 +72,16 @@ jobs:
           fi
 
       # Combined whole-pack zip for users who want every skill in one upload. Each
-      # skill keeps its own zip too (built above at the repo root).
+      # skill keeps its own zip too (built into build/ by build-skills.sh).
       - name: Assemble release assets
         id: assets
         run: |
           set -euo pipefail
           mkdir -p dist
           tag="${{ steps.tag.outputs.tag }}"
-          # Per-skill zips (built at repo root by build-skills.sh)
-          for z in *.zip; do
-            cp "$z" "dist/$z"
+          # Per-skill zips (built into build/ by build-skills.sh)
+          for z in build/*.zip; do
+            cp "$z" "dist/$(basename "$z")"
           done
           # Combined pack: bundle every per-skill zip into one archive
           ( cd dist && zip -q "nexty-agent-skills-${tag}.zip" ./*.zip )
@@ -117,3 +117,24 @@ jobs:
               --notes "$notes" \
               --verify-tag
           fi
+
+      # Notify the nxd monorepo to bump its external/nexty-agent-skills submodule
+      # pin, which rebuilds the nxd-cli-installer bundle so `nxd activate skills`
+      # serves this release. Requires NXD_DISPATCH_PAT: a fine-grained PAT with
+      # contents:write + pull-requests:write on nextdata-tech/nxd only (the
+      # default github.token cannot dispatch to another repository).
+      - name: Notify nxd to bump the skills submodule
+        env:
+          GH_TOKEN: ${{ secrets.NXD_DISPATCH_PAT }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "NXD_DISPATCH_PAT not set — skipping nxd notification (release still published)."
+            exit 0
+          fi
+          gh api repos/nextdata-tech/nxd/dispatches \
+            -f event_type=nexty-skills-release \
+            -F "client_payload[tag]=${TAG}" \
+            -F "client_payload[sha]=${GITHUB_SHA}"
+          echo "Dispatched nexty-skills-release (${TAG}) to nextdata-tech/nxd"

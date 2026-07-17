@@ -73,5 +73,13 @@ evals/query-loop/runs/
 # Cross-DP join eval run outputs (generated)
 evals/cross-dp-joins/runs/
 
+# DuckDB eval fixtures are built at eval time from committed SQL seeds (build_fixture.py)
+evals/public/*/fixtures/*.duckdb
+evals/public/*/fixtures/*.duckdb.wal
+
 # Skill build artifacts
 build/
+
+# local infra-profile secrets — never commit
+.nxd/
+.claude-pr/

@@ -1,0 +1,67 @@
+{
+  "comment": "Agent-facing logical catalog for the CROSS-DP pharma mesh (what list_models/describe_model return through the gateway built-ins). This is the merged view the gateway publishes after harvesting each authorized member DP's semantic_model and folding cross-DP join edges by owner. Each model names its owning data_product; cross-DP joins carry the member they reach (to_data_product) so the agent can SEE the mesh is multi-DP without reading physical columns. The safety/adverse-event member is NOT authorized for this principal, so its models are simply ABSENT here (entitlement probe). Discriminators mirror semantic.json: chasm (two MANY-per-subject facts at different grains), the site_subjects crosswalk (a subject at >=2 same-region sites double-counts on a naive join), confusable pairs (titer_sum/titer_avg, units_dispensed/dispense_count), and a PII dim across the boundary (prescriber_npi).",
+  "list_models": [
+    {"name": "subjects", "data_product": "pharma-subjects-demo", "grain": "one row per subject", "description": "Subject spine — one row per clinical-trial subject."},
+    {"name": "sites", "data_product": "pharma-sites-demo", "grain": "one row per site", "description": "Trial sites — one row per site."},
+    {"name": "site_subjects", "data_product": "pharma-sites-demo", "grain": "one row per site-subject enrollment", "description": "Site<->subject crosswalk — a subject may be enrolled at more than one site."},
+    {"name": "assays", "data_product": "pharma-labs-demo", "grain": "one row per assay", "description": "Lab assays — many per subject."},
+    {"name": "dispenses", "data_product": "pharma-rx-demo", "grain": "one row per dispense", "description": "Drug dispenses — many per subject."},
+    {"name": "products", "data_product": "pharma-product-demo", "grain": "one row per product", "description": "Products — one row per product."}
+  ],
+  "describe_model": {
+    "subjects": {
+      "name": "subjects", "data_product": "pharma-subjects-demo", "grain": "one row per subject",
+      "metrics": [{"name": "subject_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct subjects.", "compatible_dimensions": ["subject_country"]}],
+      "dimensions": [
+        {"name": "subject_country", "type": "string", "pii": false, "description": "Subject billing country."},
+        {"name": "subject_mrn", "type": "string", "pii": true, "description": "Subject medical record number. PII — governed/maskable."}
+      ],
+      "joins": []
+    },
+    "sites": {
+      "name": "sites", "data_product": "pharma-sites-demo", "grain": "one row per site",
+      "metrics": [{"name": "site_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct trial sites.", "compatible_dimensions": ["site_region", "subject_country"]}],
+      "dimensions": [{"name": "site_region", "type": "string", "pii": false, "description": "Trial-site region (NA, EU, APAC)."}],
+      "joins": [{"to_model": "site_subjects", "to_data_product": "pharma-sites-demo", "kind": "one_to_many", "reaches_dimensions": []}]
+    },
+    "site_subjects": {
+      "name": "site_subjects", "data_product": "pharma-sites-demo", "grain": "one row per site-subject enrollment",
+      "metrics": [],
+      "dimensions": [],
+      "joins": [
+        {"to_model": "subjects", "to_data_product": "pharma-subjects-demo", "kind": "many_to_one", "reaches_dimensions": ["subject_country"]},
+        {"to_model": "sites", "to_data_product": "pharma-sites-demo", "kind": "many_to_one", "reaches_dimensions": ["site_region"]}
+      ]
+    },
+    "assays": {
+      "name": "assays", "data_product": "pharma-labs-demo", "grain": "one row per assay",
+      "metrics": [
+        {"name": "titer_sum", "aggregation": "SUM", "description": "Sum of assay titer.", "compatible_dimensions": ["assay_type", "subject_country", "site_region"]},
+        {"name": "titer_avg", "aggregation": "AVG", "description": "Mean assay titer. AVG is only coherent at the assay grain — not across a subject/region fan-out.", "compatible_dimensions": ["assay_type"]}
+      ],
+      "dimensions": [{"name": "assay_type", "type": "string", "pii": false, "description": "Assay type."}],
+      "joins": [{"to_model": "subjects", "to_data_product": "pharma-subjects-demo", "kind": "many_to_one", "reaches_dimensions": ["subject_country"]}]
+    },
+    "dispenses": {
+      "name": "dispenses", "data_product": "pharma-rx-demo", "grain": "one row per dispense",
+      "metrics": [
+        {"name": "units_dispensed", "aggregation": "SUM", "description": "Total units dispensed.", "compatible_dimensions": ["dispense_channel", "subject_country", "product_modality"]},
+        {"name": "dispense_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct dispenses (number of dispense events).", "compatible_dimensions": ["dispense_channel", "subject_country", "product_modality"]}
+      ],
+      "dimensions": [
+        {"name": "dispense_channel", "type": "string", "pii": false, "description": "Dispense channel (pharmacy, mail, clinic)."},
+        {"name": "prescriber_npi", "type": "string", "pii": true, "description": "Prescriber NPI. PII — governed/maskable."}
+      ],
+      "joins": [
+        {"to_model": "subjects", "to_data_product": "pharma-subjects-demo", "kind": "many_to_one", "reaches_dimensions": ["subject_country"]},
+        {"to_model": "products", "to_data_product": "pharma-product-demo", "kind": "many_to_one", "reaches_dimensions": ["product_modality"]}
+      ]
+    },
+    "products": {
+      "name": "products", "data_product": "pharma-product-demo", "grain": "one row per product",
+      "metrics": [],
+      "dimensions": [{"name": "product_modality", "type": "string", "pii": false, "description": "Product modality (vaccine, antibody, small_molecule)."}],
+      "joins": []
+    }
+  }
+}

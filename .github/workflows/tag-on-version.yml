@@ -1,0 +1,53 @@
+name: tag-on-version
+
+# When a push to main lands a new plugin version, create the matching vX.Y.Z tag.
+# The tag push is what fires release.yml (build + publish + notify nxd to bump the
+# submodule). Merging a version-bumping PR does not create a tag on its own, so
+# without this the release/bump chain never starts.
+#
+# The tag is pushed with NXD_DISPATCH_PAT (not the default GITHUB_TOKEN): a tag
+# pushed by GITHUB_TOKEN does NOT trigger release.yml — GitHub suppresses workflow
+# runs triggered by the default token to prevent recursion.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.claude-plugin/plugin.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tag-on-version
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # PAT so the pushed tag triggers release.yml (see header).
+          token: ${{ secrets.NXD_DISPATCH_PAT }}
+          fetch-depth: 0
+
+      - name: Read plugin version
+        id: ver
+        run: |
+          set -euo pipefail
+          ver="$(python3 -c 'import json;print(json.load(open(".claude-plugin/plugin.json"))["version"])')"
+          echo "tag=v${ver}" >> "$GITHUB_OUTPUT"
+          echo "Plugin version: v${ver}"
+
+      - name: Create tag if missing
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists — nothing to do."
+            exit 0
+          fi
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "Pushed ${TAG} — release.yml will build, publish, and notify nxd."

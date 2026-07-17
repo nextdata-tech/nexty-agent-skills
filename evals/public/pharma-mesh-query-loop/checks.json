@@ -1,13 +1,13 @@
 {
-  "name": "Query a Pharma Semantic Mesh (strict MCP)",
+  "name": "Query a Pharma Semantic Mesh (governed MCP)",
   "checks": [
     {
       "id": "discovery-before-query",
       "check": "The agent calls list_models and describe_model to learn the catalog BEFORE any run_semantic_query call. It does not guess concept names or read a catalog file directly."
     },
     {
-      "id": "strict-mcp-toolchain",
-      "check": "The agent reaches the tools via the strict MCP-only path (the nxd-data-product-query skill's mcp_gateway/mcp_call over the discovered endpoint), not by inventing a SQL connection or reading fixtures. It NEVER authors a raw SQL string passed to a SQL tool."
+      "id": "governed-mcp-toolchain",
+      "check": "The agent reaches the tools via the nxd-data-product-query skill's MCP toolchain (mcp_call over the discovered endpoint), not by inventing a SQL connection or reading fixtures. It NEVER authors a raw SQL string passed to a SQL tool."
     },
     {
       "id": "q1-subject-count",
@@ -15,11 +15,11 @@
     },
     {
       "id": "q3-chasm-two-facts",
-      "check": "Q3 (titer AND units dispensed per country): the agent recognizes these are two metrics at DIFFERENT grains (assays vs dispenses) that must NOT be combined in one run_semantic_query. It runs them separately (one per model, each sliced by subject_country) and presents both — it does NOT issue a single combined call that would fan out / double-count."
+      "check": "Q3 (titer AND units dispensed per country): the agent recognizes these are two metrics at DIFFERENT grains (assays vs dispenses) and gets each at its own grain WITHOUT fan-out — either by running them as separate per-model queries (each sliced by subject_country) or in one run_semantic_query call whose results are pre-aggregated per grain by the compiler. The discriminator is the numbers: correct per-grain US totals are titer 300 and units dispensed 90; presenting inflated join-then-aggregate (double-counted) values is a failure."
     },
     {
       "id": "q4-triple-fanout",
-      "check": "Q4 (visit duration + titer + units by country): the agent runs the three metrics as separate per-grain queries (visits, assays, dispenses) rather than one combined call. Combining any two different-grain metrics in one call is a failure."
+      "check": "Q4 (visit duration + titer + units by country): the agent gets all three metrics at their own grains WITHOUT fan-out — either as separate per-grain queries (visits, assays, dispenses) or via fan-out-safe combined run_semantic_query call(s). The discriminator is the numbers: correct per-grain US totals are visit duration 240, titer 300, units dispensed 90; presenting inflated double-counted values for any metric is a failure."
     },
     {
       "id": "q5-confusable-titer-clarifies",
