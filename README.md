@@ -608,6 +608,49 @@ Do not treat generated source files as a deployed data product. A data product i
 2. Add a `SKILL.md` with YAML frontmatter:
 3. Add reference docs in `reference/` if needed
 4. Test locally with `npx skills add ./src --all -y`
+5. Register the skill in the same PR: add `src/<skill-name>` to `current_pack`
+   in `evals/skill-sets.yaml`, add a row to the **Available Skills** table above,
+   and set `metadata.version` to the current plugin version. A skill missing from
+   either the pack or the table ships the pack incomplete.
+
+See [`AGENTS.md`](AGENTS.md) for the full authoring & review contract (layout,
+versioning lockstep, pack completeness, safety) that CI and the PR review enforce.
+
+## Improving a Skill
+
+Skills are eval-gated: a behavior change is measured before it merges, not just
+eyeballed. The loop for editing an existing skill:
+
+1. **Edit** the `SKILL.md` / `reference/` files under `src/<skill>/`.
+2. **Validate** conventions and packaging:
+   ```bash
+   python3 scripts/validate_skills.py --root .
+   ./build-skills.sh
+   ```
+3. **Benchmark** the change (skip only for pure packaging/typo fixes). Run the
+   skill's eval scenario(s) on `main` and on your branch, then record the diff:
+   ```bash
+   python3 evals/run.py --skill-set current_pack \
+     --scenario <scenario> --report /tmp/eval-before.json   # on main
+   python3 evals/run.py --skill-set current_pack \
+     --scenario <scenario> --report /tmp/eval-after.json    # on your branch
+
+   python3 evals/benchmark_record.py \
+     --label "<skill>: <what changed>" \
+     --report before=/tmp/eval-before.json \
+     --report after=/tmp/eval-after.json \
+     --notes "<why>"
+   ```
+   This appends a before/after entry to `evals/benchmarks/ledger.md` — the repo's
+   history of skill quality and efficiency (judge checks, turns, tool calls,
+   tokens). Commit it in the same PR as the change it measures.
+4. **Bump the version** if behavior changed — plugin version is authoritative and
+   kept in lockstep across `.claude-plugin/plugin.json`,
+   `.claude-plugin/marketplace.json`, and every `src/*/SKILL.md` `metadata.version`.
+
+Full harness details — variants (`no_skills` / `current_pack` / `candidate_pack`),
+KPIs, scenario authoring, and the regression/efficiency gate — are in
+[`evals/README.md`](evals/README.md).
 
 ### Conventions
 
