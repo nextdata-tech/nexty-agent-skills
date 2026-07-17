@@ -1,0 +1,83 @@
+{
+  "date": "2026-07-17",
+  "label": "nxd-pocket-loop: graded serve-query-refine e2e",
+  "notes": "New scenario pocket-loop-serve-query-refine: whole local loop (infer, generate, serve, describe, governed query, refine) end to end against the desktop supervisor. First graded run, 7/7.",
+  "plugin_version": "0.9.1",
+  "reports": {
+    "current_pack": {
+      "elapsed_s": 1733.8,
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "pocket-loop-serve-query-refine": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-loop-serve-query-refine",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "pocket_preflight": "passed",
+            "pocket_preflight_endpoint": "http://127.0.0.1:57015/mcp/",
+            "num_turns": 117,
+            "duration_ms": 1635971,
+            "total_cost_usd": 12.150061499999994,
+            "input_tokens": 207,
+            "output_tokens": 93775,
+            "is_error": false,
+            "tool_calls": 114,
+            "agent_model": "claude-opus-4-8"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "phase-a-loop",
+                "pass": true,
+                "why": "The trace shows CSV inspection (cat of both tables), semantic inference via the loaded skills, a written DuckDB/dlt closure, a successful serve with published=yes (definition 39c4d800), a status check (current_artifact=...), and a describe of the catalog before the Q1\u2013Q4 queries."
+              },
+              {
+                "id": "catalog-grounded-governed-queries",
+                "pass": true,
+                "why": "Every presented answer is tied to a successful `nxd-desktop-supervisor query --selection` call using measures/dimensions from the preceding describe catalog (returning JSON rows), not raw SQL or CSV arithmetic (the earlier DuckDB run was only a private ground-truth cross-check)."
+              },
+              {
+                "id": "phase-a-answers",
+                "pass": true,
+                "why": "Harness facts mark spain_q2_total, q2_amount_by_segment, overdue_by_category, and top_customers_by_amount all CORRECT, with selections retaining country plus both half-open date bounds, segment grouping, the boolean-sum overdue metric, and top-three via order_by desc + limit 3."
+              },
+              {
+                "id": "staged-refine",
+                "pass": true,
+                "why": "The agent kept average out of phase A, then after the staged request regenerated and re-served the same invoice-pulse workflow with refreshed status/describe/endpoint; harness confirms phase_a_definition_id 39c4d800 answers phase A yet is refine-unanswerable, with 2 Published runs (rowid 1 before rowid 2)."
+              },
+              {
+                "id": "supervisor-state-integrity",
+                "pass": true,
+                "why": "The only touches to .pocket/state outside supervisor commands were full `rm -rf` resets of stopped/superseded state \u2014 no SQLite inserts or copied/edited pinned snapshots \u2014 and the harness definition SHA-256s and Published-run ordering (39c4d800 then c445e362) match the traced serve chronology."
+              },
+              {
+                "id": "independent-published-snapshot",
+                "pass": true,
+                "why": "Harness facts report passed:true with the final snapshot re-served, all questions CORRECT recomputed from pristine sources, and source_csvs_pristine:true plus check_script_pristine:true."
+              },
+              {
+                "id": "forcing-function-and-cleanup",
+                "pass": true,
+                "why": "The trace shows check_pocket_loop.py --mode agent ending in ALL CHECKS PASSED (7/7) and a subsequent stop returning stopped=yes with semantic.pid removed, and harness reports agent_left_endpoint_running:false."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent completed the full serve/query/refine loop with two Published generations, catalog-grounded queries, a mechanically-verified refine gap, clean supervisor state, and a passing forcing-function check with cleanup."
+          },
+          "facts": [
+            "POCKET VERIFY (authoritative runner facts): {\"agent_left_endpoint_running\": false, \"check_script_pristine\": true, \"definition_sha256\": {\"39c4d800-c4e2-4e66-ad2b-5e83d6bc43a3\": {\".nxd/semantic/orders.json\": \"8e212c7831eb4f67f284409dacf190a69e9da71275949af9f69fb45b51e2b113\", \"csv-source-path\": \"3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7\", \"data/customers/customers.csv\": \"e1101311817604d8a1976f8f7b8dbd998fa7ab4b85b816d6ecc4a5b0afc9439e\", \"data/orders/orders.csv\": \"909a0793552e6d75092122e46d3cba56168acb28c94ca0f7e70e17a241db4b89\", \"deployment-spec.yaml\": \"5fd8f409f7ce9882a791014c1f0ed612a919d7c6adfc1ab6c7f81e329242c4e2\", \"manifest.yaml\": \"b82e6e4885032839d6e5cfc2789afa25b499a172c69903da4be1d39f1643cf41\", \"models.yaml\": \"b74bc52fc563f874877538726c57baae88c9f8e66994ddd26314cbfe16390aa8\", \"transform/__pycache__/main.cpython-312.pyc\": \"4dbbec77d038b674e64413a11264835490b3f5be4da9d619325d086f9b590570\", \"transform/main.py\": \"326700ceb4f2743ac3b4ea1866c5b48d5fa918aaab0cf969eedb4f7da243eb0e\"}, \"c445e362-d1af-4862-8e9a-6d199f65a877\": {\".nxd/semantic/orders.json\": \"160ce3c2d2fc4758fba9b7fae088af1b6d58263e44c5df0f26f2252dfe9046fd\", \"csv-source-path\": \"3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7\", \"data/customers/customers.csv\": \"e1101311817604d8a1976f8f7b8dbd998fa7ab4b85b816d6ecc4a5b0afc9439e\", \"data/orders/orders.csv\": \"909a0793552e6d75092122e46d3cba56168acb28c94ca0f7e70e17a241db4b89\", \"deployment-spec.yaml\": \"5fd8f409f7ce9882a791014c1f0ed612a919d7c6adfc1ab6c7f81e329242c4e2\", \"manifest.yaml\": \"981bffc815041dfbc3edf174143f125369942b1ffa03178ce920674e2e1cb94d\", \"models.yaml\": \"6b9ba012ebb7be185adf102c58caa65e762e46e264c27cd073f228a933e633df\", \"transform/__pycache__/main.cpython-312.pyc\": \"55e950ee163f0b642dc7f50e16e9acf91af9c5ea1f29d01449911941de83b81e\", \"transform/main.py\": \"326700ceb4f2743ac3b4ea1866c5b48d5fa918aaab0cf969eedb4f7da243eb0e\"}}, \"harness_exit_code\": 0, \"passed\": true, \"phase_a_definition_id\": \"39c4d800-c4e2-4e66-ad2b-5e83d6bc43a3\", \"phase_a_snapshot_refine_unanswerable\": true, \"published_runs\": [{\"artifact_id\": \"artifact-00c74c71-ecca-4823-b5f9-f5c5e2609c69\", \"definition_id\": \"39c4d800-c4e2-4e66-ad2b-5e83d6bc43a3\", \"rowid\": 1, \"run_id\": \"run-54e65eb7-03b6-46f6-a897-8e20f76ecb37\", \"status\": \"Published\", \"workflow_id\": \"invoice-pulse\"}, {\"artifact_id\": \"artifact-5ed6740b-cc92-47b2-b694-79da7fe4c2c9\", \"definition_id\": \"c445e362-d1af-4862-8e9a-6d199f65a877\", \"rowid\": 2, \"run_id\": \"run-d1a81858-86fa-4593-98dc-883a76f82baf\", \"status\": \"Published\", \"workflow_id\": \"invoice-pulse\"}], \"questions\": {\"average_by_segment_q2\": \"CORRECT\", \"overdue_by_category\": \"CORRECT\", \"q2_amount_by_segment\": \"CORRECT\", \"spain_q2_total\": \"CORRECT\", \"top_customers_by_amount\": \"CORRECT\"}, \"runs_published\": 2, \"source_csvs_pristine\": true, \"state_dirs\": [\".pocket/state\"]}"
+          ]
+        }
+      ]
+    }
+  }
+}
