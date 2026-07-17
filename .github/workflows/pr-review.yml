@@ -52,7 +52,7 @@ jobs:
 
             1. Run: python3 scripts/validate_skills.py --root .
                Report any failures as findings (each is a hard convention violation).
-            2. Read CLAUDE.md (the authoring & review contract) and review the diff
+            2. Read AGENTS.md (the authoring & review contract) and review the diff
                against it and README.md (§Conventions) plus Anthropic skill best
                practices:
                - description: specific, under 1024 chars, includes a "Use when"
@@ -63,7 +63,7 @@ jobs:
                - allowed-tools is minimal, valid, and non-empty
                - metadata.version is semver (X.Y.Z)
                - no private/customer material added under evals/ outside evals/private/
-               PACK INVARIANTS (CLAUDE.md, high-severity if broken):
+               PACK INVARIANTS (AGENTS.md, high-severity if broken):
                - every directory under src/ is listed in current_pack in
                  evals/skill-sets.yaml AND has a row in the README Available Skills
                  table — a new skill missing from either is REQUEST_CHANGES
