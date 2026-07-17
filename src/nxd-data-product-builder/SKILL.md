@@ -27,7 +27,15 @@ This Skill is intended for technically proficient users who are familiar with te
 ## Prerequisites
 Before engaging with the user, set up the environment. Do **not** proceed until this is complete.
 
-- **NXD CLI:** Ensure the NXD CLI is installed and the correct mesh is selected, this should be set up and verified by the "nxd-setup" Skill. *Confirm the correct mesh has been selected before continuing.*
+- **NXD CLI + mesh (gate — check first, invoke `nxd-setup` if not ready):** the CLI must be installed, a mesh selected, and the session authenticated before anything else. Probe the environment; if any check fails, **invoke the `nxd-setup` Skill to set it up if it exists, then re-probe** — do not proceed or hand-roll install/login steps yourself.
+
+  ```
+  nxd --version              # installed?               -> if missing, run nxd-setup
+  nxd whoami                 # authenticated?           -> if "Not logged in" / error, run nxd-setup
+  nxd ls infra-profiles      # mesh selected & reachable -> if it errors, run nxd-setup
+  ```
+
+  Only when all three succeed is the environment ready. *Confirm the correct mesh has been selected before continuing.*
 - **Active mesh + its hosts (elicit-or-derive, do not hardcode):** every service URL, doc link, and `nxd ... --config` flag in this skill depends on which mesh is active. `nxd-setup` owns mesh selection and writes the per-mesh config to `<session_config>` (`/tmp/...` on POSIX/WSL, `$env:TEMP\...` on Windows PowerShell). Confirm the active mesh **name** with the user (or read it from the nxd registry at `~/.nxd/meshes.json` — the selected entry), and from that same mesh entry take its `app_url`/`api_url` host. These are the host you substitute into `https://<app_url>/infra-profile/<profile>#/services/<service>` URLs and into the docs base below. Never paste a demo host (`example.com`, `nextopia.dev`, `nextdata.com`) as if it were canonical — those only appear as clearly-marked illustrative placeholders.
 - **Runtime:** Python **3.10** with **`uv`** as the dependency manager.
     - *There is no need to check for a given Python version since `uv` will manage this for us.*
