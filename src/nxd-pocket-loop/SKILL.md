@@ -241,6 +241,13 @@ one turnkey path for the single client you iterate on — keep it minimal.
 - **Serve, don't hold.** Use `serve` for the loop's persistent endpoint; `stop`
   it when done. `create --hold-secs` is a smoke variant only.
 - **One workflow id per data product.** Re-`serve` the same id to regenerate.
+- **The supervisor data dir is off-limits.** Everything under `.pocket/state/`
+  — pinned snapshots in `definitions/<id>/`, `state.sqlite*`, `staging/` — is
+  immutable supervisor-owned state. Never `chmod`, edit, or hand-write those
+  files to fix a closure. A concrete `.../staging/run-<id>/data.duckdb` path
+  inside a pinned `manifest.yaml` is the supervisor's own resolved runtime path,
+  not a defect. If a served closure is wrong, fix it in **your** source dir and
+  re-`serve` — the supervisor re-pins a fresh snapshot.
 - **Bearer per command, never `export`.** Keep it out of narration.
 - **Never present a preview or truncated result as verified data**, and never
   stall silently.
