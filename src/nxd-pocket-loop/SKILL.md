@@ -3,7 +3,6 @@ name: nxd-pocket-loop
 description: Drives the end-to-end Nexty Pocket loop on a local desktop supervisor — turn a natural-language intent plus a local data source into a running, queryable data product, then answer the user's questions against it and refine when answers are wrong. Orchestrates the whole flow: infer the semantic model from the source and questions, generate the runnable data-product closure, boot and publish it on the local supervisor, translate NL questions into governed queries, and loop wrong answers back into a regenerate. Use when the user wants to "build a data product from a question", "spin up a local data product and ask it questions", "go from a CSV plus questions to answers", or iterate on a locally-generated DP. This is the orchestrator above nxd-semantic-data-product (inference) and nxd-generate-dp (code generation); it drives them plus the desktop supervisor CLI. Not for querying an already-deployed platform DP — use nxd-data-product-query for that.
 allowed-tools:
   - Bash
-  - device_bash
   - Read
   - Write
   - Edit
@@ -12,7 +11,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.9.2
+  version: 0.9.1
 ---
 
 # nxd-pocket-loop skill
