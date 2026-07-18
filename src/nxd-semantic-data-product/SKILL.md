@@ -297,6 +297,13 @@ _annotate(orders._attributes["ORDER_ID"], {"roles": [
 | join | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
 | multi-role | `{"roles": [ {...}, {...} ]}` |
 
+> **`grain` vs `primary_key`:** `{"kind": "grain"}` is accepted everywhere (the
+> runtime registry declares `#[serde(alias = "grain")]`, so it folds to the
+> canonical `primary_key` role) — a `grain` blob and a `primary_key` blob compile
+> identically. `primary_key` is the canonical wire kind; `grain` is a supported
+> alias. Both work today; either is safe to emit. (If you see a runtime that
+> parses only `primary_key`, emit `{"kind": "primary_key"}` — same meaning.)
+
 See `reference/registry-authoring.md` for the full role vocabulary,
 auto-derivation rules, and a worked example.
 
