@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.9.1
+  version: 0.10.0
 ---
 
 # nxd-semantic-data-product skill
@@ -216,12 +216,21 @@ manifest, compiles them into a typed `SemanticRegistry`, and delivers it to the 
 at boot as `<root>/.nxd/semantic/<model>.json`; the runtime rebuilds the four tools
 from those payloads.
 
-> **STOPGAP — no public author API yet.** `AttributeSpec` has no public
-> `.semantic_annotation()` setter, so the blob is injected by writing the
-> **private** `_metadata` dict directly via an `_annotate()` helper — the only
-> mechanism until that public API ships. Keep the injection isolated to
-> `models.py` and clearly marked. Before publishing, verify the wheel: if a public
-> `AttributeSpec.semantic_annotation(blob)` exists, use it instead of `_annotate()`.
+> **PREFER the public field DSL.** The wheel now ships a public role-builder DSL
+> — `from nxd.spec import field, primary_key, dimension, join` — and each field is
+> authored as `field(<type>(), <role>())`. Use it in preference to the private
+> `_annotate()` stopgap below whenever the installed wheel exposes these builders;
+> it produces the same `__nxd_semantic__` blobs without touching private
+> `_metadata`. Public DSL facts: the primary key is `primary_key()` — **emit
+> `primary_key`, NEVER the deprecated `grain` alias**; a join is
+> `join(to="<model>", to_column="<col>")` (note `to=` / `to_column=`, not
+> `to_model=`); a dimension is `dimension(name="<concept>", label="<label>")`.
+>
+> **STOPGAP (fallback only).** If the installed wheel lacks the public builders,
+> `AttributeSpec` has no public `.semantic_annotation()` setter, so the blob is
+> injected by writing the **private** `_metadata` dict directly via an
+> `_annotate()` helper. Keep the injection isolated to `models.py` and clearly
+> marked, and switch to the public `field()` DSL as soon as the wheel exposes it.
 
 Keep every module **flat at the DP root** — `models.py`, `transform.py`, `spec.py`
 are siblings. No `transform/` subdir package.
@@ -287,15 +296,19 @@ _annotate(orders._attributes["ORDER_ID"], {"roles": [
 ]})
 ```
 
-**Role grammar** (one blob per column):
+**Role grammar** — public `field()` DSL (preferred) and the equivalent
+stopgap blob (one per column):
 
-| Role | Blob |
-|------|------|
-| grain | `{"kind": "grain"}` |
-| dimension | `{"kind": "dimension", "name": ..., "description": ..., "type": ..., "pii": <bool?>}` |
-| metric | `{"kind": "metric", "name": ..., "agg": "count\|count_distinct\|sum\|avg\|min\|max", "description": ..., "boolean": <bool?>}` |
-| join | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
-| multi-role | `{"roles": [ {...}, {...} ]}` |
+| Role | Public DSL (preferred) | Stopgap blob |
+|------|------|------|
+| primary key | `field(<type>(), primary_key())` | `{"kind": "grain"}` |
+| dimension | `field(<type>(), dimension(name=..., label=...))` | `{"kind": "dimension", "name": ..., "description": ..., "type": ..., "pii": <bool?>}` |
+| metric | (consume-time / view-level — not a base-field role) | `{"kind": "metric", "name": ..., "agg": "count\|count_distinct\|sum\|avg\|min\|max", "description": ..., "boolean": <bool?>}` |
+| join | `field(<type>(), join(to=..., to_column=...))` | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
+| multi-role | (multiple roles per field via the stopgap only) | `{"roles": [ {...}, {...} ]}` |
+
+Emit `primary_key()` — the `grain` blob is the deprecated stopgap alias for
+the same role.
 
 > **`grain` vs `primary_key`:** `{"kind": "grain"}` is accepted everywhere (the
 > runtime registry declares `#[serde(alias = "grain")]`, so it folds to the
