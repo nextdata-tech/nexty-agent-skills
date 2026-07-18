@@ -290,7 +290,7 @@ stopgap blob (one per column):
 
 | Role | Public DSL (preferred) | Stopgap blob |
 |------|------|------|
-| primary key | `field(<type>(), primary_key())` | `{"kind": "grain"}` |
+| primary key | `field(<type>(), primary_key())` | `{"kind": "primary_key"}` (`grain` folds to it, but emit `primary_key`) |
 | dimension | `field(<type>(), dimension(name=..., label=...))` | `{"kind": "dimension", "name": ..., "description": ..., "type": ..., "pii": <bool?>}` |
 | metric | (consume-time / view-level — not a base-field role) | `{"kind": "metric", "name": ..., "agg": "count\|count_distinct\|sum\|avg\|min\|max", "description": ..., "boolean": <bool?>}` |
 | join | `field(<type>(), join(to=..., to_column=...))` | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
