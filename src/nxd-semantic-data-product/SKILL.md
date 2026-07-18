@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.9.1
+  version: 0.10.0
 ---
 
 # nxd-semantic-data-product skill
@@ -41,19 +41,15 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 
 > **This skill teaches the `.semantic_tools()` pattern.**
 
-> **Two flows use the inference in this skill — pick the right one before continuing.**
-> - **Regular platform flow (this skill):** a governed semantic DP on the Nextdata OS
->   platform — Snowflake/warehouse output, the split-pod k8s `.semantic_tools()`
->   topology, and a deploy step. The workflow, credential, deploy, and "consuming a
->   deployed DP" sections below assume this flow.
-> - **Local end-to-end flow:** the AI generates **and runs** the whole data product
->   locally on a desktop supervisor. That DP has a **different shape** — a local
->   DuckDB output port, dlt-in-transform ingestion, and a local Python executor —
->   owned by the **nxd-generate-dp** skill. Use this skill only for the shape-neutral
->   part it shares: profiling a source, inferring the model, and writing the
->   `__nxd_semantic__` annotations, then hand off to nxd-generate-dp for the closure.
->   **Do NOT follow the Snowflake / credential / deploy / consume steps below in the
->   local flow** — they are platform-only and produce the wrong DP shape locally.
+> **Two flows use the inference here — pick one first.**
+> - **Platform flow (this skill):** a governed semantic DP on Nextdata OS —
+>   Snowflake/warehouse output, split-pod k8s `.semantic_tools()`, a deploy step.
+>   The workflow/credential/deploy/consume sections below assume this flow.
+> - **Local end-to-end flow:** the AI generates AND runs the DP locally on a
+>   desktop supervisor — a **different shape** (local DuckDB port, dlt-in-transform,
+>   local Python executor) owned by **nxd-generate-dp**. Use this skill only for the
+>   shared part: profile, infer, write `__nxd_semantic__`, then hand off. **Do NOT
+>   follow the Snowflake/credential/deploy/consume steps below in the local flow.**
 
 ---
 
@@ -216,12 +212,14 @@ manifest, compiles them into a typed `SemanticRegistry`, and delivers it to the 
 at boot as `<root>/.nxd/semantic/<model>.json`; the runtime rebuilds the four tools
 from those payloads.
 
-> **STOPGAP — no public author API yet.** `AttributeSpec` has no public
-> `.semantic_annotation()` setter, so the blob is injected by writing the
-> **private** `_metadata` dict directly via an `_annotate()` helper — the only
-> mechanism until that public API ships. Keep the injection isolated to
-> `models.py` and clearly marked. Before publishing, verify the wheel: if a public
-> `AttributeSpec.semantic_annotation(blob)` exists, use it instead of `_annotate()`.
+> **PREFER the public field DSL.** The wheel ships `from nxd.spec import field,
+> primary_key, dimension, join`; author each field as `field(<type>(), <role>())`
+> — same `__nxd_semantic__` blobs, no private `_metadata`. Facts: `primary_key()`
+> (**emit `primary_key`, NEVER the deprecated `grain` alias**); `join(to="<model>",
+> to_column="<col>")` (`to=`/`to_column=`, not `to_model=`); `dimension(name=, label=)`.
+>
+> **STOPGAP (fallback only).** If the wheel lacks the public builders, inject the
+> blob via the private `_metadata` `_annotate()` helper below (isolated to `models.py`).
 
 Keep every module **flat at the DP root** — `models.py`, `transform.py`, `spec.py`
 are siblings. No `transform/` subdir package.
@@ -287,22 +285,24 @@ _annotate(orders._attributes["ORDER_ID"], {"roles": [
 ]})
 ```
 
-**Role grammar** (one blob per column):
+**Role grammar** — public `field()` DSL (preferred) and the equivalent
+stopgap blob (one per column):
 
-| Role | Blob |
-|------|------|
-| grain | `{"kind": "grain"}` |
-| dimension | `{"kind": "dimension", "name": ..., "description": ..., "type": ..., "pii": <bool?>}` |
-| metric | `{"kind": "metric", "name": ..., "agg": "count\|count_distinct\|sum\|avg\|min\|max", "description": ..., "boolean": <bool?>}` |
-| join | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
-| multi-role | `{"roles": [ {...}, {...} ]}` |
+| Role | Public DSL (preferred) | Stopgap blob |
+|------|------|------|
+| primary key | `field(<type>(), primary_key())` | `{"kind": "primary_key"}` (`grain` folds to it, but emit `primary_key`) |
+| dimension | `field(<type>(), dimension(name=..., label=...))` | `{"kind": "dimension", "name": ..., "description": ..., "type": ..., "pii": <bool?>}` |
+| metric | (consume-time / view-level — not a base-field role) | `{"kind": "metric", "name": ..., "agg": "count\|count_distinct\|sum\|avg\|min\|max", "description": ..., "boolean": <bool?>}` |
+| join | `field(<type>(), join(to=..., to_column=...))` | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
+| multi-role | (multiple roles per field via the stopgap only) | `{"roles": [ {...}, {...} ]}` |
 
-> **`grain` vs `primary_key`:** `{"kind": "grain"}` is accepted everywhere (the
-> runtime registry declares `#[serde(alias = "grain")]`, so it folds to the
-> canonical `primary_key` role) — a `grain` blob and a `primary_key` blob compile
-> identically. `primary_key` is the canonical wire kind; `grain` is a supported
-> alias. Both work today; either is safe to emit. (If you see a runtime that
-> parses only `primary_key`, emit `{"kind": "primary_key"}` — same meaning.)
+Emit `primary_key()` — the `grain` blob is the deprecated stopgap alias for
+the same role.
+
+> **`grain` vs `primary_key`:** the runtime folds `{"kind": "grain"}` to the
+> canonical `primary_key` role (`#[serde(alias = "grain")]`), so both compile
+> identically — but **emit `primary_key`**, the canonical kind (`grain` is a
+> deprecated alias).
 
 See `reference/registry-authoring.md` for the full role vocabulary,
 auto-derivation rules, and a worked example.
