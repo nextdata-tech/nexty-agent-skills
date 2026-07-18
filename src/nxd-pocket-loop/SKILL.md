@@ -3,6 +3,7 @@ name: nxd-pocket-loop
 description: Drives the end-to-end Nexty Pocket loop on a local desktop supervisor — turn a natural-language intent plus a local data source into a running, queryable data product, then answer the user's questions against it and refine when answers are wrong. Orchestrates the whole flow: infer the semantic model from the source and questions, generate the runnable data-product closure, boot and publish it on the local supervisor, translate NL questions into governed queries, and loop wrong answers back into a regenerate. Use when the user wants to "build a data product from a question", "spin up a local data product and ask it questions", "go from a CSV plus questions to answers", or iterate on a locally-generated DP. This is the orchestrator above nxd-semantic-data-product (inference) and nxd-generate-dp (code generation); it drives them plus the desktop supervisor CLI. Not for querying an already-deployed platform DP — use nxd-data-product-query for that.
 allowed-tools:
   - Bash
+  - device_bash
   - Read
   - Write
   - Edit
@@ -11,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.9.1
+  version: 0.9.2
 ---
 
 # nxd-pocket-loop skill
@@ -42,8 +43,49 @@ CLI to run and query the result.
 
 ## Preflight — check before you start
 
+### Step 0 — where does your shell actually run?
+
+The supervisor is a native binary that runs wherever you invoke it — but "where
+you invoke it" is not always the user's machine. Work out your execution surface
+before anything else:
+
+- **Local session** (your `Bash` tool runs on the user's own machine — `$HOME`
+  is a real user home, `uname` is the user's OS, `command -v
+  nxd-desktop-supervisor` can succeed after provisioning): drive the supervisor
+  with the ordinary `Bash` tool. The rest of this skill assumes this. This is the
+  proven path — Claude Code, or Claude Desktop running the agent loop locally.
+
+- **Cloud-sandbox session with a `device_bash` tool** (e.g. Claude Cowork): read
+  this carefully — the common mental model is wrong. `device_bash` does **NOT**
+  give you a shell on the user's machine. It runs inside an **isolated Linux VM**
+  hosted alongside the app (confirm: `uname -a` reports `Linux ... aarch64`, not
+  `Darwin`). That VM:
+  - **Cannot see the user's filesystem** except folders they explicitly connect
+    to the session. `$HOME/.nxd`, `/Volumes/...`, the repo — none are reachable
+    unless connected. A path the user pastes from their Mac will fail with `No
+    such file or directory`, not because the runtime is broken but because it
+    isn't mounted.
+  - **Cannot execute the user's macOS binaries.** The desktop bins shipped today
+    are macOS-arm64 Mach-O; a Linux VM can't run them regardless of mounts.
+
+  So you CANNOT drive a Mac-side `~/.nxd` supervisor from `device_bash`. The only
+  way to run this loop inside such a VM is a runtime provisioned **inside the VM
+  itself** — Linux-aarch64 bins + Linux (`manylinux`) wheels + the source CSVs,
+  all under a connected folder. That Linux bundle is not yet a shipped artifact;
+  until it is, **Cowork's cloud-sandbox mode is not a supported surface for this
+  skill.**
+
+Detect the surface cheaply in one call: `uname -s; echo "$HOME"; command -v
+nxd-desktop-supervisor`. If `uname` is `Linux` and you reached it via
+`device_bash`, you are in the cloud VM — do NOT try to reach the user's Mac, and
+do NOT try to provision against Mac paths. Either a Linux runtime is present
+inside the VM (drive it with `device_bash` + VM-local absolute paths), or STOP
+and tell the user this session can't reach a supervisor.
+
+### Environment checks
+
 Before the loop, confirm the environment is ready and stop with a clear message
-if not:
+if not (run these on whichever shell actually reaches a supervisor — see Step 0):
 
 - **`nxd-desktop-supervisor` is on `PATH`** (`command -v nxd-desktop-supervisor`).
   If absent, point the user at the local-desktop provisioning step
