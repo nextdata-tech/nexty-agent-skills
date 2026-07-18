@@ -42,16 +42,78 @@ CLI to run and query the result.
 
 ## Preflight — check before you start
 
+### Step 0 — where does your shell actually run?
+
+The supervisor is a native binary that runs wherever you invoke it — but "where
+you invoke it" is not always the user's machine. Work out your execution surface
+before anything else:
+
+- **Local session** (your `Bash` tool runs on the user's own machine — `$HOME`
+  is a real user home, `uname` is the user's OS, `command -v
+  nxd-desktop-supervisor` can succeed after provisioning): drive the supervisor
+  with the ordinary `Bash` tool. The rest of this skill assumes this. This is the
+  proven path — Claude Code, or Claude Desktop running the agent loop locally.
+
+- **Cloud-sandbox session with a `device_bash` tool** (e.g. Claude Cowork): read
+  this carefully — the common mental model is wrong. `device_bash` does **NOT**
+  give you a shell on the user's machine. It runs inside an **isolated Linux VM**
+  hosted alongside the app (confirm: `uname -a` reports `Linux ... aarch64`, not
+  `Darwin`). That VM:
+  - **Cannot see the user's filesystem** except folders they explicitly connect
+    to the session. `$HOME/.nxd`, `/Volumes/...`, the repo — none are reachable
+    unless connected. A path the user pastes from their Mac will fail with `No
+    such file or directory`, not because the runtime is broken but because it
+    isn't mounted.
+  - **Cannot execute the user's macOS binaries.** The desktop bins shipped today
+    are macOS-arm64 Mach-O; a Linux VM can't run them regardless of mounts.
+
+  So you CANNOT drive a Mac-side `~/.nxd` supervisor from `device_bash`. The only
+  way to run this loop inside such a VM is a runtime provisioned **inside the VM
+  itself** — Linux-aarch64 bins + Linux (`manylinux`) wheels + the source CSVs,
+  all under a connected folder. That Linux bundle is not yet a shipped artifact;
+  until it is, **Cowork's cloud-sandbox mode is not a supported surface for this
+  skill.**
+
+Detect the surface cheaply in one call: `uname -s; echo "$HOME"; command -v
+nxd-desktop-supervisor`. If `uname` is `Linux` and you reached it via
+`device_bash`, you are in the cloud VM — do NOT try to reach the user's Mac, and
+do NOT try to provision against Mac paths. Either a Linux runtime is present
+inside the VM (drive it with `device_bash` + VM-local absolute paths), or STOP
+and tell the user this session can't reach a supervisor.
+
+### Environment checks
+
 Before the loop, confirm the environment is ready and stop with a clear message
-if not:
+if not (run these on whichever shell actually reaches a supervisor — see Step 0):
 
 - **`nxd-desktop-supervisor` is on `PATH`** (`command -v nxd-desktop-supervisor`).
-  If absent, tell the user how to build/install it; do not proceed.
+  If absent, point the user at the local-desktop provisioning step
+  (`nxd-desktop-setup.sh` — it builds the two binaries onto `PATH` and provisions
+  the Python runtime). Do **not** try to `cargo build` or `uv sync` inline
+  yourself; that is the provisioning step's job. Do not proceed until it resolves.
+- **The `nxd-desktop-kernel-host` sibling binary is present too.** The supervisor
+  resolves `nxd-desktop-kernel-host` from the SAME directory as its own
+  executable at boot and hard-fails without it. Verify both sit together, e.g.
+  `command -v nxd-desktop-kernel-host` resolves to the same directory as the
+  supervisor. If only the supervisor is on `PATH`, the runtime is half-installed —
+  re-run the provisioning step.
 - **The source directory has the expected shape** — a CSV connector export: one
   subdirectory per table, `*.csv` inside. If the shape is wrong, ask.
 - **A writable data directory** for the supervisor's state and generations
-  (`--data-dir`), and the Python runtime the generated transform needs (the
-  supervisor prepares a venv; confirm it can).
+  (`--data-dir`).
+- **The Python runtime is provisioned and `NXD_DESKTOP_PYTHON` points at it.**
+  The supervisor does NOT prepare a venv — it only *resolves* an interpreter
+  (`NXD_DESKTOP_PYTHON`, else a dev venv next to the binary, else `python3`). If
+  the provisioning step set `NXD_DESKTOP_PYTHON`, confirm the export reached your
+  shell (see below); if it silently falls back to an interpreter with no nxd
+  wheels, the transform fails at import.
+- **Your shell has the provisioning step's `export` lines.** In some agent
+  sandboxes each `Bash` call is an independent process, so a `PATH` /
+  `NXD_DESKTOP_PYTHON` export set in one call may NOT be visible in the next.
+  Re-check `command -v nxd-desktop-supervisor` and `echo "$NXD_DESKTOP_PYTHON"`
+  at the **start of the run**, and if they don't persist, prefix each supervisor
+  command with the exports (`PATH="…:$PATH" NXD_DESKTOP_PYTHON="…" nxd-desktop-supervisor …`)
+  the same way the bearer is passed per-command below.
 
 ## What you drive — the supervisor CLI contract
 
@@ -64,12 +126,16 @@ prints one machine-readable document on stdout (diagnostics go to stderr).
   nxd-desktop-supervisor serve --definition <closure-dir> --workflow <id> --data-dir <dir>
   ```
   Prints `KEY=VALUE` lines: `run_id=…`, `artifact_id=…`, `definition_id=…`,
-  `semantic_endpoint=http://127.0.0.1:PORT/mcp/`, `bearer_token=…`,
-  `supervisor_pid=…`, `published=yes`. The endpoint stays alive across separate
-  `query`/`describe` calls until you `stop` it. Re-running `serve` on the SAME
-  `--workflow` replaces the DP cleanly and rebinds the same endpoint — the
-  regenerate primitive. (`create --hold-secs N` is a smoke variant whose endpoint
-  lives only N seconds and dies on return; use `serve` for the loop.)
+  `semantic_endpoint=http://127.0.0.1:PORT/mcp/`, `semantic_child_pid=…`,
+  `supervisor_pid=…`, `published=yes` on **stdout**. **`bearer_token=…` is printed
+  to stderr, not stdout** (kept off stdout so it doesn't leak into captured
+  output) — so capture BOTH streams (e.g. `serve … > out.txt 2> err.txt`, or
+  redirect `2>&1`) and read the bearer from stderr, or you will have an endpoint
+  with no token. The endpoint stays alive across separate `query`/`describe`
+  calls until you `stop` it. Re-running `serve` on the SAME `--workflow` replaces
+  the DP cleanly and rebinds the same endpoint — the regenerate primitive.
+  (`create --hold-secs N` is a smoke variant whose endpoint lives only N seconds
+  and dies on return; use `serve` for the loop.)
 
 - **describe** — introspect the running DP's semantic catalog.
   ```
@@ -147,10 +213,11 @@ nxd-desktop-supervisor serve --definition <closure-dir> --workflow <id> --data-d
 ```
 
 Fail closed unless the command SUCCEEDS (exit 0) and every required key is present
-and non-empty — in particular `published=yes`. Capture `semantic_endpoint`,
-`bearer_token`, and `supervisor_pid` from the output. Pass the bearer to each
-subsequent call **per command**, not via a persistent `export` (a separate agent
-shell may not inherit it):
+and non-empty — in particular `published=yes`. Capture `semantic_endpoint` and
+`supervisor_pid` from **stdout**, and `bearer_token` from **stderr** (redirect
+both — e.g. `serve … > out.txt 2> err.txt` — since the bearer is deliberately not
+on stdout). Pass the bearer to each subsequent call **per command**, not via a
+persistent `export` (a separate agent shell may not inherit it):
 
 ```
 NXD_DESKTOP_BEARER="<bearer_token>" nxd-desktop-supervisor describe --endpoint <ep>
