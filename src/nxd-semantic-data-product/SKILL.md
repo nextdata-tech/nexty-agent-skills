@@ -41,19 +41,15 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 
 > **This skill teaches the `.semantic_tools()` pattern.**
 
-> **Two flows use the inference in this skill — pick the right one before continuing.**
-> - **Regular platform flow (this skill):** a governed semantic DP on the Nextdata OS
->   platform — Snowflake/warehouse output, the split-pod k8s `.semantic_tools()`
->   topology, and a deploy step. The workflow, credential, deploy, and "consuming a
->   deployed DP" sections below assume this flow.
-> - **Local end-to-end flow:** the AI generates **and runs** the whole data product
->   locally on a desktop supervisor. That DP has a **different shape** — a local
->   DuckDB output port, dlt-in-transform ingestion, and a local Python executor —
->   owned by the **nxd-generate-dp** skill. Use this skill only for the shape-neutral
->   part it shares: profiling a source, inferring the model, and writing the
->   `__nxd_semantic__` annotations, then hand off to nxd-generate-dp for the closure.
->   **Do NOT follow the Snowflake / credential / deploy / consume steps below in the
->   local flow** — they are platform-only and produce the wrong DP shape locally.
+> **Two flows use the inference here — pick one first.**
+> - **Platform flow (this skill):** a governed semantic DP on Nextdata OS —
+>   Snowflake/warehouse output, split-pod k8s `.semantic_tools()`, a deploy step.
+>   The workflow/credential/deploy/consume sections below assume this flow.
+> - **Local end-to-end flow:** the AI generates AND runs the DP locally on a
+>   desktop supervisor — a **different shape** (local DuckDB port, dlt-in-transform,
+>   local Python executor) owned by **nxd-generate-dp**. Use this skill only for the
+>   shared part: profile, infer, write `__nxd_semantic__`, then hand off. **Do NOT
+>   follow the Snowflake/credential/deploy/consume steps below in the local flow.**
 
 ---
 
@@ -216,21 +212,14 @@ manifest, compiles them into a typed `SemanticRegistry`, and delivers it to the 
 at boot as `<root>/.nxd/semantic/<model>.json`; the runtime rebuilds the four tools
 from those payloads.
 
-> **PREFER the public field DSL.** The wheel now ships a public role-builder DSL
-> — `from nxd.spec import field, primary_key, dimension, join` — and each field is
-> authored as `field(<type>(), <role>())`. Use it in preference to the private
-> `_annotate()` stopgap below whenever the installed wheel exposes these builders;
-> it produces the same `__nxd_semantic__` blobs without touching private
-> `_metadata`. Public DSL facts: the primary key is `primary_key()` — **emit
-> `primary_key`, NEVER the deprecated `grain` alias**; a join is
-> `join(to="<model>", to_column="<col>")` (note `to=` / `to_column=`, not
-> `to_model=`); a dimension is `dimension(name="<concept>", label="<label>")`.
+> **PREFER the public field DSL.** The wheel ships `from nxd.spec import field,
+> primary_key, dimension, join`; author each field as `field(<type>(), <role>())`
+> — same `__nxd_semantic__` blobs, no private `_metadata`. Facts: `primary_key()`
+> (**emit `primary_key`, NEVER the deprecated `grain` alias**); `join(to="<model>",
+> to_column="<col>")` (`to=`/`to_column=`, not `to_model=`); `dimension(name=, label=)`.
 >
-> **STOPGAP (fallback only).** If the installed wheel lacks the public builders,
-> `AttributeSpec` has no public `.semantic_annotation()` setter, so the blob is
-> injected by writing the **private** `_metadata` dict directly via an
-> `_annotate()` helper. Keep the injection isolated to `models.py` and clearly
-> marked, and switch to the public `field()` DSL as soon as the wheel exposes it.
+> **STOPGAP (fallback only).** If the wheel lacks the public builders, inject the
+> blob via the private `_metadata` `_annotate()` helper below (isolated to `models.py`).
 
 Keep every module **flat at the DP root** — `models.py`, `transform.py`, `spec.py`
 are siblings. No `transform/` subdir package.
@@ -310,12 +299,10 @@ stopgap blob (one per column):
 Emit `primary_key()` — the `grain` blob is the deprecated stopgap alias for
 the same role.
 
-> **`grain` vs `primary_key`:** `{"kind": "grain"}` is accepted everywhere (the
-> runtime registry declares `#[serde(alias = "grain")]`, so it folds to the
-> canonical `primary_key` role) — a `grain` blob and a `primary_key` blob compile
-> identically. `primary_key` is the canonical wire kind; `grain` is a supported
-> alias. Both work today; either is safe to emit. (If you see a runtime that
-> parses only `primary_key`, emit `{"kind": "primary_key"}` — same meaning.)
+> **`grain` vs `primary_key`:** the runtime folds `{"kind": "grain"}` to the
+> canonical `primary_key` role (`#[serde(alias = "grain")]`), so both compile
+> identically — but **emit `primary_key`**, the canonical kind (`grain` is a
+> deprecated alias).
 
 See `reference/registry-authoring.md` for the full role vocabulary,
 auto-derivation rules, and a worked example.
