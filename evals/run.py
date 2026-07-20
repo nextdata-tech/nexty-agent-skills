@@ -42,16 +42,40 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from eval_backends import (
+    AGENT_BACKENDS,
+    JUDGE_BACKENDS,
+    get_agent_backend,
+    get_judge_backend,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EVALS_DIR = REPO_ROOT / "evals"
 SKILL_SETS_FILE = EVALS_DIR / "skill-sets.yaml"
 
-# Models. The agent under test runs on sonnet (the cheaper model we measure);
-# the judge runs on opus because grading is the call we want to trust most.
-# Override either on the CLI.
-DEFAULT_AGENT_MODEL = "sonnet"
-DEFAULT_JUDGE_MODEL = "opus"
+# Providers driving the agent-under-test and the judge. `claude` shells the
+# Claude Code CLI; `codex` shells the OpenAI Codex CLI. Both implement the same
+# AgentBackend/JudgeBackend interface (see eval_backends.py). Pick per-side on
+# the CLI (--agent-backend / --judge-backend). Default: claude for both.
+DEFAULT_AGENT_BACKEND = "claude"
+DEFAULT_JUDGE_BACKEND = "claude"
+
+# Default models per provider. The agent under test runs on the cheaper model we
+# measure; the judge runs on the stronger model because its grading is the call
+# we most want to trust. Codex model ids differ from Claude's, so the default
+# resolves from the chosen backend when --agent-model / --judge-model is unset.
+DEFAULT_MODELS = {
+    "claude": {"agent": "sonnet", "judge": "opus"},
+    "codex": {"agent": "gpt-5.6-luna", "judge": "gpt-5.6-terra"},
+}
+
+# Codex reasoning effort is a separate axis from Claude's, and its useful range
+# differs (no "xhigh"). These apply only when the corresponding side runs on the
+# codex backend AND the user did not pass an explicit --agent-effort /
+# --judge-effort. Claude's effort defaults below are unchanged.
+CODEX_DEFAULT_AGENT_EFFORT = "medium"
+CODEX_DEFAULT_JUDGE_EFFORT = "high"
 
 # Reasoning effort. The agent under test mirrors a real session (medium). The
 # judge runs at xhigh because grading is the call we most want to trust — a
@@ -69,22 +93,18 @@ DEFAULT_CONCURRENCY = 4
 DEFAULT_AGENT_TIMEOUT_S = 1200
 DEFAULT_JUDGE_TIMEOUT_S = 300
 
-# Tools the agent under test may use. Read/write/inspect the workspace, run the
-# (mocked) shell, and fetch the public platform docs. WebFetch is what lets the
-# no_skills baseline reach the same public docs a real user has, so the only
-# variable between skill-sets is the curated skills themselves.
+# The generic agent tool allowlist now lives with the Claude backend
+# (``CLAUDE_AGENT_ALLOWED_TOOLS`` in eval_backends.py), because it is a
+# provider-specific concept: Codex gates the agent through a sandbox policy
+# instead of a per-tool allowlist.
 #
-# NOTE: `Skill` MUST be here or installed skills never activate — the agent only
-# stumbles onto skill *files* by globbing the workspace and reading some ad hoc,
-# so a skill's SKILL.md body (its actual guidance) is never loaded through
-# activation. That silently under-measures every skill-set: the lift attributable
-# to a skill collapses to "whatever files the agent happened to read." With Skill
-# present the agent invokes the matching skill and its body loads as designed.
-AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,Skill"
 # Pocket's proven smoke invocation is deliberately narrower than the generic
 # eval harness: no web/docs escape hatch and no helper tools beyond the local
 # file + shell surface. Skill remains essential: without it the installed
 # plugin bodies never activate, so this would not measure the Pocket skills.
+# It stays here because it is a *scenario* constraint, not a provider default;
+# it is applied only on the Claude backend (see run_one), the only provider that
+# has a per-tool allowlist to narrow.
 POCKET_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
@@ -242,7 +262,12 @@ def discover_scenarios(suite: str) -> list[Path]:
     return sorted(p.parent for p in base.glob("*/prompt.md"))
 
 
-def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple[Path, Path | None]:
+def build_workspace(
+    tmp: Path,
+    skill_set: SkillSet,
+    scenario_dir: Path,
+    stage_skills_in_workspace: bool = False,
+) -> tuple[Path, Path | None]:
     """Create an isolated agent workspace + a per-skill-set plugin dir.
 
     Returns ``(workspace, plugin_dir)``. ``plugin_dir`` is None for the
@@ -250,12 +275,19 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple
     minimal `.claude-plugin/plugin.json` + the set's skills, loaded by the agent
     via ``--plugin-dir``.
 
-    Skills MUST be loaded as a plugin: copying skill dirs into the workspace's
-    ``.claude/skills/`` does NOT register them — ``claude -p --setting-sources
-    project`` ignores project-directory skills, so they never activate and the
-    agent only benefits from files it happens to read. ``--plugin-dir`` with a
-    `plugin.json` is the mechanism that actually surfaces them as invokable
-    skills (`<plugin>:<skill>`)."""
+    Skills MUST be loaded as a plugin for the Claude backend: copying skill dirs
+    into the workspace's ``.claude/skills/`` does NOT register them — ``claude -p
+    --setting-sources project`` ignores project-directory skills, so they never
+    activate and the agent only benefits from files it happens to read.
+    ``--plugin-dir`` with a `plugin.json` is the mechanism that actually surfaces
+    them as invokable skills (`<plugin>:<skill>`).
+
+    ``stage_skills_in_workspace`` is for providers without plugin-dir skill
+    activation (Codex): the skill dirs are additionally copied under
+    ``<workspace>/.skills/<name>`` so the agent can read their SKILL.md files as
+    context. The agent prompt points at that directory (see ``build_agent_prompt``
+    with ``skills_in_workspace=True``). The plugin_dir is still built and returned
+    (harmless; Codex just ignores it)."""
     ws = tmp / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
 
@@ -279,6 +311,12 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple
         (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
             json.dumps(manifest), encoding="utf-8"
         )
+        if stage_skills_in_workspace:
+            ws_skills = ws / SKILLS_WORKSPACE_DIR
+            ws_skills.mkdir(parents=True, exist_ok=True)
+            for rel in skill_set.skills:
+                src = REPO_ROOT / rel
+                shutil.copytree(src, ws_skills / src.name)
 
     fixtures = scenario_dir / "fixtures"
     if fixtures.is_dir():
@@ -355,13 +393,25 @@ def agent_task_from_prompt(prompt_md: str) -> str:
     return "\n".join(lines[:cut]).strip()
 
 
-def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool) -> str:
-    """Prepend the shared context every skill-set gets (docs + examples)."""
+def build_agent_prompt(
+    scenario_prompt: str,
+    docs_base: str,
+    has_examples: bool,
+    skills_in_workspace: bool = False,
+) -> str:
+    """Prepend the shared context every skill-set gets (docs + examples).
+
+    ``skills_in_workspace`` is set for providers that cannot activate skills as a
+    plugin (Codex): the skill dirs are staged under ``<workspace>/.skills/`` and
+    this adds a line telling the agent to read them, so the skill guidance is
+    available as context. Providers that activate skills natively (Claude) leave
+    this False — the skills load through the Skill tool, not by file-reading."""
     lines = [
         "You are working on a Nextdata OS (nxd) data-product task.",
         "",
         "Available context (the same for every run):",
-        f"- Public platform docs: fetch markdown pages with WebFetch at "
+        f"- Public platform docs: fetch markdown pages (WebFetch, or curl if "
+        f"WebFetch is unavailable) at "
         f"{docs_base}<path>.md (e.g. {docs_base}dp_development/debugging.md). "
         f"Start from the index {docs_base}_sidebar.md to find the right page. "
         "Use the .md URLs directly — the docs viewer's #/ links are not fetchable.",
@@ -377,71 +427,23 @@ def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool)
             "real spec.py / models.py / transform.py / contracts). Read it for "
             "working patterns."
         )
+    if skills_in_workspace:
+        lines.append(
+            f"- A curated skill pack is staged under `{SKILLS_WORKSPACE_DIR}/` in "
+            "your workspace: each subdirectory is a skill with a `SKILL.md` "
+            "describing a procedure for this platform. BEFORE improvising, list "
+            f"`{SKILLS_WORKSPACE_DIR}/`, read the `SKILL.md` of any skill whose "
+            "description matches this task, and follow its steps and referenced "
+            "files."
+        )
     lines += ["", "--- TASK ---", scenario_prompt]
     return "\n".join(lines)
 
 
-# Cap each tool-result block fed to the judge so a huge file read doesn't blow
-# up the judge prompt; the head is enough to see what the agent inspected.
-TOOL_RESULT_HEAD_CHARS = 1500
-
-
-def _trace_from_stream(stdout: str) -> tuple[str, dict]:
-    """Parse stream-json lines into a readable trace + the final metrics.
-
-    The trace interleaves the agent's reasoning text, each tool call (name +
-    input), and a truncated tool result — so the judge can see *what the agent
-    inspected*, not just its final answer. Process checks ("read the logs before
-    concluding") are only gradeable from this.
-    """
-    parts: list[str] = []
-    final_answer = ""
-    tool_calls = 0
-    metrics: dict = {"is_error": False}
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        typ = d.get("type")
-        if typ == "assistant":
-            for block in d.get("message", {}).get("content", []):
-                if block.get("type") == "text" and block.get("text", "").strip():
-                    parts.append(f"[assistant] {block['text'].strip()}")
-                elif block.get("type") == "tool_use":
-                    tool_calls += 1
-                    inp = json.dumps(block.get("input", {}), ensure_ascii=False)
-                    parts.append(f"[tool_use:{block.get('name')}] {inp[:600]}")
-        elif typ == "user":
-            for block in d.get("message", {}).get("content", []):
-                if block.get("type") == "tool_result":
-                    content = block.get("content", "")
-                    if isinstance(content, list):
-                        content = " ".join(
-                            c.get("text", "") for c in content if isinstance(c, dict)
-                        )
-                    content = str(content)[:TOOL_RESULT_HEAD_CHARS]
-                    parts.append(f"[tool_result] {content}")
-        elif typ == "result":
-            final_answer = d.get("result", "")
-            usage = d.get("usage", {}) or {}
-            metrics = {
-                "num_turns": d.get("num_turns"),
-                "duration_ms": d.get("duration_ms"),
-                "total_cost_usd": d.get("total_cost_usd"),
-                "input_tokens": usage.get("input_tokens"),
-                "output_tokens": usage.get("output_tokens"),
-                "is_error": d.get("is_error", False),
-            }
-    # tool_calls is the "how many steps did this take" efficiency signal the
-    # README's metrics table asks for; ride it along with the result metrics so
-    # reports can compare step counts across skill-sets and over time.
-    metrics["tool_calls"] = tool_calls
-    trace = "\n".join(parts)
-    return trace, {"final_answer": final_answer, **metrics}
+# Where the skill pack is staged inside the agent workspace for providers that
+# lack plugin-dir skill activation (Codex). Claude ignores this (it loads the
+# pack via --plugin-dir instead).
+SKILLS_WORKSPACE_DIR = ".skills"
 
 
 def scenario_needs_mcp(scenario_dir: Path) -> dict | None:
@@ -938,67 +940,6 @@ def _write_fake_nxd(bin_dir: Path) -> None:
     shim.chmod(0o755)
 
 
-def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
-              extra_dirs: list[Path] | None = None,
-              effort: str = "",
-              env_overrides: dict | None = None,
-              path_prepend: Path | None = None,
-              plugin_dir: Path | None = None,
-              allowed_tools: str | None = None) -> tuple[bool, str, dict]:
-    """Run the headless agent. Returns (ok, trace, metrics).
-
-    The trace (full tool-call transcript) is what the judge grades; the final
-    answer and run metrics ride along in ``metrics`` (metrics["final_answer"]).
-
-    For MCP scenarios the agent reaches the semantic tools through the query
-    skill's shipped HTTP toolchain (``nxd mcp health`` + Streamable-HTTP), so no
-    --mcp-config is needed: ``env_overrides`` carries EVAL_MCP_ENDPOINT and
-    ``path_prepend`` puts the fake ``nxd`` on PATH. The agent uses Bash (already
-    allowed) to run the skill's scripts.
-    """
-    cmd = [
-        "claude", "-p", prompt,
-        # stream-json + verbose emits per-step events so we can reconstruct the
-        # tool-call trace, not just the final answer.
-        "--output-format", "stream-json", "--verbose",
-        "--model", model,
-        # Isolate to the workspace project so user/global skills don't leak in
-        # and confound the no_skills baseline.
-        "--setting-sources", "project",
-        "--allowedTools", allowed_tools or AGENT_ALLOWED_TOOLS,
-        "--add-dir", str(ws),
-    ]
-    # Load the skill-set as a plugin so its skills actually activate (invokable as
-    # nxd-eval-pack:<skill>). Copying into .claude/skills/ does NOT register them.
-    # no_skills baseline passes plugin_dir=None → genuinely zero curated skills.
-    if plugin_dir is not None:
-        cmd += ["--plugin-dir", str(plugin_dir)]
-    if effort:
-        cmd += ["--effort", effort]
-    for d in extra_dirs or []:
-        cmd += ["--add-dir", str(d)]
-
-    env = dict(os.environ)
-    if env_overrides:
-        env.update(env_overrides)
-    if path_prepend is not None:
-        env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
-    try:
-        proc = subprocess.run(
-            cmd, cwd=ws, capture_output=True, text=True, timeout=timeout_s,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return False, "", {"error": f"agent timed out after {timeout_s}s"}
-    if proc.returncode != 0:
-        return False, "", {"error": f"claude exited {proc.returncode}: {proc.stderr[-2000:]}"}
-
-    trace, metrics = _trace_from_stream(proc.stdout)
-    if not trace and not metrics.get("final_answer"):
-        return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}"}
-    return not metrics.get("is_error", False), trace, metrics
-
-
 JUDGE_SYSTEM = (
     "You are an exacting eval grader for an AI agent. You are given a scenario, "
     "a list of success checks, and the agent's final answer transcript. Grade "
@@ -1070,55 +1011,14 @@ Respond with ONE JSON object and nothing else, in this exact shape:
   "overall_pass": true|false, "summary": "<one sentence>"}}"""
 
 
-def run_judge(scenario_dir: Path, checks: dict, trace: str, final_answer: str,
-              model: str, timeout_s: int, effort: str = "",
-              facts: list[str] | None = None) -> dict:
+def run_judge(judge_backend, scenario_dir: Path, checks: dict, trace: str,
+              final_answer: str, model: str, timeout_s: int,
+              effort: str = "", facts: list[str] | None = None) -> dict:
+    """Grade one transcript. Builds the provider-independent judge prompt (which
+    folds in the harness-verified ``facts``), then delegates the actual model
+    call to the selected judge backend."""
     prompt = build_judge_prompt(scenario_dir, checks, trace, final_answer, facts)
-    cmd = [
-        "claude", "-p", prompt,
-        "--output-format", "json",
-        "--model", model,
-        "--setting-sources", "project",
-        "--append-system-prompt", JUDGE_SYSTEM,
-        "--allowedTools", "",   # judge reasons over given text; no tools
-    ]
-    if effort:
-        cmd += ["--effort", effort]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        return {"error": f"judge timed out after {timeout_s}s", "overall_pass": False}
-    if proc.returncode != 0:
-        return {"error": f"judge exited {proc.returncode}: {proc.stderr[-1000:]}",
-                "overall_pass": False}
-    try:
-        outer = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {"error": "judge wrapper not JSON", "overall_pass": False}
-    verdict_text = outer.get("result", "")
-    parsed = _extract_json(verdict_text)
-    if parsed is None:
-        return {"error": f"judge verdict not JSON: {verdict_text[:500]}",
-                "overall_pass": False}
-    return parsed
-
-
-def _extract_json(text: str) -> dict | None:
-    """Pull the first {...} JSON object out of a model response."""
-    text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if fence:
-        candidate = fence.group(1)
-    else:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        candidate = text[start:end + 1]
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
+    return judge_backend.run_judge(prompt, JUDGE_SYSTEM, model, timeout_s, effort)
 
 
 # ---------------------------------------------------------------------------
@@ -1286,9 +1186,11 @@ def _fixtures_fingerprint(scenario_dir: Path) -> str:
 
 
 def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
-                     model: str, effort: str) -> str:
+                     backend: str, model: str, effort: str) -> str:
     """Cache key for an agent run. Independent of the judge / checks.json, so
-    iterating on grading reuses the expensive agent transcript."""
+    iterating on grading reuses the expensive agent transcript. Includes the
+    agent backend so switching provider (claude ↔ codex) never reuses the other
+    provider's transcript."""
     h = hashlib.sha256()
     pocket_runtime_key = ""
     if scenario_needs_pocket(scenario_dir) is not None:
@@ -1301,6 +1203,7 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
         ",".join(sorted(skill_set.skills)),
         scenario_dir.name,
         prompt,
+        backend,
         model,
         effort,
         _fixtures_fingerprint(scenario_dir),
@@ -1325,15 +1228,36 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     # leak the answer and the rubric. The judge still sees the full prompt.md.
     agent_task = agent_task_from_prompt(prompt_md)
 
+    agent_backend = get_agent_backend(args.agent_backend)
+    judge_backend = get_judge_backend(args.judge_backend)
+
+    # Codex has no --plugin-dir skill activation: the skills are staged into the
+    # workspace and the agent is told where to read them. Claude activates them
+    # as a plugin, so its prompt gets no skill-file hint. `has_skills` is only
+    # relevant for the file-hint (baseline no_skills skips it either way).
+    skills_in_workspace = (
+        agent_backend.name != "claude" and bool(skill_set.skills)
+    )
+
     pocket_spec = scenario_needs_pocket(scenario_dir)
-    # Pocket cells run the agent with extra_dirs=[] (see the run_agent call
-    # below), so the prompt must not advertise an examples directory the agent
-    # can never --add-dir, or it wastes turns hunting for it.
+    # Pocket cells run the agent with extra_dirs=[] (see the agent call below),
+    # so the prompt must not advertise an examples directory the agent can never
+    # --add-dir, or it wastes turns hunting for it.
     extra_dirs = [] if pocket_spec is not None else (
         [EXAMPLES_DIR] if EXAMPLES_DIR.is_dir() else []
     )
-    prompt = build_agent_prompt(agent_task, args.docs_base, bool(extra_dirs))
-    agent_model = POCKET_AGENT_MODEL if pocket_spec is not None else args.agent_model
+    prompt = build_agent_prompt(
+        agent_task, args.docs_base, bool(extra_dirs),
+        skills_in_workspace=skills_in_workspace,
+    )
+    # Pocket is pinned to a verified Claude model; on any other agent backend the
+    # pin does not apply (the id is not a Codex model), so the resolved default
+    # for that backend stands.
+    agent_model = (
+        POCKET_AGENT_MODEL
+        if pocket_spec is not None and agent_backend.name == "claude"
+        else args.agent_model
+    )
     preflight_metrics: dict[str, object] = {}
     if pocket_spec is not None:
         # Run the infrastructure gate even when an agent transcript is cached:
@@ -1365,7 +1289,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     cache_file = None
     if cache_dir:
         key = _agent_cache_key(
-            skill_set, scenario_dir, prompt, agent_model, args.agent_effort
+            skill_set, scenario_dir, prompt, agent_backend.name,
+            agent_model, args.agent_effort,
         )
         cache_file = cache_dir / f"agent-{key}.json"
 
@@ -1398,7 +1323,10 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
             try:
-                ws, plugin_dir = build_workspace(Path(tmp), skill_set, scenario_dir)
+                ws, plugin_dir = build_workspace(
+                    Path(tmp), skill_set, scenario_dir,
+                    stage_skills_in_workspace=skills_in_workspace,
+                )
             except FileNotFoundError as exc:
                 res.error = str(exc)
                 return res
@@ -1409,11 +1337,11 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 _write_fake_nxd(bin_dir)
                 try:
                     with semantic_http_server(scenario_dir, mcp_spec) as (_ep, env_over):
-                        ok, trace, metrics = run_agent(
+                        ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
                             extra_dirs=extra_dirs, effort=args.agent_effort,
                             env_overrides=env_over, path_prepend=bin_dir,
-                            plugin_dir=plugin_dir,
+                            skill_pack_dir=plugin_dir,
                         )
                 except (RuntimeError, TimeoutError) as exc:
                     res.error = f"MCP server setup failed: {exc}"
@@ -1440,11 +1368,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 with pocket_process_guard(
                     ws, bin_dir / "nxd-desktop-supervisor", env_over
                 ):
-                    ok, trace, metrics = run_agent(
+                    # Pocket narrows the tool allowlist (no web/docs escape
+                    # hatch). Backends that gate per-tool (Claude) honour it;
+                    # sandbox-based ones (Codex) ignore it, so a pocket run is
+                    # not comparable across providers.
+                    pocket_kwargs = {"allowed_tools": POCKET_AGENT_ALLOWED_TOOLS}
+                    ok, trace, metrics = agent_backend.run_agent(
                         ws, prompt, agent_model, agent_timeout,
                         extra_dirs=[], effort=args.agent_effort,
                         env_overrides=env_over, path_prepend=bin_dir,
-                        plugin_dir=plugin_dir, allowed_tools=POCKET_AGENT_ALLOWED_TOOLS,
+                        skill_pack_dir=plugin_dir, **pocket_kwargs,
                     )
                     if checks.get("pocket_verify"):
                         facts.append(pocket_harness_fact(
@@ -1452,10 +1385,10 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             str(pocket_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
                         ))
             else:
-                ok, trace, metrics = run_agent(
+                ok, trace, metrics = agent_backend.run_agent(
                     ws, prompt, agent_model, agent_timeout,
                     extra_dirs=extra_dirs, effort=args.agent_effort,
-                    plugin_dir=plugin_dir,
+                    skill_pack_dir=plugin_dir,
                 )
         # Never cache a transcript whose facts carry a verifier infrastructure
         # failure: the workspace is gone on a later cache hit, so the verifier
@@ -1482,7 +1415,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     final_answer = metrics.get("final_answer", "")
     res.verdict = run_judge(
-        scenario_dir, checks, trace, final_answer,
+        judge_backend, scenario_dir, checks, trace, final_answer,
         args.judge_model, args.judge_timeout, effort=args.judge_effort,
         facts=facts,
     )
@@ -1506,13 +1439,30 @@ def main() -> int:
                         help="Skill set(s) to run; repeatable. Default: all.")
     parser.add_argument("--scenario", action="append", dest="scenarios",
                         help="Scenario name(s) to run; repeatable. Default: all.")
-    parser.add_argument("--agent-model", default=DEFAULT_AGENT_MODEL)
-    parser.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
-    parser.add_argument("--agent-effort", default=DEFAULT_AGENT_EFFORT,
+    parser.add_argument("--agent-backend", default=DEFAULT_AGENT_BACKEND,
+                        choices=AGENT_BACKENDS,
+                        help="Provider driving the agent-under-test "
+                             f"(default: {DEFAULT_AGENT_BACKEND}).")
+    parser.add_argument("--judge-backend", default=DEFAULT_JUDGE_BACKEND,
+                        choices=JUDGE_BACKENDS,
+                        help="Provider driving the judge "
+                             f"(default: {DEFAULT_JUDGE_BACKEND}).")
+    parser.add_argument("--agent-model", default=None,
+                        help="Agent model. Default resolves from --agent-backend "
+                             f"({DEFAULT_MODELS}).")
+    parser.add_argument("--judge-model", default=None,
+                        help="Judge model. Default resolves from --judge-backend.")
+    parser.add_argument("--agent-effort", default=None,
                         help="Reasoning effort for the agent (low|medium|high|"
-                             "xhigh|max; '' = CLI default).")
-    parser.add_argument("--judge-effort", default=DEFAULT_JUDGE_EFFORT,
-                        help="Reasoning effort for the judge.")
+                             "xhigh|max; '' = CLI default). Default resolves "
+                             f"from --agent-backend (claude: "
+                             f"{DEFAULT_AGENT_EFFORT}, codex: "
+                             f"{CODEX_DEFAULT_AGENT_EFFORT}).")
+    parser.add_argument("--judge-effort", default=None,
+                        help="Reasoning effort for the judge. Default resolves "
+                             f"from --judge-backend (claude: "
+                             f"{DEFAULT_JUDGE_EFFORT}, codex: "
+                             f"{CODEX_DEFAULT_JUDGE_EFFORT}).")
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S)
     parser.add_argument("--judge-timeout", type=int, default=DEFAULT_JUDGE_TIMEOUT_S)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY,
@@ -1527,6 +1477,27 @@ def main() -> int:
     parser.add_argument("--list", action="store_true",
                         help="List skill sets and scenarios, then exit.")
     args = parser.parse_args()
+
+    # Resolve per-backend default models when not overridden on the CLI, so
+    # `--agent-backend codex` picks a codex model id (not Claude's "sonnet").
+    if args.agent_model is None:
+        args.agent_model = DEFAULT_MODELS[args.agent_backend]["agent"]
+    if args.judge_model is None:
+        args.judge_model = DEFAULT_MODELS[args.judge_backend]["judge"]
+
+    # Same for reasoning effort: codex's scale has no "xhigh", so an unset
+    # effort resolves per-backend. An explicit --agent-effort / --judge-effort
+    # (including "") always wins.
+    if args.agent_effort is None:
+        args.agent_effort = (
+            CODEX_DEFAULT_AGENT_EFFORT if args.agent_backend == "codex"
+            else DEFAULT_AGENT_EFFORT
+        )
+    if args.judge_effort is None:
+        args.judge_effort = (
+            CODEX_DEFAULT_JUDGE_EFFORT if args.judge_backend == "codex"
+            else DEFAULT_JUDGE_EFFORT
+        )
 
     sets = parse_skill_sets(SKILL_SETS_FILE)
     scenarios = discover_scenarios(args.suite)
@@ -1604,6 +1575,8 @@ def main() -> int:
     if args.report:
         report = {
             "elapsed_s": round(time.time() - started, 1),
+            "agent_backend": args.agent_backend,
+            "judge_backend": args.judge_backend,
             "agent_model": args.agent_model,
             "scenario_agent_models": {
                 scenario.name: (
