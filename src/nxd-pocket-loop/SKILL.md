@@ -55,7 +55,7 @@ smallest path that can give an honest answer:
 |---|---|
 | **Explicit deployed/platform product** — the user names a remote DP, cluster, or platform endpoint | Hand off to `nxd-data-product-query`. Do not create a local replacement. |
 | **Existing local product** — the task supplies its `semantic_endpoint` and bearer token | Call `mcp__nxd-desktop__describe_models`, then answer through `mcp__nxd-desktop__run_semantic_query`. Without both endpoint and token, there is no list/status MCP tool: ask for the product connection or build from an in-scope source. |
-| **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, and its connection details pass through to generation exactly as the user gave them. Never modify a supplied original. |
+| **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, then materialized to local CSV once (see nxd-generate-dp's `reference/database-source.md` / `reference/api-source.md`) before generation — the live credential never passes into the closure. Never modify a supplied original. |
 | **No product and no source** | Ask one concise question naming the missing thing: the local data file/folder or an existing product to query. Do not manufacture a dataset, create a throwaway database, or probe Cowork uploads/workspaces with Bash in hope of finding one. |
 | **Trivial, non-durable calculation** — for example, arithmetic over values pasted in the request, with no request to analyze or reuse data | Answer directly. Do not start a supervisor or build a product. |
 | **Local analysis requested but runtime unavailable** | Stop before fallback work. State that the local analysis runtime is unavailable, identify the missing MCP connection or host-local runtime prerequisite, and point to `nxd-desktop-setup.sh` / the Desktop connection repair. Do not substitute SQLite, raw SQL, pandas, or shell aggregation. |
@@ -150,19 +150,24 @@ you produce with that source's label:
   truncated, or missing merely because the chat renderer visually wraps the
   prompt. Ask only when the supplied table itself has a real structural
   ambiguity, such as a row with a different field count or an unparseable value.
-- **Database connection:** record the host/port/database/schema and the
-  table(s)/view(s) explicitly named by the user, plus how credentials will
-  reach the supervisor at boot — an existing environment variable or secret
-  store name the user points to, or a value they explicitly choose to supply
-  now. Never invent a table name or fabricate a credential, and never persist
-  a raw credential into narration or a committed file — pass it through
-  exactly as supplied (see nxd-generate-dp's `reference/database-source.md`,
-  and `reference/multi-source.md` for the labeled-instance shape).
+- **Database connection:** record the host/port/database/schema, the
+  table(s)/view(s) explicitly named by the user, and the credential they
+  supply now — then connect immediately, in this session, and materialize
+  the needed tables to local CSV per nxd-generate-dp's
+  `reference/database-source.md` (labeled per `reference/multi-source.md`
+  when there's more than one source). Never invent a table name or fabricate
+  a credential, and never persist a raw credential into narration or a
+  committed file. Once materialized, discard the credential — it does not
+  need to reach the supervisor or the served closure — and treat this
+  exactly like an attached CSV source for the rest of the loop.
 - **REST API:** record the base URL, auth scheme, the endpoint(s)/resource(s)
-  in scope, a sample response shape if available, and any known pagination.
-  Same credential rule as the database case — describe, never fabricate or
-  persist raw secret values (see nxd-generate-dp's `reference/api-source.md`,
-  and `reference/multi-source.md` for the labeled-instance shape).
+  in scope, a sample response shape if available, any known pagination, and
+  the credential/token supplied now — then connect immediately and
+  materialize the needed resources to local CSV per nxd-generate-dp's
+  `reference/api-source.md` (labeled per `reference/multi-source.md` when
+  there's more than one source). Same credential rule as the database
+  case: never fabricate or persist it, discard it once materialized, and
+  treat the result as an attached CSV source from here on.
 - **Host path handoff:** pass `build_data_product` only the host-visible,
   absolute output path explicitly returned or exposed by the file-writing tool.
   Never derive a definition path from an opaque attachment ID, a tool-internal
@@ -185,19 +190,20 @@ public semantic role grammar — follow it; do not duplicate its guidance here.
 Invoke the **nxd-generate-dp** skill: assemble the complete Python-authored
 closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
 `requirements.txt`, and the connector-type-specific artifact(s) — from the
-intent, inferred model(s), and connector config. Pass through **every**
-gathered source with its label (or the single unlabeled source, if there's
-only one) and its per-model provenance from Step 2, untouched: the file
-export plus `csv-source-path`/`file-source-path`, or the `db-source-tables`
-mapping, or the `api-source-endpoints` mapping — one such artifact per
-source, labeled per `reference/multi-source.md` when there's more than one.
-**nxd-generate-dp owns the exact per-type (and per-instance) shape — do not
-re-derive it here.** That skill owns the local DP shape (DuckDB output port,
-dlt-in-transform, local executor) and the naming invariant. **Never author
-`deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the supervisor
-compiles those build products from the Python sources when it pins the
-definition.** Include instructions from the file `reference/dlt.md`. The
-output is a **closure directory** — the `--definition` argument for Step 4.
+intent, inferred model(s), and connector config. By this point a database or
+API source has already been materialized to CSV (Step 1); pass through
+**every** gathered source with its label (or the single unlabeled source, if
+there's only one) and its per-model provenance from Step 2, untouched: the
+file export plus `csv-source-path`/`file-source-path` — one such artifact
+per source, labeled per `reference/multi-source.md` when there's more than
+one. **nxd-generate-dp owns the exact per-type (and per-instance) shape — do
+not re-derive it here.** That skill owns the local DP shape (DuckDB output
+port, dlt-in-transform, local executor) and the naming invariant. **Never
+author `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the
+supervisor compiles those build products from the Python sources when it
+pins the definition.** Include instructions from the file `reference/dlt.md`.
+The output is a **closure directory** — the `--definition` argument for
+Step 4.
 
 ### Step 4 — Build and serve through MCP
 
@@ -283,9 +289,12 @@ indefinitely or give up silently.
   export may contain only an exact copy kept separate from the supplied
   source. For a live database or REST API source, treat access as
   **read-only**: never write to the source, never fabricate a table/endpoint
-  the user didn't name, and never invent, persist, or narrate a raw
-  credential — pass it through exactly as supplied, the same discipline as
-  the bearer-token invariant below.
+  the user didn't name, and never invent or narrate a raw credential. The
+  credential is used only transiently, in this session, to materialize the
+  source to CSV (see nxd-generate-dp's `reference/database-source.md` /
+  `reference/api-source.md`) — it is discarded once materialization
+  completes and never needs to reach the served closure, the same discipline
+  as the bearer-token invariant below.
 - **Label every source once there are 2+.** A single-source data product
   needs no label. With multiple sources, each gets a short, distinct label
   used consistently across materialization, inference, and generation; never
@@ -325,5 +334,5 @@ indefinitely or give up silently.
 | Skill | Role in the loop |
 |-------|------------------|
 | `nxd-semantic-data-product` | Infers the semantic model from the source + questions (Step 2) |
-| `nxd-generate-dp` | Generates the runnable local closure the supervisor serves (Step 3), including local-file, database, and REST API connector config — see its own `reference/` for the connector-type-specific shape. |
+| `nxd-generate-dp` | Generates the runnable local closure the supervisor serves (Step 3); owns local-file connector config and how a database/API source gets materialized to CSV — see its own `reference/` for the per-type shape. |
 | `nxd-data-product-query` | Source of the question→concept mapping approach (Step 5) |

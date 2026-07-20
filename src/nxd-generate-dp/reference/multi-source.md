@@ -4,16 +4,16 @@
 
 - The label rule
 - Naming table
-- Worked example: two database sources
-- Applying the pattern to file / API / CSV sources
+- Worked example: two CSV sources
 - What does NOT change
 
 Every connector type documented elsewhere in this pack (`csv-source` inline
-in `SKILL.md`, `file-source.md`, `database-source.md`, `api-source.md`)
-assumes exactly one instance per closure. This doc is the sibling case: a
-closure that needs **two or more** sources — two databases, a database plus
-a REST API, two CSV exports, whatever the mix — without any of them
-colliding on the same fixed name.
+in `SKILL.md`, `file-source.md`) assumes exactly one instance per closure.
+This doc is the sibling case: a closure that needs **two or more** sources —
+two CSV exports, a CSV plus a JSON export, a materialized database source
+alongside a materialized API source (see `reference/database-source.md` /
+`reference/api-source.md` — both collapse to CSV before this point), whatever
+the mix — without any of them colliding on the same fixed name.
 
 ## The label rule
 
@@ -25,27 +25,28 @@ assertions, so never label a source that is the only instance of its type.
 **Once a type has two or more instances**, each instance gets an
 author-chosen **source label**: short, lowercase, hyphen-separated (e.g.
 `orders`, `users`, `crm`), unique among instances of *that* type. Reusing a
-label across different types is harmless (`db-source-orders` and
-`api-source-orders` don't collide as service names) but avoid it for
+label across different types is harmless (`csv-source-orders` and
+`file-source-orders` don't collide as service names) but avoid it for
 clarity.
+
+Database and API sources are materialized to CSV before this step (see
+`reference/database-source.md` / `reference/api-source.md`), so two database
+sources, or a database plus an API, both just become two labeled CSV
+sources — the `csv-source` row below, nothing special.
 
 ## Naming table
 
 | Case | Service | `secrets[...]` key | Companion artifact | `spec.py` var |
 |---|---|---|---|---|
-| One database (unchanged) | `db-source` | `db_source` | `db-source-tables` | `_db` |
-| 2+ databases, labeled | `db-source-<label>` | `db_source_<label>` | `db-source-<label>-tables` | `_db_<label>` |
-| One file source (unchanged) | `file-source` | `file_source` | `file-source-path` | `_file` |
-| 2+ file sources, labeled | `file-source-<label>` | `file_source_<label>` | `file-source-<label>-path` | `_file_<label>` |
-| One API (unchanged) | `api-source` | `api_source` | `api-source-endpoints` | `_api` |
-| 2+ APIs, labeled | `api-source-<label>` | `api_source_<label>` | `api-source-<label>-endpoints` | `_api_<label>` |
 | One CSV (unchanged) | `csv-source` | `csv_source` | `csv-source-path` | `_csv` |
 | 2+ CSVs, labeled | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
+| One file source (unchanged) | `file-source` | `file_source` | `file-source-path` | `_file` |
+| 2+ file sources, labeled | `file-source-<label>` | `file_source_<label>` | `file-source-<label>-path` | `_file_<label>` |
 
 The driver id (`nxd:generic-secrets:1.0.0`) and `attributes: []` never
 change — only the name.
 
-## Worked example: two database sources
+## Worked example: two CSV sources
 
 `infra-profile.yaml` grows past three services — one connector service per
 source instance, alongside the fixed `duckdb` and `python-compute`:
@@ -63,10 +64,10 @@ spec:
     - name: python-compute
       driver: nxd:local/python/compute:0.1.0
       attributes: []
-    - name: db-source-orders
+    - name: csv-source-orders
       driver: nxd:generic-secrets:1.0.0
       attributes: []
-    - name: db-source-users
+    - name: csv-source-support
       driver: nxd:generic-secrets:1.0.0
       attributes: []
 ```
@@ -75,8 +76,8 @@ spec:
 `.secrets([...])`:
 
 ```python
-_db_orders = "/infra-profile/desktop-local#/services/db-source-orders"
-_db_users = "/infra-profile/desktop-local#/services/db-source-users"
+_csv_orders = "/infra-profile/desktop-local#/services/csv-source-orders"
+_csv_support = "/infra-profile/desktop-local#/services/csv-source-support"
 _compute = "/infra-profile/desktop-local#/services/python-compute"
 _duckdb = "/infra-profile/desktop-local#/services/duckdb"
 
@@ -86,33 +87,28 @@ spec = (
     .transform(
         script("transform/main.py")
         .compute(_compute)
-        .secrets([_db_orders, _db_users])
+        .secrets([_csv_orders, _csv_support])
     )
     .output(_output)
 )
 ```
 
-`transform/main.py` receives both secrets entries and builds one connection
-per label; each promised model resolves to exactly one label via its
-labeled companion file (`db-source-orders-tables`, `db-source-users-tables`
-— each a `<model>=<source table>` map covering only the models that instance
-owns):
+`transform/main.py` receives both secrets entries and reads one root
+directory per label; each promised model belongs to exactly one label,
+resolved by which labeled root (`data-orders/`, `data-support/`) it lives
+under:
 
 ```python
 readers = []
-for label, secrets_key, tables_file in (
-    ("orders", "db_source_orders", "db-source-orders-tables"),
-    ("users", "db_source_users", "db-source-users-tables"),
+for label, secrets_key, models in (
+    ("orders", "csv_source_orders", ("orders", "order_items")),
+    ("support", "csv_source_support", ("tickets",)),
 ):
-    db_secrets = secrets[secrets_key]
-    connection_string = _build_connection_string(db_secrets)
-    table_map = _load_source_tables(tables_file)
-    source = sql_database(credentials=connection_string,
-                           schema=db_secrets["schema"],
-                           table_names=list(table_map.values()))
-    for model in table_map:
+    source_root = Path(secrets[secrets_key])
+    for model in models:
         table_name = duckdb.model_tables[model]
-        readers.append(source.resources[table_map[model]].with_name(table_name))
+        reader = filesystem(bucket_url=str(source_root / model), file_glob="*.csv") | read_csv()
+        readers.append(reader.with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
 ```
 
@@ -121,22 +117,12 @@ The read-back assert, `write_disposition="replace"`, and
 `PHYSICAL_MODELS` set regardless of how many source instances contributed to
 it.
 
-## Applying the pattern to file / API / CSV sources
-
-Same shape: swap `db-source-<label>`/`db_source_<label>`/`sql_database` for
-`file-source-<label>`/`file_source_<label>`/the `dlt.sources.filesystem`
-reader, `api-source-<label>`/`api_source_<label>`/`rest_api_resources`, or
-`csv-source-<label>`/`csv_source_<label>`/`read_csv` — each labeled file or
-CSV source also gets its own root directory (`data-<label>/<model>/*.csv`
-instead of the shared `data/`) so two file-based sources' exports never
-overlap on disk.
-
 ## What does NOT change
 
 - The physical-model naming invariant (`models.py` == `.promise` ==
   `PHYSICAL_MODELS` == `main.<name>`) — every model still belongs to exactly
   one source instance, it just resolves through that instance's labeled
-  companion file instead of an unlabeled one.
+  root directory instead of the shared `data/`.
 - The `duckdb` output port name, `write_disposition="replace"`, and
   `.transform-complete` touch.
 - The single-instance default names for any type that only has one source —
