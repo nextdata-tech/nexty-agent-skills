@@ -304,9 +304,40 @@ class ClaudeBackend:
 # agent's shell through a sandbox policy instead. `workspace-write` lets the
 # agent read/write its workspace + run the (mocked) shell — the Codex analog of
 # the Claude tool set — while still sandboxing the rest of the machine.
-CODEX_AGENT_SANDBOX = "workspace-write"
+#
+# Codex implements `workspace-write` with bubblewrap, which needs privileges a
+# GitHub-hosted runner does not grant: every shell call dies with
+# `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` before the
+# command runs. The agent then cannot read its own fixtures, and the judge —
+# correctly — fails a transcript that produced no evidence, which is
+# indistinguishable from a skill regression.
+#
+# EVAL_CODEX_AGENT_SANDBOX lets such an environment select
+# `danger-full-access`. That is only safe where the whole machine is already
+# disposable and isolated (an ephemeral CI runner); it is deliberately NOT the
+# default, so a local run keeps the sandbox.
+CODEX_AGENT_SANDBOX = os.environ.get("EVAL_CODEX_AGENT_SANDBOX", "").strip() or "workspace-write"
 # The judge only reasons over given text and must not touch the filesystem.
 CODEX_JUDGE_SANDBOX = "read-only"
+
+
+# Signatures of the sandbox itself refusing to run a command, as opposed to a
+# command running and failing. `bwrap` is bubblewrap, which Codex uses to
+# implement workspace-write and which cannot create a network namespace on a
+# GitHub-hosted runner.
+_SANDBOX_FAILURE_MARKERS = (
+    "bwrap:",
+    "Failed RTM_NEWADDR",
+    "seccomp",
+    "landlock",
+    "sandbox denied",
+    "Operation not permitted (os error 1)",
+)
+
+
+def _is_sandbox_failure(output: str) -> bool:
+    """True when a shell result shows the sandbox blocked execution."""
+    return any(marker in output for marker in _SANDBOX_FAILURE_MARKERS)
 
 
 class CodexBackend:
@@ -417,6 +448,9 @@ class CodexBackend:
         final_answer = ""
         tool_calls = 0
         errored = False
+        shell_calls = 0
+        shell_successes = 0
+        sandbox_failures = 0
         metrics: dict = {"is_error": False}
         for line in stdout.splitlines():
             line = line.strip()
@@ -442,6 +476,11 @@ class CodexBackend:
                     out = str(item.get("aggregated_output", ""))[:TOOL_RESULT_HEAD_CHARS]
                     exit_code = item.get("exit_code")
                     parts.append(f"[tool_result] (exit={exit_code}) {out}")
+                    shell_calls += 1
+                    if exit_code == 0:
+                        shell_successes += 1
+                    elif _is_sandbox_failure(out):
+                        sandbox_failures += 1
                 elif itype in ("file_change", "patch", "apply_patch"):
                     tool_calls += 1
                     summary = json.dumps(
@@ -478,7 +517,25 @@ class CodexBackend:
                 metrics["is_error"] = False
         metrics["is_error"] = errored or metrics.get("is_error", False)
         metrics["tool_calls"] = tool_calls
+        metrics["shell_calls"] = shell_calls
+        metrics["sandbox_failures"] = sandbox_failures
         trace = "\n".join(parts)
+        # When the sandbox refuses to launch commands, the agent never gets to
+        # attempt the task: it cannot read its fixtures or run anything. The
+        # judge still grades the transcript and correctly finds no evidence,
+        # which is indistinguishable from a skill regression. Flag it so the
+        # caller can classify the cell as an infrastructure failure instead.
+        #
+        # The signature has to be looked for across the whole trace, not just
+        # in shell results. Observed shapes on a GitHub-hosted runner: every
+        # shell call fails with the bwrap error in its output; a shell call
+        # fails with EMPTY output and the agent names the error only in prose;
+        # and the agent retries, gives up, and reports the error having logged
+        # no shell call at all. Requiring zero successful shell calls keeps this
+        # narrow — a run that got real work done is never reclassified, and a
+        # command that failed on its own merits does not count as success.
+        metrics["shell_successes"] = shell_successes
+        metrics["sandbox_blocked"] = _is_sandbox_failure(trace) and shell_successes == 0
         return trace, {"final_answer": final_answer, **metrics}
 
     # -- judge ----------------------------------------------------------------

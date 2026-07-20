@@ -48,6 +48,16 @@ def verdict_of(result: dict) -> str:
     """
     if not result.get("ok", False) or result.get("error"):
         return "ERROR"
+
+    # A run whose sandbox refused every shell call yields a transcript with no
+    # evidence in it, which the judge correctly fails — but the agent never got
+    # to attempt the task, so that FAIL says nothing about the skill. Grading it
+    # would report an environment fault as a content regression and block
+    # unrelated PRs.
+    metrics = result.get("metrics") or {}
+    if metrics.get("sandbox_blocked"):
+        return "ERROR"
+
     verdict = result.get("verdict")
     if not isinstance(verdict, dict) or "overall_pass" not in verdict:
         return "ERROR"
