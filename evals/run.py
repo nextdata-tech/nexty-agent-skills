@@ -147,6 +147,19 @@ POCKET_AGENT_TIMEOUT_S = 2400
 # The verified local smoke used Opus 4.8.  Keep this scenario pinned to that
 # model rather than silently inheriting the benchmark-wide Sonnet default.
 POCKET_AGENT_MODEL = "claude-opus-4-8"
+
+
+def effective_agent_model(is_pocket: bool, backend_name: str, default_model: str) -> str:
+    """Resolve the model a scenario actually runs on.
+
+    Pocket is pinned to a verified Claude model, but that id is meaningless to
+    any other provider, so the pin applies only on the Claude backend. The
+    dispatch path and the report must agree on this or a report attributes a
+    Codex pocket run to a Claude model and poisons the benchmark ledger.
+    """
+    if is_pocket and backend_name == "claude":
+        return POCKET_AGENT_MODEL
+    return default_model
 # The verifier may legitimately re-serve the final snapshot plus several
 # earlier published snapshots.  Give that work most of the agent budget, then
 # report a timeout as runner infrastructure rather than an agent failure.
@@ -1250,13 +1263,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         agent_task, args.docs_base, bool(extra_dirs),
         skills_in_workspace=skills_in_workspace,
     )
-    # Pocket is pinned to a verified Claude model; on any other agent backend the
-    # pin does not apply (the id is not a Codex model), so the resolved default
-    # for that backend stands.
-    agent_model = (
-        POCKET_AGENT_MODEL
-        if pocket_spec is not None and agent_backend.name == "claude"
-        else args.agent_model
+    agent_model = effective_agent_model(
+        pocket_spec is not None, agent_backend.name, args.agent_model
     )
     preflight_metrics: dict[str, object] = {}
     if pocket_spec is not None:
@@ -1579,9 +1587,10 @@ def main() -> int:
             "judge_backend": args.judge_backend,
             "agent_model": args.agent_model,
             "scenario_agent_models": {
-                scenario.name: (
-                    POCKET_AGENT_MODEL if scenario_needs_pocket(scenario) is not None
-                    else args.agent_model
+                scenario.name: effective_agent_model(
+                    scenario_needs_pocket(scenario) is not None,
+                    args.agent_backend,
+                    args.agent_model,
                 )
                 for scenario in scenarios
             },
