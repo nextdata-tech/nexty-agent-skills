@@ -1,0 +1,186 @@
+{
+  "date": "2026-07-20",
+  "label": "nxd-generate-dp + nxd-pocket-loop: uniquely-named infra-profile entries for multi-source closures",
+  "notes": "Added an opt-in source-label naming scheme (reference/multi-source.md) so nxd-generate-dp can uniquely name infra-profile service/secrets/companion entries when a closure needs 2+ sources of the same or mixed connector types, avoiding a same-type name collision. Lifted nxd-pocket-loop's prior single-source-only restriction so its Step 1 gathers and labels multiple sources when needed. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched -- this eval only exercises that unchanged path; a new eval scenario exercising the labeled multi-source path is real follow-up work, not built here. pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).",
+  "plugin_version": "0.13.0",
+  "reports": {
+    "before-v0.12.0": {
+      "elapsed_s": 131.9,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "sonnet",
+        "pocket-loop-serve-query-refine": "claude-opus-4-8"
+      },
+      "judge_model": "sonnet",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 2,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 17,
+            "duration_ms": 104087,
+            "total_cost_usd": 0.8043665000000001,
+            "input_tokens": 7495,
+            "output_tokens": 6901,
+            "is_error": false,
+            "tool_calls": 15,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The agent read inferred_model.json via the Read tool and previewed both CSV headers via `head -5` before any Write calls were made."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The agent created spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, and csv-source-path (containing 'data'), and the trace shows no Write calls to deployment-spec.yaml, manifest.yaml, or models.yaml, confirmed by the check script's PASS python-only-files and PASS no-source-yaml."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "The agent only read/inspected the CSVs (head, cat, uniq checks) and never edited them, and the check script's PASS csv-preserved:customers/customers.csv and PASS csv-preserved:orders/orders.csv (SHA-256 match) confirm byte-for-byte preservation."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "models.py declares primary_key() on customer_id and order_id per the final summary table, uniqueness/non-null was manually verified via uniq -d before writing, and the check script passed promised-base-primary-keys and promised-base-primary-key-tuples."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "models.py imports and uses only public nxd.spec DSL (semantic_model, semantic_view, field, dimension, join, metric, metric_field, primary_key) matching the reference example, and the check script passed public-semantic-dsl and no-private-semantic-metadata."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "The final summary shows physical models promised and views registered via .model(...), and the check script passed desktop-wiring, no-semantic-tools, and duckdb-port."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "transform/main.py content is truncated in the trace but the acceptance check specifically validated transform-contract, no-direct-duckdb-ddl, loaded:customers, loaded:orders, and transform-complete, all of which PASSED."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": true,
+                "why": "The agent ran the exact specified uv command against check_generated_closure.py and the output shows all 22 checks PASS culminating in ALL CHECKS PASSED."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer explicitly states 'No build or semantic query was run against a real supervisor \u2014 only this local closure/transform validation script,' correctly avoiding any false claim of a supervisor build or governed query."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent read the inputs first, authored exactly the required Python-only files without forbidden YAML, preserved CSV data, used public semantic DSL with real primary keys, satisfied desktop wiring and transform-contract checks, ran the acceptance script to ALL CHECKS PASSED, and honestly disclosed that no real supervisor build/query occurred."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-loop-serve-query-refine",
+          "ok": false,
+          "error": "pocket preflight failed",
+          "metrics": {
+            "pocket_preflight_error": "set EVAL_POCKET_SUPERVISOR_DIR (both desktop binaries) and EVAL_POCKET_PYTHON (supervisor venv Python)"
+          },
+          "verdict": {},
+          "facts": []
+        }
+      ]
+    },
+    "after-v0.13.0": {
+      "elapsed_s": 107.0,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "sonnet"
+      },
+      "judge_model": "sonnet",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 20,
+            "duration_ms": 79467,
+            "total_cost_usd": 0.6924265999999999,
+            "input_tokens": 7635,
+            "output_tokens": 6152,
+            "is_error": false,
+            "tool_calls": 18,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The trace shows Read calls on inferred_model.json, data/customers/customers.csv, and data/orders/orders.csv, all occurring before any Write tool call."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The agent wrote exactly spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, and csv-source-path (content 'data'), with no writes to deployment-spec.yaml/manifest.yaml/models.yaml, and the checker's PASS no-source-yaml/python-only-files confirm this."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "No CSV files were written/edited in the trace, and the checker reported PASS csv-preserved for both customers.csv and orders.csv via SHA-256 comparison."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "models.py declares customer_id and order_id as primary_key() on existing columns and the checker passed both promised-base-primary-keys and promised-base-primary-key-tuples, confirming validated non-synthesized keys."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "models.py imports only public nxd.spec symbols (semantic_model, semantic_view, field, dimension, join, metric, metric_field, primary_key) matching the reference example, and checker passed public-semantic-dsl and no-private-semantic-metadata."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "spec.py promises the physical models and registers views, and the checker passed desktop-wiring, no-semantic-tools, and duckdb-port."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "transform/main.py implements the dlt-through-port flow and the checker passed transform-contract, no-direct-duckdb-ddl, loaded:customers, loaded:orders, and transform-complete."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": true,
+                "why": "The agent ran the exact specified uv run command and the tool result ends with 'ALL CHECKS PASSED' after 21 PASS lines."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer explicitly states 'no supervisor build or live semantic query was run,' correctly scoping the claim to the transform/check execution only."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent read all required inputs before authoring, produced exactly the Python-only closure files with correct DSL usage and wiring, preserved CSVs, validated primary keys, ran the acceptance check to ALL CHECKS PASSED, and honestly disclosed the evaluator's scope."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}

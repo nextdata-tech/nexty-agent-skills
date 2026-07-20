@@ -83,3 +83,27 @@ Record: [`records/2026-07-17-nxd-pocket-loop-graded-serve-query-refine-e2e.json`
 Notes: Replaces the obsolete hand-authored local closure topology and private semantic authoring with the desktop supervisor's Python-only public DSL closure, parsed wiring checks, validated base-key tuples, and exact semantic-view metric roles.
 
 Record: [`records/2026-07-20-nxd-generate-dp-desktop-semantic-closure-and-public-authorin.json`](records/2026-07-20-nxd-generate-dp-desktop-semantic-closure-and-public-authorin.json)
+
+## 2026-07-20 — nxd-pocket-loop + nxd-generate-dp: multi-source-type connectors (file/database/API) (plugin v0.12.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.11.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 16 | 14 | 6775 | 0.52 | sonnet |
+| after-v0.12.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 17 | 15 | 6901 | 0.80 | sonnet |
+| after-v0.12.0 | current_pack | pocket-loop-serve-query-refine | ERROR | — | — | — | — | — | sonnet |
+
+Notes: Added file/database/REST-API connector types as siblings to the proven CSV closure in nxd-generate-dp (new reference/file-source.md, database-source.md, api-source.md), and taught nxd-pocket-loop to gather/route them. CSV artifact names/keys (csv-source-path, csv-source, secrets['csv_source']) are untouched. pocket-loop-serve-query-refine could not be re-run in this sandbox (missing nxd-desktop-supervisor binary) -- only generate-runnable-dp-from-intent regression-checked live; its prior v0.11.0 checks are cited from evals/benchmarks/records/2026-07-20-nxd-generate-dp-desktop-semantic-closure-and-public-authorin.json for comparison.
+
+Record: [`records/2026-07-20-nxd-pocket-loop-nxd-generate-dp-multi-source-type-connectors.json`](records/2026-07-20-nxd-pocket-loop-nxd-generate-dp-multi-source-type-connectors.json)
+
+## 2026-07-20 — nxd-generate-dp + nxd-pocket-loop: uniquely-named infra-profile entries for multi-source closures (plugin v0.13.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.12.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 17 | 15 | 6901 | 0.80 | sonnet |
+| before-v0.12.0 | current_pack | pocket-loop-serve-query-refine | ERROR | — | — | — | — | — | sonnet |
+| after-v0.13.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 6152 | 0.69 | sonnet |
+
+Notes: Added an opt-in source-label naming scheme (reference/multi-source.md) so nxd-generate-dp can uniquely name infra-profile service/secrets/companion entries when a closure needs 2+ sources of the same or mixed connector types, avoiding a same-type name collision. Lifted nxd-pocket-loop's prior single-source-only restriction so its Step 1 gathers and labels multiple sources when needed. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched -- this eval only exercises that unchanged path; a new eval scenario exercising the labeled multi-source path is real follow-up work, not built here. pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
+
+Record: [`records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json`](records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json)
