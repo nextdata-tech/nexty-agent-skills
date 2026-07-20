@@ -262,6 +262,17 @@ python3 evals/compare_baseline.py --report eval-report.json --update
 carries no signal about the skill, and recording it would imply coverage that
 does not exist.
 
+**A baseline entry is only valid for the scenario content it was recorded
+against.** If a PR rewrites a scenario's `prompt.md`, `fixtures/`, or
+`checks.json`, the recorded verdict for that cell is stale — and a stale `PASS`
+is worse than no entry, because the next PR to touch that skill is reported as a
+REGRESSION for a change it did not make. Re-run and re-record any scenario your
+branch rewrites, and re-check after rebasing past someone else's rewrite:
+
+```sh
+git diff --name-only origin/main...HEAD -- evals/public/
+```
+
 **The baseline is provider-specific.** It was recorded on the `codex` backend,
 which is what the PR gate runs. Codex activates skills as staged context rather
 than through the `Skill` tool (see "Skill activation differs by provider"
