@@ -76,8 +76,55 @@ Defaults: agent `sonnet`, judge `opus`, effort `medium` for both, concurrency
 stronger model because its grading is the call we most want to trust. Override
 any of these with `--agent-model` / `--judge-model` / `--agent-effort` /
 `--judge-effort` / `--concurrency`. The agent cache is keyed on the skill-set,
-the agent-facing task, the fixtures, and the agent model — a fixture or skill
-edit invalidates it; a grading-only change does not.
+the agent-facing task, the fixtures, the agent backend, and the agent model — a
+fixture, skill, or provider change invalidates it; a grading-only change does not.
+
+### Choosing a provider (Claude / Codex)
+
+The agent-under-test and the judge each run behind a pluggable **backend**
+(`evals/eval_backends.py`). Two ship:
+
+| Backend | CLI it shells | Default agent / judge model | Default agent / judge effort |
+|---|---|---|---|
+| `claude` (default) | `claude -p` (Claude Code) | `sonnet` / `opus` | `medium` / `xhigh` |
+| `codex` | `codex exec --json` (OpenAI Codex) | `gpt-5.6-luna` / `gpt-5.6-terra` | `medium` / `xhigh` |
+
+Pick per-side — you can run a Codex agent graded by a Claude judge, or the
+reverse:
+
+```sh
+# Measure an OpenAI model on the skill task, graded by the same provider.
+python3 evals/run.py --agent-backend codex --judge-backend codex \
+  --skill-set current_pack --scenario duplicate-rows-on-rerun
+
+# Cross-provider: Codex agent, Claude judge (the grader you trust most).
+python3 evals/run.py --agent-backend codex --judge-backend claude \
+  --skill-set current_pack --report eval-report.json
+```
+
+When `--agent-model` / `--judge-model` is omitted, the model defaults resolve
+from the chosen backend (Codex ids differ from Claude's, so `sonnet` is never
+sent to Codex). The prerequisite CLI must be installed and authenticated for
+whichever backend you select (`claude` and/or `codex`); the runner sets no
+credentials of its own.
+
+**Skill activation differs by provider — the numbers are not directly
+comparable.** Claude loads a skill-set as a plugin (`--plugin-dir`), so skills
+activate through the `Skill` tool exactly as in production. Codex has no
+plugin-dir mechanism, so the runner stages the skill pack under
+`<workspace>/.skills/` and the agent prompt tells the agent to read the matching
+`SKILL.md`. That measures *skills as context*, not *skill invocation*. Report a
+Codex run as "Codex + skill-set X", never head-to-head against a Claude run's
+absolute pass rate; the valid within-provider comparison is still
+`no_skills` vs `current_pack` vs `candidate_pack` on the **same** backend.
+
+**Tool restriction is also provider-shaped.** Scenarios that deliberately narrow
+the agent's tool surface (pocket-loop withholds `WebFetch`/`TodoWrite` to measure
+behaviour without a web escape hatch) pass an `allowed_tools` list. Claude gates
+per-tool and honours it exactly; Codex gates with a sandbox policy and ignores
+the list, so it cannot reproduce the same restriction. A tool-restricted scenario
+is therefore measuring a different thing on each backend — compare within a
+provider, never across.
 
 `run.py` exits non-zero only on infrastructure failures (a run that could not be
 graded). A graded `FAIL` is a measured signal, not a CI break — pass rates are
