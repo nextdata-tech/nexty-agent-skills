@@ -1,5 +1,8 @@
 {
   "name": "nxd Setup — Headless Auth in a Sandboxed Shell (dead background login poller)",
+  "skills": [
+    "nxd-setup"
+  ],
   "checks": [
     {
       "id": "diagnoses-dead-poller",

@@ -1,5 +1,9 @@
 {
   "name": "Duplicate Rows on Every Re-run",
+  "skills": [
+    "nxd-debugging-data-products",
+    "nxd-adding-outputs"
+  ],
   "checks": [
     {
       "id": "recognizes-idempotency",

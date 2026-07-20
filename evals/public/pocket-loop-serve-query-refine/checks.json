@@ -1,13 +1,40 @@
 {
   "name": "pocket-loop-serve-query-refine",
+  "skills": [
+    "nxd-pocket-loop",
+    "nxd-semantic-data-product",
+    "nxd-generate-dp"
+  ],
+  "ci_skip": "needs a live desktop supervisor (EVAL_POCKET_SUPERVISOR_DIR / EVAL_POCKET_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
   "pocket_verify": true,
   "checks": [
-    {"id": "phase-a-loop", "check": "The trace shows source inspection, semantic inference, runnable DuckDB/dlt closure generation, a successful local supervisor serve with published=yes, status confirmation, and describe before phase-A queries."},
-    {"id": "catalog-grounded-governed-queries", "check": "Each answer is tied in the trace to a successful supervisor query using a measure/dimension selection grounded in the preceding describe output, never raw SQL or direct CSV arithmetic."},
-    {"id": "phase-a-answers", "check": "The harness pocket_verify facts say every phase-A question is CORRECT. In particular the Spain/Q2 answer retains country plus both half-open date bounds, the segment answer crosses the customer join, overdue is a boolean sum, and top-three uses endpoint ordering and limit."},
-    {"id": "staged-refine", "check": "The agent did not pre-empt the average metric in phase A and, after the staged request, regenerated and re-served the same workflow, refreshed status/describe, and answered the average by segment from the new endpoint. The harness facts must identify a published definition strictly before the final run that answers every phase-A question while remaining UNANSWERABLE for the average question, and at least two runs must be Published."},
-    {"id": "supervisor-state-integrity", "check": "The trace contains no direct writes to the agent-owned supervisor state database at .pocket/state/state.sqlite* or to .pocket/state/definitions/** outside nxd-desktop-supervisor commands. The authoritative facts' published-run timestamps and per-definition SHA-256s must be consistent with the traced supervisor publication chronology; any SQLite insertion or copied/edited pinned snapshot there is an automatic FAIL."},
-    {"id": "independent-published-snapshot", "check": "The authoritative pocket_verify facts report that the harness re-served the immutable final published snapshot, recomputed truth from pristine CSVs, found every required answer correct, and found both source CSVs and the verifier script pristine."},
-    {"id": "forcing-function-and-cleanup", "check": "The trace shows the supplied check_pocket_loop.py --mode agent completed with ALL CHECKS PASSED and the supervisor was stopped; the harness must not report an endpoint still running after the agent finished."}
+    {
+      "id": "phase-a-loop",
+      "check": "The trace shows source inspection, semantic inference, runnable DuckDB/dlt closure generation, a successful local supervisor serve with published=yes, status confirmation, and describe before phase-A queries."
+    },
+    {
+      "id": "catalog-grounded-governed-queries",
+      "check": "Each answer is tied in the trace to a successful supervisor query using a measure/dimension selection grounded in the preceding describe output, never raw SQL or direct CSV arithmetic."
+    },
+    {
+      "id": "phase-a-answers",
+      "check": "The harness pocket_verify facts say every phase-A question is CORRECT. In particular the Spain/Q2 answer retains country plus both half-open date bounds, the segment answer crosses the customer join, overdue is a boolean sum, and top-three uses endpoint ordering and limit."
+    },
+    {
+      "id": "staged-refine",
+      "check": "The agent did not pre-empt the average metric in phase A and, after the staged request, regenerated and re-served the same workflow, refreshed status/describe, and answered the average by segment from the new endpoint. The harness facts must identify a published definition strictly before the final run that answers every phase-A question while remaining UNANSWERABLE for the average question, and at least two runs must be Published."
+    },
+    {
+      "id": "supervisor-state-integrity",
+      "check": "The trace contains no direct writes to the agent-owned supervisor state database at .pocket/state/state.sqlite* or to .pocket/state/definitions/** outside nxd-desktop-supervisor commands. The authoritative facts' published-run timestamps and per-definition SHA-256s must be consistent with the traced supervisor publication chronology; any SQLite insertion or copied/edited pinned snapshot there is an automatic FAIL."
+    },
+    {
+      "id": "independent-published-snapshot",
+      "check": "The authoritative pocket_verify facts report that the harness re-served the immutable final published snapshot, recomputed truth from pristine CSVs, found every required answer correct, and found both source CSVs and the verifier script pristine."
+    },
+    {
+      "id": "forcing-function-and-cleanup",
+      "check": "The trace shows the supplied check_pocket_loop.py --mode agent completed with ALL CHECKS PASSED and the supervisor was stopped; the harness must not report an endpoint still running after the agent finished."
+    }
   ]
 }

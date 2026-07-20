@@ -127,8 +127,9 @@ is therefore measuring a different thing on each backend — compare within a
 provider, never across.
 
 `run.py` exits non-zero only on infrastructure failures (a run that could not be
-graded). A graded `FAIL` is a measured signal, not a CI break — pass rates are
-tracked, not gated.
+graded). A graded `FAIL` is a measured signal, not a CI break at the runner
+level — but CI does gate on *regression* against a committed baseline; see
+"CI" below.
 
 ### Benchmarking a skill change (regression + efficiency)
 
@@ -203,9 +204,54 @@ Each scenario directory holds:
 
 ### CI
 
-`.github/workflows/evals.yml` runs this suite, but is **disabled by default**
-(manual `workflow_dispatch` only, not wired to push/PR) until a Claude
-credential is provisioned in CI. Run the suite locally meanwhile.
+`.github/workflows/evals.yml` has two entry points.
+
+**Automatic (pull requests).** A PR touching `src/**` or `evals/**` runs only
+the scenarios that cover the changed skills, on the `codex` backend with
+`current_pack`. Selection is computed by `evals/affected_scenarios.py`, which
+inverts the `skills` array each scenario declares in its `checks.json`:
+
+```json
+{
+  "name": "Duplicate Rows on Every Re-run",
+  "skills": ["nxd-debugging-data-products", "nxd-adding-outputs"],
+  "checks": [ ... ]
+}
+```
+
+`skills` is mandatory — `validate_skills.py` fails a scenario that omits it or
+names a directory absent from `src/`. Without it a scenario is selected by no
+change at all, which is indistinguishable from "this skill has no regressions".
+
+Changes to the harness itself (`run.py`, `eval_backends.py`, `skill-sets.yaml`,
+the workflow) select every scenario, since they can alter any cell's outcome.
+
+A scenario that cannot run unattended sets `ci_skip` to a reason string and is
+never selected automatically. `pocket-loop-serve-query-refine` uses this: it
+needs a live desktop supervisor CI cannot provision. Run those locally or via
+`workflow_dispatch`.
+
+**Gating is on regression, not on absolute pass.** `evals/compare_baseline.py`
+compares the report against `evals/baselines/public.json` and fails the job only
+when a cell recorded `PASS` there now fails. Absolute pass rates are noisy —
+agent runs are nondeterministic and some cells fail at baseline for reasons a
+given PR did not introduce — so gating on `FAIL` would be both flaky and unfair.
+A cell absent from the baseline reports as `NEW` and never fails the build.
+
+When a change legitimately alters a verdict, re-record it in the same PR:
+
+```sh
+python3 evals/compare_baseline.py --report eval-report.json --update
+```
+
+**Manual (`workflow_dispatch`).** Full control over backend, models, skill-set,
+and scenario. It reports baseline drift but never fails on it, since an
+arbitrary backend/model combination is expected to diverge from the PR gate's
+baseline.
+
+Credentials: the PR gate uses the `OPENAI_API_KEY` repo secret (codex backend).
+The manual job additionally reads `ANTHROPIC_API_KEY` when either side is set to
+the `claude` backend.
 
 ## Running a scenario (manual reference)
 

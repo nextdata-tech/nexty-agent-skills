@@ -1,5 +1,8 @@
 {
   "name": "Query a Pharma Semantic Mesh Across Data Products (governed gateway)",
+  "skills": [
+    "nxd-data-product-query"
+  ],
   "checks": [
     {
       "id": "discovery-before-query",

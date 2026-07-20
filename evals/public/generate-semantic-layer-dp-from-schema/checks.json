@@ -1,5 +1,8 @@
 {
   "name": "Generate a Semantic-Layer Data Product from a Schema",
+  "skills": [
+    "nxd-semantic-data-product"
+  ],
   "checks": [
     {
       "id": "models-grains-annotated",

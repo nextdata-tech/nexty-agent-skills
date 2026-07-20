@@ -1,5 +1,8 @@
 {
   "name": "Query a Pharma Semantic Mesh (governed MCP)",
+  "skills": [
+    "nxd-data-product-query"
+  ],
   "checks": [
     {
       "id": "discovery-before-query",

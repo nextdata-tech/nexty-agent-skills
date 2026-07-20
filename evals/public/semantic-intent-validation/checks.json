@@ -1,5 +1,8 @@
 {
   "name": "Validate Intent Before Executing a Semantic Query",
+  "skills": [
+    "nxd-data-product-query"
+  ],
   "checks": [
     {
       "id": "discovery-before-query",

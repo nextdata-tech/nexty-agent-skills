@@ -1,5 +1,8 @@
 {
   "name": "Generate a Semantic-Layer Data Product from a Live Source and Questions",
+  "skills": [
+    "nxd-semantic-data-product"
+  ],
   "digest_tie": {
     "filename": "models.py",
     "label": "MODELS_SHA256"

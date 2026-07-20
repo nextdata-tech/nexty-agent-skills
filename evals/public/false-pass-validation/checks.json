@@ -1,5 +1,9 @@
 {
   "name": "nxd validate Exits 0 but Did Not Validate",
+  "skills": [
+    "nxd-debugging-data-products",
+    "nxd-setup"
+  ],
   "checks": [
     {
       "id": "recognizes-not-authenticated",

@@ -1,5 +1,9 @@
 {
   "name": "Comply With A Failing Policy (Missing Output Quality Promise)",
+  "skills": [
+    "nxd-complying-with-failing-policy",
+    "nxd-adding-expectations-promises"
+  ],
   "checks": [
     {
       "id": "identifies-policy-type-first",

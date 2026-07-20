@@ -3,11 +3,25 @@ name: evals
 # Runs the skill-pack eval suite (evals/run.py): drives a headless agent over
 # each scenario with a chosen skill-set and grades it with an LLM judge.
 #
-# DISABLED BY DEFAULT. This workflow is manual-only (workflow_dispatch) and is
-# not wired to push/PR: it spends model tokens and needs a Claude credential in
-# CI, so it runs on demand rather than on every push. Until a CI credential is
-# provisioned the suite is run locally (see evals/README.md).
+# Two entry points:
+#
+#   pull_request  — automatic, but only for PRs that touch skills or the eval
+#                   harness. Runs the *affected* scenarios (the ones whose
+#                   checks.json declares a changed skill) on the codex backend
+#                   with current_pack, and gates on regression against
+#                   evals/baselines/public.json. See the `evals-pr` job.
+#   workflow_dispatch — manual, full control over backend/model/skill-set.
+#
+# Cost control is by scenario selection, not by disabling the workflow: a PR
+# touching one skill runs only that skill's scenarios (see
+# evals/affected_scenarios.py).
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/**'
+      - 'evals/**'
+      - '.github/workflows/evals.yml'
   workflow_dispatch:
     inputs:
       skill_set:
@@ -19,16 +33,28 @@ on:
         description: "Single scenario name to run (omit for the whole suite)."
         required: false
         type: string
+      agent_backend:
+        description: "Backend driving the agent under test."
+        required: false
+        type: choice
+        options: [claude, codex]
+        default: codex
+      judge_backend:
+        description: "Backend grading the transcript."
+        required: false
+        type: choice
+        options: [claude, codex]
+        default: codex
       agent_model:
-        description: "Model for the agent under test."
+        description: "Model for the agent under test (blank = the backend's default)."
         required: false
         type: string
-        default: sonnet
+        default: ""
       judge_model:
-        description: "Model for the LLM judge."
+        description: "Model for the LLM judge (blank = the backend's default)."
         required: false
         type: string
-        default: opus
+        default: ""
       docs_base:
         description: "Public platform docs base URL (fetchable .md base) given to every run."
         required: false
@@ -43,8 +69,112 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Supersede an in-flight run when a PR is pushed again; eval runs are long and
+  # only the newest head matters. Manual runs key off the run id so two
+  # dispatches never cancel each other.
+  group: evals-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Automatic PR gate: affected scenarios only, codex backend, regression-gated.
+  # ---------------------------------------------------------------------------
+  evals-pr:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # need the merge base to diff changed paths
+          submodules: recursive   # example data products the scenarios reference
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Select affected scenarios
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Diff against the merge base, not the base tip, so unrelated commits
+          # landed on main since the PR branched are not counted as changes.
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          git diff --name-only "$merge_base" "$HEAD_SHA" > changed.txt
+          echo "Changed files:"; cat changed.txt
+
+          python3 evals/affected_scenarios.py --changed-file changed.txt > decision.json
+          cat decision.json
+
+          reason="$(python3 -c 'import json;print(json.load(open("decision.json"))["reason"])')"
+          count="$(python3 -c 'import json;print(len(json.load(open("decision.json"))["scenarios"]))')"
+          {
+            echo "count=$count"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+
+          # Emit the repeated --scenario flags the runner consumes.
+          python3 -c '
+          import json
+          d = json.load(open("decision.json"))
+          print("\n".join(d["scenarios"]))
+          ' > selected.txt
+
+          {
+            echo "### Eval selection"
+            echo ""
+            echo "$reason"
+            echo ""
+            if [ "$count" -gt 0 ]; then
+              echo "Scenarios:"
+              sed 's/^/- /' selected.txt
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Codex CLI
+        if: steps.select.outputs.count != '0'
+        run: npm install -g @openai/codex
+
+      - name: Run affected scenarios
+        if: steps.select.outputs.count != '0'
+        env:
+          # The codex backend authenticates via OPENAI_API_KEY (repo secret).
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          args=(--suite public --report eval-report.json
+                --agent-backend codex --judge-backend codex
+                --skill-set current_pack
+                --concurrency 4)
+          while IFS= read -r scenario; do
+            [ -n "$scenario" ] && args+=(--scenario "$scenario")
+          done < selected.txt
+          python3 evals/run.py "${args[@]}"
+
+      - name: Gate on regression vs baseline
+        if: steps.select.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          python3 evals/compare_baseline.py --report eval-report.json --suite public \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval report
+        if: always() && steps.select.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-pr
+          path: eval-report.json
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Manual full-control run.
+  # ---------------------------------------------------------------------------
   evals:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -56,7 +186,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install Claude Code CLI
+        if: inputs.agent_backend == 'claude' || inputs.judge_backend == 'claude'
         run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install Codex CLI
+        if: inputs.agent_backend == 'codex' || inputs.judge_backend == 'codex'
+        run: npm install -g @openai/codex
 
       - name: Run eval suite
         env:
@@ -64,8 +199,11 @@ jobs:
           # historical misnomer: it holds an OAuth token from `claude
           # setup-token`, consumed by the CLI as CLAUDE_CODE_OAUTH_TOKEN.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Bind workflow inputs as env vars (not inline ${{ }} in the script)
           # so a crafted input cannot break out of its intended shell argument.
+          AGENT_BACKEND: ${{ inputs.agent_backend }}
+          JUDGE_BACKEND: ${{ inputs.judge_backend }}
           AGENT_MODEL: ${{ inputs.agent_model }}
           JUDGE_MODEL: ${{ inputs.judge_model }}
           DOCS_BASE: ${{ inputs.docs_base }}
@@ -75,10 +213,19 @@ jobs:
         run: |
           set -euo pipefail
           args=(--suite public --report eval-report.json
-                --agent-model "$AGENT_MODEL"
-                --judge-model "$JUDGE_MODEL"
+                --agent-backend "$AGENT_BACKEND"
+                --judge-backend "$JUDGE_BACKEND"
                 --docs-base "$DOCS_BASE"
                 --concurrency "$CONCURRENCY")
+          # Model flags are omitted when blank so each backend's own default
+          # applies — Codex model ids differ from Claude's, and forcing one
+          # backend's id onto the other is always wrong.
+          if [ -n "$AGENT_MODEL" ]; then
+            args+=(--agent-model "$AGENT_MODEL")
+          fi
+          if [ -n "$JUDGE_MODEL" ]; then
+            args+=(--judge-model "$JUDGE_MODEL")
+          fi
           if [ -n "$SKILL_SET" ]; then
             args+=(--skill-set "$SKILL_SET")
           fi
@@ -86,6 +233,18 @@ jobs:
             args+=(--scenario "$SCENARIO")
           fi
           python3 evals/run.py "${args[@]}"
+
+      - name: Compare against baseline (report only)
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f eval-report.json ]; then
+            # Manual runs report drift but never fail on it: the dispatcher
+            # chooses arbitrary backends/models, so a mismatch against the
+            # PR-gate baseline is expected rather than a regression.
+            python3 evals/compare_baseline.py --report eval-report.json --suite public \
+              | tee -a "$GITHUB_STEP_SUMMARY" || true
+          fi
 
       - name: Upload eval report
         if: always()
@@ -99,6 +258,7 @@ jobs:
   # Vendor-agnostic; runs the live baseline over the stdio MCP transport with a
   # cheap OpenAI model. Manual-only, gated on the OPENAI_API_KEY repo secret.
   nxd-eval-smoke:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

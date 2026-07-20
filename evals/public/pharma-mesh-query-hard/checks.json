@@ -1,5 +1,8 @@
 {
   "name": "Pharma Semantic Mesh — Adversarial Queries (strict MCP)",
+  "skills": [
+    "nxd-data-product-query"
+  ],
   "checks": [
     {
       "id": "discovery-and-strict-mcp",
