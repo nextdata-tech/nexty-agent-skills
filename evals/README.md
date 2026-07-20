@@ -227,9 +227,23 @@ Changes to the harness itself (`run.py`, `eval_backends.py`, `skill-sets.yaml`,
 the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
-never selected automatically. `pocket-loop-serve-query-refine` uses this: it
-needs a live desktop supervisor CI cannot provision. Run those locally or via
-`workflow_dispatch`.
+never selected automatically. Run those locally or via `workflow_dispatch`.
+Five scenarios are currently skipped:
+
+| Scenario | Why |
+|---|---|
+| `pocket-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
+| `pharma-cross-dp-mesh-query` | needs a live semantic MCP server reaching lower-env Snowflake |
+| `pharma-mesh-query-hard` | same |
+| `pharma-mesh-query-loop` | same |
+| `semantic-intent-validation` | same |
+
+**Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
+skipped scenarios, so a PR touching it currently gets a green no-op. Four more
+skills — `nxd-adding-policy`, `nxd-policies`, `nxd-mesh-analyzer`,
+`nxd-eval-harness` — have no scenario at all. Five of fifteen skills are
+therefore unguarded by CI. A green eval check on those PRs means "nothing ran",
+not "nothing regressed".
 
 **Gating is on regression, not on absolute pass.** `evals/compare_baseline.py`
 compares the report against `evals/baselines/public.json` and fails the job only
@@ -243,6 +257,18 @@ When a change legitimately alters a verdict, re-record it in the same PR:
 ```sh
 python3 evals/compare_baseline.py --report eval-report.json --update
 ```
+
+`ERROR` cells are never written to the baseline: a cell that failed to run
+carries no signal about the skill, and recording it would imply coverage that
+does not exist.
+
+**The baseline is provider-specific.** It was recorded on the `codex` backend,
+which is what the PR gate runs. Codex activates skills as staged context rather
+than through the `Skill` tool (see "Skill activation differs by provider"
+above), so several cells sit at `FAIL` having done the substantive work but not
+evidenced every prescribed step. Those `FAIL` entries are a property of the
+harness, not proof of a skill defect — do not rewrite a skill to chase one
+without first comparing against a `claude`-backend run.
 
 **Manual (`workflow_dispatch`).** Full control over backend, models, skill-set,
 and scenario. It reports baseline drift but never fails on it, since an

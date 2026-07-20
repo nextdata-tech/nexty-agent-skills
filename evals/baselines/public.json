@@ -1,0 +1,35 @@
+{
+  "_comment": "Known-good verdict per <skill_set>/<scenario>. CI fails a PR only when a cell recorded PASS here now fails. Regenerate with: python3 evals/compare_baseline.py --report <report>.json --update",
+  "cells": {
+    "current_pack/api-to-vector-data-product-build": {
+      "verdict": "FAIL"
+    },
+    "current_pack/debug-failed-data-product": {
+      "verdict": "FAIL"
+    },
+    "current_pack/duplicate-rows-on-rerun": {
+      "verdict": "PASS"
+    },
+    "current_pack/false-pass-validation": {
+      "verdict": "PASS"
+    },
+    "current_pack/generate-runnable-dp-from-intent": {
+      "verdict": "PASS"
+    },
+    "current_pack/generate-semantic-layer-dp-from-schema": {
+      "verdict": "PASS"
+    },
+    "current_pack/generate-semantic-layer-from-live-source-and-questions": {
+      "verdict": "FAIL"
+    },
+    "current_pack/nxd-setup-headless-auth": {
+      "verdict": "FAIL"
+    },
+    "current_pack/pgvector-embedding-type-failure": {
+      "verdict": "PASS"
+    },
+    "current_pack/policy-compliance-failure": {
+      "verdict": "FAIL"
+    }
+  }
+}

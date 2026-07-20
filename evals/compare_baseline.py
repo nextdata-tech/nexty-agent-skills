@@ -89,7 +89,14 @@ def main() -> int:
         )
         cells = existing.get("cells", {})
         for result in results:
-            cells[cell_key(result)] = {"verdict": verdict_of(result)}
+            grade = verdict_of(result)
+            if grade == "ERROR":
+                # A cell that never ran carries no signal about the skill.
+                # Recording it would leave an entry implying coverage that does
+                # not exist, and it can never be regressed against anyway.
+                print(f"  skipping {cell_key(result)}: ERROR (not recorded)")
+                continue
+            cells[cell_key(result)] = {"verdict": grade}
         payload = {
             "_comment": (
                 "Known-good verdict per <skill_set>/<scenario>. CI fails a PR only "
