@@ -128,11 +128,20 @@ def main() -> int:
     regressions: list[tuple[str, str]] = []
     improvements: list[str] = []
     new_cells: list[tuple[str, str]] = []
+    flaky_hits: list[tuple[str, str]] = []
     unchanged = 0
 
     for result in results:
         key = cell_key(result)
         now = verdict_of(result)
+        entry = baseline.get(key) or {}
+        # A cell marked flaky has been observed returning different verdicts for
+        # identical input. It is still run and reported, but it cannot gate: a
+        # cell that flips on its own would red PRs at random, which trains
+        # everyone to ignore the check.
+        if entry.get("flaky") and now != "PASS":
+            flaky_hits.append((key, now))
+            continue
         if key not in baseline:
             new_cells.append((key, now))
             continue
@@ -147,10 +156,12 @@ def main() -> int:
     print(f"baseline: {baseline_path}")
     print(
         f"{len(results)} cell(s): {unchanged} unchanged, {len(improvements)} improved, "
-        f"{len(new_cells)} new, {len(regressions)} regressed"
+        f"{len(new_cells)} new, {len(flaky_hits)} flaky, {len(regressions)} regressed"
     )
     for key, now in new_cells:
         print(f"  NEW        {key}: {now} (not in baseline — not gated)")
+    for key, now in flaky_hits:
+        print(f"  FLAKY      {key}: {now} (known-unstable cell — reported, not gated)")
     for key in improvements:
         print(f"  IMPROVED   {key}: FAIL -> PASS (update the baseline to lock this in)")
     for key, now in regressions:

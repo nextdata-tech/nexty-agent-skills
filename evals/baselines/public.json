@@ -17,7 +17,9 @@
       "verdict": "PASS"
     },
     "current_pack/generate-semantic-layer-dp-from-schema": {
-      "verdict": "PASS"
+      "verdict": "PASS",
+      "flaky": true,
+      "note": "Returned PASS when recorded and FAIL (3/10 checks) on an identical local re-run, with a healthy sandbox both times. Its checks demand visible evidence for 10 separate artifacts, which a nondeterministic agent does not reliably produce. Reported, never gated, until the checks are made robust."
     },
     "current_pack/generate-semantic-layer-from-live-source-and-questions": {
       "verdict": "FAIL"
