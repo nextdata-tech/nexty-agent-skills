@@ -162,6 +162,13 @@ jobs:
         if: steps.select.outputs.count != '0'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Codex's workspace-write sandbox is bubblewrap-based and cannot
+          # create a network namespace on a GitHub-hosted runner: every shell
+          # call fails with `bwrap: loopback: Failed RTM_NEWADDR` before the
+          # command runs. A hosted runner is already an ephemeral, isolated VM
+          # that we discard after the job, so dropping Codex's own sandbox here
+          # does not widen the blast radius. Never set this on a shared machine.
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
         run: |
           set -euo pipefail
           args=(--suite public --report eval-report.json
@@ -231,6 +238,9 @@ jobs:
           # setup-token`, consumed by the CLI as CLAUDE_CODE_OAUTH_TOKEN.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # See the evals-pr job: bubblewrap cannot namespace on a hosted
+          # runner, and the runner is itself the disposable isolation boundary.
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
           # Bind workflow inputs as env vars (not inline ${{ }} in the script)
           # so a crafted input cannot break out of its intended shell argument.
           AGENT_BACKEND: ${{ inputs.agent_backend }}
