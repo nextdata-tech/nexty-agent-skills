@@ -87,7 +87,7 @@ The agent-under-test and the judge each run behind a pluggable **backend**
 | Backend | CLI it shells | Default agent / judge model | Default agent / judge effort |
 |---|---|---|---|
 | `claude` (default) | `claude -p` (Claude Code) | `sonnet` / `opus` | `medium` / `xhigh` |
-| `codex` | `codex exec --json` (OpenAI Codex) | `gpt-5.6-luna` / `gpt-5.6-terra` | `medium` / `high` |
+| `codex` | `codex exec --json` (OpenAI Codex) | `gpt-5.6-luna` / `gpt-5.6-terra` | `medium` / `xhigh` |
 
 Pick per-side — you can run a Codex agent graded by a Claude judge, or the
 reverse:

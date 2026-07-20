@@ -460,14 +460,22 @@ class CodexBackend:
                 err = d.get("error") or {}
                 parts.append(f"[turn.failed] {json.dumps(err, ensure_ascii=False)[:600]}")
             elif typ == "turn.completed":
+                # `codex exec` emits one turn.completed per invocation, whose
+                # usage covers the whole run — but that is CLI behaviour we do
+                # not control, and overwriting would silently undercount if it
+                # ever emitted per-turn usage across a multi-turn run. Summing
+                # is correct either way: with a single event it is the identity.
                 usage = d.get("usage", {}) or {}
-                metrics = {
-                    "input_tokens": usage.get("input_tokens"),
-                    "output_tokens": usage.get("output_tokens"),
-                    "reasoning_output_tokens": usage.get("reasoning_output_tokens"),
-                    "cached_input_tokens": usage.get("cached_input_tokens"),
-                    "is_error": False,
-                }
+                for key in (
+                    "input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                    "cached_input_tokens",
+                ):
+                    value = usage.get(key)
+                    if value is not None:
+                        metrics[key] = (metrics.get(key) or 0) + value
+                metrics["is_error"] = False
         metrics["is_error"] = errored or metrics.get("is_error", False)
         metrics["tool_calls"] = tool_calls
         trace = "\n".join(parts)

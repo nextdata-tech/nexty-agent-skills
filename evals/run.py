@@ -75,7 +75,7 @@ DEFAULT_MODELS = {
 # codex backend AND the user did not pass an explicit --agent-effort /
 # --judge-effort. Claude's effort defaults below are unchanged.
 CODEX_DEFAULT_AGENT_EFFORT = "medium"
-CODEX_DEFAULT_JUDGE_EFFORT = "high"
+CODEX_DEFAULT_JUDGE_EFFORT = "xhigh"
 
 # Reasoning effort. The agent under test mirrors a real session (medium). The
 # judge runs at xhigh because grading is the call we most want to trust — a
