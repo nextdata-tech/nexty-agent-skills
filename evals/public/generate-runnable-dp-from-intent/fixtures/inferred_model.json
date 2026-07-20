@@ -1,5 +1,5 @@
 {
-  "$comment": "Inferred semantic model — the handoff artifact produced by the nxd-semantic-data-product skill (inference mode) over the profiled CSV sample, driven by the stakeholder questions. Per model: description + per-column data_type (models.yaml vocabulary) and the ready __nxd_semantic__ role blobs. PLACE these blobs verbatim; do not redesign them. Columns with an empty roles list are promised attributes but carry NO semantic annotation.",
+  "$comment": "Inferred semantic intent — the handoff artifact produced by nxd-semantic-data-product (inference mode) over the profiled CSV export and stakeholder questions. Per model: description, source column types, and required public semantic roles. Translate these roles with semantic_model, field, primary_key, dimension, join, semantic_view, and metric_field; do not write __nxd_semantic__ metadata directly. Empty roles mean a promised bare-typed attribute.",
   "produced_by": "nxd-semantic-data-product (inference mode)",
   "models": {
     "customers": {
@@ -7,7 +7,7 @@
       "columns": {
         "customer_id": {
           "data_type": "string",
-          "roles": [{"kind": "grain"}]
+          "roles": [{"kind": "primary_key"}]
         },
         "email": {
           "data_type": "string",
@@ -45,7 +45,7 @@
         "order_id": {
           "data_type": "string",
           "roles": [
-            {"kind": "grain"},
+            {"kind": "primary_key"},
             {"kind": "metric", "name": "order_count", "agg": "count_distinct", "description": "Distinct orders placed."}
           ]
         },

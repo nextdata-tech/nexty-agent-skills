@@ -1,6 +1,6 @@
 ---
 name: nxd-pocket-loop
-description: Drives the end-to-end Nexty Pocket loop on a local desktop supervisor — turn a natural-language intent plus a local data source into a running, queryable data product, then answer the user's questions against it and refine when answers are wrong. Orchestrates the whole flow: infer the semantic model from the source and questions, generate the runnable data-product closure, boot and publish it on the local supervisor, translate NL questions into governed queries, and loop wrong answers back into a regenerate. Use when the user wants to "build a data product from a question", "spin up a local data product and ask it questions", "go from a CSV plus questions to answers", or iterate on a locally-generated DP. This is the orchestrator above nxd-semantic-data-product (inference) and nxd-generate-dp (code generation); it drives them plus the desktop supervisor CLI. Not for querying an already-deployed platform DP — use nxd-data-product-query for that.
+description: Use when a task includes or references tabular business data—rows, columns, CSVs, spreadsheets, or exports—and the user wants an analytical answer they may revisit: a breakdown, ranking, comparison, total by group, trend, anomaly, driver, or follow-up question. Treat recurring data, requests to keep asking questions, and repeated analysis as strong signals to create or reuse a governed local product, even when the first table is small enough to calculate directly. Answer only from the product's semantic query result. If the data or local desktop runtime is unavailable, state the missing prerequisite; never silently substitute raw SQL, pandas, shell aggregation, or mental arithmetic. Do not use for clearly one-off arithmetic with no tabular analysis or reusable intent. For an explicitly deployed platform product, use nxd-data-product-query.
 allowed-tools:
   - Bash
   - Read
@@ -9,166 +9,91 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+# The plugin validator permits only built-in Claude Code tool names here.
+# nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.10.0
+  version: 0.11.0
 ---
 
 # nxd-pocket-loop skill
 
 ## Overview
 
-This skill drives the **Nexty Pocket loop**: a natural-language intent plus a
-local data source become a running, queryable data product on a local desktop
-supervisor — no Kubernetes, no remote warehouse. The loop is:
+This skill is the analyst-facing entry point for local business-data questions.
+Start from the user's outcome and available data, not internal product language.
+When a durable local product is useful, drive the **Nexty Pocket loop**: a
+natural-language intent plus a local data source become a running, queryable
+data product on a local desktop supervisor — no Kubernetes, no remote
+warehouse. The loop is:
 
 ```
 intent + source + questions
    → infer the semantic model        (nxd-semantic-data-product)
    → generate the runnable closure    (nxd-generate-dp)
-   → boot + serve on the supervisor   (nxd-desktop-supervisor serve)
+   → build + serve on the supervisor  (nxd-desktop MCP)
    → translate NL question → query    (this skill, agent-side)
    → answer, and refine wrong answers back into a regenerate
 ```
 
 This skill is the **orchestrator**. It does not re-teach inference or code
 generation — it invokes the skills that own those, then drives the supervisor
-CLI to run and query the result.
+MCP path to run and query the result. Do not expose this routing machinery as a
+requirement for the user.
 
 > **You own the loop, not the gates.** This skill sequences the work loosely and
 > narrates progress. It does NOT enforce ordered approval gates or autonomy
 > budgets — that hardening lives supervisor-side and is deferred. Keep one data
 > product in flight at a time while iterating.
 
-## Preflight — check before you start
+## Route the request before doing work
 
-### Step 0 — where does your shell actually run?
+Classify the request before provisioning, generation, or querying. Prefer the
+smallest path that can give an honest answer:
 
-The supervisor is a native binary that runs wherever you invoke it — but "where
-you invoke it" is not always the user's machine. Work out your execution surface
-before anything else:
+| Situation | Route |
+|---|---|
+| **Explicit deployed/platform product** — the user names a remote DP, cluster, or platform endpoint | Hand off to `nxd-data-product-query`. Do not create a local replacement. |
+| **Existing local product** — the task supplies its `semantic_endpoint` and bearer token | Call `mcp__nxd-desktop__describe_models`, then answer through `mcp__nxd-desktop__run_semantic_query`. Without both endpoint and token, there is no list/status MCP tool: ask for the product connection or build from an in-scope source. |
+| **In-scope source data** — attached/exported CSVs, a connected workspace folder, pasted tabular data, or a spreadsheet made available to the task | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single CSV may be copied unchanged into the generated closure's required export layout; never modify the supplied original. |
+| **No product and no source** | Ask one concise question naming the missing thing: the local data file/folder or an existing product to query. Do not manufacture a dataset, create a throwaway database, or probe Cowork uploads/workspaces with Bash in hope of finding one. |
+| **Trivial, non-durable calculation** — for example, arithmetic over values pasted in the request, with no request to analyze or reuse data | Answer directly. Do not start a supervisor or build a product. |
+| **Local analysis requested but runtime unavailable** | Stop before fallback work. State that the local analysis runtime is unavailable, identify the missing MCP connection or host-local runtime prerequisite, and point to `nxd-desktop-setup.sh` / the Desktop connection repair. Do not substitute SQLite, raw SQL, pandas, or shell aggregation. |
 
-- **Local session** (your `Bash` tool runs on the user's own machine — `$HOME`
-  is a real user home, `uname` is the user's OS, `command -v
-  nxd-desktop-supervisor` can succeed after provisioning): drive the supervisor
-  with the ordinary `Bash` tool. The rest of this skill assumes this. This is the
-  proven path — Claude Code, or Claude Desktop running the agent loop locally.
+Treat ambiguous requests conservatively. If a question could mean either a
+one-off calculation or analysis of an unseen source, ask which data or product
+should answer it. If data is in scope and the user asks for a recurring,
+shareable, or multi-question analysis, prefer the reusable local-product path.
 
-- **Cloud-sandbox session with a `device_bash` tool** (e.g. Claude Cowork): read
-  this carefully — the common mental model is wrong. `device_bash` does **NOT**
-  give you a shell on the user's machine. It runs inside an **isolated Linux VM**
-  hosted alongside the app (confirm: `uname -a` reports `Linux ... aarch64`, not
-  `Darwin`). That VM:
-  - **Cannot see the user's filesystem** except folders they explicitly connect
-    to the session. `$HOME/.nxd`, `/Volumes/...`, the repo — none are reachable
-    unless connected. A path the user pastes from their Mac will fail with `No
-    such file or directory`, not because the runtime is broken but because it
-    isn't mounted.
-  - **Cannot execute the user's macOS binaries.** The desktop bins shipped today
-    are macOS-arm64 Mach-O; a Linux VM can't run them regardless of mounts.
+## Choose the execution surface
 
-  So you CANNOT drive a Mac-side `~/.nxd` supervisor from `device_bash`. The only
-  way to run this loop inside such a VM is a runtime provisioned **inside the VM
-  itself** — Linux-aarch64 bins + Linux (`manylinux`) wheels + the source CSVs,
-  all under a connected folder. That Linux bundle is not yet a shipped artifact;
-  until it is, **Cowork's cloud-sandbox mode is not a supported surface for this
-  skill.**
+Choose this order before invoking any runtime command:
 
-Detect the surface cheaply in one call: `uname -s; echo "$HOME"; command -v
-nxd-desktop-supervisor`. If `uname` is `Linux` and you reached it via
-`device_bash`, you are in the cloud VM — do NOT try to reach the user's Mac, and
-do NOT try to provision against Mac paths. Either a Linux runtime is present
-inside the VM (drive it with `device_bash` + VM-local absolute paths), or STOP
-and tell the user this session can't reach a supervisor.
+1. **MCP first.** If all three tools are available —
+   `mcp__nxd-desktop__build_data_product`,
+   `mcp__nxd-desktop__describe_models`, and
+   `mcp__nxd-desktop__run_semantic_query` — use them for the entire build,
+   describe, and query sequence. This is the supported route for Claude
+   Desktop and Claude Cowork.
+2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
+   `nxd-desktop-supervisor` only when the session context has positively
+   established that the shell is the user's macOS host **and** both
+   `nxd-desktop-supervisor` and its sibling `nxd-desktop-kernel-host` are
+   present together. If either fact is not already established, do not assume
+   it from a path, home directory, or prior task.
+3. **Otherwise stop.** Report that no usable local desktop runtime is connected
+   and give the provisioning/connection recovery action.
 
-### Environment checks
+In Claude Cowork, its workspace `Bash` is an isolated Linux environment. Use it
+only to read, stage, or materialize task files. **Never run `uname`, binary
+probes, or supervisor commands there**, and never use its Linux paths as MCP
+definition paths. The connected `nxd-desktop` MCP server runs on the host and
+is the runtime authority.
 
-Before the loop, confirm the environment is ready and stop with a clear message
-if not (run these on whichever shell actually reaches a supervisor — see Step 0):
-
-- **`nxd-desktop-supervisor` is on `PATH`** (`command -v nxd-desktop-supervisor`).
-  If absent, point the user at the local-desktop provisioning step
-  (`nxd-desktop-setup.sh` — it builds the two binaries onto `PATH` and provisions
-  the Python runtime). Do **not** try to `cargo build` or `uv sync` inline
-  yourself; that is the provisioning step's job. Do not proceed until it resolves.
-- **The `nxd-desktop-kernel-host` sibling binary is present too.** The supervisor
-  resolves `nxd-desktop-kernel-host` from the SAME directory as its own
-  executable at boot and hard-fails without it. Verify both sit together, e.g.
-  `command -v nxd-desktop-kernel-host` resolves to the same directory as the
-  supervisor. If only the supervisor is on `PATH`, the runtime is half-installed —
-  re-run the provisioning step.
-- **The source directory has the expected shape** — a CSV connector export: one
-  subdirectory per table, `*.csv` inside. If the shape is wrong, ask.
-- **A writable data directory** for the supervisor's state and generations
-  (`--data-dir`).
-- **The Python runtime is provisioned and `NXD_DESKTOP_PYTHON` points at it.**
-  The supervisor does NOT prepare a venv — it only *resolves* an interpreter
-  (`NXD_DESKTOP_PYTHON`, else a dev venv next to the binary, else `python3`). If
-  the provisioning step set `NXD_DESKTOP_PYTHON`, confirm the export reached your
-  shell (see below); if it silently falls back to an interpreter with no nxd
-  wheels, the transform fails at import.
-- **Your shell has the provisioning step's `export` lines.** In some agent
-  sandboxes each `Bash` call is an independent process, so a `PATH` /
-  `NXD_DESKTOP_PYTHON` export set in one call may NOT be visible in the next.
-  Re-check `command -v nxd-desktop-supervisor` and `echo "$NXD_DESKTOP_PYTHON"`
-  at the **start of the run**, and if they don't persist, prefix each supervisor
-  command with the exports (`PATH="…:$PATH" NXD_DESKTOP_PYTHON="…" nxd-desktop-supervisor …`)
-  the same way the bearer is passed per-command below.
-
-## What you drive — the supervisor CLI contract
-
-The local supervisor is the `nxd-desktop-supervisor` binary. Each subcommand
-prints one machine-readable document on stdout (diagnostics go to stderr).
-
-- **serve** — pin a generated closure, boot the kernel, run the transform,
-  publish, and keep the semantic query endpoint alive as a background process.
-  ```
-  nxd-desktop-supervisor serve --definition <closure-dir> --workflow <id> --data-dir <dir>
-  ```
-  Prints `KEY=VALUE` lines: `run_id=…`, `artifact_id=…`, `definition_id=…`,
-  `semantic_endpoint=http://127.0.0.1:PORT/mcp/`, `semantic_child_pid=…`,
-  `supervisor_pid=…`, `published=yes` on **stdout**. **`bearer_token=…` is printed
-  to stderr, not stdout** (kept off stdout so it doesn't leak into captured
-  output) — so capture BOTH streams (e.g. `serve … > out.txt 2> err.txt`, or
-  redirect `2>&1`) and read the bearer from stderr, or you will have an endpoint
-  with no token. The endpoint stays alive across separate `query`/`describe`
-  calls until you `stop` it. Re-running `serve` on the SAME `--workflow` replaces
-  the DP cleanly and rebinds the same endpoint — the regenerate primitive.
-  (`create --hold-secs N` is a smoke variant whose endpoint lives only N seconds
-  and dies on return; use `serve` for the loop.)
-
-- **describe** — introspect the running DP's semantic catalog.
-  ```
-  nxd-desktop-supervisor describe --endpoint <ep>
-  ```
-  Reads the bearer from `NXD_DESKTOP_BEARER`. Prints the models with their
-  measures and dimensions — the canonical concept names to query by. This is how
-  you learn what to select; do not guess concept names.
-
-- **query** — run a governed semantic query against the running DP.
-  ```
-  nxd-desktop-supervisor query --endpoint <ep> --measure <m> [--dimension <d> …]
-  # or, for filters / ordering / limit:
-  nxd-desktop-supervisor query --endpoint <ep> --selection <file.json>
-  ```
-  Reads the bearer from `NXD_DESKTOP_BEARER`. Prints ONE JSON line:
-  `{"columns": [...], "rows": [...], "compiled_sql": "...", "row_count": N,
-  "truncated": bool}`. `--measure`/`--dimension` are sugar for the simple case;
-  `--selection <file>` takes a JSON document `{measures, dimensions, filters,
-  order_by, limit}` for anything richer. The query is by **measure and dimension
-  names** — never raw SQL, never natural language.
-
-- **status** — check what is published for a workflow.
-  ```
-  nxd-desktop-supervisor status --data-dir <dir> --workflow <id>
-  ```
-  Prints `current_artifact=<id|none>`, `pointer=<id|none>`.
-
-- **stop** — tear down a served endpoint and its semantic child.
-  ```
-  nxd-desktop-supervisor stop --data-dir <dir>
-  ```
-  Run this when the loop is done, or before re-serving a fresh workflow.
+The `allowed-tools` frontmatter is restricted by this plugin's validator to
+built-in tool names; it cannot enumerate fully qualified MCP tools. The three
+`mcp__nxd-desktop__…` calls above are nevertheless mandatory whenever exposed
+by the session tool registry.
 
 ## The loop — step by step
 
@@ -177,8 +102,9 @@ prints one machine-readable document on stdout (diagnostics go to stderr).
 Establish three things (ask the user for whatever is missing):
 
 - **Intent** — what the data product is about, in the user's words.
-- **Source** — where the local data lives (the CSV export directory checked in
-  preflight).
+- **Source** — where the in-scope local data lives. Preserve it exactly; if it
+  is not already a connector export, keep any generated export copy separate
+  from the supplied source.
 - **Questions** — the natural-language questions the DP must answer. These drive
   the whole inference (right-to-left): the model is judged by whether it answers
   them.
@@ -187,78 +113,91 @@ Warm the user up before long work: state that you'll infer a model, generate the
 DP, run it locally, and then answer their questions — so a multi-minute build is
 expected, not a stall.
 
+Materialize the source faithfully before inference:
+
+- **Attached or workspace source:** make an exact byte-for-byte copy into the
+  generated connector export. Do not rewrite delimiter, encoding, headers, or
+  rows.
+- **Pasted table:** materialize every supplied header and value faithfully in a
+  separate CSV export. Do not add columns, coerce values, deduplicate rows, or
+  invent an identifier. Treat introductory prose before or after a table as
+  narrative, not a data row. A header followed by consistently shaped rows is
+  sufficient evidence to proceed: do not claim a valid value was spliced,
+  truncated, or missing merely because the chat renderer visually wraps the
+  prompt. Ask only when the supplied table itself has a real structural
+  ambiguity, such as a row with a different field count or an unparseable value.
+- **Host path handoff:** pass `build_data_product` only the host-visible,
+  absolute output path explicitly returned or exposed by the file-writing tool.
+  Never derive a definition path from an opaque attachment ID, a tool-internal
+  ID, or a Linux workspace path. If no host-visible absolute output path is
+  available, stop and explain that the local build cannot access the materialized
+  definition yet.
+
 ### Step 2 — Infer the semantic model
 
 Invoke the **nxd-semantic-data-product** skill in its inference mode: profile the
 local source into `schema.json`, then derive the semantic model (grains,
 dimensions, metrics, joins, PII) from the profile **and** the user's questions.
-That skill owns the role grammar and the `__nxd_semantic__` annotations — follow
-it; do not duplicate its guidance here.
+That skill owns the public semantic role grammar — follow it; do not duplicate
+its guidance here.
 
 ### Step 3 — Generate the runnable closure
 
-Invoke the **nxd-generate-dp** skill: assemble the complete runnable closure —
-`spec.py`, `models.py`, `transform/main.py`, `requirements.txt`, and the
-`deployment-spec.yaml` / `manifest.yaml` / `models.yaml` wiring — from the intent,
-the inferred model, and the connector config. That skill owns the local DP shape
-(DuckDB output port, dlt-in-transform, local executor) and the naming invariant.
-The output is a **closure directory** — the `--definition` argument for Step 4.
+Invoke the **nxd-generate-dp** skill: assemble the complete Python-authored
+closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
+`requirements.txt`, `csv-source-path`, and the unchanged CSV export copy — from
+the intent, inferred model, and connector config. That skill owns the local DP
+shape (DuckDB output port, dlt-in-transform, local executor) and the naming
+invariant. **Never author `deployment-spec.yaml`, `manifest.yaml`, or
+`models.yaml`: the supervisor compiles those build products from the Python
+sources when it pins the definition.** The output is a **closure directory** —
+the `--definition` argument for Step 4.
 
-### Step 4 — Serve on the supervisor
+### Step 4 — Build and serve through MCP
 
-Serve the closure (a persistent endpoint the loop can query repeatedly):
+When the three desktop MCP tools are available, call
+`mcp__nxd-desktop__build_data_product` with the host-visible absolute closure
+path as `definition` and a stable `workflow`. It creates, publishes, and serves
+the product for this MCP session. Treat the returned `semantic_endpoint` and
+`bearer_token` as the only connection for later calls; keep the token out of
+narration.
 
-```
-nxd-desktop-supervisor serve --definition <closure-dir> --workflow <id> --data-dir <dir>
-```
+Fail closed on any build error or missing returned endpoint/token. Report the
+MCP build failure and its actionable message; **do not retry through workspace
+Bash, SQLite, raw SQL, pandas, or another local database.** A successful build
+is the only proof that the generated product is ready to query.
 
-Fail closed unless the command SUCCEEDS (exit 0) and every required key is present
-and non-empty — in particular `published=yes`. Capture `semantic_endpoint` and
-`supervisor_pid` from **stdout**, and `bearer_token` from **stderr** (redirect
-both — e.g. `serve … > out.txt 2> err.txt` — since the bearer is deliberately not
-on stdout). Pass the bearer to each subsequent call **per command**, not via a
-persistent `export` (a separate agent shell may not inherit it):
-
-```
-NXD_DESKTOP_BEARER="<bearer_token>" nxd-desktop-supervisor describe --endpoint <ep>
-```
-
-Keep the token out of narration. Confirm the publish before querying:
-
-```
-nxd-desktop-supervisor status --data-dir <dir> --workflow <id>
-```
-
-`current_artifact` must be non-`none`. Narrate: report that the DP built,
-published, and is serving, and that you're about to query it.
+Use the direct CLI only under the confirmed host-local Darwin conditions in
+"Choose the execution surface." Keep that path equivalent: serve the generated
+closure, retain its endpoint/token, and stop on any failure rather than falling
+back to a different analysis mechanism.
 
 ### Step 5 — Answer the questions (NL → governed query)
 
 The query surface is **structured** (measure/dimension names); the
 natural-language translation is yours to do. For each question:
 
-1. **Discover the catalog.** Run `describe --endpoint <ep>` to see the running
-   DP's actual measures and dimensions. The declared vocabulary is canonical —
-   map against it, do not guess concept names from the source columns.
+1. **Discover the catalog first.** Call
+   `mcp__nxd-desktop__describe_models` with the endpoint/token returned by the
+   build (or supplied for an existing local product). The declared vocabulary is
+   canonical — map against it, do not guess concept names from source columns.
 2. **Map the NL question to a selection.** Pick the measure(s) and dimension(s)
    that answer it — reuse the question→concept mapping approach from
    **nxd-data-product-query**'s semantic-layer section. Before running, restate
    the selection you chose and, if the question is ambiguous against the declared
    concepts, ask rather than silently picking.
-3. **Check the question fits the grammar.** The query supports measures grouped
-   by dimensions, plus filters / order_by / limit via `--selection`. It does NOT
-   express raw-row retrieval or anything outside measures+dimensions(+filters).
-   If a question needs something the grammar can't express (e.g. a per-row dump),
-   say so and clarify — do not silently drop a constraint like "in Spain last
-   month" and answer a broader total.
-4. **Run the query** (`--measure`/`--dimension`, or `--selection <file>` for
-   filters/ordering/limit), reading the bearer per-command from
-   `NXD_DESKTOP_BEARER`.
-5. **Parse + present.** Read the `{columns, rows, compiled_sql, row_count,
-   truncated}` JSON. Render the answer as a compact table, state the concept
-   selection that produced it, and if `truncated` is true label the result a
-   partial preview — never present a truncated or unverified result as the
-   complete answer.
+3. **Check the question fits the MCP grammar.**
+   `mcp__nxd-desktop__run_semantic_query` accepts only `measures[]` and
+   `dimensions[]`. It does not support filters, ordering, raw-row retrieval, or
+   raw SQL. If the request cannot be represented without dropping a constraint,
+   explain the gap and clarify; do not broaden the answer silently.
+4. **Run the governed query.** Call
+   `mcp__nxd-desktop__run_semantic_query` with the endpoint/token plus the
+   selected measures and dimensions. Do not bypass it with raw SQL or a local
+   aggregation.
+5. **Parse + present.** Render the returned rows as a compact table and state
+   the semantic selection that produced them. Label any partial or unverified
+   result as a preview rather than the complete answer.
 
 ### Step 6 — Refine wrong answers back into the loop
 
@@ -266,19 +205,18 @@ If an answer is wrong, missing, or unsatisfying, decide where the fix belongs an
 keep BOTH levels bounded:
 
 - **Query-level** (cheapest) — the model is right but the selection was wrong or a
-  dimension was missing. Re-`describe`, re-map, re-`query`. Cap at ~2 remaps per
-  question.
+  dimension was missing. Re-describe, re-map, then re-query through MCP. Cap at
+  ~2 remaps per question.
 - **Model / DP-level** — the inferred model is wrong (missing metric, wrong grain,
-  missing join, wrong PII). Go back to Step 2/3 to regenerate, then re-`serve` on
-  the **same** `--workflow`. Cap at ~3 regenerate cycles total.
+  missing join, wrong PII). Go back to Step 2/3, then rebuild through MCP with
+  the **same** `workflow`. Cap at ~3 regenerate cycles total.
 
-**After every re-serve, refresh:** re-read the new `semantic_endpoint` +
-`bearer_token` from the serve output (they may change), re-confirm `status`, and
-re-`describe` the catalog before mapping again — the regenerated model is exactly
+**After every rebuild, refresh:** use the endpoint/token returned by that build,
+then describe the catalog before mapping again — the regenerated model is exactly
 when the catalog can differ. Define success as a catalog-grounded answer the user
-accepts. If the loop doesn't converge within the caps, `stop` the endpoint and
-report what you tried, what the DP currently declares, and where the gap is — do
-not loop indefinitely or give up silently.
+accepts. If the loop does not converge within the caps, report what you tried,
+what the product currently declares, and where the gap is — do not loop
+indefinitely or give up silently.
 
 ## Narration discipline (always)
 
@@ -290,24 +228,28 @@ not loop indefinitely or give up silently.
 - **Show the query behind the answer** — every answer states the
   measure/dimension selection that produced it.
 
-## Turnkey client config (thin)
-
-To wire one client (Claude Desktop / Cowork / Claude Code) to a running DP, write
-that client's MCP config pointing at the running DP's `semantic_endpoint` as the
-MCP server URL, with `Authorization: Bearer <bearer_token>` as its auth header —
-using the client's own config schema and file location (these differ per client;
-do not assume one shape). Never print the bearer token into the chat. This is the
-one turnkey path for the single client you iterate on — keep it minimal.
-
 ## Invariants — never violate these
 
 - **Do not re-teach inference or code generation.** Invoke
   nxd-semantic-data-product and nxd-generate-dp.
+- **Preserve supplied data.** Never modify an input file, its headers, or its
+  rows; never add an identifier or fabricate a key. A generated connector
+  export may contain only an exact copy kept separate from the supplied source.
+- **Keep governed analysis on the supervisor path.** Never answer a governed
+  local-data question with SQLite, `sqlite3`, raw SQL, pandas aggregation, or a
+  shell pipeline as a fallback. The supervisor may compile semantic selections
+  internally, but do not author or execute raw SQL to bypass its query contract.
+- **MCP is authoritative when connected.** If the three `nxd-desktop` MCP tools
+  are present, build, describe, and query through them. A failed MCP build is a
+  reported failure, not permission to use a workspace-shell or database fallback.
+- **Hand off only host-visible paths.** Pass `build_data_product` an absolute
+  generated-definition path explicitly exposed by the file-writing surface;
+  never infer one from an attachment ID or isolated Linux path.
 - **Query is by measure/dimension name, not raw SQL or NL.** The NL→selection
-  translation is agent-side; ground it in `describe`.
-- **Serve, don't hold.** Use `serve` for the loop's persistent endpoint; `stop`
-  it when done. `create --hold-secs` is a smoke variant only.
-- **One workflow id per data product.** Re-`serve` the same id to regenerate.
+  translation is agent-side; ground it in `describe_models`. The desktop MCP
+  query contract accepts only measures and dimensions — do not emulate filters
+  or ordering outside it.
+- **One workflow id per data product.** Rebuild the same id to regenerate.
 - **The supervisor data dir is off-limits.** Everything under `.pocket/state/`
   — pinned snapshots in `definitions/<id>/`, `state.sqlite*`, `staging/` — is
   immutable supervisor-owned state. Never `chmod`, edit, or hand-write those
@@ -315,7 +257,8 @@ one turnkey path for the single client you iterate on — keep it minimal.
   inside a pinned `manifest.yaml` is the supervisor's own resolved runtime path,
   not a defect. If a served closure is wrong, fix it in **your** source dir and
   re-`serve` — the supervisor re-pins a fresh snapshot.
-- **Bearer per command, never `export`.** Keep it out of narration.
+- **Bearer only as a tool parameter.** Keep it out of narration and never persist
+  or print it.
 - **Never present a preview or truncated result as verified data**, and never
   stall silently.
 - **The loop is bounded** — cap query remaps and regenerate cycles; report
