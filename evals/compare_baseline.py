@@ -87,6 +87,25 @@ def main() -> int:
         action="store_true",
         help="Rewrite the baseline from this report instead of gating on it.",
     )
+    parser.add_argument(
+        "--write-regressed",
+        type=Path,
+        default=None,
+        help=(
+            "Write the regressed scenario names (one per line) to this file. "
+            "CI uses it to re-run only the failing cells before failing the build."
+        ),
+    )
+    parser.add_argument(
+        "--confirm-with",
+        type=Path,
+        default=None,
+        help=(
+            "A second report of a re-run. A cell regresses only if it also failed "
+            "there; a cell that passed on retry is reported as flaky-run and does "
+            "not fail the build."
+        ),
+    )
     args = parser.parse_args()
 
     baseline_path = args.baseline or REPO_ROOT / "evals" / "baselines" / f"{args.suite}.json"
@@ -153,11 +172,31 @@ def main() -> int:
         else:
             unchanged += 1
 
+    # A single agent run is noisy enough that one FAIL is not proof of a
+    # regression: false-pass-validation was observed PASS, FAIL, then PASS again
+    # across identical inputs. When a retry report is supplied, a cell has to
+    # fail twice to count — a cell that passes on retry is reported and dropped.
+    retry_rescued: list[str] = []
+    if args.confirm_with and regressions:
+        retry_verdicts = {
+            cell_key(r): verdict_of(r) for r in load_report(args.confirm_with)
+        }
+        confirmed: list[tuple[str, str]] = []
+        for key, now in regressions:
+            again = retry_verdicts.get(key)
+            if again == "PASS":
+                retry_rescued.append(key)
+            else:
+                confirmed.append((key, again or now))
+        regressions = confirmed
+
     print(f"baseline: {baseline_path}")
     print(
         f"{len(results)} cell(s): {unchanged} unchanged, {len(improvements)} improved, "
         f"{len(new_cells)} new, {len(flaky_hits)} flaky, {len(regressions)} regressed"
     )
+    for key in retry_rescued:
+        print(f"  FLAKY-RUN  {key}: failed once, passed on retry — not gated")
     for key, now in new_cells:
         print(f"  NEW        {key}: {now} (not in baseline — not gated)")
     for key, now in flaky_hits:
@@ -167,10 +206,17 @@ def main() -> int:
     for key, now in regressions:
         print(f"  REGRESSION {key}: PASS -> {now}")
 
+    if args.write_regressed:
+        # Scenario name only — the runner takes --scenario, not skill_set/scenario.
+        args.write_regressed.write_text(
+            "".join(f"{key.split('/', 1)[1]}\n" for key, _ in regressions)
+        )
+
     if regressions:
+        confirmed_note = " (confirmed by retry)" if args.confirm_with else ""
         print(
-            "\nA cell that passed on the baseline now fails. If this is an accepted "
-            "change, re-run and update evals/baselines/ in this PR.",
+            f"\nA cell that passed on the baseline now fails{confirmed_note}. If this "
+            "is an accepted change, re-run and update evals/baselines/ in this PR.",
             file=sys.stderr,
         )
         return 1

@@ -252,6 +252,22 @@ agent runs are nondeterministic and some cells fail at baseline for reasons a
 given PR did not introduce — so gating on `FAIL` would be both flaky and unfair.
 A cell absent from the baseline reports as `NEW` and never fails the build.
 
+**A regression must reproduce to block.** One agent run is too noisy to gate on:
+`false-pass-validation` was observed `PASS`, then `FAIL`, then `PASS` again on
+unchanged input. So when a cell regresses, CI re-runs just that cell and fails
+only if it regresses twice. A cell that passes on retry is reported as
+`FLAKY-RUN` and does not block. Only a clean `PASS` rescues — a retry that
+`ERROR`s or fails again still gates.
+
+Some cells are unstable enough that even a retry cannot make them meaningful.
+Mark those `"flaky": true` in the baseline with a note recording the evidence;
+they are still run and reported (as `FLAKY`) but never gate.
+`generate-semantic-layer-dp-from-schema` is currently marked — it returned
+`PASS` when recorded and `FAIL` (3/10 checks) on an identical re-run, because
+its checks demand visible evidence for ten separate artifacts that a
+nondeterministic agent does not reliably produce. The marker is a stopgap, not
+a fix: the checks want rewriting into fewer, more robust assertions.
+
 When a change legitimately alters a verdict, re-record it in the same PR:
 
 ```sh

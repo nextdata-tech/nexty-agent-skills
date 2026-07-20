@@ -181,11 +181,49 @@ jobs:
           python3 evals/run.py "${args[@]}"
 
       - name: Gate on regression vs baseline
+        id: gate
         if: steps.select.outputs.count != '0'
         run: |
           set -euo pipefail
+          # First pass: report, and capture any regressed cells for a retry.
+          # Do not fail here — a single agent run is too noisy to block on. The
+          # same cell has been observed PASS, FAIL, then PASS again on identical
+          # input, so one failure is not yet evidence of a regression.
+          status=0
           python3 evals/compare_baseline.py --report eval-report.json --suite public \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+            --write-regressed regressed.txt | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
+          if [ -s regressed.txt ]; then
+            echo "retry=true" >> "$GITHUB_OUTPUT"
+            echo "Regressed cells to retry:"; cat regressed.txt
+          else
+            echo "retry=false" >> "$GITHUB_OUTPUT"
+            exit $status
+          fi
+
+      - name: Retry regressed scenarios
+        if: steps.gate.outputs.retry == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
+        run: |
+          set -euo pipefail
+          args=(--suite public --report eval-retry.json
+                --agent-backend codex --judge-backend codex
+                --skill-set current_pack
+                --concurrency 4)
+          while IFS= read -r scenario; do
+            [ -n "$scenario" ] && args+=(--scenario "$scenario")
+          done < regressed.txt
+          python3 evals/run.py "${args[@]}"
+
+      - name: Confirm regressions against the retry
+        if: steps.gate.outputs.retry == 'true'
+        run: |
+          set -euo pipefail
+          # A cell fails the build only if it regressed twice. One that passes on
+          # retry is reported as FLAKY-RUN and does not block.
+          python3 evals/compare_baseline.py --report eval-report.json --suite public \
+            --confirm-with eval-retry.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload eval report
         if: always() && steps.select.outputs.count != '0'
