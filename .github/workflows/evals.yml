@@ -135,14 +135,32 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install Codex CLI
+      - name: Install and authenticate Codex CLI
         if: steps.select.outputs.count != '0'
-        run: npm install -g @openai/codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex
+
+          # `codex` does NOT pick up OPENAI_API_KEY from the environment: it
+          # defaults to ChatGPT-style websocket auth and 401s without a stored
+          # credential. The key has to be handed to an explicit login.
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "OPENAI_API_KEY secret is empty — the codex backend cannot authenticate." >&2
+            exit 1
+          fi
+          printenv OPENAI_API_KEY | codex login --with-api-key
+          codex login status
+
+          # `codex` installs bundled system skills on first run and fails with
+          # "Directory not empty (os error 39)" when the target already exists
+          # from the npm install. Clearing it lets the first run populate it.
+          rm -rf "${CODEX_HOME:-$HOME/.codex}/skills" || true
 
       - name: Run affected scenarios
         if: steps.select.outputs.count != '0'
         env:
-          # The codex backend authenticates via OPENAI_API_KEY (repo secret).
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
@@ -189,9 +207,22 @@ jobs:
         if: inputs.agent_backend == 'claude' || inputs.judge_backend == 'claude'
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Install Codex CLI
+      - name: Install and authenticate Codex CLI
         if: inputs.agent_backend == 'codex' || inputs.judge_backend == 'codex'
-        run: npm install -g @openai/codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex
+          # See the evals-pr job: the env var alone is not a credential for
+          # `codex`, which needs an explicit api-key login.
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "OPENAI_API_KEY secret is empty — the codex backend cannot authenticate." >&2
+            exit 1
+          fi
+          printenv OPENAI_API_KEY | codex login --with-api-key
+          codex login status
+          rm -rf "${CODEX_HOME:-$HOME/.codex}/skills" || true
 
       - name: Run eval suite
         env:
