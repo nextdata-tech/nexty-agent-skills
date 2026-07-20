@@ -1,69 +1,39 @@
 """Complete semantic-layer data product reference (.semantic_tools()).
 
-This is the whole wiring for a deployable semantic DP under the
-`.semantic_tools()` pattern: the four governed MCP tools (list_models,
-semantic_model, describe_model, run_semantic_query) are AUTO-GENERATED at pod
-boot from per-field `__nxd_semantic__` annotations on the promised models.
+This is the full wiring for a deployable semantic DP. The author declares public
+semantic roles in `models.py`; `.semantic_tools()` compiles them and auto-generates
+the four governed MCP tools at pod boot.
 
-Files (FLAT siblings at the DP root):
-    models.py       # semantic vocabulary as per-field __nxd_semantic__ blobs
-    transform.py    # seeds the base tables the tools query + a marker row
-    spec.py         # .transform() + storage port + .semantic_tools()
+Files (flat siblings at the DP root):
+    models.py       # physical bases plus query-time metric views
+    transform.py    # seeds physical base tables and a marker row
+    spec.py         # transform, output port, views, and .semantic_tools()
     requirements.txt
 
-HOW ANNOTATIONS FLOW TO THE TOOLS
+AUTHORING AND RUNTIME FLOW
 ------------------------------------------------------------------------------
-  models.py                    spec.py build           pod runtime
-  ---------                    -------------           -----------
-  AttributeSpec._metadata   →  manifest models.yaml →  entrypoints._load_tools()
-    __nxd_semantic__: '...'    attributes[*].metadata   │
-                                                         ├─ PRIMARY: kernel writes
-                                                         │  .nxd/semantic/<model>.json
-                                                         │  at boot (needs a kernel
-                                                         │  image with the semantic
-                                                         │  emitter) → glob+merge
-                                                         └─ FALLBACK: split-pod k8s/rpc
-                                                            MCP server runs no kernel →
-                                                            _manifest_compile parses the
-                                                            bundled models.yaml blobs
-                                                            (byte-identical payload;
-                                                            needs pyyaml)
-                                                         ↓
-                                                  build_semantic_tools_from_payload()
-                                                         ↓
-                                                  4 MCP tools served at /mcp
+  models.py                         spec.py                     pod runtime
+  ---------                         -------                     -----------
+  field(..., primary_key())  ┐      promise(physical base)  ┐
+  field(..., dimension())    ├──→   model(metric view)      ├──→ compiled
+  field(..., join())         │      semantic_tools(...)     │    payloads → tools
+  metric_field(metric(...))  ┘                              ┘
 
-THREE WIRING CONSTRAINTS
-------------------------------------------------------------------------------
-1. The semantic vocabulary is per-field `__nxd_semantic__` JSON blobs on each
-   model's AttributeSpec. STOPGAP (public author API not yet available): no public
-   `AttributeSpec.semantic_annotation()` setter yet, so `_annotate()` writes the
-   private `_metadata` dict directly. Replace once the public API ships.
-2. PROMISE every annotated model on the storage port (so its attributes reach
-   the manifest), then call `.semantic_tools(service=...)` — it auto-wires the 4
-   RPC tools + the mcp-api port. Do NOT also call data_product_rpc_output();
-   semantic_tools() raises ValidationError if an RPC output already exists.
-3. The `.transform()` seeds the base tables the tools query (CREATE OR REPLACE
-   TABLE + write_pandas) and the marker row. NO semantic-view DDL —
-   run_semantic_query compiles against the base tables from the kernel payloads.
+Physical bases define keys, dimensions, and joins. Metrics live on a
+`semantic_view(...)`; that view is query-time only and is registered with
+`.model(...)`, never `.promise(...)`. The transform creates no semantic-view
+DDL: governed SQL runs against the seeded physical tables.
+
+In the split-pod RPC topology, `pyyaml` lets the MCP pod rebuild payloads from the
+bundled model definition when kernel-delivered payloads are unavailable.
 
 
 # ============================================================================
 # models.py
 # ============================================================================
-import json
-
-from nxd.spec import semantic_model
-from nxd.spec._model import AttributeSpec
+from nxd.spec import Agg, dimension, field, join, metric, metric_field
+from nxd.spec import primary_key, semantic_model, semantic_view
 from nxd.spec.data_types import float64, int64, string
-
-_SEMANTIC_KEY = "__nxd_semantic__"
-
-
-def _annotate(attr: AttributeSpec, role: dict) -> AttributeSpec:
-    \"\"\"Inject a `__nxd_semantic__` blob into *attr*._metadata (stopgap).\"\"\"
-    attr._metadata[_SEMANTIC_KEY] = json.dumps(role, separators=(",", ":"))
-    return attr
 
 
 customer_profile = (
@@ -71,22 +41,14 @@ customer_profile = (
     .description("One row per customer.")
     .schema(
         {
-            "CUSTOMER_ID": _annotate(
-                AttributeSpec(name="CUSTOMER_ID", data_type=int64()),
-                {"kind": "grain"},
+            "CUSTOMER_ID": field(int64(), primary_key()),
+            "COUNTRY": field(
+                string(),
+                dimension(name="country"),
             ),
-            "COUNTRY": _annotate(
-                AttributeSpec(name="COUNTRY", data_type=string(),
-                              _description="Customer's country."),
-                {"kind": "dimension", "name": "country",
-                 "description": "Customer's country.", "type": "string"},
-            ),
-            "EMAIL": _annotate(
-                AttributeSpec(name="EMAIL", data_type=string(),
-                              _description="Customer email address."),
-                {"kind": "dimension", "name": "email",
-                 "description": "Customer email address.", "type": "string",
-                 "pii": True},
+            "EMAIL": field(
+                string(),
+                dimension(name="email", pii=True),
             ),
         }
     )
@@ -94,44 +56,43 @@ customer_profile = (
 
 order_event = (
     semantic_model("order_event")
-    .description("One row per order / sales event.")
+    .description("One row per order or sales event.")
     .schema(
         {
-            "ORDER_ID": _annotate(
-                AttributeSpec(name="ORDER_ID", data_type=int64()),
-                {"kind": "grain"},
+            "ORDER_ID": field(int64(), primary_key()),
+            "CUSTOMER_ID": field(
+                int64(),
+                join(to="customer_profile", to_column="CUSTOMER_ID"),
             ),
-            # Multi-role: join key (N:1 to customer_profile) + a count_distinct metric.
-            "CUSTOMER_ID": _annotate(
-                AttributeSpec(name="CUSTOMER_ID", data_type=int64()),
-                {"roles": [
-                    {"kind": "join", "to_model": "customer_profile",
-                     "to_column": "CUSTOMER_ID", "cardinality": "many_to_one"},
-                    {"kind": "metric", "name": "unique_customers_ordered",
-                     "agg": "count_distinct",
-                     "description": "Distinct customers who placed an order."},
-                ]},
-            ),
-            "AMOUNT_USD": _annotate(
-                AttributeSpec(name="AMOUNT_USD", data_type=float64(),
-                              _description="Order amount in USD."),
-                {"kind": "metric", "name": "total_revenue", "agg": "sum",
-                 "description": "Sum of order amounts in USD."},
-            ),
+            "AMOUNT_USD": float64(),
         }
     )
 )
 
-# COUNT metric anchored on the grain column — patch a full roles list post-hoc
-# because the bare {"kind": ...} shorthand has no inline multi-role form. The
-# roles list REPLACES the bare-grain blob.
-_annotate(
-    order_event._attributes["ORDER_ID"],
-    {"roles": [
-        {"kind": "grain"},
-        {"kind": "metric", "name": "order_count", "agg": "count",
-         "description": "Total number of orders."},
-    ]},
+# Metrics belong on a query-time semantic view, not on a physical base field.
+order_metrics = semantic_view("order_metrics", order_event).schema(
+    {
+        "order_count": metric_field(
+            int64(),
+            metric(Agg.COUNT, of=order_event.field("ORDER_ID"), name="order_count"),
+        ),
+        "unique_customers_ordered": metric_field(
+            int64(),
+            metric(
+                Agg.COUNT_DISTINCT,
+                of=order_event.field("CUSTOMER_ID"),
+                name="unique_customers_ordered",
+            ),
+        ),
+        "total_revenue": metric_field(
+            float64(),
+            metric(
+                Agg.SUM,
+                of=order_event.field("AMOUNT_USD"),
+                name="total_revenue",
+            ),
+        ),
+    }
 )
 
 # Marker model — satisfies the storage port's produce-verification.
@@ -180,26 +141,23 @@ def transform(snowflake: Snowflake) -> None:
     try:
         cur = conn.cursor()
         try:
-            # Seed base tables UNQUOTED so Snowflake folds to upper-case (the
-            # compiler references the base tables unquoted too → same objects).
-            for name, df, cols in [
+            # Seed unquoted base tables so Snowflake and the compiler resolve one object.
+            for name, rows, columns in [
                 ("customer_profile", customers,
                  "CUSTOMER_ID NUMBER, COUNTRY VARCHAR, EMAIL VARCHAR"),
                 ("order_event", orders,
                  "ORDER_ID NUMBER, CUSTOMER_ID NUMBER, AMOUNT_USD FLOAT"),
             ]:
-                cur.execute(f"CREATE OR REPLACE TABLE {fqn}{name} ({cols})")
-                write_pandas(conn, df, name.upper(),
+                cur.execute(f"CREATE OR REPLACE TABLE {fqn}{name} ({columns})")
+                write_pandas(conn, rows, name.upper(),
                              database=snowflake.database, schema=snowflake.schema)
-                print(f"seeded {fqn}{name} rows={len(df)}")
+                print(f"seeded {fqn}{name} rows={len(rows)}")
 
-            # Marker row (promised marker model).
             managed = snowflake.full_table_name("semantic_smoke_marker")
             cur.execute(f"TRUNCATE TABLE IF EXISTS {managed}")
             write_pandas(conn, pd.DataFrame([{"MARKER_ID": 1, "VIEW_NAME": "n/a"}]),
                          managed.split(".")[-1].strip('"'),
                          database=snowflake.database, schema=snowflake.schema)
-            print(f"marker written to {managed}")
         finally:
             cur.close()
     finally:
@@ -211,17 +169,16 @@ def transform(snowflake: Snowflake) -> None:
 # ============================================================================
 from nxd.spec import code, data_product, data_product_output, storage
 from transform import transform
-from models import customer_profile, order_event, provision_marker
+from models import customer_profile, order_event, order_metrics, provision_marker
 
 INFRA_PROFILE = "ecommerce-demo"
 
-# Storage output port — promise all annotated models so their attributes appear
-# in the kernel-generated manifest (→ .nxd/semantic/<model>.json at boot).
 _storage = (
     data_product_output()
     .promise(provision_marker)
     .promise(customer_profile)
     .promise(order_event)
+    .model(order_metrics)
     .port("snowflake", storage(f"/infra-profile/{INFRA_PROFILE}#/services/nxd-snowflake"))
 )
 
@@ -233,14 +190,10 @@ spec = (
         version="0.1.0",
         infra_profile=INFRA_PROFILE,
     )
-    # Seeds customer_profile + order_event base tables + the marker row. No view DDL.
     .transform(
         code(transform).compute(f"/infra-profile/{INFRA_PROFILE}#/services/k8s-compute")
     )
     .output(_storage)
-    # ONE line auto-wires list_models, semantic_model, describe_model,
-    # run_semantic_query + the mcp-api port. Replaces the old build_semantic_tools
-    # + 4x rpc_function(code(fn), ...) loop entirely.
     .semantic_tools(service="mcp-api-service-k8s")
 )
 
@@ -252,5 +205,5 @@ spec = (
 # nxd.drivers[rpc]
 # snowflake-connector-python[pandas]
 # pandas
-# pyyaml>=6.0.2          # .semantic_tools() manifest fallback (split-pod k8s/rpc)
+# pyyaml>=6.0.2
 """
