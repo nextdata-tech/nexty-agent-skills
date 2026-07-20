@@ -167,6 +167,19 @@ POCKET_RUNNER_SIDE_FIXTURES = {
     "reference-closure",
     "build_data.py",     # contains fixture discriminator fingerprints
 }
+DERIVATION_RUNNER_SIDE_FIXTURES = {
+    # Ground-truth totals for the derivation scenario. Handing these to the
+    # agent hands it the answer key: the scenario measures whether the closure
+    # materializes the rulings a question needs, and truth.json states the exact
+    # numbers a correct closure produces (and the exact ones a closure that
+    # forgets to net refunds produces). Runner-side only.
+    "truth.json",
+    # The checker leaks the answer key too: its docstring names the seeded
+    # merchant->category mapping and the netted-vs-charges-only discrimination
+    # strategy. The agent cannot run it anyway (no truth.json), so it has no
+    # reason to be in the workspace.
+    "check_derived_closure.py",
+}
 # MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
 # file read, so MCP scenarios get a longer agent timeout.
 MCP_AGENT_TIMEOUT_S = 1800
@@ -374,7 +387,8 @@ def build_workspace(
             # particular, a sibling __pycache__/build_data.pyc would reveal
             # runner-only discriminator assertions to the agent.
             if (item.name.startswith(".") or item.name == "__pycache__"
-                    or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES):
+                    or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES
+                    | DERIVATION_RUNNER_SIDE_FIXTURES):
                 continue
             dst = ws / item.name
             if item.is_dir():

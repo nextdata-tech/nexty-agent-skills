@@ -173,6 +173,17 @@ you produce with that source's label:
   available, stop and explain that the local build cannot access the materialized
   definition yet.
 
+> **Fidelity here; derivation downstream.** The rules above govern **source
+> materialization only**, and they are absolute: the CSVs you land are a
+> byte-exact record of what the user supplied, so any later number can be
+> traced back to it. Cleaning, deduplication, amortization, currency
+> normalization, reclassification and regrain are all legitimate — and often
+> necessary — but they exist **only as derived models computed downstream of
+> the pristine source**, never as an edit to the source export. Never delete a
+> duplicate, fix a value, add a column, or invent an identifier on the way in.
+> Preserve the row, then derive the corrected model beside it. nxd-generate-dp
+> owns how derived models are authored.
+
 ### Step 2 — Infer the semantic model
 
 Invoke the **nxd-semantic-data-product** skill in its inference mode: profile
@@ -196,10 +207,11 @@ mapping, or the `api-source-endpoints` mapping — one such artifact per
 source, labeled per `reference/multi-source.md` when there's more than one.
 **nxd-generate-dp owns the exact per-type (and per-instance) shape — do not
 re-derive it here.** That skill owns the local DP shape (DuckDB output port,
-dlt-in-transform, local executor) and the naming invariant. **Never author
-`deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the supervisor
-compiles those build products from the Python sources when it pins the
-definition.** Include instructions from the file `reference/dlt.md`. The
+dlt-in-transform, local executor), the naming invariant, and the derived
+models that carry any business ruling the semantic layer cannot express.
+**Never author `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the
+supervisor compiles those build products from the Python sources when it pins
+the definition.** Include instructions from the file `reference/dlt.md`. The
 output is a **closure directory** — the `--definition` argument for Step 4.
 
 ### Step 4 — Build and serve through MCP
@@ -239,7 +251,11 @@ natural-language translation is yours to do. For each question:
    `mcp__nxd-desktop__run_semantic_query` accepts only `measures[]` and
    `dimensions[]`. It does not support filters, ordering, raw-row retrieval, or
    raw SQL. If the request cannot be represented without dropping a constraint,
-   explain the gap and clarify; do not broaden the answer silently.
+   explain the gap and clarify; do not broaden the answer silently. A gap that
+   is really a **missing column or grain** — a filter, a ratio, a monthly
+   rollup, a classification — is a Step 6 model-level fix: the ruling must
+   materialize in a derived model. Do not emulate it agent-side over the
+   returned rows.
 4. **Run the governed query.** Call
    `mcp__nxd-desktop__run_semantic_query` with the endpoint/token plus the
    selected measures and dimensions. Do not bypass it with raw SQL or a local
@@ -257,8 +273,11 @@ keep BOTH levels bounded:
   dimension was missing. Re-describe, re-map, then re-query through MCP. Cap at
   ~2 remaps per question.
 - **Model / DP-level** — the inferred model is wrong (missing metric, wrong grain,
-  missing join, wrong PII). Go back to Step 2/3, then rebuild through MCP with
-  the **same** `workflow`. Cap at ~3 regenerate cycles total.
+  missing join, wrong PII), or the question needs a column or grain that does
+  not exist yet (a filtered figure, a ratio, a monthly rollup, a
+  classification). The latter is a **derived model**, not a query tweak: go back
+  to Step 2/3 and have nxd-generate-dp materialize the ruling, then rebuild
+  through MCP with the **same** `workflow`. Cap at ~3 regenerate cycles total.
 
 **After every rebuild, refresh:** use the endpoint/token returned by that build,
 then describe the catalog before mapping again — the regenerated model is exactly
@@ -284,7 +303,8 @@ indefinitely or give up silently.
 - **Preserve supplied data.** Never modify an input file, its headers, or its
   rows; never add an identifier or fabricate a key. A generated file-connector
   export may contain only an exact copy kept separate from the supplied
-  source. For a live database or REST API source, treat access as
+  source. This governs **source materialization** and admits no exception.
+  For a live database or REST API source, treat access as
   **read-only**: never write to the source, never fabricate a table/endpoint
   the user didn't name, and never invent or narrate a raw credential. A real
   credential is written exactly once — into the generated `infra-profile.yaml`
@@ -299,6 +319,16 @@ indefinitely or give up silently.
   used consistently across materialization, inference, and generation; never
   let two sources of the same connector type share an unlabeled or duplicate
   name — that's a collision nxd-generate-dp cannot resolve for you.
+- **Correct data downstream, never upstream.** Cleaning, deduplication,
+  amortization, currency normalization, reclassification and regrain belong in
+  **derived models computed from the pristine source** — authored by
+  nxd-generate-dp, landed through the DuckDB output port, and asserted in the
+  transform. Never reach that outcome by editing the source export, and never
+  emulate it agent-side over query results.
+- **A judgement not in the data is confirmed and landed, not hardcoded.** FX
+  rates, merchant→category rulings and similar mappings are surfaced to the
+  user, confirmed, and landed as their own model so they are queryable — never
+  embedded as constants in generated transform code.
 - **Keep governed analysis on the supervisor path.** Never answer a governed
   local-data question with SQLite, `sqlite3`, raw SQL, pandas aggregation, or a
   shell pipeline as a fallback. The supervisor may compile semantic selections
