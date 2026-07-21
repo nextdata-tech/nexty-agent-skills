@@ -129,3 +129,14 @@ Record: [`records/2026-07-20-nxd-generate-dp-retire-live-db-api-connector-materi
 Notes: Adds reference/nxd-spec-api.md: exact verified nxd.spec signatures (data types, role builders, Agg member names, SemanticModelSpec/semantic_view, spec.py builders), read directly from the installed nxd v0.41.139 package source and pinned like the dlt==1.28.2 pin. Motivated by a real transcript (aidevboard-jobs-dp) showing repeated pre-emptive re-verification of this API against nxd source on every run. SKILL.md gets one short pointer in Step 2; explicit instruction to trust the doc unless a concrete runtime error contradicts it, to stop the pre-emptive re-derivation pattern. CSV-only path unaffected; PASS 9/9. No version bump per explicit instruction.
 
 Record: [`records/2026-07-20-nxd-generate-dp-verified-nxd-spec-api-surface-reference-doc.json`](records/2026-07-20-nxd-generate-dp-verified-nxd-spec-api-surface-reference-doc.json)
+
+## 2026-07-21 — nxd-generate-dp: apply PR #88 review feedback (line-budget headroom, empty-rows guard) (plugin v0.13.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 6180 | 0.65 | sonnet |
+| after | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 18 | 16 | 5215 | 0.65 | sonnet |
+
+Notes: Applies PR #88's two non-blocking review comments: (1) SKILL.md was exactly at the 500-line cap with zero headroom — consolidated five duplicated 'Other connector types'/materialize-to-CSV restatements (folded into neighboring bullets/paragraphs, no content lost) down to 493 lines, real margin against the next addition. (2) api-source.md's illustrative materialization snippet raised IndexError on a legitimately empty API resource (writer.writerow(rows[0].keys())); added an explicit fail-loud guard matching the pack's existing 'never silently misrepresent' discipline. CSV-only path unaffected; PASS 9/9. No version bump per prior instruction.
+
+Record: [`records/2026-07-21-nxd-generate-dp-apply-pr-88-review-feedback-line-budget-head.json`](records/2026-07-21-nxd-generate-dp-apply-pr-88-review-feedback-line-budget-head.json)
