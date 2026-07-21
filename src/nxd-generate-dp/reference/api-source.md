@@ -60,11 +60,27 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
 - The `api-source` service's `attributes` list carries the live payload as
   **one entry per property**, each shaped `{"key": <property>, "value":
   <live value>, "public": false}` — never one attribute holding a nested
-  object. `base_url` is always present. Add an `auth` attribute too only
-  when the API requires authentication — its absence means
-  `secrets["api_source"]` has no `"auth"` key, not an empty one. See the
-  worked example below and the conditional `client_config` construction in
-  the transform diff.
+  object. `base_url` is always present. When the API requires
+  authentication, add `auth_type` (one of `bearer` / `http_basic` /
+  `api_key` / `oauth2_client_credentials`) plus that type's own flat
+  fields — never a single `auth` attribute holding the whole credential,
+  since dlt's `client.auth` needs a *structured* value (e.g. `{"type":
+  "bearer", "token": ...}`), not one opaque string, and some types
+  (`api_key`, `oauth2_client_credentials`) carry more than one secret
+  field to begin with:
+
+  | `auth_type` | additional attributes |
+  |---|---|
+  | `bearer` | `auth_token` |
+  | `http_basic` | `auth_username`, `auth_password` |
+  | `api_key` | `auth_api_key`, `auth_key_name`, `auth_key_location` (optional, defaults to `header`) |
+  | `oauth2_client_credentials` | `auth_client_id`, `auth_client_secret`, `auth_token_url` |
+
+  Omitting `auth_type` (and its fields) entirely means
+  `secrets["api_source"]` has no `"auth_type"` key, not an empty one. See
+  the worked example below and the `auth_type` dispatch in the transform
+  diff, which assembles these flat fields into the structured dict dlt
+  expects.
 - **`value` is always a plain string** on the transform side — dlt/Python
   types (ints, bools) are not preserved; cast in the transform if needed.
 - **Set `public: false` on every attribute here.** The supervisor drops any
@@ -90,8 +106,8 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
 
 - Infra-profile service: `api-source`, driver `nxd:generic-secrets:1.0.0`.
 - Transform secrets key: `secrets["api_source"]` — a dict with `base_url`
-  (always present) and `auth` (the auth type plus its live token/key/
-  credentials — present only when the API requires authentication).
+  (always present) and, only when the API requires authentication,
+  `auth_type` plus that type's own fields (see Credential handling).
 - Companion file: `api-source-endpoints` — one line per model,
   `<model>=<endpoint path>` (non-secret topology only).
 
@@ -110,12 +126,33 @@ template. Only the ingestion body changes:
 ```python
 from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig
 
-api_secrets = secrets["api_source"]  # dict: base_url (always), auth (only if the API needs it)
+api_secrets = secrets["api_source"]  # dict: base_url (always), auth_type (+its fields) if needed
 endpoint_map = _load_api_source_endpoints()  # parses the api-source-endpoints companion file
 
 client_config = {"base_url": api_secrets["base_url"]}
-if "auth" in api_secrets:
-    client_config["auth"] = api_secrets["auth"]
+auth_type = api_secrets.get("auth_type")
+if auth_type == "bearer":
+    client_config["auth"] = {"type": "bearer", "token": api_secrets["auth_token"]}
+elif auth_type == "http_basic":
+    client_config["auth"] = {
+        "type": "http_basic",
+        "username": api_secrets["auth_username"],
+        "password": api_secrets["auth_password"],
+    }
+elif auth_type == "api_key":
+    client_config["auth"] = {
+        "type": "api_key",
+        "name": api_secrets["auth_key_name"],
+        "api_key": api_secrets["auth_api_key"],
+        "location": api_secrets.get("auth_key_location", "header"),
+    }
+elif auth_type == "oauth2_client_credentials":
+    client_config["auth"] = {
+        "type": "oauth2_client_credentials",
+        "access_token_url": api_secrets["auth_token_url"],
+        "client_id": api_secrets["auth_client_id"],
+        "client_secret": api_secrets["auth_client_secret"],
+    }
 
 config: RESTAPIConfig = {
     "client": client_config,
@@ -134,7 +171,11 @@ pipeline.run(readers, write_disposition="replace")
 ```
 
 Build the `RESTAPIConfig` from `secrets["api_source"]` at runtime — never
-hard-code a base URL or credential in the transform source.
+hard-code a base URL or credential in the transform source. The `auth_type`
+dispatch assembles dlt's structured `auth` dict from the flat secret
+fields, the same way `_build_connection_string` in `database-source.md`
+assembles a connection string from flat `db_source` fields — never pass a
+flat secret value straight through as `auth`.
 `_load_api_source_endpoints` is **not** a dlt or stdlib function — the author
 must write it, parsing the `api-source-endpoints` companion file's
 `<model>=<endpoint path>` lines into a dict. A transform that calls it
@@ -144,7 +185,7 @@ without defining it raises `NameError` at runtime.
 
 Base pins unchanged. Under current dlt docs, `rest_api_resources` needs no
 additional pin beyond the base `dlt[duckdb]==1.28.2` — reconfirm this holds
-for the pinned `1.28.2` before relying on it. If the chosen `auth` type
+for the pinned `1.28.2` before relying on it. If the chosen `auth_type`
 (e.g. `oauth2_client_credentials`) turns out to need an extra dependency,
 add it explicitly rather than assuming it's already covered.
 
@@ -167,9 +208,9 @@ add it explicitly rather than assuming it's already covered.
           public: false
   ```
 
-  When the API needs authentication, add the `auth` attribute alongside
-  `base_url` — never nest `base_url`/`auth` under a single attribute's
-  value:
+  When the API needs authentication, add `auth_type` plus that type's own
+  flat fields alongside `base_url` — never nest a whole credential under
+  one attribute's value. Bearer-token example:
 
   ```yaml
     - name: api-source
@@ -178,10 +219,18 @@ add it explicitly rather than assuming it's already covered.
         - key: base_url
           value: https://aidevboard.com/api/v1
           public: false
-        - key: auth
-          value: <the live token/key/credentials the user supplied>
+        - key: auth_type
+          value: bearer
+          public: false
+        - key: auth_token
+          value: <the live bearer token the user supplied>
           public: false
   ```
+
+  For the other three types, add that type's fields from the table in
+  Credential handling instead of `auth_token` (e.g. `auth_username` +
+  `auth_password` for `http_basic`) — same `key`/`value`/`public: false`
+  shape, one attribute per field.
 
   **No `data/` directory, no path file** — `api-source-endpoints` is the
   only companion artifact, and it stays non-secret topology only. For 2+ API

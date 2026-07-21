@@ -118,3 +118,14 @@ Record: [`records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infr
 Notes: Code-review pass on the multi-source-connector work: fixed a real bug in api-source.md's no-auth worked example (crashed against its own transform template), corrected the infra-profile.yaml attributes field name (name->key per the supervisor's actual KeyValuePairWithPublic schema) and added the required public:false, reordered nxd-generate-dp's Workflow so infra-profile.yaml is authored before models.py, added closure-directory credential warnings, and removed doc duplication/stale cross-references. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched by any of these fixes -- this eval only exercises that unchanged path; the fixed db-source/api-source attribute shape has no eval scenario yet (real follow-up work). pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
 
 Record: [`records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-fix-credential-attributes-sh.json`](records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-fix-credential-attributes-sh.json)
+
+## 2026-07-21 — nxd-generate-dp: structured auth_type/fields for api-source REST auth (PR #88 review follow-up) (plugin v0.13.2)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.13.1 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 19 | 17 | 7108 | 0.85 | sonnet |
+| after-v0.13.2 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 17 | 15 | 7575 | 0.61 | sonnet |
+
+Notes: Applies the still-open PR #88 review comment on api-source.md:118: the infra-profile auth attribute was a single opaque string passed straight into dlt's RESTAPIConfig, which needs a structured value and can't carry api_key/oauth2's multiple fields. Replaced with auth_type + per-type flat attributes (bearer/http_basic/api_key/oauth2_client_credentials), assembled into dlt's structured auth dict inside the transform, mirroring database-source.md's flat-field-plus-assembly-helper pattern. This eval only exercises the unchanged no-auth CSV path (generate-runnable-dp-from-intent has no API-connector scenario yet); the auth_type dispatch itself has no scenario coverage yet -- real follow-up work.
+
+Record: [`records/2026-07-21-nxd-generate-dp-structured-auth-type-fields-for-api-source-r.json`](records/2026-07-21-nxd-generate-dp-structured-auth-type-fields-for-api-source-r.json)
