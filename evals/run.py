@@ -82,7 +82,14 @@ DEFAULT_MODELS = {
 # catches. Verdicts recorded at one effort are not comparable to another, so
 # changing these invalidates evals/baselines/ — re-measure with
 # `mode: stability` before trusting a baseline recorded at a different effort.
-CODEX_DEFAULT_AGENT_EFFORT = "low"
+#   agent: low was measured and reverted. On low the agent writes the fluent
+#   API (metric()/join()/dimension(pii=True)/primary_key()) instead of the
+#   required per-field __nxd_semantic__ blobs, sometimes leaving the blobs in
+#   comments or module-level maps. generate-semantic-layer-dp-from-schema fell
+#   from [P P P P P] to [F P F F F] on an unchanged commit. That is a real skill
+#   failure the judge described correctly, not a grading artifact, so the cheaper
+#   agent buys nothing: it fails cells for reasons the skill did not cause.
+CODEX_DEFAULT_AGENT_EFFORT = "medium"
 CODEX_DEFAULT_JUDGE_EFFORT = "medium"
 
 # Reasoning effort. The agent under test mirrors a real session (medium). The
