@@ -107,25 +107,3 @@ Record: [`records/2026-07-20-nxd-pocket-loop-nxd-generate-dp-multi-source-type-c
 Notes: Added an opt-in source-label naming scheme (reference/multi-source.md) so nxd-generate-dp can uniquely name infra-profile service/secrets/companion entries when a closure needs 2+ sources of the same or mixed connector types, avoiding a same-type name collision. Lifted nxd-pocket-loop's prior single-source-only restriction so its Step 1 gathers and labels multiple sources when needed. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched -- this eval only exercises that unchanged path; a new eval scenario exercising the labeled multi-source path is real follow-up work, not built here. pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
 
 Record: [`records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json`](records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json)
-
-## 2026-07-20 — nxd-generate-dp: retire live db/api connector, materialize to CSV instead (plugin v0.13.0)
-
-| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
-|---|---|---|---|---|---|---|---|---|---|
-| before | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 6152 | 0.69 | sonnet |
-| after | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 21 | 19 | 7292 | 0.89 | sonnet |
-
-Notes: database-source.md/api-source.md retired the live in-transform dlt sql_database/rest_api connector (whose generic-secrets live-credential delivery was unconfirmed) in favor of materializing a database/API source to local CSV once at gather time, then treating it as a plain csv-source. Also documents what the generic-secrets driver actually does (resolves a non-secret companion-file path, no live-credential mode). CSV-only path (this scenario) is unaffected; PASS 9/9 before and after. No version bump per explicit instruction.
-
-Record: [`records/2026-07-20-nxd-generate-dp-retire-live-db-api-connector-materialize-to-.json`](records/2026-07-20-nxd-generate-dp-retire-live-db-api-connector-materialize-to-.json)
-
-## 2026-07-20 — nxd-generate-dp: verified nxd.spec API-surface reference doc (plugin v0.13.0)
-
-| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
-|---|---|---|---|---|---|---|---|---|---|
-| before | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 21 | 19 | 7292 | 0.89 | sonnet |
-| after | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 6180 | 0.65 | sonnet |
-
-Notes: Adds reference/nxd-spec-api.md: exact verified nxd.spec signatures (data types, role builders, Agg member names, SemanticModelSpec/semantic_view, spec.py builders), read directly from the installed nxd v0.41.139 package source and pinned like the dlt==1.28.2 pin. Motivated by a real transcript (aidevboard-jobs-dp) showing repeated pre-emptive re-verification of this API against nxd source on every run. SKILL.md gets one short pointer in Step 2; explicit instruction to trust the doc unless a concrete runtime error contradicts it, to stop the pre-emptive re-derivation pattern. CSV-only path unaffected; PASS 9/9. No version bump per explicit instruction.
-
-Record: [`records/2026-07-20-nxd-generate-dp-verified-nxd-spec-api-surface-reference-doc.json`](records/2026-07-20-nxd-generate-dp-verified-nxd-spec-api-surface-reference-doc.json)
