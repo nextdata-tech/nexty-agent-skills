@@ -351,6 +351,26 @@ what is unknown instead of inferring it. Note that quoting is a snapshot taken
 after the run, so it evidences *what the agent produced*, not *when or how* it
 produced it; keep process claims as separate checks graded from the trace.
 
+Two traps, both of which produced confident wrong verdicts before being fixed:
+
+- **The harness stages files into the workspace too.** The skill pack's bundled
+  reference data products live under `.skills/` and carry exactly the names a
+  scenario asks about, so `**/models.py` matches dozens of files the agent never
+  wrote. Staged directories are now skipped and matches are ordered
+  shallowest-first, because otherwise those files exhaust the quoting budget and
+  starve the agent's own output — the verdict then tracks *where* the agent put
+  its files rather than what is in them.
+- **A fact that reads too late looks exactly like a true negative.** Collecting
+  after the workspace is cleaned up matches nothing and reports "never written"
+  with full authority. `workspace_files_fact` now raises if the workspace is
+  gone, so absence is only ever reported when absence was measurable.
+
+The general point: a mechanical fact is graded as ground truth, so a bug in one
+is worse than the transcript-guessing it replaces — guessing at least fails
+visibly. Confirm a newly-declared `workspace_files` list actually quotes what
+you expect (`mode: stability` prints the fact into each report) before trusting
+a verdict that depends on it.
+
 **One check should test one thing.** `verifies-whoami-and-identity` bundled
 three requirements — inspect whoami's output, mention the exit-code-0 caveat,
 surface the email — into a single boolean. Two runs whose answers were

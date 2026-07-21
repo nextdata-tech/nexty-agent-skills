@@ -19,8 +19,7 @@
     },
     "current_pack/generate-semantic-layer-dp-from-schema": {
       "verdict": "PASS",
-      "flaky": true,
-      "note": "All ten checks assert on the CONTENT of files the agent writes, but the judge only ever saw a truncated transcript, so a correct file that was not echoed back graded identically to one never written — both runs failed 8/10 with reasons of the form 'the transcript does not show'. The scenario now opts into workspace_files, which quotes the produced files to the judge as ground truth. Kept flaky until a run confirms the verdict is stable on real evidence; the recorded PASS predates that change and is not trustworthy."
+      "note": "Measured [P P P P P], pass_rate 1.0 over five CI runs of the same commit — no longer flaky, so this cell gates. Its ten checks assert on file CONTENT and were previously graded from a truncated transcript, where a correct file the agent did not echo back was indistinguishable from one never written. It now opts into workspace_files and the judge reads the produced files directly. The skill was correct throughout; every earlier failure was harness measurement error."
     },
     "current_pack/generate-semantic-layer-from-live-source-and-questions": {
       "verdict": "FAIL"
