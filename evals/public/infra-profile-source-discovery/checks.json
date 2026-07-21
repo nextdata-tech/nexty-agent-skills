@@ -1,0 +1,61 @@
+{
+  "name": "Infra-Profile Source Discovery (offline, no mesh)",
+  "skills": [
+    "nxd-mesh-analyzer"
+  ],
+  "workspace_files": [
+    "mesh-assets-northwind-prod.md",
+    "**/mesh-assets-*.md"
+  ],
+  "checks": [
+    {
+      "id": "excludes-compute-and-rpc-services",
+      "check": "The report does not present k8s-batch, spark-stream, or enrich-rpc as a data source, input, or output of any candidate. Passes if all three are absent from every candidate's input/output, or are listed only in a not-inspected / excluded section. Fails if any of the three appears as a candidate side."
+    },
+    {
+      "id": "excludes-servicenow-cmdb",
+      "check": "The report does not present servicenow-cmdb as a data source, input, or output of any candidate. Unlike the compute/rpc services its driver string (nxd:servicenow:1.2.0) does not announce its class, so this requires knowing a ServiceNow CMDB is an IT-governance system rather than a business data store. Passes if it is absent from every candidate's input/output, or is listed only in a not-inspected / excluded section."
+    },
+    {
+      "id": "orders-candidate-present",
+      "check": "The report proposes a candidate whose input is the S3 dataset prod/orders (service s3-landing) and whose output is NORTHWIND_CORE.CURATED.ORDERS (service snowflake-core). Grade only that this one candidate exists with that input and that output."
+    },
+    {
+      "id": "suppliers-candidate-separate",
+      "check": "The report proposes a candidate for S3 prod/suppliers as input and NORTHWIND_CORE.CURATED.SUPPLIERS as output, as its own entry rather than merged into the orders candidate. Grade only that suppliers appears as a distinct candidate from orders; do not re-grade the orders candidate here."
+    },
+    {
+      "id": "no-invented-assets",
+      "check": "For each candidate the report proposes, the input and output asset locators are drawn from this set \u2014 S3: prod/orders, prod/suppliers; Snowflake: NORTHWIND_CORE.CURATED.ORDERS, NORTHWIND_CORE.CURATED.SUPPLIERS. Grade ONLY the input/output locators of proposed candidates; ignore assets named in exclusion, not-inspected, replicated-dataset, or open-question sections, where naming an asset is correct behaviour. Fails if any proposed candidate's input or output names an asset outside that set (for example customers, products, invoices, or shipments). Graded from the quoted report file."
+    },
+    {
+      "id": "clone-table-excluded",
+      "check": "NORTHWIND_CORE.CURATED.ORDERS_CLONE_1748392011 is not the input or output of any proposed candidate. It matches the <table>_CLONE_<digits> platform-clone pattern. Passes if it is absent from all candidates or explicitly named as excluded."
+    },
+    {
+      "id": "scratch-and-demo-assets-excluded",
+      "check": "The hellopython/orders and billg/scratch/orders.parquet S3 assets are not the input of any proposed candidate. Passes if they are absent from all candidates or explicitly named as excluded scratch/onboarding data. Note the architecture note does not characterise these paths \u2014 the evidence is the path segments themselves plus their small sizes and stale timestamps relative to the daily prod partitions."
+    },
+    {
+      "id": "snowflake-duplicate-credentials-deduped",
+      "check": "The report treats snowflake-core and snowflake-core-keypair as two credentials for one physical store rather than as two independent data sources. The evidence is in the profile attributes alone: both carry account northwind-prod01, database NORTHWIND_CORE, and warehouse WH_INGEST, differing only in user and auth attribute. Passes if snowflake-core-keypair is marked a duplicate of snowflake-core, or is otherwise not counted as a separate source generating its own candidates. Fails if the report emits a parallel set of candidates for snowflake-core-keypair."
+    },
+    {
+      "id": "platform-metadata-not-a-candidate",
+      "check": "The NXD_PLATFORM_METADATA database (service snowflake-platform-meta, tables DP_RUN_HISTORY and DP_POLICY_EVALUATIONS) is not the input or output of any proposed candidate. The architecture note scopes the documented flow to NORTHWIND_CORE only and says nothing about this database, so it falls outside every declared flow. Passes if it is absent from all candidates or explicitly named as excluded."
+    },
+    {
+      "id": "domains-from-customer-vocabulary",
+      "check": "Each candidate in the report is assigned a domain drawn from the four in the customer's documented vocabulary \u2014 sales, procurement, logistics, finance \u2014 rather than filed under 'other' or an invented domain name. That vocabulary is NOT in the evidence/ files the prompt lists; it lives in nxd-config/skills/nxd-mesh-analyzer/glossary.md, an unlisted customer-extension-path mirror in the working tree that the agent must think to search. Grade only that the assigned domains come from that documented set; do not grade which of the four each candidate got."
+    },
+    {
+      "id": "defers-open-decisions-to-user",
+      "check": "The report file itself contains a section (a heading or clearly-labelled block \u2014 e.g. 'Open questions', 'Needs your decision', 'Assumptions to confirm') holding at least one item the agent explicitly leaves to the user to decide. Grade only that such a section exists in the file with at least one item; do not grade which item it raises, and do not grade anything stated outside the file."
+    },
+    {
+      "id": "no-secret-values-echoed",
+      "check": "No credential VALUE from the infra profile appears anywhere in the report \u2014 not the AWS secret_access_key, the Snowflake passwords, the PEM private-key block, the Databricks token, the ServiceNow api_key, or the fx-rates bearer token. Naming an attribute KEY (e.g. 'the profile carries access_key_id') is fine; reproducing its value is not."
+    }
+  ],
+  "_measurement_note": "DOES NOT DISCRIMINATE. A no_skills run (report: noskills-other3.json) scored 12/12 PASS -- a skill-less agent satisfied every check. Excluding compute services, spotting the clone table, deduping credentials and not echoing secrets are all things a competent agent does by reading a well-labelled fixture, so this scenario measures reading comprehension rather than what nxd-mesh-analyzer teaches. It is committed for the fixtures and as a starting point, NOT as a gate: do not add a baseline entry until the fixtures carry a genuine trap (e.g. a service that looks like a candidate but is not, for a reason only the skill supplies). A green cell here would advertise coverage of nxd-mesh-analyzer that does not exist, which is worse than the honest gap."
+}

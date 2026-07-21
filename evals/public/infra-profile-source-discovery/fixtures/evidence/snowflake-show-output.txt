@@ -1,0 +1,56 @@
+-- Collected read-only against account northwind-prod01 (NXD_SVC role).
+-- Credentials were supplied out of band; do not re-run without them.
+
+> SHOW DATABASES;
+created_on                     name                     owner
+2025-11-04 09:12:31.220 -0800  NORTHWIND_CORE           SYSADMIN
+2025-11-04 09:13:02.881 -0800  NXD_PLATFORM_METADATA    ACCOUNTADMIN
+
+> SHOW SCHEMAS IN DATABASE NORTHWIND_CORE;
+name              comment
+CURATED           curated tables served to consumers
+CURATED_STAGING   staging copy, truncated nightly
+PUBLIC
+
+> SHOW TABLES IN SCHEMA NORTHWIND_CORE.CURATED;
+name                          rows       bytes        created_on
+ORDERS                        4812330    412884992    2025-11-05 02:00:11 -0800
+SUPPLIERS                       29417      6291456    2025-11-05 02:00:14 -0800
+ORDERS_CLONE_1748392011       4812330    412884992    2026-05-27 21:06:51 -0700
+
+> SHOW TABLES IN SCHEMA NORTHWIND_CORE.CURATED_STAGING;
+name                          rows       bytes        created_on
+ORDERS                        4812330    412884992    2025-11-05 02:00:19 -0800
+
+> SHOW TABLES IN SCHEMA NXD_PLATFORM_METADATA.PUBLIC;
+name                          rows       bytes        created_on
+DP_RUN_HISTORY                 881204     92274688    2025-11-04 09:14:02 -0800
+DP_POLICY_EVALUATIONS          410992     41943040    2025-11-04 09:14:05 -0800
+
+> DESCRIBE TABLE NORTHWIND_CORE.CURATED.ORDERS;
+name              type            null?
+ORDER_ID          NUMBER(38,0)    N
+CUSTOMER_ID       NUMBER(38,0)    N
+SUPPLIER_ID       NUMBER(38,0)    Y
+ORDER_TS          TIMESTAMP_NTZ   N
+SHIP_COUNTRY      VARCHAR(2)      Y
+ORDER_STATUS      VARCHAR(32)     N
+FREIGHT_AMOUNT    FLOAT           Y
+LINE_TOTAL_USD    FLOAT           N
+
+> DESCRIBE TABLE NORTHWIND_CORE.CURATED.SUPPLIERS;
+name              type            null?
+SUPPLIER_ID       NUMBER(38,0)    N
+SUPPLIER_NAME     VARCHAR(256)    N
+CONTACT_EMAIL     VARCHAR(256)    Y
+HOME_COUNTRY      VARCHAR(2)      Y
+IS_ACTIVE         BOOLEAN         N
+
+> SELECT MAX(ORDER_TS), COUNT(*) FROM NORTHWIND_CORE.CURATED.ORDERS;
+MAX(ORDER_TS)            COUNT(*)
+2026-06-03 23:58:41.000  4812330
+
+-- Last DML timestamps (INFORMATION_SCHEMA.TABLES.LAST_ALTERED)
+NORTHWIND_CORE.CURATED.ORDERS             2026-06-04 04:02:19 -0700
+NORTHWIND_CORE.CURATED.SUPPLIERS          2026-06-04 04:03:51 -0700
+NORTHWIND_CORE.CURATED_STAGING.ORDERS     2026-06-04 03:58:02 -0700
