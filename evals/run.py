@@ -1001,7 +1001,11 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 --- INSTRUCTIONS ---
 Grade every check as pass or fail with a one-sentence justification grounded in
 the trace and final answer. A "did the agent inspect X" check passes only if the
-trace shows the corresponding tool call/result. Give an overall pass only if ALL
+trace shows the corresponding tool call/result. That rule is about the agent's
+PROCESS. It does not apply to checks about the CONTENT of a file the agent
+wrote: when a WORKSPACE FILES block is present it is the authoritative record of
+what the agent produced, so grade those checks against the quoted file contents
+and do not fail one merely because the trace never echoed the file. Give an overall pass only if ALL
 checks pass. Where a HARNESS-VERIFIED FACTS block is present, it is authoritative
 for exactly what it states and no more: it settles whether the final-answer
 source matches the reported digest (use it, not the agent's self-report, for
@@ -1181,6 +1185,81 @@ def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
             f"final-answer source is NOT the source that digest was computed "
             f"over (e.g. a digest copied from a different file). Treat any "
             f"digest-tie check as FAILED.")
+
+
+# Opt-in and guarded: only scenarios that declare ``"workspace_files"`` in
+# checks.json get this. Checks about what an agent *wrote* cannot be graded from
+# a transcript — tool results are truncated, and an agent that writes a correct
+# file without echoing it back looks identical to one that wrote nothing. That
+# ambiguity does not fail such a check honestly; it fails it for lack of
+# evidence, and it flips run to run with how chatty the agent happened to be.
+# Reading the files the agent actually left behind replaces that guesswork.
+WORKSPACE_FILE_BUDGET = 60_000
+
+
+def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
+    """Quote the agent's produced files verbatim for the judge, or None when the
+    scenario doesn't opt in.
+
+    ``cfg`` (checks.json ``workspace_files``) is a list of workspace-relative
+    glob patterns, e.g. ``["models.py", "spec.py", "requirements.txt"]``.
+    """
+    if not cfg:
+        return None
+
+    matched: list[Path] = []
+    for pattern in cfg:
+        # Anchor every match inside the workspace. A pattern escaping upward
+        # (``../``) would quote harness files into the judge prompt, where they
+        # would read as the agent's work.
+        for path in sorted(ws.glob(pattern)):
+            resolved = path.resolve()
+            if not resolved.is_file():
+                continue
+            if not resolved.is_relative_to(ws.resolve()):
+                continue
+            if resolved not in [m.resolve() for m in matched]:
+                matched.append(path)
+
+    if not matched:
+        # State the absence explicitly. Silence would let the judge fall back to
+        # the transcript and re-introduce exactly the evidence guesswork this
+        # exists to remove.
+        return ("WORKSPACE FILES: NONE — the harness looked for "
+                f"{', '.join(cfg)} in the agent's workspace after the run and "
+                "found no such file. Any check about the content of those files "
+                "must FAIL: they were never written.")
+
+    sections: list[str] = []
+    budget = WORKSPACE_FILE_BUDGET
+    omitted: list[str] = []
+    for path in matched:
+        rel = path.relative_to(ws).as_posix()
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            sections.append(f"--- {rel} (UNREADABLE: {exc}) ---")
+            continue
+        if len(body) > budget:
+            # Never silently truncate a file into the judge prompt: a check
+            # about a missing annotation would then fail on a cut that the
+            # harness made, which is the same false signal in a new place.
+            omitted.append(rel)
+            continue
+        budget -= len(body)
+        sections.append(f"--- {rel} ({len(body)} bytes) ---\n{body}")
+
+    note = ""
+    if omitted:
+        note = ("\nNOTE: these files exceeded the quoting budget and are NOT "
+                f"shown: {', '.join(omitted)}. Do not infer anything about "
+                "their contents either way.")
+
+    return ("WORKSPACE FILES (read by the harness from the agent's workspace "
+            "after the run — this is the agent's actual output, authoritative "
+            "over anything the transcript does or does not show; grade content "
+            "checks about these files from here, NOT from whether the agent "
+            "echoed them):\n" + "\n".join(sections) + note)
 
 
 def _fixtures_fingerprint(scenario_dir: Path) -> str:
@@ -1408,6 +1487,26 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 json.dumps({"trace": trace, "metrics": metrics, "facts": facts}),
                 encoding="utf-8",
             )
+
+        # Read the produced files while the workspace still exists, and do it
+        # AFTER the cache write so file contents are never cached: on a cache
+        # hit the workspace is gone, and a stale quoted file would be served to
+        # the judge as authoritative ground truth for a run that never happened.
+        if ok:
+            ws_fact = workspace_files_fact(ws, checks.get("workspace_files"))
+            if ws_fact:
+                facts.append(ws_fact)
+
+    if cached and checks.get("workspace_files"):
+        # A cached transcript has no workspace behind it, so the files cannot be
+        # read. Say so rather than letting the judge silently fall back to
+        # transcript-guessing, which is the failure mode this replaces.
+        facts.append(
+            "WORKSPACE FILES: UNAVAILABLE — this run replayed a cached agent "
+            "transcript, so the workspace no longer exists and the produced "
+            "files could not be read. Grade file-content checks as unproven "
+            "rather than inferring them from the transcript."
+        )
 
     res.transcript = trace
     res.metrics = {**preflight_metrics, **metrics, "agent_model": agent_model}

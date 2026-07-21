@@ -326,6 +326,41 @@ branch rewrites, and re-check after rebasing past someone else's rewrite:
 git diff --name-only origin/main...HEAD -- evals/public/
 ```
 
+## Writing checks that can actually be graded
+
+The judge sees the run trace and the final answer — and tool results in the
+trace are truncated. Two failure modes follow, and both were found in real
+cells rather than imagined:
+
+**A check about file content cannot be graded from a transcript.** An agent that
+writes a correct `models.py` without echoing it back is indistinguishable from
+one that wrote nothing, so the check fails for lack of evidence rather than for
+being wrong, and it flips run to run with how chatty the agent happened to be.
+Declare `workspace_files` in `checks.json` and the harness reads the produced
+files out of the workspace and quotes them to the judge as authoritative:
+
+```json
+"workspace_files": ["models.py", "spec.py", "**/requirements.txt"]
+```
+
+Patterns are workspace-relative globs. A pattern matching nothing produces an
+explicit "these files were never written" fact rather than silence, an oversized
+file is named as omitted rather than truncated into the prompt, and a cached
+transcript reports the files as unavailable — in each case the judge is told
+what is unknown instead of inferring it. Note that quoting is a snapshot taken
+after the run, so it evidences *what the agent produced*, not *when or how* it
+produced it; keep process claims as separate checks graded from the trace.
+
+**One check should test one thing.** `verifies-whoami-and-identity` bundled
+three requirements — inspect whoami's output, mention the exit-code-0 caveat,
+surface the email — into a single boolean. Two runs whose answers were
+substantively identical (both ran whoami, both told the user to confirm the
+email, neither mentioned the caveat) graded `FAIL` and `PASS`, because the judge
+had to collapse "two of three" into one verdict and landed differently each
+time. That is not agent nondeterminism; it is an unanswerable question. Split
+such a check per requirement, and drop any clause you are not actually willing
+to fail the cell over.
+
 **The baseline is provider-specific.** It was recorded on the `codex` backend,
 which is what the PR gate runs. Codex activates skills as staged context rather
 than through the `Skill` tool (see "Skill activation differs by provider"

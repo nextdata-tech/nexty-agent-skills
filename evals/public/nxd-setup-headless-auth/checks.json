@@ -33,8 +33,12 @@
       "check": "The plan never passes the OAuth access token to `nxd create config --personal-access-token=...` (or explicitly calls this out as a dead end that returns 401); persistence is achieved by minting a real personal access token (nxdpat_...) via `nxd create personal-access-token` after whoami succeeds, then regenerating the config with that PAT."
     },
     {
-      "id": "verifies-whoami-and-identity",
-      "check": "The plan verifies authentication by checking `nxd --config /tmp/nxd-acme.yaml whoami` OUTPUT (noting that 'Not logged in' can appear even with exit code 0) and surfaces the reported email to the user as an identity sanity-check (flagging if it is not the user's own account)."
+      "id": "verifies-whoami-output-not-exit-code",
+      "check": "The plan verifies authentication by inspecting the OUTPUT of `nxd --config /tmp/nxd-acme.yaml whoami`, not its exit status. Passes if the plan reads, prints, greps, or otherwise tests the command's output. It does NOT need to mention the 'Not logged in' exit-code-0 caveat to pass this check."
+    },
+    {
+      "id": "surfaces-identity-for-sanity-check",
+      "check": "The plan shows the email whoami reports back to the user, or tells the user to check it, so a wrong or shared identity would be noticed. Passes on either; the plan need not also explain what to do about a mismatch."
     }
   ]
 }

@@ -20,7 +20,7 @@
     "current_pack/generate-semantic-layer-dp-from-schema": {
       "verdict": "PASS",
       "flaky": true,
-      "note": "Returned PASS when recorded and FAIL (3/10 checks) on an identical local re-run, with a healthy sandbox both times. Its checks demand visible evidence for 10 separate artifacts, which a nondeterministic agent does not reliably produce. Reported, never gated, until the checks are made robust."
+      "note": "All ten checks assert on the CONTENT of files the agent writes, but the judge only ever saw a truncated transcript, so a correct file that was not echoed back graded identically to one never written — both runs failed 8/10 with reasons of the form 'the transcript does not show'. The scenario now opts into workspace_files, which quotes the produced files to the judge as ground truth. Kept flaky until a run confirms the verdict is stable on real evidence; the recorded PASS predates that change and is not trustworthy."
     },
     "current_pack/generate-semantic-layer-from-live-source-and-questions": {
       "verdict": "FAIL"
@@ -28,7 +28,7 @@
     "current_pack/nxd-setup-headless-auth": {
       "verdict": "FAIL",
       "flaky": true,
-      "note": "Returned FAIL then PASS across two CI runs of the same commit and inputs, both with a healthy sandbox. Recorded FAIL, so it does not gate today, but the marker stops a later PASS observation from being locked in and turning a coin toss into a blocking cell. Re-measure with evals/flakiness.py before removing."
+      "note": "Returned FAIL then PASS across two CI runs of the same commit. The two agent answers were substantively identical — both ran whoami and told the user to confirm the displayed email; neither mentioned the 'Not logged in' caveat — so the flip was the judge splitting one check that bundled three separate requirements into a single boolean. That check is now split in two with the caveat dropped as a requirement. Kept flaky until a run confirms the split holds; re-measure with evals/flakiness.py before removing."
     },
     "current_pack/pgvector-embedding-type-failure": {
       "verdict": "PASS"
