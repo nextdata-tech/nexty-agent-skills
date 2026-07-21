@@ -22,6 +22,19 @@ on:
       - 'src/**'
       - 'evals/**'
       - '.github/workflows/evals.yml'
+      # Files under evals/ that cannot change a verdict. Excluding them keeps a
+      # docs edit or a baseline re-record from spending a full agent run to
+      # confirm nothing moved. `paths-ignore` cannot be combined with `paths`,
+      # so these are negations within the same list — later patterns win.
+      - '!evals/README.md'
+      - '!evals/**/*.md'
+      # The baseline is read by the gate, never by a run: re-recording it
+      # changes which verdicts are acceptable, not what the agent or judge does.
+      - '!evals/baselines/**'
+      # Reporting/analysis tools the graded run never imports.
+      - '!evals/flakiness.py'
+      - '!evals/benchmark_record.py'
+      - '!evals/benchmarks/**'
   workflow_dispatch:
     inputs:
       mode:

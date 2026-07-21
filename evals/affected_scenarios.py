@@ -34,6 +34,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Changes to these select every scenario: they alter how runs are executed or
 # graded, so no per-skill narrowing is sound.
+#
+# Keep this list to code a graded run actually executes. Deliberately absent:
+#
+#   compare_baseline.py   gates verdicts after the fact — it decides whether a
+#                         result is acceptable, never what the result is
+#   affected_scenarios.py this file; a change here is exercised by the
+#                         selection step on the very pull request that makes it
+#   flakiness.py,         read finished reports, never imported by run.py
+#   benchmark_record.py
+#
+# Adding an entry costs a full-suite run on every pull request touching it, so
+# add one only when it can change a verdict. The workflow's `paths:` filter
+# encodes the same split and must stay consistent with this list.
 SUITE_WIDE_PREFIXES = (
     "evals/run.py",
     "evals/eval_backends.py",
