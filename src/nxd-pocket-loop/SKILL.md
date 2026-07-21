@@ -155,18 +155,18 @@ you produce with that source's label:
   table(s)/view(s) explicitly named by the user, and the live credentials
   (user/password) the user supplies now — nxd-generate-dp writes them into
   the generated `infra-profile.yaml`'s `db-source` service `attributes` (see
-  its `reference/database-source.md`, and `reference/multi-source.md` for the
-  labeled-instance shape). Never invent a table name or fabricate a
-  credential, and never narrate a live credential in chat — it goes into
-  `infra-profile.yaml` and nowhere else.
+  `nxd-generate-dp's reference/database-source.md`, and `nxd-generate-dp's
+  reference/multi-source.md` for the labeled-instance shape). Never invent a
+  table name or fabricate a credential, and never narrate a live credential in
+  chat — it goes into `infra-profile.yaml` and nowhere else.
 - **REST API:** record the base URL, auth scheme, the endpoint(s)/resource(s)
   in scope, a sample response shape if available, any known pagination, and
   the live token/key/credentials if the API requires auth — nxd-generate-dp
   writes them into the generated `infra-profile.yaml`'s `api-source` service
-  `attributes` (see its `reference/api-source.md`, and
-  `reference/multi-source.md` for the labeled-instance shape). Same rule as
-  the database case: never fabricate a credential, never narrate a live one
-  in chat.
+  `attributes` (see `nxd-generate-dp's reference/api-source.md`, and
+  `nxd-generate-dp's reference/multi-source.md` for the labeled-instance
+  shape). Same rule as the database case: never fabricate a credential, never
+  narrate a live one in chat.
 - **Host path handoff:** pass `build_data_product` only the host-visible,
   absolute output path explicitly returned or exposed by the file-writing tool.
   Never derive a definition path from an opaque attachment ID, a tool-internal
@@ -205,15 +205,16 @@ gathered source with its label (or the single unlabeled source, if there's
 only one) and its per-model provenance from Step 2, untouched: the file
 export plus `csv-source-path`/`file-source-path`, or the `db-source-tables`
 mapping, or the `api-source-endpoints` mapping — one such artifact per
-source, labeled per `reference/multi-source.md` when there's more than one.
-**nxd-generate-dp owns the exact per-type (and per-instance) shape — do not
-re-derive it here.** That skill owns the local DP shape (DuckDB output port,
-dlt-in-transform, local executor), the naming invariant, and the derived
-models that carry any business ruling the semantic layer cannot express.
-**Never author `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the
-supervisor compiles those build products from the Python sources when it pins
-the definition.** Include instructions from the file `reference/dlt.md`. The
-output is a **closure directory** — the `--definition` argument for Step 4.
+source, labeled per `nxd-generate-dp's reference/multi-source.md` when there's
+more than one. **nxd-generate-dp owns the exact per-type (and per-instance)
+shape — do not re-derive it here.** That skill owns the local DP shape (DuckDB
+output port, dlt-in-transform, local executor), the naming invariant, and the
+derived models that carry any business ruling the semantic layer cannot
+express. **Never author `deployment-spec.yaml`, `manifest.yaml`, or
+`models.yaml`: the supervisor compiles those build products from the Python
+sources when it pins the definition.** Include instructions from the file
+`reference/dlt.md`. The output is a **closure directory** — the `--definition`
+argument for Step 4.
 
 **Land the closure at a durable, user-visible path — never a temp or scratch
 directory.** Put it in a directory named by the workflow id
