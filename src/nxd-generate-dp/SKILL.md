@@ -1,6 +1,6 @@
 ---
 name: nxd-generate-dp
-description: Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS (the desktop supervisor) from a natural-language intent, an inferred semantic model, and a connector config — spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (a local file export, a live database connection, or an off-mesh REST API), ready to boot locally and produce a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML at create time, so the author never hand-writes deployment-spec / manifest / models YAML. Use when the task is to "generate a data product", "build a DP from intent", "assemble a runnable data product around an inferred semantic model", or to turn a connector config plus stakeholder questions into a local desktop DP. Pairs with nxd-semantic-data-product, which INFERS the semantic model this skill PLACES and assembles the closure around. Not for the k8s/Snowflake topology — use nxd-data-product-builder there.
+description: Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS (the desktop supervisor) from a natural-language intent, an inferred semantic model, and a connector config — spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (a local file export, a live database connection, or an off-mesh REST API), ready to boot locally and produce a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML at create time, so the author never hand-writes deployment-spec / manifest / models YAML. Use when the task is to "generate a data product", "build a DP from intent", "assemble a runnable data product around an inferred semantic model", or to turn a connector config plus stakeholder questions into a local desktop DP. Pairs with nxd-semantic-data-product, which INFERS the semantic model this skill PLACES. Not for the k8s/Snowflake topology — use nxd-data-product-builder there.
 allowed-tools:
   - Bash
   - Read
@@ -370,9 +370,8 @@ Classification totality is never sufficient alone: it can pass while every
 monetary answer is overstated. Raise `RuntimeError` carrying the
 actual-vs-expected numbers; the run log is the whole diagnostic.
 
-Worked code for both steps (resource template, stdlib source read, assert
-template, per-shape invariant table, reference-join example, full `ingest()`) is
-in [reference/derived-models.md](reference/derived-models.md).
+Worked code for both steps is in
+[reference/derived-models.md](reference/derived-models.md).
 
 **Other connector types**: Step 4 is identical except the `readers=[...]` body
 and `secrets[...]` key — take those from `reference/` (`file-source.md`,
@@ -380,12 +379,12 @@ and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 
 ### Step 5 — `spec.py`: promises + transform + the `duckdb` output port
 
-`spec.py` is the author-facing source of truth the supervisor compiles into the
-deployment YAML: it declares the infra profile, wires the transform to the local
-Python compute service, promises every physical model — base and derived — on
-the DuckDB storage output port, and registers each query-time semantic view.
-Bind the three service references by relative infra-profile path. The worked
-`spec.py` — paired with the `models.py` example — is in
+`spec.py` is the author-facing source of truth the supervisor compiles into
+the deployment YAML: it declares the infra profile, wires the transform to
+compute, promises every physical model — base and derived — on the DuckDB
+port, and registers each query-time view. Bind the three service references by
+relative infra-profile path (resolved against `infra-profile.yaml`, Step 5).
+The worked `spec.py` is in
 [reference/models-example.md](reference/models-example.md).
 
 Contract facts baked into that shape — keep every one:
