@@ -10,7 +10,7 @@ allowed-tools:
   - Glob
 metadata:
   author: nextdata
-  version: 0.11.0
+  version: 0.12.0
 ---
 
 # nxd-eval-harness skill

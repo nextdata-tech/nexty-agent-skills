@@ -1,6 +1,6 @@
 ---
 name: nxd-generate-dp
-description: Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS (the desktop supervisor) from a natural-language intent, an inferred semantic model, and a connector config — spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the CSV export, ready to boot locally and produce a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML at create time, so the author never hand-writes deployment-spec / manifest / models YAML. Use when the task is to "generate a data product", "build a DP from intent", "assemble a runnable data product around an inferred semantic model", or to turn a connector export plus stakeholder questions into a local desktop DP. Pairs with nxd-semantic-data-product, which INFERS the semantic model this skill PLACES and assembles the closure around. Not for the k8s/Snowflake topology — use nxd-data-product-builder there.
+description: Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS (the desktop supervisor) from a natural-language intent, an inferred semantic model, and a connector config — spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (a local file export, a live database connection, or an off-mesh REST API), ready to boot locally and produce a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML at create time, so the author never hand-writes deployment-spec / manifest / models YAML. Use when the task is to "generate a data product", "build a DP from intent", "assemble a runnable data product around an inferred semantic model", or to turn a connector config plus stakeholder questions into a local desktop DP. Pairs with nxd-semantic-data-product, which INFERS the semantic model this skill PLACES and assembles the closure around. Not for the k8s/Snowflake topology — use nxd-data-product-builder there.
 allowed-tools:
   - Bash
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.11.0
+  version: 0.12.0
 ---
 
 # nxd-generate-dp skill
@@ -20,15 +20,27 @@ metadata:
 ## Overview
 
 This skill assembles the **complete Python-only definition closure** for a
-local (desktop) data product from three inputs:
+local (desktop) data product from these inputs:
 
 1. **Intent** — the user's natural-language description of what the DP is for.
 2. **Inferred semantic model** — the per-column semantic roles produced by the
    **nxd-semantic-data-product** skill's inference mode (its `schema.json`
    profile + role declarations). That skill designs the roles; this skill
    places them. Do not redesign them.
-3. **Connector config** — where the source data lives. The proven desktop
-   connector is a local CSV export: one subdirectory per table, `*.csv` inside.
+3. **Connector config(s)** — one or more, each naming where the source data
+   lives and its **connector type**. Never invent connection details or
+   credentials for a database or API connector.
+
+**Connector types at a glance** — the canonical mapping; every other mention below points back here instead of restating it:
+
+| Type | Service | `secrets[...]` key | Companion artifact |
+|---|---|---|---|
+| CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |
+| Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
+| Database — `reference/database-source.md` | `db-source` | `db_source` | `db-source-tables`, no `data/` |
+| REST API — `reference/api-source.md` | `api-source` | `api_source` | `api-source-endpoints`, no `data/` |
+
+Names above are for exactly one instance of a type — for 2+, label each per `reference/multi-source.md`.
 
 The output is a directory the **desktop supervisor** can compile, pin, boot,
 and publish: the supervisor **compiles `spec.py` into the kernel definition
@@ -54,6 +66,9 @@ YAMLs are BUILD PRODUCTS the supervisor compiles from `spec.py` at pin time:
     └── <model>/…
 ```
 
+> This is the CSV layout, the proven default; other types swap in a
+> different companion artifact per the table above.
+
 **The author NEVER writes `deployment-spec.yaml`, `manifest.yaml`, or
 `models.yaml`.** Those three are now compiled by the desktop supervisor from
 `spec.py` + `models.py` when it creates and pins the DP. Emitting them by hand
@@ -63,9 +78,8 @@ compiled YAML follows.
 
 > Layout note: unlike the k8s `.semantic_tools()` topology (modules flat at
 > the DP root, no subdir), the desktop closure keeps the transform at
-> `transform/main.py` — that is the directory the snapshot pins and the local
-> Python compute driver executes. `models.py` and `spec.py` sit at the root and
-> are imported by the compiler.
+> `transform/main.py` — the directory the snapshot pins and the local Python
+> compute driver executes. `models.py`/`spec.py` sit at the root, imported by the compiler.
 
 ---
 
@@ -79,7 +93,7 @@ name and the `model_tables` identity map from these — you do not author them):
 |---|---|
 | `models.py` | `semantic_model("<name>")` |
 | `spec.py` | `.promise(<name>)` — imported from `models` |
-| `data/` | the connector subdirectory `data/<name>/` |
+| the connector's per-model reference | `data/<name>/` for a file connector (CSV/JSON/JSONL/Parquet); a `db-source-tables` entry for a database connector; an `api-source-endpoints` entry for a REST API connector |
 | the physical table | what dlt writes: `main.<name>` |
 
 `.model(name)` == `main.<name>` == the dlt-written table, **unquoted
@@ -87,25 +101,74 @@ lowercase**. dlt normalizes names, so assert its output against the promised
 physical models—not the whole `model_tables` map, which also includes semantic
 views. Attribute names are byte-exact CSV headers (post-dlt snake_case).
 
-Separately, the **storage output port MUST be named `duckdb`** — the local
-DuckDB storage driver requires that exact port name, and the transform param
-name must match it (see Step 3). `output` is wrong; use `duckdb`.
+Separately, the **storage output port MUST be named `duckdb`**, matched by
+the transform param (Step 4) — the local DuckDB driver requires it; `output` is wrong.
 
 ---
 
 ## Workflow
 
-### Step 1 — Collect the three inputs
+### Step 1 — Collect the inputs
 
 - The intent tells you the DP `name`, description, and which questions the
   semantic layer must answer.
 - The inferred model gives each base model's primary key, dimensions, joins,
   PII flags, metrics, and column types. Base roles and metric views are
-  different authored objects — see Step 2.
-- The connector config gives you the CSV export root. Confirm the layout is
-  one subdirectory per model (`<root>/<model>/*.csv`) and read its headers.
-  If a model and data directory do not match, stop and surface it — do not
-  invent or drop models.
+  different authored objects — see Step 3.
+- Each connector config names a **connector type** (CSV / other local file /
+  database / REST API) plus its type-specific location. For CSV: confirm one
+  subdirectory per model (`<root>/<model>/*.csv`) and read its headers; stop
+  and surface a model/directory mismatch rather than inventing or dropping
+  models. For the other three types, follow `reference/file-source.md` /
+  `database-source.md` / `api-source.md` — for database/API, confirm the
+  user supplied real connection details; never invent them.
+
+### Step 2 — `infra-profile.yaml`: the desktop-local profile (emitted prerequisite)
+
+The desktop closure ships its own infra profile declaring the three local
+services the spec references. Emit it **verbatim in this shape** (only rarely
+does anything here vary — the driver ids and service names are fixed):
+
+```yaml
+apiVersion: infra.nextdata.com/v1
+kind: Profile
+metadata:
+  name: desktop-local
+spec:
+  services:
+    - name: duckdb
+      driver: nxd:local/duckdb/storage:0.1.0
+      attributes: []
+    - name: python-compute
+      driver: nxd:local/python/compute:0.1.0
+      attributes: []
+    - name: csv-source
+      driver: nxd:generic-secrets:1.0.0
+      attributes: []
+```
+
+- `metadata.name` is `desktop-local` — it MUST match `infra_profile=` in
+  `spec.py` and the `/infra-profile/desktop-local#/...` service refs.
+- Three services: `duckdb` (storage), `python-compute` (runs the transform),
+  `csv-source` (generic-secrets, delivers the CSV export root). None carry a
+  live value here — `duckdb`/`python-compute` never do, and `csv-source`'s
+  export root is non-secret topology (covered by `csv-source-path` below) —
+  so all three stay `attributes: []`.
+- The closure also carries **`csv-source-path`** — one line, the
+  **relative** path from the closure root to the CSV export root (e.g.
+  `data`); the supervisor resolves it inside the pinned snapshot, so an
+  absolute path escapes the snapshot and fails.
+- **Other connector types**: only the third service's *name* changes, per
+  the table above. A connector needing a **real credential** (database, REST
+  API) populates that service's `attributes` instead — see
+  `reference/database-source.md` / `reference/api-source.md` for the shape;
+  `csv-source`/`file-source` have no credential to carry. For 2+ sources of
+  one type, add one service per instance — see `reference/multi-source.md`.
+
+> The supervisor compiles `deployment-spec.yaml`, `manifest.yaml`, and
+> `models.yaml` from `spec.py` + `models.py` at pin time — including the
+> `model_tables` identity map, the staging-path placeholder, and the compiled
+> semantic roles the semantic child reads. **You never write those three files.**
 
 ### Gate — validate base-model primary keys before authoring
 
@@ -118,7 +181,7 @@ is absent, stop and ask for the source entity/event key; a unique sample is not
 proof for a future export. This replace-only flow excludes append/upsert
 semantics, which require a separately designed stable source key.
 
-### Step 2 — `models.py`: place the inferred roles with the public DSL
+### Step 3 — `models.py`: place the inferred roles with the public DSL
 
 Author `models.py` with the **real public semantic DSL**. Import the role
 builders and wrap each field:
@@ -155,46 +218,7 @@ Columns the inferred model left unannotated stay bare-typed (do not invent
 roles no question motivated). No marker model: desktop produce-verification is
 the transform's `.transform-complete` file, not a marker row.
 
-Worked example (matches the proven closure):
-
-```python
-"""Base models and query-time metrics for the desktop DP."""
-
-from nxd.spec import Agg, semantic_model, semantic_view
-from nxd.spec.data_types import number, string
-from nxd.spec import dimension, field, join, metric, metric_field, primary_key
-
-customers = semantic_model("customers").schema(
-    {
-        "customer_id": field(number(), primary_key()),
-        "country_id": field(
-            string(),
-            dimension(name="customer_country"),
-        ),
-        "country": string(),
-    }
-)
-
-orders = semantic_model("orders").schema(
-    {
-        "order_id": field(number(), primary_key()),
-        "customer_id": field(
-            number(),
-            join(to="customers", to_column="customer_id"),
-        ),
-        "amount": number(),
-    }
-)
-
-order_metrics = semantic_view("order_metrics", orders).schema(
-    {
-        "total_order_amount": metric_field(
-            number(),
-            metric(Agg.SUM, of=orders.field("amount"), name="total_order_amount"),
-        ),
-    }
-)
-```
+Worked example (matches the proven closure): see `reference/models-example.md`.
 
 Data-type mapping (inferred type → `nxd.spec.data_types`):
 
@@ -206,12 +230,12 @@ Data-type mapping (inferred type → `nxd.spec.data_types`):
 | bool | `boolean()` |
 | date | `date32()` |
 
-### Step 3 — `transform/main.py`: the dlt-through-port ingest
+### Step 4 — `transform/main.py`: the dlt-through-port ingest
 
 The transform receives the typed **output port handle** (`DuckDbOutput`: `path`,
 `schema`, `model_tables`) and connector secrets, streams each **promised
 physical model** CSV directory through dlt, then asserts the produced table
-names. The handle param is **`duckdb`**, matching the port in Step 4. Declare
+names. The handle param is **`duckdb`**, matching the port in Step 5. Declare
 `PHYSICAL_MODELS` from the `.promise(...)` calls; use `duckdb.model_tables` only
 to resolve those table names. It can also contain `.model(...)` semantic views,
 which have neither a CSV directory nor a physical DuckDB table.
@@ -305,7 +329,10 @@ Contract facts baked into that template — keep every one:
   MANDATORY, not decoration: the first enforces the naming invariant, the
   second is what the supervisor's readiness gate polls.
 
-### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
+**Other connector types**: everything above is identical except the
+`readers = [...]` body and the `secrets[...]` key — take those from `reference/`.
+
+### Step 5 — `spec.py`: promises + transform + the `duckdb` output port
 
 `spec.py` is the author-facing source of truth the supervisor compiles into
 the deployment YAML. It declares the infra profile, wires the transform to the
@@ -313,7 +340,7 @@ local Python compute service, promises every physical base model on the DuckDB
 storage output port, and registers each query-time semantic view.
 
 Bind the three service references by relative infra-profile path (all three
-resolve against `infra-profile.yaml`, Step 5):
+resolve against `infra-profile.yaml`, Step 2):
 
 ```python
 """A desktop data product authored entirely in Python. The supervisor compiles
@@ -356,7 +383,7 @@ Contract facts baked into this shape — keep every one:
 
 - **The output port is named `duckdb`** (`.port("duckdb", storage(...))`) — the
   local DuckDB storage driver requires that exact name, and the transform param
-  matches it (Step 3). Never `"output"`.
+  matches it (Step 4). Never `"output"`.
 - **`infra_profile="desktop-local"`** on `data_product(...)`, matching
   `infra-profile.yaml`'s `metadata.name`.
 - **`script("transform/main.py")`**, not `code(transform)` — the desktop
@@ -376,45 +403,9 @@ Contract facts baked into this shape — keep every one:
   k8s-topology artifact with no local RPC driver on desktop. Adding it here is
   wrong: it wires a port nothing serves. Leave it out.
 
-### Step 5 — `infra-profile.yaml`: the desktop-local profile (emitted prerequisite)
-
-The desktop closure ships its own infra profile declaring the three local
-services the spec references. Emit it **verbatim in this shape** (only rarely
-does anything here vary — the driver ids and service names are fixed):
-
-```yaml
-apiVersion: infra.nextdata.com/v1
-kind: Profile
-metadata:
-  name: desktop-local
-spec:
-  services:
-    - name: duckdb
-      driver: nxd:local/duckdb/storage:0.1.0
-      attributes: []
-    - name: python-compute
-      driver: nxd:local/python/compute:0.1.0
-      attributes: []
-    - name: csv-source
-      driver: nxd:generic-secrets:1.0.0
-      attributes: []
-```
-
-- `metadata.name` is `desktop-local` — it MUST match `infra_profile=` in
-  `spec.py` and the `/infra-profile/desktop-local#/...` service refs.
-- Three services, each with `attributes: []`: `duckdb` (local DuckDB storage,
-  the output port backend), `python-compute` (local Python compute, runs the
-  transform), `csv-source` (generic-secrets, delivers the CSV export root).
-
-Finally, the closure also carries **`csv-source-path`** — one line, the
-**relative** path from the closure root to the CSV export root (e.g. `data`).
-The supervisor resolves it inside the pinned snapshot; an absolute path escapes
-the snapshot and fails.
-
-> The supervisor compiles `deployment-spec.yaml`, `manifest.yaml`, and
-> `models.yaml` from `spec.py` + `models.py` at pin time — including the
-> `model_tables` identity map, the staging-path placeholder, and the compiled
-> semantic roles the semantic child reads. **You never write those three files.**
+**Other connector types**: only the variable name and its service path
+(connector-types table above) change; for 2+ of one type, `.secrets([...])`
+takes one labeled variable per instance — see `reference/multi-source.md`.
 
 ### Step 6 — `requirements.txt`: the proven pins
 
@@ -429,13 +420,18 @@ pandas==2.3.3
 supervisor — do not float them. `pandas` is required by dlt's `read_csv`
 transformer. Python `>=3.12,<3.13` is the proven interpreter range.
 
+**Other connector types add to these pins, never replace them** — see
+`reference/` for the exact per-type additions (Parquet extra, `dlt[sql_database]`
++ one vendor driver, or none for REST API).
+
 ### Step 7 — Self-check before handing off (MANDATORY)
 
 Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Then
 walk the physical naming invariant (`models.py` == `.promise` ==
-`PHYSICAL_MODELS` == `data/<name>/`); `.model(...)` views deliberately have no
-data directory. Confirm supplied CSVs are unchanged, then dry-run the transform
-against a scratch DuckDB — the same execution the supervisor performs minus the kernel:
+`PHYSICAL_MODELS` == the connector's per-model reference — see "THE NAMING
+INVARIANT" table); `.model(...)` views deliberately have no such reference at
+all. Confirm supplied CSVs are unchanged, then dry-run the transform against a
+scratch DuckDB — the same execution the supervisor performs minus the kernel:
 
 ```python
 # self_check.py — run from the closure root:
@@ -475,20 +471,26 @@ If the read-back assert in the transform fires, or an unquoted
 `main.<name>` query fails, a name diverged somewhere — fix the NAME (across
 `models.py`, `.promise`, and `data/<name>/`), never quote your way around it.
 
+**Database/API connectors need live credentials to dry-run.** With
+credentials, run each type's own connectivity check exactly as its reference
+doc specifies — `database-source.md`'s asserts `row_count > 0` per model;
+`api-source.md`'s asserts a parseable response per resource — never an exact
+fixture count either way. Without credentials, report the connectivity
+self-check as **not run** — never claim it passed.
+
 ---
 ## Invariants — NEVER violate these
 
-- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + `csv-source-path` + `data/`. NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
-- **The naming invariant**: each physical base model name == `models.py` `semantic_model` arg == `spec.py` `.promise` == `PHYSICAL_MODELS` == `data/<name>/` == `main.<name>`, unquoted lowercase snake_case. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.
+- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + the connector-type-specific companion artifact (see the connector-types table in Overview). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
+- **The naming invariant**: each physical base model name == `models.py` `semantic_model` arg == `spec.py` `.promise` == `PHYSICAL_MODELS` == the connector's per-model reference (see "THE NAMING INVARIANT" table) == `main.<name>`, unquoted lowercase snake_case. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.
 - **Output port named `duckdb`**: `.port("duckdb", storage(...))`, transform param `duckdb` typed `DuckDbOutput` (port name == param name). The local DuckDB driver requires exactly this name.
 - **Through the port, always**: dlt destination is `duckdb.path` / `duckdb.schema`. No raw `duckdb.connect` writes, no view/table DDL, no direct file writes into staging.
 - **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.
 - **Public semantic DSL only**: base models carry `primary_key` / `dimension` / `join`; metrics are `metric_field(metric(...))` on `semantic_view(...)`. Never import private modules or write metadata directly.
 - **Validated base keys**: every promised physical model has one or more existing source columns marked `primary_key()`; their tuple is non-null and unique across the supplied export. Never synthesize a key, and stop for a source key when that evidence is absent.
-- **Connector via secrets**: source root only from `secrets["csv_source"]`; `csv-source-path` relative; the generic-secrets service is named `csv-source`, delivered via `.secrets([...])` on the transform.
-- **`infra-profile.yaml`**: `metadata.name: desktop-local`, three services (`duckdb`, `python-compute`, `csv-source`), each `attributes: []`.
+- **Connector via secrets, `infra-profile.yaml` shape**: `metadata.name: desktop-local`, at least three services (`duckdb`, `python-compute`, one connector service per source instance, labeled when 2+ of a type — `reference/multi-source.md`), delivered via `.secrets([...])` on the transform. `duckdb`, `python-compute`, `csv-source`, and `file-source` keep `attributes: []`; `db-source`/`api-source` (and their labeled variants) carry one `{"key": ..., "value": ..., "public": false}` attribute per real credential field instead — see `reference/database-source.md` / `reference/api-source.md`. Never fabricate a credential, never narrate one in chat, and never let two same-type instances share a name.
 - **Run-local dlt state** (`pipelines_dir` under the run dir + `DLT_DATA_DIR` set; never `~/.dlt`); **`write_disposition="replace"`**; **`.transform-complete` touch** after the assert.
-- **Place, don't redesign**: semantic roles come from nxd-semantic-data-product. Preserve the supplied CSV exactly; use an existing validated key or surface the missing-key problem. Promise only base models, register metric views with `.model(...)`, and add no marker model on desktop.
+- **Place, don't redesign**: semantic roles come from nxd-semantic-data-product. Preserve a file connector's supplied export exactly, and treat a database or API connector as read-only; use an existing validated key or surface the missing-key problem. Promise only base models, register metric views with `.model(...)`, and add no marker model on desktop.
 - **Proven pins**: `dlt[duckdb]==1.28.2`, `duckdb==1.5.4`, pandas, the nxd wheel; Python `>=3.12,<3.13`.
 ## Related skills
 
