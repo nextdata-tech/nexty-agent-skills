@@ -28,7 +28,7 @@
     "current_pack/nxd-setup-headless-auth": {
       "verdict": "FAIL",
       "flaky": true,
-      "note": "Returned FAIL then PASS across two CI runs of the same commit. The two agent answers were substantively identical — both ran whoami and told the user to confirm the displayed email; neither mentioned the 'Not logged in' caveat — so the flip was the judge splitting one check that bundled three separate requirements into a single boolean. That check is now split in two with the caveat dropped as a requirement. Kept flaky until a run confirms the split holds; re-measure with evals/flakiness.py before removing."
+      "note": "Measured over 5 CI runs of the same commit: [P P F P P], pass_rate 0.8. The original bundled whoami check was split in two and both halves passed all 5 runs, so that fix holds. The remaining flip is genuine agent variance, not a check defect — the one failing run exported shell variables across separate calls, which this scenario establishes do not persist, and omitted the fresh-device-code-on-expiry requirement. Both checks caught real defects and should not be loosened. Kept flaky because a 1-in-5 verdict cannot gate; the fix is skill-side reliability, not check wording."
     },
     "current_pack/pgvector-embedding-type-failure": {
       "verdict": "PASS"
