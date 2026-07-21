@@ -261,12 +261,49 @@ only if it regresses twice. A cell that passes on retry is reported as
 
 Some cells are unstable enough that even a retry cannot make them meaningful.
 Mark those `"flaky": true` in the baseline with a note recording the evidence;
-they are still run and reported (as `FLAKY`) but never gate.
-`generate-semantic-layer-dp-from-schema` is currently marked — it returned
-`PASS` when recorded and `FAIL` (3/10 checks) on an identical re-run, because
-its checks demand visible evidence for ten separate artifacts that a
-nondeterministic agent does not reliably produce. The marker is a stopgap, not
-a fix: the checks want rewriting into fewer, more robust assertions.
+they are still run and reported (as `FLAKY`) but never gate, in either
+direction — a flaky cell that happens to pass is not reported as an improvement
+either, and `--update` refuses to re-record it. Both matter: recording a flaky
+cell's `PASS` is exactly what converts a coin toss into a gating cell.
+
+Two cells are currently marked:
+
+- `generate-semantic-layer-dp-from-schema` — `PASS` when recorded, `FAIL` (3/10
+  checks) on an identical re-run. Its checks demand visible evidence for ten
+  separate artifacts that a nondeterministic agent does not reliably produce.
+- `nxd-setup-headless-auth` — `FAIL` then `PASS` across two CI runs of the same
+  commit. Recorded `FAIL`, so it does not gate today; the marker exists to stop
+  a later `PASS` from being locked in.
+
+The markers are a stopgap, not a fix: those checks want rewriting into fewer,
+more robust assertions that assert on outcomes rather than on wording.
+
+`false-pass-validation` is deliberately **not** marked despite flipping. It is
+recorded `PASS`, so exempting it would drop a real check rather than fix it;
+retry-once is what holds it.
+
+## Measuring stability
+
+Whether a cell is flaky is a measurement, not a guess — and flakiness has so far
+been found by accident, which systematically under-counts it. To measure, run
+the suite N times on identical input off the PR path:
+
+Actions → **evals** → Run workflow → `mode: stability`, `repeats: 5`.
+
+The job runs the selected scenarios N times with no cache (a cached transcript
+would replay identically and report a flip rate of zero by construction), then
+`evals/flakiness.py` reports which cells disagreed with themselves. Run it
+locally against saved reports the same way:
+
+```sh
+python3 evals/flakiness.py --report run-1.json run-2.json run-3.json
+```
+
+Read the output asymmetrically: **a disagreement proves instability, but
+agreement only fails to disprove it.** A cell that flips one run in five still
+looks stable across two runs most of the time, so the printed graded-run count
+is part of the result. This probe never gates — gating on a flakiness measurement
+would block PRs for the very nondeterminism it exists to quantify.
 
 When a change legitimately alters a verdict, re-record it in the same PR:
 

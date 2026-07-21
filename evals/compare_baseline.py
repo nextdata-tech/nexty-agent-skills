@@ -125,7 +125,16 @@ def main() -> int:
                 # not exist, and it can never be regressed against anyway.
                 print(f"  skipping {cell_key(result)}: ERROR (not recorded)")
                 continue
-            cells[cell_key(result)] = {"verdict": grade}
+            key = cell_key(result)
+            prior = cells.get(key) or {}
+            if prior.get("flaky"):
+                # Never let a routine --update quietly re-arm a cell that was
+                # marked unstable on evidence. Overwriting the entry would drop
+                # both the marker and the note recording why, so the next run
+                # would gate on a verdict already known to be a coin toss.
+                print(f"  keeping {key}: marked flaky (verdict not re-recorded)")
+                continue
+            cells[key] = {"verdict": grade}
         payload = {
             "_comment": (
                 "Known-good verdict per <skill_set>/<scenario>. CI fails a PR only "
@@ -158,7 +167,12 @@ def main() -> int:
         # identical input. It is still run and reported, but it cannot gate: a
         # cell that flips on its own would red PRs at random, which trains
         # everyone to ignore the check.
-        if entry.get("flaky") and now != "PASS":
+        #
+        # This covers PASS as well as FAIL. A flaky cell that happens to pass is
+        # not an improvement to lock in — recording that PASS is precisely what
+        # turns a coin toss into a gating cell, so it must not be reported as
+        # progress either.
+        if entry.get("flaky"):
             flaky_hits.append((key, now))
             continue
         if key not in baseline:

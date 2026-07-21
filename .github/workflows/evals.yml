@@ -24,6 +24,17 @@ on:
       - '.github/workflows/evals.yml'
   workflow_dispatch:
     inputs:
+      mode:
+        description: "suite = run the eval suite once. stability = run it N times on identical input and report which cells flip."
+        required: false
+        type: choice
+        options: [suite, stability]
+        default: suite
+      repeats:
+        description: "stability mode only: how many times to run the selected scenarios."
+        required: false
+        type: string
+        default: "5"
       skill_set:
         description: "Skill set to run: no_skills | current_pack | candidate_pack (blank = all)."
         required: false
@@ -237,7 +248,7 @@ jobs:
   # Manual full-control run.
   # ---------------------------------------------------------------------------
   evals:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'suite'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -337,7 +348,7 @@ jobs:
   # Vendor-agnostic; runs the live baseline over the stdio MCP transport with a
   # cheap OpenAI model. Manual-only, gated on the OPENAI_API_KEY repo secret.
   nxd-eval-smoke:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'suite'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -376,4 +387,114 @@ jobs:
         with:
           name: nxd-eval-smoke-log
           path: evals/nxd_eval/logs/*.eval
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Stability probe — run the same scenarios N times on identical input and
+  # report which cells disagree with themselves.
+  #
+  # Deliberately manual and off the pull-request path. The PR gate assumes a
+  # cell's verdict says something about the skill; this is how that assumption
+  # gets checked. Running it per-PR would multiply cost on every change while
+  # measuring nothing a one-off run does not already establish.
+  # ---------------------------------------------------------------------------
+  evals-stability:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'stability'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive   # example data products the scenarios reference
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Claude Code CLI
+        if: inputs.agent_backend == 'claude' || inputs.judge_backend == 'claude'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install and authenticate Codex CLI
+        if: inputs.agent_backend == 'codex' || inputs.judge_backend == 'codex'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "OPENAI_API_KEY secret is empty — the codex backend cannot authenticate." >&2
+            exit 1
+          fi
+          printenv OPENAI_API_KEY | codex login --with-api-key
+          codex login status
+          rm -rf "${CODEX_HOME:-$HOME/.codex}/skills" || true
+
+      - name: Run the suite N times
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
+          AGENT_BACKEND: ${{ inputs.agent_backend }}
+          JUDGE_BACKEND: ${{ inputs.judge_backend }}
+          AGENT_MODEL: ${{ inputs.agent_model }}
+          JUDGE_MODEL: ${{ inputs.judge_model }}
+          DOCS_BASE: ${{ inputs.docs_base }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          SKILL_SET: ${{ inputs.skill_set }}
+          SCENARIO: ${{ inputs.scenario }}
+          REPEATS: ${{ inputs.repeats }}
+        run: |
+          set -euo pipefail
+          case "$REPEATS" in
+            ''|*[!0-9]*) echo "repeats must be a positive integer, got '$REPEATS'" >&2; exit 2 ;;
+          esac
+          if [ "$REPEATS" -lt 2 ]; then
+            # One run cannot disagree with itself; the analysis would report
+            # every cell "stable" while having measured nothing.
+            echo "repeats must be at least 2 to measure stability, got $REPEATS" >&2
+            exit 2
+          fi
+
+          args=(--suite public
+                --agent-backend "$AGENT_BACKEND"
+                --judge-backend "$JUDGE_BACKEND"
+                --docs-base "$DOCS_BASE"
+                --concurrency "$CONCURRENCY")
+          if [ -n "$AGENT_MODEL" ]; then args+=(--agent-model "$AGENT_MODEL"); fi
+          if [ -n "$JUDGE_MODEL" ]; then args+=(--judge-model "$JUDGE_MODEL"); fi
+          if [ -n "$SKILL_SET" ]; then args+=(--skill-set "$SKILL_SET"); fi
+          if [ -n "$SCENARIO" ]; then args+=(--scenario "$SCENARIO"); fi
+
+          # No --cache-dir anywhere here. A cached agent transcript would be
+          # replayed identically on every repeat, so the measured flip rate
+          # would be zero by construction regardless of the real one.
+          for i in $(seq 1 "$REPEATS"); do
+            echo "::group::stability run $i/$REPEATS"
+            # A run that dies must not abort the probe: the remaining runs still
+            # carry evidence, and an ERROR cell is itself recorded and reported.
+            python3 evals/run.py "${args[@]}" --report "stability-$i.json" || true
+            echo "::endgroup::"
+          done
+
+      - name: Analyse verdict stability
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          reports=(stability-*.json)
+          if [ "${#reports[@]}" -lt 2 ]; then
+            echo "only ${#reports[@]} report(s) produced — not enough to measure stability" >&2
+            exit 1
+          fi
+          python3 evals/flakiness.py --report "${reports[@]}" --json stability.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload stability reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-stability
+          path: |
+            stability-*.json
+            stability.json
           if-no-files-found: warn

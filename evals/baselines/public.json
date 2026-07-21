@@ -11,7 +11,8 @@
       "verdict": "PASS"
     },
     "current_pack/false-pass-validation": {
-      "verdict": "PASS"
+      "verdict": "PASS",
+      "note": "Observed PASS, FAIL, PASS on identical input, so this cell can block a pull request on noise alone. Deliberately NOT marked flaky: it is recorded PASS, and exempting it would drop a real check rather than fix it. Retry-once is what holds it — a single FAIL is re-run and only a second FAIL gates. Rewrite its checks, then re-measure with evals/flakiness.py."
     },
     "current_pack/generate-runnable-dp-from-intent": {
       "verdict": "PASS"
@@ -25,7 +26,9 @@
       "verdict": "FAIL"
     },
     "current_pack/nxd-setup-headless-auth": {
-      "verdict": "FAIL"
+      "verdict": "FAIL",
+      "flaky": true,
+      "note": "Returned FAIL then PASS across two CI runs of the same commit and inputs, both with a healthy sandbox. Recorded FAIL, so it does not gate today, but the marker stops a later PASS observation from being locked in and turning a coin toss into a blocking cell. Re-measure with evals/flakiness.py before removing."
     },
     "current_pack/pgvector-embedding-type-failure": {
       "verdict": "PASS"
