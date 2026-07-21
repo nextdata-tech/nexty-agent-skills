@@ -89,8 +89,18 @@ DEFAULT_MODELS = {
 #   from [P P P P P] to [F P F F F] on an unchanged commit. That is a real skill
 #   failure the judge described correctly, not a grading artifact, so the cheaper
 #   agent buys nothing: it fails cells for reasons the skill did not cause.
+#
+#   judge: xhigh -> medium was measured and reverted. It held [P P P P P] on
+#   generate-semantic-layer-dp-from-schema but took false-pass-validation from a
+#   baselined PASS to [F F F]. The failing check requires the agent to record
+#   status "NOT RUN" and NAME the next command; the agent did the substantive
+#   work but omitted the command. So medium reads the check literally and xhigh
+#   was crediting substance over the letter — not a weaker judge, a differently
+#   strict one. Either reading is defensible, but the whole baseline was recorded
+#   under xhigh, and re-grading ten cells by a different standard to save judge
+#   tokens trades away far more than it saves.
 CODEX_DEFAULT_AGENT_EFFORT = "medium"
-CODEX_DEFAULT_JUDGE_EFFORT = "medium"
+CODEX_DEFAULT_JUDGE_EFFORT = "xhigh"
 
 # Reasoning effort. The agent under test mirrors a real session (medium). The
 # judge runs at xhigh because grading is the call we most want to trust — a
