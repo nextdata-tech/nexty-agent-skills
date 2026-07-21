@@ -1207,6 +1207,17 @@ def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
     if not cfg:
         return None
 
+    # Distinguish "the agent wrote nothing" from "the harness looked after the
+    # workspace was deleted". Both otherwise yield zero matches and produce an
+    # identical, confident-sounding "never written" verdict — which is how a
+    # read-too-late bug once graded a whole scenario as an agent failure.
+    if not ws.is_dir():
+        raise RuntimeError(
+            f"workspace {ws} does not exist when reading workspace_files; "
+            "the fact must be collected before the temporary workspace is "
+            "cleaned up, otherwise absence of files is unmeasurable"
+        )
+
     matched: list[Path] = []
     for pattern in cfg:
         # Anchor every match inside the workspace. A pattern escaping upward
@@ -1383,6 +1394,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     cached = None
     facts: list[str] = []
+    ws_fact: str | None = None
     if cache_file and cache_file.exists():
         try:
             loaded = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -1477,10 +1489,26 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                     extra_dirs=extra_dirs, effort=args.agent_effort,
                     skill_pack_dir=plugin_dir,
                 )
+
+            # Read the produced files INSIDE the `with`, while the temporary
+            # workspace still exists. Outside it the directory is already
+            # deleted and every pattern silently matches nothing, which the
+            # fact then reports as "never written" — a confident-looking claim
+            # that is purely an artefact of reading too late.
+            ws_fact = (
+                workspace_files_fact(ws, checks.get("workspace_files"))
+                if ok else None
+            )
+
         # Never cache a transcript whose facts carry a verifier infrastructure
         # failure: the workspace is gone on a later cache hit, so the verifier
         # cannot re-run and run_one would re-report the transient failure
         # forever. Drop the cache entry so the next run re-verifies from scratch.
+        #
+        # `facts` deliberately does NOT include the workspace-files fact yet: on
+        # a cache hit the workspace no longer exists, and replaying quoted file
+        # contents as authoritative ground truth would describe a run that never
+        # happened.
         if ok and cache_file and pocket_facts_infrastructure_error(facts) is None:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
@@ -1488,14 +1516,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 encoding="utf-8",
             )
 
-        # Read the produced files while the workspace still exists, and do it
-        # AFTER the cache write so file contents are never cached: on a cache
-        # hit the workspace is gone, and a stale quoted file would be served to
-        # the judge as authoritative ground truth for a run that never happened.
-        if ok:
-            ws_fact = workspace_files_fact(ws, checks.get("workspace_files"))
-            if ws_fact:
-                facts.append(ws_fact)
+        if ws_fact:
+            facts.append(ws_fact)
 
     if cached and checks.get("workspace_files"):
         # A cached transcript has no workspace behind it, so the files cannot be
