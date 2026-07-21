@@ -90,15 +90,19 @@ DEFAULT_MODELS = {
 #   failure the judge described correctly, not a grading artifact, so the cheaper
 #   agent buys nothing: it fails cells for reasons the skill did not cause.
 #
-#   judge: xhigh -> medium was measured and reverted. It held [P P P P P] on
-#   generate-semantic-layer-dp-from-schema but took false-pass-validation from a
-#   baselined PASS to [F F F]. The failing check requires the agent to record
-#   status "NOT RUN" and NAME the next command; the agent did the substantive
-#   work but omitted the command. So medium reads the check literally and xhigh
-#   was crediting substance over the letter — not a weaker judge, a differently
-#   strict one. Either reading is defensible, but the whole baseline was recorded
-#   under xhigh, and re-grading ten cells by a different standard to save judge
-#   tokens trades away far more than it saves.
+#   judge: xhigh -> medium was measured and reverted, but NOT for the reason
+#   first recorded here. The evidence used was false-pass-validation going
+#   [F F F] at medium, read at the time as medium grading a check literally
+#   where xhigh credited substance. Later observations at xhigh show F, P, F —
+#   one pass in six across both efforts, always the same check. The cell simply
+#   flakes on whether the agent names the next command, independent of judge
+#   effort, so it was never evidence about the judge at all.
+#
+#   What the judge drop actually has going for it: it held [P P P P P] on
+#   generate-semantic-layer-dp-from-schema. What is still unknown is whether it
+#   errs toward false PASS, which no passing cell can reveal. Reverted on that
+#   uncertainty rather than on the misread — the whole baseline was recorded
+#   under xhigh, and re-grading ten cells to save judge tokens is a poor trade.
 CODEX_DEFAULT_AGENT_EFFORT = "medium"
 CODEX_DEFAULT_JUDGE_EFFORT = "xhigh"
 
