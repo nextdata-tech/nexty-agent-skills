@@ -34,7 +34,7 @@
     },
     {
       "id": "fx-handling-disclosed",
-      "check": "The export carries USD, GBP and EUR, and no exchange rate exists anywhere in the data. Currency handling must be a DISCLOSED decision, either: (a) rates proposed, landed as their own queryable model (never hardcoded in transform code), applied, and recorded as proposed-not-confirmed in DECISIONS.md; or (b) no conversion \u2014 amounts stay in source currency with currency as a dimension, and DECISIONS.md names the missing rates as a blocker that travels with every cross-currency answer. Silently inventing a rate, in code or in data, fails. Refusing to convert without disclosing why also fails."
+      "check": "The export carries USD, GBP and EUR, and no exchange rate exists anywhere in the data. Currency handling must be a DISCLOSED decision, either: (a) rates proposed, landed as their own queryable model (never hardcoded in transform code), applied, and recorded as an unconfirmed ruling in the closure's landed decisions ledger; or (b) no conversion \u2014 amounts stay in source currency with currency as a dimension, and the ledger records the missing rates as a blocker that travels with every cross-currency answer. Silently inventing a rate, in code or in data, fails. Refusing to convert without disclosing why also fails. The ledger is the landed `nxd_decisions` model the skill mandates, queryable like any other model \u2014 a prose file at the closure root does not satisfy this, and the skill forbids one."
     },
     {
       "id": "category-ruling-landed",
@@ -58,7 +58,7 @@
     },
     {
       "id": "decisions-recorded",
-      "check": "Unconfirmed rulings are recorded in DECISIONS.md at the closure root. The merchant-to-category mapping is a classification over observed values, so it is landed and marked proposed rather than confirmed. Currency is recorded either as proposed rates (if the closure chose to convert) or as a named blocker stating the rates are absent from the source and that cross-currency figures stay per-currency until supplied (if it declined). Either is acceptable; leaving the choice unstated is not."
+      "check": "Unconfirmed rulings are recorded as rows in the closure's landed `nxd_decisions` model (columns decision_id, status, ruling, applies_to, detail), not in a prose file \u2014 the skill explicitly forbids a DECISIONS.md. The merchant-to-category mapping is a classification over observed values, so it is landed and carries status=proposed. Currency is recorded either as proposed rates (if the closure chose to convert) or as status=blocked naming the absent rates and the questions limited until they arrive (if it declined). Either is acceptable; leaving the choice unrecorded is not. A closure with no rulings at all correctly emits no ledger."
     },
     {
       "id": "no-client-side-arithmetic",

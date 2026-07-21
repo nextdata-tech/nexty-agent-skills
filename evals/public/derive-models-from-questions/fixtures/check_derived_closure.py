@@ -152,6 +152,43 @@ def reconciles_a_measure(fn: ast.FunctionDef) -> bool:
     return not uses_abs
 
 
+def _duckdb_path(root: Path) -> Path | None:
+    db = root / "data.duckdb"
+    if db.is_file():
+        return db
+    found = list(root.glob("**/*.duckdb"))
+    return found[0] if found else None
+
+
+def tables_in(root: Path) -> list[str]:
+    """Table names in the closure's DuckDB, or [] if it has none yet."""
+    db = _duckdb_path(root)
+    if db is None:
+        return []
+    try:
+        import duckdb  # noqa: PLC0415
+
+        con = duckdb.connect(str(db), read_only=True)
+        return [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+    except Exception:  # noqa: BLE001 - a missing/locked db is "no tables", not a crash
+        return []
+
+
+def dump_table(root: Path, table: str) -> str:
+    """Every value in a table as one string, for substring scanning."""
+    db = _duckdb_path(root)
+    if db is None:
+        return ""
+    try:
+        import duckdb  # noqa: PLC0415
+
+        con = duckdb.connect(str(db), read_only=True)
+        rows = con.execute(f'SELECT * FROM "{table}"').fetchall()
+        return "\n".join(" ".join("" if v is None else str(v) for v in row) for row in rows)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 DISCLOSURE_RE = re.compile(r"(?i)(fx|exchange[ -]?rate|currenc)")
 
@@ -308,25 +345,39 @@ def main() -> int:
         # Conditional: only meaningful once the closure has chosen to convert.
         check("fx:landed-as-model", True)
 
-    decisions = next(
-        (p for p in (root / "DECISIONS.md", root / "decisions.md") if p.is_file()), None
-    )
-    disclosed = bool(decisions) and bool(
-        DISCLOSURE_RE.search(decisions.read_text(encoding="utf-8", errors="replace"))
-    )
-    # Crude on purpose. A tighter regex generates false failures on legitimate
-    # prose; the judge's `decisions-recorded` check is the semantic layer that
-    # catches disclosure which is present but gamed.
+    # The ruling ledger is a LANDED MODEL (`nxd_decisions`), not a prose file --
+    # the skill forbids a DECISIONS.md, so a checker that reads one would fail
+    # every closure that follows the skill correctly. Read the landed CSV, and
+    # fall back to the DuckDB table for a ledger the transform derived rather
+    # than landed.
+    ledger_text = ""
+    for path in sorted(root.glob("data/*decision*/*.csv")):
+        ledger_text += path.read_text(encoding="utf-8", errors="replace")
+    if not ledger_text:
+        for table in tables_in(root):
+            if "decision" in table.lower():
+                ledger_text += dump_table(root, table)
+
+    disclosed = bool(ledger_text) and bool(DISCLOSURE_RE.search(ledger_text))
+    # Crude on purpose. A tighter match generates false failures on legitimate
+    # phrasing; the judge's `decisions-recorded` check is the semantic layer
+    # that catches disclosure which is present but gamed.
     check(
         "fx:handling-disclosed",
         disclosed,
-        "no DECISIONS.md entry mentions FX / exchange rates / currency. "
+        (
+            "no nxd_decisions row mentions FX / exchange rates / currency"
+            if ledger_text
+            else "no landed decisions ledger found (expected a data/*decision*/ "
+            "CSV or a decisions table)"
+        )
+        + ". "
         + (
             "Rates were landed and applied, but an unconfirmed ruling must be "
-            "recorded as proposed."
+            "recorded with status=proposed."
             if converted
             else "Amounts were left unconverted, which is defensible, but the "
-            "missing rates must be named as a blocker that travels with every "
+            "missing rates must be recorded as a blocker that travels with every "
             "cross-currency answer."
         ),
     )

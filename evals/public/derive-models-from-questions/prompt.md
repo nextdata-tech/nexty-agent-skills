@@ -46,9 +46,9 @@ what the rows say:
   question 3 is precisely a request to enumerate them.
 
 No user is available to confirm a ruling during this run. Where the workflow
-would ask, record the proposal and the assumption in `DECISIONS.md` at the
-closure root, state plainly that the ruling is proposed rather than confirmed,
-and proceed with your best defensible choice.
+would ask, record the proposal and the basis you chose it on wherever the
+workflow says an unconfirmed ruling belongs, mark it as proposed rather than
+confirmed, and proceed with your best defensible choice.
 
 ## Definition of done
 
