@@ -1196,6 +1196,11 @@ def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
 # Reading the files the agent actually left behind replaces that guesswork.
 WORKSPACE_FILE_BUDGET = 60_000
 
+# Directories the harness stages into the workspace as INPUT. Their contents are
+# never the agent's output, so quoting them as such would misattribute authorship
+# to the agent and burn the budget the agent's real files need.
+_STAGED_INPUT_DIRS = frozenset({".skills", ".claude", "fixtures", ".pocket"})
+
 
 def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
     """Quote the agent's produced files verbatim for the judge, or None when the
@@ -1219,6 +1224,7 @@ def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
         )
 
     matched: list[Path] = []
+    seen: set[Path] = set()
     for pattern in cfg:
         # Anchor every match inside the workspace. A pattern escaping upward
         # (``../``) would quote harness files into the judge prompt, where they
@@ -1229,8 +1235,23 @@ def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
                 continue
             if not resolved.is_relative_to(ws.resolve()):
                 continue
-            if resolved not in [m.resolve() for m in matched]:
+            # The staged skill pack ships reference data products whose files
+            # carry exactly the names a scenario asks about. They are input the
+            # harness placed, not output the agent wrote, and a recursive
+            # pattern matches dozens of them — enough to exhaust the quoting
+            # budget and starve the agent's own files, which is how a correct
+            # run graded FAIL for "requirements.txt was not quoted".
+            if any(part in _STAGED_INPUT_DIRS for part in resolved.parts):
+                continue
+            if resolved not in seen:
+                seen.add(resolved)
                 matched.append(path)
+
+    # Shallowest first, so the agent's own top-level files are quoted before any
+    # deeper match. Depth is the only signal available for "most likely to be
+    # the answer" and the budget is finite; without this the ordering is
+    # alphabetical and a nested directory can crowd out the real output.
+    matched.sort(key=lambda p: (len(p.relative_to(ws).parts), p.as_posix()))
 
     if not matched:
         # State the absence explicitly. Silence would let the judge fall back to
