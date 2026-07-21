@@ -84,48 +84,13 @@ Notes: Replaces the obsolete hand-authored local closure topology and private se
 
 Record: [`records/2026-07-20-nxd-generate-dp-desktop-semantic-closure-and-public-authorin.json`](records/2026-07-20-nxd-generate-dp-desktop-semantic-closure-and-public-authorin.json)
 
-## 2026-07-20 — nxd-pocket-loop + nxd-generate-dp: multi-source-type connectors (file/database/API) (plugin v0.12.0)
+## 2026-07-21 — nxd-generate-dp + nxd-pocket-loop: multi-connector-type sources (file/database/API), labeled multi-source naming, structured API auth (plugin v0.12.0)
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
 |---|---|---|---|---|---|---|---|---|---|
-| before-v0.11.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 16 | 14 | 6775 | 0.52 | sonnet |
-| after-v0.12.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 17 | 15 | 6901 | 0.80 | sonnet |
-| after-v0.12.0 | current_pack | pocket-loop-serve-query-refine | ERROR | — | — | — | — | — | sonnet |
+| before-v0.11.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 19 | 17 | 6970 | 0.69 | sonnet |
+| after-v0.12.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 17 | 15 | 7575 | 0.61 | sonnet |
 
-Notes: Added file/database/REST-API connector types as siblings to the proven CSV closure in nxd-generate-dp (new reference/file-source.md, database-source.md, api-source.md), and taught nxd-pocket-loop to gather/route them. CSV artifact names/keys (csv-source-path, csv-source, secrets['csv_source']) are untouched. pocket-loop-serve-query-refine could not be re-run in this sandbox (missing nxd-desktop-supervisor binary) -- only generate-runnable-dp-from-intent regression-checked live; its prior v0.11.0 checks are cited from evals/benchmarks/records/2026-07-20-nxd-generate-dp-desktop-semantic-closure-and-public-authorin.json for comparison.
+Notes: Direct upgrade from 0.11.0 to 0.12.0 (renumbered from an intermediate 0.13.0/0.13.1/0.13.2 sequence to resolve a version-bump collision with PR #87, which also bumps 0.11.0 -> 0.12.0 and rebases onto this). Net effect of the whole PR: added file/database/REST-API connector types as siblings to the proven CSV closure in nxd-generate-dp (reference/file-source.md, database-source.md, api-source.md), taught nxd-pocket-loop to gather/route them, added an opt-in labeled multi-source naming scheme for 2+ sources of the same or mixed connector types (reference/multi-source.md), fixed the infra-profile.yaml credential-attribute shape (name->key, public:false) against the supervisor's real KeyValuePairWithPublic schema, and replaced the api-source connector's single opaque auth value with structured auth_type + per-type flat fields assembled into dlt's structured auth dict in the transform. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched throughout -- this eval only exercises that unchanged path; the new connector types and the auth_type dispatch have no scenario coverage yet (real follow-up work). pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
 
-Record: [`records/2026-07-20-nxd-pocket-loop-nxd-generate-dp-multi-source-type-connectors.json`](records/2026-07-20-nxd-pocket-loop-nxd-generate-dp-multi-source-type-connectors.json)
-
-## 2026-07-20 — nxd-generate-dp + nxd-pocket-loop: uniquely-named infra-profile entries for multi-source closures (plugin v0.13.0)
-
-| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
-|---|---|---|---|---|---|---|---|---|---|
-| before-v0.12.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 17 | 15 | 6901 | 0.80 | sonnet |
-| before-v0.12.0 | current_pack | pocket-loop-serve-query-refine | ERROR | — | — | — | — | — | sonnet |
-| after-v0.13.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 6152 | 0.69 | sonnet |
-
-Notes: Added an opt-in source-label naming scheme (reference/multi-source.md) so nxd-generate-dp can uniquely name infra-profile service/secrets/companion entries when a closure needs 2+ sources of the same or mixed connector types, avoiding a same-type name collision. Lifted nxd-pocket-loop's prior single-source-only restriction so its Step 1 gathers and labels multiple sources when needed. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched -- this eval only exercises that unchanged path; a new eval scenario exercising the labeled multi-source path is real follow-up work, not built here. pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
-
-Record: [`records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json`](records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json)
-
-## 2026-07-21 — nxd-generate-dp + nxd-pocket-loop: fix credential-attributes shape (name→key, public:false), Workflow step reorder, review cleanup (plugin v0.13.1)
-
-| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
-|---|---|---|---|---|---|---|---|---|---|
-| before-v0.13.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 6152 | 0.69 | sonnet |
-| after-v0.13.1 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 9028 | 0.71 | sonnet |
-
-Notes: Code-review pass on the multi-source-connector work: fixed a real bug in api-source.md's no-auth worked example (crashed against its own transform template), corrected the infra-profile.yaml attributes field name (name->key per the supervisor's actual KeyValuePairWithPublic schema) and added the required public:false, reordered nxd-generate-dp's Workflow so infra-profile.yaml is authored before models.py, added closure-directory credential warnings, and removed doc duplication/stale cross-references. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched by any of these fixes -- this eval only exercises that unchanged path; the fixed db-source/api-source attribute shape has no eval scenario yet (real follow-up work). pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
-
-Record: [`records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-fix-credential-attributes-sh.json`](records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-fix-credential-attributes-sh.json)
-
-## 2026-07-21 — nxd-generate-dp: structured auth_type/fields for api-source REST auth (PR #88 review follow-up) (plugin v0.13.2)
-
-| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
-|---|---|---|---|---|---|---|---|---|---|
-| before-v0.13.1 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 19 | 17 | 7108 | 0.85 | sonnet |
-| after-v0.13.2 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 17 | 15 | 7575 | 0.61 | sonnet |
-
-Notes: Applies the still-open PR #88 review comment on api-source.md:118: the infra-profile auth attribute was a single opaque string passed straight into dlt's RESTAPIConfig, which needs a structured value and can't carry api_key/oauth2's multiple fields. Replaced with auth_type + per-type flat attributes (bearer/http_basic/api_key/oauth2_client_credentials), assembled into dlt's structured auth dict inside the transform, mirroring database-source.md's flat-field-plus-assembly-helper pattern. This eval only exercises the unchanged no-auth CSV path (generate-runnable-dp-from-intent has no API-connector scenario yet); the auth_type dispatch itself has no scenario coverage yet -- real follow-up work.
-
-Record: [`records/2026-07-21-nxd-generate-dp-structured-auth-type-fields-for-api-source-r.json`](records/2026-07-21-nxd-generate-dp-structured-auth-type-fields-for-api-source-r.json)
+Record: [`records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-multi-connector-type-sources.json`](records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-multi-connector-type-sources.json)
