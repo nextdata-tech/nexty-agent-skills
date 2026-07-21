@@ -127,8 +127,9 @@ is therefore measuring a different thing on each backend — compare within a
 provider, never across.
 
 `run.py` exits non-zero only on infrastructure failures (a run that could not be
-graded). A graded `FAIL` is a measured signal, not a CI break — pass rates are
-tracked, not gated.
+graded). A graded `FAIL` is a measured signal, not a CI break at the runner
+level — but CI does gate on *regression* against a committed baseline; see
+"CI" below.
 
 ### Benchmarking a skill change (regression + efficiency)
 
@@ -203,9 +204,199 @@ Each scenario directory holds:
 
 ### CI
 
-`.github/workflows/evals.yml` runs this suite, but is **disabled by default**
-(manual `workflow_dispatch` only, not wired to push/PR) until a Claude
-credential is provisioned in CI. Run the suite locally meanwhile.
+`.github/workflows/evals.yml` has two entry points.
+
+**Automatic (pull requests).** A PR touching `src/**` or `evals/**` runs only
+the scenarios that cover the changed skills, on the `codex` backend with
+`current_pack`. Selection is computed by `evals/affected_scenarios.py`, which
+inverts the `skills` array each scenario declares in its `checks.json`:
+
+```json
+{
+  "name": "Duplicate Rows on Every Re-run",
+  "skills": ["nxd-debugging-data-products", "nxd-adding-outputs"],
+  "checks": [ ... ]
+}
+```
+
+`skills` is mandatory — `validate_skills.py` fails a scenario that omits it or
+names a directory absent from `src/`. Without it a scenario is selected by no
+change at all, which is indistinguishable from "this skill has no regressions".
+
+Changes to the harness itself (`run.py`, `eval_backends.py`, `skill-sets.yaml`,
+the workflow) select every scenario, since they can alter any cell's outcome.
+
+A scenario that cannot run unattended sets `ci_skip` to a reason string and is
+never selected automatically. Run those locally or via `workflow_dispatch`.
+Five scenarios are currently skipped:
+
+| Scenario | Why |
+|---|---|
+| `pocket-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
+| `pharma-cross-dp-mesh-query` | needs a live semantic MCP server reaching lower-env Snowflake |
+| `pharma-mesh-query-hard` | same |
+| `pharma-mesh-query-loop` | same |
+| `semantic-intent-validation` | same |
+
+**Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
+skipped scenarios, so a PR touching it currently gets a green no-op. Four more
+skills — `nxd-adding-policy`, `nxd-policies`, `nxd-mesh-analyzer`,
+`nxd-eval-harness` — have no scenario at all. Five of fifteen skills are
+therefore unguarded by CI. A green eval check on those PRs means "nothing ran",
+not "nothing regressed".
+
+**Gating is on regression, not on absolute pass.** `evals/compare_baseline.py`
+compares the report against `evals/baselines/public.json` and fails the job only
+when a cell recorded `PASS` there now fails. Absolute pass rates are noisy —
+agent runs are nondeterministic and some cells fail at baseline for reasons a
+given PR did not introduce — so gating on `FAIL` would be both flaky and unfair.
+A cell absent from the baseline reports as `NEW` and never fails the build.
+
+**A regression must reproduce to block.** One agent run is too noisy to gate on:
+`false-pass-validation` was observed `PASS`, then `FAIL`, then `PASS` again on
+unchanged input. So when a cell regresses, CI re-runs just that cell and fails
+only if it regresses twice. A cell that passes on retry is reported as
+`FLAKY-RUN` and does not block. Only a clean `PASS` rescues — a retry that
+`ERROR`s or fails again still gates.
+
+Some cells are unstable enough that even a retry cannot make them meaningful.
+Mark those `"flaky": true` in the baseline with a note recording the evidence;
+they are still run and reported (as `FLAKY`) but never gate, in either
+direction — a flaky cell that happens to pass is not reported as an improvement
+either, and `--update` refuses to re-record it. Both matter: recording a flaky
+cell's `PASS` is exactly what converts a coin toss into a gating cell.
+
+Two cells are currently marked:
+
+- `generate-semantic-layer-dp-from-schema` — `PASS` when recorded, `FAIL` (3/10
+  checks) on an identical re-run. Its checks demand visible evidence for ten
+  separate artifacts that a nondeterministic agent does not reliably produce.
+- `nxd-setup-headless-auth` — `FAIL` then `PASS` across two CI runs of the same
+  commit. Recorded `FAIL`, so it does not gate today; the marker exists to stop
+  a later `PASS` from being locked in.
+
+The markers are a stopgap, not a fix: those checks want rewriting into fewer,
+more robust assertions that assert on outcomes rather than on wording.
+
+`false-pass-validation` is deliberately **not** marked despite flipping. It is
+recorded `PASS`, so exempting it would drop a real check rather than fix it;
+retry-once is what holds it.
+
+## Measuring stability
+
+Whether a cell is flaky is a measurement, not a guess — and flakiness has so far
+been found by accident, which systematically under-counts it. To measure, run
+the suite N times on identical input off the PR path:
+
+Actions → **evals** → Run workflow → `mode: stability`, `repeats: 5`.
+
+The job runs the selected scenarios N times with no cache (a cached transcript
+would replay identically and report a flip rate of zero by construction), then
+`evals/flakiness.py` reports which cells disagreed with themselves. Run it
+locally against saved reports the same way:
+
+```sh
+python3 evals/flakiness.py --report run-1.json run-2.json run-3.json
+```
+
+Read the output asymmetrically: **a disagreement proves instability, but
+agreement only fails to disprove it.** A cell that flips one run in five still
+looks stable across two runs most of the time, so the printed graded-run count
+is part of the result. This probe never gates — gating on a flakiness measurement
+would block PRs for the very nondeterminism it exists to quantify.
+
+When a change legitimately alters a verdict, re-record it in the same PR:
+
+```sh
+python3 evals/compare_baseline.py --report eval-report.json --update
+```
+
+`ERROR` cells are never written to the baseline: a cell that failed to run
+carries no signal about the skill, and recording it would imply coverage that
+does not exist.
+
+**A baseline entry is only valid for the scenario content it was recorded
+against.** If a PR rewrites a scenario's `prompt.md`, `fixtures/`, or
+`checks.json`, the recorded verdict for that cell is stale — and a stale `PASS`
+is worse than no entry, because the next PR to touch that skill is reported as a
+REGRESSION for a change it did not make. Re-run and re-record any scenario your
+branch rewrites, and re-check after rebasing past someone else's rewrite:
+
+```sh
+git diff --name-only origin/main...HEAD -- evals/public/
+```
+
+## Writing checks that can actually be graded
+
+The judge sees the run trace and the final answer — and tool results in the
+trace are truncated. Two failure modes follow, and both were found in real
+cells rather than imagined:
+
+**A check about file content cannot be graded from a transcript.** An agent that
+writes a correct `models.py` without echoing it back is indistinguishable from
+one that wrote nothing, so the check fails for lack of evidence rather than for
+being wrong, and it flips run to run with how chatty the agent happened to be.
+Declare `workspace_files` in `checks.json` and the harness reads the produced
+files out of the workspace and quotes them to the judge as authoritative:
+
+```json
+"workspace_files": ["models.py", "spec.py", "**/requirements.txt"]
+```
+
+Patterns are workspace-relative globs. A pattern matching nothing produces an
+explicit "these files were never written" fact rather than silence, an oversized
+file is named as omitted rather than truncated into the prompt, and a cached
+transcript reports the files as unavailable — in each case the judge is told
+what is unknown instead of inferring it. Note that quoting is a snapshot taken
+after the run, so it evidences *what the agent produced*, not *when or how* it
+produced it; keep process claims as separate checks graded from the trace.
+
+Two traps, both of which produced confident wrong verdicts before being fixed:
+
+- **The harness stages files into the workspace too.** The skill pack's bundled
+  reference data products live under `.skills/` and carry exactly the names a
+  scenario asks about, so `**/models.py` matches dozens of files the agent never
+  wrote. Staged directories are now skipped and matches are ordered
+  shallowest-first, because otherwise those files exhaust the quoting budget and
+  starve the agent's own output — the verdict then tracks *where* the agent put
+  its files rather than what is in them.
+- **A fact that reads too late looks exactly like a true negative.** Collecting
+  after the workspace is cleaned up matches nothing and reports "never written"
+  with full authority. `workspace_files_fact` now raises if the workspace is
+  gone, so absence is only ever reported when absence was measurable.
+
+The general point: a mechanical fact is graded as ground truth, so a bug in one
+is worse than the transcript-guessing it replaces — guessing at least fails
+visibly. Confirm a newly-declared `workspace_files` list actually quotes what
+you expect (`mode: stability` prints the fact into each report) before trusting
+a verdict that depends on it.
+
+**One check should test one thing.** `verifies-whoami-and-identity` bundled
+three requirements — inspect whoami's output, mention the exit-code-0 caveat,
+surface the email — into a single boolean. Two runs whose answers were
+substantively identical (both ran whoami, both told the user to confirm the
+email, neither mentioned the caveat) graded `FAIL` and `PASS`, because the judge
+had to collapse "two of three" into one verdict and landed differently each
+time. That is not agent nondeterminism; it is an unanswerable question. Split
+such a check per requirement, and drop any clause you are not actually willing
+to fail the cell over.
+
+**The baseline is provider-specific.** It was recorded on the `codex` backend,
+which is what the PR gate runs. Codex activates skills as staged context rather
+than through the `Skill` tool (see "Skill activation differs by provider"
+above), so several cells sit at `FAIL` having done the substantive work but not
+evidenced every prescribed step. Those `FAIL` entries are a property of the
+harness, not proof of a skill defect — do not rewrite a skill to chase one
+without first comparing against a `claude`-backend run.
+
+**Manual (`workflow_dispatch`).** Full control over backend, models, skill-set,
+and scenario. It reports baseline drift but never fails on it, since an
+arbitrary backend/model combination is expected to diverge from the PR gate's
+baseline.
+
+Credentials: the PR gate uses the `OPENAI_API_KEY` repo secret (codex backend).
+The manual job additionally reads `ANTHROPIC_API_KEY` when either side is set to
+the `claude` backend.
 
 ## Running a scenario (manual reference)
 

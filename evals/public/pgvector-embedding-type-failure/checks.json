@@ -1,5 +1,8 @@
 {
   "name": "pgvector Embedding-Column Type Failure",
+  "skills": [
+    "nxd-debugging-data-products"
+  ],
   "checks": [
     {
       "id": "reads-logs-first",

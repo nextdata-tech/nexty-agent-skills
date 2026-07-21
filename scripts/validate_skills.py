@@ -231,6 +231,7 @@ def validate_evals(root: Path) -> list[str]:
         scenario_prompts = sorted(public_scenarios.glob("*/prompt.md"))
         if not scenario_prompts:
             errors.append("evals/public contains no prompt.md files")
+        errors.extend(_scenario_skill_errors(root, public_scenarios))
 
     templates = root / "evals" / "templates"
     if not templates.is_dir():
@@ -242,6 +243,44 @@ def validate_evals(root: Path) -> list[str]:
     if committed_private_prompts:
         for prompt in committed_private_prompts:
             errors.append(f"{prompt}: private eval prompts must not be committed")
+    return errors
+
+
+def _scenario_skill_errors(root: Path, public_scenarios: Path) -> list[str]:
+    """Check every scenario declares the skills it exercises.
+
+    CI selects which scenarios a PR runs by inverting this mapping (see
+    ``evals/affected_scenarios.py``). A scenario missing `skills` is never
+    selected by any code change, so it silently stops guarding its skill —
+    which looks identical to "the skill has no regressions". Validating the
+    field here makes that failure loud at authoring time instead.
+    """
+    errors: list[str] = []
+    for checks_file in sorted(public_scenarios.glob("*/checks.json")):
+        try:
+            data = json.loads(checks_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"{checks_file}: invalid JSON: {exc}")
+            continue
+
+        skills = data.get("skills")
+        if skills is None:
+            errors.append(
+                f"{checks_file}: missing `skills` list naming the skills this "
+                f"scenario exercises (CI uses it to select affected scenarios)"
+            )
+            continue
+        if not isinstance(skills, list) or not skills:
+            errors.append(f"{checks_file}: `skills` must be a non-empty list")
+            continue
+        for skill in skills:
+            if not isinstance(skill, str):
+                errors.append(f"{checks_file}: `skills` entries must be strings")
+            elif not (root / "src" / skill).is_dir():
+                errors.append(
+                    f"{checks_file}: `skills` names a skill that does not exist: "
+                    f"src/{skill}"
+                )
     return errors
 
 

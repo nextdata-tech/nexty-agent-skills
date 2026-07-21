@@ -1,5 +1,20 @@
 {
   "name": "Generate a Semantic-Layer Data Product from a Schema",
+  "skills": [
+    "nxd-semantic-data-product"
+  ],
+  "workspace_files": [
+    "models.py",
+    "spec.py",
+    "transform.py",
+    "requirements.txt",
+    "pyproject.toml",
+    "**/models.py",
+    "**/spec.py",
+    "**/transform.py",
+    "**/requirements.txt",
+    "**/pyproject.toml"
+  ],
   "checks": [
     {
       "id": "models-grains-annotated",
@@ -19,7 +34,7 @@
     },
     {
       "id": "pii-flagged",
-      "check": "The EMAIL and FULL_NAME dimension blobs set \"pii\": true, and no other dimension blob is marked pii."
+      "check": "In the quoted models.py, the EMAIL and FULL_NAME dimension blobs set \"pii\": true, and no other dimension blob is marked pii. The exhaustive half is graded from the quoted file, which is the complete text — do not fail it for lack of transcript evidence."
     },
     {
       "id": "semantic-tools-flag-used",

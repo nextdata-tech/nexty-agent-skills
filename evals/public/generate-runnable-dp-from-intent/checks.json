@@ -1,5 +1,8 @@
 {
   "name": "Generate a runnable desktop data product from intent",
+  "skills": [
+    "nxd-generate-dp"
+  ],
   "checks": [
     {"id": "read-inputs", "check": "Read inferred_model.json and the supplied CSV headers before authoring."},
     {"id": "python-only-closure", "check": "Create spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, and a relative csv-source-path. Do not author deployment-spec.yaml, manifest.yaml, or models.yaml."},

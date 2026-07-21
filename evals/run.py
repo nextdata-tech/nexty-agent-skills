@@ -74,6 +74,35 @@ DEFAULT_MODELS = {
 # differs (no "xhigh"). These apply only when the corresponding side runs on the
 # codex backend AND the user did not pass an explicit --agent-effort /
 # --judge-effort. Claude's effort defaults below are unchanged.
+#
+# Both sides run lower than the Claude defaults to keep the per-pull-request
+# gate cheap, since it runs on every touched skill. This is a cost/signal trade,
+# not a free win: a weaker agent fails more cells for real reasons, and a weaker
+# judge is more prone to the transcript-skim misreads that a stronger one
+# catches. Verdicts recorded at one effort are not comparable to another, so
+# changing these invalidates evals/baselines/ — re-measure with
+# `mode: stability` before trusting a baseline recorded at a different effort.
+#   agent: low was measured and reverted. On low the agent writes the fluent
+#   API (metric()/join()/dimension(pii=True)/primary_key()) instead of the
+#   required per-field __nxd_semantic__ blobs, sometimes leaving the blobs in
+#   comments or module-level maps. generate-semantic-layer-dp-from-schema fell
+#   from [P P P P P] to [F P F F F] on an unchanged commit. That is a real skill
+#   failure the judge described correctly, not a grading artifact, so the cheaper
+#   agent buys nothing: it fails cells for reasons the skill did not cause.
+#
+#   judge: xhigh -> medium was measured and reverted, but NOT for the reason
+#   first recorded here. The evidence used was false-pass-validation going
+#   [F F F] at medium, read at the time as medium grading a check literally
+#   where xhigh credited substance. Later observations at xhigh show F, P, F —
+#   one pass in six across both efforts, always the same check. The cell simply
+#   flakes on whether the agent names the next command, independent of judge
+#   effort, so it was never evidence about the judge at all.
+#
+#   What the judge drop actually has going for it: it held [P P P P P] on
+#   generate-semantic-layer-dp-from-schema. What is still unknown is whether it
+#   errs toward false PASS, which no passing cell can reveal. Reverted on that
+#   uncertainty rather than on the misread — the whole baseline was recorded
+#   under xhigh, and re-grading ten cells to save judge tokens is a poor trade.
 CODEX_DEFAULT_AGENT_EFFORT = "medium"
 CODEX_DEFAULT_JUDGE_EFFORT = "xhigh"
 
@@ -1001,7 +1030,11 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 --- INSTRUCTIONS ---
 Grade every check as pass or fail with a one-sentence justification grounded in
 the trace and final answer. A "did the agent inspect X" check passes only if the
-trace shows the corresponding tool call/result. Give an overall pass only if ALL
+trace shows the corresponding tool call/result. That rule is about the agent's
+PROCESS. It does not apply to checks about the CONTENT of a file the agent
+wrote: when a WORKSPACE FILES block is present it is the authoritative record of
+what the agent produced, so grade those checks against the quoted file contents
+and do not fail one merely because the trace never echoed the file. Give an overall pass only if ALL
 checks pass. Where a HARNESS-VERIFIED FACTS block is present, it is authoritative
 for exactly what it states and no more: it settles whether the final-answer
 source matches the reported digest (use it, not the agent's self-report, for
@@ -1183,6 +1216,113 @@ def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
             f"digest-tie check as FAILED.")
 
 
+# Opt-in and guarded: only scenarios that declare ``"workspace_files"`` in
+# checks.json get this. Checks about what an agent *wrote* cannot be graded from
+# a transcript — tool results are truncated, and an agent that writes a correct
+# file without echoing it back looks identical to one that wrote nothing. That
+# ambiguity does not fail such a check honestly; it fails it for lack of
+# evidence, and it flips run to run with how chatty the agent happened to be.
+# Reading the files the agent actually left behind replaces that guesswork.
+WORKSPACE_FILE_BUDGET = 60_000
+
+# Directories the harness stages into the workspace as INPUT. Their contents are
+# never the agent's output, so quoting them as such would misattribute authorship
+# to the agent and burn the budget the agent's real files need.
+_STAGED_INPUT_DIRS = frozenset({".skills", ".claude", "fixtures", ".pocket"})
+
+
+def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
+    """Quote the agent's produced files verbatim for the judge, or None when the
+    scenario doesn't opt in.
+
+    ``cfg`` (checks.json ``workspace_files``) is a list of workspace-relative
+    glob patterns, e.g. ``["models.py", "spec.py", "requirements.txt"]``.
+    """
+    if not cfg:
+        return None
+
+    # Distinguish "the agent wrote nothing" from "the harness looked after the
+    # workspace was deleted". Both otherwise yield zero matches and produce an
+    # identical, confident-sounding "never written" verdict — which is how a
+    # read-too-late bug once graded a whole scenario as an agent failure.
+    if not ws.is_dir():
+        raise RuntimeError(
+            f"workspace {ws} does not exist when reading workspace_files; "
+            "the fact must be collected before the temporary workspace is "
+            "cleaned up, otherwise absence of files is unmeasurable"
+        )
+
+    matched: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in cfg:
+        # Anchor every match inside the workspace. A pattern escaping upward
+        # (``../``) would quote harness files into the judge prompt, where they
+        # would read as the agent's work.
+        for path in sorted(ws.glob(pattern)):
+            resolved = path.resolve()
+            if not resolved.is_file():
+                continue
+            if not resolved.is_relative_to(ws.resolve()):
+                continue
+            # The staged skill pack ships reference data products whose files
+            # carry exactly the names a scenario asks about. They are input the
+            # harness placed, not output the agent wrote, and a recursive
+            # pattern matches dozens of them — enough to exhaust the quoting
+            # budget and starve the agent's own files, which is how a correct
+            # run graded FAIL for "requirements.txt was not quoted".
+            if any(part in _STAGED_INPUT_DIRS for part in resolved.parts):
+                continue
+            if resolved not in seen:
+                seen.add(resolved)
+                matched.append(path)
+
+    # Shallowest first, so the agent's own top-level files are quoted before any
+    # deeper match. Depth is the only signal available for "most likely to be
+    # the answer" and the budget is finite; without this the ordering is
+    # alphabetical and a nested directory can crowd out the real output.
+    matched.sort(key=lambda p: (len(p.relative_to(ws).parts), p.as_posix()))
+
+    if not matched:
+        # State the absence explicitly. Silence would let the judge fall back to
+        # the transcript and re-introduce exactly the evidence guesswork this
+        # exists to remove.
+        return ("WORKSPACE FILES: NONE — the harness looked for "
+                f"{', '.join(cfg)} in the agent's workspace after the run and "
+                "found no such file. Any check about the content of those files "
+                "must FAIL: they were never written.")
+
+    sections: list[str] = []
+    budget = WORKSPACE_FILE_BUDGET
+    omitted: list[str] = []
+    for path in matched:
+        rel = path.relative_to(ws).as_posix()
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            sections.append(f"--- {rel} (UNREADABLE: {exc}) ---")
+            continue
+        if len(body) > budget:
+            # Never silently truncate a file into the judge prompt: a check
+            # about a missing annotation would then fail on a cut that the
+            # harness made, which is the same false signal in a new place.
+            omitted.append(rel)
+            continue
+        budget -= len(body)
+        sections.append(f"--- {rel} ({len(body)} bytes) ---\n{body}")
+
+    note = ""
+    if omitted:
+        note = ("\nNOTE: these files exceeded the quoting budget and are NOT "
+                f"shown: {', '.join(omitted)}. Do not infer anything about "
+                "their contents either way.")
+
+    return ("WORKSPACE FILES (read by the harness from the agent's workspace "
+            "after the run — this is the agent's actual output, authoritative "
+            "over anything the transcript does or does not show; grade content "
+            "checks about these files from here, NOT from whether the agent "
+            "echoed them):\n" + "\n".join(sections) + note)
+
+
 def _fixtures_fingerprint(scenario_dir: Path) -> str:
     """Hash the scenario fixtures so a fixture edit invalidates the cache."""
     h = hashlib.sha256()
@@ -1304,6 +1444,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     cached = None
     facts: list[str] = []
+    ws_fact: str | None = None
     if cache_file and cache_file.exists():
         try:
             loaded = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -1398,16 +1539,46 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                     extra_dirs=extra_dirs, effort=args.agent_effort,
                     skill_pack_dir=plugin_dir,
                 )
+
+            # Read the produced files INSIDE the `with`, while the temporary
+            # workspace still exists. Outside it the directory is already
+            # deleted and every pattern silently matches nothing, which the
+            # fact then reports as "never written" — a confident-looking claim
+            # that is purely an artefact of reading too late.
+            ws_fact = (
+                workspace_files_fact(ws, checks.get("workspace_files"))
+                if ok else None
+            )
+
         # Never cache a transcript whose facts carry a verifier infrastructure
         # failure: the workspace is gone on a later cache hit, so the verifier
         # cannot re-run and run_one would re-report the transient failure
         # forever. Drop the cache entry so the next run re-verifies from scratch.
+        #
+        # `facts` deliberately does NOT include the workspace-files fact yet: on
+        # a cache hit the workspace no longer exists, and replaying quoted file
+        # contents as authoritative ground truth would describe a run that never
+        # happened.
         if ok and cache_file and pocket_facts_infrastructure_error(facts) is None:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
                 json.dumps({"trace": trace, "metrics": metrics, "facts": facts}),
                 encoding="utf-8",
             )
+
+        if ws_fact:
+            facts.append(ws_fact)
+
+    if cached and checks.get("workspace_files"):
+        # A cached transcript has no workspace behind it, so the files cannot be
+        # read. Say so rather than letting the judge silently fall back to
+        # transcript-guessing, which is the failure mode this replaces.
+        facts.append(
+            "WORKSPACE FILES: UNAVAILABLE — this run replayed a cached agent "
+            "transcript, so the workspace no longer exists and the produced "
+            "files could not be read. Grade file-content checks as unproven "
+            "rather than inferring them from the transcript."
+        )
 
     res.transcript = trace
     res.metrics = {**preflight_metrics, **metrics, "agent_model": agent_model}
