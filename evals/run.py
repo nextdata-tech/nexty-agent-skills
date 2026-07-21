@@ -74,8 +74,16 @@ DEFAULT_MODELS = {
 # differs (no "xhigh"). These apply only when the corresponding side runs on the
 # codex backend AND the user did not pass an explicit --agent-effort /
 # --judge-effort. Claude's effort defaults below are unchanged.
-CODEX_DEFAULT_AGENT_EFFORT = "medium"
-CODEX_DEFAULT_JUDGE_EFFORT = "xhigh"
+#
+# Both sides run lower than the Claude defaults to keep the per-pull-request
+# gate cheap, since it runs on every touched skill. This is a cost/signal trade,
+# not a free win: a weaker agent fails more cells for real reasons, and a weaker
+# judge is more prone to the transcript-skim misreads that a stronger one
+# catches. Verdicts recorded at one effort are not comparable to another, so
+# changing these invalidates evals/baselines/ — re-measure with
+# `mode: stability` before trusting a baseline recorded at a different effort.
+CODEX_DEFAULT_AGENT_EFFORT = "low"
+CODEX_DEFAULT_JUDGE_EFFORT = "medium"
 
 # Reasoning effort. The agent under test mirrors a real session (medium). The
 # judge runs at xhigh because grading is the call we most want to trust — a

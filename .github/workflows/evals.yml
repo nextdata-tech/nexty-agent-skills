@@ -373,7 +373,8 @@ jobs:
           uv run --extra openai python -c "
           from inspect_ai import eval as inspect_eval
           import spike_stdio as m
-          lg = inspect_eval(m.spike_stdio(), model='openai/gpt-5.4-mini', log_dir='logs')[0]
+          lg = inspect_eval(m.spike_stdio(), model='openai/gpt-5.6-luna',
+                            reasoning_effort='low', log_dir='logs')[0]
           s = lg.samples[0]
           print('status', lg.status, 'answer', repr(s.output.completion.strip()), 'score', s.scores['includes'].value)
           assert lg.status == 'success', lg.status
