@@ -54,7 +54,8 @@ smallest path that can give an honest answer:
 | Situation | Route |
 |---|---|
 | **Explicit deployed/platform product** — the user names a remote DP, cluster, or platform endpoint | Hand off to `nxd-data-product-query`. Do not create a local replacement. |
-| **Existing local product** — the task supplies its `semantic_endpoint` and bearer token | Call `mcp__nxd-desktop__describe_models`, then answer through `mcp__nxd-desktop__run_semantic_query`. Without both endpoint and token, there is no list/status MCP tool: ask for the product connection or build from an in-scope source. |
+| **Existing local product** — the task supplies its `semantic_endpoint` and bearer token | Call `mcp__nxd-desktop__describe_models`, then answer through `mcp__nxd-desktop__run_semantic_query`. |
+| **Existing local product, but no endpoint/token** — the typical new session, since the bearer is per-session and never persisted | There is no list, status, or rediscovery MCP tool, so the running instance cannot be found. Locate the durable closure path (ask if unknown) and **reopen by rebuilding**: `build_data_product` with the same definition path and the same workflow id. This is a **mitigation that costs a full rebuild**, not a reattach — narrate it as such. See `reference/reopen.md`. |
 | **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, and its connection details pass through to generation exactly as the user gave them. Never modify a supplied original. |
 | **No product and no source** | Ask one concise question naming the missing thing: the local data file/folder or an existing product to query. Do not manufacture a dataset, create a throwaway database, or probe Cowork uploads/workspaces with Bash in hope of finding one. |
 | **Trivial, non-durable calculation** — for example, arithmetic over values pasted in the request, with no request to analyze or reuse data | Answer directly. Do not start a supervisor or build a product. |
@@ -214,6 +215,16 @@ supervisor compiles those build products from the Python sources when it pins
 the definition.** Include instructions from the file `reference/dlt.md`. The
 output is a **closure directory** — the `--definition` argument for Step 4.
 
+**Land the closure at a durable, user-visible path — never a temp or scratch
+directory.** Put it in a directory named by the workflow id
+(`…/nxd-pocket/<workflow>/`) on the file-writing surface, under whichever base
+the host-visible-absolute-path rules in Step 1 make legal, and **state that
+path to the user in the handoff**. There is no list, status, or rediscovery
+MCP tool, and the bearer is minted per session and never persisted — so this
+path is the only key a later session has to the product. A closure written to
+a scratch dir is effectively lost when the session ends. See
+`reference/reopen.md`.
+
 ### Step 4 — Build and serve through MCP
 
 When the three desktop MCP tools are available, call
@@ -248,21 +259,40 @@ natural-language translation is yours to do. For each question:
    the selection you chose and, if the question is ambiguous against the declared
    concepts, ask rather than silently picking.
 3. **Check the question fits the MCP grammar.**
-   `mcp__nxd-desktop__run_semantic_query` accepts only `measures[]` and
-   `dimensions[]`. It does not support filters, ordering, raw-row retrieval, or
-   raw SQL. If the request cannot be represented without dropping a constraint,
-   explain the gap and clarify; do not broaden the answer silently. A gap that
-   is really a **missing column or grain** — a filter, a ratio, a monthly
-   rollup, a classification — is a Step 6 model-level fix: the ruling must
-   materialize in a derived model. Do not emulate it agent-side over the
-   returned rows.
+   `mcp__nxd-desktop__run_semantic_query` accepts `measures[]`, `dimensions[]`,
+   `filters[]` (`=`, `!=`, `<>`, `>`, `>=`, `<`, `<=`, `LIKE`, `ILIKE`; ANDed
+   only; values are strings), `order_by[]` (names must be among the selected
+   measures/dimensions) and `limit` (capped at 200 rows). It does **not** support
+   `IN`/`BETWEEN`/`IS NULL`/`NOT LIKE`, `HAVING` or measure-level filtering, `OR`,
+   raw-row retrieval, or raw SQL.
+   Apply the **Omission Test** to every constraint before you place it — see
+   [reference/query-grammar.md](reference/query-grammar.md). Would a consumer who
+   never heard the constraint, querying with no filters, get a **wrong** number
+   (a **standing ruling** → materialize it in a derived model, Step 6) or merely a
+   **broader** one (a **per-question constraint** → express it with
+   `filters[]`/`order_by[]`/`limit` here)? When ambiguous, ask; with no user
+   available, materialize. If a genuine per-question constraint outruns the
+   grammar, use the sanctioned patterns in that reference (group-and-read,
+   two ANDed filters for a range, `order_by`+`limit` for a threshold) — never
+   re-aggregate agent-side, and never silently drop the constraint.
 4. **Run the governed query.** Call
    `mcp__nxd-desktop__run_semantic_query` with the endpoint/token plus the
    selected measures and dimensions. Do not bypass it with raw SQL or a local
    aggregation.
-5. **Parse + present.** Render the returned rows as a compact table and state
-   the semantic selection that produced them. Label any partial or unverified
-   result as a preview rather than the complete answer.
+5. **Quantify the review bucket before presenting a classified total.** If the
+   selection's model carries a classification dimension with a review bucket
+   (`needs_review`, `unmapped`, `other`), a single headline number hides how
+   much of it is unclassified. Run the same measure grouped by that dimension
+   and report the bucket's share alongside the total whenever it is nonzero —
+   "€480k total; €190k (40%) is `needs_review`". A classified total with an
+   unquantified review bucket is a preview, not an answer.
+6. **Parse + present.** Render the returned rows as a compact table and state
+   the semantic selection that produced them. Surface any ruling behind the
+   answer: if a dimension you grouped by or filtered on carries a
+   `describe_models` description naming a ruling (a mapping, an exclusion, a
+   reclassification), state that ruling in the answer — the consumer is
+   trusting it whether or not they know it exists. Label any partial or
+   unverified result as a preview rather than the complete answer.
 
 ### Step 6 — Refine wrong answers back into the loop
 
@@ -294,7 +324,8 @@ indefinitely or give up silently.
   preview, not a verified answer — say so. Never present an unvalidated
   intermediate as the final answer.
 - **Show the query behind the answer** — every answer states the
-  measure/dimension selection that produced it.
+  measure/dimension selection that produced it, and the ruling behind any
+  dimension whose catalog description names one.
 
 ## Invariants — never violate these
 
@@ -329,6 +360,11 @@ indefinitely or give up silently.
   rates, merchant→category rulings and similar mappings are surfaced to the
   user, confirmed, and landed as their own model so they are queryable — never
   embedded as constants in generated transform code.
+- **A ruling behind a number is stated with the number.** When a dimension's
+  catalog description names the ruling that created it, the answer says so, and
+  a classified total reports its review-bucket share whenever nonzero. A
+  governed answer that silently rests on an unstated ruling is the failure this
+  loop exists to prevent.
 - **Keep governed analysis on the supervisor path.** Never answer a governed
   local-data question with SQLite, `sqlite3`, raw SQL, pandas aggregation, or a
   shell pipeline as a fallback. The supervisor may compile semantic selections
@@ -341,8 +377,16 @@ indefinitely or give up silently.
   never infer one from an attachment ID or isolated Linux path.
 - **Query is by measure/dimension name, not raw SQL or NL.** The NL→selection
   translation is agent-side; ground it in `describe_models`. The desktop MCP
-  query contract accepts only measures and dimensions — do not emulate filters
-  or ordering outside it.
+  query contract accepts measures, dimensions, ANDed `filters[]`, `order_by[]`
+  and `limit` — use them for **per-question scoping only**, and never emulate
+  the grammar's gaps by re-aggregating agent-side.
+- **A standing ruling materializes; a filter never enforces one.** Apply the
+  **Omission Test** ([reference/query-grammar.md](reference/query-grammar.md)):
+  if a consumer querying with no filters would get a *wrong* number, the ruling
+  belongs in the transform, and the ruling-bearing measure must be correct with
+  no filter applied. Landing an `is_transfer` dimension and expecting callers to
+  filter on it is the same silent failure wearing a column. Only a constraint
+  that would merely make the answer *broader* is a query-time filter.
 - **One workflow id per data product.** Rebuild the same id to regenerate.
 - **The supervisor data dir is off-limits.** Everything under `.pocket/state/`
   — pinned snapshots in `definitions/<id>/`, `state.sqlite*`, `staging/` — is

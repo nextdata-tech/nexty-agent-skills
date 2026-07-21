@@ -194,13 +194,14 @@ view per set of metrics over that table:
 
 Role builders (verified DSL facts): `field(number(), primary_key())` — emit
 `primary_key()`, NEVER the deprecated `grain` alias;
-`field(string(), dimension(name="<concept>", pii=<inferred flag>))`;
+`field(string(), dimension(name="<concept>", pii=<flag>, description="..."))`;
 `field(number(), join(to="<model>", to_column="<col>"))` — note `to=` and
 `to_column=`, NOT `to_model=`.
 
-Columns the inferred model left unannotated stay bare-typed (do not invent roles
-no question motivated). No marker model: desktop produce-verification is the
-transform's `.transform-complete` file, not a marker row.
+Unannotated columns stay bare-typed (do not invent roles no question motivated).
+**A dimension a ruling created MUST carry `description=` stating that ruling** —
+`describe_models` is all a later consumer sees, so an unstated ruling is
+invisible. No marker model: produce-verification is `.transform-complete`.
 
 **Derived models are authored identically** — same DSL, role vocabulary, and
 `.schema({...})` shape. The only differences: its schema keys are the keys of the
@@ -210,9 +211,8 @@ model as derived; that distinction lives only in the transform.
 
 Worked examples: `reference/models-example.md` (base) and
 [reference/derived-models.md](reference/derived-models.md) (derived). Every
-verified DSL signature used in this skill (roles, data types, Step 4's
-builders) is pinned in `reference/nxd-spec-api.md` — trust it over re-reading
-source.
+verified DSL signature used here (roles, data types, Step 4's builders) is pinned
+in `reference/nxd-spec-api.md` — trust it over re-reading source.
 
 Data-type mapping (inferred → `nxd.spec.data_types`): string → `string()`;
 int / number / double / float → `number()`; bool → `boolean()`; date →
@@ -489,7 +489,7 @@ self-check as **not run** — never claim it passed.
 - **Connector via secrets, `infra-profile.yaml` shape**: source config only from `secrets[...]`, keyed per connector type per the connector-types table in Overview, one entry per source instance (labeled when 2+ of a type — `reference/multi-source.md`) — always delivered via `.secrets([...])` on the transform. The profile is `metadata.name: desktop-local` with at least three services (`duckdb`, `python-compute`, one connector service per source instance). `duckdb`, `python-compute`, `csv-source`, and `file-source` keep `attributes: []` (their companion path file is relative); `db-source`/`api-source` (and their labeled variants) carry one `{"key": ..., "value": ..., "public": false}` attribute per real credential field instead — see `reference/database-source.md` / `reference/api-source.md`. Never fabricate a credential, never narrate one in chat, never write a raw database password or API token into a committed closure file, and never let two same-type instances share a name.
 - **Run-local dlt state** (`pipelines_dir` under the run dir + `DLT_DATA_DIR` set; never `~/.dlt`); **`write_disposition="replace"`**; **`.transform-complete` touch** after the assert.
 - **Place, don't redesign**: semantic roles come from nxd-semantic-data-product. Preserve a file connector's supplied export exactly, and treat a database or API connector as read-only — cleaning, dedupe, reclassification and regrain happen ONLY in derived models downstream of pristine sources, never by editing the source export. Use an existing validated key for base models or surface the missing-key problem. Promise base and derived models, register metric views with `.model(...)`, and add no marker model on desktop.
-- **Reference data is landed, never hardcoded**: FX rates, merchant→category rulings, account mappings and similar judgements that exist in no source data are user-confirmed and landed as their own model, so they stay queryable and reviewable. Never bake them into transform code as a constant dict or an `if` ladder. With no user available to confirm, land the mapping anyway as PROPOSED and record it in `DECISIONS.md` — see [reference/derivation-plan.md](reference/derivation-plan.md).
+- **Reference data is landed, never hardcoded**: FX rates, merchant→category rulings, account mappings and similar judgements that exist in no source data are user-confirmed and landed as their own model, so they stay queryable and reviewable. Never bake them into transform code as a constant dict or an `if` ladder. With no user available to confirm, land the mapping anyway as PROPOSED, recorded as a row in the closure's landed `nxd_decisions` model — never a `DECISIONS.md` file — see [reference/derivation-plan.md](reference/derivation-plan.md).
 - **Proven pins**: `dlt[duckdb]==1.28.2`, `duckdb==1.5.4`, pandas, the nxd wheel; Python `>=3.12,<3.13`.
 
 ## Related skills

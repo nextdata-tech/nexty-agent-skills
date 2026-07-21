@@ -7,6 +7,7 @@
 - [A worked chain](#a-worked-chain)
 - [Base or derived? the decision test](#base-or-derived-the-decision-test)
 - [Reference data: rulings that exist in no source CSV](#reference-data-rulings-that-exist-in-no-source-csv)
+- [The decisions model](#the-decisions-model)
 - [Rulings you must NOT propose](#rulings-you-must-not-propose)
 - [Confirm the plan before authoring](#confirm-the-plan-before-authoring)
 
@@ -43,9 +44,16 @@ materialized. For each question:
 1. **Name the answer's shape.** One number? A number per group? A ranking?
    Write it as a measure over a dimension: "net burn by month".
 2. **Name the measure's column.** The measure is `Agg(one column)` and nothing
-   more. Ask which single physical column it sums or averages. If the honest
-   answer contains "…where…", "…minus…", "…divided by…", or "…but only…", that
-   column does not exist yet — a derived model must produce it.
+   more. Ask which single physical column it sums or averages.
+   - "…minus…" or "…divided by…" **always** forces a derived column: the layer
+     has no expression surface, so no filter can rescue it.
+   - "…where…" or "…but only…" no longer settles it by itself — the query
+     grammar ships ANDed `filters[]`, so a scoping clause may be a query-time
+     filter. Route it through the **Omission Test** (stated canonically in the
+     **nxd-pocket-loop** skill, `reference/query-grammar.md`):
+     if a consumer querying with **no filters** would get a *wrong* number, it is
+     a standing ruling and a derived model must produce the column; if they would
+     get a merely *broader* number, it is a per-question filter — derive nothing.
 3. **Name the dimension's column.** Same test. "By month" over a date column is
    a derived column, not a query-time truncation.
 4. **Ask what the column needs.** A classification needs a ruling. A ruling
@@ -71,10 +79,14 @@ usually converge on the same one or two derived models.
 - **net burn** = cash out − cash in, per month → needs a signed `amount` column
   and a `month` column at monthly grain. The source has a transaction date, not
   a month → **derived column**.
-- cash out excludes internal transfers → a transfer must be excluded from the
-  measure. The layer has no filtered metric → the transform must either drop
-  transfer rows from the derived model or land the classification as a
-  dimension the query groups by.
+- cash out excludes internal transfers → "transfers are never expenses" is a
+  standing ruling, not a scoping clause: a consumer querying spend with no
+  filters would count transfers as spend — a confidently wrong number. So the
+  transform **drops transfer rows from the derived model**, making the default
+  read right. **In addition**, land the classification as a dimension so
+  transfers stay queryable. Landing only the dimension and expecting the query
+  to filter on it is a governance hole — the ruling would then depend on every
+  caller remembering it.
 - expenses must split **COGS vs opex** → needs a `category` column that no
   source row carries → **derived column** from a ruling.
 - that ruling is a **merchant → category** mapping → exists in no source CSV →
@@ -107,8 +119,12 @@ query, not a support ticket, because `needs_review` is a value in a dimension.
 | a judgement the user supplied, not the system | **base reference model** — see below |
 
 A derived model needs a real reason to exist. If a question is answerable by a
-metric over an existing column grouped by an existing column, do **not** derive
-anything — add the view and stop.
+metric over an existing column grouped by an existing column — optionally scoped
+by ANDed `filters[]`, `order_by[]` and `limit` — do **not** derive anything: add
+the view and stop. The **Omission Test** is the rule that decides this; it is
+stated once in the **nxd-pocket-loop** skill, `reference/query-grammar.md`.
+A scoping constraint the grammar cannot express is still not a reason to derive
+a single-use column — that reference lists the sanctioned patterns.
 
 ## Reference data: rulings that exist in no source CSV
 
@@ -145,12 +161,16 @@ Handle a proposable ruling this way:
      corrected; one that never got landed cannot.
    - **Route every uncovered value to `needs_review`.** Never widen a proposed
      rule to swallow values it does not actually cover.
-   - **Record each unconfirmed ruling in a `DECISIONS.md`** at the closure
-     root: the ruling, the values it covers, the evidence you based it on, and
-     what a reviewer should check. One entry per ruling.
+   - **Record each unconfirmed ruling as a row in the closure's
+     [decisions model](#the-decisions-model)** with `status = proposed`: the
+     ruling, what it applies to, and the evidence you based it on. One row per
+     ruling. A ledger that is itself landed data can be queried and corrected
+     by the same governed path as every other answer — which a file at the
+     closure root cannot. Never write a `DECISIONS.md`.
    - **State in the handoff that the rulings are PROPOSED, NOT CONFIRMED**, and
-     name `DECISIONS.md` as the place to review them. An answer built on a
-     proposed ruling must never be narrated as if the user had agreed to it.
+     name `nxd_decisions` as the model to query to review them. An answer built
+     on a proposed ruling must never be narrated as if the user had agreed to
+     it.
 3. **Land it as its own model.** Write the confirmed mapping to
    `data/<name>/<name>.csv` and promise it as a base model like any other —
    `merchant_categories(merchant, category)`, `account_departments(account,
@@ -173,6 +193,92 @@ One narrow exception: a definition that is genuinely structural rather than a
 business judgement — the number of months in a year, cents-per-dollar — is not
 reference data. If a reasonable user could disagree with the value, it is a
 ruling, and it gets landed.
+
+## The decisions model
+
+Every ruling the closure encodes — confirmed, proposed, or refused — is recorded
+as a row in one landed model named **`nxd_decisions`**. Not a `DECISIONS.md`,
+not a comment, not a line in the handoff that scrolls away.
+
+The reason is the same one that forbids hardcoding reference data. A ruling
+filed in a document is invisible to the thing that consumes the answer: a later
+session asks a question, gets a number built on a proposed mapping, and has no
+governed way to discover that. Landed as data, the ledger is reachable by the
+same `run_semantic_query` path as every other fact in the product, so "which
+decisions are still unconfirmed?" is a query.
+
+### Shape
+
+| Column | Role | Content |
+|---|---|---|
+| `decision_id` | `primary_key()` | stable snake_case slug — `merchant_categories`, `fx_rates`. Name it after what it rules on, so the same ruling keeps the same id across rebuilds. Never derive it from a timestamp or a random value. |
+| `status` | `dimension()` | exactly one of `confirmed`, `proposed`, `blocked` |
+| `ruling` | `dimension()` | the ruling in one sentence |
+| `applies_to` | `dimension()` | the models and columns it materializes in — `classified_spend.category, merchant_categories`. Empty for `blocked`, which materializes nothing. |
+| `detail` | `dimension()` | the evidence or basis a reviewer should check. For `blocked`: exactly the missing datum and which questions are limited until it arrives. |
+
+There is deliberately **no timestamp column**. The transform must be
+deterministic and rerunnable byte-identically, which forbids `now()`.
+
+`status` is the whole mechanism. A user confirms a proposed ruling by editing
+that row to `confirmed` and rebuilding the same workflow. There is no approval
+tool, no pending-state machine, and nothing in the supervisor enforces a status
+— the only behaviour it drives is narration: an answer built on a model an
+unconfirmed decision `applies_to` must say so.
+
+### Emit it only when a ruling exists
+
+A closure whose questions are all answerable by metrics over existing columns
+has no rulings — so it has **no `nxd_decisions` model**. Do not emit an empty
+ledger, and do not let its existence pressure you into inventing a ruling to
+put in it. The rule from
+[base or derived](#base-or-derived-the-decision-test) applies unchanged: a
+model needs a real reason to exist.
+
+### Landing it
+
+`nxd_decisions` is a base reference model and is landed exactly like
+`merchant_categories` — it is authored as data, not as code.
+
+1. Write `data/nxd_decisions/nxd_decisions.csv`, one row per ruling.
+2. Declare it in `models.py` with a metric view beside it, so the rows are
+   selectable (`run_semantic_query` needs a measure in the selection):
+
+```python
+nxd_decisions = semantic_model("nxd_decisions").schema(
+    {
+        "decision_id": field(string(), primary_key()),
+        "status": field(string(), dimension(name="decision_status")),
+        "ruling": field(string(), dimension(name="decision_ruling")),
+        "applies_to": field(string(), dimension(name="decision_applies_to")),
+        "detail": field(string(), dimension(name="decision_detail")),
+    }
+)
+
+nxd_decisions_metrics = semantic_view(
+    "nxd_decisions_metrics", nxd_decisions
+).schema(
+    {
+        "decision_count": metric_field(
+            number(),
+            metric(
+                Agg.COUNT,
+                of=nxd_decisions.field("decision_id"),
+                name="decision_count",
+            ),
+        ),
+    }
+)
+```
+
+3. `.promise(nxd_decisions)` and `.model(nxd_decisions_metrics)` in `spec.py`,
+   and add `"nxd_decisions"` to `BASE_MODELS` in the transform. It flows
+   through the same dlt reader loop as every other base model — no special
+   casing anywhere.
+
+The name is reserved. If a source file would snake_case to `nxd_decisions`,
+that is the naming collision the Step-1 ambiguity rule already covers: stop and
+surface it rather than silently overwriting one with the other.
 
 ## Rulings you must NOT propose
 
@@ -207,9 +313,11 @@ one input was missing.
    keep amounts in their **source currency**, and keep `currency` as a dimension
    on the derived model so no aggregate can silently mix units. A per-currency
    answer is honest; a single blended number built on an invented rate is not.
-3. **Surface it as BLOCKED in `DECISIONS.md`** — a status distinct from
-   PROPOSED. Name exactly the datum needed (which currencies, over what date
-   range, at what precision) and which questions are limited until it arrives.
+3. **Surface it as a `blocked` row in the [decisions model](#the-decisions-model)**
+   — a status distinct from `proposed`. Name exactly the datum needed (which
+   currencies, over what date range, at what precision) and which questions are
+   limited until it arrives. This row is the *only* model the refused ruling
+   produces: there is no `fx_rates` table, because there are no rates.
 4. **Make the limitation travel.** State in the handoff that every
    cross-currency answer is per-currency until rates are supplied — the caveat
    belongs with every number it touches, not filed once in a doc nobody reopens.
@@ -218,11 +326,13 @@ one input was missing.
 
 A worked contrast on the same closure: the merchant→category ruling is
 **PROPOSED** — landed as `merchant_categories`, uncovered merchants routed to
-`needs_review`, recorded in `DECISIONS.md`, and the derived model carries a
-`category` dimension. The FX ruling on that same closure is **BLOCKED** — no
-`fx_rates` model, amounts stay in USD/GBP/EUR, `currency` is a dimension, and
-`DECISIONS.md` names the missing rates as the reason "total opex" is reported
-per currency rather than as one figure.
+`needs_review`, carried as an `nxd_decisions` row with `status = proposed`, and
+the derived model carries a `category` dimension. The FX ruling on that same
+closure is **BLOCKED** — no `fx_rates` model, amounts stay in USD/GBP/EUR,
+`currency` is a dimension, and an `nxd_decisions` row with `status = blocked`
+names the missing rates as the reason "total opex" is reported per currency
+rather than as one figure. Both rulings live in the same queryable ledger; only
+their `status` differs.
 
 ## Confirm the plan before authoring
 

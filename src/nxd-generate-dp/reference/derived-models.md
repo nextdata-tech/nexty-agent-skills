@@ -7,6 +7,7 @@ clauses live in SKILL.md; this file is the shape they produce.
 
 - [The source-checkout shim](#the-source-checkout-shim)
 - [`models.py`: base and derived side by side](#modelspy-base-and-derived-side-by-side)
+- [Naming the ruling on the dimension it created](#naming-the-ruling-on-the-dimension-it-created)
 - [The resource template](#the-resource-template)
 - [Reading the sources yourself](#reading-the-sources-yourself)
 - [Flat dicts, and why](#flat-dicts-and-why)
@@ -117,6 +118,53 @@ _output = (
 
 A derived model that keeps its source key (a dedupe) declares that source
 column as `primary_key()` — only a regrain introduces a synthetic composite.
+
+## Naming the ruling on the dimension it created
+
+A derived column that exists because of a **ruling** — a classification, a
+reclassification, an exclusion — must say so in `description=`. This is not
+documentation polish. `describe_models` is the entire surface a later consumer
+sees: a `category` dimension with no description looks like it came from the
+source, and the ruling behind it becomes invisible exactly when someone is
+about to trust a number built on it.
+
+```python
+# DERIVED — classification. `category` exists ONLY because of the confirmed
+# merchant_categories ruling; the source carries no such column.
+classified_spend = semantic_model("classified_spend").schema(
+    {
+        "transaction_id": field(number(), primary_key()),
+        "merchant": field(string(), dimension(name="merchant")),
+        "category": field(
+            string(),
+            dimension(
+                name="category",
+                description=(
+                    "COGS/opex classification from the confirmed "
+                    "merchant_categories mapping. Merchants the mapping does "
+                    "not cover land in 'needs_review', not in a real category."
+                ),
+            ),
+        ),
+        "amount": number(),
+    }
+)
+```
+
+Two rules the example encodes:
+
+- **State the basis, not just the meaning.** "Category of the transaction" is
+  useless; naming the mapping tells the reader the number is only as good as
+  that ruling — and where to go to correct it.
+- **Name the review bucket in the description.** A consumer who groups by
+  `category` and sees `needs_review` must be able to learn what it means from
+  the catalog alone. The bucket is the honest edge of the classification;
+  hiding it in transform code is how an unmapped merchant silently becomes a
+  rounding error in someone's total.
+
+The same applies to a dimension whose values were **narrowed** by a ruling
+(rows reclassified or excluded upstream): say what was excluded and why, since
+the default read of the measure now silently reflects that decision.
 
 ## The resource template
 
