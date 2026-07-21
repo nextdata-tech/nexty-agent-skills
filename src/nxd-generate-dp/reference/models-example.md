@@ -1,6 +1,6 @@
 # `models.py` worked example
 
-Matches the proven closure referenced by `SKILL.md` Step 2 — a full
+Matches the proven closure referenced by `SKILL.md` Step 3 — a full
 `models.py` showing base models with placed roles plus one semantic view with
 a metric. Use it as the concrete shape to match; do not deviate from the
 `primary_key()` / `dimension(...)` / `join(...)` / `metric_field(metric(...))`

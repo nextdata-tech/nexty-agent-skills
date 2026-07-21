@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.13.0
+  version: 0.13.1
 ---
 
 # nxd-pocket-loop skill
@@ -150,19 +150,22 @@ you produce with that source's label:
   truncated, or missing merely because the chat renderer visually wraps the
   prompt. Ask only when the supplied table itself has a real structural
   ambiguity, such as a row with a different field count or an unparseable value.
-- **Database connection:** record the host/port/database/schema and the
-  table(s)/view(s) explicitly named by the user, plus how credentials will
-  reach the supervisor at boot — an existing environment variable or secret
-  store name the user points to, or a value they explicitly choose to supply
-  now. Never invent a table name or fabricate a credential, and never persist
-  a raw credential into narration or a committed file — pass it through
-  exactly as supplied (see nxd-generate-dp's `reference/database-source.md`,
-  and `reference/multi-source.md` for the labeled-instance shape).
+- **Database connection:** record the host/port/database/schema, the
+  table(s)/view(s) explicitly named by the user, and the live credentials
+  (user/password) the user supplies now — nxd-generate-dp writes them into
+  the generated `infra-profile.yaml`'s `db-source` service `attributes` (see
+  its `reference/database-source.md`, and `reference/multi-source.md` for the
+  labeled-instance shape). Never invent a table name or fabricate a
+  credential, and never narrate a live credential in chat — it goes into
+  `infra-profile.yaml` and nowhere else.
 - **REST API:** record the base URL, auth scheme, the endpoint(s)/resource(s)
-  in scope, a sample response shape if available, and any known pagination.
-  Same credential rule as the database case — describe, never fabricate or
-  persist raw secret values (see nxd-generate-dp's `reference/api-source.md`,
-  and `reference/multi-source.md` for the labeled-instance shape).
+  in scope, a sample response shape if available, any known pagination, and
+  the live token/key/credentials if the API requires auth — nxd-generate-dp
+  writes them into the generated `infra-profile.yaml`'s `api-source` service
+  `attributes` (see its `reference/api-source.md`, and
+  `reference/multi-source.md` for the labeled-instance shape). Same rule as
+  the database case: never fabricate a credential, never narrate a live one
+  in chat.
 - **Host path handoff:** pass `build_data_product` only the host-visible,
   absolute output path explicitly returned or exposed by the file-writing tool.
   Never derive a definition path from an opaque attachment ID, a tool-internal
@@ -283,9 +286,14 @@ indefinitely or give up silently.
   export may contain only an exact copy kept separate from the supplied
   source. For a live database or REST API source, treat access as
   **read-only**: never write to the source, never fabricate a table/endpoint
-  the user didn't name, and never invent, persist, or narrate a raw
-  credential — pass it through exactly as supplied, the same discipline as
-  the bearer-token invariant below.
+  the user didn't name, and never invent or narrate a raw credential. A real
+  credential is written exactly once — into the generated `infra-profile.yaml`
+  connector service's `attributes` (nxd-generate-dp's job) — never anywhere
+  else, and never into chat narration. This differs from the bearer-token
+  invariant below, which is never written to any file at all. Once a
+  credential is written there, **the closure directory itself is sensitive**
+  — don't commit it, zip it, attach it to a ticket/chat, or reuse it as a
+  template for a different source without clearing the old credential first.
 - **Label every source once there are 2+.** A single-source data product
   needs no label. With multiple sources, each gets a short, distinct label
   used consistently across materialization, inference, and generation; never

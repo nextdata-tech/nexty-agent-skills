@@ -48,27 +48,50 @@ version-pinned documentation.
 
 ## Credential handling — read this before shipping
 
-Same constraint as the database connector: for CSV the committed connector
+Same mechanism as the database connector: for CSV the committed connector
 config is a non-secret path; for a REST API it necessarily includes a real
-credential (bearer token, API key, or OAuth client secret). This repo does
-not document how the desktop supervisor's `generic-secrets` driver resolves
-that value at boot.
+credential (bearer token, API key, or OAuth client secret). That value is
+delivered by writing it into the `api-source` service's `attributes` in
+`infra-profile.yaml` — the desktop supervisor's `generic-secrets` driver
+reads it from there and exposes it to the transform as `secrets["api_source"]`.
 
 - The companion file `api-source-endpoints` holds **only non-secret
   topology** — one line per model, `<model>=<endpoint path>`.
-- The actual `base_url` + `auth` (and thus the live token/key) is delivered
-  via `secrets["api_source"]` at transform run time. **Never write the live
-  token into any file inside the closure directory**, never persist it in
-  narration, never fabricate one.
-- Confirm the real secret-delivery mechanism with whoever owns the
-  supervisor's `generic-secrets` driver before relying on this path for an
-  API needing a real credential.
+- The `api-source` service's `attributes` list carries the live payload as
+  **one entry per property**, each shaped `{"key": <property>, "value":
+  <live value>, "public": false}` — never one attribute holding a nested
+  object. `base_url` is always present. Add an `auth` attribute too only
+  when the API requires authentication — its absence means
+  `secrets["api_source"]` has no `"auth"` key, not an empty one. See the
+  worked example below and the conditional `client_config` construction in
+  the transform diff.
+- **`value` is always a plain string** on the transform side — dlt/Python
+  types (ints, bools) are not preserved; cast in the transform if needed.
+- **Set `public: false` on every attribute here.** The supervisor drops any
+  attribute *not* marked `public: false` before it reaches template-render
+  contexts — that's the actual credential boundary, not the closure
+  directory. Don't rely on the default; it's inconsistent across call sites
+  in the supervisor.
+- **Never fabricate a credential the user hasn't supplied**, and never
+  narrate a live token/key in chat — enter it into `infra-profile.yaml`
+  exactly as the user gave it, nowhere else.
+- **The closure directory itself now holds a live credential in plaintext**
+  — `public: false` only controls template-render exposure inside the
+  supervisor, it does not make `infra-profile.yaml` safe to commit, zip, or
+  hand off. Treat the whole closure directory as sensitive once this file
+  carries a real token/key: don't commit it to a shared repo, don't attach
+  it to a ticket or chat, and don't reuse it as a template for a different
+  API without clearing the old credential first.
+- This shape (`key`/`value`/`public`) is verified against the supervisor's
+  `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
+  `SecretsHandler` construction — not inferred from a single example.
 
 ## Naming
 
 - Infra-profile service: `api-source`, driver `nxd:generic-secrets:1.0.0`.
 - Transform secrets key: `secrets["api_source"]` — a dict with `base_url`
-  and `auth` (the auth type plus its live token/key/credentials).
+  (always present) and `auth` (the auth type plus its live token/key/
+  credentials — present only when the API requires authentication).
 - Companion file: `api-source-endpoints` — one line per model,
   `<model>=<endpoint path>` (non-secret topology only).
 
@@ -87,11 +110,15 @@ template. Only the ingestion body changes:
 ```python
 from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig
 
-api_secrets = secrets["api_source"]  # dict: base_url, auth
+api_secrets = secrets["api_source"]  # dict: base_url (always), auth (only if the API needs it)
 endpoint_map = _load_api_source_endpoints()  # parses the api-source-endpoints companion file
 
+client_config = {"base_url": api_secrets["base_url"]}
+if "auth" in api_secrets:
+    client_config["auth"] = api_secrets["auth"]
+
 config: RESTAPIConfig = {
-    "client": {"base_url": api_secrets["base_url"], "auth": api_secrets["auth"]},
+    "client": client_config,
     "resources": [
         {"name": model, "endpoint": {"path": endpoint_map[model]}}
         for model in PHYSICAL_MODELS
@@ -128,10 +155,38 @@ add it explicitly rather than assuming it's already covered.
   `.port("duckdb", ...)`, no `.semantic_tools()`) is identical to the CSV
   template.
 - `infra-profile.yaml`: third service named `api-source` (same driver
-  `nxd:generic-secrets:1.0.0`, same `attributes: []`). **No `data/`
-  directory, no path file** — `api-source-endpoints` is the only companion
-  artifact. For 2+ API sources, add one labeled service per instance instead
-  — see `reference/multi-source.md`.
+  `nxd:generic-secrets:1.0.0`), with its `attributes` populated with the
+  live payload. No-auth example (a public API needing only a base URL):
+
+  ```yaml
+    - name: api-source
+      driver: nxd:generic-secrets:1.0.0
+      attributes:
+        - key: base_url
+          value: https://aidevboard.com/api/v1
+          public: false
+  ```
+
+  When the API needs authentication, add the `auth` attribute alongside
+  `base_url` — never nest `base_url`/`auth` under a single attribute's
+  value:
+
+  ```yaml
+    - name: api-source
+      driver: nxd:generic-secrets:1.0.0
+      attributes:
+        - key: base_url
+          value: https://aidevboard.com/api/v1
+          public: false
+        - key: auth
+          value: <the live token/key/credentials the user supplied>
+          public: false
+  ```
+
+  **No `data/` directory, no path file** — `api-source-endpoints` is the
+  only companion artifact, and it stays non-secret topology only. For 2+ API
+  sources, add one labeled service per instance instead (`api-source-<label>`
+  / `secrets["api_source_<label>"]`) — see `reference/multi-source.md`.
 
 ## Self-check (connectivity smoke test)
 

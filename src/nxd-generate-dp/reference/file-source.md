@@ -67,7 +67,7 @@ pattern (each labeled instance also gets its own root, `data-<label>/`).
 
 ## `transform/main.py` diff from the CSV template
 
-Same skeleton as `SKILL.md` Step 3's CSV template — same `duckdb` param
+Same skeleton as `SKILL.md` Step 4's CSV template — same `duckdb` param
 typed `DuckDbOutput`, same `PHYSICAL_MODELS` discipline, same read-back
 assert, same `write_disposition="replace"`, same `.transform-complete`
 touch. Only the source-root secrets key and the reader construction change:
@@ -113,7 +113,11 @@ float the version.
   (`.promise`, `.model`, `.port("duckdb", ...)`, no `.semantic_tools()`) is
   identical to the CSV template.
 - `infra-profile.yaml`: the third service is named `file-source` (same
-  driver `nxd:generic-secrets:1.0.0`, same `attributes: []`). For 2+ file
+  driver `nxd:generic-secrets:1.0.0`). Like `csv-source`, it has nothing
+  secret to deliver — the export root is non-secret topology, covered by
+  `file-source-path` — so `attributes` stays `[]`, unlike `db-source` /
+  `api-source` which populate it with a live credential (see
+  `reference/database-source.md` / `reference/api-source.md`). For 2+ file
   sources, add one labeled service per instance instead — see
   `reference/multi-source.md`.
 

@@ -107,3 +107,14 @@ Record: [`records/2026-07-20-nxd-pocket-loop-nxd-generate-dp-multi-source-type-c
 Notes: Added an opt-in source-label naming scheme (reference/multi-source.md) so nxd-generate-dp can uniquely name infra-profile service/secrets/companion entries when a closure needs 2+ sources of the same or mixed connector types, avoiding a same-type name collision. Lifted nxd-pocket-loop's prior single-source-only restriction so its Step 1 gathers and labels multiple sources when needed. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched -- this eval only exercises that unchanged path; a new eval scenario exercising the labeled multi-source path is real follow-up work, not built here. pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
 
 Record: [`records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json`](records/2026-07-20-nxd-generate-dp-nxd-pocket-loop-uniquely-named-infra-profile.json)
+
+## 2026-07-21 — nxd-generate-dp + nxd-pocket-loop: fix credential-attributes shape (name→key, public:false), Workflow step reorder, review cleanup (plugin v0.13.1)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.13.0 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 6152 | 0.69 | sonnet |
+| after-v0.13.1 | current_pack | generate-runnable-dp-from-intent | PASS | 9/9 | 20 | 18 | 9028 | 0.71 | sonnet |
+
+Notes: Code-review pass on the multi-source-connector work: fixed a real bug in api-source.md's no-auth worked example (crashed against its own transform template), corrected the infra-profile.yaml attributes field name (name->key per the supervisor's actual KeyValuePairWithPublic schema) and added the required public:false, reordered nxd-generate-dp's Workflow so infra-profile.yaml is authored before models.py, added closure-directory credential warnings, and removed doc duplication/stale cross-references. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched by any of these fixes -- this eval only exercises that unchanged path; the fixed db-source/api-source attribute shape has no eval scenario yet (real follow-up work). pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
+
+Record: [`records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-fix-credential-attributes-sh.json`](records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-fix-credential-attributes-sh.json)

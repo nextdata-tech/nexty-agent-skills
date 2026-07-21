@@ -46,24 +46,40 @@ table name and the model name never need to match.
 
 For CSV, the committed "connector config" is just a non-secret path. For a
 database connector it necessarily includes a real credential (host, user,
-password). **This repo does not yet document how the desktop supervisor's
-`generic-secrets` driver resolves a secret value at boot** — whether it's an
-env-var indirection, a keychain lookup, or a value supplied directly to
-`build_data_product` and never written to disk.
-
-Until that's confirmed against the actual supervisor implementation, treat
-this as the design constraint and the biggest open risk in this connector
-type:
+password). That value is delivered by writing it into the `db-source`
+service's `attributes` in `infra-profile.yaml` — the desktop supervisor's
+`generic-secrets` driver reads it from there and exposes it to the transform
+as `secrets["db_source"]`.
 
 - The companion file `db-source-tables` holds **only non-secret topology** —
   one line per model, `<model>=<schema-qualified source table name>`.
-- The actual connection secret (host/port/user/password) is delivered via
-  `secrets["db_source"]` at transform run time. **Never write a raw
-  password into any file inside the closure directory**, never persist it
-  in narration, and never fabricate one if the user hasn't supplied it.
-- Confirm the real secret-delivery mechanism with whoever owns the
-  supervisor's `generic-secrets` driver before relying on this path for a
-  database holding real credentials.
+- The `db-source` service's `attributes` list carries the live payload as
+  **one entry per connection field**, each shaped `{"key": <field>, "value":
+  <live value>, "public": false}` — `host`, `port`, `database`, `schema`,
+  `user`, `password` — never one attribute holding a nested object. Together
+  they match exactly what `secrets["db_source"]` hands the transform as a
+  dict. See the worked example below.
+- **`value` is always a plain string** on the transform side — `port` arrives
+  as `"5432"`, not `5432`; cast in `_build_connection_string` if the
+  dialect's connection-string/DSN builder needs an int.
+- **Set `public: false` on every attribute here.** The supervisor drops any
+  attribute *not* marked `public: false` before it reaches template-render
+  contexts — that's the actual credential boundary, not the closure
+  directory. Don't rely on the default; it's inconsistent across call sites
+  in the supervisor.
+- **Never fabricate a credential the user hasn't supplied**, and never
+  narrate a raw password in chat — enter it into `infra-profile.yaml` exactly
+  as the user gave it, nowhere else.
+- **The closure directory itself now holds a live credential in plaintext**
+  — `public: false` only controls template-render exposure inside the
+  supervisor, it does not make `infra-profile.yaml` safe to commit, zip, or
+  hand off. Treat the whole closure directory as sensitive once this file
+  carries a real password: don't commit it to a shared repo, don't attach it
+  to a ticket or chat, and don't reuse it as a template for a different
+  database without clearing the old credential first.
+- This shape (`key`/`value`/`public`) is verified against the supervisor's
+  `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
+  `SecretsHandler` construction — not inferred from a single example.
 
 ## Naming
 
@@ -129,10 +145,37 @@ Postgres, `pymysql` for MySQL. Never install both speculatively.
   `.port("duckdb", ...)`, no `.semantic_tools()`) is identical to the CSV
   template.
 - `infra-profile.yaml`: third service named `db-source` (same driver
-  `nxd:generic-secrets:1.0.0`, same `attributes: []`). **No `data/`
-  directory, no path file** — `db-source-tables` is the only companion
-  artifact. For 2+ database sources, add one labeled service per instance
-  instead — see `reference/multi-source.md`.
+  `nxd:generic-secrets:1.0.0`), with its `attributes` populated with the
+  live connection credentials:
+
+  ```yaml
+    - name: db-source
+      driver: nxd:generic-secrets:1.0.0
+      attributes:
+        - key: host
+          value: <live host>
+          public: false
+        - key: port
+          value: <live port>
+          public: false
+        - key: database
+          value: <live database>
+          public: false
+        - key: schema
+          value: <live schema>
+          public: false
+        - key: user
+          value: <live user>
+          public: false
+        - key: password
+          value: <the live password the user supplied>
+          public: false
+  ```
+
+  **No `data/` directory, no path file** — `db-source-tables` is the only
+  companion artifact, and it stays non-secret topology only. For 2+ database
+  sources, add one labeled service per instance instead (`db-source-<label>`
+  / `secrets["db_source_<label>"]`) — see `reference/multi-source.md`.
 
 ## Self-check (connectivity smoke test)
 

@@ -31,6 +31,12 @@ clarity.
 
 ## Naming table
 
+The "(unchanged)" rows restate SKILL.md's canonical connector-types table
+deliberately — each sits next to its labeled counterpart so the rename
+pattern (`<name>` → `<name>-<label>`) reads in one glance. SKILL.md's table
+stays the source of truth for the unlabeled names themselves; a rename there
+must be mirrored here.
+
 | Case | Service | `secrets[...]` key | Companion artifact | `spec.py` var |
 |---|---|---|---|---|
 | One database (unchanged) | `db-source` | `db_source` | `db-source-tables` | `_db` |
@@ -42,8 +48,16 @@ clarity.
 | One CSV (unchanged) | `csv-source` | `csv_source` | `csv-source-path` | `_csv` |
 | 2+ CSVs, labeled | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
 
-The driver id (`nxd:generic-secrets:1.0.0`) and `attributes: []` never
-change — only the name.
+The driver id (`nxd:generic-secrets:1.0.0`) never changes — only the name.
+`attributes` follows the single-instance rule per type: `[]` for
+`csv-source-<label>` / `file-source-<label>` (nothing secret to carry — see
+`reference/file-source.md`); for `db-source-<label>` / `api-source-<label>`,
+one flat `{"key": <property>, "value": <live value>, "public": false}`
+attribute per connection field — the label lives on the *service* name
+(`db-source-orders`), not on the attribute keys, which stay the plain
+property names (`host`, `port`, ...) within each labeled service — see
+`reference/database-source.md` / `reference/api-source.md` for the exact
+per-property list and why `public: false` is required on each one.
 
 ## Worked example: two database sources
 
@@ -65,10 +79,32 @@ spec:
       attributes: []
     - name: db-source-orders
       driver: nxd:generic-secrets:1.0.0
-      attributes: []
+      attributes:
+        - key: host
+          value: <live host>
+          public: false
+        - key: port
+          value: <live port>
+          public: false
+        - key: database
+          value: <live database>
+          public: false
+        - key: schema
+          value: <live schema>
+          public: false
+        - key: user
+          value: <live user>
+          public: false
+        - key: password
+          value: <the live password the user supplied>
+          public: false
     - name: db-source-users
       driver: nxd:generic-secrets:1.0.0
-      attributes: []
+      # Same six attributes as db-source-orders above (host/port/database/
+      # schema/user/password, each `public: false`) — its own live values,
+      # not shared with db-source-orders. See reference/database-source.md
+      # for the canonical per-field list.
+      attributes: [...]
 ```
 
 `spec.py` binds one variable per instance and passes both through
