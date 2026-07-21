@@ -284,8 +284,9 @@ Contract facts baked into that template — keep every one:
 - The read-back-and-assert block and the `.transform-complete` touch are
   MANDATORY, not decoration: the first enforces the naming invariant, the
   second is what the supervisor's readiness gate polls.
-- **Other connector types**: only `file-source` changes the `readers=[...]`
-  body/`secrets[...]` key — a materialized database/API source is plain CSV.
+
+**Other connector types**: only `file-source` changes the `readers=[...]`
+body and `secrets[...]` key — a materialized database/API source is plain CSV here.
 
 ### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
 
@@ -356,9 +357,10 @@ Contract facts baked into this shape — keep every one:
   `.semantic_tools()` emits a kernel RPC port that needs a live RPC driver — a
   k8s-topology artifact with no local RPC driver on desktop. Adding it here is
   wrong: it wires a port nothing serves. Leave it out.
-- **Other connector types**: only the variable name/service path change
-  (table above); `.secrets([...])` takes one labeled variable per 2+
-  instances of a type (Step 5 covers the labeling scheme).
+
+**Other connector types**: only the variable name and its service path
+(connector-types table above) change; for 2+ of one type, `.secrets([...])`
+takes one labeled variable per instance — see `reference/multi-source.md`.
 
 ### Step 5 — `infra-profile.yaml`: the desktop-local profile (emitted prerequisite)
 
@@ -396,9 +398,12 @@ line, the **relative** path from the closure root to the CSV export root
 (e.g. `data`; an absolute path escapes the pinned snapshot and fails) — into
 `secrets[...]`. It has no live-credential mode, so a database/API connection
 is never configured through it; materialize those to CSV first instead
-(`reference/database-source.md` / `reference/api-source.md`). Only
-`file-source` changes the third service's *name*; for 2+ of one type, add
-one labeled service per instance — see `reference/multi-source.md`.
+(`reference/database-source.md` / `reference/api-source.md`).
+
+**Other connector types**: only `file-source` changes the third service's
+*name*; a materialized database/API source uses this exact `csv-source` shape,
+never its own service. For 2+ of one type, add one service per instance —
+see `reference/multi-source.md`.
 
 > The supervisor compiles `deployment-spec.yaml`, `manifest.yaml`, and
 > `models.yaml` from `spec.py` + `models.py` at pin time — including the
@@ -417,9 +422,10 @@ pandas==2.3.3
 `dlt[duckdb]==1.28.2` + `duckdb==1.5.4` are the pins proven against the S0
 supervisor — do not float them. `pandas` is required by dlt's `read_csv`
 transformer. Python `>=3.12,<3.13` is the proven interpreter range.
-`file-source` adds to these pins, never replaces them (see
-`reference/file-source.md` for the Parquet extra); a materialized
-database/API source adds nothing here — its deps are one-off tooling.
+
+**`file-source` adds to these pins, never replaces them** — see
+`reference/file-source.md` for the Parquet extra. A materialized database/API
+source adds nothing here — its deps are one-off materialization tooling.
 
 ### Step 7 — Self-check before handing off (MANDATORY)
 
@@ -467,7 +473,8 @@ print("SELF-CHECK OK")
 If the read-back assert in the transform fires, or an unquoted
 `main.<name>` query fails, a name diverged somewhere — fix the NAME (across
 `models.py`, `.promise`, and `data/<name>/`), never quote your way around it.
-A materialized database/API source is plain CSV by now — run the same
+
+**A materialized database/API source is plain CSV by now** — run the same
 self-check as CSV, above; no separate connectivity check applies.
 
 ---

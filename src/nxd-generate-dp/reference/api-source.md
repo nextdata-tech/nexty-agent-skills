@@ -47,8 +47,6 @@ for model, endpoint in endpoint_map.items():  # e.g. {"orders": "/v1/orders"}
         payload = resp.json()
         rows.extend(payload["data"])          # adjust to the actual response shape
         url = payload.get("next_page_url")    # or None if unpaginated
-    if not rows:
-        raise RuntimeError(f"{model}: endpoint returned zero rows; cannot materialize an empty resource")
     out_dir = Path("data") / model  # data-<label>/ if labeled — see multi-source.md
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / f"{model}.csv", "w", newline="") as f:
