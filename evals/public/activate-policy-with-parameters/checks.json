@@ -1,0 +1,53 @@
+{
+  "name": "Activate a Parameters-Driven Sensitivity Policy (register contract, then activate)",
+  "skills": [
+    "nxd-adding-policy",
+    "nxd-policies"
+  ],
+  "_workspace_files_note": "run.py copies each CHILD of fixtures/ to the workspace ROOT, so the staged fixture tree lands at data_product/... with no `fixtures` path component \u2014 the harness's _STAGED_INPUT_DIRS skip does NOT fire for this scenario. Never point a recursive wildcard (**/*.sh, **/*.json) at the workspace here: it would quote staged fixtures to the judge as the agent's own output. These patterns are anchored to the four placements that actually resolve (workspace root, data_product/, data_product/policies/, data_product/contracts/) and are extension-scoped so no staged .py/.md fixture can match.",
+  "workspace_files": [
+    "activate-policy.sh",
+    "*.json",
+    "*.yaml",
+    "data_product/activate-policy.sh",
+    "data_product/*.json",
+    "data_product/*.yaml",
+    "data_product/policies/*.json",
+    "data_product/policies/*.yaml",
+    "data_product/contracts/*.json",
+    "data_product/contracts/*.yaml"
+  ],
+  "checks": [
+    {
+      "id": "registers-contract-before-activating",
+      "check": "The quoted command sequence registers the contract with `nxd create contract` (--name profile-sensitivity, --code resolving to contracts/sensitivity_rules.py or the contracts directory), and that command appears BEFORE the `nxd activate policy` command referencing it. Activating first, or omitting registration on the assumption that activation uploads the contract code, fails this check."
+    },
+    {
+      "id": "no-stale-runbook-activation-forms",
+      "check": "The `nxd activate policy` command uses neither stale form from policies/README-runbook.md: it does not pass a `--create-contract` flag, and it passes `--policy SensitivityCompliance` as a bare type name rather than the namespace-qualified `--policy user/SensitivityCompliance`."
+    },
+    {
+      "id": "no-raw-contract-path-on-activate",
+      "check": "No flag on the `nxd activate policy` command points at the RAW contracts/sensitivity_rules.py file path \u2014 the stale runbook's `--validation-url ./contracts/sensitivity_rules.py` form. The contract is referenced by its registered name (profile-sensitivity), whether via --parameters-file or --validation-url, not by file path. Referencing the registered contract by name with --validation-url does NOT fail this check; only a raw .py path does."
+    },
+    {
+      "id": "parameters-minimum-classification-derived",
+      "check": "In the quoted parameters file, `minimum_classification` is the string \"restricted\", matching the classification value carried by the restricted attributes in models.py. Grade this from the quoted file, which is the complete text."
+    },
+    {
+      "id": "parameters-handling-tags-derived",
+      "check": "In the quoted parameters file, `approved_handling_tags` is a JSON array whose values are drawn from the handling tags actually carried by restricted-classification attributes in models.py \u2014 \"tokenized\" (email) and \"masked\" (full_name, phone_number). Any value not appearing on a restricted attribute in models.py \u2014 an invented tag such as \"encrypted\" or \"redacted\", or the \"none\" tag that appears only on the internal-classification postal_code \u2014 fails this check. Grade this from the quoted file, which is the complete text."
+    },
+    {
+      "id": "namespace-user",
+      "check": "The activate command passes `--namespace user`, overriding the help-documented default of \"nextdata\", because the contract is user-authored rather than a built-in nextdata policy."
+    },
+    {
+      "id": "verifies-after-activation",
+      "check": "The quoted activate-policy.sh contains, after the activate command, a verification step that lists policies for customer-profiles-curated in the prod environment. Any `nxd ls policies` invocation scoped to that data product and environment passes regardless of exact flag spelling (--dp / --data-product / --name are all acceptable). The stale runbook's `nxd ls data-product policies --name ...` subcommand form fails this check."
+    }
+  ],
+  "_fixture_note": "fixtures/data_product/contracts/sensitivity_rules.py uses an INVENTED contract API (nxd.policy PolicyContext/PolicyResult/@contract). The real policy SDK lives in the external nextdata-tech/nxd-policy-sdk and was not verified against. This is deliberate and inert: no check grades that API. The contract file exists only so the agent has a --code target to register and two parameter keys to derive, both of which the skill actually teaches (steps 5-6). Do NOT add a check asserting on the contract's code shape without first verifying it against the real SDK -- that would gate future PRs against a fiction, which is worse than no coverage because it looks like coverage.",
+  "_trim_note": "Trimmed 13 -> 8 after a no_skills run (report: noskills-activate-policy.json) in which a skill-less agent passed 11 of 13. Cut five checks the prompt or fixtures make free: the prompt states 'prod', 'must block', and the data-product name verbatim, so grading them measured transcription, not skill. Merged two contract-registration checks into one ordered claim and folded the stale namespace-qualified policy form into the stale-flag check, since each pair grades a single behaviour and split checks flip at the union of their rates. Split no-validation-url-or-raw-py-path, which bundled a flag prohibition with a path prohibition. KEPT every check guarding a stale-runbook trap even where the no_skills agent happened to pass it: one observation is not evidence a trap guard is dead, and deleting one is how a scenario silently stops gating. The two checks that actually caught the skill-less agent (--validation-url, unscoped verify) are both retained.",
+  "_review_fix_note": "Dropped no-validation-url-flag on review (PR #93): it forbade --validation-url outright, but nxd-policies/SKILL.md:166 states --validation-url always references the contract, and this scenario registers a named contract, so an agent linking it by name is skill-consistent and must not be failed. The real stale-runbook defect is a raw .py path, which no-raw-contract-path-on-activate catches; that check was widened to say referencing the contract by name is fine."
+}

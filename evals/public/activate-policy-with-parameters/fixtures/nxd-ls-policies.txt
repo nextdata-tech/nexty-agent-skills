@@ -1,0 +1,4 @@
+ID    POLICY                    NAME                     CONSEQUENCE   DP ACTIVATION ID
+118   DataQualityCompliance     require-output-quality   STOP          4471
+
+1 policy.

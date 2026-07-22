@@ -1,0 +1,26 @@
+$ nxd --config /tmp/nxd-acme-prod.yaml activate policy --help
+
+Activate (or re-activate) a computational policy on the selected mesh.
+
+Usage:
+  nxd activate policy [flags]
+
+Flags:
+      --config string           Path to the session mesh config
+      --consequence string      Action on violation: STOP | WARN  (default "STOP")
+      --env string              Environment to activate in (required)
+      --filter string           jq-style selector for matched data products
+  -h, --help                    Help for activate policy
+      --name string             Policy activation name (required)
+      --namespace string        Policy namespace: "nextdata" or "user"
+                                (default "nextdata")
+      --output-ports string     Which output ports must satisfy the policy:
+                                all | at-least-one  (default "at-least-one")
+      --parameters-file string  Path to a JSON parameters file for the policy.
+                                Resolved relative to the current working
+                                directory.
+      --policy string           Policy type. See `nxd ls policy-types`.
+      --promise-enforced        Tie the policy to the data product's enforced
+                                output promise(s)
+      --skip-version-check      Skip the client/server version compatibility check
+      --validation-url string   Name of the validation contract to enforce

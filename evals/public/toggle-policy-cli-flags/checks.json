@@ -1,0 +1,45 @@
+{
+  "name": "Toggle a Policy Off and Back On via the Public CLI (stale-flag trap)",
+  "skills": [
+    "nxd-policies"
+  ],
+  "workspace_files": [
+    "policy-toggle-runbook.md",
+    "**/policy-toggle-runbook.md"
+  ],
+  "checks": [
+    {
+      "id": "list-uses-dp-flag",
+      "check": "The runbook's policy-listing steps invoke `ls policies` with both `--dp shipment-events-curated` and `--env demo`, not the legacy wiki's `data-product policies --name ...` form."
+    },
+    {
+      "id": "flags-stale-list-form",
+      "check": "The runbook identifies the legacy wiki's `nxd data-product policies --name ...` listing form as outdated or not to be used, rather than presenting it as a command the engineer should run."
+    },
+    {
+      "id": "deactivate-omits-env",
+      "check": "The `deactivate policy` command the engineer is instructed to RUN does not pass `--env`. An occurrence of the `--env`-bearing form inside a section identifying stale or incorrect legacy guidance does not fail this check."
+    },
+    {
+      "id": "reactivate-matches-committed-config",
+      "check": "The reactivation command's flags match those committed in data_product/policies/create.sh: `--policy DataQualityCompliance`, `--validation-url shipment-events-output-quality`, `--output-ports at-least-one`, `--consequence STOP`, `--promise-enforced`, and a `--filter` selecting `.name == \"shipment-events-curated\"` (any equivalent shell quoting of that jq expression counts)."
+    },
+    {
+      "id": "targets-only-the-data-quality-policy",
+      "check": "The toggle targets the policy named `require-shipment-output-quality`. The SensitivityCompliance policy `mask-recipient-contact`, which also appears in the pasted ls output, is NOT deactivated or reactivated by the runbook."
+    },
+    {
+      "id": "contract-reused-not-recreated",
+      "check": "The reactivation path reuses the existing `shipment-events-output-quality` contract; the runbook does not instruct the engineer to run `create contract` as a prerequisite of reactivation."
+    },
+    {
+      "id": "verify-toggle-verify-ordering",
+      "check": "The runbook contains three separate ordered steps that each list policies, positioned before the deactivate step, between the deactivate and activate steps, and after the activate step. Grade by POSITION only \u2014 the command form is graded by list-uses-dp-flag, so do not re-fail it here. Three occurrences of the same command text at those three positions satisfy this check."
+    },
+    {
+      "id": "warns-redeploy-reapplies-policies",
+      "check": "The runbook warns that deploying or re-deploying the data product re-applies its declared policies and will therefore undo the manual deactivation, so the policy can come back without anyone running `activate`. Any phrasing conveying that is sufficient; the warning need not name the deploy-shipments pipeline, the merge-to-main trigger, or the walkthrough window."
+    }
+  ],
+  "_trim_note": "Trimmed 13 -> 8 after a no_skills run (report: noskills-other3.json) in which a skill-less agent scored 6/13. Four of the seven failures shared ONE root cause -- the agent used the stale `data-product policies --name` listing form -- so they were four views of one behaviour rather than four independent signals, and a cell needing all four flips at their union for no added discrimination. Folded list-includes-env into list-uses-dp-flag and rescoped verify-toggle-verify-ordering to grade POSITION only. Dropped reactivate-not-name-alone as strictly subsumed by reactivate-matches-committed-config (passing the latter guarantees the former). Cut three transcription checks whose values the prompt or session-context.md states verbatim. KEPT flags-stale-list-form, deactivate-omits-env, reactivate-matches-committed-config, contract-reused-not-recreated and warns-redeploy-reapplies-policies: these are the skill's non-obvious content and the reason the scenario discriminates. MEASUREMENT CAVEAT: a second no_skills run after the trim scored 8/8 PASS. The four checks that had failed (list-uses-dp-flag, flags-stale-list-form, deactivate-omits-env, reactivate-matches-committed-config) were all RETAINED and all flipped F->P on unchanged check text, with tool_calls 5->10 -- so the trim did not remove the discrimination, the skill-less agent simply solved it that run. Two observations, opposite outcomes: this scenario's no_skills difficulty is UNKNOWN, not 6/13. Do not baseline it until repeated runs give a rate. If it proves easy without the skill, the fixtures need a genuine trap rather than more checks."
+}

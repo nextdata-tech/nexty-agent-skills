@@ -1,0 +1,20 @@
+$ uv run --project evals/nxd_eval python -m nxd_eval report --log ./logs/logistics-demo-20260714-1102.eval
+
+# logistics-demo · variant=current_pack · agent=anthropic/claude-3-5-sonnet-latest
+# 24 questions × 4 epochs = 96 sample-epochs
+
+## overall
+- accuracy 87/96 = 90.6%
+- N_eff 66.2 of 96  (deff=1.45, icc=0.15, m=4.00)
+- reliability c=0 +0.906 · c=1 +0.750 · c=2 +0.594
+- pass^k 68.8%
+- governance P=91.0% · R=79.0%
+
+## by bucket
+- answer   75/80 = 93.8%   (N_eff=55.2)
+- clarify   9/12 = 75.0%   (N_eff=8.3)
+- abstain   3/4  = 75.0%   (N_eff=2.8)
+
+## notes
+- 24 questions were authored from 6 templates (4 dimension values each).
+- epochs=4, epochs_reducer='at_least'
