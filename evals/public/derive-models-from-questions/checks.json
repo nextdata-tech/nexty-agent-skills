@@ -1,0 +1,68 @@
+{
+  "name": "Derive the models the questions actually need",
+  "skills": [
+    "nxd-generate-dp"
+  ],
+  "checks": [
+    {
+      "id": "read-source-first",
+      "check": "Read data/transactions.csv and inspect the distinct values of kind, currency and merchant before authoring. The decisions this scenario turns on are visible only in the values, not the header."
+    },
+    {
+      "id": "python-only-closure",
+      "check": "Create spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, and a relative csv-source-path. Do not author deployment-spec.yaml, manifest.yaml, or models.yaml."
+    },
+    {
+      "id": "source-bytes-preserved",
+      "check": "data/transactions.csv is landed byte-for-byte. No row is edited, dropped, or re-signed in the source to make a derivation easier."
+    },
+    {
+      "id": "derived-model-exists",
+      "check": "DERIVED_MODELS is non-empty and PHYSICAL_MODELS == BASE_MODELS + DERIVED_MODELS. The three questions are not answerable from the raw rows: at minimum a month column, a signed spend measure, and a category column must be materialized."
+    },
+    {
+      "id": "refunds-netted",
+      "check": "CRITICAL. A refunded charge is not spend, so the landed spend measure must not count it as spend. Either shape is correct: retain refund rows carrying their negative amount so they net under signed summation (row count stays 324), or remove each refund and its matched charge. Judge the MEASURE, not the row count \u2014 a closure that keeps all 324 rows with signed amounts is correct. What fails is a closure whose spend total counts a refund as positive, e.g. one that stores or sums absolute values; its totals then match neither the netted nor the charges-only figure."
+    },
+    {
+      "id": "transfers-excluded",
+      "check": "Internal transfers are not expenses and must not land in any COGS or opex total. They may be retained as rows with a distinguishing column, but must be excluded from the spend measure."
+    },
+    {
+      "id": "monthly-grain",
+      "check": "A month column is materialized from txn_date. The semantic layer cannot express DATE_TRUNC at query time, so daily dates cannot answer a monthly question without a derived column."
+    },
+    {
+      "id": "fx-handling-disclosed",
+      "check": "The export carries USD, GBP and EUR, and no exchange rate exists anywhere in the data. Currency handling must be a DISCLOSED decision, either: (a) rates proposed, landed as their own queryable model (never hardcoded in transform code), applied, and recorded as an unconfirmed ruling in the closure's landed decisions ledger; or (b) no conversion \u2014 amounts stay in source currency with currency as a dimension, and the ledger records the missing rates as a blocker that travels with every cross-currency answer. Silently inventing a rate, in code or in data, fails. Refusing to convert without disclosing why also fails. The ledger is the landed `nxd_decisions` model the skill mandates, queryable like any other model \u2014 a prose file at the closure root does not satisfy this, and the skill forbids one."
+    },
+    {
+      "id": "category-ruling-landed",
+      "check": "The merchant-to-category ruling is landed as its own base model (a CSV under data/) and joined in the transform. It must NOT appear as a dict literal, if/elif chain, or any other constant embedded in transform code."
+    },
+    {
+      "id": "unclassified-visible",
+      "check": "Merchants the ruling does not cover land in an explicit bucket such as needs_review, never silently dropped and never defaulted into a real category. Question 3 must be answerable as a query over a dimension."
+    },
+    {
+      "id": "measure-reconciliation-assert",
+      "check": "The transform asserts, in memory and before pipeline.run, that the signed measure total of each derived model reconciles against the signed total read independently from the source CSV, with every intentional divergence itemized as a named term. This is the assert that catches the refunds-netted failure. An assert that restates the transform's own arithmetic does not count; it must re-read the source."
+    },
+    {
+      "id": "totality-assert",
+      "check": "The transform asserts every source row landed in exactly one category bucket, including the unclassified bucket."
+    },
+    {
+      "id": "key-uniqueness-assert",
+      "check": "Each derived model asserts its declared key is unique and non-null over the landed rows."
+    },
+    {
+      "id": "decisions-recorded",
+      "check": "Unconfirmed rulings are recorded as rows in the closure's landed `nxd_decisions` model (columns decision_id, status, ruling, applies_to, detail), not in a prose file \u2014 the skill explicitly forbids a DECISIONS.md. The merchant-to-category mapping is a classification over observed values, so it is landed and carries status=proposed. Currency is recorded either as proposed rates (if the closure chose to convert) or as status=blocked naming the absent rates and the questions limited until they arrive (if it declined). Either is acceptable; leaving the choice unrecorded is not. A closure with no rulings at all correctly emits no ledger."
+    },
+    {
+      "id": "no-client-side-arithmetic",
+      "check": "The closure does not defer any of the four rulings (netting, transfer exclusion, monthly regrain, classification) to the caller. Each is materialized as a column or row the transform writes."
+    }
+  ]
+}

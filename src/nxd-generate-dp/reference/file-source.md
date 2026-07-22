@@ -67,7 +67,7 @@ pattern (each labeled instance also gets its own root, `data-<label>/`).
 
 ## `transform/main.py` diff from the CSV template
 
-Same skeleton as `SKILL.md` Step 4's CSV template — same `duckdb` param
+Same skeleton as `SKILL.md` Step 3's CSV template — same `duckdb` param
 typed `DuckDbOutput`, same `PHYSICAL_MODELS` discipline, same read-back
 assert, same `write_disposition="replace"`, same `.transform-complete`
 touch. Only the source-root secrets key and the reader construction change:

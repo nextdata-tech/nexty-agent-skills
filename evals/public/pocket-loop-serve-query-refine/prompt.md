@@ -14,9 +14,11 @@ Use this exact loop:
 1. Inspect/profile the source and infer a question-driven semantic model with
    `nxd-semantic-data-product`.
 2. Generate a complete runnable local DuckDB + dlt closure with
-   `nxd-generate-dp`. The generated `models.yaml` must carry the per-attribute
-   `metadata.__nxd_semantic__` JSON-string blobs; the desktop child derives its
-   catalog from those blobs.
+   `nxd-generate-dp` — `spec.py`, `models.py`, `infra-profile.yaml`,
+   `transform/main.py`, `requirements.txt`, and the `data/` export. Do not
+   hand-write `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`; the
+   supervisor compiles those, including the semantic catalog, from `spec.py`
+   at serve time.
 3. Serve it with `nxd-desktop-supervisor serve --definition <dir> --workflow
    invoice-pulse --data-dir .pocket/state`. Require `published=yes`, then run
    `status` and `describe`. Keep the bearer out of narration and pass it only
