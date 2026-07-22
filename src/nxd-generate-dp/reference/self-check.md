@@ -2,14 +2,14 @@
 
 ## Contents
 
-- What the two phases are
+- What the phases are
 - What this script does NOT cover
 - The script
 - Reading a failure
 
-## What the two phases are
+## What the phases are
 
-The dry-run for Step 7 of nxd-generate-dp, in two phases:
+The dry-run for Step 7 of nxd-generate-dp, in three phases:
 
 - **Phase A — structural check of `models.py` and `spec.py`.** Parses both files
   with `ast` and checks them against the pinned DSL surface in
@@ -19,6 +19,12 @@ The dry-run for Step 7 of nxd-generate-dp, in two phases:
   `ModuleNotFoundError: No module named 'nxd'`.
 - **Phase B — dry-run of the transform** against a scratch DuckDB: the
   supervisor's execution minus the kernel.
+- **Phase C — context-completeness gate** (Step 6a). Checks that `CONTEXT.md`
+  exists at the closure root, and that no closure file references a
+  contract/design doc by a `../`-rooted path that escapes the closure. A closure
+  can be structurally valid and still be an insufficient handoff — a promised
+  derived model whose contract lives in an external doc the closure only points
+  at cannot be continued by a cold reader. Phase C is what catches that.
 
 One script, one command, one exit code. What to check and how to read a failure
 is in SKILL.md; this file is the runnable script.
@@ -387,11 +393,48 @@ con = duckdb.connect(out.path, read_only=True)
 for m in PHYSICAL_MODELS:  # unquoted main.<name> — the invariant, physically
     print(m, con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0])
 assert (run / ".transform-complete").exists()
-print(f"SELF-CHECK OK — transform dry-run EXECUTED; models.py/spec.py checked "
+print(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
       f"STRUCTURALLY against the pinned nxd v0.41.139 DSL surface (not "
       f"executed — no nxd wheel installable here); {len(unverified)} "
       f"unverified entries listed above. A spec fault only the real wheel or "
       f"the supervisor's spec compilation can raise still reaches handoff.")
+
+# ---------------------------------------------------------------- Phase C ---
+# Context-completeness gate (Step 6a). The closure must be a SUFFICIENT handoff:
+# CONTEXT.md present, and no closure file points at a contract/design doc OUTSIDE
+# the closure. A structurally valid closure can still be uncontinuable if the
+# rubric for a promised derived model lives in ../../some-doc.md.
+cerrors = []
+if not Path("CONTEXT.md").exists():
+    cerrors.append("CONTEXT.md is missing from the closure root — a cold reader "
+                   "cannot continue the work (intent, sample rule, inference "
+                   "caveats, deferred-model contract, reopen recipe). See "
+                   "reference/context-doc.md.")
+
+# Any closure file that references a design/contract doc by a path escaping the
+# closure (a ../-rooted markdown reference) is a dangling cross-boundary pointer.
+# Scan the human/author-facing text files, not data.
+ESCAPE = re.compile(r"\.\.(?:/[^\s\)\"']*)+\.md", re.IGNORECASE)
+scan = ["CONTEXT.md", "README.md", "spec.py", "models.py", "transform/main.py"]
+scan += [str(p) for p in Path(".").glob("contracts/*")]
+for rel in scan:
+    p = Path(rel)
+    if not p.exists():
+        continue
+    for m in ESCAPE.findall(p.read_text()):
+        cerrors.append(f"{rel}: references '{m}' — a contract/design path that "
+                       f"escapes the closure. Materialize it inside the closure "
+                       f"(CONTEXT.md / contracts/<name>.md / inert derived model), "
+                       f"never a ../ pointer.")
+
+if cerrors:
+    print("\nPHASE C FAILED — context-completeness gate:")
+    for e in cerrors:
+        print(f"  - {e}")
+    sys.exit(1)
+print("phase C ok — CONTEXT.md present, no closure-escaping contract references")
+print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
+      "C (context-completeness) all passed.")
 ```
 
 ## Reading a failure

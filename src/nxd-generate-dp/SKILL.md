@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.13.0
+  version: 0.14.0
 ---
 
 # nxd-generate-dp skill
@@ -59,6 +59,7 @@ The author emits **Python and prerequisite config only**:
 ├── transform/
 │   └── main.py            # the dlt-through-port ingest (standalone entrypoint)
 ├── requirements.txt       # proven pins (below)
+├── CONTEXT.md             # in-closure design/process record for cold handoff (Step 6a)
 ├── csv-source-path        # one line: relative path to the CSV export root
 └── data/                  # the connector export: data/<base_model>/*.csv
     └── <base_model>/…     # base models only — derived models have no data dir
@@ -389,6 +390,42 @@ connector types add to these pins, never replace them** — see `reference/` for
 the per-type additions (Parquet extra, `dlt[sql_database]` + one vendor driver,
 or none for REST API).
 
+### Step 6a — `CONTEXT.md`: the in-closure design/process record (MANDATORY)
+
+The closure carries a queryable data product but **not** the design and process
+context that makes the work continuable. A fresh session handed only the closure
+can reconstruct what a base model is and how to reopen it, but cannot continue to
+a promised-but-unbuilt derived model, cannot reproduce the row set, and cannot
+tell inference from stated fact — those rulings live nowhere in `spec.py` /
+`models.py` / the data. Emit **`CONTEXT.md` at the closure root**, always.
+
+It records: intent; the **population & sample-selection rule** (the exact,
+reproducible rule for which rows are in the source — and, if you sampled, what it
+excludes and whether any downstream model cares); **per-field inference
+caveats** (every field derived rather than a verbatim source value, stating the
+ruling and that it is the field most likely to drift on a rerun); **required-
+capture fields** (any source field a downstream model or step depends on, plus
+which rows are missing it); **the full in-closure contract for every promised
+derived model not yet built**; the **reopen recipe** (workflow id + the
+list/resume/build sequence); and **known runtime blockers** kept separate from
+artifact correctness.
+
+**The boundary rule (Phase C enforces it):** everything a later session needs to
+continue the work lives INSIDE the closure. A promised derived model whose
+contract sits in a doc **outside** the closure — referenced by a `../`-rooted
+path — is a dangling reference across the package boundary: the moment the
+closure moves or is handed off, the contract is gone and the model cannot be
+built. Materialize any deferred contract in the closure (prose in `CONTEXT.md` /
+`contracts/<name>.md`, or better, the inert derived `semantic_model` +
+`@dlt.resource` per Step 3a). Never a cross-boundary pointer.
+
+`CONTEXT.md` is prose to read; it does **not** replace the machine-enforced
+surfaces — rulings still land as data (`nxd_decisions`, see
+[reference/derivation-plan.md](reference/derivation-plan.md)) and the Step-3b
+asserts still run. It explains them so a cold reader can continue. The required
+sections and a copy-ready template are in
+[reference/context-doc.md](reference/context-doc.md).
+
 ### Step 7 — Self-check before handing off (MANDATORY)
 
 Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the
@@ -399,10 +436,13 @@ models and `.model(...)` views both lack one for different reasons: the first is
 written by the transform, the second is never written at all. Confirm the
 supplied export is unchanged, then run
 [reference/self-check.md](reference/self-check.md): it dry-runs the transform
-against a scratch DuckDB **and structurally validates `models.py`/`spec.py`
+against a scratch DuckDB, **structurally validates `models.py`/`spec.py`
 against the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
-installable here). Read the `unverified:` lines it prints: those entries were not
-checked at all.
+installable here), **and runs Phase C — the context-completeness gate**: it fails
+the check if `CONTEXT.md` is absent from the closure root, or if any closure file
+references a contract/design doc by a `../`-rooted path that escapes the closure
+(the dangling-pointer failure from Step 6a). Read the `unverified:` lines it
+prints: those entries were not checked at all.
 
 Reading a failure: if the read-back assert fires or an unquoted `main.<name>`
 query fails, a name diverged — fix the NAME (in `models.py`, `.promise`,
@@ -420,7 +460,9 @@ self-check as **not run** — never claim it passed.
 ---
 ## Invariants — NEVER violate these
 
-- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + the connector-type-specific companion artifact (see the connector-types table in Overview). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
+- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + `CONTEXT.md` + the connector-type-specific companion artifact (see the connector-types table in Overview). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
+- **Self-contained closure — no cross-boundary contract pointers** (Step 6a): `CONTEXT.md` is emitted at the closure root, and everything a later session needs to continue the work lives INSIDE the closure. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in `CONTEXT.md` / `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure. Phase C fails a missing `CONTEXT.md` or any closure-escaping contract reference.
+- **Sample-selection is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in `CONTEXT.md`, reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends. A deterministic-but-arbitrary sample (e.g. "the oldest N") that silently excludes the rows a later step needs is a defect even though it reruns identically. A source field a downstream model or step depends on (a URL a later evaluation needs, a key a later join needs) is a **required-capture** field: record every row where it is missing, because a missing required field disables the downstream step without erroring.
 - **The naming invariant**: each physical model name == `models.py` `semantic_model` arg == `spec.py` `.promise` == `PHYSICAL_MODELS` == `main.<name>`, unquoted lowercase snake_case; additionally `==` the connector's per-model reference (`data/<name>/`, see "THE NAMING INVARIANT" table) for base models only. `PHYSICAL_MODELS` is landed tables (base + derived), NOT the `data/` listing. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.
 - **Output port named `duckdb`**: `.port("duckdb", storage(...))`, transform param `duckdb` typed `DuckDbOutput` (port name == param name). The local DuckDB driver requires exactly this name.
 - **Through the port, always**: dlt destination is `duckdb.path` / `duckdb.schema`. No raw `duckdb.connect` writes, no view/table DDL, no direct file writes into staging. **Derived models do not relax this** — they reach the port as `@dlt.resource` generators in the same `pipeline.run(...)`, not as DDL.

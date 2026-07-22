@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.13.0
+  version: 0.14.0
 ---
 
 # nxd-pocket-loop skill
@@ -199,7 +199,7 @@ public semantic role grammar — follow it; do not duplicate its guidance here.
 
 Invoke the **nxd-generate-dp** skill: assemble the complete Python-authored
 closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-`requirements.txt`, and the connector-type-specific artifact(s) — from the
+`requirements.txt`, `CONTEXT.md`, and the connector-type-specific artifact(s) — from the
 intent, inferred model(s), and connector config. Pass through **every**
 gathered source with its label (or the single unlabeled source, if there's
 only one) and its per-model provenance from Step 2, untouched: the file
@@ -224,7 +224,12 @@ path to the user in the handoff**. There is no list, status, or rediscovery
 MCP tool, and the bearer is minted per session and never persisted — so this
 path is the only key a later session has to the product. A closure written to
 a scratch dir is effectively lost when the session ends. See
-`reference/reopen.md`.
+`reference/reopen.md`. The closure's `CONTEXT.md` (emitted by nxd-generate-dp)
+is the durable record a *later* session reads to continue the work — the reopen
+recipe, the sample-selection rule, per-field inference caveats, and the full
+contract of any promised-but-unbuilt derived model. It must be self-contained:
+a derived model's contract lives inside the closure, never behind a `../` pointer
+to an external doc that the handoff would strand.
 
 ### Step 4 — Build and serve through MCP
 
