@@ -20,27 +20,78 @@ clauses live in SKILL.md; this file is the shape they produce.
 ## The source-checkout shim
 
 The Step-3 transform template opens with this shim. Copy it verbatim, directly
-below the stdlib imports and **above** `import dlt`. The supervisor exports
-`NXD_DESKTOP_REPO_ROOT` for an interpreter that has no nxd wheel installed; the
-guarded lookup makes the block a no-op for normal wheel-based runs, so it is
-safe in every closure.
+below the stdlib imports and **above** `import dlt`.
+
+The shim exists for a developer running against a source checkout whose bindings
+are built locally. **Installed wheels always win.** The supervisor exports
+`NXD_DESKTOP_REPO_ROOT` on every run — including runs whose interpreter has
+perfectly good wheels installed — so the presence of that variable says nothing
+about whether the checkout should be used.
 
 ```python
+import importlib.util
 import sys
 
-_repo_root = os.environ.get("NXD_DESKTOP_REPO_ROOT")
-if _repo_root:
-    for _source in reversed((
-        Path(_repo_root) / "components/nxd_py/data_product",
-        Path(_repo_root) / "components/nxd_py/core",
-        Path(_repo_root) / "components/nxd_py/drivers",
-    )):
-        sys.path.insert(0, str(_source))
+
+def _configure_nxd_imports() -> None:
+    """Prefer installed nxd wheels; fall back to a source checkout only if it
+    carries COMPILED bindings.
+
+    Two guards, both load-bearing:
+
+    * If ``nxd.core`` / ``nxd.drivers`` / ``nxd.data_product`` already resolve,
+      the wheels are installed and this is a no-op. Prepending the checkout here
+      would SHADOW a healthy runtime with a source tree.
+    * A checkout is only usable when its compiled extension modules are present.
+      A tree with just ``_bindings.pyi`` (the type stub) is not a runtime: the
+      child dies with ``ModuleNotFoundError: No module named
+      'nxd.core._bindings'`` the instant it imports nxd.
+    """
+    try:
+        installed = all(
+            importlib.util.find_spec(module) is not None
+            for module in ("nxd.core", "nxd.drivers", "nxd.data_product")
+        )
+    except (ImportError, ValueError):
+        installed = False
+    if installed:
+        return
+
+    repo_root = os.environ.get("NXD_DESKTOP_REPO_ROOT")
+    if not repo_root:
+        return
+    root = Path(repo_root)
+    sources = (
+        root / "components/nxd_py/data_product",
+        root / "components/nxd_py/core",
+        root / "components/nxd_py/drivers",
+    )
+    # Compiled bindings must exist for BOTH core and drivers, or the fallback
+    # produces a tree that imports halfway and then fails. A ".pyi" stub next to
+    # a missing ".so" is exactly the trap this guards.
+    compiled = (
+        root / "components/nxd_py/core/nxd/core",
+        root / "components/nxd_py/drivers/nxd/drivers",
+    )
+    if not all(any(directory.glob("_bindings*.so")) for directory in compiled):
+        return
+    for source in reversed(sources):
+        sys.path.insert(0, str(source))
+
+
+_configure_nxd_imports()
 ```
 
 `reversed(...)` matters: each `insert(0, ...)` pushes onto the front of
 `sys.path`, so iterating in reverse leaves the three source roots in the listed
 order once the loop finishes.
+
+Never replace this with a bare `if os.environ.get("NXD_DESKTOP_REPO_ROOT"):`
+prepend. That shape shipped once and broke every generated closure on a machine
+whose desktop runtime pointed at a checkout without built bindings: the
+transform crashed instantly, and — because the kernel host only waits for a
+staging file that never appears — it surfaced as an opaque ~170s
+"did not materialize staging output" timeout rather than an import error.
 
 ## `models.py`: base and derived side by side
 
