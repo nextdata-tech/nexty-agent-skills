@@ -61,19 +61,21 @@ A closure `CONTEXT.md` at the closure root, with these sections:
    as absent. A missing required field silently disables the downstream step (it
    runs and produces nothing; no assert fires). This is a general stage-to-stage
    dependency rule, independent of what the field is.
-5. **The derived-model contract, in full, for every promised model not yet
-   built** — if `spec.py` promises a derived model whose logic is authored in a
-   later session (it is not in `PHYSICAL_MODELS`), its complete contract lives in
-   the closure. Two shapes, preferred first: (a) **best — author the inert derived
-   model itself** (its `semantic_model`, an empty-bodied `@dlt.resource`, the
-   contract as schema + Step-3b asserts) so it is executable; (b) **if genuinely
-   deferred — a structured `contracts/<name>.md`** with mechanically-readable
-   sections: `## inputs`, `## rule` (input→output mapping / gates / thresholds),
-   `## output schema` (columns the model must promise), `## verdict set` (allowed
-   output values, if any). Phase C **fails** a deferred promised model with no
-   `contracts/<name>.md`. **Never** a pointer to a file outside the closure, and
-   never a rubric left only as free prose here in `CONTEXT.md` when a derived
-   model depends on it.
+5. **The derived-model contract, in full, for every model still to be built** —
+   its complete contract lives in the closure. Two shapes, preferred first:
+   (a) **best — author the inert derived model itself** (its `semantic_model`, an
+   empty-bodied `@dlt.resource`, listed in `PHYSICAL_MODELS`, the contract as
+   schema + Step-3b asserts) so it is executable *and* satisfies the naming
+   invariant; (b) **if the logic is genuinely deferred to a later session, the
+   model is not yet `.promise`d** — the naming invariant requires every promised
+   model to be in `PHYSICAL_MODELS`, so a promised-but-unbuilt model fails Phase A
+   — and its contract is carried as a structured `contracts/<name>.md` with
+   mechanically-readable sections: `## inputs`, `## rule` (input→output mapping /
+   gates / thresholds), `## output schema` (columns the model must promise),
+   `## verdict set` (allowed output values, if any). Name it in the "Models still
+   to build" section below, and `.promise` it only once authored. **Never** a
+   pointer to a file outside the closure, and never a rubric left only as free
+   prose here in `CONTEXT.md` when a derived model depends on it.
 6. **Reopen recipe** — the workflow id (the only durable key; bearer tokens do
    not persist) and the `list_data_products` → `resume_data_product` /
    `build_data_product` → `describe_models` → `run_semantic_query` sequence.
@@ -114,9 +116,10 @@ Workflow id: <workflow-id>   (the only durable key across sessions)
 - <field>: required by <downstream model/step>. Missing for rows: <ids or "none">.
   If missing, <downstream step> runs and produces nothing (silent no-op).
 
-## Deferred promised models
-- <derived-model-name>: promised in spec.py, logic added <when>. Contract in
-  `contracts/<derived-model-name>.md`. (Or author it inert now — preferred.)
+## Models still to build (not yet promised)
+- <derived-model-name>: logic added <when>. Contract in
+  `contracts/<derived-model-name>.md`; `.promise` it once authored.
+  (Or author it inert now and promise it — preferred.)
 
 ## Reopen
 1. list_data_products — is <workflow-id> published?
@@ -129,11 +132,13 @@ Workflow id: <workflow-id>   (the only durable key across sessions)
   self-check (A/B/C) passing is independent of this runtime issue.
 ```
 
-## `contracts/<name>.md` template (one per deferred promised model)
+## `contracts/<name>.md` template (one per model still to build)
 
-Phase C requires this file for any model promised in `spec.py` but absent from
-`PHYSICAL_MODELS`. Prefer authoring the inert derived model instead; use this only
-when the logic is genuinely deferred to a later session.
+Prefer authoring the inert derived model instead — it satisfies the naming
+invariant and is executable. Use this file only when the logic is genuinely
+deferred to a later session, in which case the model is **not yet `.promise`d**
+and this contract (plus the `CONTEXT.md` entry naming it) is what makes it
+buildable by a cold reader.
 
 ```markdown
 # contract — <derived-model-name>
