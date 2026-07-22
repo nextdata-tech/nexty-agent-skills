@@ -239,11 +239,18 @@ Five scenarios are currently skipped:
 | `semantic-intent-validation` | same |
 
 **Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
-skipped scenarios, so a PR touching it currently gets a green no-op. Four more
-skills — `nxd-adding-policy`, `nxd-policies`, `nxd-mesh-analyzer`,
-`nxd-eval-harness` — have no scenario at all. Five of fifteen skills are
-therefore unguarded by CI. A green eval check on those PRs means "nothing ran",
-not "nothing regressed".
+skipped scenarios, so a PR touching it currently gets a green no-op. One more
+skill — `nxd-mesh-analyzer` — has no scenario at all: a scenario for it was
+authored but withdrawn because its fixture rewarded *not* following the skill,
+so it detected nothing (see the git history for
+`infra-profile-source-discovery`). Two of fifteen skills are therefore
+unguarded by CI. A green eval check on those PRs means "nothing ran", not
+"nothing regressed".
+
+The three scenarios these gaps used to include — `nxd-adding-policy`,
+`nxd-policies`, `nxd-eval-harness` — now each have a scenario, though none is
+baselined yet: they run and report `new`, and gate only once a measured verdict
+is recorded.
 
 **Gating is on regression, not on absolute pass.** `evals/compare_baseline.py`
 compares the report against `evals/baselines/public.json` and fails the job only
