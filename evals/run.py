@@ -9,7 +9,12 @@ For each (skill-set x scenario) pair this runner:
      the workspace so the agent has the same artifacts a real session would.
   3. Runs ``claude -p`` from the workspace with the scenario ``prompt.md`` and
      captures the transcript + run metrics (turns, tokens, cost, duration).
-  4. Asks a separate ``claude -p`` judge to grade the transcript against the
+  4. Runs any runner-side deterministic checker the scenario declares against
+     the landed workspace (opt-in via ``deterministic_check`` in checks.json).
+     Its verdict is stated to the judge as an authoritative fact AND enforced
+     mechanically, so a closure with wrong numbers cannot pass on a generous
+     judge read.
+  5. Asks a separate ``claude -p`` judge to grade the transcript against the
      scenario's ``checks.json`` (the structured form of the prose success
      checks). The judge never sees the prompt-under-test's hints; the agent
      never sees ``checks.json``.
@@ -871,6 +876,142 @@ def pocket_facts_infrastructure_error(facts: list[str]) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Runner-side deterministic check (opt-in per scenario).
+#
+# Some scenarios ship a checker that can decide correctness by ARITHMETIC
+# rather than by a judge reading a transcript — but only because it reads a
+# ground-truth fixture that states the right answer. Such a checker cannot be
+# an agent self-check: handing the agent the checker or its truth file hands it
+# the answer key. So the harness runs it AFTER the agent finishes, against the
+# landed workspace, with the truth fixture supplied from the scenario directory
+# (which is runner-side and deliberately excluded from the workspace copy).
+#
+# Contrast with a self-check like generate-runnable-dp-from-intent's, which the
+# agent runs itself and the judge grades from the transcript: that checker
+# embeds no withheld answer, so it can safely live in the workspace.
+#
+# Opt-in and guarded: only scenarios declaring ``"deterministic_check"`` in
+# checks.json activate this. Config keys:
+#   script  — checker filename under the scenario's ``fixtures/`` (required)
+#   deps    — extra PyPI deps for ``uv run --with`` (default: ["duckdb"])
+#
+# The result is emitted as an authoritative fact (visible to the judge) AND
+# enforced mechanically: a failed check fails the cell regardless of how
+# generously the judge read the transcript.
+# ---------------------------------------------------------------------------
+
+DETERMINISTIC_CHECK_TIMEOUT_S = 600
+DETERMINISTIC_CHECK_PREFIX = "DETERMINISTIC CHECK (authoritative runner facts): "
+# Deliberately stable: report code and callers distinguish this cell outcome
+# without parsing checker-specific detail.
+DETERMINISTIC_CHECK_FAILED = "deterministic check failed"
+
+
+def deterministic_check_fact(scenario_dir: Path, ws: Path, cfg: dict) -> str:
+    """Run a scenario's runner-side checker against the landed workspace.
+
+    ``--fixtures`` points at the scenario's own ``fixtures/`` directory, never
+    at the workspace: that is where the withheld ground truth lives and it must
+    stay out of the agent's reach.
+    """
+    fixtures = scenario_dir / "fixtures"
+    script = fixtures / str(cfg.get("script", ""))
+    if not script.is_file():
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False,
+             "infrastructure_error": f"checker not found: {script}"},
+            sort_keys=True,
+        )
+    deps = cfg.get("deps") or ["duckdb"]
+    cmd = ["uv", "run", "--no-project"]
+    for dep in deps:
+        cmd += ["--with", str(dep)]
+    cmd += ["python", str(script), "--fixtures", str(fixtures), "--root", str(ws)]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=DETERMINISTIC_CHECK_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False,
+             "infrastructure_error": (
+                 f"checker timed out after {DETERMINISTIC_CHECK_TIMEOUT_S}s: {exc}")},
+            sort_keys=True,
+        )
+    except OSError as exc:
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False, "infrastructure_error": f"checker failed to start: {exc}"},
+            sort_keys=True,
+        )
+    stdout = proc.stdout
+    # Fail closed on the exit code, and require the checker's own success
+    # sentinel: a checker that dies mid-report can exit 0 without having run
+    # the gate that matters.
+    passed = proc.returncode == 0 and "ALL CHECKS PASSED" in stdout
+    facts: dict[str, object] = {
+        "passed": passed,
+        "exit_code": proc.returncode,
+        # Only the FAIL lines: the judge needs the naming detail, not the
+        # dozen PASS lines that would crowd its context.
+        "failures": [line for line in stdout.splitlines() if line.startswith("FAIL ")],
+    }
+    if not passed and not facts["failures"]:
+        # Exit-code failure with no FAIL line means the checker aborted rather
+        # than graded. Carry stderr so that is diagnosable instead of silent.
+        facts["detail"] = (stdout[-1500:] + proc.stderr[-1500:]).strip()
+    return DETERMINISTIC_CHECK_PREFIX + json.dumps(facts, sort_keys=True)
+
+
+def deterministic_check_passed(facts: list[str]) -> bool:
+    """Whether an authoritative deterministic-check fact explicitly passed.
+
+    Fail-closed: a missing, malformed, or negative fact is not rescued by a
+    lenient judge.
+    """
+    for fact in facts:
+        if fact.startswith(DETERMINISTIC_CHECK_PREFIX):
+            try:
+                return json.loads(fact[len(DETERMINISTIC_CHECK_PREFIX):]).get("passed") is True
+            except json.JSONDecodeError:
+                return False
+    return False
+
+
+def deterministic_check_infrastructure_error(facts: list[str]) -> str | None:
+    """Return a checker infrastructure failure, if one was recorded.
+
+    A checker that never started or timed out proves nothing about the agent;
+    the caller reports it as infrastructure rather than as an agent FAIL.
+    """
+    for fact in facts:
+        if fact.startswith(DETERMINISTIC_CHECK_PREFIX):
+            try:
+                error = json.loads(fact[len(DETERMINISTIC_CHECK_PREFIX):]).get(
+                    "infrastructure_error"
+                )
+            except json.JSONDecodeError:
+                return "deterministic check facts were malformed"
+            return str(error) if error else None
+    return None
+
+
+def deterministic_check_detail(facts: list[str]) -> str:
+    """Human-readable failure detail from the deterministic-check fact."""
+    for fact in facts:
+        if fact.startswith(DETERMINISTIC_CHECK_PREFIX):
+            try:
+                data = json.loads(fact[len(DETERMINISTIC_CHECK_PREFIX):])
+            except json.JSONDecodeError:
+                return "deterministic check facts were malformed"
+            if data.get("infrastructure_error"):
+                return str(data["infrastructure_error"])
+            failures = data.get("failures") or []
+            return "; ".join(str(f) for f in failures) or str(data.get("detail", ""))
+    return "deterministic check did not run"
+
+
 def _free_port() -> int:
     import socket
 
@@ -1459,6 +1600,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     cached = None
     facts: list[str] = []
     ws_fact: str | None = None
+    det_fact: str | None = None
     if cache_file and cache_file.exists():
         try:
             loaded = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -1563,6 +1705,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 workspace_files_fact(ws, checks.get("workspace_files"))
                 if ok else None
             )
+            # Same reason as ws_fact: the checker reads the landed closure off
+            # disk, so it has to run before the temporary workspace is removed.
+            if ok and checks.get("deterministic_check"):
+                det_fact = deterministic_check_fact(
+                    scenario_dir, ws, checks["deterministic_check"]
+                )
 
         # Never cache a transcript whose facts carry a verifier infrastructure
         # failure: the workspace is gone on a later cache hit, so the verifier
@@ -1582,6 +1730,11 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
         if ws_fact:
             facts.append(ws_fact)
+        # Appended after the cache write for the same reason as ws_fact: the
+        # verdict it carries belongs to THIS run's workspace, and replaying it
+        # on a later cache hit would describe a closure that was never checked.
+        if det_fact:
+            facts.append(det_fact)
 
     if cached and checks.get("workspace_files"):
         # A cached transcript has no workspace behind it, so the files cannot be
@@ -1594,8 +1747,28 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             "rather than inferring them from the transcript."
         )
 
+    if cached and checks.get("deterministic_check"):
+        # No workspace behind a cached transcript, so there is no landed closure
+        # to check. Record the skip explicitly: silently treating an unrun
+        # deterministic gate as a pass is exactly the hole this stage closes.
+        det_status = "skipped: cached transcript, no workspace"
+        facts.append(
+            "DETERMINISTIC CHECK: UNAVAILABLE — this run replayed a cached agent "
+            "transcript, so the workspace no longer exists and the closure's "
+            "numbers could not be verified. Grade numeric-correctness checks as "
+            "unproven rather than inferring them from the transcript."
+        )
+    elif checks.get("deterministic_check"):
+        det_status = "passed" if deterministic_check_passed(facts) else "failed"
+    else:
+        det_status = ""
+
     res.transcript = trace
     res.metrics = {**preflight_metrics, **metrics, "agent_model": agent_model}
+    if det_status:
+        res.metrics["deterministic_check"] = det_status
+        if det_status == "failed":
+            res.metrics["deterministic_check_detail"] = deterministic_check_detail(facts)
     res.facts = facts
     if not ok:
         res.error = str(metrics.get("error", "agent run failed"))
@@ -1604,6 +1777,13 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     verifier_infrastructure_error = pocket_facts_infrastructure_error(facts)
     if verifier_infrastructure_error:
         res.error = f"pocket harness infrastructure failure: {verifier_infrastructure_error}"
+        return res
+
+    det_infrastructure_error = deterministic_check_infrastructure_error(facts)
+    if det_infrastructure_error:
+        # A checker that could not run says nothing about the agent. Report it
+        # as infrastructure so it is not counted as an agent FAIL in the ledger.
+        res.error = f"deterministic check infrastructure failure: {det_infrastructure_error}"
         return res
 
     final_answer = metrics.get("final_answer", "")
@@ -1619,6 +1799,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         prior = str(res.verdict.get("summary", ""))
         res.verdict["summary"] = (
             f"{prior} Pocket verifier did not pass; the cell is mechanically failed."
+        ).strip()
+    if det_status == "failed":
+        # The checker computes the answer from ground truth; it is the hard
+        # acceptance gate, not advisory evidence. A closure whose numbers are
+        # wrong fails the cell however generously the judge read the transcript.
+        res.verdict["overall_pass"] = False
+        prior = str(res.verdict.get("summary", ""))
+        res.verdict["summary"] = (
+            f"{prior} {DETERMINISTIC_CHECK_FAILED}: "
+            f"{res.metrics['deterministic_check_detail']}"
         ).strip()
     res.ok = True
     return res
