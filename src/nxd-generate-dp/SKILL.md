@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.12.0
+  version: 0.13.0
 ---
 
 # nxd-generate-dp skill
@@ -228,70 +228,14 @@ matching the port in Step 5. Declare `PHYSICAL_MODELS` from the `.promise(...)`
 calls — base names first, then derived; use `duckdb.model_tables` only to resolve
 those names (it can also hold `.model(...)` views with no table).
 
-```python
-"""<dp-name>: load the CSV connector export into the local DuckDB output port."""
-
-from __future__ import annotations
-
-import os
-from pathlib import Path
-from typing import Any
-
-# Source-checkout shim: see reference/derived-models.md. Copy it verbatim —
-# it keeps an interpreter without the wheel working, and is a no-op otherwise.
-
-import dlt
-from dlt.sources.filesystem import filesystem, read_csv
-
-from nxd import data_product
-from nxd.core.context import DuckDbOutput
-
-# Landed tables promised by spec.py; never semantic views.
-# BASE_MODELS have data/<name>/; DERIVED_MODELS are computed below.
-BASE_MODELS = ("<base_model>",)
-DERIVED_MODELS = ()
-PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS
-
-
-@data_product.on_transform()
-def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:
-    """Land each promised model into the DuckDB output port."""
-    source_root = Path(secrets["csv_source"])
-    # Keep ALL dlt state run-local (next to the staging file) — never ~/.dlt.
-    run_dir = Path(duckdb.path).parent
-    pipelines_dir = run_dir / "dlt-pipelines"
-    pipelines_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["DLT_DATA_DIR"] = str(run_dir / "dlt-data")
-
-    pipeline = dlt.pipeline(
-        pipelines_dir=str(pipelines_dir),
-        destination=dlt.destinations.duckdb(credentials=duckdb.path),
-        dataset_name=duckdb.schema,
-    )
-    resources = []
-    # Base models: one dlt CSV reader per data/<model>/ directory.
-    for model in BASE_MODELS:
-        reader = filesystem(
-            bucket_url=str(source_root / model), file_glob="*.csv"
-        ) | read_csv()
-        resources.append(reader.with_name(duckdb.model_tables[model]))
-    # Derived models (Step 3a) append their @dlt.resource here — same list.
-    pipeline.run(resources, write_disposition="replace")
-
-    # dlt must write exactly the promised tables, never semantic views.
-    actual = set(pipeline.default_schema.data_table_names())
-    expected = {duckdb.model_tables[model] for model in PHYSICAL_MODELS}
-    if actual != expected:
-        raise RuntimeError(
-            f"dlt produced tables {sorted(actual)!r}, expected {sorted(expected)!r}"
-        )
-    # Produce-verification marker: the supervisor's readiness gate waits for it.
-    (run_dir / ".transform-complete").touch()
-
-
-if __name__ == "__main__":
-    data_product.main()
-```
+The complete `transform/main.py` template — module docstring, imports, the
+source-checkout shim, the `BASE_MODELS`/`DERIVED_MODELS`/`PHYSICAL_MODELS`
+tuples, the `@data_product.on_transform()` `ingest(duckdb, secrets)` body
+(run-local dlt state, the per-base-model `filesystem | read_csv` reader loop, one
+`pipeline.run(..., write_disposition="replace")`, the read-back-and-assert
+block, the `.transform-complete` touch) and the `__main__` guard — is in
+[reference/transform-template.md](reference/transform-template.md). Copy it and
+fill in the model tuples.
 
 Contract facts baked into that template — keep every one:
 
