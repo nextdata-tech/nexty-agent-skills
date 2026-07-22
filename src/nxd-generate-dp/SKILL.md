@@ -103,7 +103,7 @@ assert dlt's output against the promised physical models, not the whole
 `model_tables` map. Base attribute names are byte-exact source headers (post-dlt
 snake_case); derived attribute names are the keys of the dicts your resource
 yields. Separately, the **storage output port MUST be named `duckdb`**, matched
-by the transform param (Step 5) — the local DuckDB driver requires it.
+by the transform param (Step 4) — the local DuckDB driver requires it.
 
 ---
 
@@ -115,7 +115,7 @@ by the transform param (Step 5) — the local DuckDB driver requires it.
   semantic layer must answer.
 - The inferred model gives each base model's primary key, dimensions, joins,
   PII flags, metrics, and column types. Base roles and metric views are
-  different authored objects — see Step 3.
+  different authored objects — see Step 2.
 - Each connector config names a **connector type** (CSV / other local file /
   database / REST API) plus its type-specific location. For the non-CSV types,
   follow `reference/file-source.md` / `database-source.md` / `api-source.md` —
@@ -175,7 +175,7 @@ row-preserving enrichment or a row-removing dedupe keeps its **source** key —
 those rows are still the source entities. Only a regrain declares a new
 composite.
 
-### Step 3 — `models.py`: place the inferred roles with the public DSL
+### Step 2 — `models.py`: place the inferred roles with the public DSL
 
 Author `models.py` with the **real public semantic DSL**
 (`from nxd.spec import semantic_model, field, primary_key, dimension, join`;
@@ -211,20 +211,20 @@ model as derived; that distinction lives only in the transform.
 
 Worked examples: `reference/models-example.md` (base) and
 [reference/derived-models.md](reference/derived-models.md) (derived). Every
-verified DSL signature used here (roles, data types, Step 4's builders) is pinned
+verified DSL signature used here (roles, data types, Step 3's builders) is pinned
 in `reference/nxd-spec-api.md` — trust it over re-reading source.
 
 Data-type mapping (inferred → `nxd.spec.data_types`): string → `string()`;
 int / number / double / float → `number()`; bool → `boolean()`; date →
 `date32()`.
 
-### Step 4 — `transform/main.py`: the dlt-through-port ingest
+### Step 3 — `transform/main.py`: the dlt-through-port ingest
 
 The transform receives the typed **output port handle** (`DuckDbOutput`: `path`,
 `schema`, `model_tables`) and connector secrets, streams each **base model's**
 CSV directory through dlt, yields each **derived model's** computed rows into the
 same run, then asserts the produced table names. The handle param is **`duckdb`**,
-matching the port in Step 5. Declare `PHYSICAL_MODELS` from the `.promise(...)`
+matching the port in Step 4. Declare `PHYSICAL_MODELS` from the `.promise(...)`
 calls — base names first, then derived; use `duckdb.model_tables` only to resolve
 those names (it can also hold `.model(...)` views with no table).
 
@@ -261,7 +261,7 @@ directory: its rows are computed in Python from the base sources and landed
 through the same DuckDB output port. Every ruling the semantic layer cannot
 express lives here — dedupe, amortization, normalization, classification.
 
-**The DDL ban (Step 4) is preserved, not relaxed**: still written by dlt through
+**The DDL ban (Step 3) is preserved, not relaxed**: still written by dlt through
 the `duckdb` port, still NO `duckdb.connect(...)` write, NO `CREATE TABLE` /
 `CREATE VIEW`, NO direct file write into staging. The only new thing is where the
 rows come from — a `@dlt.resource` generator instead of a CSV reader. Every
@@ -317,11 +317,11 @@ actual-vs-expected numbers; the run log is the whole diagnostic.
 Worked code for both steps is in
 [reference/derived-models.md](reference/derived-models.md).
 
-**Other connector types**: Step 4 is identical except the `readers=[...]` body
+**Other connector types**: Step 3 is identical except the `readers=[...]` body
 and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 `database-source.md`, `api-source.md`). Steps 3a/3b are connector-independent.
 
-### Step 5 — `spec.py`: promises + transform + the `duckdb` output port
+### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
 
 `spec.py` is the author-facing source of truth the supervisor compiles into
 the deployment YAML: it declares the infra profile, wires the transform to
@@ -335,7 +335,7 @@ Contract facts baked into that shape — keep every one:
 
 - **The output port is named `duckdb`** (`.port("duckdb", storage(...))`) — the
   local DuckDB storage driver requires that exact name, and the transform param
-  matches it (Step 4). Never `"output"`.
+  matches it (Step 3). Never `"output"`.
 - **`infra_profile="desktop-local"`** on `data_product(...)`, matching
   `infra-profile.yaml`'s `metadata.name`.
 - **`script("transform/main.py")`**, not `code(transform)` — the desktop

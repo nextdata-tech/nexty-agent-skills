@@ -1,8 +1,8 @@
 # The `transform/main.py` base-ingest template
 
-Worked code for Step 4 of nxd-generate-dp — the dlt-through-port ingest that
+Worked code for Step 3 of nxd-generate-dp — the dlt-through-port ingest that
 lands each base model's CSV directory into the local DuckDB output port. The
-mandatory contract clauses (the "keep every one" list) live in SKILL.md Step 4;
+mandatory contract clauses (the "keep every one" list) live in SKILL.md Step 3;
 this file is the shape they produce. For the derived-model additions (the
 `@dlt.resource` block that slots between the base-reader loop and
 `pipeline.run(...)`), see [derived-models.md](derived-models.md).
