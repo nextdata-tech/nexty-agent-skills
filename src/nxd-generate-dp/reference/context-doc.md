@@ -52,19 +52,28 @@ A closure `CONTEXT.md` at the closure root, with these sections:
    derived from, and that it is the field most likely to **drift on a rerun**.
    This mirrors the dimension `description=` in `models.py` but states the
    *ruling*, not just the flag.
-4. **Required-capture fields** — any source field a downstream model or step
-   **depends on** (a URL a later evaluation needs, a key a later join needs).
-   State that its capture is required, and record any row where it is missing —
-   a missing required field silently disables the downstream step (a no-op that
-   does not error).
+4. **Required-capture fields** — any source field a downstream model, gate, or
+   verdict **depends on**, identified by reading backward from every promised
+   derived model and any gating/verdict logic to the source fields it consumes.
+   State that its capture is required, and record any row where it is missing. A
+   field that is *referenced in the source but not extracted* is an incomplete
+   extraction, not a valid absent value — surface it for recovery, never pass it
+   as absent. A missing required field silently disables the downstream step (it
+   runs and produces nothing; no assert fires). This is a general stage-to-stage
+   dependency rule, independent of what the field is.
 5. **The derived-model contract, in full, for every promised model not yet
    built** — if `spec.py` promises a derived model whose logic is authored in a
-   later session, its complete contract lives HERE (or in `contracts/<name>.md`
-   in the closure): the rule that maps inputs to outputs, thresholds/gates, the
-   output schema, the verdict/label set. **Never** a pointer to a file outside
-   the closure. Better still, author the derived model's `semantic_model` +
-   `@dlt.resource` inert (Step 3a) so the contract is code, not prose — but if it
-   is deferred, the prose contract is mandatory and in-closure.
+   later session (it is not in `PHYSICAL_MODELS`), its complete contract lives in
+   the closure. Two shapes, preferred first: (a) **best — author the inert derived
+   model itself** (its `semantic_model`, an empty-bodied `@dlt.resource`, the
+   contract as schema + Step-3b asserts) so it is executable; (b) **if genuinely
+   deferred — a structured `contracts/<name>.md`** with mechanically-readable
+   sections: `## inputs`, `## rule` (input→output mapping / gates / thresholds),
+   `## output schema` (columns the model must promise), `## verdict set` (allowed
+   output values, if any). Phase C **fails** a deferred promised model with no
+   `contracts/<name>.md`. **Never** a pointer to a file outside the closure, and
+   never a rubric left only as free prose here in `CONTEXT.md` when a derived
+   model depends on it.
 6. **Reopen recipe** — the workflow id (the only durable key; bearer tokens do
    not persist) and the `list_data_products` → `resume_data_product` /
    `build_data_product` → `describe_models` → `run_semantic_query` sequence.
@@ -103,16 +112,11 @@ Workflow id: <workflow-id>   (the only durable key across sessions)
 
 ## Required-capture fields (downstream depends on these)
 - <field>: required by <downstream model/step>. Missing for rows: <ids or "none">.
-  If missing, <downstream step> becomes a silent no-op.
+  If missing, <downstream step> runs and produces nothing (silent no-op).
 
-## Deferred derived-model contracts (full, in-closure)
-### <derived-model-name>  (promised in spec.py, logic added <when>)
-- Inputs → output rule: <the mapping / rubric>
-- Gates / thresholds: <...>
-- Output schema: <columns the derived model must promise>
-- Verdict / label set: <the allowed values>
-  (Prefer authoring this as inert code in models.py + transform/main.py; if
-  deferred, this prose contract is the durable copy and MUST stay in the closure.)
+## Deferred promised models
+- <derived-model-name>: promised in spec.py, logic added <when>. Contract in
+  `contracts/<derived-model-name>.md`. (Or author it inert now — preferred.)
 
 ## Reopen
 1. list_data_products — is <workflow-id> published?
@@ -123,4 +127,28 @@ Workflow id: <workflow-id>   (the only durable key across sessions)
 ## Known blockers (separate from artifact correctness)
 - <e.g. build/serve readiness timeout>: <symptom>, <remedy>. The closure
   self-check (A/B/C) passing is independent of this runtime issue.
+```
+
+## `contracts/<name>.md` template (one per deferred promised model)
+
+Phase C requires this file for any model promised in `spec.py` but absent from
+`PHYSICAL_MODELS`. Prefer authoring the inert derived model instead; use this only
+when the logic is genuinely deferred to a later session.
+
+```markdown
+# contract — <derived-model-name>
+
+## inputs
+<which base/derived models and columns this model reads>
+
+## rule
+<the input→output mapping: the derivation, gates, thresholds, calibration —
+everything a later session needs to author the transform, with nothing left to
+re-derive>
+
+## output schema
+<the columns this model must promise, with types — what models.py declares>
+
+## verdict set
+<the allowed values for any classification/verdict column; omit if none>
 ```

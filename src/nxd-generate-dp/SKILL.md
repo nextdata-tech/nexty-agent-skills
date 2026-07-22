@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.14.0
+  version: 0.15.0
 ---
 
 # nxd-generate-dp skill
@@ -403,21 +403,35 @@ It records: intent; the **population & sample-selection rule** (the exact,
 reproducible rule for which rows are in the source — and, if you sampled, what it
 excludes and whether any downstream model cares); **per-field inference
 caveats** (every field derived rather than a verbatim source value, stating the
-ruling and that it is the field most likely to drift on a rerun); **required-
-capture fields** (any source field a downstream model or step depends on, plus
-which rows are missing it); **the full in-closure contract for every promised
-derived model not yet built**; the **reopen recipe** (workflow id + the
+ruling and that it is the field most likely to drift on a rerun); the
+**required-capture fields** (see below); **the full in-closure contract for every
+promised derived model not yet built**; the **reopen recipe** (workflow id + the
 list/resume/build sequence); and **known runtime blockers** kept separate from
 artifact correctness.
+
+**Required-capture fields (connector-independent).** A source field a downstream
+model, gate, or verdict **consumes** is required-capture — find them by reading
+backward from every promised derived model and gating/verdict logic to the source
+fields they read. For such a field, "referenced in the source but not extracted"
+is an **incomplete extraction**, not a valid missing value: record which rows lack
+it and surface it for recovery, never pass it as absent. A missing one disables
+the downstream step **without erroring** — it runs, produces nothing, no assert
+fires. A general stage-dependency rule, not about any one field type.
 
 **The boundary rule (Phase C enforces it):** everything a later session needs to
 continue the work lives INSIDE the closure. A promised derived model whose
 contract sits in a doc **outside** the closure — referenced by a `../`-rooted
 path — is a dangling reference across the package boundary: the moment the
 closure moves or is handed off, the contract is gone and the model cannot be
-built. Materialize any deferred contract in the closure (prose in `CONTEXT.md` /
-`contracts/<name>.md`, or better, the inert derived `semantic_model` +
-`@dlt.resource` per Step 3a). Never a cross-boundary pointer.
+built. Materialize any deferred contract in the closure, preferably as the **inert
+derived model itself** (its `semantic_model`, an empty-bodied `@dlt.resource`, the
+contract encoded as schema + Step-3b asserts) so it is executable; if genuinely
+deferred, as a **structured `contracts/<name>.md`** (sections `## inputs`,
+`## rule`, `## output schema`, `## verdict set` — see
+[reference/context-doc.md](reference/context-doc.md)). Phase C **fails** a
+deferred promised model with no `contracts/<name>.md`. Never a cross-boundary
+pointer, and never a rubric left only as free prose in `CONTEXT.md` when a derived
+model depends on it.
 
 `CONTEXT.md` is prose to read; it does **not** replace the machine-enforced
 surfaces — rulings still land as data (`nxd_decisions`, see
