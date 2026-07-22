@@ -118,6 +118,11 @@ def _write_ingesting_closure(root: Path, *, net_refunds: bool) -> None:
     _write_closure(root)
     src = INGESTING_TRANSFORM_SRC.replace("__NET_REFUNDS__", str(net_refunds))
     (root / "transform" / "main.py").write_text(src, encoding="utf-8")
+    # A real closure declares its ingest dependencies and expects the runtime to
+    # provide them; `nxd` is the internal wheel that cannot be installed.
+    (root / "requirements.txt").write_text(
+        "nxd.data_product[spec]\nduckdb==1.5.4\n", encoding="utf-8"
+    )
 
 
 def _write_closure(root: Path) -> None:
@@ -244,6 +249,36 @@ def test_materialized_closure_with_wrong_numbers_still_fails(tmp_path):
     detail = run.deterministic_check_detail(facts)
     assert "totals:" in detail
     assert "charges-only" in detail
+
+
+def test_closure_dependencies_are_installed_except_the_internal_wheel(tmp_path):
+    """The transform ingests through its declared deps, so they must be installed.
+
+    A live run failed with ``ModuleNotFoundError: No module named 'dlt'`` because
+    the transform ran on the bare checker interpreter. It has to run under the
+    closure's own requirements — minus ``nxd``, which is an internal package on a
+    private index that the harness stubs instead.
+    """
+    checker = importlib.util.spec_from_file_location(
+        "check_derived_closure", FIXTURES / "check_derived_closure.py"
+    )
+    mod = importlib.util.module_from_spec(checker)
+    checker.loader.exec_module(mod)
+
+    (tmp_path / "requirements.txt").write_text(
+        "nxd.data_product[spec]\n"
+        "dlt[duckdb]==1.28.2\n"
+        "duckdb==1.5.4\n"
+        "# a comment\n"
+        "\n"
+        "pandas==2.3.3\n",
+        encoding="utf-8",
+    )
+    assert mod.closure_requirements(tmp_path) == [
+        "dlt[duckdb]==1.28.2",
+        "duckdb==1.5.4",
+        "pandas==2.3.3",
+    ]
 
 
 def test_unrunnable_closure_fails_rather_than_being_excused(tmp_path):

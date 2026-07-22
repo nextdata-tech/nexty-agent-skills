@@ -187,6 +187,28 @@ ingest(duckdb=out, secrets={"csv_source": str(Path("data").resolve())})
 '''
 
 
+# `nxd` is an internal package on a private index and cannot be installed here;
+# the harness above stubs the surface the transform imports from it.
+_UNINSTALLABLE_PREFIXES = ("nxd",)
+
+
+def closure_requirements(root: Path) -> list[str]:
+    """The closure's own declared dependencies, minus the uninstallable ones."""
+    req = root / "requirements.txt"
+    if not req.is_file():
+        return []
+    specs = []
+    for raw in req.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        name = re.split(r"[\[<>=!~ ]", line, maxsplit=1)[0].strip().lower()
+        if name.startswith(_UNINSTALLABLE_PREFIXES):
+            continue
+        specs.append(line)
+    return specs
+
+
 def materialize_closure(root: Path) -> tuple[Path | None, str]:
     """Run the closure's own transform into a scratch DuckDB.
 
@@ -196,9 +218,9 @@ def materialize_closure(root: Path) -> tuple[Path | None, str]:
     rule substitutes for, so "no database" must not mean "not graded": this
     executes the closure's transform to produce one.
 
-    The transform runs against the closure's OWN data and its own arithmetic;
-    nothing here supplies numbers. Returns the database path, or None with a
-    reason when the transform could not be run.
+    The transform runs against the closure's OWN data, its own arithmetic, and
+    its own declared dependencies; nothing here supplies numbers. Returns the
+    database path, or None with a reason when the transform could not be run.
     """
     try:
         import duckdb  # noqa: F401, PLC0415
@@ -209,9 +231,20 @@ def materialize_closure(root: Path) -> tuple[Path | None, str]:
     db = scratch / "data.duckdb"
     harness = scratch / "_materialize.py"
     harness.write_text(_MATERIALIZE_HARNESS, encoding="utf-8")
+
+    # The transform ingests through the closure's own declared dependencies
+    # (dlt, duckdb, pandas), so it must run in an environment that has them.
+    # `uv run --with` builds that environment from requirements.txt, exactly as
+    # the skill's own dry-run does. Only `nxd` itself is dropped: it is an
+    # internal package on a private index, not installable here, and the
+    # harness stubs the surface the transform touches.
+    cmd = ["uv", "run", "--no-project"]
+    for spec in closure_requirements(root):
+        cmd += ["--with", spec]
+    cmd += ["python", str(harness), str(db)]
     try:
         proc = subprocess.run(
-            [sys.executable, str(harness), str(db)],
+            cmd,
             cwd=str(root),
             capture_output=True,
             text=True,
