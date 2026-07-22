@@ -118,6 +118,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Deterministic scenario checkers shell out to `uv` to run in a pinned
+      # environment. Without it they abort the whole step with an infrastructure
+      # ERROR before the regression gate can run.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Select affected scenarios
         id: select
         env:
