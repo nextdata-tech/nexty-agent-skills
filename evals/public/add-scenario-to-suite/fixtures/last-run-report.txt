@@ -11,7 +11,7 @@ $ uv run --project evals/nxd_eval python -m nxd_eval report --log ./logs/logisti
 - governance P=91.0% · R=79.0%
 
 ## by bucket
-- answer   72/80 = 90.0%   (N_eff=55.2)
+- answer   75/80 = 93.8%   (N_eff=55.2)
 - clarify   9/12 = 75.0%   (N_eff=8.3)
 - abstain   3/4  = 75.0%   (N_eff=2.8)
 
