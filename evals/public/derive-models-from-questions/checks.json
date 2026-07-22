@@ -3,6 +3,12 @@
   "skills": [
     "nxd-generate-dp"
   ],
+  "deterministic_check": {
+    "script": "check_derived_closure.py",
+    "deps": [
+      "duckdb"
+    ]
+  },
   "checks": [
     {
       "id": "read-source-first",
