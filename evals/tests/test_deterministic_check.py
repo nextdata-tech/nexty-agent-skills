@@ -63,6 +63,63 @@ def _assert_measure_reconciles(source_rows, derived_total):
 '''
 
 
+# A closure that lands NOTHING itself: it carries an `ingest` the checker can
+# run, exactly as a real closure does. The agent is entitled to leave no
+# database behind — the skill's own dry-run writes one to a temp directory and
+# then discards it — so the checker has to be able to produce one.
+INGESTING_TRANSFORM_SRC = TRANSFORM_SRC + '''
+import csv as _csv
+from pathlib import Path as _Path
+
+from nxd.core.context import DuckDbOutput  # noqa: F401
+from nxd import data_product as _dp
+
+CATEGORIES = {
+    "AWS": "cogs", "Anthropic": "cogs", "OpenAI": "cogs",
+    "Deel": "opex", "Figma": "opex", "Lufthansa": "opex",
+    "Monzo": "opex", "WeWork": "opex",
+}
+
+NET_REFUNDS = __NET_REFUNDS__
+
+
+@_dp.on_transform()
+def ingest(duckdb, secrets):
+    import duckdb as _duckdb
+
+    src = _Path(secrets["csv_source"]) / "transactions" / "transactions.csv"
+    rows = list(_csv.DictReader(src.open()))
+    landed = []
+    for r in rows:
+        if r["kind"] == "transfer":
+            continue
+        if not NET_REFUNDS and r["kind"] == "refund":
+            continue
+        landed.append((r["txn_id"], CATEGORIES.get(r["merchant"], "needs_review"),
+                       r["currency"], float(Decimal(r["amount"]))))
+
+    # The unnetted variant deliberately skips its own reconciliation: that is
+    # precisely the closure this scenario exists to catch — one whose numbers are
+    # wrong and whose asserts did not stop it. Running the assert here would make
+    # it fail as a broken transform instead of as a wrong-totals closure.
+    if NET_REFUNDS:
+        _assert_measure_reconciles(rows, sum(Decimal(str(r[3])) for r in landed))
+
+    con = _duckdb.connect(duckdb.path)
+    con.execute("CREATE TABLE classified_spend "
+                "(txn_id VARCHAR, category VARCHAR, currency VARCHAR, net_amount DOUBLE)")
+    con.executemany("INSERT INTO classified_spend VALUES (?, ?, ?, ?)", landed)
+    con.close()
+'''
+
+
+def _write_ingesting_closure(root: Path, *, net_refunds: bool) -> None:
+    """A closure that materializes on demand and lands no database of its own."""
+    _write_closure(root)
+    src = INGESTING_TRANSFORM_SRC.replace("__NET_REFUNDS__", str(net_refunds))
+    (root / "transform" / "main.py").write_text(src, encoding="utf-8")
+
+
 def _write_closure(root: Path) -> None:
     (root / "transform").mkdir(parents=True, exist_ok=True)
     (root / "transform" / "main.py").write_text(TRANSFORM_SRC, encoding="utf-8")
@@ -157,6 +214,49 @@ def test_unnetted_refunds_closure_fails_and_names_the_bug(tmp_path):
     detail = run.deterministic_check_detail(facts)
     assert "totals:" in detail
     assert "charges-only" in detail
+
+
+def test_closure_without_a_landed_database_is_still_graded(tmp_path):
+    """No landed database must mean "materialize and grade", not "cannot check".
+
+    A closure is entitled to leave no database behind: the skill's pre-handoff
+    dry-run writes one to a temporary directory and discards it as scratch. Such
+    a closure was previously unverifiable, so the totals gate — the one check no
+    structural rule substitutes for — never ran on it.
+    """
+    _write_ingesting_closure(tmp_path, net_refunds=True)
+    assert not list(tmp_path.glob("**/*.duckdb")), "test must start with no database"
+
+    facts = _facts(tmp_path)
+    assert run.deterministic_check_infrastructure_error(facts) is None
+    assert run.deterministic_check_passed(facts) is True
+
+
+def test_materialized_closure_with_wrong_numbers_still_fails(tmp_path):
+    """Materializing must not become a way to pass: the numbers are still graded."""
+    _write_ingesting_closure(tmp_path, net_refunds=False)
+    assert not list(tmp_path.glob("**/*.duckdb"))
+
+    facts = _facts(tmp_path)
+    assert run.deterministic_check_passed(facts) is False
+    assert run.deterministic_check_infrastructure_error(facts) is None
+
+    detail = run.deterministic_check_detail(facts)
+    assert "totals:" in detail
+    assert "charges-only" in detail
+
+
+def test_unrunnable_closure_fails_rather_than_being_excused(tmp_path):
+    """Unrunnable is not unchecked — a transform that cannot execute still fails."""
+    _write_closure(tmp_path)
+    (tmp_path / "transform" / "main.py").write_text(
+        TRANSFORM_SRC + "\n\ndef ingest(duckdb, secrets):\n    raise RuntimeError('boom')\n",
+        encoding="utf-8",
+    )
+
+    facts = _facts(tmp_path)
+    assert run.deterministic_check_passed(facts) is False
+    assert "no queryable database" in run.deterministic_check_detail(facts)
 
 
 def test_missing_closure_fails_rather_than_passing_vacuously(tmp_path):

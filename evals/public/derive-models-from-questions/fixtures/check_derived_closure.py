@@ -42,13 +42,19 @@ import argparse
 import ast
 import csv
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 
 FAILURES: list[str] = []
 PASSES: list[str] = []
+
+# How long the closure's own transform gets when this checker materializes it.
+MATERIALIZE_TIMEOUT_S = 600
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -150,6 +156,81 @@ def reconciles_a_measure(fn: ast.FunctionDef) -> bool:
         for n in ast.walk(fn)
     )
     return not uses_abs
+
+
+# The transform runs under a stub `nxd` package, exactly as the skill's own
+# pre-handoff dry-run does: the real wheel is an internal package on a private
+# index and is not installable here. Only the surface the transform touches is
+# stubbed -- `DuckDbOutput`, `@dp.on_transform`, `dp.main` -- so the transform's
+# own arithmetic runs unmodified.
+_MATERIALIZE_HARNESS = '''
+import sys, types
+from dataclasses import dataclass, field
+from pathlib import Path
+
+@dataclass
+class DuckDbOutput:
+    path: str; schema: str; model_tables: dict; models: dict = field(default_factory=dict)
+
+nxd = types.ModuleType("nxd"); core = types.ModuleType("nxd.core")
+ctx = types.ModuleType("nxd.core.context"); ctx.DuckDbOutput = DuckDbOutput
+dp = types.SimpleNamespace(on_transform=lambda *a, **k: (lambda fn: fn), main=lambda: None)
+nxd.data_product, nxd.core, core.context = dp, core, ctx
+sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": ctx})
+
+sys.path.insert(0, ".")
+from transform.main import PHYSICAL_MODELS, ingest
+
+out = DuckDbOutput(path=sys.argv[1], schema="main",
+                   model_tables={m: m for m in PHYSICAL_MODELS})
+ingest(duckdb=out, secrets={"csv_source": str(Path("data").resolve())})
+'''
+
+
+def materialize_closure(root: Path) -> tuple[Path | None, str]:
+    """Run the closure's own transform into a scratch DuckDB.
+
+    A closure is not required to leave a materialized database behind -- the
+    skill's dry-run writes one to a temporary directory and the agent is right
+    to treat it as scratch. But the totals gate is the one check no structural
+    rule substitutes for, so "no database" must not mean "not graded": this
+    executes the closure's transform to produce one.
+
+    The transform runs against the closure's OWN data and its own arithmetic;
+    nothing here supplies numbers. Returns the database path, or None with a
+    reason when the transform could not be run.
+    """
+    try:
+        import duckdb  # noqa: F401, PLC0415
+    except ImportError:
+        return None, "duckdb not importable in checker env"
+
+    scratch = Path(tempfile.mkdtemp(prefix="derived-closure-check-"))
+    db = scratch / "data.duckdb"
+    harness = scratch / "_materialize.py"
+    harness.write_text(_MATERIALIZE_HARNESS, encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(harness), str(db)],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=MATERIALIZE_TIMEOUT_S,
+            # The transform imports from the closure root; keep the checker's own
+            # sys.path out of it so it cannot accidentally resolve fixture code.
+            env={**os.environ, "PYTHONPATH": ""},
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"transform timed out after {MATERIALIZE_TIMEOUT_S}s"
+    except OSError as exc:
+        return None, f"transform failed to start: {exc}"
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()
+        return None, f"transform failed: {tail[-1] if tail else 'no output'}"
+    if not db.is_file():
+        return None, "transform ran but wrote no database"
+    return db, ""
 
 
 def _duckdb_path(root: Path) -> Path | None:
@@ -384,14 +465,21 @@ def main() -> int:
 
     # ---- the semantic gate: are the numbers right? ---------------------------
     # This is the check no structural rule can substitute for.
-    db = root / "data.duckdb"
-    if not db.is_file():
-        candidates = list(root.glob("**/*.duckdb"))
-        db = candidates[0] if candidates else db
-    if not db.is_file():
-        check("totals:queryable", False, "no .duckdb produced; cannot verify totals")
-        print_report()
-        return 1 if FAILURES else 0
+    # A landed database is used as-is. When the closure left none -- the skill's
+    # dry-run writes to a temporary directory and the agent is right to treat it
+    # as scratch -- run the closure's own transform to produce one, so that the
+    # totals are graded either way. A closure that cannot be materialized at all
+    # still fails: unrunnable is not the same as unchecked.
+    found = _duckdb_path(root)
+    if found is not None:
+        db = found
+    else:
+        db, why = materialize_closure(root)
+        if db is None:
+            check("totals:queryable", False, f"no queryable database: {why}")
+            print_report()
+            return 1 if FAILURES else 0
+        print("no landed database; materialized the closure's transform to verify totals")
 
     try:
         import duckdb  # noqa: PLC0415
