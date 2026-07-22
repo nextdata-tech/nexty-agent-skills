@@ -404,19 +404,18 @@ reproducible rule for which rows are in the source — and, if you sampled, what
 excludes and whether any downstream model cares); **per-field inference
 caveats** (every field derived rather than a verbatim source value, stating the
 ruling and that it is the field most likely to drift on a rerun); the
-**required-capture fields** (see below); **the full in-closure contract for every
-promised derived model not yet built**; the **reopen recipe** (workflow id + the
-list/resume/build sequence); and **known runtime blockers** kept separate from
-artifact correctness.
+**required-capture fields** (below); **the full in-closure contract for every model
+still to be built**; the **reopen recipe** (workflow id + the list/resume/build
+sequence); and **known runtime blockers** kept separate from artifact correctness.
 
 **Required-capture fields (connector-independent).** A source field a downstream
 model, gate, or verdict **consumes** is required-capture — find them by reading
-backward from every promised derived model and gating/verdict logic to the source
-fields they read. For such a field, "referenced in the source but not extracted"
-is an **incomplete extraction**, not a valid missing value: record which rows lack
-it and surface it for recovery, never pass it as absent. A missing one disables
-the downstream step **without erroring** — it runs, produces nothing, no assert
-fires. A general stage-dependency rule, not about any one field type.
+backward from every derived model and gating/verdict logic to the source fields
+they read. For such a field, "referenced in the source but not extracted" is an
+**incomplete extraction**, not a valid missing value: record which rows lack it and
+surface it for recovery, never pass it as absent. A missing one disables the
+downstream step **without erroring** — it runs, produces nothing, no assert fires.
+A general stage-dependency rule, not about any one field type.
 
 **The boundary rule (Phase C enforces it):** everything a later session needs to
 continue the work lives INSIDE the closure. A promised derived model whose
