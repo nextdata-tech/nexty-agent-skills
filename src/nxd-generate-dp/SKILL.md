@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.15.0
+  version: 0.15.1
 ---
 
 # nxd-generate-dp skill
@@ -424,14 +424,15 @@ contract sits in a doc **outside** the closure — referenced by a `../`-rooted
 path — is a dangling reference across the package boundary: the moment the
 closure moves or is handed off, the contract is gone and the model cannot be
 built. Materialize any deferred contract in the closure, preferably as the **inert
-derived model itself** (its `semantic_model`, an empty-bodied `@dlt.resource`, the
-contract encoded as schema + Step-3b asserts) so it is executable; if genuinely
-deferred, as a **structured `contracts/<name>.md`** (sections `## inputs`,
-`## rule`, `## output schema`, `## verdict set` — see
-[reference/context-doc.md](reference/context-doc.md)). Phase C **fails** a
-deferred promised model with no `contracts/<name>.md`. Never a cross-boundary
-pointer, and never a rubric left only as free prose in `CONTEXT.md` when a derived
-model depends on it.
+derived model itself** — `semantic_model`, an empty-bodied `@dlt.resource`, listed
+in `PHYSICAL_MODELS`, contract as schema + Step-3b asserts: executable *and*
+naming-invariant-clean. If the logic is genuinely deferred, the model is **not yet
+promised** (every `.promise` must be in `PHYSICAL_MODELS`, so a promised-but-unbuilt
+model fails Phase A): carry its contract as a **structured `contracts/<name>.md`**
+(`## inputs`, `## rule`, `## output schema`, `## verdict set` — see
+[reference/context-doc.md](reference/context-doc.md)), name it in `CONTEXT.md`, and
+`.promise` it only once authored. Never a cross-boundary pointer, and never a
+rubric left only as free prose in `CONTEXT.md` when a derived model depends on it.
 
 `CONTEXT.md` is prose to read; it does **not** replace the machine-enforced
 surfaces — rulings still land as data (`nxd_decisions`, see

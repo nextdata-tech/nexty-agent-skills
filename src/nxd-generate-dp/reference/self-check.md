@@ -20,13 +20,15 @@ The dry-run for Step 7 of nxd-generate-dp, in three phases:
 - **Phase B — dry-run of the transform** against a scratch DuckDB: the
   supervisor's execution minus the kernel.
 - **Phase C — context-completeness gate** (Step 6a). Checks that `CONTEXT.md`
-  exists at the closure root, that no closure file references a contract/design
-  doc by a `../`-rooted path that escapes the closure, and that every **deferred**
-  promised model (promised in `spec.py` but not landed — absent from
-  `PHYSICAL_MODELS`) has an in-closure `contracts/<name>.md`. A closure can be
+  exists at the closure root and that no closure file references a contract/design
+  doc by a `../`-rooted path that escapes the closure. A closure can be
   structurally valid and still be an insufficient handoff — a promised derived
-  model whose contract lives in an external doc, or nowhere at all, cannot be
-  continued by a cold reader. Phase C is what catches that.
+  model whose contract lives in an external doc cannot be continued by a cold
+  reader. Phase C is what catches that. (Note: the naming invariant that Phase A
+  enforces already requires every promised model to be in `PHYSICAL_MODELS`, so a
+  model cannot be *promised-but-deferred*; a deferred contract belongs to a model
+  not yet promised, carried in `contracts/<name>.md` and `CONTEXT.md` — see
+  Step 6a — until the model is authored and promised.)
 
 One script, one command, one exit code. What to check and how to read a failure
 is in SKILL.md; this file is the runnable script.
@@ -429,29 +431,12 @@ for rel in scan:
                        f"(CONTEXT.md / contracts/<name>.md / inert derived model), "
                        f"never a ../ pointer.")
 
-# Deferred-model contract check: a model promised in spec.py that is NOT landed
-# by the transform (absent from PHYSICAL_MODELS) is deferred to a later session.
-# Its contract must then live in the closure as contracts/<name>.md — otherwise
-# the cold reader has a promise with no rule to fulfil it (the exact handoff
-# failure this gate exists for). A model IN PHYSICAL_MODELS carries its contract
-# as executable code (schema + Step-3b asserts) and needs no file.
-deferred = promised - physical if physical else set()
-for name in sorted(deferred):
-    if not Path(f"contracts/{name}.md").exists():
-        cerrors.append(f"promised model '{name}' is deferred (not in "
-                       f"PHYSICAL_MODELS) but has no contracts/{name}.md — a "
-                       f"later session cannot build it. Author the inert derived "
-                       f"model now, or add contracts/{name}.md with its inputs / "
-                       f"rule / output schema / verdict set (see "
-                       f"reference/context-doc.md).")
-
 if cerrors:
     print("\nPHASE C FAILED — context-completeness gate:")
     for e in cerrors:
         print(f"  - {e}")
     sys.exit(1)
-print("phase C ok — CONTEXT.md present, no closure-escaping contract "
-      "references, every deferred promised model has an in-closure contract")
+print("phase C ok — CONTEXT.md present, no closure-escaping contract references")
 print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
       "C (context-completeness) all passed.")
 ```
