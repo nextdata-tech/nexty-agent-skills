@@ -1,6 +1,6 @@
 ---
 name: nxd-generate-dp
-description: Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS (the desktop supervisor) from a natural-language intent, an inferred semantic model, and a connector config — spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (a local file export, a live database connection, or an off-mesh REST API), ready to boot locally and produce a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML at create time, so the author never hand-writes deployment-spec / manifest / models YAML. Use when the task is to "generate a data product", "build a DP from intent", "assemble a runnable data product around an inferred semantic model", or to turn a connector config plus stakeholder questions into a local desktop DP. Pairs with nxd-semantic-data-product, which INFERS the semantic model this skill PLACES. Not for the k8s/Snowflake topology — use nxd-data-product-builder there.
+description: CONSTRUCTION SPECIALIST, not an entry point. Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS from an ALREADY-SETTLED plan (intent, inferred model, connector config): spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (local file, live database, or REST API), ready to boot into a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML, so never hand-write deployment-spec / manifest / models YAML. Use when the plan is settled and the closure needs constructing. An end-to-end request to build a data product from a source starts in nxd-pocket-loop, which gathers intent, source, questions and any supplied procedure and runs the policy read-back FIRST; arriving here directly means that has not happened, and this skill's gate blocks materialization until it does. Pairs with nxd-semantic-data-product, which INFERS the model this skill PLACES. Not for k8s — use nxd-data-product-builder.
 allowed-tools:
   - Bash
   - Read
@@ -31,8 +31,8 @@ local (desktop) data product from these inputs:
 
 **If the intent carries a procedure** — a rubric, gates, thresholds, a verdict
 vocabulary — the Workflow's **policy read-back gate** runs before any file is
-written. Assembling a closure whose scoring policy the user has not seen is the
-one failure this skill treats as unrecoverable.
+written. A closure whose scoring policy the user never saw is the one failure
+this skill treats as unrecoverable.
 
 **Connector types at a glance** — the canonical mapping; every other mention below points back here. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
 
@@ -76,9 +76,8 @@ reads. It owns their shape and will overwrite them; your source of truth is the
 Python.
 
 > Layout note: unlike the k8s `.semantic_tools()` topology (modules flat at the
-> DP root, no subdir), the desktop closure keeps the transform at
-> `transform/main.py` — the directory the snapshot pins and the local Python
-> compute driver executes. `models.py`/`spec.py` sit at the root.
+> DP root), the desktop closure keeps the transform at `transform/main.py` — the
+> directory the snapshot pins and the local Python compute driver executes.
 
 ---
 
@@ -103,8 +102,7 @@ are `.model(...)` only — no `PHYSICAL_MODELS` entry, no data directory, no
 table — so assert dlt's output against the promised physical models, not the
 whole `model_tables` map. Base attribute names are byte-exact source headers
 (post-dlt snake_case); derived ones are the keys your resource yields. The
-**storage output port MUST be named `duckdb`**, matched by the transform param
-(Step 4).
+**storage output port MUST be named `duckdb`**, matched by the transform param.
 
 ---
 
@@ -128,18 +126,18 @@ whole `model_tables` map. Base attribute names are byte-exact source headers
   the snake_cased filename — `Card Txns 2024.csv` → `card_txns_2024` — landed at
   `data/<model>/<file>.csv` as an **EXACT BYTE COPY**). Never merge files,
   rename headers, add a column, or reshape rows. Read the headers either way.
-  Reserve **stop and surface it** for genuinely ambiguous shapes: nested
-  directories more than one level deep, a directory mixing formats, or two files
-  that snake_case to the same model name.
+  Reserve **stop and surface it** for genuinely ambiguous shapes: nesting more
+  than one level deep, a directory mixing formats, or two files that snake_case
+  to the same model name.
 - Every data directory MUST have a base model; a promised model with **no** data
   directory is a **derived** model (Step 3a), not a missing export.
 
 ### Gate — policy read-back before ANY materialization
 
 **Fires when** the request supplies a procedure (rubric, gates, weights,
-thresholds, score scales, a verdict/classification vocabulary, a selection rule)
-that has a gap changing a score, verdict, gate outcome, or which rows land: a
-scale defining only some levels (5 and 1 given, 2/3/4 absent); named verdicts
+thresholds, scales, a verdict vocabulary, a selection rule) with a gap changing
+a score, verdict, gate outcome, or which rows land: a scale defining only some
+levels (5 and 1 given, 2/3/4 absent); named verdicts
 with no score→verdict mapping or precedence; a qualitative modifier that must
 become a rule ("unless exceptional"); a gate whose UNKNOWN/missing/inferred
 value could change the outcome; evidence with no provenance or
@@ -156,9 +154,9 @@ answer is not policy approval. Do not proceed on your own recommended defaults.
 generated code: objective and scope · source and re-run approach · gates with
 explicit UNKNOWN handling · each criterion weight · **every anchor you propose
 for an incomplete scale** · score aggregation · **proposed verdict bands and
-precedence** · provenance and missing-evidence behaviour · that all of it lands
-as editable rows, not hidden judgement · an explicit request to correct or
-approve. Enumerate the values; never summarize a procedure the user must check.
+precedence** · provenance and missing-evidence behaviour · that it all lands as
+editable rows, not hidden judgement · an explicit request to correct or approve.
+Enumerate the values; never summarize a procedure the user must check.
 
 **"Use your judgement" is not approval.** *"I don't have those defined, use your
 judgement but write it down"* licenses you to author the proposal — then show it
@@ -168,6 +166,11 @@ Fully specified procedure: still read back and confirm, but expect one short
 turn. No procedure in the request: this gate does not fire; do not manufacture
 one. Approved policy lands as rows —
 [reference/derivation-plan.md](reference/derivation-plan.md).
+
+**If you were invoked directly** — without **nxd-pocket-loop** having gathered
+intent, source, questions and the procedure — that gathering has not happened,
+so this gate has not been satisfied. "The user asked for a data product" is not
+a settled plan: run the read-back here, or hand back to `nxd-pocket-loop`.
 
 ### Step 1a — Plan the derivation before authoring anything
 
@@ -414,8 +417,7 @@ additions (Parquet extra, `dlt[sql_database]` + a vendor driver, or none).
 The closure carries a queryable data product but **not** the design context that
 makes the work continuable: a fresh session cannot continue a promised-but-unbuilt
 model, reproduce the row set, or tell inference from stated fact. Emit
-**`CONTEXT.md` at the closure root**, always. Required sections and a copy-ready
-template: [reference/context-doc.md](reference/context-doc.md).
+**`CONTEXT.md`** at the closure root, always — [reference/context-doc.md](reference/context-doc.md).
 
 **Required-capture fields (connector-independent).** A source field a downstream
 model, gate, or verdict **consumes** is required-capture — find them by reading
@@ -493,7 +495,6 @@ credentials, report it **not run** — never claim it passed.
 
 ## Related skills
 
-| Skill | Relationship |
-|---|---|
-| `nxd-semantic-data-product` | Produces the inferred semantic model this skill places; owns the role grammar and the k8s `.semantic_tools()` topology |
-| `nxd-data-product-builder` | The k8s/cloud DP authoring path (Snowflake et al.) — use it, not this skill, off-desktop |
+**`nxd-pocket-loop`** owns the conversation and sequencing; it gathers the plan
+and invokes this skill. **`nxd-semantic-data-product`** produces the inferred
+model this skill places. **`nxd-data-product-builder`** is the k8s/cloud path.
