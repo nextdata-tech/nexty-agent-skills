@@ -10,7 +10,7 @@
 
 ## What the phases are
 
-The dry-run for Step 7 of nxd-generate-dp, in three phases:
+The dry-run for Step 7 of nxd-generate-dp, in four phases:
 
 - **Phase A — structural check of `models.py` and `spec.py`.** Parses both files
   with `ast` and checks them against the pinned DSL surface in
@@ -30,6 +30,14 @@ The dry-run for Step 7 of nxd-generate-dp, in three phases:
   model cannot be *promised-but-deferred*; a deferred contract belongs to a model
   not yet promised, carried in `contracts/<name>.md` and `CONTEXT.md` — see
   Step 6a — until the model is authored and promised.)
+- **Phase D — policy-boundary gate.** Checks that rulings are landed data the
+  user can edit, not literals in transform code: `nxd_decisions`, if promised, is
+  a **base** model backed by `data/` with a `status` column, and no parameter in
+  a landed policy CSV is duplicated as a literal in `transform/main.py`. A ledger
+  generated from a Python literal *describes* the code instead of driving it —
+  editing a row changes nothing, and the two silently diverge. The prose rules
+  this enforces are in [derivation-plan.md](derivation-plan.md); Phase D is what
+  makes them fire.
 
 After the phases, the script prints a **distribution read-back** over every
 derived model's classification columns. It is not a phase and it never fails the
@@ -473,8 +481,107 @@ if cerrors:
         print(f"  - {e}")
     sys.exit(1)
 print("phase C ok — CONTEXT.md present, no closure-escaping contract references")
+
+# ---------------------------------------------------------------- Phase D ---
+# Policy-boundary gate. A ruling is landed data the user can edit, never a
+# literal in transform code. Both halves are checked, because complying with
+# either alone leaves the defect intact:
+#   (a) nxd_decisions, if promised, is a BASE model backed by data/ with a
+#       status column — not a derived model generated from a Python literal,
+#       which produces a ledger that DESCRIBES code rather than driving it;
+#   (b) no value in a landed policy CSV also appears as a literal in
+#       transform/main.py — a duplicated threshold silently diverges from the
+#       row that claims to be editable.
+# Ground truth is the closure's own landed data, so this needs no fixture.
+derrors = []
+
+# Use the values Phase B IMPORTED, not the statically-parsed ones: the template
+# writes PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS, which is an expression
+# rather than a literal, so the static reader reports it `unverified` and a gate
+# keyed on it would silently never fire.
+if "nxd_decisions" in set(PHYSICAL_MODELS):
+    if "nxd_decisions" not in set(BASE_MODELS):
+        derrors.append(
+            "nxd_decisions is promised but is not in BASE_MODELS — it is being "
+            "generated in the transform. A ledger built from a Python literal "
+            "describes the code instead of driving it: editing a row changes "
+            "nothing. Write data/nxd_decisions/nxd_decisions.csv and land it "
+            "like any other base model (reference/derivation-plan.md).")
+    else:
+        led = Path("data/nxd_decisions/nxd_decisions.csv")
+        if not led.exists():
+            derrors.append("nxd_decisions is in BASE_MODELS but "
+                           "data/nxd_decisions/nxd_decisions.csv is missing.")
+        else:
+            import csv as _csv
+            with led.open(newline="") as fh:
+                lrows = list(_csv.DictReader(fh))
+            if lrows and "status" not in lrows[0]:
+                derrors.append(
+                    f"nxd_decisions.csv has no 'status' column (found "
+                    f"{sorted(lrows[0])}). status is the whole mechanism: it is "
+                    f"how a user tells a confirmed ruling from one you proposed.")
+            else:
+                okst = {"confirmed", "proposed", "blocked"}
+                badst = {r["status"] for r in lrows} - okst
+                if badst:
+                    derrors.append(f"nxd_decisions.status has {sorted(badst)}; "
+                                   f"allowed values are {sorted(okst)}.")
+
+# (b) A policy value that is landed AND hardcoded is a divergence waiting to
+# happen. Only scan CSVs whose model name looks like landed policy, and only
+# compare distinctive values: short/common tokens ("1", "US", "PASS") collide by
+# coincidence, and flagging those would make this unreliable.
+POLICY_HINT = ("rubric", "weight", "threshold", "band", "anchor", "verdict",
+               "scale", "policy", "gate", "criteri")
+tsrc = Path("transform/main.py").read_text()
+tlits = set()
+for node in ast.walk(ast.parse(tsrc)):
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            tlits.add(node.value.strip())
+        elif isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            tlits.add(str(node.value))
+# A KEY column is how the transform looks a row UP, so naming it in code is
+# correct and expected ("c1_backend_depth" as an output column). What must not
+# be duplicated is the PARAMETER the row carries — the weight, threshold or
+# verdict the lookup returns. Skip the first column and any *_id/key/name/
+# criterion column; check the rest.
+KEYISH = ("id", "key", "name", "criterion", "code", "slug", "label")
+for pcsv in sorted(Path("data").rglob("*.csv")):
+    if not any(h in pcsv.parent.name.lower() for h in POLICY_HINT):
+        continue
+    import csv as _csv
+    with pcsv.open(newline="") as fh:
+        prows = list(_csv.DictReader(fh))
+    if not prows:
+        continue
+    cols = list(prows[0])
+    for col in cols[1:]:                       # first column is the key
+        if any(k in col.lower() for k in KEYISH):
+            continue
+        for row in prows:
+            v = (row[col] or "").strip()
+            # Distinctive = long enough to be a real policy value, or a
+            # decimal/multi-digit number. Single digits and 1-3 char codes
+            # collide with array indices and unrelated strings.
+            distinctive = len(v) >= 4 or (
+                v.replace(".", "", 1).isdigit() and len(v) >= 2)
+            if distinctive and v in tlits:
+                derrors.append(
+                    f"{pcsv}: value {v!r} (column '{col}') is landed AND "
+                    f"appears as a literal in transform/main.py. The "
+                    f"transform must READ it from the row; a copy diverges "
+                    f"from the row the user edits.")
+
+if derrors:
+    print("\nPHASE D FAILED — policy boundary (rulings are data, not code):")
+    for e in dict.fromkeys(derrors):
+        print(f"  - {e}")
+    sys.exit(1)
+print("phase D ok — rulings land as editable data, not transform literals")
 print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
-      "C (context-completeness) all passed.")
+      "C (context-completeness), D (policy boundary) all passed.")
 
 # Distribution read-back. NOT a gate — it never fails the run. It prints the
 # value counts of every classification-shaped string column of every derived
@@ -497,6 +604,41 @@ for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
         counts = ", ".join(f"{v!r}={n}" for v, n in rows)
         flag = "  <- UNIFORM: this column does not discriminate" if len(rows) == 1 else ""
         print(f"distribution {m}.{c}: {counts}{flag}")
+
+# Declared-but-absent read-back. The dual of UNIFORM, and equally unconditional:
+# a vocabulary the closure LANDS (verdict labels, statuses, buckets) whose value
+# never appears in any derived column is a branch that did not fire. Deciding
+# whether it CANNOT fire needs reasoning and stays with you — this only reports
+# what is mechanically true: declared, never produced. Vocabularies come from
+# landed data, never from a transform literal, so this is independent of the
+# code it is checking.
+produced = set()
+for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
+    for (c,) in con.execute(
+            f"SELECT name FROM pragma_table_info('{m}') "
+            f"WHERE type = 'VARCHAR'").fetchall():
+        if c.startswith("_dlt_"):
+            continue
+        produced |= {str(v[0]).strip() for v in con.execute(
+            f'SELECT DISTINCT "{c}" FROM main.{m}').fetchall() if v[0] is not None}
+VOCAB_HINT = ("verdict", "bucket", "outcome", "band", "tier", "category")
+for vcsv in sorted(Path("data").rglob("*.csv")):
+    # nxd_decisions is the ledger ABOUT the policy, not an output vocabulary:
+    # its own status values are meant to describe rulings, not to appear in a
+    # scored row. Reporting them absent would be noise on every closure.
+    if vcsv.parent.name == "nxd_decisions":
+        continue
+    import csv as _csv
+    with vcsv.open(newline="") as fh:
+        vrows = list(_csv.DictReader(fh))
+    for col in (vrows[0] if vrows else {}):
+        if not any(h in col.lower() for h in VOCAB_HINT):
+            continue
+        declared = {(r[col] or "").strip() for r in vrows} - {""}
+        missing = sorted(d for d in declared if d not in produced)
+        if missing and len(declared) <= 12:
+            print(f"ABSENT {vcsv.parent.name}.{col}: declared {missing} — "
+                  f"never produced in any derived column")
 ```
 
 The read-back prints **after** `SELF-CHECK OK`, deliberately: it is the last
@@ -512,6 +654,21 @@ a derived table with zero rows, or with exactly as many rows as its source when
 the derivation was supposed to expand or collapse, means the derivation ran but
 did nothing. The Step-3b asserts should have caught that — if they did not, the
 invariant they encode was too weak.
+
+Reading a **Phase D** failure: it is not a formatting complaint. `nxd_decisions
+is promised but is not in BASE_MODELS` means the ledger is generated from a
+Python literal, so it documents the code rather than driving it — the row a user
+edits has no effect, and the two drift apart the moment either changes. Fix it by
+writing `data/nxd_decisions/nxd_decisions.csv` and reading it like any other base
+model, never by deleting the model or loosening the check. `value X is landed AND
+appears as a literal` means the same value exists in two places that can
+disagree: delete the literal and read the row.
+
+An **ABSENT** line reports a declared value no derived column ever produced. It
+is mechanical and says only that: on this data, that branch did not fire. Whether
+it *cannot* fire is yours to work out — and if a rule makes a verdict
+unreachable (a criterion that can never reach the score its own branch needs),
+say so to the user rather than shipping a branch that is dead by construction.
 
 The **distribution read-back** is read the same way, and it is the one the
 success banner is most likely to bury. A `UNIFORM` line means a column you built

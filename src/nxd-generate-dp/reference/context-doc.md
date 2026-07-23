@@ -131,7 +131,7 @@ Workflow id: <workflow-id>   (the only durable key across sessions)
 
 ## Known blockers (separate from artifact correctness)
 - <e.g. build/serve readiness timeout>: <symptom>, <remedy>. The closure
-  self-check (A/B/C) passing is independent of this runtime issue.
+  self-check (A/B/C/D) passing is independent of this runtime issue.
 ```
 
 ## `contracts/<name>.md` template (one per model still to build)

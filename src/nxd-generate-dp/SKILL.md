@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.16.0
+  version: 0.17.0
 ---
 
 # nxd-generate-dp skill
@@ -448,16 +448,17 @@ Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the
 naming invariant (`models.py` == `.promise` == `PHYSICAL_MODELS` ==
 `main.<name>`), then separately confirm `BASE_MODELS` — and only `BASE_MODELS` —
 matches the `data/` directories. Derived models and `.model(...)` views lack one
-for different reasons: the first is written by the transform, the second is never
-written at all. Confirm the supplied export is unchanged, then run
+for different reasons: the first is written by the transform, the second never at
+all. Confirm the supplied export is unchanged, then run
 [reference/self-check.md](reference/self-check.md): it dry-runs the transform
 against a scratch DuckDB, **structurally validates `models.py`/`spec.py` against
 the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
-installable here), **runs Phase C — the context-completeness gate** (fails on a
-missing `CONTEXT.md` or a `../`-rooted contract pointer escaping the closure),
-then prints the **distribution read-back**. Read the `unverified:` lines — those
-were not checked at all — and read the distributions: a `UNIFORM` classification
-column is a value you supplied, not one the data produced, so state it.
+installable here), runs **Phase C** (missing `CONTEXT.md` / a `../`-rooted
+contract pointer) and **Phase D — the policy boundary**: a promised
+`nxd_decisions` must be a BASE model with a `status` column, and no landed policy
+value may also be a literal in the transform. Then it prints the **distribution**
+and **ABSENT** read-backs. Read `unverified:`, read the distributions (`UNIFORM`
+= a value you supplied, not one the data produced), and state both.
 
 Reading a failure: if the read-back assert fires or an unquoted `main.<name>`
 query fails, a name diverged — fix the NAME (in `models.py`, `.promise`,
@@ -466,10 +467,9 @@ If a derived model's reconciliation assert (Step 3b) fires, the derivation is
 wrong — fix the LOGIC, never loosen the assert.
 
 **Database/API connectors need live credentials to dry-run.** With credentials,
-run each type's own connectivity check exactly as its reference doc specifies —
-`database-source.md`'s asserts `row_count > 0` per model; `api-source.md`'s a
-parseable response per resource — never an exact fixture count. Without
-credentials, report it **not run** — never claim it passed.
+run each type's own connectivity check per its reference doc (`database-source.md`
+asserts `row_count > 0` per model; `api-source.md` a parseable response) — never
+an exact fixture count. Without credentials, report it **not run**.
 
 ---
 ## Invariants — NEVER violate these
