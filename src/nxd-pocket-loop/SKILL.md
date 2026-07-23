@@ -1,6 +1,6 @@
 ---
 name: nxd-pocket-loop
-description: Use when a task includes or references tabular business data—rows, columns, CSVs, spreadsheets, exports, a live database connection, or an off-mesh REST API—and the user wants an analytical answer they may revisit: a breakdown, ranking, comparison, total by group, trend, anomaly, driver, or follow-up question. Treat recurring data, requests to keep asking questions, and repeated analysis as strong signals to create or reuse a governed local product, even when the first table is small enough to calculate directly. Answer only from the product's semantic query result. If the data or local desktop runtime is unavailable, state the missing prerequisite; never silently substitute raw SQL, pandas, shell aggregation, or mental arithmetic. Do not use for clearly one-off arithmetic with no tabular analysis or reusable intent. For an explicitly deployed platform product, use nxd-data-product-query.
+description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request — "build me a data product", "score these against my rubric" — starts HERE, not in nxd-generate-dp: this skill gathers intent, source, questions and any supplied procedure (rubric, gates, weights, thresholds, verdicts), runs the mandatory policy read-back when that procedure has gaps, then invokes nxd-generate-dp. Going straight to the generator skips the co-authoring checkpoint and encodes a policy the user never saw. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-data-product-query.
 allowed-tools:
   - Bash
   - Read
@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.15.2
+  version: 0.16.0
 ---
 
 # nxd-pocket-loop skill
@@ -36,15 +36,22 @@ intent + source + questions
    → answer, and refine wrong answers back into a regenerate
 ```
 
-This skill is the **orchestrator**. It does not re-teach inference or code
-generation — it invokes the skills that own those, then drives the supervisor
-MCP path to run and query the result. Do not expose this routing machinery as a
-requirement for the user.
+This skill is the **orchestrator**, and it is the **entry point for any
+end-to-end "build me a data product from this source" request** — including one
+that names a data product directly. `nxd-generate-dp` is the specialist that
+constructs the closure once the plan is settled; it is not the place a request
+starts. If you find yourself in the generator without having gathered the
+intent, source, questions and any supplied procedure here first, you skipped a
+step: come back, do Step 1, and invoke the generator from Step 3. It does not
+re-teach inference or code generation — it invokes the skills that own those,
+then drives the supervisor MCP path. Do not expose this routing to the user.
 
-> **You own the loop, not the gates.** This skill sequences the work loosely and
-> narrates progress. It does NOT enforce ordered approval gates or autonomy
-> budgets — that hardening lives supervisor-side and is deferred. Keep one data
-> product in flight at a time while iterating.
+> **You own the conversation and the sequencing.** This skill narrates progress
+> and sequences the work loosely — with **one exception that is not loose**: the
+> policy read-back in Step 1a. Autonomy budgets and supervisor-side approval
+> machinery remain deferred, but that gate is enforced here, in agent-turn
+> space, because no runtime seam exists that could enforce it later. Keep one
+> data product in flight at a time while iterating.
 
 ## Route the request before doing work
 
@@ -109,6 +116,11 @@ Establish three things (ask the user for whatever is missing):
 - **Questions** — the natural-language questions the DP must answer. These drive
   the whole inference (right-to-left): the model is judged by whether it answers
   them.
+- **Any procedure the user already has** — a rubric, gates, weights, thresholds,
+  a verdict vocabulary, a selection rule. Ask for it here rather than inferring
+  one later: a supplied procedure is the spec, encoded verbatim and landed as
+  data, and a gap in it is a question back to the user. nxd-generate-dp's
+  `reference/derivation-plan.md` owns how it lands.
 
 Warm the user up before long work: state that you'll infer a model, generate the
 DP, run it locally, and then answer their questions — so a multi-minute build is
@@ -138,7 +150,11 @@ may have.
 
 Materialize each source faithfully before inference — repeat the matching
 bullet once per source when there is more than one, tagging every artifact
-you produce with that source's label:
+you produce with that source's label. **If the request supplied a procedure
+(rubric, gates, thresholds, verdicts) with a gap that changes a result, the
+policy read-back in Step 3's skill comes FIRST** — reading a source is always
+allowed, but copying it into a closure is a materialization and waits for the
+user's reply:
 
 - **Attached or workspace source:** make an exact byte-for-byte copy into the
   generated connector export. Do not rewrite delimiter, encoding, headers, or
@@ -200,7 +216,11 @@ public semantic role grammar — follow it; do not duplicate its guidance here.
 Invoke the **nxd-generate-dp** skill: assemble the complete Python-authored
 closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
 `requirements.txt`, `CONTEXT.md`, and the connector-type-specific artifact(s) — from the
-intent, inferred model(s), and connector config. Pass through **every**
+intent, inferred model(s), and connector config. **That skill opens with a
+policy read-back gate**: when the request carried a procedure with a gap that
+changes a score, verdict, gate outcome, or which rows land, it writes nothing
+until the user has seen the enumerated proposal and replied. Do not route around
+it, and do not treat your own earlier technical questions as that approval. Pass through **every**
 gathered source with its label (or the single unlabeled source, if there's
 only one) and its per-model provenance from Step 2, untouched: the file
 export plus `csv-source-path`/`file-source-path`, or the `db-source-tables`
@@ -230,6 +250,13 @@ recipe, the sample-selection rule, per-field inference caveats, and the full
 contract of any promised-but-unbuilt derived model. It must be self-contained:
 a derived model's contract lives inside the closure, never behind a `../` pointer
 to an external doc that the handoff would strand.
+
+**Relay the self-check's distribution read-back before building**, in one or two
+lines: the value counts it printed for each classification column (a column that
+came out uniform is the one to say out loud), and which of the closure's
+assertions are internal-consistency only rather than checks against the source.
+A green self-check means the closure is structurally sound and the transform
+ran — never report it as evidence that the numbers are right.
 
 ### Step 4 — Build and serve through MCP
 
@@ -366,6 +393,12 @@ indefinitely or give up silently.
   rates, merchant→category rulings and similar mappings are surfaced to the
   user, confirmed, and landed as their own model so they are queryable — never
   embedded as constants in generated transform code.
+- **A supplied procedure with a result-changing gap is read back BEFORE any
+  materialization.** No closure directory, source copy, generated code, table,
+  scoring, or build until the user has seen every proposed anchor, band and
+  precedence rule and replied. A technical delivery question is not that
+  approval; "use your judgement" licenses authoring the proposal, not skipping
+  the turn.
 - **A ruling behind a number is stated with the number.** When a dimension's
   catalog description names the ruling that created it, the answer says so, and
   a classified total reports its review-bucket share whenever nonzero. A

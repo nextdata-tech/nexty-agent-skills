@@ -908,12 +908,21 @@ DETERMINISTIC_CHECK_PREFIX = "DETERMINISTIC CHECK (authoritative runner facts): 
 DETERMINISTIC_CHECK_FAILED = "deterministic check failed"
 
 
-def deterministic_check_fact(scenario_dir: Path, ws: Path, cfg: dict) -> str:
+def deterministic_check_fact(
+    scenario_dir: Path, ws: Path, cfg: dict, trace: str = ""
+) -> str:
     """Run a scenario's runner-side checker against the landed workspace.
 
     ``--fixtures`` points at the scenario's own ``fixtures/`` directory, never
     at the workspace: that is where the withheld ground truth lives and it must
     stay out of the agent's reach.
+
+    ``--trace`` is passed only when the scenario sets ``"wants_trace": true``.
+    A landed workspace records WHAT the agent produced but not the ORDER it
+    acted in, so a scenario asserting that a conversational checkpoint preceded
+    the first write cannot be graded from disk alone. The trace file lands in
+    its own temp dir, never inside ``ws``: a file in the workspace would be
+    visible to the agent and would perturb any workspace-files assertion.
     """
     fixtures = scenario_dir / "fixtures"
     script = fixtures / str(cfg.get("script", ""))
@@ -928,6 +937,10 @@ def deterministic_check_fact(scenario_dir: Path, ws: Path, cfg: dict) -> str:
     for dep in deps:
         cmd += ["--with", str(dep)]
     cmd += ["python", str(script), "--fixtures", str(fixtures), "--root", str(ws)]
+    if cfg.get("wants_trace"):
+        trace_file = Path(tempfile.mkdtemp(prefix="nxd-eval-trace-")) / "trace.txt"
+        trace_file.write_text(trace, encoding="utf-8")
+        cmd += ["--trace", str(trace_file)]
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
@@ -1709,7 +1722,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             # disk, so it has to run before the temporary workspace is removed.
             if ok and checks.get("deterministic_check"):
                 det_fact = deterministic_check_fact(
-                    scenario_dir, ws, checks["deterministic_check"]
+                    scenario_dir, ws, checks["deterministic_check"], trace
                 )
 
         # Never cache a transcript whose facts carry a verifier infrastructure

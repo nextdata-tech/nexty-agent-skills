@@ -1,6 +1,6 @@
 ---
 name: nxd-generate-dp
-description: Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS (the desktop supervisor) from a natural-language intent, an inferred semantic model, and a connector config — spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (a local file export, a live database connection, or an off-mesh REST API), ready to boot locally and produce a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML at create time, so the author never hand-writes deployment-spec / manifest / models YAML. Use when the task is to "generate a data product", "build a DP from intent", "assemble a runnable data product around an inferred semantic model", or to turn a connector config plus stakeholder questions into a local desktop DP. Pairs with nxd-semantic-data-product, which INFERS the semantic model this skill PLACES. Not for the k8s/Snowflake topology — use nxd-data-product-builder there.
+description: CONSTRUCTION SPECIALIST, not an entry point. Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS from an ALREADY-SETTLED plan (intent, inferred model, connector config): spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (local file, live database, or REST API), ready to boot into a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML, so never hand-write deployment-spec / manifest / models YAML. Use when the plan is settled and the closure needs constructing. An end-to-end request to build a data product from a source starts in nxd-pocket-loop, which gathers intent, source, questions and any supplied procedure and runs the policy read-back FIRST; arriving here directly means that has not happened, and this skill's gate blocks materialization until it does. Pairs with nxd-semantic-data-product, which INFERS the model this skill PLACES. Not for k8s — use nxd-data-product-builder.
 allowed-tools:
   - Bash
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.15.2
+  version: 0.16.0
 ---
 
 # nxd-generate-dp skill
@@ -24,14 +24,17 @@ local (desktop) data product from these inputs:
 
 1. **Intent** — the user's natural-language description of what the DP is for.
 2. **Inferred semantic model** — the per-column semantic roles produced by the
-   **nxd-semantic-data-product** skill's inference mode (its `schema.json`
-   profile + role declarations). That skill designs the roles; this skill
-   places them. Do not redesign them.
-3. **Connector config(s)** — one or more, each naming where the source data
-   lives and its **connector type**. Never invent connection details or
-   credentials for a database or API connector.
+   **nxd-semantic-data-product** skill's inference mode. That skill designs the
+   roles; this skill places them. Do not redesign them.
+3. **Connector config(s)** — each naming where the source data lives and its
+   **connector type**. Never invent connection details or credentials.
 
-**Connector types at a glance** — the canonical mapping; every other mention below points back here instead of restating it:
+**If the intent carries a procedure** — a rubric, gates, thresholds, a verdict
+vocabulary — the Workflow's **policy read-back gate** runs before any file is
+written. A closure whose scoring policy the user never saw is the one failure
+this skill treats as unrecoverable.
+
+**Connector types at a glance** — the canonical mapping; every other mention below points back here. Names are for exactly one instance of a type; for 2+, label each per `reference/multi-source.md`.
 
 | Type | Service | `secrets[...]` key | Companion artifact |
 |---|---|---|---|
@@ -39,8 +42,6 @@ local (desktop) data product from these inputs:
 | Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
 | Database — `reference/database-source.md` | `db-source` | `db_source` | `db-source-tables`, no `data/` |
 | REST API — `reference/api-source.md` | `api-source` | `api_source` | `api-source-endpoints`, no `data/` |
-
-Names above are for exactly one instance of a type — for 2+, label each per `reference/multi-source.md`.
 
 The output is a directory the **desktop supervisor** compiles, pins, boots, and
 publishes: it **compiles `spec.py` into the kernel definition YAML at create
@@ -74,10 +75,9 @@ staging-path placeholder, and the compiled semantic roles the semantic child
 reads. It owns their shape and will overwrite them; your source of truth is the
 Python.
 
-> Layout note: unlike the k8s `.semantic_tools()` topology (modules flat at
-> the DP root, no subdir), the desktop closure keeps the transform at
-> `transform/main.py` — the directory the snapshot pins and the local Python
-> compute driver executes. `models.py`/`spec.py` sit at the root, imported by the compiler.
+> Layout note: unlike the k8s `.semantic_tools()` topology (modules flat at the
+> DP root), the desktop closure keeps the transform at `transform/main.py` — the
+> directory the snapshot pins and the local Python compute driver executes.
 
 ---
 
@@ -95,16 +95,14 @@ and the `model_tables` identity map from these — you do not author them):
 | the physical table | what dlt writes: `main.<name>` | yes | yes |
 | the connector's per-model reference | `data/<name>/` for a file connector (CSV/JSON/JSONL/Parquet); a `db-source-tables` entry for a database connector; an `api-source-endpoints` entry for a REST API connector | yes | **no** |
 
-`PHYSICAL_MODELS` is the set of **landed tables**, not the set of data
-directories: base models (backed by `data/<name>/`) **plus** derived models
-(computed in the transform, no data directory — Step 3a). Both are promised in
-`spec.py` and both appear in `model_tables`. Semantic views are `.model(...)`
-only: no `PHYSICAL_MODELS` entry, no data directory, no physical table — so
-assert dlt's output against the promised physical models, not the whole
-`model_tables` map. Base attribute names are byte-exact source headers (post-dlt
-snake_case); derived attribute names are the keys of the dicts your resource
-yields. Separately, the **storage output port MUST be named `duckdb`**, matched
-by the transform param (Step 4) — the local DuckDB driver requires it.
+`PHYSICAL_MODELS` is the set of **landed tables**, not data directories: base
+models (backed by `data/<name>/`) **plus** derived models (Step 3a, no data
+directory). Both are promised and both appear in `model_tables`. Semantic views
+are `.model(...)` only — no `PHYSICAL_MODELS` entry, no data directory, no
+table — so assert dlt's output against the promised physical models, not the
+whole `model_tables` map. Base attribute names are byte-exact source headers
+(post-dlt snake_case); derived ones are the keys your resource yields. The
+**storage output port MUST be named `duckdb`**, matched by the transform param.
 
 ---
 
@@ -118,27 +116,61 @@ by the transform param (Step 4) — the local DuckDB driver requires it.
   PII flags, metrics, and column types. Base roles and metric views are
   different authored objects — see Step 2.
 - Each connector config names a **connector type** (CSV / other local file /
-  database / REST API) plus its type-specific location. For the non-CSV types,
-  follow `reference/file-source.md` / `database-source.md` / `api-source.md` —
-  for database/API, confirm the user supplied real connection details; never
-  invent them.
-- **Read the export's shape, then land it unchanged.** For a file connector
-  (CSV/JSON/JSONL/Parquet), two shapes are both NORMAL and neither is an
-  anomaly:
-  - **One subdirectory per model** (`<root>/<model>/*.csv`) — land each
-    directory as `data/<model>/`.
-  - **Flat `*.csv` files sitting at the export root** — this is one base model
-    per file. The model name is the snake_cased filename without its
-    extension (`Card Txns 2024.csv` → `card_txns_2024`), and the file lands at
-    `data/<model>/<file>.csv` as an **EXACT BYTE COPY**. Never merge files,
-    rename headers, add a column, or reshape rows to fit a tidier model set.
+  database / REST API) plus its location. For non-CSV types follow
+  `reference/file-source.md` / `database-source.md` / `api-source.md`; for
+  database/API confirm real connection details — never invent them.
+- **Read the export's shape, then land it unchanged** — landing happens only
+  after the policy gate below. Two file-connector shapes are NORMAL: **one
+  subdirectory per model** (`<root>/<model>/*.csv`, landed as `data/<model>/`),
+  or **flat `*.csv` at the export root** (one base model per file, named from
+  the snake_cased filename — `Card Txns 2024.csv` → `card_txns_2024` — landed at
+  `data/<model>/<file>.csv` as an **EXACT BYTE COPY**). Never merge files,
+  rename headers, add a column, or reshape rows. Read the headers either way.
+  Reserve **stop and surface it** for genuinely ambiguous shapes: nesting more
+  than one level deep, a directory mixing formats, or two files that snake_case
+  to the same model name.
+- Every data directory MUST have a base model; a promised model with **no** data
+  directory is a **derived** model (Step 3a), not a missing export.
 
-  Read the headers either way. Reserve **stop and surface it** for genuinely
-  ambiguous shapes: nested directories more than one level deep, a directory
-  mixing formats, or two files that snake_case to the same model name.
-- Every data directory MUST have a base model; a promised model with **no**
-  data directory is a **derived** model, computed in the transform (Step 3a) —
-  not a missing export. Never invent or drop models.
+### Gate — policy read-back before ANY materialization
+
+**Fires when** the request supplies a procedure (rubric, gates, weights,
+thresholds, scales, a verdict vocabulary, a selection rule) with a gap changing
+a score, verdict, gate outcome, or which rows land: a scale defining only some
+levels (5 and 1 given, 2/3/4 absent); named verdicts
+with no score→verdict mapping or precedence; a qualitative modifier that must
+become a rule ("unless exceptional"); a gate whose UNKNOWN/missing/inferred
+value could change the outcome; evidence with no provenance or
+missing-evidence rule.
+
+**Then, until the user replies, do NOT**: create the closure directory, copy
+source data into it, write any closure file, generate transform code, create
+tables, score rows, or invoke a build. Reading the source and its headers is
+allowed. Asking technical delivery questions (deterministic vs manual, extra
+outputs, naming) is allowed and **does not satisfy this gate** — a delivery
+answer is not policy approval. Do not proceed on your own recommended defaults.
+
+**State the read-back** in the user's vocabulary, understandable without reading
+generated code: objective and scope · source and re-run approach · gates with
+explicit UNKNOWN handling · each criterion weight · **every anchor you propose
+for an incomplete scale** · score aggregation · **proposed verdict bands and
+precedence** · provenance and missing-evidence behaviour · that it all lands as
+editable rows, not hidden judgement · an explicit request to correct or approve.
+Enumerate the values; never summarize a procedure the user must check.
+
+**"Use your judgement" is not approval.** *"I don't have those defined, use your
+judgement but write it down"* licenses you to author the proposal — then show it
+and wait again. It never licenses skipping the turn.
+
+Fully specified procedure: still read back and confirm, but expect one short
+turn. No procedure in the request: this gate does not fire; do not manufacture
+one. Approved policy lands as rows —
+[reference/derivation-plan.md](reference/derivation-plan.md).
+
+**If you were invoked directly** — without **nxd-pocket-loop** having gathered
+intent, source, questions and the procedure — that gathering has not happened,
+so this gate has not been satisfied. "The user asked for a data product" is not
+a settled plan: run the read-back here, or hand back to `nxd-pocket-loop`.
 
 ### Step 1a — Plan the derivation before authoring anything
 
@@ -180,24 +212,23 @@ composite.
 
 Author `models.py` with the **real public semantic DSL**
 (`from nxd.spec import semantic_model, field, primary_key, dimension, join`;
-types from `nxd.spec.data_types`). Place the table roles, then add one semantic
-view per set of metrics over that table:
+types from `nxd.spec.data_types`). Place the table roles, then one semantic view
+per set of metrics over that table:
 
 - `semantic_model("<name>")` — the bare lowercase physical table name.
-- `.schema({...})` mapping each column to a typed value. A role-bearing column is
+- `.schema({...})` mapping each column to a typed value. Role-bearing columns are
   `field(<type>(), <role>())`; one with no role is the bare type
   (`"country": string()`), which still reaches the compiled schema.
 - **Base models carry ONLY `primary_key()`, `dimension(...)`, or `join(...)`** —
   the DSL RAISES on a metric attached to a base-model field.
 - A metric belongs on `semantic_view("<base>_metrics", <base>)` with
   `metric_field(<type>(), metric(Agg.<AGG>, of=<base>.field("<column>"), ...))` —
-  a query-time model, not a physical table.
+  query-time, not a physical table.
 
-Role builders (verified DSL facts): `field(number(), primary_key())` — emit
-`primary_key()`, NEVER the deprecated `grain` alias;
-`field(string(), dimension(name="<concept>", pii=<flag>, description="..."))`;
-`field(number(), join(to="<model>", to_column="<col>"))` — note `to=` and
-`to_column=`, NOT `to_model=`.
+Role builders (verified DSL facts): `field(number(), primary_key())` — NEVER the
+deprecated `grain` alias; `field(string(), dimension(name="<concept>",
+pii=<flag>, description="..."))`; `field(number(), join(to="<model>",
+to_column="<col>"))` — note `to=` and `to_column=`, NOT `to_model=`.
 
 Unannotated columns stay bare-typed (do not invent roles no question motivated).
 **A dimension a ruling created MUST carry `description=` stating that ruling** —
@@ -229,14 +260,13 @@ matching the port in Step 4. Declare `PHYSICAL_MODELS` from the `.promise(...)`
 calls — base names first, then derived; use `duckdb.model_tables` only to resolve
 those names (it can also hold `.model(...)` views with no table).
 
-The complete `transform/main.py` template — module docstring, imports, the
-source-checkout shim, the `BASE_MODELS`/`DERIVED_MODELS`/`PHYSICAL_MODELS`
-tuples, the `@data_product.on_transform()` `ingest(duckdb, secrets)` body
-(run-local dlt state, the per-base-model `filesystem | read_csv` reader loop, one
-`pipeline.run(..., write_disposition="replace")`, the read-back-and-assert
-block, the `.transform-complete` touch) and the `__main__` guard — is in
-[reference/transform-template.md](reference/transform-template.md). Copy it and
-fill in the model tuples.
+The complete `transform/main.py` template — docstring, imports, source-checkout
+shim, the `BASE_MODELS`/`DERIVED_MODELS`/`PHYSICAL_MODELS` tuples, the
+`@data_product.on_transform()` `ingest(duckdb, secrets)` body (run-local dlt
+state, the per-base-model `filesystem | read_csv` reader loop, one
+`pipeline.run(..., write_disposition="replace")`, the read-back-and-assert block,
+the `.transform-complete` touch) and the `__main__` guard — is in
+[reference/transform-template.md](reference/transform-template.md).
 
 Contract facts baked into that template — keep every one:
 
@@ -258,9 +288,9 @@ Contract facts baked into that template — keep every one:
 ### Step 3a — Derived models: computed rows through the SAME port
 
 A **derived model** is a promised physical model with no `data/<name>/`
-directory: its rows are computed in Python from the base sources and landed
-through the same DuckDB output port. Every ruling the semantic layer cannot
-express lives here — dedupe, amortization, normalization, classification.
+directory: rows computed in Python from the base sources, landed through the same
+port. Every ruling the semantic layer cannot express lives here — dedupe,
+amortization, normalization, classification.
 
 **The DDL ban (Step 3) is preserved, not relaxed**: still written by dlt through
 the `duckdb` port, still NO `duckdb.connect(...)` write, NO `CREATE TABLE` /
@@ -277,45 +307,38 @@ clause below is mandatory:
 - **Name it from `model_tables`** —
   `@dlt.resource(name=duckdb.model_tables["<derived>"])` — and **list it in
   `PHYSICAL_MODELS`** (via `DERIVED_MODELS`) so the read-back assert covers it.
-  A derived model absent from that tuple is an unasserted table.
 - **Read the sources yourself** with stdlib `csv` and `sorted()` over the glob:
   dlt's reader streams to the destination and cannot hand rows back to Python.
 - **Deterministic.** No `now()`, no `today()`, no unseeded random, no
-  set/dict-iteration order leaking into output: a rerun over the same export
-  must produce byte-identical rows.
-- **Confined to the fixed venv** — `pandas`, `duckdb`, stdlib only. The closure's
-  `requirements.txt` is **never installed at runtime**, so a new import is an
-  import error at run time.
+  set/dict-iteration order leaking into output.
+- **Confined to the fixed venv** — `pandas`, `duckdb`, stdlib only;
+  `requirements.txt` is **never installed at runtime**.
 
 ### Step 3b — In-memory asserts: the only durable data-quality check
 
-**Desktop has no other execution point for data quality.** The local storage
-driver's verify is a no-op and contract verification runs only platform-side, so
-an assert inside the transform is the whole quality story — and it runs over the
-complete derived set before the rows are yielded, failing the run **before
-anything is promoted**. Write one assert helper per derived model, invoked
-between deriving the rows and yielding them. Make each an **invariant over the
-source-vs-derived relationship** — a claim that could be false if the derivation
-were wrong; restating the transform's own arithmetic proves nothing. **These are
-mandatory tiers, not a menu to pick the convenient one from:**
+**Desktop has no other execution point for data quality.** The local driver's
+verify is a no-op and contract verification runs only platform-side, so an assert
+inside the transform is the whole quality story — running over the complete
+derived set before the rows are yielded. One helper per derived model, invoked
+between deriving and yielding, each an **invariant over the source-vs-derived
+relationship**: a claim that could be false if the derivation were wrong.
+Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
 
 - **Tier 1 — every derived model, always:** (a) the **declared key is unique**
   over the complete derived set, and (b) the **row count computed from the
   grain** matches source rows **read independently** from the base CSVs.
-- **Tier 2 — additionally, whenever the model carries a MEASURE column** (any
-  amount/quantity a metric will aggregate): the **signed measure total must
-  reconcile** against the signed total read independently from the base CSVs,
-  with **every intentional divergence itemized as its own named term**
-  (`- refund_pairs_total`, `- transfer_rows_total`). Use `Decimal`, and
-  reconcile **per source currency BEFORE any FX conversion**.
+- **Tier 2 — whenever the model carries a MEASURE column** (any amount/quantity
+  a metric will aggregate): the **signed measure total must reconcile** against
+  the signed total read independently from the base CSVs, with **every
+  intentional divergence itemized as its own named term**
+  (`- refund_pairs_total`). Use `Decimal`, reconcile **per source currency
+  BEFORE any FX conversion**.
 
 An itemized exclusion means the derivation **removes** rows or value rather than
 enriching — reclassify it as a removal and apply the removal invariants too.
 Classification totality is never sufficient alone: it can pass while every
 monetary answer is overstated. Raise `RuntimeError` carrying the
-actual-vs-expected numbers; the run log is the whole diagnostic.
-
-Worked code for both steps is in
+actual-vs-expected numbers. Worked code for both steps:
 [reference/derived-models.md](reference/derived-models.md).
 
 **Other connector types**: Step 3 is identical except the `readers=[...]` body
@@ -324,13 +347,12 @@ and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 
 ### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
 
-`spec.py` is the author-facing source of truth the supervisor compiles into
-the deployment YAML: it declares the infra profile, wires the transform to
-compute, promises every physical model — base and derived — on the DuckDB
-port, and registers each query-time view. Bind the three service references by
-relative infra-profile path (resolved against `infra-profile.yaml`, Step 5).
-The worked `spec.py` is in
-[reference/models-example.md](reference/models-example.md).
+`spec.py` is the author-facing source of truth the supervisor compiles into the
+deployment YAML: it declares the infra profile, wires the transform to compute,
+promises every physical model — base and derived — on the DuckDB port, and
+registers each query-time view. Bind the three service references by relative
+infra-profile path (resolved against `infra-profile.yaml`, Step 5). Worked
+`spec.py`: [reference/models-example.md](reference/models-example.md).
 
 Contract facts baked into that shape — keep every one:
 
@@ -364,8 +386,8 @@ services the spec references (`duckdb`, `python-compute`, `csv-source`). Emit it
 **verbatim** from [reference/infra-profile.md](reference/infra-profile.md);
 `metadata.name` is `desktop-local` and MUST match `infra_profile=` in `spec.py`.
 The `generic-secrets` `csv-source` service delivers the **relative**
-`csv-source-path` (an absolute path escapes the pinned snapshot and fails) into
-`secrets[...]`.
+`csv-source-path` into `secrets[...]` (an absolute path escapes the pinned
+snapshot and fails).
 
 **Other connector types**: only the third service's *name* changes, per the
 connector-types table (Overview). `csv-source`/`file-source` carry no credential
@@ -385,78 +407,57 @@ pandas==2.3.3
 
 `dlt[duckdb]==1.28.2` + `duckdb==1.5.4` are the pins proven against the S0
 supervisor — do not float them. `pandas` is required by dlt's `read_csv`
-transformer. Python `>=3.12,<3.13` is the proven interpreter range. **Other
-connector types add to these pins, never replace them** — see `reference/` for
-the per-type additions (Parquet extra, `dlt[sql_database]` + one vendor driver,
-or none for REST API).
+transformer. Python `>=3.12,<3.13` is the proven range. **Other connector types
+add to these pins, never replace them** — see `reference/` for the per-type
+additions (Parquet extra, `dlt[sql_database]` + a vendor driver, or none).
 
 ### Step 6a — `CONTEXT.md`: the in-closure design/process record (MANDATORY)
 
-The closure carries a queryable data product but **not** the design and process
-context that makes the work continuable. A fresh session handed only the closure
-can reconstruct what a base model is and how to reopen it, but cannot continue to
-a promised-but-unbuilt derived model, cannot reproduce the row set, and cannot
-tell inference from stated fact — those rulings live nowhere in `spec.py` /
-`models.py` / the data. Emit **`CONTEXT.md` at the closure root**, always.
-
-It records: intent; the **population & sample-selection rule** (the exact,
-reproducible rule for which rows are in the source — and, if you sampled, what it
-excludes and whether any downstream model cares); **per-field inference
-caveats** (every field derived rather than a verbatim source value, stating the
-ruling and that it is the field most likely to drift on a rerun); the
-**required-capture fields** (below); **the full in-closure contract for every model
-still to be built**; the **reopen recipe** (workflow id + the list/resume/build
-sequence); and **known runtime blockers** kept separate from artifact correctness.
+The closure carries a queryable data product but **not** the design context that
+makes the work continuable: a fresh session cannot continue a promised-but-unbuilt
+model, reproduce the row set, or tell inference from stated fact. Emit
+**`CONTEXT.md`** at the closure root, always — [reference/context-doc.md](reference/context-doc.md).
 
 **Required-capture fields (connector-independent).** A source field a downstream
 model, gate, or verdict **consumes** is required-capture — find them by reading
 backward from every derived model and gating/verdict logic to the source fields
-they read. For such a field, "referenced in the source but not extracted" is an
-**incomplete extraction**, not a valid missing value: record which rows lack it and
-surface it for recovery, never pass it as absent. A missing one disables the
-downstream step **without erroring** — it runs, produces nothing, no assert fires.
-A general stage-dependency rule, not about any one field type.
+they read. "Referenced in the source but not extracted" is an **incomplete
+extraction**, not a valid missing value: record which rows lack it and surface it
+for recovery, never pass it as absent. A missing one disables the downstream step
+**without erroring** — it runs, produces nothing, no assert fires.
 
-**The boundary rule (Phase C enforces it):** everything a later session needs to
-continue the work lives INSIDE the closure. A promised derived model whose
-contract sits in a doc **outside** the closure — referenced by a `../`-rooted
-path — is a dangling reference across the package boundary: the moment the
-closure moves or is handed off, the contract is gone and the model cannot be
-built. Materialize any deferred contract in the closure, preferably as the **inert
-derived model itself** — `semantic_model`, an empty-bodied `@dlt.resource`, listed
-in `PHYSICAL_MODELS`, contract as schema + Step-3b asserts: executable *and*
-naming-invariant-clean. If the logic is genuinely deferred, the model is **not yet
-promised** (every `.promise` must be in `PHYSICAL_MODELS`, so a promised-but-unbuilt
-model fails Phase A): carry its contract as a **structured `contracts/<name>.md`**
-(`## inputs`, `## rule`, `## output schema`, `## verdict set` — see
-[reference/context-doc.md](reference/context-doc.md)), name it in `CONTEXT.md`, and
-`.promise` it only once authored. Never a cross-boundary pointer, and never a
-rubric left only as free prose in `CONTEXT.md` when a derived model depends on it.
+**The boundary rule (Phase C enforces it):** everything a later session needs
+lives INSIDE the closure. A promised derived model whose contract sits outside it
+— a `../`-rooted path — is a dangling reference. Materialize any deferred
+contract in the closure, preferably as the **inert derived model itself**
+(`semantic_model`, empty-bodied
+`@dlt.resource`, in `PHYSICAL_MODELS`, contract as schema + Step-3b asserts). If
+the logic is genuinely deferred the model is **not yet promised** (every
+`.promise` must be in `PHYSICAL_MODELS`): carry its contract as a structured
+`contracts/<name>.md`, name it in `CONTEXT.md`, and `.promise` it only once
+authored. Never a cross-boundary pointer, and never a rubric left only as free
+prose when a derived model depends on it.
 
 `CONTEXT.md` is prose to read; it does **not** replace the machine-enforced
-surfaces — rulings still land as data (`nxd_decisions`, see
-[reference/derivation-plan.md](reference/derivation-plan.md)) and the Step-3b
-asserts still run. It explains them so a cold reader can continue. The required
-sections and a copy-ready template are in
-[reference/context-doc.md](reference/context-doc.md).
+surfaces — rulings still land as data (`nxd_decisions`) and the Step-3b asserts
+still run.
 
 ### Step 7 — Self-check before handing off (MANDATORY)
 
 Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the
 naming invariant (`models.py` == `.promise` == `PHYSICAL_MODELS` ==
 `main.<name>`), then separately confirm `BASE_MODELS` — and only `BASE_MODELS` —
-matches the connector's per-model references (the `data/` directories). Derived
-models and `.model(...)` views both lack one for different reasons: the first is
-written by the transform, the second is never written at all. Confirm the
-supplied export is unchanged, then run
+matches the `data/` directories. Derived models and `.model(...)` views lack one
+for different reasons: the first is written by the transform, the second is never
+written at all. Confirm the supplied export is unchanged, then run
 [reference/self-check.md](reference/self-check.md): it dry-runs the transform
-against a scratch DuckDB, **structurally validates `models.py`/`spec.py`
-against the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
-installable here), **and runs Phase C — the context-completeness gate**: it fails
-the check if `CONTEXT.md` is absent from the closure root, or if any closure file
-references a contract/design doc by a `../`-rooted path that escapes the closure
-(the dangling-pointer failure from Step 6a). Read the `unverified:` lines it
-prints: those entries were not checked at all.
+against a scratch DuckDB, **structurally validates `models.py`/`spec.py` against
+the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
+installable here), **runs Phase C — the context-completeness gate** (fails on a
+missing `CONTEXT.md` or a `../`-rooted contract pointer escaping the closure),
+then prints the **distribution read-back**. Read the `unverified:` lines — those
+were not checked at all — and read the distributions: a `UNIFORM` classification
+column is a value you supplied, not one the data produced, so state it.
 
 Reading a failure: if the read-back assert fires or an unquoted `main.<name>`
 query fails, a name diverged — fix the NAME (in `models.py`, `.promise`,
@@ -464,12 +465,11 @@ query fails, a name diverged — fix the NAME (in `models.py`, `.promise`,
 If a derived model's reconciliation assert (Step 3b) fires, the derivation is
 wrong — fix the LOGIC, never loosen the assert.
 
-**Database/API connectors need live credentials to dry-run.** With
-credentials, run each type's own connectivity check exactly as its reference
-doc specifies — `database-source.md`'s asserts `row_count > 0` per model;
-`api-source.md`'s asserts a parseable response per resource — never an exact
-fixture count either way. Without credentials, report the connectivity
-self-check as **not run** — never claim it passed.
+**Database/API connectors need live credentials to dry-run.** With credentials,
+run each type's own connectivity check exactly as its reference doc specifies —
+`database-source.md`'s asserts `row_count > 0` per model; `api-source.md`'s a
+parseable response per resource — never an exact fixture count. Without
+credentials, report it **not run** — never claim it passed.
 
 ---
 ## Invariants — NEVER violate these
@@ -482,6 +482,7 @@ self-check as **not run** — never claim it passed.
 - **Through the port, always**: dlt destination is `duckdb.path` / `duckdb.schema`. No raw `duckdb.connect` writes, no view/table DDL, no direct file writes into staging. **Derived models do not relax this** — they reach the port as `@dlt.resource` generators in the same `pipeline.run(...)`, not as DDL.
 - **Derived models are flat, deterministic, and in-run** (Step 3a): plain scalar dicts (no DataFrame — no pyarrow in the fixed venv; no nested values — they spawn `parent__field` child tables), appended to the SAME `resources` list, landed in ONE `pipeline.run(..., write_disposition="replace")`, named from `duckdb.model_tables`, listed in `PHYSICAL_MODELS`. Read the sources yourself with stdlib `csv`. No `now()`, no unseeded random, sorted inputs. Imports confined to pandas / duckdb / stdlib.
 - **Every derived model carries mandatory in-memory asserts** (Step 3b): Tier 1 always — declared-key uniqueness plus a grain-derived row count against independently-read source rows; Tier 2 whenever a measure column is present — a signed measure total reconciled per currency pre-FX in `Decimal`, every exclusion itemized as a named term. Raised with actual-vs-expected before the rows are yielded. It is the ONLY durable data-quality gate on desktop. Never restate the transform's arithmetic as an assert, never substitute a weaker invariant for the measure reconciliation, and never loosen one to make a run pass.
+- **No materialization before the policy read-back** (Workflow § Gate): when the request supplies a procedure with a gap that changes a score, verdict, gate outcome, or which rows land, NOTHING is written — no closure directory, no source copy, no generated code, no table, no scoring, no build — until the user has seen the enumerated proposal and replied. Reading the source is allowed; answering a technical delivery question is not approval; "use your judgement" licenses authoring the proposal, not skipping the turn.
 - **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.
 - **Public semantic DSL only**: base models carry `primary_key` / `dimension` / `join`; metrics are `metric_field(metric(...))` on `semantic_view(...)`. Never import private modules or write metadata directly.
 - **Validated keys, by kind**: every promised physical model has one or more `primary_key()` fields. A **base** model's key is one or more EXISTING source columns whose tuple is non-null and unique across the supplied export — never synthesize one; stop and ask for the source key when that evidence is absent. A **derived** model's key is defined by the derivation's grain, constructed deterministically from source values plus the grain's ordinal, and proven unique by an in-transform assert. A dedupe keeps its source key; only a regrain declares a new composite.
@@ -493,7 +494,6 @@ self-check as **not run** — never claim it passed.
 
 ## Related skills
 
-| Skill | Relationship |
-|---|---|
-| `nxd-semantic-data-product` | Produces the inferred semantic model this skill places; owns the role grammar and the k8s `.semantic_tools()` topology |
-| `nxd-data-product-builder` | The k8s/cloud DP authoring path (Snowflake et al.) — use it, not this skill, off-desktop |
+**`nxd-pocket-loop`** owns the conversation and sequencing; it gathers the plan
+and invokes this skill. **`nxd-semantic-data-product`** produces the inferred
+model this skill places. **`nxd-data-product-builder`** is the k8s/cloud path.
