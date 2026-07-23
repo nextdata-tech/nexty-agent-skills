@@ -21,8 +21,13 @@ The dry-run for Step 7 of nxd-generate-dp, in four phases:
 - **Phase B — dry-run of the transform** against a scratch DuckDB: the
   supervisor's execution minus the kernel.
 - **Phase C — context-completeness gate** (Step 6a). Checks that `CONTEXT.md`
-  exists at the closure root and that no closure file references a contract/design
-  doc by a `../`-rooted path that escapes the closure. A closure can be
+  exists at the closure root, that no closure file references a contract/design
+  doc by a `../`-rooted path that escapes the closure, and — when
+  `infra-profile.yaml` carries a populated `attributes:` list, i.e. a live
+  credential in plaintext — that `.gitignore` and `SENSITIVE` exist and that
+  `.gitignore` names `infra-profile.yaml`. The credential check reports missing
+  FILES only; it never reads or echoes an attribute value, because a check that
+  prints the secret it found turns a contained file leak into a transcript leak. A closure can be
   structurally valid and still be an insufficient handoff — a promised derived
   model whose contract lives in an external doc cannot be continued by a cold
   reader. Phase C is what catches that. (Note: the naming invariant that Phase A
@@ -474,6 +479,34 @@ for rel in scan:
                        f"escapes the closure. Materialize it inside the closure "
                        f"(CONTEXT.md / contracts/<name>.md / inert derived model), "
                        f"never a ../ pointer.")
+
+# Sensitivity artifacts. The trigger is STRUCTURAL: a *-source service carrying
+# a populated `attributes:` list holds a live credential in plaintext. A CSV or
+# file source keeps `attributes: []` and is exempt, so this cannot false-positive
+# on a healthy local closure. Names the missing FILES only — never reads or
+# echoes an attribute value, because a check that prints the secret it found
+# turns a contained file leak into a transcript leak.
+profile = Path("infra-profile.yaml")
+if profile.exists():
+    text = profile.read_text()
+    # A populated attributes list = `attributes:` followed by a `- ` item before
+    # the next key at the same or shallower indent. `attributes: []` never matches.
+    has_secret = re.search(r"^\s*attributes:\s*\n\s+-\s", text, re.MULTILINE) is not None
+    if has_secret:
+        for name, why in (
+            (".gitignore", "git will happily commit infra-profile.yaml without it"),
+            ("SENSITIVE", "a cold reader gets no warning before opening the closure"),
+        ):
+            if not Path(name).exists():
+                cerrors.append(
+                    f"{name} is missing, but infra-profile.yaml carries a populated "
+                    f"`attributes:` list (a live credential in plaintext) — {why}. "
+                    f"See reference/database-source.md, 'Sensitivity artifacts'.")
+        gi = Path(".gitignore")
+        if gi.exists() and "infra-profile.yaml" not in gi.read_text():
+            cerrors.append(
+                ".gitignore exists but does not ignore infra-profile.yaml — the one "
+                "file that must never be committed. Ignore it by name, never `*`.")
 
 if cerrors:
     print("\nPHASE C FAILED — context-completeness gate:")

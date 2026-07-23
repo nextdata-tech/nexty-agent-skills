@@ -98,6 +98,15 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   carries a real token/key: don't commit it to a shared repo, don't attach
   it to a ticket or chat, and don't reuse it as a template for a different
   API without clearing the old credential first.
+- **Emit `.gitignore` and `SENSITIVE` in the same step that writes the
+  credential**, and `chmod 0600 infra-profile.yaml` where a shell can reach
+  the closure. The trigger is structural — any `*-source` service with a
+  populated `attributes` list — and Phase C fails the closure when the two
+  files are missing. `database-source.md`'s **Sensitivity artifacts** section
+  is the canonical definition, including the exact file bodies; it applies
+  unchanged here with `Keys: <service>.attributes -> auth_token` (or whichever
+  auth keys this API uses). Writing the credential and not the artifacts is an
+  incomplete step, not a later cleanup.
 - This shape (`key`/`value`/`public`) is verified against the supervisor's
   `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
   `SecretsHandler` construction — not inferred from a single example.
