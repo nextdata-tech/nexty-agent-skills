@@ -491,13 +491,15 @@ if profile.exists():
     text = profile.read_text()
     # A populated attributes list = `attributes:` followed by a `- ` item before
     # the next key at the same or shallower indent. `attributes: []` never matches.
-    # Block form (`attributes:` then `- key: ...`) is what every shipped template
-    # emits, but match the inline flow form too: an improvised profile written as
-    # `attributes: [{key: ..., value: ...}]` carries exactly the same credential,
-    # and a gate that silently exempts it is not the structural check it claims
-    # to be. `attributes: []` must NOT match either way.
+    # Match every YAML spelling of a populated list, because a gate that only
+    # recognises the shipped templates is not the structural check it claims to
+    # be — an improvised profile carries exactly the same live credential:
+    #   block, indented      `attributes:` / `  - key: ...`   (what templates emit)
+    #   block, zero-indent   `attributes:` / `- key: ...`     (also valid YAML)
+    #   inline flow          `attributes: [{key: ...}]`
+    # `attributes: []` and `attributes: [ ]` must NOT match in any form.
     has_secret = (
-        re.search(r"^\s*attributes:\s*\n\s+-\s", text, re.MULTILINE) is not None
+        re.search(r"^\s*attributes:\s*\n\s*-\s", text, re.MULTILINE) is not None
         or re.search(r"^\s*attributes:\s*\[\s*[^\s\]]", text, re.MULTILINE) is not None
     )
     if has_secret:
