@@ -25,11 +25,26 @@ choice was made: a closure that silently invents a rate, or silently declines to
 convert, fails. Refusing to fabricate a rate is a legitimate answer here and the
 fixture must not punish it.
 
-SCOPE. Truth still bakes in the seeded merchant->category mapping
-(COGS={AWS, Anthropic, OpenAI}; opex={Deel, Figma, Lufthansa, Monzo, WeWork}).
-A closure that classifies differently -- e.g. Anthropic as opex -- fails the
-totals gate even if internally consistent. That is a pre-existing property of
-this scenario, noted here so such a failure is diagnosable rather than baffling.
+CLASSIFICATION STANCE. The COGS/opex ruling is a JUDGEMENT, not a fact in the
+export: no column carries it, and the prompt says no user is available to
+confirm one. So it is gated the same way as the currency stance -- what is
+checked is that the closure's own ruling reconciles against the source, not
+that it matches a mapping the closure was never shown. Expected totals are
+recomputed by folding the closure's landed merchant->category CSV over the
+pristine export.
+
+This matters because the scenario's `unclassified-visible` check actively asks
+for uncovered merchants to land in an explicit bucket such as `needs_review`.
+Grading totals against a withheld mapping punished exactly that behaviour. What
+still fails is a measure that does not net refunds -- wrong under every ruling --
+and a measure that contradicts the ruling the closure itself recorded.
+
+The seeded per-currency totals below remain the fallback for a closure whose
+ruling cannot be parsed, and still drive the row-count checks.
+
+The seeded mapping those totals were computed from is
+COGS={AWS, Anthropic, OpenAI}; opex={Deel, Figma, Lufthansa, Monzo, WeWork}.
+It is a fallback basis only -- it is not the answer the closure has to reach.
 
 Run from the closure root with the fixtures directory passed in:
 
@@ -42,13 +57,19 @@ import argparse
 import ast
 import csv
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 
 FAILURES: list[str] = []
 PASSES: list[str] = []
+
+# How long the closure's own transform gets when this checker materializes it.
+MATERIALIZE_TIMEOUT_S = 600
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -150,6 +171,181 @@ def reconciles_a_measure(fn: ast.FunctionDef) -> bool:
         for n in ast.walk(fn)
     )
     return not uses_abs
+
+
+# The transform runs under a stub `nxd` package, exactly as the skill's own
+# pre-handoff dry-run does: the real wheel is an internal package on a private
+# index and is not installable here. Only the surface the transform touches is
+# stubbed -- `DuckDbOutput`, `@dp.on_transform`, `dp.main` -- so the transform's
+# own arithmetic runs unmodified.
+_MATERIALIZE_HARNESS = '''
+import sys, types
+from dataclasses import dataclass, field
+from pathlib import Path
+
+@dataclass
+class DuckDbOutput:
+    path: str; schema: str; model_tables: dict; models: dict = field(default_factory=dict)
+
+nxd = types.ModuleType("nxd"); core = types.ModuleType("nxd.core")
+ctx = types.ModuleType("nxd.core.context"); ctx.DuckDbOutput = DuckDbOutput
+dp = types.SimpleNamespace(on_transform=lambda *a, **k: (lambda fn: fn), main=lambda: None)
+nxd.data_product, nxd.core, core.context = dp, core, ctx
+sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": ctx})
+
+sys.path.insert(0, ".")
+from transform.main import PHYSICAL_MODELS, ingest
+
+out = DuckDbOutput(path=sys.argv[1], schema="main",
+                   model_tables={m: m for m in PHYSICAL_MODELS})
+ingest(duckdb=out, secrets={"csv_source": str(Path("data").resolve())})
+'''
+
+
+# `nxd` is an internal package on a private index and cannot be installed here;
+# the harness above stubs the surface the transform imports from it.
+_UNINSTALLABLE_PREFIXES = ("nxd",)
+
+
+def closure_requirements(root: Path) -> list[str]:
+    """The closure's own declared dependencies, minus the uninstallable ones."""
+    req = root / "requirements.txt"
+    if not req.is_file():
+        return []
+    specs = []
+    for raw in req.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        name = re.split(r"[\[<>=!~ ]", line, maxsplit=1)[0].strip().lower()
+        if name.startswith(_UNINSTALLABLE_PREFIXES):
+            continue
+        specs.append(line)
+    return specs
+
+
+def materialize_closure(root: Path) -> tuple[Path | None, str]:
+    """Run the closure's own transform into a scratch DuckDB.
+
+    A closure is not required to leave a materialized database behind -- the
+    skill's dry-run writes one to a temporary directory and the agent is right
+    to treat it as scratch. But the totals gate is the one check no structural
+    rule substitutes for, so "no database" must not mean "not graded": this
+    executes the closure's transform to produce one.
+
+    The transform runs against the closure's OWN data, its own arithmetic, and
+    its own declared dependencies; nothing here supplies numbers. Returns the
+    database path, or None with a reason when the transform could not be run.
+    """
+    try:
+        import duckdb  # noqa: F401, PLC0415
+    except ImportError:
+        return None, "duckdb not importable in checker env"
+
+    scratch = Path(tempfile.mkdtemp(prefix="derived-closure-check-"))
+    db = scratch / "data.duckdb"
+    harness = scratch / "_materialize.py"
+    harness.write_text(_MATERIALIZE_HARNESS, encoding="utf-8")
+
+    # The transform ingests through the closure's own declared dependencies
+    # (dlt, duckdb, pandas), so it must run in an environment that has them.
+    # `uv run --with` builds that environment from requirements.txt, exactly as
+    # the skill's own dry-run does. Only `nxd` itself is dropped: it is an
+    # internal package on a private index, not installable here, and the
+    # harness stubs the surface the transform touches.
+    cmd = ["uv", "run", "--no-project"]
+    for spec in closure_requirements(root):
+        cmd += ["--with", spec]
+    cmd += ["python", str(harness), str(db)]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=MATERIALIZE_TIMEOUT_S,
+            # The transform imports from the closure root; keep the checker's own
+            # sys.path out of it so it cannot accidentally resolve fixture code.
+            env={**os.environ, "PYTHONPATH": ""},
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"transform timed out after {MATERIALIZE_TIMEOUT_S}s"
+    except OSError as exc:
+        return None, f"transform failed to start: {exc}"
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()
+        return None, f"transform failed: {tail[-1] if tail else 'no output'}"
+    if not db.is_file():
+        return None, "transform ran but wrote no database"
+    return db, ""
+
+
+def closure_ruling(root: Path) -> dict[str, str] | None:
+    """Recover the closure's OWN merchant->category ruling from its landed CSV.
+
+    The ruling is a judgement the closure made, not a fact in the export. Grading
+    its totals against a withheld mapping would punish a defensible call, so the
+    expected totals are recomputed from whatever ruling the closure actually
+    landed. Returns None when no ruling CSV is parseable.
+    """
+    paths = sorted(set(root.glob("data/*categor*/*.csv")) | set(root.glob("data/*merchant*/*.csv")))
+    for path in paths:
+        try:
+            rows = list(csv.DictReader(path.open()))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        if not rows:
+            continue
+        cols = [c for c in (rows[0].keys() or []) if c]
+        merch_col = next((c for c in cols if "merchant" in c.lower()), None)
+        cat_col = next((c for c in cols if "categor" in c.lower()), None)
+        if not (merch_col and cat_col):
+            continue
+        ruling = {
+            (r.get(merch_col) or "").strip(): (r.get(cat_col) or "").strip().lower()
+            for r in rows
+            if (r.get(merch_col) or "").strip()
+        }
+        if ruling:
+            return ruling
+    return None
+
+
+def expected_from_ruling(
+    fixtures: Path, ruling: dict[str, str]
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
+    """Fold the closure's ruling over the pristine source into per-currency truth.
+
+    Returns (netted, charges_only) in the same shape as the truth fixture, so the
+    downstream stance composition is identical either way. Merchants the ruling
+    does not cover fall into whatever bucket the closure chose for them, which is
+    exactly the point: an explicit `needs_review` bucket is a legitimate answer.
+    """
+    netted: dict[str, dict[str, Decimal]] = {}
+    charges: dict[str, dict[str, Decimal]] = {}
+    src = fixtures / "data" / "transactions.csv"
+    for r in csv.DictReader(src.open()):
+        if (r.get("kind") or "").strip().lower() == "transfer":
+            continue
+        cat = ruling.get((r.get("merchant") or "").strip())
+        if cat is None:
+            continue
+        cur = (r.get("currency") or "").strip().upper()
+        amt = Decimal((r.get("amount") or "0").strip())
+        netted.setdefault(cat, {}).setdefault(cur, Decimal("0"))
+        netted[cat][cur] += amt
+        if (r.get("kind") or "").strip().lower() != "refund":
+            charges.setdefault(cat, {}).setdefault(cur, Decimal("0"))
+            charges[cat][cur] += amt
+    # Truth is stored as absolute magnitudes; the export carries spend as
+    # negative. Normalise so both bases compose identically downstream.
+    def as_str(d: dict[str, dict[str, Decimal]]) -> dict[str, dict[str, str]]:
+        return {
+            cat: {cur: str(abs(v)) for cur, v in per_cur.items()} for cat, per_cur in d.items()
+        }
+
+    return as_str(netted), as_str(charges)
 
 
 def _duckdb_path(root: Path) -> Path | None:
@@ -384,14 +580,21 @@ def main() -> int:
 
     # ---- the semantic gate: are the numbers right? ---------------------------
     # This is the check no structural rule can substitute for.
-    db = root / "data.duckdb"
-    if not db.is_file():
-        candidates = list(root.glob("**/*.duckdb"))
-        db = candidates[0] if candidates else db
-    if not db.is_file():
-        check("totals:queryable", False, "no .duckdb produced; cannot verify totals")
-        print_report()
-        return 1 if FAILURES else 0
+    # A landed database is used as-is. When the closure left none -- the skill's
+    # dry-run writes to a temporary directory and the agent is right to treat it
+    # as scratch -- run the closure's own transform to produce one, so that the
+    # totals are graded either way. A closure that cannot be materialized at all
+    # still fails: unrunnable is not the same as unchecked.
+    found = _duckdb_path(root)
+    if found is not None:
+        db = found
+    else:
+        db, why = materialize_closure(root)
+        if db is None:
+            check("totals:queryable", False, f"no queryable database: {why}")
+            print_report()
+            return 1 if FAILURES else 0
+        print("no landed database; materialized the closure's transform to verify totals")
 
     try:
         import duckdb  # noqa: PLC0415
@@ -416,10 +619,23 @@ def main() -> int:
         stance = f"converted ({', '.join(f'{k}={v}' for k, v in sorted(rates.items()))})"
         stance_rates = rates
 
-    correct = {c: compose(truth["netted_per_currency"][c], stance_rates) for c in ("cogs", "opex")}
-    wrong = {
-        c: compose(truth["charges_only_per_currency"][c], stance_rates) for c in ("cogs", "opex")
-    }
+    # The COGS/opex ruling is a judgement, not a fact in the export, so the
+    # expected totals are recomputed from the ruling the closure actually landed
+    # rather than from a mapping it was never shown. A closure that routes an
+    # ambiguous merchant to `needs_review` -- which `unclassified-visible` asks
+    # for -- is then graded on its own terms. Netting is still gated: forgetting
+    # to net is wrong under every ruling.
+    ruling = closure_ruling(root)
+    if ruling is not None:
+        netted_truth, charges_truth = expected_from_ruling(args.fixtures, ruling)
+        basis = "the closure's own landed ruling"
+    else:
+        netted_truth = truth["netted_per_currency"]
+        charges_truth = truth["charges_only_per_currency"]
+        basis = "the seeded ruling (closure landed none that could be parsed)"
+
+    correct = {c: compose(netted_truth.get(c, {}), stance_rates) for c in ("cogs", "opex")}
+    wrong = {c: compose(charges_truth.get(c, {}), stance_rates) for c in ("cogs", "opex")}
 
     # A closure may net refunds by EXCLUDING both rows, or by RETAINING the
     # signed pair. Both are arithmetically correct, so probe both aggregations
@@ -455,10 +671,18 @@ def main() -> int:
         return 1
 
     print(f"currency stance: {stance}")
+    print(f"expected totals computed from: {basis}")
     for cat in ("cogs", "opex"):
         cands = found_totals.get(cat)
         if not cands:
             check(f"totals:{cat}", False, "not found in any landed table")
+            continue
+        if not netted_truth.get(cat):
+            # The closure's ruling puts nothing in this category. That is a
+            # classification choice, not an arithmetic error, and there is no
+            # total to reconcile against.
+            check(f"totals:{cat}", False, f"got {' / '.join(str(c) for c in cands)}, but the "
+                  f"closure's ruling assigns no merchant to {cat}")
             continue
         want, bad = correct[cat], wrong[cat]
         shown = " / ".join(str(c) for c in cands)
@@ -484,9 +708,10 @@ def main() -> int:
                 f"totals:{cat}",
                 False,
                 f"got {shown}; under the {stance} stance the netted total is "
-                f"{want} and the charges-only total is {bad} (+/-{tol}). Matching "
-                f"neither usually means a rate was applied that is not the one "
-                f"landed as data, or the category ruling differs from the seeded one.",
+                f"{want} and the charges-only total is {bad} (+/-{tol}), both "
+                f"computed from {basis}. Matching neither usually means a rate "
+                f"was applied that is not the one landed as data, or the landed "
+                f"measure disagrees with the ruling the closure itself recorded.",
             )
 
     print_report()
