@@ -319,11 +319,10 @@ clause below is mandatory:
 **Desktop has no other execution point for data quality.** The local driver's
 verify is a no-op and contract verification runs only platform-side, so an assert
 inside the transform is the whole quality story — running over the complete
-derived set before the rows are yielded, failing the run **before anything is
-promoted**. One assert helper per derived model, invoked between deriving and
-yielding. Each must be an **invariant over the source-vs-derived relationship** —
-a claim that could be false if the derivation were wrong; restating the
-transform's own arithmetic proves nothing. **Mandatory tiers, not a menu:**
+derived set before the rows are yielded. One helper per derived model, invoked
+between deriving and yielding, each an **invariant over the source-vs-derived
+relationship**: a claim that could be false if the derivation were wrong.
+Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
 
 - **Tier 1 — every derived model, always:** (a) the **declared key is unique**
   over the complete derived set, and (b) the **row count computed from the
@@ -429,9 +428,9 @@ for recovery, never pass it as absent. A missing one disables the downstream ste
 
 **The boundary rule (Phase C enforces it):** everything a later session needs
 lives INSIDE the closure. A promised derived model whose contract sits outside it
-— a `../`-rooted path — is a dangling reference: the moment the closure moves,
-the contract is gone. Materialize any deferred contract in the closure,
-preferably as the **inert derived model itself** (`semantic_model`, empty-bodied
+— a `../`-rooted path — is a dangling reference. Materialize any deferred
+contract in the closure, preferably as the **inert derived model itself**
+(`semantic_model`, empty-bodied
 `@dlt.resource`, in `PHYSICAL_MODELS`, contract as schema + Step-3b asserts). If
 the logic is genuinely deferred the model is **not yet promised** (every
 `.promise` must be in `PHYSICAL_MODELS`): carry its contract as a structured

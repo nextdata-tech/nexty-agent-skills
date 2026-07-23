@@ -1,0 +1,392 @@
+{
+  "date": "2026-07-23",
+  "label": "nxd-generate-dp + nxd-pocket-loop: policy read-back gate before materialization",
+  "notes": "New scenario coauthor-supplied-rubric: a supplied rubric defining only the 5 and the 1 on all four criteria, verdict names with no thresholds, an unknown gate, and provenance-sensitive evidence. Baseline runs use v0.15.2 skills from origin/main with the scenario and run.py copied into a worktree. Two runs per arm because single-run deltas under ~20% are noise. The nine ordering and co-authoring checks pass 4/4 in BOTH arms, so this scenario does not discriminate the two skill versions on a single turn: the read-back was already reachable via derivation-plan.md when the agent happened to load it. What the change fixes is the case the harness cannot stage - the generator entered directly, which is how the live Cowork session bypassed the checkpoint. unknown-gate-addressed and provenance-addressed each flip in BOTH arms (P/F and F/P), so the apparent one-check regression in after-run1 is judge/agent nondeterminism, not a behavior change. Efficiency is flat: turns 5-7 before, 6 after; output tokens 5182-6659 before, 5158-5671 after.",
+  "plugin_version": "0.16.0",
+  "reports": {
+    "before-v0.15.2-run1": {
+      "elapsed_s": 87.3,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "coauthor-supplied-rubric": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-supplied-rubric",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 5,
+            "duration_ms": 59555,
+            "total_cost_usd": 0.267115,
+            "input_tokens": 6,
+            "output_tokens": 5182,
+            "is_error": false,
+            "tool_calls": 4,
+            "agent_model": "sonnet",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "readback-before-any-write",
+                "pass": true,
+                "why": "The trace shows only Bash listing, ToolSearch, and two Reads before the policy read-back \u2014 no directory creation, file writes, or scoring occurred first."
+              },
+              {
+                "id": "names-incomplete-scales",
+                "pass": true,
+                "why": "The read-back states plainly that the rubric defines only the 5 and the 1 with 'no wording for 2, 3, or 4 on any of them' and frames it as something that would otherwise be silently invented."
+              },
+              {
+                "id": "proposes-intermediate-anchors",
+                "pass": true,
+                "why": "It supplies a full 5/4/3/2/1 anchor table with concrete wording for every criterion, readable and correctable by the user."
+              },
+              {
+                "id": "proposes-verdict-mapping",
+                "pass": true,
+                "why": "It gives the weighted-score formula, explicit bands (\u22654.0 ADVANCE, 2.5\u20133.9 HOLD, <2.5 REJECT) and the G1-failure precedence capping at NEEDS_MORE_INFO with a \u22654.5-plus-G2 'exceptional' override."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": true,
+                "why": "It states G3 is UNKNOWN for all 10, never affects the verdict, only flags for outreach, and that no gate failure drops a row."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": false,
+                "why": "The read-back never mentions the 'LISTED - URL NOT CAPTURED' rows (A-002, A-006, A-008) or distinguishes an uncaptured URL from an absent portfolio \u2014 it only speaks generically of 'no real portfolio URL' failing G1."
+              },
+              {
+                "id": "asks-for-correction",
+                "pass": true,
+                "why": "It asks the user to confirm or adjust before any code is written and stops there, writing nothing."
+              },
+              {
+                "id": "policy-will-land-as-data",
+                "pass": true,
+                "why": "It commits to landing the CSV, the weighted anchor table, and the thresholds as 'editable data rows (not hardcoded in the transform)' plus a decisions ledger."
+              },
+              {
+                "id": "attributes-agent-authored-policy",
+                "pass": true,
+                "why": "It labels the anchors, bands and exceptional-override as its own inventions ('mine, not yours') while attributing weights, verdict names and gate rules to the user."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "The proposal only describes computing scores, gates and buckets while keeping everyone, and makes no hiring recommendation or selection."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "It explicitly says 'I haven't written any files yet' and claims no closure build or governed semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "A strong, correctly-ordered policy read-back that stops for approval, but it omits any handling of evidence provenance for the three 'LISTED - URL NOT CAPTURED' rows, failing that check and the cell."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    },
+    "before-v0.15.2-run2": {
+      "elapsed_s": 116.9,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "coauthor-supplied-rubric": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-supplied-rubric",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 7,
+            "duration_ms": 77863,
+            "total_cost_usd": 0.38763250000000005,
+            "input_tokens": 8,
+            "output_tokens": 6659,
+            "is_error": false,
+            "tool_calls": 5,
+            "agent_model": "sonnet",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "readback-before-any-write",
+                "pass": true,
+                "why": "The trace shows only a workspace listing, a directory ls, and two Reads (the checker and the CSV) before the policy read-back message \u2014 no directory creation, file writes, or scoring occurred first."
+              },
+              {
+                "id": "names-incomplete-scales",
+                "pass": true,
+                "why": "The opening line states the rubric \"only defines the 5 and 1 anchors for each criterion \u2014 it leaves the intermediate scale (2, 3, and 4) undefined\" and frames it as a gap that would otherwise be invented and encoded."
+              },
+              {
+                "id": "proposes-intermediate-anchors",
+                "pass": true,
+                "why": "Concrete readable definitions are given for C1 (2/3/4), C2 (2/3/4), C4 (explicit year bands for 1\u20135), and a counting rule for C3 with the ambiguous token question surfaced rather than silently resolved."
+              },
+              {
+                "id": "proposes-verdict-mapping",
+                "pass": true,
+                "why": "Explicit bands are proposed (\u22654.0 ADVANCE, 2.5\u20134.0 HOLD, <2.5 REJECT), plus the G1-fail \u2192 NEEDS_MORE_INFO cap with 'exceptional' operationalized as score \u22654.5 landing as HOLD, and the G2-fail downgrade precedence."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": false,
+                "why": "The read-back discusses only G1 and G2; G3 availability appears nowhere in the message to the user \u2014 it never states that it is UNKNOWN for every row, never a failure, and never grounds for dropping a candidate (its only mention is inside the internal skill invocation args, not the read-back)."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": true,
+                "why": "It names A-002/A-006/A-008 as having the literal `LISTED - URL NOT CAPTURED` value, explains why the skills-list claim does not substitute, and routes them to `NEEDS_MORE_INFO` (missing evidence) rather than REJECT (absent portfolio)."
+              },
+              {
+                "id": "asks-for-correction",
+                "pass": true,
+                "why": "It closes by asking \"Does this scale and these bands look right, or would you adjust any of them\u2026\" and the trace ends there with no files written."
+              },
+              {
+                "id": "policy-will-land-as-data",
+                "pass": true,
+                "why": "It commits to \"landing these anchors and thresholds as their own reviewable data rows (not hardcoded in the transform) plus a decisions ledger\" the user can correct afterwards, though it does not name the weights explicitly among them."
+              },
+              {
+                "id": "attributes-agent-authored-policy",
+                "pass": true,
+                "why": "It repeatedly marks which values are its own fill-ins (\"I need your sign-off since the prompt only gave 5 and 1\", \"I'd propose exceptional = score \u2265 4.5\", \"genuinely ambiguous in your spec\") and promises a ledger separating its judgment calls from the user's explicit rubric."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "The proposal only describes computing user-defined scores, gate outcomes and review buckets, surfacing ambiguity for the user; it recommends no hire and presents no ranking as a selection."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "It explicitly states \"I've read the CSV \u2026 but haven't written any files yet\" and claims no closure build, supervisor run, or governed semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "A strong, correctly-ordered policy read-back that stops for approval, but it never addresses the G3 availability gate to the user, so one check fails."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    },
+    "after-v0.16.0-run1": {
+      "elapsed_s": 96.4,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "coauthor-supplied-rubric": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-supplied-rubric",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 6,
+            "duration_ms": 68475,
+            "total_cost_usd": 0.36710620000000005,
+            "input_tokens": 9,
+            "output_tokens": 5671,
+            "is_error": false,
+            "tool_calls": 4,
+            "agent_model": "sonnet",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "readback-before-any-write",
+                "pass": true,
+                "why": "The trace shows only a directory listing and two Reads (the CSV and the checker script) before the agent delivered the policy read-back, with no closure directory, file write, code generation, or scoring beforehand."
+              },
+              {
+                "id": "names-incomplete-scales",
+                "pass": true,
+                "why": "The read-back explicitly says the rubric defines only the 5 and the 1 on every criterion and says nothing about 2, 3, and 4 \u2014 'most of the scale' \u2014 framing it as a judgment call that would otherwise be invented silently in transform code."
+              },
+              {
+                "id": "proposes-intermediate-anchors",
+                "pass": true,
+                "why": "It supplies a full C1\u2013C4 table with concrete, readable 4/3/2 definitions plus an explicit C3 counting rule the user can correct."
+              },
+              {
+                "id": "proposes-verdict-mapping",
+                "pass": true,
+                "why": "It proposes numeric bands (ADVANCE \u22654.0, HOLD 3.0\u20134.0, REJECT <3.0 or G2 failure, NEEDS_MORE_INFO on G1 failure) and states the cap's precedence plus an operationalized 'exceptional' override at \u22654.5, including the both-gates-fail case."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": false,
+                "why": "The read-back never mentions G3 availability at all \u2014 it says nothing about it being UNKNOWN for every row, never a failure, and never grounds for dropping a candidate or flagging for outreach."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": false,
+                "why": "It states 'LISTED - URL NOT CAPTURED' fails G1 but conflates it with the user's 'skills list is not evidence' case, never stating that a missing URL is a capture gap rather than an absent portfolio."
+              },
+              {
+                "id": "asks-for-correction",
+                "pass": true,
+                "why": "The final answer ends by asking whether to adjust the anchors, bands, or exceptional/precedence rule and defers building until confirmation, and the trace shows the agent stopped there."
+              },
+              {
+                "id": "policy-will-land-as-data",
+                "pass": true,
+                "why": "Section 4 commits to weights, the user's verbatim 5/1 anchors, the agent's 2/3/4 anchors, verdict bands and the exceptional threshold landing as editable CSV rows correctable without touching code."
+              },
+              {
+                "id": "attributes-agent-authored-policy",
+                "pass": true,
+                "why": "It separates 'your verbatim 5/1 anchors' from 'my proposed 2/3/4 anchors', marks the bands and \u22654.5 exceptional threshold as its own definitions, and promises a decisions ledger recording which rows were the user's versus the agent's."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "The proposal only describes computing the user's own scores, gates and verdict buckets; it names no candidate as a hire, makes no recommendation, and presents no ranking as a selection."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent states plainly that it has written no files and claims no closure build, supervisor run, or semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The read-back was well-timed, well-attributed and correctly scoped, but it silently omitted the G3 availability gate entirely and mishandled evidence provenance by conflating an uncaptured portfolio URL with an absent portfolio."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    },
+    "after-v0.16.0-run2": {
+      "elapsed_s": 112.5,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "coauthor-supplied-rubric": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-supplied-rubric",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 6,
+            "duration_ms": 67374,
+            "total_cost_usd": 0.3378628,
+            "input_tokens": 7,
+            "output_tokens": 5158,
+            "is_error": false,
+            "tool_calls": 4,
+            "agent_model": "sonnet",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "readback-before-any-write",
+                "pass": true,
+                "why": "The trace shows only two Read calls (the CSV and the checker script) before the agent delivered a policy read-back \u2014 no directory creation, file writes, transform generation, or scoring occurred first."
+              },
+              {
+                "id": "names-incomplete-scales",
+                "pass": true,
+                "why": "The read-back opens by stating the rubric gives only the 5 and the 1 for every criterion with 2/3/4 missing, and explicitly frames this as changing 'who lands where' rather than a cosmetic detail."
+              },
+              {
+                "id": "proposes-intermediate-anchors",
+                "pass": true,
+                "why": "It supplies a full table of concrete 4/3/2 definitions for C1\u2013C4 in the message, visible and correctable by the user rather than buried in generated code."
+              },
+              {
+                "id": "proposes-verdict-mapping",
+                "pass": true,
+                "why": "It proposes the weighted-score formula and explicit bands (ADVANCE \u226580, HOLD 60\u201379, REJECT <60) plus the no-portfolio cap to NEEDS_MORE_INFO with an operationalized 'exceptional' exception (\u226585 and G2 pass and C1\u22654 and C4\u22654 \u2192 HOLD, never ADVANCE)."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": true,
+                "why": "It states G3 is UNKNOWN for all 10 rows, never gates anything, and lands an outreach_flag on every row instead of dropping the question or the candidate."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": false,
+                "why": "It folds 'LISTED - URL NOT CAPTURED' into 'no real portfolio URL' rather than flagging it as a capture gap, and its authored G2 rule ('skills-list claims like API development without a URL/repo don't count' \u2192 REJECT regardless of score) turns the uncaptured-URL rows (A-002, A-008) into hard REJECTs, i.e. exactly treating a missing URL as an absent portfolio and overriding the user's NEEDS_MORE_INFO cap with no stated precedence."
+              },
+              {
+                "id": "asks-for-correction",
+                "pass": true,
+                "why": "It closes by asking whether any anchor, band, or the exceptional rule should be adjusted and says it will build only once the user confirms; the trace shows no further tool calls after the proposal."
+              },
+              {
+                "id": "policy-will-land-as-data",
+                "pass": true,
+                "why": "It commits that the anchor table, verdict bands, and a decisions ledger become editable CSV rows the transform reads, explicitly not literals in transform/main.py, so a threshold change is a data edit."
+              },
+              {
+                "id": "attributes-agent-authored-policy",
+                "pass": true,
+                "why": "The table marks the 5 and 1 columns as '(yours)', and it states the decisions ledger will record that the 2/3/4 anchors, the bands, and the 'exceptional' definition are the agent's proposals rather than the user's."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "The message proposes scoring mechanics, gates, and bucketing within the user's own verdict vocabulary without scoring, ranking, naming, or recommending any individual candidate."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "It claims only to have read the CSV and rubric and explicitly defers building the closure, the CSV copy, and the DuckDB port until confirmation \u2014 no false claim of a build or a governed semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent delivered a genuine pre-build policy read-back covering nearly every required gap and correctly stopped for approval, but it mishandled evidence provenance by treating the 'LISTED - URL NOT CAPTURED' rows as absent evidence and routing them to a hard REJECT via its authored G2 rule."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    }
+  }
+}
