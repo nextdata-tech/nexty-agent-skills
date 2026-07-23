@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.15.2
+  version: 0.16.0
 ---
 
 # nxd-pocket-loop skill
@@ -109,6 +109,11 @@ Establish three things (ask the user for whatever is missing):
 - **Questions** — the natural-language questions the DP must answer. These drive
   the whole inference (right-to-left): the model is judged by whether it answers
   them.
+- **Any procedure the user already has** — a rubric, gates, weights, thresholds,
+  a verdict vocabulary, a selection rule. Ask for it here rather than inferring
+  one later: a supplied procedure is the spec, encoded verbatim and landed as
+  data, and a gap in it is a question back to the user. nxd-generate-dp's
+  `reference/derivation-plan.md` owns how it lands.
 
 Warm the user up before long work: state that you'll infer a model, generate the
 DP, run it locally, and then answer their questions — so a multi-minute build is
@@ -230,6 +235,13 @@ recipe, the sample-selection rule, per-field inference caveats, and the full
 contract of any promised-but-unbuilt derived model. It must be self-contained:
 a derived model's contract lives inside the closure, never behind a `../` pointer
 to an external doc that the handoff would strand.
+
+**Relay the self-check's distribution read-back before building**, in one or two
+lines: the value counts it printed for each classification column (a column that
+came out uniform is the one to say out loud), and which of the closure's
+assertions are internal-consistency only rather than checks against the source.
+A green self-check means the closure is structurally sound and the transform
+ran — never report it as evidence that the numbers are right.
 
 ### Step 4 — Build and serve through MCP
 

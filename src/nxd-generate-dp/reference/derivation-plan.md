@@ -220,6 +220,11 @@ decisions are still unconfirmed?" is a query.
 There is deliberately **no timestamp column**. The transform must be
 deterministic and rerunnable byte-identically, which forbids `now()`.
 
+A **sample-selection rule is a ruling** and gets a row like any other — which
+rows entered the closure, and why, is a judgement the user can disagree with.
+This holds whether the rule came from the user or from you, and whether or not
+any other ruling exists in the closure.
+
 `status` is the whole mechanism. A user confirms a proposed ruling by editing
 that row to `confirmed` and rebuilding the same workflow. There is no approval
 tool, no pending-state machine, and nothing in the supervisor enforces a status
@@ -334,6 +339,45 @@ names the missing rates as the reason "total opex" is reported per currency
 rather than as one figure. Both rulings live in the same queryable ledger; only
 their `status` differs.
 
+## When the user supplies the ruling
+
+Everything above governs a ruling you must *propose* because the data does not
+contain it. This section governs the opposite case, and it inverts the default.
+
+When the user supplies the ruling — a rubric, gates, weights, thresholds, a
+verdict vocabulary, a selection rule — it is the spec, not raw material. Encode
+it verbatim, value-for-value; do not improve, reorder, or fill a missing case
+with a default. It lands by the same flow as any confirmed ruling: as its own
+model, with an `nxd_decisions` row at `status = confirmed` whose `detail` names
+it user-supplied. A gap in a supplied procedure (an unhandled case, an undefined
+tie-break, an unstated scale endpoint) is a question back to the user; with no
+user available it lands `blocked` naming the missing datum — never an agent
+default.
+
+### The data/code boundary, worked
+
+A supplied rubric is **parameterization**, not logic. The values are landed
+rows; the transform reads them. Concretely, for a rubric with weighted criteria
+and score-banded verdicts:
+
+```
+rubric(criterion, weight, scale_min, scale_max)
+verdict_thresholds(verdict, min_score)
+→ transform reads both; contains no weight, no threshold, no verdict string
+```
+
+The test is textual and mechanical: **a supplied weight, threshold, or verdict
+string that appears as a literal in `transform/main.py` is a defect**, however
+faithfully it was copied. Copying the user's numbers into code is the same
+unreviewable fabrication as inventing them — the user cannot query it, cannot
+correct one row, and cannot rebuild without you. Landed as rows, a correction is
+a data edit against an unchanged transform.
+
+This cuts both ways: it is also why a gap must be surfaced rather than filled.
+An agent-authored mid-scale anchor sitting in a landed rubric row is
+indistinguishable from a user-authored one, so the ledger's `detail` must say
+which is which.
+
 ## Confirm the plan before authoring
 
 Before writing `models.py`, state the plan back in two or three lines: the base
@@ -341,3 +385,8 @@ models, the derived models with their grain and key, any reference data you
 need confirmed, and which question each derived model exists to answer. A
 derived model no question motivates should not be built. A question no model
 answers is the gap to raise now — not after a build.
+
+When a supplied procedure is in play, the read-back enumerates it: every gate,
+criterion, weight, and verdict string with the user's own value, plus every gap
+you are about to land as `blocked` or ask about. A procedure summarized rather
+than enumerated is a procedure the user cannot check.

@@ -51,7 +51,9 @@ A closure `CONTEXT.md` at the closure root, with these sections:
    inferences like deriving location from other columns). For each: what it is
    derived from, and that it is the field most likely to **drift on a rerun**.
    This mirrors the dimension `description=` in `models.py` but states the
-   *ruling*, not just the flag.
+   *ruling*, not just the flag. Where a ruling was **supplied by the user**, say
+   so and name it — a landed rubric row the user wrote and one you authored are
+   indistinguishable in the table, and only this line tells them apart.
 4. **Required-capture fields** — any source field a downstream model, gate, or
    verdict **depends on**, identified by reading backward from every promised
    derived model and any gating/verdict logic to the source fields it consumes.

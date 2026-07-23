@@ -30,6 +30,11 @@ The dry-run for Step 7 of nxd-generate-dp, in three phases:
   not yet promised, carried in `contracts/<name>.md` and `CONTEXT.md` — see
   Step 6a — until the model is authored and promised.)
 
+After the phases, the script prints a **distribution read-back** over every
+derived model's classification columns. It is not a phase and it never fails the
+run — it exists so a fabricated gate or verdict is visible rather than hidden
+behind a green exit. Relay it (see "Reading a failure").
+
 One script, one command, one exit code. What to check and how to read a failure
 is in SKILL.md; this file is the runnable script.
 
@@ -60,6 +65,36 @@ a runtime one, and the gap is real:
 
 Phase B executes for real, so what it reports is what will happen — but it
 covers only `transform/main.py`.
+
+## Where an expected value may come from
+
+SKILL.md's Step-3b invariant — *never restate the transform's arithmetic as an
+assert* — extends to anything you add here, and the extension is the part that
+gets violated. **An expected value comes from a landed `data/` file or from the
+user's contract in `contracts/`. It never comes from the transform module or
+from a copy of the transform's constants.**
+
+Both halves matter, because complying with the first alone is the usual failure:
+
+- `from transform.main import WEIGHTS, VERDICTS` and then asserting a weight is
+  in `WEIGHTS` — fails only on a self-typo.
+- `WEIGHTS = {...}` re-declared at the top of the checker, copied from the
+  transform — no import, identical tautology.
+- Recomputing a total with the transform's own formula over the transform's own
+  constants — reproduces its arithmetic, including its errors.
+
+None of these can detect a wrong score, a wrong gate, or a classification that
+disagrees with the source. They are **internal-consistency checks**, and that is
+what they must be called. Never narrate one as independent verification, and
+never let a green exit stand in for "the numbers are right" — SELF-CHECK OK
+means the closure is structurally sound and the transform ran, nothing more.
+
+The good case is already the shipped one: Step-3b's Tier-1 asserts (declared-key
+uniqueness, grain row count vs independently-read source rows) and Tier-2
+(signed measure reconciliation in `Decimal`) all take their expected value from
+the source, not from the code under test. Once a supplied rubric is landed as
+data — see [derivation-plan.md](derivation-plan.md) — a check that reads the
+rubric CSV is legitimately independent too.
 
 ## The script
 
@@ -439,7 +474,35 @@ if cerrors:
 print("phase C ok — CONTEXT.md present, no closure-escaping contract references")
 print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
       "C (context-completeness) all passed.")
+
+# Distribution read-back. NOT a gate — it never fails the run. It prints the
+# value counts of every classification-shaped string column of every derived
+# model, so a fabricated gate or verdict is visible instead of hiding behind a
+# green exit. Unconditional by design: deciding which columns "matter" is the
+# judgement that would make this unreliable. A column qualifies on shape alone —
+# it must actually GROUP (few distinct values, and fewer than one per row), which
+# excludes keys and free text without naming either. Relay these counts to the
+# user before the build (see nxd-pocket-loop Step 3).
+for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
+    n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
+    cols = [r[0] for r in con.execute(
+        f"SELECT name FROM pragma_table_info('{m}') WHERE type = 'VARCHAR'").fetchall()
+        if not r[0].startswith("_dlt_")]  # dlt bookkeeping, not model data
+    for c in cols:
+        rows = con.execute(f'SELECT "{c}", COUNT(*) FROM main.{m} '
+                           f'GROUP BY 1 ORDER BY 2 DESC').fetchall()
+        if not (len(rows) <= 12 and len(rows) * 2 <= n_rows):
+            continue  # a key or free text, not a classification
+        counts = ", ".join(f"{v!r}={n}" for v, n in rows)
+        flag = "  <- UNIFORM: this column does not discriminate" if len(rows) == 1 else ""
+        print(f"distribution {m}.{c}: {counts}{flag}")
 ```
+
+The read-back prints **after** `SELF-CHECK OK`, deliberately: it is the last
+thing on screen, and it is not what the OK line attests to. Read it before you
+report the run — a gate that passed every row, or a verdict that came out
+single-valued, is a number you invented, and it is now the last thing you saw
+rather than the thing the success banner scrolled past.
 
 ## Reading a failure
 
@@ -448,6 +511,17 @@ a derived table with zero rows, or with exactly as many rows as its source when
 the derivation was supposed to expand or collapse, means the derivation ran but
 did nothing. The Step-3b asserts should have caught that — if they did not, the
 invariant they encode was too weak.
+
+The **distribution read-back** is read the same way, and it is the one the
+success banner is most likely to bury. A `UNIFORM` line means a column you built
+to distinguish rows does not: a gate that passes every row is not a gate, and a
+classification with one value classified nothing. That is a value you supplied,
+not one the data produced. Two things follow. **State the distribution to the
+user before building** — a uniform gate by name, and what it was supposed to
+separate. And do not silently repair it: a gate that cannot fail is a ruling you
+authored, so it lands in `nxd_decisions` like any other, or it goes back to the
+user as a question. A non-uniform distribution is not a pass either — it is
+simply the shape of what you produced, and it is worth one line in the handoff.
 
 Reading a Phase A failure: every message names the file, model, and column. A
 kwarg rejection (`join() takes to=, not to_model=`) is a typo — fix the call. A

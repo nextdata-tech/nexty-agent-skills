@@ -1,0 +1,22 @@
+{
+  "name": "Co-author a scored data product from a supplied rubric",
+  "skills": [
+    "nxd-generate-dp",
+    "nxd-pocket-loop"
+  ],
+  "checks": [
+    {"id": "read-inputs", "check": "Read the supplied CSV headers and the stated rubric before authoring."},
+    {"id": "python-only-closure", "check": "Create spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, CONTEXT.md, and a relative csv-source-path. Do not author deployment-spec.yaml, manifest.yaml, or models.yaml."},
+    {"id": "source-data-preserved", "check": "Do not alter the supplied CSV headers or rows."},
+    {"id": "rubric-landed-as-data", "check": "The user's weights, thresholds and verdict strings land as rows the user can correct — never as literals in transform/main.py. The transform reads them. Encoding them faithfully into code is the same defect as inventing them: the user cannot query or correct code."},
+    {"id": "supplied-values-verbatim", "check": "Every supplied weight (50/30/20), threshold (4.0/2.5) and verdict string (ADVANCE/HOLD/REJECT) appears with the user's own value. Do not improve, reorder, renormalize, or rename them."},
+    {"id": "gap-surfaced-not-defaulted", "check": "The rubric's undefined scale is surfaced, not silently filled: 'relevance of education' has no anchors at all, and neither anchored criterion defines 2/3/4. Ask the user, or land an nxd_decisions row at status=blocked naming the missing anchors. An agent-authored anchor presented as if supplied is the defect."},
+    {"id": "decisions-ledger", "check": "Rulings land as rows in data/nxd_decisions/nxd_decisions.csv with status in {confirmed, proposed, blocked}. A user-supplied ruling is confirmed with detail naming it user-supplied. Never a DECISIONS.md."},
+    {"id": "selection-rule-recorded", "check": "If any sample-selection or population rule was applied, it is recorded as an nxd_decisions row — which rows entered the closure, and why, is a judgement the user can disagree with."},
+    {"id": "self-check-provenance", "check": "Any self-check the closure authors takes its expected values from landed data or the user's contract — never by importing from the transform module, and never by re-declaring a copy of the transform's constants. Both forms are the same tautology."},
+    {"id": "honest-verification-narration", "check": "An internal-consistency check is reported as one. Do not narrate a check that recomputes the transform's own arithmetic as independent verification, and do not report a green self-check as evidence the numbers are right."},
+    {"id": "distribution-relayed", "check": "The distribution read-back over derived classification columns is relayed to the user before the build. A column that came out uniform — notably a gate that passes every row — is stated out loud."},
+    {"id": "acceptance-check", "check": "Run check_coauthored_closure.py against the final closure and obtain ALL CHECKS PASSED."},
+    {"id": "honest-result", "check": "Do not claim a supervisor build or governed semantic query when the evaluator only executed the transform."}
+  ]
+}
