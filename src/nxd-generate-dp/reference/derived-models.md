@@ -7,6 +7,7 @@ clauses live in SKILL.md; this file is the shape they produce.
 
 - [The source-checkout shim](#the-source-checkout-shim)
 - [`models.py`: base and derived side by side](#modelspy-base-and-derived-side-by-side)
+- [Classifying free text: two defects that ship silently](#classifying-free-text-two-defects-that-ship-silently)
 - [Naming the ruling on the dimension it created](#naming-the-ruling-on-the-dimension-it-created)
 - [The resource template](#the-resource-template)
 - [Reading the sources yourself](#reading-the-sources-yourself)
@@ -169,6 +170,57 @@ _output = (
 
 A derived model that keeps its source key (a dedupe) declares that source
 column as `primary_key()` — only a regrain introduces a synthetic composite.
+
+## Classifying free text: two defects that ship silently
+
+A derived classification over prose — a resume, a description, a note — is
+usually a keyword scan. Two mistakes in that scan produce a closure that passes
+every check and is still wrong, and both have shipped:
+
+**Match tokens, never substrings.** `"api" in text` is true for *therapist*,
+*rapid*, *capital*. A gate written that way passes almost everything, and its
+distribution read-back shows `UNIFORM` — which reads as "everyone qualifies"
+rather than "this test is broken". Split into words and compare:
+
+```python
+# WRONG — substring: "therapist" contains "api"
+if any(k in text.lower() for k in ("api", "rest", "sql")):
+
+# RIGHT — token equality against a normalized word set
+words = set(re.findall(r"[a-z0-9+#.]+", text.lower()))
+if words & {"api", "rest", "sql"}:
+```
+
+Multi-word phrases (`"data platform"`) still need a substring test — scope that
+to the phrases that genuinely contain a space, and keep single tokens on the
+word-set path.
+
+**Every declared band needs a reachable branch, and the fall-through must be
+honest.** A ladder whose last branch and whose fall-through return the same value
+has a dead branch; a fall-through returning a *labelled* value claims something
+about rows that merely failed every test:
+
+```python
+# WRONG — declares a band 2 it can never return, and labels an unmatched
+# row as if it had matched.
+if "spain" in c: return 5, "SF/Spain"
+if "utc-8" in c: return 4, "US West"
+if "usa"   in c: return 3, "US East/Central"
+return 3, "US East/Central"          # an AU row scores 3, labelled "US"
+
+# RIGHT — every declared band has a branch, and no match says so.
+if "spain" in c: return 5, "SF/Spain"
+if "utc-8" in c: return 4, "US West"
+if "usa"   in c: return 3, "US East/Central"
+if words & {"brazil", "australia", "chile"}: return 2, "LatAm/AU/NZ"
+return 1, "unclassified"             # honest, and visible in the read-back
+```
+
+The self-check's **ABSENT** line catches half of this — a band declared in landed
+policy that no row ever received. It cannot catch a mislabelled fall-through,
+because that row *did* get a value. Read your own ladder: if a band appears in the
+ruling you landed it needs a branch that can return it, and an unmatched row gets
+an unmatched label.
 
 ## Naming the ruling on the dimension it created
 
