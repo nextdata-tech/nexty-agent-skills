@@ -98,6 +98,15 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   carries a real token/key: don't commit it to a shared repo, don't attach
   it to a ticket or chat, and don't reuse it as a template for a different
   API without clearing the old credential first.
+- **Emit `.gitignore` and `SENSITIVE` in the same step that writes the
+  credential**, and `chmod 0600 infra-profile.yaml` where a shell can reach
+  the closure. The trigger is structural — any `*-source` service with a
+  populated `attributes` list — and Phase C fails the closure when the two
+  files are missing. `database-source.md`'s **Sensitivity artifacts** section
+  is the canonical definition, including the exact file bodies; it applies
+  unchanged here with `Keys: <service>.attributes -> auth_token` (or whichever
+  auth keys this API uses). Writing the credential and not the artifacts is an
+  incomplete step, not a later cleanup.
 - This shape (`key`/`value`/`public`) is verified against the supervisor's
   `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
   `SecretsHandler` construction — not inferred from a single example.
@@ -247,3 +256,30 @@ count, since remote data isn't static. When credentials are not available
 in-session, report the connectivity self-check as **not run** — do not
 claim it passed. Structural checks (naming invariant, no
 `.semantic_tools()`, import correctness) still run regardless.
+
+**Never let a probe's traceback reach the transcript unredacted.** This is a
+sharper risk than the database case: `requests` puts the full URL in
+`HTTPError`/`ConnectionError` messages, so an API keyed by query string
+(`?api_key=…`) or basic auth leaks the live credential into chat the moment a
+probe fails — and chat is the one place the user cannot remediate. Redact by
+substituting the known secret values, never by pattern-matching:
+
+```python
+def _redact(exc: BaseException, secrets: dict) -> str:
+    text = str(exc)
+    for value in secrets.values():            # every live value, keys vary per API
+        if value:
+            text = text.replace(str(value), "<redacted>")
+    return text
+
+try:
+    ...  # the bounded GET
+except Exception as exc:
+    raise SystemExit(f"connectivity check failed: {_redact(exc, api_secrets)}") from None
+```
+
+`from None` is mandatory: without it Python chains the original exception as
+`__context__` and re-prints it in full, defeating the redaction. The same rule
+governs anything you improvise — never `print()` a request URL or a response
+header dump, and never paste a raw traceback from a failed call into the
+answer.

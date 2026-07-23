@@ -58,6 +58,24 @@ When the user has an existing product but no endpoint or token:
    the **same** workflow id. Reusing the workflow id is what makes this a
    reopen of one product rather than the creation of a second one — the
    "one workflow id per data product" invariant still binds.
+   - **If the closure has a `SENSITIVE` marker**, it reaches a live database or
+     API through `infra-profile.yaml`. Two different failures wear the same
+     symptom, and they need different fixes:
+     - **The file is present** and the rebuild fails at connection time: the
+       credential has expired or rotated. Ask the user for the new value,
+       replace the `value:` entry `SENSITIVE` names, and rebuild.
+     - **The file is absent** — the usual case for a closure obtained as a
+       clone or copy, because `.gitignore` excludes it by design. This is not a
+       broken closure, and you **cannot** reconstruct the file from `SENSITIVE`:
+       that marker deliberately lists only credential *key names*, while
+       `infra-profile.yaml` also carries the non-secret connection topology
+       (host, port, database, schema for a database; base URL for an API) and
+       the `duckdb` / `python-compute` / `<connector>-source` service skeleton.
+       Ask the user for the whole file — or for the topology plus their own
+       credential, rebuilding it against
+       `nxd-generate-dp's reference/database-source.md` / `api-source.md`.
+       Never invent a host or a credential to fill the gap, and never echo a
+       credential in chat.
 3. **Take the new connection.** The returned `semantic_endpoint` and
    `bearer_token` are the connection for this session. The old ones stay dead.
 4. **Re-describe, then answer.** Call `describe_models` before mapping any

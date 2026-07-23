@@ -78,10 +78,19 @@ A closure `CONTEXT.md` at the closure root, with these sections:
    to build" section below, and `.promise` it only once authored. **Never** a
    pointer to a file outside the closure, and never a rubric left only as free
    prose here in `CONTEXT.md` when a derived model depends on it.
-6. **Reopen recipe** — the workflow id (the only durable key; bearer tokens do
-   not persist) and the `list_data_products` → `resume_data_product` /
+6. **Reopen recipe** — the workflow id and this closure's absolute path (together
+   the only durable key; bearer tokens do not persist) and the
    `build_data_product` → `describe_models` → `run_semantic_query` sequence.
-7. **Known blockers** — any runtime issue seen while building (e.g. a build/serve
+   The supervisor exposes **no** list, status, resume, or rediscovery tool, so
+   reopening is always a rebuild. Write the recipe so it stands alone: a cold
+   reader may not have this skill loaded.
+7. **Credentials** — only when `infra-profile.yaml` carries live credentials
+   (a `*-source` service with a populated `attributes:` list). Name the file and
+   the **keys**, never a value, and give the rotation step. `SENSITIVE` warns a
+   reader who opens the directory; this section reaches the one who reads
+   `CONTEXT.md` first. Omit the section entirely for a file/CSV closure — an
+   empty "no credentials here" line invites a later editor to fill it in.
+8. **Known blockers** — any runtime issue seen while building (e.g. a build/serve
    readiness timeout), kept **separate** from artifact correctness so a later
    session does not mistake a transient runtime failure for a broken closure.
 
@@ -99,7 +108,9 @@ A closure `CONTEXT.md` at the closure root, with these sections:
 ```markdown
 # CONTEXT — <dp-name>
 
-Workflow id: <workflow-id>   (the only durable key across sessions)
+Workflow id:   <workflow-id>
+Closure path:  <abs path to this dir>
+(Together these are the durable key across sessions. Bearer tokens never persist.)
 
 ## Intent
 <what this DP is for; the questions it answers>
@@ -124,10 +135,20 @@ Workflow id: <workflow-id>   (the only durable key across sessions)
   (Or author it inert now and promise it — preferred.)
 
 ## Reopen
-1. list_data_products — is <workflow-id> published?
-2. yes → resume_data_product(workflow="<workflow-id>")
-3. no  → build_data_product(definition="<abs path to this dir>", workflow="<workflow-id>")
-4. describe_models → run_semantic_query
+The supervisor exposes only build_data_product, describe_models and
+run_semantic_query — there is no list, status, resume or rediscovery tool, and
+the bearer token is never persisted. Reopening is therefore always a rebuild,
+which costs a full build; it is not a reattach to a running instance.
+1. build_data_product(definition="<abs path to this dir>", workflow="<workflow-id>")
+2. describe_models — using the endpoint and bearer that call returned
+3. run_semantic_query — same endpoint and bearer
+
+## Credentials (omit this section entirely if there are none)
+This closure holds a live credential in plaintext.
+- File: infra-profile.yaml — service <service-name>, keys: <key names only>
+- Rotate: replace the `value:` entries and rebuild the data product.
+- Do not commit, zip, or attach this directory. `.gitignore` covers
+  infra-profile.yaml; the other files are safe to share only if the data is.
 
 ## Known blockers (separate from artifact correctness)
 - <e.g. build/serve readiness timeout>: <symptom>, <remedy>. The closure
