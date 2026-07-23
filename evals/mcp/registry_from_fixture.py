@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+import warnings
 
 from nxd.experimental.semantic import Agg, Cardinality, SemanticRegistry
 
@@ -32,6 +33,7 @@ _AGG = {
     "AVG": Agg.AVG,
     "MIN": Agg.MIN,
     "MAX": Agg.MAX,
+    "EXPRESSION": Agg.EXPRESSION,
 }
 _CARD = {
     "one_to_one": Cardinality.ONE_TO_ONE,
@@ -58,8 +60,17 @@ def build_registry(spec: dict[str, Any]):
     ``spec`` shape (see fixtures/.../semantic.json):
         {
           "models": [{"name", "table", "grain", "description"?, "data_product"?}],
-          "dimensions": [{"name","model","column","type"?,"pii"?,"description"?}],
-          "metrics": [{"name","model","agg","column"?,"boolean"?,"description"?}],
+                    "dimensions": [{"name","model","column","type"?,"pii"?,"description"?}],
+                    # A metric may be authored either as a physical `column` name or
+                    # as a SQL expression string. Fixtures may use any of these keys
+                    # to carry an expression-style metric: `expr`, `expression`, or
+                    # `definition` (all fall back to the same value below). Example
+                    # shapes accepted here:
+                    #   {"name","model","agg","column"?,"boolean"?,"description"?}
+                    #   {"name","model","agg","expr"?,"boolean"?,"description"?}
+                    #   {"name","model","agg","expression"?,"boolean"?,"description"?}
+                    #   {"name","model","agg","definition"?,"boolean"?,"description"?}
+                    "metrics": [{"name","model","agg","column"?|"expr"|"expression"|"definition"? ,"boolean"?,"description"?}],
           "joins": [{"left","right","on":[[l,r],...],"cardinality"?}]
         }
     """
@@ -101,6 +112,24 @@ def build_registry(spec: dict[str, Any]):
             or me.get("definition")
             or "*"
         )
+        # NOTE: when a metric is authored as an expression (e.g. agg ==
+        # EXPRESSION or the fixture used `expr`/`expression`/`definition`),
+        # we currently pass that SQL string into the `column=` parameter of
+        # `SemanticRegistry.metric`. That works only if the live
+        # `SemanticRegistry` implementation accepts a SQL fragment here (some
+        # implementations interpolate the column into the aggregation), and
+        # will break if the registry validates `column` as a physical column
+        # name. This scenario is CI-skipped (requires a real nxd compiler),
+        # so callers should verify it compiles live before relying on it.
+        if agg == _AGG.get("EXPRESSION") or (
+            me.get("expr") or me.get("expression") or me.get("definition")
+        ):
+            warnings.warn(
+                "Metric uses expression fallback: passing SQL expression into 'column='; "
+                "confirm live SemanticRegistry accepts expression strings (CI-skipped).",
+                UserWarning,
+            )
+
         reg.metric(
             me["name"],
             model=me["model"],
