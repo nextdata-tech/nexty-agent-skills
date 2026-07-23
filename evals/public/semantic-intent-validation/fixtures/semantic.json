@@ -12,7 +12,7 @@
     {"name": "segment", "model": "customer_profile", "column": "SEGMENT", "type": "string", "pii": false, "description": "Customer segment (enterprise, mid-market, smb)."}
   ],
   "metrics": [
-    {"name": "total_revenue", "model": "order_event", "agg": "SUM", "column": "AMOUNT_USD", "description": "Sum of order amount in USD (AMOUNT_USD) across orders."},
+    {"name": "total_revenue", "model": "order_event", "agg": "SUM", "expression": "AMOUNT_USD * 1", "description": "Sum of order amount in USD (AMOUNT_USD) across orders."},
     {"name": "order_count", "model": "order_event", "agg": "COUNT_DISTINCT", "column": "ORDER_ID", "description": "Distinct count of orders (ORDER_ID)."},
     {"name": "call_count", "model": "rep_activity", "agg": "COUNT", "column": "*", "description": "Count of every logged call activity, regardless of outcome."},
     {"name": "sales_calls", "model": "rep_activity", "agg": "SUM", "column": "IS_CONVERTED", "boolean": true, "description": "Count of calls that converted to a sale (IS_CONVERTED flag = true)."}

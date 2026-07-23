@@ -90,11 +90,22 @@ def build_registry(spec: dict[str, Any]):
         )
     for me in spec.get("metrics", []):
         agg = _AGG[me["agg"].upper()]
+        # Metric definition may be authored as a physical `column` or as a
+        # SQL `expr`/`expression`/`definition` string. Prefer an explicit
+        # column name, but fall back to expression keys so fixtures authored
+        # with expression-style metrics still compile into the registry.
+        col = (
+            me.get("column")
+            or me.get("expr")
+            or me.get("expression")
+            or me.get("definition")
+            or "*"
+        )
         reg.metric(
             me["name"],
             model=me["model"],
             agg=agg,
-            column=me.get("column", "*"),
+            column=col,
             description=me.get("description", ""),
             boolean=bool(me.get("boolean", False)),
         )

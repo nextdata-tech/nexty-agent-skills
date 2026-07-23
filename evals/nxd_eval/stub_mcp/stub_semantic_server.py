@@ -92,7 +92,15 @@ def _build_selection_sql(
         if metric.get("name") != metric_name:
             continue
         agg = (metric.get("agg") or metric.get("aggregation") or "").upper()
-        col = metric.get("column") or metric.get("expr")
+        # Metric column may be expressed under several keys depending on the
+        # semantic fixture's authoring: prefer an explicit column name, then
+        # legacy `expr`, then `expression` (a common semantic registry key).
+        col = (
+            metric.get("column")
+            or metric.get("expr")
+            or metric.get("expression")
+            or metric.get("definition")
+        )
         table = tables.get(metric.get("model"))
         if table is None:
             raise ValueError(f"metric {metric_name!r} references unknown model "
@@ -103,6 +111,8 @@ def _build_selection_sql(
             return f"SELECT SUM({col}) AS {metric_name} FROM {table}"
         if agg == "COUNT":
             return f"SELECT COUNT({col}) AS {metric_name} FROM {table}"
+        if agg == "EXPRESSION":
+            return f"SELECT {col} AS {metric_name} FROM {table}"
         raise ValueError(f"stub compiler cannot handle aggregation {agg!r}")
     raise ValueError(f"unknown metric {metric_name!r}")
 
