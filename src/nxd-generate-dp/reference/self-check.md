@@ -4,6 +4,7 @@
 
 - What the phases are
 - What this script does NOT cover
+- Where an expected value may come from
 - The script
 - Reading a failure
 

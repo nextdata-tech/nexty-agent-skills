@@ -9,6 +9,7 @@
 - [Reference data: rulings that exist in no source CSV](#reference-data-rulings-that-exist-in-no-source-csv)
 - [The decisions model](#the-decisions-model)
 - [Rulings you must NOT propose](#rulings-you-must-not-propose)
+- [When the user supplies the ruling](#when-the-user-supplies-the-ruling)
 - [Confirm the plan before authoring](#confirm-the-plan-before-authoring)
 
 ## Why this step exists
