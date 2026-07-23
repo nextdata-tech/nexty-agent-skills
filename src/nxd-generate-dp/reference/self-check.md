@@ -491,7 +491,15 @@ if profile.exists():
     text = profile.read_text()
     # A populated attributes list = `attributes:` followed by a `- ` item before
     # the next key at the same or shallower indent. `attributes: []` never matches.
-    has_secret = re.search(r"^\s*attributes:\s*\n\s+-\s", text, re.MULTILINE) is not None
+    # Block form (`attributes:` then `- key: ...`) is what every shipped template
+    # emits, but match the inline flow form too: an improvised profile written as
+    # `attributes: [{key: ..., value: ...}]` carries exactly the same credential,
+    # and a gate that silently exempts it is not the structural check it claims
+    # to be. `attributes: []` must NOT match either way.
+    has_secret = (
+        re.search(r"^\s*attributes:\s*\n\s+-\s", text, re.MULTILINE) is not None
+        or re.search(r"^\s*attributes:\s*\[\s*[^\s\]]", text, re.MULTILINE) is not None
+    )
     if has_secret:
         for name, why in (
             (".gitignore", "git will happily commit infra-profile.yaml without it"),

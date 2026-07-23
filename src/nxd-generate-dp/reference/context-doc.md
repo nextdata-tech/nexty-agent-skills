@@ -84,15 +84,15 @@ A closure `CONTEXT.md` at the closure root, with these sections:
    The supervisor exposes **no** list, status, resume, or rediscovery tool, so
    reopening is always a rebuild. Write the recipe so it stands alone: a cold
    reader may not have this skill loaded.
-7. **Known blockers** — any runtime issue seen while building (e.g. a build/serve
-   readiness timeout), kept **separate** from artifact correctness so a later
-   session does not mistake a transient runtime failure for a broken closure.
-8. **Credentials** — only when `infra-profile.yaml` carries live credentials
+7. **Credentials** — only when `infra-profile.yaml` carries live credentials
    (a `*-source` service with a populated `attributes:` list). Name the file and
    the **keys**, never a value, and give the rotation step. `SENSITIVE` warns a
    reader who opens the directory; this section reaches the one who reads
    `CONTEXT.md` first. Omit the section entirely for a file/CSV closure — an
    empty "no credentials here" line invites a later editor to fill it in.
+8. **Known blockers** — any runtime issue seen while building (e.g. a build/serve
+   readiness timeout), kept **separate** from artifact correctness so a later
+   session does not mistake a transient runtime failure for a broken closure.
 
 ## Boundary rule (enforced by the self-check)
 
