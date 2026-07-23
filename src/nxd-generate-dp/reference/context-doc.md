@@ -87,6 +87,12 @@ A closure `CONTEXT.md` at the closure root, with these sections:
 7. **Known blockers** — any runtime issue seen while building (e.g. a build/serve
    readiness timeout), kept **separate** from artifact correctness so a later
    session does not mistake a transient runtime failure for a broken closure.
+8. **Credentials** — only when `infra-profile.yaml` carries live credentials
+   (a `*-source` service with a populated `attributes:` list). Name the file and
+   the **keys**, never a value, and give the rotation step. `SENSITIVE` warns a
+   reader who opens the directory; this section reaches the one who reads
+   `CONTEXT.md` first. Omit the section entirely for a file/CSV closure — an
+   empty "no credentials here" line invites a later editor to fill it in.
 
 ## Boundary rule (enforced by the self-check)
 
@@ -136,6 +142,13 @@ which costs a full build; it is not a reattach to a running instance.
 1. build_data_product(definition="<abs path to this dir>", workflow="<workflow-id>")
 2. describe_models — using the endpoint and bearer that call returned
 3. run_semantic_query — same endpoint and bearer
+
+## Credentials (omit this section entirely if there are none)
+This closure holds a live credential in plaintext.
+- File: infra-profile.yaml — service <service-name>, keys: <key names only>
+- Rotate: replace the `value:` entries and rebuild the data product.
+- Do not commit, zip, or attach this directory. `.gitignore` covers
+  infra-profile.yaml; the other files are safe to share only if the data is.
 
 ## Known blockers (separate from artifact correctness)
 - <e.g. build/serve readiness timeout>: <symptom>, <remedy>. The closure

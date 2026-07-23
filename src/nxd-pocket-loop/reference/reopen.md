@@ -58,6 +58,13 @@ When the user has an existing product but no endpoint or token:
    the **same** workflow id. Reusing the workflow id is what makes this a
    reopen of one product rather than the creation of a second one — the
    "one workflow id per data product" invariant still binds.
+   - **If the closure has a `SENSITIVE` marker**, it reaches a live database or
+     API and its credential lives in `infra-profile.yaml`. That file is
+     git-ignored by design, so a closure obtained as a clone or copy will be
+     missing it and the rebuild fails at connection time — not a broken
+     closure. Ask the user for the credential and restore the file with the
+     keys `SENSITIVE` names; never invent one, and never echo it in chat. A
+     credential may also simply have expired or rotated since the last build.
 3. **Take the new connection.** The returned `semantic_endpoint` and
    `bearer_token` are the connection for this session. The old ones stay dead.
 4. **Re-describe, then answer.** Call `describe_models` before mapping any
