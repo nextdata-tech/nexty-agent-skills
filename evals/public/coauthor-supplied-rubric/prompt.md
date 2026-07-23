@@ -1,36 +1,42 @@
 # Scenario: Co-author a scored data product from a supplied rubric
 
-I have 10 applicants exported to `data/applicants/applicants.csv`. I want a
-local desktop data product that screens and scores them so I can query the
-results.
+I've got 10 applicants for an AI Platform Engineer contract role exported to
+`data/applicants/applicants.csv` — one row each, every cell either a verbatim
+extract or the literal `not stated`.
+
+I want a queryable, rerunnable data product that screens and scores them so I
+can review the results and re-run as new applicants come in.
 
 ## My gates
 
-An applicant must clear all of these to be scorable:
+Failing a gate means not-Interview, but score every criterion anyway and keep
+the candidate, bucketed. Never discard anyone.
 
-- **G1 portfolio** — a real portfolio URL is captured. A skills list that merely
-  claims backend work is not evidence; it must be a URL.
-- **G2 backend** — the applicant does backend engineering.
-- **G3 seniority** — 4 or more years of experience.
+- **G1 portfolio** — a real portfolio URL is captured. A skills list that claims
+  backend work is not evidence; it has to be a URL.
+- **G2 backend** — Python backend and API fluency: a real service or API, not
+  scripting or notebooks.
+- **G3 availability** — available for a near-term contract. The form never asks
+  this, so it is `UNKNOWN` for everyone. Don't fail anyone on it; flag them for
+  outreach.
 
-## My rubric
+## My weighted criteria
 
-Score each scorable applicant on these criteria, 1 to 5:
+Scored 1–5. Weights sum to 100.
 
-| criterion | weight |
-|---|---|
-| depth of backend experience | 50 |
-| relevance of education | 30 |
-| breadth of stack | 20 |
-
-On depth of backend experience, 5 means 10+ years and 1 means under 2 years.
-On breadth of stack, 5 means four or more distinct technologies and 1 means one.
+| Criterion | Weight | 5 means | 1 means |
+|---|---|---|---|
+| C1 backend depth | 40 | multi-service backend systems, knows failure modes | called an API once |
+| C2 education relevance | 25 | CS/CE degree or demonstrated fundamentals | unrelated field |
+| C3 stack breadth | 20 | four or more distinct technologies | one |
+| C4 seniority | 15 | 10+ years | under 2 years |
 
 ## My verdicts
 
-- **ADVANCE** — weighted total of 4.0 or above
-- **HOLD** — weighted total of 2.5 or above
-- **REJECT** — below that
+`ADVANCE` · `HOLD` · `REJECT` · `NEEDS_MORE_INFO`.
+
+A candidate with no captured portfolio URL caps at `NEEDS_MORE_INFO` unless the
+resume is exceptional.
 
 ## Task
 

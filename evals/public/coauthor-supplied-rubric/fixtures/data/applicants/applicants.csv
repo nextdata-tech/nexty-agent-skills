@@ -1,11 +1,11 @@
-applicant_id,full_name,city,country,years_experience,skills,portfolio_url,degree
-A-001,Rowan Vale,Austin,US,7,"Python; FastAPI; Postgres",https://github.com/rvale/ledger-svc,MS Computer Science
-A-002,Iris Okonkwo,Lagos,NG,5,"Python; API development; backend services",,BSc Computer Science
-A-003,Mika Tanaka,Seattle,US,9,"Go; gRPC; Kubernetes",https://github.com/mtanaka/mesh-router,MS Artificial Intelligence
-A-004,Priya Raman,,US,4,"Python; Flask; REST",https://github.com/praman/inventory-api,BE Information Technology
-A-005,Tomas Nowak,Krakow,PL,11,"Java; Spring; Kafka",https://github.com/tnowak/event-bridge,MS Information Systems
-A-006,Dana Feld,Berlin,DE,3,"Python; Django",,BA Economics
-A-007,Sam Oyelaran,Chicago,US,6,"Node; Express; REST APIs",https://github.com/soyelaran/billing-api,BSc Software Engineering
-A-008,Wen Li,Toronto,CA,8,"Python; backend services; API development",,MS Computer Science
-A-009,Ana Duarte,Lisbon,PT,2,"Python; FastAPI",https://github.com/aduarte/notes-svc,BSc Mathematics
-A-010,Kofi Mensah,Accra,GH,10,"Java; microservices; REST",https://github.com/kmensah/payments-core,MS Information Systems
+applicant_id,full_name,city,country,years_experience,skills,portfolio_url,degree,availability_stated
+A-001,Rowan Vale,Austin,US,7,"Python; FastAPI; Postgres; Redis",https://github.com/rvale/ledger-svc,MS Computer Science,not stated
+A-002,Iris Okonkwo,Lagos,NG,5,"Python; API development; backend services",LISTED - URL NOT CAPTURED,BSc Computer Science,not stated
+A-003,Mika Tanaka,Seattle,US,9,"Go; gRPC; Kubernetes; Postgres",https://github.com/mtanaka/mesh-router,MS Artificial Intelligence,not stated
+A-004,Priya Raman,not stated,US,4,"Python; Flask; REST",https://github.com/praman/inventory-api,BE Information Technology,not stated
+A-005,Tomas Nowak,Krakow,PL,11,"Java; Spring; Kafka; Cassandra",https://github.com/tnowak/event-bridge,MS Information Systems,not stated
+A-006,Dana Feld,Berlin,DE,3,"Python; Django",LISTED - URL NOT CAPTURED,BA Economics,not stated
+A-007,Sam Oyelaran,Chicago,US,6,"Node; Express; REST APIs",https://github.com/soyelaran/billing-api,BSc Software Engineering,not stated
+A-008,Wen Li,Toronto,CA,8,"Python; backend services; API development",LISTED - URL NOT CAPTURED,MS Computer Science,not stated
+A-009,Ana Duarte,Lisbon,PT,2,"Python; FastAPI",https://github.com/aduarte/notes-svc,BSc Mathematics,not stated
+A-010,Kofi Mensah,Accra,GH,10,"Java; microservices; REST; Kafka",https://github.com/kmensah/payments-core,MS Information Systems,not stated

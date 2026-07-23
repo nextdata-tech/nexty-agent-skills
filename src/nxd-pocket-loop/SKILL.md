@@ -143,7 +143,11 @@ may have.
 
 Materialize each source faithfully before inference — repeat the matching
 bullet once per source when there is more than one, tagging every artifact
-you produce with that source's label:
+you produce with that source's label. **If the request supplied a procedure
+(rubric, gates, thresholds, verdicts) with a gap that changes a result, the
+policy read-back in Step 3's skill comes FIRST** — reading a source is always
+allowed, but copying it into a closure is a materialization and waits for the
+user's reply:
 
 - **Attached or workspace source:** make an exact byte-for-byte copy into the
   generated connector export. Do not rewrite delimiter, encoding, headers, or
@@ -205,7 +209,11 @@ public semantic role grammar — follow it; do not duplicate its guidance here.
 Invoke the **nxd-generate-dp** skill: assemble the complete Python-authored
 closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
 `requirements.txt`, `CONTEXT.md`, and the connector-type-specific artifact(s) — from the
-intent, inferred model(s), and connector config. Pass through **every**
+intent, inferred model(s), and connector config. **That skill opens with a
+policy read-back gate**: when the request carried a procedure with a gap that
+changes a score, verdict, gate outcome, or which rows land, it writes nothing
+until the user has seen the enumerated proposal and replied. Do not route around
+it, and do not treat your own earlier technical questions as that approval. Pass through **every**
 gathered source with its label (or the single unlabeled source, if there's
 only one) and its per-model provenance from Step 2, untouched: the file
 export plus `csv-source-path`/`file-source-path`, or the `db-source-tables`
@@ -378,6 +386,12 @@ indefinitely or give up silently.
   rates, merchant→category rulings and similar mappings are surfaced to the
   user, confirmed, and landed as their own model so they are queryable — never
   embedded as constants in generated transform code.
+- **A supplied procedure with a result-changing gap is read back BEFORE any
+  materialization.** No closure directory, source copy, generated code, table,
+  scoring, or build until the user has seen every proposed anchor, band and
+  precedence rule and replied. A technical delivery question is not that
+  approval; "use your judgement" licenses authoring the proposal, not skipping
+  the turn.
 - **A ruling behind a number is stated with the number.** When a dimension's
   catalog description names the ruling that created it, the answer says so, and
   a classified total reports its review-bucket share whenever nonzero. A

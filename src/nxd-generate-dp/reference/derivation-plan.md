@@ -381,13 +381,19 @@ which is which.
 
 ## Confirm the plan before authoring
 
-Before writing `models.py`, state the plan back in two or three lines: the base
-models, the derived models with their grain and key, any reference data you
-need confirmed, and which question each derived model exists to answer. A
-derived model no question motivates should not be built. A question no model
-answers is the gap to raise now — not after a build.
+Before **any materialization** — not merely before `models.py`, but before the
+closure directory exists, before the source is copied into it, and before any
+file is written — state the plan back: the base models, the derived models with
+their grain and key, any reference data you need confirmed, and which question
+each derived model exists to answer. A derived model no question motivates
+should not be built. A question no model answers is the gap to raise now — not
+after a build.
 
-When a supplied procedure is in play, the read-back enumerates it: every gate,
-criterion, weight, and verdict string with the user's own value, plus every gap
-you are about to land as `blocked` or ask about. A procedure summarized rather
-than enumerated is a procedure the user cannot check.
+When a supplied procedure is in play this is a **hard gate**, not a courtesy:
+see the Workflow's "Gate — policy read-back before ANY materialization" in
+`SKILL.md`. The read-back enumerates every gate, criterion, weight and verdict
+string with the user's own value, every anchor you propose for an incomplete
+scale, the verdict bands and precedence, and every gap you are about to land as
+`blocked` or ask about — then **waits for the user's reply**. A procedure
+summarized rather than enumerated is a procedure the user cannot check, and a
+proposal the user never saw is an invention however carefully it was authored.
