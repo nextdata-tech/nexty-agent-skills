@@ -122,6 +122,46 @@ def test_read_only_inspection_is_not_a_write(tmp_path):
     assert "ALL CHECKS PASSED" in proc.stdout
 
 
+def test_routing_check_fails_when_generator_is_reached_first(tmp_path):
+    """Skill SELECTION is graded, not just what happens inside a skill.
+
+    The observed failure was a routing decision: both skills attached, only
+    nxd-generate-dp loaded, because "I want a data product" matched the
+    generator's trigger. That choice happens before any skill body runs, so no
+    rule inside a skill can compensate for it.
+    """
+    trace = (
+        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-generate-dp", '
+        '"args": "Build a local desktop data product that screens..."}\n'
+        "[tool_result] Launching skill: nxd-eval-pack:nxd-generate-dp\n"
+    )
+    proc = _run_checker(tmp_path, trace)
+    assert proc.returncode != 0, proc.stdout
+    assert "FAIL routing:orchestrator-first" in proc.stdout
+    assert "nxd-generate-dp" in proc.stdout
+
+
+def test_routing_check_passes_when_orchestrator_is_reached_first(tmp_path):
+    trace = (
+        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-pocket-loop"}\n'
+        "[tool_result] Launching skill: nxd-eval-pack:nxd-pocket-loop\n"
+    ) + READBACK_FIRST
+    proc = _run_checker(tmp_path, trace)
+    assert proc.returncode == 0, proc.stdout
+    assert "PASS routing:orchestrator-first" in proc.stdout
+
+
+def test_routing_check_is_silent_when_no_skill_loaded(tmp_path):
+    """No skill at all is a different failure, graded by the read-back checks.
+
+    Asserting routing here would report a misleading cause.
+    """
+    proc = _run_checker(tmp_path, READBACK_FIRST)
+    assert proc.returncode == 0, proc.stdout
+    assert "NOTE routing" in proc.stdout
+    assert "FAIL routing" not in proc.stdout
+
+
 def test_fact_forwards_trace_only_when_scenario_opts_in(tmp_path):
     """``wants_trace`` is what puts --trace on the checker's argv."""
     run = _load_run_module()

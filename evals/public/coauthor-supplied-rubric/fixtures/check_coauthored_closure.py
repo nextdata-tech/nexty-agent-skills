@@ -139,6 +139,35 @@ def first_write_index(trace_lines: list[str]) -> int | None:
     return None
 
 
+SKILL_LOAD = re.compile(r'"skill":\s*"[^"]*?:(nxd-[a-z0-9-]+)"')
+
+
+def check_routing(trace: str) -> None:
+    """The orchestrator must be reached for before the construction specialist.
+
+    This grades SKILL SELECTION — the model's free choice among the attached
+    skills, driven only by their descriptions. It is the step that decides
+    whether the policy gate is even in scope, and it happens before any skill
+    body executes, so nothing inside a skill can compensate for getting it
+    wrong. An end-to-end "build me a data product" request has to reach
+    nxd-pocket-loop, which gathers intent, source, questions and any supplied
+    procedure; going straight to nxd-generate-dp is the observed failure.
+    """
+    loads = SKILL_LOAD.findall(trace)
+    if not loads:
+        # No skill at all is a different failure, already covered by the
+        # read-back checks: nothing here to grade.
+        note("routing", "no skill was loaded; read-back checks decide this run")
+        return
+    check(
+        "routing:orchestrator-first",
+        loads[0] != "nxd-generate-dp",
+        f"first skill loaded was {loads[0]!r}; an end-to-end build request must "
+        f"enter through nxd-pocket-loop, which gathers the inputs and runs the "
+        f"policy read-back. Skill order was: {' -> '.join(loads)}",
+    )
+
+
 def check_ordering(trace: str) -> None:
     """Every read-back signal must appear before the first materialization."""
     lines = trace.split("\n")
@@ -230,6 +259,7 @@ def main(root: Path, trace_path: Path | None = None) -> None:
     # the artifact, and a silently-invented policy produces a perfect artifact.
     if trace_path is not None and trace_path.is_file():
         trace = trace_path.read_text(errors="ignore")
+        check_routing(trace)
         check_ordering(trace)
         if first_write_index(trace.split("\n")) is None:
             # Stopped and asked without writing: the gate's ideal outcome. There
