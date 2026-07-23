@@ -25,11 +25,26 @@ choice was made: a closure that silently invents a rate, or silently declines to
 convert, fails. Refusing to fabricate a rate is a legitimate answer here and the
 fixture must not punish it.
 
-SCOPE. Truth still bakes in the seeded merchant->category mapping
-(COGS={AWS, Anthropic, OpenAI}; opex={Deel, Figma, Lufthansa, Monzo, WeWork}).
-A closure that classifies differently -- e.g. Anthropic as opex -- fails the
-totals gate even if internally consistent. That is a pre-existing property of
-this scenario, noted here so such a failure is diagnosable rather than baffling.
+CLASSIFICATION STANCE. The COGS/opex ruling is a JUDGEMENT, not a fact in the
+export: no column carries it, and the prompt says no user is available to
+confirm one. So it is gated the same way as the currency stance -- what is
+checked is that the closure's own ruling reconciles against the source, not
+that it matches a mapping the closure was never shown. Expected totals are
+recomputed by folding the closure's landed merchant->category CSV over the
+pristine export.
+
+This matters because the scenario's `unclassified-visible` check actively asks
+for uncovered merchants to land in an explicit bucket such as `needs_review`.
+Grading totals against a withheld mapping punished exactly that behaviour. What
+still fails is a measure that does not net refunds -- wrong under every ruling --
+and a measure that contradicts the ruling the closure itself recorded.
+
+The seeded per-currency totals below remain the fallback for a closure whose
+ruling cannot be parsed, and still drive the row-count checks.
+
+The seeded mapping those totals were computed from is
+COGS={AWS, Anthropic, OpenAI}; opex={Deel, Figma, Lufthansa, Monzo, WeWork}.
+It is a fallback basis only -- it is not the answer the closure has to reach.
 
 Run from the closure root with the fixtures directory passed in:
 
@@ -264,6 +279,73 @@ def materialize_closure(root: Path) -> tuple[Path | None, str]:
     if not db.is_file():
         return None, "transform ran but wrote no database"
     return db, ""
+
+
+def closure_ruling(root: Path) -> dict[str, str] | None:
+    """Recover the closure's OWN merchant->category ruling from its landed CSV.
+
+    The ruling is a judgement the closure made, not a fact in the export. Grading
+    its totals against a withheld mapping would punish a defensible call, so the
+    expected totals are recomputed from whatever ruling the closure actually
+    landed. Returns None when no ruling CSV is parseable.
+    """
+    paths = sorted(set(root.glob("data/*categor*/*.csv")) | set(root.glob("data/*merchant*/*.csv")))
+    for path in paths:
+        try:
+            rows = list(csv.DictReader(path.open()))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        if not rows:
+            continue
+        cols = [c for c in (rows[0].keys() or []) if c]
+        merch_col = next((c for c in cols if "merchant" in c.lower()), None)
+        cat_col = next((c for c in cols if "categor" in c.lower()), None)
+        if not (merch_col and cat_col):
+            continue
+        ruling = {
+            (r.get(merch_col) or "").strip(): (r.get(cat_col) or "").strip().lower()
+            for r in rows
+            if (r.get(merch_col) or "").strip()
+        }
+        if ruling:
+            return ruling
+    return None
+
+
+def expected_from_ruling(
+    fixtures: Path, ruling: dict[str, str]
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
+    """Fold the closure's ruling over the pristine source into per-currency truth.
+
+    Returns (netted, charges_only) in the same shape as the truth fixture, so the
+    downstream stance composition is identical either way. Merchants the ruling
+    does not cover fall into whatever bucket the closure chose for them, which is
+    exactly the point: an explicit `needs_review` bucket is a legitimate answer.
+    """
+    netted: dict[str, dict[str, Decimal]] = {}
+    charges: dict[str, dict[str, Decimal]] = {}
+    src = fixtures / "data" / "transactions.csv"
+    for r in csv.DictReader(src.open()):
+        if (r.get("kind") or "").strip().lower() == "transfer":
+            continue
+        cat = ruling.get((r.get("merchant") or "").strip())
+        if cat is None:
+            continue
+        cur = (r.get("currency") or "").strip().upper()
+        amt = Decimal((r.get("amount") or "0").strip())
+        netted.setdefault(cat, {}).setdefault(cur, Decimal("0"))
+        netted[cat][cur] += amt
+        if (r.get("kind") or "").strip().lower() != "refund":
+            charges.setdefault(cat, {}).setdefault(cur, Decimal("0"))
+            charges[cat][cur] += amt
+    # Truth is stored as absolute magnitudes; the export carries spend as
+    # negative. Normalise so both bases compose identically downstream.
+    def as_str(d: dict[str, dict[str, Decimal]]) -> dict[str, dict[str, str]]:
+        return {
+            cat: {cur: str(abs(v)) for cur, v in per_cur.items()} for cat, per_cur in d.items()
+        }
+
+    return as_str(netted), as_str(charges)
 
 
 def _duckdb_path(root: Path) -> Path | None:
@@ -537,10 +619,23 @@ def main() -> int:
         stance = f"converted ({', '.join(f'{k}={v}' for k, v in sorted(rates.items()))})"
         stance_rates = rates
 
-    correct = {c: compose(truth["netted_per_currency"][c], stance_rates) for c in ("cogs", "opex")}
-    wrong = {
-        c: compose(truth["charges_only_per_currency"][c], stance_rates) for c in ("cogs", "opex")
-    }
+    # The COGS/opex ruling is a judgement, not a fact in the export, so the
+    # expected totals are recomputed from the ruling the closure actually landed
+    # rather than from a mapping it was never shown. A closure that routes an
+    # ambiguous merchant to `needs_review` -- which `unclassified-visible` asks
+    # for -- is then graded on its own terms. Netting is still gated: forgetting
+    # to net is wrong under every ruling.
+    ruling = closure_ruling(root)
+    if ruling is not None:
+        netted_truth, charges_truth = expected_from_ruling(args.fixtures, ruling)
+        basis = "the closure's own landed ruling"
+    else:
+        netted_truth = truth["netted_per_currency"]
+        charges_truth = truth["charges_only_per_currency"]
+        basis = "the seeded ruling (closure landed none that could be parsed)"
+
+    correct = {c: compose(netted_truth.get(c, {}), stance_rates) for c in ("cogs", "opex")}
+    wrong = {c: compose(charges_truth.get(c, {}), stance_rates) for c in ("cogs", "opex")}
 
     # A closure may net refunds by EXCLUDING both rows, or by RETAINING the
     # signed pair. Both are arithmetically correct, so probe both aggregations
@@ -576,10 +671,18 @@ def main() -> int:
         return 1
 
     print(f"currency stance: {stance}")
+    print(f"expected totals computed from: {basis}")
     for cat in ("cogs", "opex"):
         cands = found_totals.get(cat)
         if not cands:
             check(f"totals:{cat}", False, "not found in any landed table")
+            continue
+        if not netted_truth.get(cat):
+            # The closure's ruling puts nothing in this category. That is a
+            # classification choice, not an arithmetic error, and there is no
+            # total to reconcile against.
+            check(f"totals:{cat}", False, f"got {' / '.join(str(c) for c in cands)}, but the "
+                  f"closure's ruling assigns no merchant to {cat}")
             continue
         want, bad = correct[cat], wrong[cat]
         shown = " / ".join(str(c) for c in cands)
@@ -605,9 +708,10 @@ def main() -> int:
                 f"totals:{cat}",
                 False,
                 f"got {shown}; under the {stance} stance the netted total is "
-                f"{want} and the charges-only total is {bad} (+/-{tol}). Matching "
-                f"neither usually means a rate was applied that is not the one "
-                f"landed as data, or the category ruling differs from the seeded one.",
+                f"{want} and the charges-only total is {bad} (+/-{tol}), both "
+                f"computed from {basis}. Matching neither usually means a rate "
+                f"was applied that is not the one landed as data, or the landed "
+                f"measure disagrees with the ruling the closure itself recorded.",
             )
 
     print_report()

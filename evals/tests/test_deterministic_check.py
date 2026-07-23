@@ -194,6 +194,48 @@ def _land_totals(root: Path, *, net_refunds: bool) -> None:
     con.close()
 
 
+def _land_ruling(root: Path, ruling: dict[str, str]) -> None:
+    """Overwrite the closure's landed merchant->category CSV with `ruling`."""
+    (root / "data" / "merchant_category" / "merchant_category.csv").write_text(
+        "merchant,category\n" + "".join(f"{m},{c}\n" for m, c in ruling.items()),
+        encoding="utf-8",
+    )
+
+
+def _land_totals_under(root: Path, ruling: dict[str, str], *, net_refunds: bool = True) -> None:
+    """Land a measure classified by `ruling`, which the closure also records."""
+    _land_ruling(root, ruling)
+    rows = list(csv.DictReader((FIXTURES / "data" / "transactions.csv").open()))
+    landed = []
+    for r in rows:
+        if r["kind"] == "transfer":
+            continue
+        if not net_refunds and r["kind"] == "refund":
+            continue
+        landed.append(
+            (
+                r["txn_id"],
+                ruling.get(r["merchant"], "needs_review"),
+                r["currency"],
+                float(Decimal(r["amount"])),
+            )
+        )
+    con = duckdb.connect(str(root / "data.duckdb"))
+    con.execute(
+        "CREATE TABLE classified_spend "
+        "(txn_id VARCHAR, category VARCHAR, currency VARCHAR, net_amount DOUBLE)"
+    )
+    con.executemany("INSERT INTO classified_spend VALUES (?, ?, ?, ?)", landed)
+    con.close()
+
+
+SEEDED_RULING = {
+    "AWS": "cogs", "Anthropic": "cogs", "OpenAI": "cogs",
+    "Deel": "opex", "Figma": "opex", "Lufthansa": "opex",
+    "Monzo": "opex", "WeWork": "opex",
+}
+
+
 def _facts(ws: Path) -> list[str]:
     return [run.deterministic_check_fact(SCENARIO, ws, CHECK_CFG)]
 
@@ -219,6 +261,63 @@ def test_unnetted_refunds_closure_fails_and_names_the_bug(tmp_path):
     detail = run.deterministic_check_detail(facts)
     assert "totals:" in detail
     assert "charges-only" in detail
+
+
+def test_defensible_ruling_is_graded_on_its_own_terms(tmp_path):
+    """An uncovered merchant routed to `needs_review` must not fail the totals.
+
+    The COGS/opex ruling exists in no column of the export and no user is
+    available to confirm one, so it is a judgement rather than a fact. The
+    scenario's own `unclassified-visible` check asks for uncovered merchants to
+    land in an explicit bucket; grading totals against a mapping the closure was
+    never shown punished exactly that. Monzo is a bank, and calling it
+    unclassified is defensible.
+    """
+    _write_closure(tmp_path)
+    _land_totals_under(tmp_path, dict(SEEDED_RULING, Monzo="needs_review"))
+
+    facts = _facts(tmp_path)
+    assert run.deterministic_check_passed(facts) is True
+    assert run.deterministic_check_infrastructure_error(facts) is None
+
+
+def test_ruling_freedom_does_not_excuse_unnetted_refunds(tmp_path):
+    """Netting is wrong under EVERY ruling, so the gate must still bite.
+
+    Guards the obvious way to defang this: if the expected totals follow the
+    closure's ruling, a closure must not be able to escape the netting check by
+    reclassifying. The charges-only diagnostic must also be recomputed under the
+    closure's ruling rather than quoting the seeded figure.
+    """
+    _write_closure(tmp_path)
+    _land_totals_under(
+        tmp_path, dict(SEEDED_RULING, Monzo="needs_review"), net_refunds=False
+    )
+
+    facts = _facts(tmp_path)
+    assert run.deterministic_check_passed(facts) is False
+
+    detail = run.deterministic_check_detail(facts)
+    assert "charges-only" in detail
+    # The seeded opex charges-only figure includes Monzo; this ruling excludes
+    # it, so quoting 354408.96 here would prove the fallback basis was used.
+    assert "354408.96" not in detail
+
+
+def test_measure_contradicting_its_own_ruling_fails(tmp_path):
+    """Self-consistency is still enforced.
+
+    A closure cannot dodge the gate by landing a ruling that disagrees with the
+    measure it actually computed -- that is the loophole a ruling-derived basis
+    would otherwise open.
+    """
+    _write_closure(tmp_path)
+    # Measure classifies Anthropic as opex; the recorded ruling says cogs.
+    _land_totals_under(tmp_path, dict(SEEDED_RULING, Anthropic="opex"))
+    _land_ruling(tmp_path, SEEDED_RULING)
+
+    facts = _facts(tmp_path)
+    assert run.deterministic_check_passed(facts) is False
 
 
 def test_closure_without_a_landed_database_is_still_graded(tmp_path):
