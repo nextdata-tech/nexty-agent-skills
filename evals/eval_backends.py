@@ -423,8 +423,13 @@ class CodexBackend:
         except subprocess.TimeoutExpired:
             return False, "", {"error": f"agent timed out after {timeout_s}s"}
         if proc.returncode != 0:
+            # Same stdout-vs-stderr fallback as the Claude paths. No Codex
+            # stdout-only failure is known today, but a CLI that dies with an
+            # empty stderr reports as a bare "codex exited 1:" either way, and
+            # the fallback costs nothing when stderr is populated.
+            detail = proc.stderr.strip() or proc.stdout.strip() or "(no output)"
             return False, "", {
-                "error": f"codex exited {proc.returncode}: {proc.stderr[-2000:]}"
+                "error": f"codex exited {proc.returncode}: {detail[-2000:]}"
             }
 
         trace, metrics = self._trace_from_stream(proc.stdout)
@@ -591,8 +596,9 @@ class CodexBackend:
                 return {"error": f"judge timed out after {timeout_s}s",
                         "overall_pass": False}
             if proc.returncode != 0:
+                detail = proc.stderr.strip() or proc.stdout.strip() or "(no output)"
                 return {
-                    "error": f"judge exited {proc.returncode}: {proc.stderr[-1000:]}",
+                    "error": f"judge exited {proc.returncode}: {detail[-1000:]}",
                     "overall_pass": False,
                 }
             # Prefer the last-message file (the schema-constrained final answer);
