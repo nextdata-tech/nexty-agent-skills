@@ -256,3 +256,30 @@ count, since remote data isn't static. When credentials are not available
 in-session, report the connectivity self-check as **not run** — do not
 claim it passed. Structural checks (naming invariant, no
 `.semantic_tools()`, import correctness) still run regardless.
+
+**Never let a probe's traceback reach the transcript unredacted.** This is a
+sharper risk than the database case: `requests` puts the full URL in
+`HTTPError`/`ConnectionError` messages, so an API keyed by query string
+(`?api_key=…`) or basic auth leaks the live credential into chat the moment a
+probe fails — and chat is the one place the user cannot remediate. Redact by
+substituting the known secret values, never by pattern-matching:
+
+```python
+def _redact(exc: BaseException, secrets: dict) -> str:
+    text = str(exc)
+    for value in secrets.values():            # every live value, keys vary per API
+        if value:
+            text = text.replace(str(value), "<redacted>")
+    return text
+
+try:
+    ...  # the bounded GET
+except Exception as exc:
+    raise SystemExit(f"connectivity check failed: {_redact(exc, api_secrets)}") from None
+```
+
+`from None` is mandatory: without it Python chains the original exception as
+`__context__` and re-prints it in full, defeating the redaction. The same rule
+governs anything you improvise — never `print()` a request URL or a response
+header dump, and never paste a raw traceback from a failed call into the
+answer.

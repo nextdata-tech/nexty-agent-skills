@@ -243,3 +243,31 @@ isn't static. When credentials are not available in-session, report the
 connectivity self-check as **not run** — do not claim it passed. Structural
 checks (naming invariant, no `.semantic_tools()`, import correctness) still
 run regardless.
+
+**Never let a probe's traceback reach the transcript unredacted.** A failing
+connection raises through SQLAlchemy, which masks the password in its own
+`repr` — but a malformed URL raises `ArgumentError` carrying the string you
+passed it, and an improvised probe that builds its own DSN or prints the
+connection string leaks the live value into chat, where the user cannot
+remediate it. Wrap the probe so the failure is substituted from the known
+secret values, never pattern-matched:
+
+```python
+def _redact(exc: BaseException, secrets: dict) -> str:
+    text = str(exc)
+    for key in ("password", "user"):          # the values, not the key names
+        value = secrets.get(key)
+        if value:
+            text = text.replace(value, f"<{key} redacted>")
+    return text
+
+try:
+    ...  # the bounded probe
+except Exception as exc:
+    raise SystemExit(f"connectivity check failed: {_redact(exc, db_secrets)}") from None
+```
+
+`from None` is mandatory: without it Python chains the original exception as
+`__context__` and re-prints it in full, defeating the redaction. The same rule
+governs anything you improvise — never `print()` a connection string, and
+never paste a raw traceback from a failed connection into the answer.
