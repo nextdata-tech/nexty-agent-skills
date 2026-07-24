@@ -5,9 +5,11 @@
 - What Nexty Pocket is
 - End-to-end flow
 - The skills (subskills) and what each owns
+- Context capture: `CONTEXT.md` and `nxd_decisions`
 - Deterministic runtime checks (the self-check phases)
 - Evals that exercise this loop
 - Automated tests that guard the gates themselves
+- Known coverage gaps
 - Where things live
 
 ## What Nexty Pocket is
@@ -78,6 +80,49 @@ A single-source build needs only `nxd-pocket-loop` → `nxd-semantic-data-produc
 short label per source through all three steps (`reference/multi-source.md` in
 `nxd-generate-dp`).
 
+## Context capture: `CONTEXT.md` and `nxd_decisions`
+
+A closure has to survive being handed off cold — a later session, possibly
+without this skill loaded, has to be able to continue or reopen the work with
+nothing but the closure directory. Two distinct, complementary mechanisms
+capture that context, and neither substitutes for the other:
+
+**`CONTEXT.md`** (`src/nxd-generate-dp/reference/context-doc.md`) is the
+**prose** design/process record, emitted at the closure root by every build
+(Step 6a), mandatory (enforced by self-check Phase C below). It has 8 required
+sections: intent; the population/sample-selection rule (and, if sampled, an
+explicit statement of what's excluded and whether a downstream step depends on
+it); per-field inference/determinism caveats (distinguishing what the agent
+inferred from what the user actually supplied — otherwise indistinguishable in
+the data); required-capture fields (a source field a downstream model depends
+on — missing it silently no-ops the downstream step rather than erroring);
+the full contract for any derived model not yet built; the reopen recipe
+(workflow id + closure path — the only durable key, since the bearer token
+never persists); credentials (key *names* only, never values); and known
+runtime blockers, kept separate from artifact correctness. A worked template
+for both `CONTEXT.md` and the companion `contracts/<name>.md` ships in the
+same reference file.
+
+**`nxd_decisions`** (`src/nxd-generate-dp/reference/derivation-plan.md`) is the
+**machine-queryable** ledger for the same rulings — a reserved-name base model
+landed as `data/nxd_decisions/nxd_decisions.csv`, one row per ruling, with a
+`status` column restricted to `confirmed` / `proposed` / `blocked`. It's what
+makes a ruling *editable* and *reviewable* rather than merely documented, and
+it's mechanically enforced by self-check Phase D below (must be a base model,
+not a derived one generated from a Python literal; no policy value may also
+appear as a hardcoded literal in the transform).
+
+The two are meant to describe the **same** rulings from two angles — `CONTEXT.md`
+says "here's the ruling and why," `nxd_decisions` makes it a queryable, editable
+row — and this is stated in both files (`CONTEXT.md`'s per-field-inference
+section says it "mirrors the dimension `description=` in `models.py`"; the
+model itself is what a later consumer edits). What's *not* stated explicitly in
+either file is the failure mode of the two drifting apart — e.g. `CONTEXT.md`
+describing a ruling that was later changed in `nxd_decisions` without the prose
+being updated to match. No check catches that divergence today; Phase D only
+catches a ruling duplicated as a code literal, not a ruling whose prose and
+data have quietly diverged from each other.
+
 ## Deterministic runtime checks (the self-check phases)
 
 Unlike the platform flow (which relies on the kernel's own build-time
@@ -143,6 +188,7 @@ own claims.
 | **`pharma-cross-dp-mesh-query`** | `nxd-data-product-query` (platform path, not Pocket) | Included here only because Pocket's Step 5 reuses its NL→concept mapping approach; the scenario itself targets deployed cross-DP semantic queries, not a local closure. |
 | **`semantic-intent-validation`** | `nxd-data-product-query` | Exercises the "intent gate" (critic/echo/clarify) ahead of `run_semantic_query` — the same discipline Pocket's Step 5 leans on when mapping a question to a selection, though the scenario itself runs against a deployed DP. |
 | **`coauthor-supplied-rubric`** (not Pocket-specific but shares the gate `nxd-generate-dp`/`nxd-pocket-loop` both implement) | `nxd-generate-dp` | The policy read-back gate: a supplied rubric with an incomplete scale must be read back and approved **before** any closure file is written. `fixtures/check_coauthored_closure.py` fails a transcript where scaffolding starts before the read-back, fails post-hoc disclosure (reading back only after building), and separately fails a **routing** regression where a build request reaches `nxd-generate-dp` directly instead of `nxd-pocket-loop` gathering first. |
+| **`derive-models-from-questions`** | `nxd-generate-dp` | Step 1a/3a/3b end-to-end on a messy transactions export: refund netting (the derived spend *measure* must be correct even though the row count is a red herring), transfer exclusion, a monthly regrain (the semantic layer can't `DATE_TRUNC` at query time), an undisclosed-FX-rate trap across three currencies (silently inventing a rate fails; silently refusing to convert without disclosing why also fails), and a merchant→category ruling landed in `nxd_decisions` (never a dict literal or `if/elif` chain) with an explicit `needs_review` bucket for uncovered merchants. Has its own `deterministic_check` (`fixtures/check_derived_closure.py`) folded into the judge's facts. |
 
 Efficiency (turns, tool calls, tokens, cost) is graded alongside correctness
 for every scenario — a skill edit that keeps a `PASS` verdict but doubles the
@@ -186,6 +232,45 @@ was written for:
 
 Run them with plain `pytest evals/tests/` — no live supervisor, no agent, no
 API key required.
+
+## Known coverage gaps
+
+Three gaps in what's actually verified, none hypothetical — each is either an
+open tracked issue or a documented note in the eval ledger:
+
+- **`reference/reopen.md` (reopen-by-rebuild) and `reference/query-grammar.md`
+  (the Omission Test) have no scenario at all.** Both are carefully worked
+  reference docs — the reopen playbook's credential-recovery branches and
+  honesty-clause narration rules, the Omission Test's ruling-vs-filter
+  classification — but nothing in `evals/public/` or `evals/tests/` exercises
+  either. Tracked in **[#103](https://github.com/nextdata-tech/nexty-agent-skills/issues/103)**,
+  E5 ("pocket-loop invariants with no scenario at all") names reopen-by-rebuild
+  by name and calls it "the one a real user hits every second session, since
+  the bearer is per-session and never persisted"; E4 separately flags the
+  Omission Test as mechanically decidable (run the ruling-bearing measure with
+  no filters, compare against the ruled total) but currently ungraded even by
+  the judge.
+- **Database and REST-API connector types have no scenario coverage.**
+  `reference/database-source.md`, `reference/api-source.md`, the labeled
+  multi-source naming scheme, and the structured `auth_type` dispatch all
+  shipped, but every public eval that touches `nxd-generate-dp` only exercises
+  the single-CSV-source path — noted at the time in
+  `evals/benchmarks/records/2026-07-21-...multi-connector-type-sources.json`
+  as "real follow-up work" but never filed until now:
+  **[#107](https://github.com/nextdata-tech/nexty-agent-skills/issues/107)**.
+- **The flagship end-to-end scenario can't run in CI or in a plain sandbox.**
+  `pocket-loop-serve-query-refine` needs a live `nxd-desktop-supervisor`
+  binary (`ci_skip`'d for exactly this reason), and the same 2026-07-21 ledger
+  entry separately notes it "remains blocked in this sandbox (missing
+  nxd-desktop-supervisor binary)" — so it has apparently not actually run
+  against the connector-type and reopen-recipe changes layered on top of it
+  since. Tracked as part of **[#90](https://github.com/nextdata-tech/nexty-agent-skills/issues/90)**
+  ("Covered only by `ci_skip` scenarios") and **#103** E3 (whether
+  `pocket_verify` should generalize beyond this one scenario).
+
+There is also **no check for `CONTEXT.md`/`nxd_decisions` drifting apart** from
+each other over time (see "Context capture" above) — not yet filed as an issue,
+since it's a narrower, newly-noticed gap rather than an already-tracked one.
 
 ## Where things live
 
