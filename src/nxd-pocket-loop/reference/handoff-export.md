@@ -41,8 +41,7 @@ mcp__nxd-desktop__export_data_product(
   stated in the handoff and named by the workflow id (`…/nxd-pocket/<workflow>/`).
   It is the same path `build_data_product` takes.
 - `import_notes` is **required**.
-- `redact` is optional and, for a pocket closure, effectively never needed — see
-  the next section.
+- `redact` is optional and rarely needed — see the next section.
 
 ## Fail-closed redaction — why you don't hunt for secrets
 
@@ -52,19 +51,23 @@ placeholder automatically, without being named. You do not enumerate secrets,
 and you do not need to know which attributes are sensitive — anything not proven
 public is redacted by default.
 
-`nxd-generate-dp` marks **every** connector attribute `public: false` (see
-`nxd-generate-dp`'s `reference/database-source.md` and `reference/api-source.md`).
-So for a pocket-generated closure the default already redacts the entire
-connection payload — host, port, database, schema, user, password, base URL,
-token. Nothing in a pocket closure is `public: true`.
+`nxd-generate-dp` marks each connector attribute by sensitivity (see
+`nxd-generate-dp`'s `reference/database-source.md` and `reference/api-source.md`):
+credentials and identity (`password`, `user`, tokens/keys) are `public: false`,
+while non-secret topology/config (`host`, `port`, `database`, `schema`,
+`base_url`, `auth_type`, `region`) is `public: true`. So an export of a
+pocket-generated closure **keeps the topology and redacts only the secrets** —
+the recipient's bundle already carries the connection shape and they refill just
+the credentials the `IMPORT.md` header names.
 
 Two consequences:
 
-- **`redact` is effectively never needed here.** The `redact` map only strips
-  values that *are* marked `public: true`; it is keyed by infra-profile **service
-  name**. Since no pocket-closure attribute is `public: true`, there is nothing
-  for it to do. Never reach for `redact` to strip a secret — the fail-closed
-  default already did.
+- **`redact` is rarely needed here.** The `redact` map only strips values that
+  *are* marked `public: true`; it is keyed by infra-profile **service name**.
+  The fail-closed default already redacts every secret, so never reach for
+  `redact` to strip a credential. Its one legitimate use is to *also* strip a
+  non-secret `public: true` value the user decides shouldn't ship (e.g. an
+  internal host) — an export-time override of the automatic classification.
 - **Never mark a credential `public: true`.** `public: true` means "safe to
   ship in an export." Marking a credential public would leak it into the bundle.
 

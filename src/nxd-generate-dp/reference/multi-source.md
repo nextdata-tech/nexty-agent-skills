@@ -52,12 +52,13 @@ The driver id (`nxd:generic-secrets:1.0.0`) never changes — only the name.
 `attributes` follows the single-instance rule per type: `[]` for
 `csv-source-<label>` / `file-source-<label>` (nothing secret to carry — see
 `reference/file-source.md`); for `db-source-<label>` / `api-source-<label>`,
-one flat `{"key": <property>, "value": <live value>, "public": false}`
+one flat `{"key": <property>, "value": <live value>, "public": <bool>}`
 attribute per connection field — the label lives on the *service* name
 (`db-source-orders`), not on the attribute keys, which stay the plain
 property names (`host`, `port`, ...) within each labeled service — see
 `reference/database-source.md` / `reference/api-source.md` for the exact
-per-property list and why `public: false` is required on each one.
+per-property list and the `public:` value per property (secrets `false`,
+non-secret topology `true`).
 
 ## Worked example: two database sources
 
@@ -82,16 +83,16 @@ spec:
       attributes:
         - key: host
           value: <live host>
-          public: false
+          public: true
         - key: port
           value: <live port>
-          public: false
+          public: true
         - key: database
           value: <live database>
-          public: false
+          public: true
         - key: schema
           value: <live schema>
-          public: false
+          public: true
         - key: user
           value: <live user>
           public: false
@@ -101,7 +102,7 @@ spec:
     - name: db-source-users
       driver: nxd:generic-secrets:1.0.0
       # Same six attributes as db-source-orders above (host/port/database/
-      # schema/user/password, each `public: false`) — its own live values,
+      # schema `public: true`, user/password `public: false`) — its own values,
       # not shared with db-source-orders. See reference/database-source.md
       # for the canonical per-field list.
       attributes: [...]

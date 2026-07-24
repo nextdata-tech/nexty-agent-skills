@@ -59,8 +59,9 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   topology** — one line per model, `<model>=<endpoint path>`.
 - The `api-source` service's `attributes` list carries the live payload as
   **one entry per property**, each shaped `{"key": <property>, "value":
-  <live value>, "public": false}` — never one attribute holding a nested
-  object. `base_url` is always present. When the API requires
+  <live value>, "public": <bool>}` — never one attribute holding a nested
+  object (see the sensitivity classification under Credential handling for the
+  `public:` value per property). `base_url` is always present. When the API requires
   authentication, add `auth_type` (one of `bearer` / `http_basic` /
   `api_key` / `oauth2_client_credentials`) plus that type's own flat
   fields — never a single `auth` attribute holding the whole credential,
@@ -83,22 +84,27 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   expects.
 - **`value` is always a plain string** on the transform side — dlt/Python
   types (ints, bools) are not preserved; cast in the transform if needed.
-- **Set `public: false` on every attribute here.** The supervisor drops any
-  attribute *not* marked `public: false` before it reaches template-render
-  contexts — that's the actual credential boundary, not the closure
-  directory. Don't rely on the default; it's inconsistent across call sites
-  in the supervisor.
+- **Mark each attribute by sensitivity.** The `public:` flag controls **only**
+  `export_data_product` redaction — the transform reads every attribute via
+  `secrets["api_source"]` regardless. Secrets and identity —
+  `auth_token`, `auth_username`, `auth_password`, `auth_api_key`,
+  `auth_client_id`, `auth_client_secret` — are `public: false` (redacted
+  fail-closed on export). Non-secret topology/config — `base_url`, `auth_type`,
+  `auth_key_name`, `auth_key_location`, `region` — is `public: true` so it
+  survives an export and the recipient only refills the credentials. **Never
+  mark a credential `public: true`.** If the user explicitly designates an
+  attribute's sensitivity, honor their choice over this default.
 - **Never fabricate a credential the user hasn't supplied**, and never
   narrate a live token/key in chat — enter it into `infra-profile.yaml`
   exactly as the user gave it, nowhere else.
-- **The closure directory itself now holds a live credential in plaintext**
-  — `public: false` only controls template-render exposure inside the
-  supervisor, it does not make `infra-profile.yaml` safe to commit, hand-zip, or
-  hand off. Treat the whole closure directory as sensitive once this file
-  carries a real token/key: don't commit it to a shared repo, don't hand-attach
-  it to a ticket or chat, and don't reuse it as a template for a different
-  API without clearing the old credential first. To share the product, use the
-  supervisor's `export_data_product` tool — it strips every attribute not marked
+- **The closure directory itself now holds a live credential in plaintext.**
+  The `public:` flag only controls `export_data_product` redaction; it does not
+  make `infra-profile.yaml` safe to commit, hand-zip, or hand off. Treat the
+  whole closure directory as sensitive once this file carries a real token/key:
+  don't commit it to a shared repo, don't hand-attach it to a ticket or chat,
+  and don't reuse it as a template for a different API without clearing the old
+  credential first. To share the product, use the supervisor's
+  `export_data_product` tool — it strips every attribute not marked
   `public: true` fail-closed, so **never mark a credential attribute
   `public: true`** (`public: true` means "safe to ship in an export").
 - **Emit `.gitignore` and `SENSITIVE` in the same step that writes the
@@ -217,12 +223,13 @@ add it explicitly rather than assuming it's already covered.
       attributes:
         - key: base_url
           value: https://aidevboard.com/api/v1
-          public: false
+          public: true
   ```
 
   When the API needs authentication, add `auth_type` plus that type's own
   flat fields alongside `base_url` — never nest a whole credential under
-  one attribute's value. Bearer-token example:
+  one attribute's value. Bearer-token example (topology `public: true`, the
+  secret `public: false`):
 
   ```yaml
     - name: api-source
@@ -230,10 +237,10 @@ add it explicitly rather than assuming it's already covered.
       attributes:
         - key: base_url
           value: https://aidevboard.com/api/v1
-          public: false
+          public: true
         - key: auth_type
           value: bearer
-          public: false
+          public: true
         - key: auth_token
           value: <the live bearer token the user supplied>
           public: false
@@ -241,8 +248,9 @@ add it explicitly rather than assuming it's already covered.
 
   For the other three types, add that type's fields from the table in
   Credential handling instead of `auth_token` (e.g. `auth_username` +
-  `auth_password` for `http_basic`) — same `key`/`value`/`public: false`
-  shape, one attribute per field.
+  `auth_password` for `http_basic`) — one attribute per field, each marked
+  `public:` per the sensitivity classification (secrets `false`, non-secret
+  config like `auth_key_name`/`auth_key_location` `true`).
 
   **No `data/` directory, no path file** — `api-source-endpoints` is the
   only companion artifact, and it stays non-secret topology only. For 2+ API

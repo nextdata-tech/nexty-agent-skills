@@ -56,30 +56,35 @@ as `secrets["db_source"]`.
   one line per model, `<model>=<schema-qualified source table name>`.
 - The `db-source` service's `attributes` list carries the live payload as
   **one entry per connection field**, each shaped `{"key": <field>, "value":
-  <live value>, "public": false}` — `host`, `port`, `database`, `schema`,
-  `user`, `password` — never one attribute holding a nested object. Together
+  <live value>, "public": <bool>}` — `host`, `port`, `database`, `schema`,
+  `user`, `password` (see the sensitivity classification under Credential
+  handling for the `public:` value per field) — never one attribute holding a
+  nested object. Together
   they match exactly what `secrets["db_source"]` hands the transform as a
   dict. See the worked example below.
 - **`value` is always a plain string** on the transform side — `port` arrives
   as `"5432"`, not `5432`; cast in `_build_connection_string` if the
   dialect's connection-string/DSN builder needs an int.
-- **Set `public: false` on every attribute here.** The supervisor drops any
-  attribute *not* marked `public: false` before it reaches template-render
-  contexts — that's the actual credential boundary, not the closure
-  directory. Don't rely on the default; it's inconsistent across call sites
-  in the supervisor.
+- **Mark each attribute by sensitivity.** The `public:` flag controls **only**
+  `export_data_product` redaction — the transform reads every attribute via
+  `secrets["db_source"]` regardless. Secrets and identity — `password`, `user` —
+  are `public: false` (redacted fail-closed on export). Non-secret topology —
+  `host`, `port`, `database`, `schema` — is `public: true` so it survives an
+  export and the recipient only refills the credentials. **Never mark a
+  credential `public: true`.** If the user explicitly designates an attribute's
+  sensitivity, honor their choice over this default.
 - **Never fabricate a credential the user hasn't supplied**, and never
   narrate a raw password in chat — enter it into `infra-profile.yaml` exactly
   as the user gave it, nowhere else.
-- **The closure directory itself now holds a live credential in plaintext**
-  — `public: false` only controls template-render exposure inside the
-  supervisor, it does not make `infra-profile.yaml` safe to commit, hand-zip, or
-  hand off. Treat the whole closure directory as sensitive once this file
-  carries a real password: don't commit it to a shared repo, don't hand-attach
-  it to a ticket or chat, and don't reuse it as a template for a different
-  database without clearing the old credential first. To share the product, use
-  the supervisor's `export_data_product` tool — it strips every attribute not
-  marked `public: true` fail-closed, so **never mark a credential attribute
+- **The closure directory itself now holds a live credential in plaintext.**
+  The `public:` flag only controls `export_data_product` redaction; it does not
+  make `infra-profile.yaml` safe to commit, hand-zip, or hand off. Treat the
+  whole closure directory as sensitive once this file carries a real password:
+  don't commit it to a shared repo, don't hand-attach it to a ticket or chat,
+  and don't reuse it as a template for a different database without clearing the
+  old credential first. To share the product, use the supervisor's
+  `export_data_product` tool — it strips every attribute not marked
+  `public: true` fail-closed, so **never mark a credential attribute
   `public: true`** (`public: true` means "safe to ship in an export").
 - **Emit the sensitivity artifacts in the same step that writes the
   credential** — see [Sensitivity artifacts](#sensitivity-artifacts) below.
@@ -209,16 +214,16 @@ Postgres, `pymysql` for MySQL. Never install both speculatively.
       attributes:
         - key: host
           value: <live host>
-          public: false
+          public: true
         - key: port
           value: <live port>
-          public: false
+          public: true
         - key: database
           value: <live database>
-          public: false
+          public: true
         - key: schema
           value: <live schema>
-          public: false
+          public: true
         - key: user
           value: <live user>
           public: false
