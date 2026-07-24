@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.19.0
+  version: 0.20.0
 ---
 
 # nxd-pocket-loop skill
@@ -362,6 +362,10 @@ accepts. If the loop does not converge within the caps, report what you tried,
 what the product currently declares, and where the gap is — do not loop
 indefinitely or give up silently.
 
+## When questions require inference
+
+Some questions need a **judgement produced by reading each entity's evidence** — a per-entity score, verdict, or classification. It is nondeterministic, so route it like any ruling: **land it as data, produced agent-side, before the build**, teaching the rubric as data FIRST. `reference/inference.md` owns *when the agent judges* (teach/judge/incremental, unscored-bucket degrade); the row schema is nxd-generate-dp's `reference/llm-judgments.md`.
+
 ## Narration discipline (always)
 
 - **Warm up** before any multi-minute step (inference, generation, serve).
@@ -372,6 +376,11 @@ indefinitely or give up silently.
 - **Show the query behind the answer** — every answer states the
   measure/dimension selection that produced it, and the ruling behind any
   dimension whose catalog description names one.
+- **Disclose proposed judgement, and quantify the unscored bucket.** An answer
+  resting on a model an agent judgement `applies_to` says so ("built on proposed
+  agent judgements, rubric v1"), never as confirmed fact, and reports the unscored
+  share like a `needs_review` share. A score over a silently-incomplete
+  population is a preview, not an answer.
 
 ## Invariants — never violate these
 
@@ -405,7 +414,11 @@ indefinitely or give up silently.
 - **A judgement not in the data is confirmed and landed, not hardcoded.** FX
   rates, merchant→category rulings and similar mappings are surfaced to the
   user, confirmed, and landed as their own model so they are queryable — never
-  embedded as constants in generated transform code.
+  embedded as constants in generated transform code. **This covers a judgement
+  the agent itself produced** — a per-entity score/verdict/classification read
+  from evidence, landed agent-side as data (`status = proposed`, evidence-cited),
+  rubric taught first; the build never invokes a model. A per-entity judgement
+  written as a transform constant is hardcoded even when the weighting is computed.
 - **A supplied procedure with a result-changing gap is read back BEFORE any
   materialization.** No closure directory, source copy, generated code, table,
   scoring, or build until the user has seen every proposed anchor, band and
@@ -467,7 +480,7 @@ indefinitely or give up silently.
 | Skill | Role in the loop |
 |-------|------------------|
 | `nxd-semantic-data-product` | Infers the semantic model from the source + questions (Step 2) |
-| `nxd-generate-dp` | Generates the runnable local closure the supervisor serves (Step 3), including local-file, database, and REST API connector config — see its own `reference/` for the connector-type-specific shape. |
+| `nxd-generate-dp` | Generates the runnable local closure the supervisor serves (Step 3), including local-file, database, and REST API connector config — see its own `reference/` for the connector-type-specific shape, and `reference/llm-judgments.md` for landing an agent judgement (score/verdict/classification) as data. |
 | `nxd-data-product-query` | Source of the question→concept mapping approach (Step 5) |
 
 ## Reference docs (this skill)
@@ -479,6 +492,7 @@ one-DP-in-flight, subagent fan-out);
 [reference/context-and-resume.md](reference/context-and-resume.md) owns
 **context** (what persists vs. dies, the resume-first reattach playbook, the
 rebuild fallback and `SENSITIVE` credential recovery, the optional session
-ledger). Step 5's grammar is in
-[reference/query-grammar.md](reference/query-grammar.md); dlt instructions in
+ledger); [reference/inference.md](reference/inference.md) owns **inference**
+(teach/judge/incremental agent judgement). Step 5's grammar is in
+[reference/query-grammar.md](reference/query-grammar.md); dlt in
 [reference/dlt.md](reference/dlt.md).
