@@ -35,6 +35,10 @@
     {
       "id": "forcing-function-and-cleanup",
       "check": "The trace shows the supplied check_pocket_loop.py --mode agent completed with ALL CHECKS PASSED and the supervisor was stopped; the harness must not report an endpoint still running after the agent finished."
+    },
+    {
+      "id": "phase-c-recover-from-durable-key",
+      "check": "In Phase C, after the endpoint/bearer were dead, the agent recovered the invoice-pulse product from its durable key — the existing closure directory plus the same workflow id — by re-serving that closure, WITHOUT re-running inference/generation or authoring a new closure. It then re-described and re-answered the average-by-segment question from the fresh endpoint. On this direct-CLI surface a re-serve is a rebuild from the closure, and the trace/narration must treat it honestly as such (not as a reattach to a running instance); authoring a fresh closure, or narrating the re-serve as a live reattach, is a FAIL."
     }
   ]
 }

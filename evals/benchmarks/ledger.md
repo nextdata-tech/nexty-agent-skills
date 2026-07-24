@@ -177,3 +177,31 @@ Notes: Runtime enforcement only (eval-harness work is #103). Emits .gitignore/SE
 None of the three scenarios exercises a credential-bearing closure, so the Phase C sensitivity gate this PR adds is unmeasured by them — its evidence is the four-case execution of the Phase C block recorded in the PR, not this table. What the table does support is the absence of a regression: verdicts hold or improve, turns are flat-to-+6, and output tokens fall on both PASS cells (46692 -> 32958, 14403 -> 10732) despite ~186 added reference lines.
 
 Record: [`records/2026-07-23-nxd-generate-dp-nxd-pocket-loop-runtime-credential-sensitivi.json`](records/2026-07-23-nxd-generate-dp-nxd-pocket-loop-runtime-credential-sensitivi.json)
+
+## 2026-07-24 — nxd-pocket-loop: split task-scheduling / context management + resume-first reattach (plugin v0.19.0)
+
+Behavior pivot: reopen-is-always-a-rebuild → **resume-first reattach**
+(`list_data_products` → `resume_data_product`; full rebuild only when the
+published artifact is `collected` / `artifact_unavailable`). Also decomposes the
+`nxd-pocket-loop` orchestrator into `reference/scheduling.md` (routing, step
+order, caps, subagent fan-out) + `reference/context-and-resume.md` (reattach,
+fallback, session ledger), deleting `reference/reopen.md`.
+
+**No before/after run table — the change is not measurable by the current
+harness.** The reattach path needs a live `nxd-desktop-supervisor`
+(`EVAL_POCKET_SUPERVISOR_DIR` / `EVAL_POCKET_PYTHON`), and the only scenario that
+exercises it, `pocket-loop-serve-query-refine`, is `ci_skip`'d and CLI-only —
+its surface has no `list`/`resume` verb, so it cannot demonstrate the MCP
+resume-first ordering even when run. None of the three CI-runnable public
+scenarios touch the reopen/resume path. Same posture as the 2026-07-23 v0.18.0
+credential-sensitivity entry above.
+
+**Evidence instead of a table:** the deterministic gate
+`evals/tests/test_resume_first_gate.py` (8 cases) pins the resume-before-build
+tool ordering, the artifact-gone gating of the rebuild fallback, and the absence
+of the stale three-tool framing across the skill + reference docs; it fails on a
+rebuild-first revert. The full `evals/tests/` suite passes (44). The
+`pocket-loop-serve-query-refine` Phase-C addition is CLI-honest (a re-serve is a
+rebuild from the durable closure, narrated as such — not a reattach), with the
+MCP resume-first assertion delegated to the gate test. A live before/after lands
+with the next real Desktop/Cowork run.

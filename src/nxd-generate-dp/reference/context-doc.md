@@ -79,11 +79,13 @@ A closure `CONTEXT.md` at the closure root, with these sections:
    pointer to a file outside the closure, and never a rubric left only as free
    prose here in `CONTEXT.md` when a derived model depends on it.
 6. **Reopen recipe** — the workflow id and this closure's absolute path (together
-   the only durable key; bearer tokens do not persist) and the
-   `build_data_product` → `describe_models` → `run_semantic_query` sequence.
-   The supervisor exposes **no** list, status, resume, or rediscovery tool, so
-   reopening is always a rebuild. Write the recipe so it stands alone: a cold
-   reader may not have this skill loaded.
+   the only durable key; bearer tokens do not persist). Reopening is
+   **resume-first**: `list_data_products` → `resume_data_product(workflow)` →
+   `describe_models` → `run_semantic_query` reattaches to the published artifact
+   in seconds with a fresh bearer. Only when the artifact is gone (`collected` /
+   `artifact_unavailable`) does reopening fall back to a full rebuild with
+   `build_data_product` against this closure path and the same workflow id. Write
+   the recipe so it stands alone: a cold reader may not have this skill loaded.
 7. **Credentials** — only when `infra-profile.yaml` carries live credentials
    (a `*-source` service with a populated `attributes:` list). Name the file and
    the **keys**, never a value, and give the rotation step. `SENSITIVE` warns a
@@ -135,13 +137,19 @@ Closure path:  <abs path to this dir>
   (Or author it inert now and promise it — preferred.)
 
 ## Reopen
-The supervisor exposes only build_data_product, describe_models and
-run_semantic_query — there is no list, status, resume or rediscovery tool, and
-the bearer token is never persisted. Reopening is therefore always a rebuild,
-which costs a full build; it is not a reattach to a running instance.
-1. build_data_product(definition="<abs path to this dir>", workflow="<workflow-id>")
-2. describe_models — using the endpoint and bearer that call returned
-3. run_semantic_query — same endpoint and bearer
+The bearer token is never persisted, so a later session reattaches by workflow
+id + closure path. Reopen resume-first — a rebuild is the fallback only when the
+published artifact is gone:
+1. list_data_products — is this workflow published, and is artifact_status
+   `available`?
+2. resume_data_product(workflow="<workflow-id>") — reattaches to the published
+   artifact in seconds, returns a fresh endpoint + bearer (no rebuild).
+   Fallback if `collected` / `artifact_unavailable`:
+   build_data_product(definition="<abs path to this dir>", workflow="<workflow-id>")
+   — a full rebuild; sound because this closure is deterministic and embeds its
+   source.
+3. describe_models — using the endpoint and bearer the resume (or rebuild) returned
+4. run_semantic_query — same endpoint and bearer
 
 ## Credentials (omit this section entirely if there are none)
 This closure holds a live credential in plaintext.
