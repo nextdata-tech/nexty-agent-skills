@@ -35,6 +35,10 @@
     {
       "id": "forcing-function-and-cleanup",
       "check": "The trace shows the supplied check_pocket_loop.py --mode agent completed with ALL CHECKS PASSED and the supervisor was stopped; the harness must not report an endpoint still running after the agent finished."
+    },
+    {
+      "id": "phase-c-reattach-by-resume",
+      "check": "In Phase C, after the endpoint/bearer were dead, the agent recovered the invoice-pulse product by listing the published catalog and RESUMING the existing workflow (fresh endpoint/bearer, no regeneration) rather than rebuilding the closure from scratch — the trace shows a list/resume reattach, not a full re-run of inference/generation. It then re-described the catalog and re-answered the average-by-segment question from the resumed endpoint. A full rebuild in Phase C when the published artifact was intact and available is a FAIL."
     }
   ]
 }

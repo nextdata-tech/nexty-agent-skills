@@ -58,11 +58,14 @@ answer, quantify any review bucket, state the ruling behind the number
 ```
 
 `nxd-pocket-loop` is the **orchestrator** — it owns the conversation, the
-routing decision (deployed DP vs. existing local product vs. reopen-by-rebuild
-vs. new build vs. trivial arithmetic), and the one hard gate (the policy
-read-back). It is also the entry point for a direct "build me a data product"
-request — arriving straight at `nxd-generate-dp` skips that gathering and its
-own gate fires as a backstop.
+routing decision (deployed DP vs. existing local product vs.
+resume-an-existing-workflow vs. new build vs. trivial arithmetic), and the one
+hard gate (the policy read-back). It is also the entry point for a direct "build
+me a data product" request — arriving straight at `nxd-generate-dp` skips that
+gathering and its own gate fires as a backstop. Two concerns it used to inline
+now live in `src/nxd-pocket-loop/reference/`: **task scheduling** (routing, step
+order, caps, subagent fan-out) in `scheduling.md`, and **context** (resume-first
+reattach, rebuild fallback, the session ledger) in `context-and-resume.md`.
 
 ## The skills (subskills) and what each owns
 
@@ -238,18 +241,20 @@ API key required.
 Three gaps in what's actually verified, none hypothetical — each is either an
 open tracked issue or a documented note in the eval ledger:
 
-- **`reference/reopen.md` (reopen-by-rebuild) and `reference/query-grammar.md`
-  (the Omission Test) have no scenario at all.** Both are carefully worked
-  reference docs — the reopen playbook's credential-recovery branches and
-  honesty-clause narration rules, the Omission Test's ruling-vs-filter
-  classification — but nothing in `evals/public/` or `evals/tests/` exercises
-  either. Tracked in **[#103](https://github.com/nextdata-tech/nexty-agent-skills/issues/103)**,
-  E5 ("pocket-loop invariants with no scenario at all") names reopen-by-rebuild
-  by name and calls it "the one a real user hits every second session, since
-  the bearer is per-session and never persisted"; E4 separately flags the
-  Omission Test as mechanically decidable (run the ruling-bearing measure with
-  no filters, compare against the ruled total) but currently ungraded even by
-  the judge.
+- **`reference/context-and-resume.md` (reattach) and `reference/query-grammar.md`
+  (the Omission Test) have thin scenario coverage.** Both are carefully worked
+  reference docs — the reattach playbook's resume-first ordering,
+  credential-recovery branches and honesty-clause narration rules, the Omission
+  Test's ruling-vs-filter classification. A plain-pytest gate in `evals/tests/`
+  now pins the resume-first tool ordering (`list_data_products` before
+  `resume_data_product` before `build_data_product`), but the full playbook and
+  the Omission Test are still ungraded by any live scenario. Tracked in
+  **[#103](https://github.com/nextdata-tech/nexty-agent-skills/issues/103)**,
+  E5 ("pocket-loop invariants with no scenario at all") — the reattach path is
+  "the one a real user hits every second session, since the bearer is
+  per-session and never persisted"; E4 separately flags the Omission Test as
+  mechanically decidable (run the ruling-bearing measure with no filters,
+  compare against the ruled total) but currently ungraded even by the judge.
 - **Database and REST-API connector types have no scenario coverage.**
   `reference/database-source.md`, `reference/api-source.md`, the labeled
   multi-source naming scheme, and the structured `auth_type` dispatch all
@@ -274,7 +279,8 @@ since it's a narrower, newly-noticed gap rather than an already-tracked one.
 
 ## Where things live
 
-- `src/nxd-pocket-loop/SKILL.md`, `reference/reopen.md`, `reference/dlt.md` —
+- `src/nxd-pocket-loop/SKILL.md`, `reference/scheduling.md` (task scheduling),
+  `reference/context-and-resume.md` (reattach/context), `reference/dlt.md` —
   the orchestrator.
 - `src/nxd-semantic-data-product/SKILL.md` + `reference/` — inference (shared)
   and the platform `.semantic_tools()` flow (not used by Pocket).

@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.18.0
+  version: 0.19.0
 ---
 
 # nxd-pocket-loop skill
@@ -55,18 +55,20 @@ then drives the supervisor MCP path. Do not expose this routing to the user.
 
 ## Route the request before doing work
 
-Classify the request before provisioning, generation, or querying. Prefer the
-smallest path that can give an honest answer:
+Classify the request before provisioning, generation, or querying, and prefer
+the smallest path that can give an honest answer. The full routing table — the
+deployed-DP / existing-local / no-endpoint / in-scope-source / no-source /
+trivial / runtime-unavailable rows — plus the step order, the remap/regenerate
+caps, the one-DP-in-flight rule, and where the loop may fan out to subagents,
+all live in [reference/scheduling.md](reference/scheduling.md). The two routes
+that decide the whole loop:
 
-| Situation | Route |
-|---|---|
-| **Explicit deployed/platform product** — the user names a remote DP, cluster, or platform endpoint | Hand off to `nxd-data-product-query`. Do not create a local replacement. |
-| **Existing local product** — the task supplies its `semantic_endpoint` and bearer token | Call `mcp__nxd-desktop__describe_models`, then answer through `mcp__nxd-desktop__run_semantic_query`. |
-| **Existing local product, but no endpoint/token** — the typical new session, since the bearer is per-session and never persisted | There is no list, status, or rediscovery MCP tool, so the running instance cannot be found. Locate the durable closure path (ask if unknown) and **reopen by rebuilding**: `build_data_product` with the same definition path and the same workflow id. This is a **mitigation that costs a full rebuild**, not a reattach — narrate it as such. See `reference/reopen.md`. |
-| **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, and its connection details pass through to generation exactly as the user gave them. Never modify a supplied original. |
-| **No product and no source** | Ask one concise question naming the missing thing: the local data file/folder or an existing product to query. Do not manufacture a dataset, create a throwaway database, or probe Cowork uploads/workspaces with Bash in hope of finding one. |
-| **Trivial, non-durable calculation** — for example, arithmetic over values pasted in the request, with no request to analyze or reuse data | Answer directly. Do not start a supervisor or build a product. |
-| **Local analysis requested but runtime unavailable** | Stop before fallback work. State that the local analysis runtime is unavailable, identify the missing MCP connection or host-local runtime prerequisite, and point to `nxd-desktop-setup.sh` / the Desktop connection repair. Do not substitute SQLite, raw SQL, pandas, or shell aggregation. |
+- **A source is in scope, no suitable local product exists** → run the loop
+  (Steps 1–6): gather, infer, generate, build, query, refine.
+- **An existing local product but no live endpoint/token** (the typical new
+  session, since the bearer never persists) → **reattach, don't rebuild**:
+  `list_data_products` → `resume_data_product`. See
+  [reference/context-and-resume.md](reference/context-and-resume.md).
 
 Treat ambiguous requests conservatively. If a question could mean either a
 one-off calculation or analysis of an unseen source, ask which data or product
@@ -77,11 +79,14 @@ shareable, or multi-question analysis, prefer the reusable local-product path.
 
 Choose this order before invoking any runtime command:
 
-1. **MCP first.** If all three tools are available —
+1. **MCP first.** The `nxd-desktop` server exposes six tools —
    `mcp__nxd-desktop__build_data_product`,
-   `mcp__nxd-desktop__describe_models`, and
-   `mcp__nxd-desktop__run_semantic_query` — use them for the entire build,
-   describe, and query sequence. This is the supported route for Claude
+   `mcp__nxd-desktop__resume_data_product`,
+   `mcp__nxd-desktop__list_data_products`,
+   `mcp__nxd-desktop__describe_models`,
+   `mcp__nxd-desktop__run_semantic_query`, and
+   `mcp__nxd-desktop__inspect_run` — use them for the entire discover, build,
+   resume, describe, and query sequence. This is the supported route for Claude
    Desktop and Claude Cowork.
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
    `nxd-desktop-supervisor` only when the session context has positively
@@ -99,7 +104,7 @@ definition paths. The connected `nxd-desktop` MCP server runs on the host and
 is the runtime authority.
 
 The `allowed-tools` frontmatter is restricted by this plugin's validator to
-built-in tool names; it cannot enumerate fully qualified MCP tools. The three
+built-in tool names; it cannot enumerate fully qualified MCP tools. The
 `mcp__nxd-desktop__…` calls above are nevertheless mandatory whenever exposed
 by the session tool registry.
 
@@ -240,11 +245,12 @@ argument for Step 4.
 directory.** Put it in a directory named by the workflow id
 (`…/nxd-pocket/<workflow>/`) on the file-writing surface, under whichever base
 the host-visible-absolute-path rules in Step 1 make legal, and **state that
-path to the user in the handoff**. There is no list, status, or rediscovery
-MCP tool, and the bearer is minted per session and never persisted — so this
-path is the only key a later session has to the product. A closure written to
-a scratch dir is effectively lost when the session ends. See
-`reference/reopen.md`. The closure's `CONTEXT.md` (emitted by nxd-generate-dp)
+path to the user in the handoff**. The bearer is minted per session and never
+persists, so the closure path plus the workflow id are the durable key a later
+session reattaches with — via `list_data_products` → `resume_data_product` (see
+[reference/context-and-resume.md](reference/context-and-resume.md)). A closure
+written to a scratch dir is effectively lost when the session ends. The
+closure's `CONTEXT.md` (emitted by nxd-generate-dp)
 is the durable record a *later* session reads to continue the work — the reopen
 recipe, the sample-selection rule, per-field inference caveats, and the full
 contract of any promised-but-unbuilt derived model. It must be self-contained:
@@ -260,12 +266,15 @@ ran — never report it as evidence that the numbers are right.
 
 ### Step 4 — Build and serve through MCP
 
-When the three desktop MCP tools are available, call
+When the desktop MCP tools are available, call
 `mcp__nxd-desktop__build_data_product` with the host-visible absolute closure
 path as `definition` and a stable `workflow`. It creates, publishes, and serves
 the product for this MCP session. Treat the returned `semantic_endpoint` and
 `bearer_token` as the only connection for later calls; keep the token out of
-narration.
+narration. (Building the same workflow again regenerates it; **resuming** an
+already-published workflow — a later session with no live endpoint — is the fast
+reattach in [reference/context-and-resume.md](reference/context-and-resume.md),
+not a rebuild.)
 
 Fail closed on any build error or missing returned endpoint/token. Report the
 MCP build failure and its actionable message; **do not retry through workspace
@@ -329,18 +338,19 @@ natural-language translation is yours to do. For each question:
 
 ### Step 6 — Refine wrong answers back into the loop
 
-If an answer is wrong, missing, or unsatisfying, decide where the fix belongs and
-keep BOTH levels bounded:
+If an answer is wrong, missing, or unsatisfying, decide where the fix belongs.
+Both levels are **bounded** — the caps (remap ≤~2/question, regenerate ≤~3
+total) and the non-convergence report live in
+[reference/scheduling.md](reference/scheduling.md):
 
 - **Query-level** (cheapest) — the model is right but the selection was wrong or a
-  dimension was missing. Re-describe, re-map, then re-query through MCP. Cap at
-  ~2 remaps per question.
+  dimension was missing. Re-describe, re-map, then re-query through MCP.
 - **Model / DP-level** — the inferred model is wrong (missing metric, wrong grain,
   missing join, wrong PII), or the question needs a column or grain that does
   not exist yet (a filtered figure, a ratio, a monthly rollup, a
   classification). The latter is a **derived model**, not a query tweak: go back
   to Step 2/3 and have nxd-generate-dp materialize the ruling, then rebuild
-  through MCP with the **same** `workflow`. Cap at ~3 regenerate cycles total.
+  through MCP with the **same** `workflow`.
 
 **After every rebuild, refresh:** use the endpoint/token returned by that build,
 then describe the catalog before mapping again — the regenerated model is exactly
@@ -408,9 +418,15 @@ indefinitely or give up silently.
   local-data question with SQLite, `sqlite3`, raw SQL, pandas aggregation, or a
   shell pipeline as a fallback. The supervisor may compile semantic selections
   internally, but do not author or execute raw SQL to bypass its query contract.
-- **MCP is authoritative when connected.** If the three `nxd-desktop` MCP tools
-  are present, build, describe, and query through them. A failed MCP build is a
-  reported failure, not permission to use a workspace-shell or database fallback.
+- **MCP is authoritative when connected.** If the `nxd-desktop` MCP tools
+  are present, discover, build, resume, describe, and query through them. A
+  failed MCP build is a reported failure, not permission to use a
+  workspace-shell or database fallback.
+- **Reattach, don't rebuild, when the artifact is live.** In a fresh session
+  with no endpoint, `list_data_products` → `resume_data_product` recovers a
+  published workflow in seconds with a fresh bearer. Rebuild only when the
+  artifact is `collected` / `artifact_unavailable`
+  ([reference/context-and-resume.md](reference/context-and-resume.md)).
 - **Hand off only host-visible paths.** Pass `build_data_product` an absolute
   generated-definition path explicitly exposed by the file-writing surface;
   never infer one from an attachment ID or isolated Linux path.
@@ -426,7 +442,9 @@ indefinitely or give up silently.
   no filter applied. Landing an `is_transfer` dimension and expecting callers to
   filter on it is the same silent failure wearing a column. Only a constraint
   that would merely make the answer *broader* is a query-time filter.
-- **One workflow id per data product.** Rebuild the same id to regenerate.
+- **One workflow id per data product.** Rebuild the same id to regenerate;
+  resume the same id to reattach. A different id is a different product and
+  replaces the current endpoint.
 - **The supervisor data dir is off-limits.** Everything under `.pocket/state/`
   — pinned snapshots in `definitions/<id>/`, `state.sqlite*`, `staging/` — is
   immutable supervisor-owned state. Never `chmod`, edit, or hand-write those
@@ -439,7 +457,7 @@ indefinitely or give up silently.
 - **Never present a preview or truncated result as verified data**, and never
   stall silently.
 - **The loop is bounded** — cap query remaps and regenerate cycles; report
-  non-convergence.
+  non-convergence ([reference/scheduling.md](reference/scheduling.md)).
 
 ## Reference skills
 
@@ -448,3 +466,16 @@ indefinitely or give up silently.
 | `nxd-semantic-data-product` | Infers the semantic model from the source + questions (Step 2) |
 | `nxd-generate-dp` | Generates the runnable local closure the supervisor serves (Step 3), including local-file, database, and REST API connector config — see its own `reference/` for the connector-type-specific shape. |
 | `nxd-data-product-query` | Source of the question→concept mapping approach (Step 5) |
+
+## Reference docs (this skill)
+
+Two concerns live in their own docs so this file stays the orchestrator:
+[reference/scheduling.md](reference/scheduling.md) owns **task scheduling** (the
+routing table, step order and dependency edges, remap/regenerate caps,
+one-DP-in-flight, subagent fan-out);
+[reference/context-and-resume.md](reference/context-and-resume.md) owns
+**context** (what persists vs. dies, the resume-first reattach playbook, the
+rebuild fallback and `SENSITIVE` credential recovery, the optional session
+ledger). Step 5's grammar is in
+[reference/query-grammar.md](reference/query-grammar.md); dlt instructions in
+[reference/dlt.md](reference/dlt.md).

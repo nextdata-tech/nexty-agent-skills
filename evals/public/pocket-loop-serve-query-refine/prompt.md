@@ -58,8 +58,20 @@ python check_pocket_loop.py --mode agent --data-dir .pocket/state \
 It must end in `ALL CHECKS PASSED`. Then stop the supervisor with
 `nxd-desktop-supervisor stop --data-dir .pocket/state`.
 
+Phase C — reattach, don't rebuild. The endpoint and bearer you held are now
+dead (they never persist). Recover the product the way a fresh session would:
+list the published catalog, confirm `invoice-pulse` is present and available,
+then **resume** it — reattaching to the published artifact for a fresh endpoint
+and bearer in seconds, with no regeneration. Do not rebuild from the closure
+unless the catalog reports the artifact as collected or unavailable. Re-describe
+the catalog, then re-answer Phase-B question 5 from the resumed endpoint to prove
+the reattached product still carries the average metric. (On the direct-CLI
+surface, `nxd-desktop-supervisor serve` against the same `--workflow
+invoice-pulse` performs this reattach when the published artifact is intact.)
+
 In your final answer, give the five answers, the latest selection behind each,
-and state that the forcing-function check passed. Do not include bearer tokens.
+and state that the forcing-function check passed and that Phase C reattached by
+resume rather than rebuilding. Do not include bearer tokens.
 
 ## Success checks
 
