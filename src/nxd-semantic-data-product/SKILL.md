@@ -74,7 +74,7 @@ Interview the user or read the table DDL to establish, per source table:
    a `description`, and `pii: true` if governed.
 3. **Metrics** — named aggregated measures. Each: a concept `name`, the physical
    `column` it aggregates, the `agg` function (`count`, `count_distinct`, `sum`,
-   `avg`, `min`, `max`), a `description`, and `boolean: true` for a flag that counts
+   `avg`, `min`, `max`, `expression`), a `description`, and `boolean: true` for a flag that counts
    truthy rows.
 4. **Joins** — documented N:1 relationships, declared on the MANY-side model's join
    key: `to_model` (the ONE side), `to_column`, `cardinality: many_to_one`.
@@ -240,7 +240,7 @@ order_metrics = semantic_view("order_metrics", orders).schema(
     {
         "total_revenue": metric_field(
             float64(),
-            metric(Agg.SUM, of=orders.field("REVENUE_USD"), name="total_revenue"),
+            metric(Agg.EXPRESSION, name="total_revenue"),
         ),
     }
 )
@@ -334,7 +334,7 @@ _storage = (
     data_product_output()
     .promise(provision_marker)
     .promise(orders)
-    .model(order_metrics)
+    .model(order_metrics, expressions={"total_revenue": "SUM(ORDERS.REVENUE_USD)"})
     .port("snowflake", storage(f"/infra-profile/{INFRA_PROFILE}#/services/<snowflake>"))
 )
 
@@ -354,6 +354,24 @@ spec = (
 
 `semantic_tools(service, *, port_name="mcp-api", mcp_path="/mcp")` —
 `service` is the infra-profile service name the MCP RPC port binds to.
+
+### Step 4b — Specify expressions on the output port for a specific model
+
+When a metric or semantic view needs a custom SQL expression, you can attach it
+on the output port for the specific promoted model. This is useful for derived
+metrics that should compile to a specific expression rather than the default
+field behavior.
+
+```python
+_storage = (
+    data_product_output()
+    .promise(orders)
+    .model(order_metrics, expressions={"total_revenue": "SUM(ORDERS.REVENUE_USD)"})
+)
+```
+
+The `expressions` mapping is scoped to the model passed to `.model(...)`; use it
+when you need an expression override for that model's output contract.
 
 Key facts:
 - **Do NOT also call `data_product_rpc_output()`.** `.semantic_tools()` IS the RPC
