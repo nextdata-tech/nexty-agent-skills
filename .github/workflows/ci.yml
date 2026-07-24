@@ -34,3 +34,11 @@ jobs:
             echo "::error::one or more skills exceed the 200-entry Claude Desktop cap"
             exit 1
           fi
+
+      - uses: astral-sh/setup-uv@v5
+
+      # Harness unit tests. These need no model credentials: they stub the
+      # agent/judge backends and run the runner-side checkers directly, so a
+      # deterministic gate cannot silently regress to judge-only grading.
+      - name: Harness unit tests
+        run: uv run --no-project --with pytest --with duckdb python -m pytest evals/tests -q

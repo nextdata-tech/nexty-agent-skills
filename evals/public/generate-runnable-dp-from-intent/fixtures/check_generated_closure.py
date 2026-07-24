@@ -25,6 +25,14 @@ REQUIRED = (
     "csv-source-path",
 )
 FORBIDDEN = ("deployment-spec.yaml", "manifest.yaml", "models.yaml")
+
+# Digests of the CSV export this harness ships. They pin the supplied-data
+# invariant for the fixture closure: the author must not edit a header or a row
+# to manufacture a key. A closure generated over a DIFFERENT export (a derived-
+# model closure over transactions/invoices, say) legitimately has none of these
+# files; for those, `csv-source-unmodified` degrades to a presence check on the
+# base models' own directories, and the no-editing rule is enforced by the
+# generating harness that supplied the export.
 CSV_SHA256 = {
     "customers/customers.csv": "e839803bf3f5d44488dbed69d5605114f9436249cdd421bd0b38a8cd40d6914b",
     "orders/orders.csv": "24f7a01bbb4a5fa9b12489a0c0475de885a86a01a37a404ec62a196cb2a4e69d",
@@ -388,7 +396,99 @@ def desktop_wiring_errors(spec: str, profile: str, requirements: str) -> list[st
     return errors
 
 
+def string_tuple_constant(tree: ast.AST, name: str) -> tuple[str, ...] | None:
+    """Read a module-level ``NAME = ("a", "b")`` string tuple/list literal."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or target.id != name:
+            continue
+        if not isinstance(node.value, (ast.Tuple, ast.List)):
+            continue
+        if all(isinstance(element, ast.Constant) and isinstance(element.value, str) for element in node.value.elts):
+            return tuple(element.value for element in node.value.elts)  # type: ignore[union-attr]
+    return None
+
+
+def physical_model_names(tree: ast.AST) -> tuple[tuple[str, ...], tuple[str, ...], list[str]]:
+    """Resolve (BASE_MODELS, DERIVED_MODELS) from the transform's own constants.
+
+    The closure declares its landed tables; the harness must not re-derive them
+    from the `data/` listing, which by design cannot represent a derived model.
+    `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` is the contract, so a
+    closure with no derived models may omit DERIVED_MODELS entirely.
+    """
+    errors: list[str] = []
+    base = string_tuple_constant(tree, "BASE_MODELS")
+    derived = string_tuple_constant(tree, "DERIVED_MODELS")
+    if base is None:
+        errors.append("transform must declare BASE_MODELS as a literal string tuple")
+        base = ()
+    if derived is None:
+        derived = ()
+    overlap = sorted(set(base) & set(derived))
+    if overlap:
+        errors.append(f"models in both BASE_MODELS and DERIVED_MODELS: {overlap}")
+    return base, derived, errors
+
+
+def derived_resource_flatness_errors(tree: ast.AST, derived: tuple[str, ...]) -> list[str]:
+    """Reject nested literals yielded by a derived resource.
+
+    dlt routes a nested dict/list to a `parent__field` child table, which breaks
+    the read-back assert; and the pinned desktop venv has no pyarrow, so a
+    DataFrame cannot be routed at all. Both failures are statically visible when
+    the resource yields dict literals, which is the shape the contract requires.
+    """
+    if not derived:
+        return []
+    errors: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if not any(
+            isinstance(decorator, ast.Call)
+            and call_name(decorator.func) == "resource"
+            for decorator in node.decorator_list
+        ):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and call_name(inner.func) in {"DataFrame", "from_records", "from_dict"}:
+                errors.append(f"{node.name}: yields a DataFrame; the pinned venv has no pyarrow")
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Dict):
+                continue
+            for value in inner.values:
+                if isinstance(value, (ast.Dict, ast.List, ast.Set)):
+                    errors.append(
+                        f"{node.name}: nested value in yielded dict spawns a dlt child table"
+                    )
+    return errors
+
+
+def derived_rows_are_flat(rows: object, model: str) -> list[str]:
+    """Runtime flatness assert over the rows a derived model actually landed."""
+    errors: list[str] = []
+    if not isinstance(rows, list):
+        return errors
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            errors.append(f"{model}: row {index} is {type(row).__name__}, expected dict")
+            continue
+        for column, value in row.items():
+            if isinstance(value, (dict, list, set, tuple)):
+                errors.append(f"{model}.{column}: nested {type(value).__name__} at row {index}")
+    return errors
+
+
 def validate_primary_key_tuples(data: Path, keys_by_model: dict[str, set[str]]) -> list[str]:
+    """Prove each BASE model's declared key over its supplied CSV export.
+
+    Derived models are excluded by the caller: they have no `data/<name>/`
+    directory by design, and their key is proven post-run against the landed
+    table plus the transform's own in-memory assert.
+    """
     errors: list[str] = []
     for model, columns in sorted(keys_by_model.items()):
         if not columns:
@@ -418,6 +518,104 @@ def validate_primary_key_tuples(data: Path, keys_by_model: dict[str, set[str]]) 
     return errors
 
 
+def executable_source(source: str) -> str:
+    """Return the source with comments and docstrings removed.
+
+    The DDL ban below is a raw substring scan, and it must judge what the
+    transform DOES, not what its prose says. A docstring stating "no raw
+    duckdb.connect, no DDL" is the closure honouring the ban, yet a scan over
+    the whole file reads it as a violation. Stripping non-executable text keeps
+    the ban exactly as strict over real code while removing that false positive:
+    a string used as an actual DDL argument is an expression, not a docstring,
+    and survives this pass.
+    """
+    tree = ast.parse(source)
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        body = getattr(node, "body", [])
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            docstrings.add(id(body[0].value))
+
+    class StripDocstrings(ast.NodeTransformer):
+        def visit_Expr(self, node: ast.Expr):  # noqa: N802
+            if isinstance(node.value, ast.Constant) and id(node.value) in docstrings:
+                return None
+            return node
+
+    stripped = StripDocstrings().visit(tree)
+    ast.fix_missing_locations(stripped)
+    return ast.unparse(stripped)
+
+
+DDL_TOKENS = ("duckdb.connect", "CREATE TABLE", "CREATE VIEW")
+DDL_STATEMENTS = ("create table", "create view", "create or replace")
+
+
+def out_of_port_write_errors(tree: ast.AST) -> list[str]:
+    """Catch writes outside the dlt port that the literal token scan misses.
+
+    The substring ban reads `duckdb.connect(...)` but not `from duckdb import
+    connect as c; c(...)`, and reads a `CREATE TABLE` literal but not one
+    assembled or cased differently. Writing outside the port escapes the
+    pin-substituted staging path that the publish step promotes crash-safely,
+    so the alias route is closed here rather than left to the substring scan.
+    """
+    errors: list[str] = []
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "duckdb" and alias.asname:
+                    aliases.add(alias.asname)
+        elif isinstance(node, ast.ImportFrom) and node.module == "duckdb":
+            for alias in node.names:
+                if alias.name == "connect":
+                    errors.append("imports duckdb.connect directly; write through the dlt port")
+                    aliases.add(alias.asname or alias.name)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "connect" and isinstance(func.value, ast.Name) and func.value.id in aliases:
+            errors.append(f"{func.value.id}.connect(...) opens a write outside the dlt port")
+        if isinstance(func, ast.Name) and func.id in aliases and func.id != "duckdb":
+            errors.append(f"{func.id}(...) opens a duckdb connection outside the dlt port")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            lowered = " ".join(node.value.lower().split())
+            for statement in DDL_STATEMENTS:
+                if statement in lowered:
+                    errors.append(f"DDL statement in a string literal: {statement!r}")
+                    break
+    return sorted(set(errors))
+
+
+def landed_key_errors(connection, model: str, columns: set[str]) -> list[str]:
+    """Prove a derived model's declared key over the table it actually landed."""
+    ordered = sorted(columns)
+    projection = ", ".join(ordered)
+    predicate = " OR ".join(f"{column} IS NULL" for column in ordered)
+    errors: list[str] = []
+    nulls = connection.execute(
+        f"SELECT COUNT(*) FROM main.{model} WHERE {predicate}"
+    ).fetchone()[0]
+    if nulls:
+        errors.append(f"{model}: {nulls} rows with a null key column {ordered}")
+    total, distinct = connection.execute(
+        f"SELECT COUNT(*), COUNT(DISTINCT ({projection})) FROM main.{model}"
+    ).fetchone()
+    if total != distinct:
+        errors.append(f"{model}: key {ordered} not unique ({total} rows, {distinct} distinct)")
+    return errors
+
+
 def main(root: Path) -> None:
     missing = [name for name in REQUIRED if not (root / name).is_file()]
     check("python-only-files", not missing)
@@ -427,9 +625,32 @@ def main(root: Path) -> None:
     check("relative-csv-source", bool(source_root) and not Path(source_root).is_absolute())
     data = root / source_root
     check("csv-source-exists", data.is_dir())
+    # The shipped fixture export is digest-pinned. A closure built over another
+    # export has none of these paths and is checked for presence instead.
     for relative, digest in CSV_SHA256.items():
         path = data / relative
-        check(f"csv-preserved:{relative}", path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == digest)
+        if not path.is_file():
+            continue
+        check(f"csv-preserved:{relative}", hashlib.sha256(path.read_bytes()).hexdigest() == digest)
+
+    # Skipping absent pinned paths is deliberate (above), but on its own it is a
+    # bypass: rewriting rows into a DIFFERENT filename under a pinned model's
+    # own directory escapes the digest entirely while `loaded:` row counts still
+    # pass. If the directory is present, every CSV in it must be a pinned name.
+    pinned_by_dir: dict[str, set[str]] = {}
+    for relative in CSV_SHA256:
+        parent, _, name = relative.rpartition("/")
+        pinned_by_dir.setdefault(parent, set()).add(name)
+    for parent, names in pinned_by_dir.items():
+        directory = data / parent if parent else data
+        if not directory.is_dir():
+            continue
+        unpinned = sorted(p.name for p in directory.glob("*.csv") if p.name not in names)
+        check(
+            f"csv-no-unpinned:{parent or '.'}",
+            not unpinned,
+            f"unpinned CSVs alongside a pinned export: {unpinned}",
+        )
 
     models = (root / "models.py").read_text(encoding="utf-8")
     spec = (root / "spec.py").read_text(encoding="utf-8")
@@ -439,17 +660,46 @@ def main(root: Path) -> None:
     transform = transform_path.read_text(encoding="utf-8")
     check("public-semantic-dsl", all(token in models for token in ("semantic_model", "semantic_view", "metric_field", "metric(")))
     check("no-private-semantic-metadata", "__nxd_semantic__" not in models and "nxd.spec._" not in models)
-    check("base-models-promised", all(token in spec for token in (".promise(customers)", ".promise(orders)")))
     model_tree = ast.parse(models, filename=str(root / "models.py"))
     spec_tree = ast.parse(spec, filename=str(root / "spec.py"))
+    transform_tree = ast.parse(transform, filename=str(transform_path))
     promised = promised_models(spec_tree)
+
+    base_models, derived_models, model_name_errors = physical_model_names(transform_tree)
+    check("physical-model-declaration", not model_name_errors, "; ".join(model_name_errors))
+    physical = tuple(base_models) + tuple(derived_models)
+
+    # The naming invariant, in both directions: every landed table is promised,
+    # every base model has a data/ directory, and no derived model does.
+    invariant_errors: list[str] = []
+    invariant_errors.extend(
+        f"{model}: in PHYSICAL_MODELS but not .promise()d" for model in sorted(set(physical) - promised)
+    )
+    data_dirs = {directory.name for directory in data.iterdir() if directory.is_dir()}
+    invariant_errors.extend(
+        f"{model}: base model has no data/{model}/ directory" for model in sorted(set(base_models) - data_dirs)
+    )
+    invariant_errors.extend(
+        f"{model}: derived model must not have a data/{model}/ directory"
+        for model in sorted(set(derived_models) & data_dirs)
+    )
+    invariant_errors.extend(
+        f"{model}: data/{model}/ directory has no base model" for model in sorted(data_dirs - set(base_models))
+    )
+    check("physical-models-match-data-dirs", not invariant_errors, "; ".join(invariant_errors))
+    check("models-promised", bool(physical) and set(physical) <= promised)
+
     model_primary_keys = base_model_primary_keys(model_tree)
     missing_primary_keys = sorted(model for model in promised if not model_primary_keys.get(model))
-    check("promised-base-primary-keys", not missing_primary_keys, ", ".join(missing_primary_keys))
+    check("promised-primary-keys", not missing_primary_keys, ", ".join(missing_primary_keys))
+    # Base keys are proven against the supplied export. Derived keys cannot be —
+    # there is no export — so they are proven post-run against the landed table.
     key_errors = validate_primary_key_tuples(
-        data, {model: model_primary_keys[model] for model in promised}
+        data, {model: model_primary_keys[model] for model in promised if model in base_models}
     )
     check("promised-base-primary-key-tuples", not key_errors, "; ".join(key_errors))
+    flatness_errors = derived_resource_flatness_errors(transform_tree, derived_models)
+    check("derived-resources-flat", not flatness_errors, "; ".join(flatness_errors))
     inferred_path = root / "inferred_model.json"
     check("inferred-model-present", inferred_path.is_file())
     inferred = json.loads(inferred_path.read_text(encoding="utf-8"))["models"]
@@ -462,7 +712,13 @@ def main(root: Path) -> None:
     check("no-semantic-tools", ".semantic_tools(" not in spec)
     check("duckdb-port", ".port(\"duckdb\"" in spec and "DuckDbOutput" in transform and "def ingest(duckdb:" in transform)
     check("transform-contract", all(token in transform for token in ("PHYSICAL_MODELS", "secrets[\"csv_source\"]", "pipeline.default_schema.data_table_names()", "write_disposition=\"replace\"", ".transform-complete")))
-    check("no-direct-duckdb-ddl", all(token not in transform for token in ("duckdb.connect", "CREATE TABLE", "CREATE VIEW")))
+    # Scans executable code only — a docstring naming the ban is not a breach.
+    # The token list is unchanged: writing outside the dlt port is still fatal,
+    # which is what keeps output inside the pin-substituted staging path.
+    transform_code = executable_source(transform)
+    check("no-direct-duckdb-ddl", all(token not in transform_code for token in DDL_TOKENS))
+    out_of_port = out_of_port_write_errors(ast.parse(transform_code))
+    check("no-out-of-port-write", not out_of_port, "; ".join(out_of_port))
 
     try:
         import dlt
@@ -472,21 +728,80 @@ def main(root: Path) -> None:
     install_transform_stubs()
     module = types.ModuleType("desktop_transform")
     module.__file__ = str(transform_path)
+    # Register before exec: dlt's @dlt.resource decorator reflects the defining
+    # function's module (inspect.getmodule) to build its spec, and a module
+    # missing from sys.modules resolves to None there. Base CSV readers never
+    # hit that path; a derived model's decorated resource always does.
+    sys.modules["desktop_transform"] = module
     exec(compile(transform, str(transform_path), "exec"), module.__dict__)  # noqa: S102
     ingest = module.ingest
 
-    physical_models = {directory.name: directory.name for directory in data.iterdir() if directory.is_dir()}
+    # model_tables is the supervisor's identity map over PHYSICAL_MODELS — base
+    # AND derived. Building it from the data/ listing would KeyError the moment a
+    # derived model resolves its table name.
+    model_tables = {model: model for model in physical}
     # The compiled supervisor mapping also contains semantic views registered
     # with .model(...). They are query-time only and must not be ingested.
-    model_tables = {**physical_models, "semantic_view_probe": "semantic_view_probe"}
+    model_tables["semantic_view_probe"] = "semantic_view_probe"
     run = Path(tempfile.mkdtemp())
     output = DuckDbOutput(str(run / "data.duckdb"), "main", model_tables)
     ingest(output, {"csv_source": str(data)})
     connection = duckdb.connect(output.path, read_only=True)
-    for model in physical_models:
+
+    # Base models land 1:1 with their export, so row counts must match exactly.
+    for model in base_models:
         expected = sum(csv_count(path) for path in (data / model).glob("*.csv"))
         actual = connection.execute(f"SELECT COUNT(*) FROM main.{model}").fetchone()[0]
         check(f"loaded:{model}", actual == expected)
+
+    # Derived models have no export to count against. What is checkable here is
+    # that the table exists, carries rows, and honours its declared key — the
+    # in-transform assert (Step 3b) owns the semantic reconciliation.
+    for model in derived_models:
+        rows = connection.execute(f"SELECT COUNT(*) FROM main.{model}").fetchone()[0]
+        check(f"derived-landed:{model}", rows > 0, "derived model landed zero rows")
+        derived_key_errors = landed_key_errors(connection, model, model_primary_keys.get(model, set()))
+        check(f"derived-key:{model}", not derived_key_errors, "; ".join(derived_key_errors))
+        # A nested value survives as a flattened `field__key` column (or, for a
+        # list, as a child table caught by no-child-tables below). Either way
+        # the model no longer matches the schema its semantic roles describe.
+        schema = base_model_schemas(model_tree).get(model)
+        declared = {
+            key.value
+            for key in (schema.keys if schema is not None else [])
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        landed_columns = {
+            name
+            for (name,) in connection.execute(
+                "SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = 'main' AND table_name = '{model}'"
+            ).fetchall()
+            if not name.startswith("_dlt")
+        }
+        nested = sorted(column for column in landed_columns - declared if "__" in column)
+        check(
+            f"derived-flat:{model}",
+            not nested,
+            f"nested values flattened into {nested!r}; yield scalar-only dicts",
+        )
+
+    # A nested value would have made dlt emit a `parent__field` child table.
+    # Assert the landed tables are exactly the promised physical models.
+    # dlt's own _dlt_* bookkeeping tables are expected and are not data tables;
+    # this mirrors pipeline.default_schema.data_table_names().
+    landed = {
+        name
+        for (name,) in connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' AND table_name NOT LIKE '\\_dlt\\_%' ESCAPE '\\'"
+        ).fetchall()
+    }
+    check(
+        "no-child-tables",
+        landed == set(physical),
+        f"landed {sorted(landed)!r}, expected {sorted(physical)!r}",
+    )
     check("transform-complete", (run / ".transform-complete").is_file())
     print("ALL CHECKS PASSED")
 

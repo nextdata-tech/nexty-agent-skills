@@ -1,0 +1,8 @@
+$ nxd --config /tmp/nxd-acme-prod.yaml ls data-products
+
+NAME                          DOMAIN      ENV     STATUS
+customer-profiles-curated     Customer    prod    RUNNING
+customer-orders-curated       Commerce    prod    RUNNING
+shipments-raw                 Logistics   prod    RUNNING
+
+3 data products.

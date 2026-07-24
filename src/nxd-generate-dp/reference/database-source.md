@@ -6,6 +6,7 @@
 - The `sql_database` source shape
 - Credential handling — read this before shipping
 - Naming
+- Sensitivity artifacts
 - `transform/main.py` diff from the CSV template
 - `requirements.txt` additions
 - `spec.py` / `infra-profile.yaml` diffs
@@ -77,6 +78,10 @@ as `secrets["db_source"]`.
   carries a real password: don't commit it to a shared repo, don't attach it
   to a ticket or chat, and don't reuse it as a template for a different
   database without clearing the old credential first.
+- **Emit the sensitivity artifacts in the same step that writes the
+  credential** — see [Sensitivity artifacts](#sensitivity-artifacts) below.
+  Writing the credential and not the artifacts is an incomplete step, not a
+  later cleanup.
 - This shape (`key`/`value`/`public`) is verified against the supervisor's
   `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
   `SecretsHandler` construction — not inferred from a single example.
@@ -96,6 +101,51 @@ needs two or more database sources (or mixes a database with another
 connector type), label each instance instead — see
 `reference/multi-source.md` for the full `db-source-<label>` /
 `db_source_<label>` / `db-source-<label>-tables` pattern.
+
+## Sensitivity artifacts
+
+The trigger is **structural**, not a judgement call: any `*-source` service in
+`infra-profile.yaml` with a populated `attributes` list. A file or CSV source
+keeps `attributes: []` and needs none of this. Emit all three in the same step
+that writes the credential — Phase C fails the closure if the first two are
+missing while a populated `attributes` list is present.
+
+1. **`.gitignore`** at the closure root, ignoring the credential file only:
+
+   ```gitignore
+   # Holds live credentials in plaintext. Never commit.
+   infra-profile.yaml
+   ```
+
+   Never `*`. The rest of the closure — `spec.py`, `models.py`,
+   `transform/main.py`, `data/` — is exactly what a colleague needs to rebuild,
+   and a blanket ignore silently destroys that. A clone missing
+   `infra-profile.yaml` is the intended outcome: the recipient supplies their
+   own credential and rebuilds.
+
+2. **`SENSITIVE`** at the closure root — a marker a cold reader hits before
+   opening anything, naming keys but **never values**:
+
+   ```
+   This closure holds a live credential in plaintext.
+
+   File:  infra-profile.yaml
+   Keys:  <service>.attributes -> user, password
+   Rotate: replace the `value:` entries and rebuild the data product.
+
+   Do not commit, zip, attach to a ticket, or reuse as a template for a
+   different source without clearing the credential first.
+   ```
+
+3. **`chmod 0600 infra-profile.yaml`** where a shell can reach the closure.
+   Best-effort risk reduction, never a gate: it is unavailable on surfaces with
+   no host shell (Claude Cowork's Bash is an isolated Linux environment, not the
+   user's host). Skip it silently there — the two files above are mandatory on
+   every surface.
+
+**Never write a credential value into `SENSITIVE`, `CONTEXT.md`, `README.md`,
+or chat narration.** Keys and file paths only. These artifacts exist so the
+credential's location is discoverable without the credential being copied.
 
 ## `transform/main.py` diff from the CSV template
 
@@ -193,3 +243,31 @@ isn't static. When credentials are not available in-session, report the
 connectivity self-check as **not run** — do not claim it passed. Structural
 checks (naming invariant, no `.semantic_tools()`, import correctness) still
 run regardless.
+
+**Never let a probe's traceback reach the transcript unredacted.** A failing
+connection raises through SQLAlchemy, which masks the password in its own
+`repr` — but a malformed URL raises `ArgumentError` carrying the string you
+passed it, and an improvised probe that builds its own DSN or prints the
+connection string leaks the live value into chat, where the user cannot
+remediate it. Wrap the probe so the failure is substituted from the known
+secret values, never pattern-matched:
+
+```python
+def _redact(exc: BaseException, secrets: dict) -> str:
+    text = str(exc)
+    for key in ("password", "user"):          # the values, not the key names
+        value = secrets.get(key)
+        if value:
+            text = text.replace(value, f"<{key} redacted>")
+    return text
+
+try:
+    ...  # the bounded probe
+except Exception as exc:
+    raise SystemExit(f"connectivity check failed: {_redact(exc, db_secrets)}") from None
+```
+
+`from None` is mandatory: without it Python chains the original exception as
+`__context__` and re-prints it in full, defeating the redaction. The same rule
+governs anything you improvise — never `print()` a connection string, and
+never paste a raw traceback from a failed connection into the answer.

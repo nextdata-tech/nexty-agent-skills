@@ -94,3 +94,86 @@ Record: [`records/2026-07-20-nxd-generate-dp-desktop-semantic-closure-and-public
 Notes: Direct upgrade from 0.11.0 to 0.12.0 (renumbered from an intermediate 0.13.0/0.13.1/0.13.2 sequence to resolve a version-bump collision with PR #87, which also bumps 0.11.0 -> 0.12.0 and rebases onto this). Net effect of the whole PR: added file/database/REST-API connector types as siblings to the proven CSV closure in nxd-generate-dp (reference/file-source.md, database-source.md, api-source.md), taught nxd-pocket-loop to gather/route them, added an opt-in labeled multi-source naming scheme for 2+ sources of the same or mixed connector types (reference/multi-source.md), fixed the infra-profile.yaml credential-attribute shape (name->key, public:false) against the supervisor's real KeyValuePairWithPublic schema, and replaced the api-source connector's single opaque auth value with structured auth_type + per-type flat fields assembled into dlt's structured auth dict in the transform. The single-CSV-source default path (csv-source, csv_source, csv-source-path) is untouched throughout -- this eval only exercises that unchanged path; the new connector types and the auth_type dispatch have no scenario coverage yet (real follow-up work). pocket-loop-serve-query-refine remains blocked in this sandbox (missing nxd-desktop-supervisor binary).
 
 Record: [`records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-multi-connector-type-sources.json`](records/2026-07-21-nxd-generate-dp-nxd-pocket-loop-multi-connector-type-sources.json)
+
+## 2026-07-21 — nxd-generate-dp / nxd-pocket-loop: derivation rulings materialize; omission-test routing (plugin v0.12.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before | current_pack | derive-models-from-questions | ERROR | — | — | — | — | — | — |
+| after | current_pack | derive-models-from-questions | ERROR | — | — | — | — | — | — |
+
+Notes: the harness cannot run this scenario in-sandbox — the same desktop-supervisor
+blocker recorded against the sibling rows above. Logged ERROR rather than omitted so the
+gap is visible.
+
+Evidence was gathered instead by running isolated agents (sonnet, clean working
+directory, no repo context) against the installed skills and grading with the
+scenario's own deterministic checker plus withheld ground truth. Four runs:
+
+- **Control** — a source where every question is answerable by a metric over an
+  existing column. Zero derived models, correct answers. The new derivation
+  guidance does not induce over-derivation.
+- **Finance** — refunds, internal transfers, three currencies, no category column.
+  All four currency/category totals correct to the cent against withheld truth.
+- **Negative fixture** — the finance closure with the sign stripped from amounts, so
+  refunds stop netting. The mandatory Tier-2 signed-measure reconciliation raised at
+  build time before any data landed: `classified_spend EUR total 75614.33 != source
+  -70284.47`. With that assert removed the closure builds and prints SELF-CHECK OK,
+  and only the scenario's numeric gate catches it (2 failed). Defence in depth
+  demonstrated on a real defect.
+- **Realistic-messy** — 16 raw vendor descriptions over 7 real vendors, 9 duplicate
+  transaction ids from a re-export, partial refunds, two date formats in one column,
+  and an fx_rate column present but empty on every row. A naive closure lands
+  12,128.61 from correct. The agent deduped correctly, resolved the primary-key
+  conflict (no key on the base model, key on the derived dedupe), inferred DD/MM/YYYY
+  from 23 unambiguous rows, and refused to invent an FX rate — reporting per-currency
+  and naming the cost. All totals correct to the cent.
+
+Not yet covered: expansion/collapse derivation shapes (only enrichment and removal
+were exercised), the FX-applied path end-to-end, and chained derivations.
+
+## 2026-07-23 — nxd-generate-dp + nxd-pocket-loop: policy read-back gate before materialization (plugin v0.16.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.15.2-run1 | current_pack | coauthor-supplied-rubric | FAIL | 10/11 | 5 | 4 | 5182 | 0.27 | sonnet |
+| before-v0.15.2-run2 | current_pack | coauthor-supplied-rubric | FAIL | 10/11 | 7 | 5 | 6659 | 0.39 | sonnet |
+| after-v0.16.0-run1 | current_pack | coauthor-supplied-rubric | FAIL | 9/11 | 6 | 4 | 5671 | 0.37 | sonnet |
+| after-v0.16.0-run2 | current_pack | coauthor-supplied-rubric | FAIL | 10/11 | 6 | 4 | 5158 | 0.34 | sonnet |
+
+Notes: New scenario coauthor-supplied-rubric: a supplied rubric defining only the 5 and the 1 on all four criteria, verdict names with no thresholds, an unknown gate, and provenance-sensitive evidence. Baseline runs use v0.15.2 skills from origin/main with the scenario and run.py copied into a worktree. Two runs per arm because single-run deltas under ~20% are noise. The nine ordering and co-authoring checks pass 4/4 in BOTH arms: the read-back was already reachable via derivation-plan.md whenever the agent happened to load that file, so on the READ-BACK axis this scenario does not separate the versions. It DOES separate them on ROUTING, which was initially assumed untestable and is not: --plugin-dir registers skills for model-driven selection, the same mechanism Desktop uses, so the transcript records which skill the model chose first from a free choice between both. Across 9 runs the first skill loaded was: before v0.15.2 (n=4) none 1, nxd-generate-dp 1, nxd-pocket-loop 2 - i.e. 2/4 failed to reach the orchestrator first; after v0.16.0 (n=5) nxd-pocket-loop 5/5. That reproduces the live failure (generator entered directly, skipping the gathering) and shows the rewritten descriptions correcting it, but 1/4 vs 0/5 is a weak sample - treat it as directional, not settled. A routing:orchestrator-first assertion is now mechanized in the scenario's checker and verified against these real transcripts. unknown-gate-addressed and provenance-addressed each flip in BOTH arms (P/F and F/P), so the apparent one-check regression in after-run1 is judge/agent nondeterminism, not a behavior change. Efficiency is flat: turns 5-7 before, 6 after; output tokens 5182-6659 before, 5158-5671 after.
+
+Record: [`records/2026-07-23-nxd-generate-dp-nxd-pocket-loop-policy-read-back-gate-before.json`](records/2026-07-23-nxd-generate-dp-nxd-pocket-loop-policy-read-back-gate-before.json)
+
+## 2026-07-23 — nxd-generate-dp: Phase D policy-boundary gate + classification guidance (plugin v0.17.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.16.0-run1 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 5483 | 0.32 | sonnet |
+| before-v0.16.0-run2 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 5367 | 0.35 | sonnet |
+| after-v0.17.0-run1 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 7 | 5 | 9831 | 0.44 | sonnet |
+| after-v0.17.0-run2 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 8224 | 0.39 | sonnet |
+
+Notes: Phase D (policy-boundary gate) + the ABSENT read-back + token-matching/reachable-band guidance in derived-models.md. THIS SCENARIO DOES NOT EXERCISE PHASE D: it stops at the policy read-back before any closure is built, and Phase D runs against a LANDED closure, so the gate never executes here. Eleven of twelve checks pass identically in both arms. provenance-addressed goes 0/2 before to 1/2 after - a single flip on a check that has been noisy since it was added, not evidence of improvement. Efficiency moved the wrong way: output tokens 5367-5483 before vs 8224-9831 after (~+60%), with turns and tool calls unchanged. NOT a longer read-back - visible output is nearly identical (final answer 3501 vs 3786 chars, transcript 7831 vs 8176), so the delta is reasoning tokens, which this metric counts. Plausible cause is the ~209 added lines of reference prose (derived-models.md 482->534, self-check.md 533->690) giving the agent more to weigh; n=2 per arm cannot separate that from run-to-run variance. Worth watching on the next change that touches these files; not worth blocking on. The real evidence for Phase D is direct and outside this scenario: run against the actual defective closure from the 2026-07-23 Cowork session it FAILS with the diagnosis and fix (nxd_decisions promised but generated in the transform), passes a correct closure with no false positives, and catches the category-instead-of-status shape defect. Eight new unit tests pin each Phase D branch plus the two false starts (a version keyed on statically-parsed PHYSICAL_MODELS that passed the very closure it was written for, and a version that flagged key columns and failed every correct closure).
+
+Record: [`records/2026-07-23-nxd-generate-dp-phase-d-policy-boundary-gate-classification-.json`](records/2026-07-23-nxd-generate-dp-phase-d-policy-boundary-gate-classification-.json)
+## 2026-07-23 — nxd-generate-dp + nxd-pocket-loop: runtime credential/sensitivity artifacts and reopen-recipe fix (plugin v0.18.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-main-f57fdab | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 6 | 4 | 5293 | 0.34 | sonnet |
+| before-main-f57fdab | current_pack | derive-models-from-questions | FAIL | 13/15 | 41 | 38 | 46692 | 2.68 | sonnet |
+| before-main-f57fdab | current_pack | generate-runnable-dp-from-intent | PASS | 14/14 | 21 | 19 | 14403 | 1.13 | sonnet |
+| after-24c3eca | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 5912 | 0.36 | sonnet |
+| after-24c3eca | current_pack | derive-models-from-questions | PASS | 15/15 | 42 | 38 | 32958 | 2.76 | sonnet |
+| after-24c3eca | current_pack | generate-runnable-dp-from-intent | PASS | 14/14 | 27 | 25 | 10732 | 1.10 | sonnet |
+
+Notes: Runtime enforcement only (eval-harness work is #103). Emits .gitignore/SENSITIVE for credential-bearing closures with a Phase C gate, redacts smoke-test failures, fixes the closure reopen recipe that named nonexistent list_data_products/resume_data_product tools, and adds closure-resident credential+reopen disclosure.
+
+**Baseline provenance:** both arms were measured against f57fdab (v0.16.0), BEFORE #104 landed Phase D and bumped the pack to v0.17.0. The branch was rebased past v0.17.0 (#104) afterwards and the entry re-titled to v0.18.0, the version it ships on, but the numbers were not re-measured — so read this table as isolating THIS change's effect on a v0.16.0 pack, not as a v0.17.0 before/after. The two changes touch disjoint mechanisms (Phase D gates policy literals in a landed closure; Phase C here gates credential-file emission), the merged self-check parses and runs both gates in sequence, and #104's eight Phase D unit tests plus the rest of evals/tests pass on the rebased branch (36/36).
+
+**Read the derive-models-from-questions flip as noise, not as a win.** It moves FAIL->PASS (13/15 -> 15/15), but the two checks that flipped — totality-assert and key-uniqueness-assert — are judge reads of whether the *trace shows evidence* of asserts the agent wrote, and this PR does not touch the guidance behind them (derived-models.md, derivation-plan.md and transform-template.md are all unchanged; the diff is confined to the two connector refs, context-doc.md, self-check.md Phase C, reopen.md and two in-line SKILL.md invariants). The authoritative deterministic check passed in BOTH arms with zero failures, so on the mechanically-graded axis the arms are identical and the delta is agent/judge nondeterminism. Same caution as the entry above: single-run deltas here are not evidence.
+
+None of the three scenarios exercises a credential-bearing closure, so the Phase C sensitivity gate this PR adds is unmeasured by them — its evidence is the four-case execution of the Phase C block recorded in the PR, not this table. What the table does support is the absence of a regression: verdicts hold or improve, turns are flat-to-+6, and output tokens fall on both PASS cells (46692 -> 32958, 14403 -> 10732) despite ~186 added reference lines.
+
+Record: [`records/2026-07-23-nxd-generate-dp-nxd-pocket-loop-runtime-credential-sensitivi.json`](records/2026-07-23-nxd-generate-dp-nxd-pocket-loop-runtime-credential-sensitivi.json)

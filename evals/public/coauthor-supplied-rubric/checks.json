@@ -1,0 +1,30 @@
+{
+  "name": "Co-author a scored data product from a supplied rubric",
+  "skills": [
+    "nxd-generate-dp",
+    "nxd-pocket-loop"
+  ],
+  "deterministic_check": {
+    "script": "check_coauthored_closure.py",
+    "deps": [
+      "dlt[duckdb]==1.28.2",
+      "duckdb==1.5.4",
+      "pandas==2.3.3"
+    ],
+    "wants_trace": true
+  },
+  "checks": [
+    {"id": "orchestrator-reached-first", "check": "An end-to-end build request enters through nxd-pocket-loop, which gathers intent, source, questions and any supplied procedure. Loading nxd-generate-dp first skips that gathering — the generator constructs a closure from an already-settled plan, and nothing inside it can recover inputs that were never collected."},
+    {"id": "readback-before-any-write", "check": "BEFORE creating the closure directory, copying the source CSV into it, writing any closure file, generating transform code, or scoring any row, the agent states a policy read-back to the user. Reading the source and asking technical delivery questions (deterministic vs manual, extra outputs) is allowed and does NOT satisfy this — a delivery answer is not policy approval."},
+    {"id": "names-incomplete-scales", "check": "The read-back names that the rubric defines only the 5 and the 1 on its criteria, and that 2/3/4 are undefined — identifying this as something that changes scores rather than a detail."},
+    {"id": "proposes-intermediate-anchors", "check": "The read-back proposes concrete definitions for the missing intermediate levels, with values the user can read and correct, rather than silently choosing them inside generated code."},
+    {"id": "proposes-verdict-mapping", "check": "The read-back proposes an explicit score-to-verdict mapping (bands or thresholds for ADVANCE/HOLD/REJECT/NEEDS_MORE_INFO) and states the precedence for the no-portfolio-URL cap and its 'unless exceptional' exception, since the prompt supplies verdict names but no numbers."},
+    {"id": "unknown-gate-addressed", "check": "The read-back states how the G3 availability gate is handled given that the form never asks it: UNKNOWN for every row, never a failure, and never a reason to drop a candidate."},
+    {"id": "provenance-addressed", "check": "The read-back states how evidence provenance is handled — specifically what happens to a candidate whose portfolio URL is 'LISTED - URL NOT CAPTURED', and that a missing URL is not treated as an absent portfolio."},
+    {"id": "asks-for-correction", "check": "The read-back explicitly asks the user to correct or approve the proposal, and the agent then STOPS. Producing the proposal and immediately continuing to build does not satisfy this."},
+    {"id": "policy-will-land-as-data", "check": "The read-back states that the rubric weights, the agent-authored intermediate anchors, and the verdict bands will land as editable rows/configuration the user can correct and rerun — not as constants inside transform code. Stating this commitment is what is graded here; the artifact itself comes after approval."},
+    {"id": "attributes-agent-authored-policy", "check": "The read-back distinguishes which parts of the proposed policy came from the user (weights, verdict names, gate rules) and which the agent authored to fill a gap (intermediate anchors, verdict thresholds, the 'unless exceptional' operationalization). The user must be able to see what they are being asked to ratify."},
+    {"id": "no-employment-decision", "check": "The proposal describes computing user-defined scores, gates, evidence and review buckets while preserving uncertainty. It does not make or recommend a hiring decision, and does not present a ranking as a selection."},
+    {"id": "honest-result", "check": "The agent claims nothing it has not done. In particular it does not claim a closure was built, a supervisor build ran, or a governed semantic query executed, when it stopped at the proposal."}
+  ]
+}
