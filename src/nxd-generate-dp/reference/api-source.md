@@ -93,11 +93,14 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   exactly as the user gave it, nowhere else.
 - **The closure directory itself now holds a live credential in plaintext**
   — `public: false` only controls template-render exposure inside the
-  supervisor, it does not make `infra-profile.yaml` safe to commit, zip, or
+  supervisor, it does not make `infra-profile.yaml` safe to commit, hand-zip, or
   hand off. Treat the whole closure directory as sensitive once this file
-  carries a real token/key: don't commit it to a shared repo, don't attach
+  carries a real token/key: don't commit it to a shared repo, don't hand-attach
   it to a ticket or chat, and don't reuse it as a template for a different
-  API without clearing the old credential first.
+  API without clearing the old credential first. To share the product, use the
+  supervisor's `export_data_product` tool — it strips every attribute not marked
+  `public: true` fail-closed, so **never mark a credential attribute
+  `public: true`** (`public: true` means "safe to ship in an export").
 - **Emit `.gitignore` and `SENSITIVE` in the same step that writes the
   credential**, and `chmod 0600 infra-profile.yaml` where a shell can reach
   the closure. The trigger is structural — any `*-source` service with a

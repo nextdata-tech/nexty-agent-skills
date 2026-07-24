@@ -73,11 +73,14 @@ as `secrets["db_source"]`.
   as the user gave it, nowhere else.
 - **The closure directory itself now holds a live credential in plaintext**
   — `public: false` only controls template-render exposure inside the
-  supervisor, it does not make `infra-profile.yaml` safe to commit, zip, or
+  supervisor, it does not make `infra-profile.yaml` safe to commit, hand-zip, or
   hand off. Treat the whole closure directory as sensitive once this file
-  carries a real password: don't commit it to a shared repo, don't attach it
-  to a ticket or chat, and don't reuse it as a template for a different
-  database without clearing the old credential first.
+  carries a real password: don't commit it to a shared repo, don't hand-attach
+  it to a ticket or chat, and don't reuse it as a template for a different
+  database without clearing the old credential first. To share the product, use
+  the supervisor's `export_data_product` tool — it strips every attribute not
+  marked `public: true` fail-closed, so **never mark a credential attribute
+  `public: true`** (`public: true` means "safe to ship in an export").
 - **Emit the sensitivity artifacts in the same step that writes the
   credential** — see [Sensitivity artifacts](#sensitivity-artifacts) below.
   Writing the credential and not the artifacts is an incomplete step, not a
@@ -133,8 +136,10 @@ missing while a populated `attributes` list is present.
    Keys:  <service>.attributes -> user, password
    Rotate: replace the `value:` entries and rebuild the data product.
 
-   Do not commit, zip, attach to a ticket, or reuse as a template for a
-   different source without clearing the credential first.
+   Do not commit or hand-zip this directory with the credential intact, or
+   reuse it as a template for a different source without clearing the credential
+   first. To share the product, use the supervisor's export_data_product tool,
+   which strips credentials fail-closed.
    ```
 
 3. **`chmod 0600 infra-profile.yaml`** where a shell can reach the closure.

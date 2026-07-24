@@ -228,11 +228,12 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Five scenarios are currently skipped:
+Six scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
 | `pocket-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
+| `pocket-loop-export-handoff` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
 | `pharma-cross-dp-mesh-query` | needs a live semantic MCP server reaching lower-env Snowflake |
 | `pharma-mesh-query-hard` | same |
 | `pharma-mesh-query-loop` | same |

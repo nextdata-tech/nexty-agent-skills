@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.21.0
+  version: 0.22.0
 ---
 
 # nxd-pocket-loop skill
@@ -77,13 +77,14 @@ multi-question analysis, prefer the reusable local-product path.
 
 Choose this order before invoking any runtime command:
 
-1. **MCP first.** The `nxd-desktop` server exposes six tools —
+1. **MCP first.** The `nxd-desktop` server exposes six loop tools —
    `mcp__nxd-desktop__build_data_product`,
    `mcp__nxd-desktop__resume_data_product`,
    `mcp__nxd-desktop__list_data_products`, `mcp__nxd-desktop__describe_models`,
    `mcp__nxd-desktop__run_semantic_query`, and `mcp__nxd-desktop__inspect_run`
    — use them for the entire discover, build, resume, describe, and query
-   sequence. This is the supported route for Claude Desktop and Claude Cowork.
+   sequence, plus a read-only `export_data_product` for on-demand handoffs. This
+   is the supported route for Claude Desktop and Claude Cowork.
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
    `nxd-desktop-supervisor` only when the session context has positively
    established that the shell is the user's macOS host **and** both
@@ -166,14 +167,13 @@ for the user's reply:
   (user/password) supplied now. They land in the generated
   `infra-profile.yaml`'s `db-source` service `attributes` per the credential
   invariant below (shape: `nxd-generate-dp's reference/database-source.md`,
-  labeled-instance: `reference/multi-source.md`). Never invent a table name or
-  a credential, and never narrate a live one in chat.
+  labeled-instance: `reference/multi-source.md`). Never invent a table name.
 - **REST API:** record the base URL, auth scheme, the endpoint(s)/resource(s)
   in scope, a sample response shape if available, any known pagination, and the
   live token/key/credentials if auth is required. They land in the `api-source`
   service `attributes` per the credential invariant below (shape:
   `nxd-generate-dp's reference/api-source.md`, labeled-instance:
-  `reference/multi-source.md`). Never fabricate a credential, and never narrate a live one in chat.
+  `reference/multi-source.md`). Never fabricate an endpoint.
 - **Host path handoff:** pass `build_data_product` only the host-visible,
   absolute output path explicitly returned or exposed by the file-writing tool.
   Never derive a definition path from an opaque attachment ID, a tool-internal
@@ -183,13 +183,11 @@ for the user's reply:
 > **Fidelity here; derivation downstream.** The rules above govern **source
 > materialization only** and are absolute: the CSVs you land are a byte-exact
 > record of what the user supplied, so any later number traces back to it.
-> Cleaning, deduplication, amortization, currency normalization,
-> reclassification and regrain are all legitimate — often necessary — but exist
-> **only as derived models computed downstream of the pristine source**, never
-> as an edit to the source export. Never delete a duplicate, fix a value, add a
-> column, or invent an identifier on the way in — preserve the row, then derive
-> the corrected model beside it. nxd-generate-dp owns how derived models are
-> authored.
+> Cleaning, dedup, amortization, currency normalization, reclassification and
+> regrain are legitimate — often necessary — but exist **only as derived models
+> computed downstream of the pristine source**, never as an edit to the source
+> export. Preserve the row on the way in, then derive the corrected model beside
+> it — nxd-generate-dp owns how.
 
 ### Step 2 — Infer the semantic model
 
@@ -407,13 +405,13 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
   transform. Never edit the source export to reach that outcome, and never
   emulate it agent-side.
 - **A judgement not in the data is confirmed and landed, not hardcoded.** FX
-  rates, merchant→category rulings and similar mappings are surfaced,
-  confirmed, and landed as their own model so they're queryable — never
-  embedded as constants in transform code. **This covers agent-produced
-  judgement too** — a per-entity score/verdict/classification read from
-  evidence, landed agent-side as data (`status = proposed`, evidence-cited),
-  rubric taught first; the build never invokes a model. A per-entity judgement
-  as a transform constant is hardcoded even when weighted.
+  rates, merchant→category and similar mappings are surfaced, confirmed, and
+  landed as their own queryable model — never embedded as transform constants.
+  **This covers agent-produced judgement too** — a per-entity
+  score/verdict/classification read from evidence, landed agent-side as data
+  (`status = proposed`, evidence-cited, rubric taught first); the build never
+  invokes a model, and a per-entity judgement baked in as a constant is
+  hardcoded even when weighted.
 - **A supplied procedure with a result-changing gap is read back BEFORE any
   materialization.** No closure directory, source copy, generated code, table,
   scoring, or build until the user has seen every proposed anchor, band and
@@ -439,19 +437,18 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
 - **Hand off only host-visible paths.** Pass `build_data_product` an absolute
   generated-definition path explicitly exposed by the file-writing surface;
   never infer one from an attachment ID or isolated Linux path, and verify a
-  generation subagent's returned path host-side before build rather than
-  trusting it as-is.
+  generation subagent's returned path host-side before build.
 - **A subagent never owns the policy turn and never holds a credential.** When
-  generation is offloaded (Step 3), the policy read-back is a main-thread user
-  turn preceding the dispatch — a subagent never opens one, returning
-  `gap_found` on a new gap instead; and a live credential is placeholdered in
-  the subagent and injected host-side before build, never put in its prompt,
-  return, or narration ([reference/scheduling.md](reference/scheduling.md)).
-- **Query is by measure/dimension name, not raw SQL or NL.** The NL→selection
-  translation is agent-side; ground it in `describe_models`. The desktop MCP
-  query contract accepts measures, dimensions, ANDed `filters[]`, `order_by[]`
-  and `limit` for **per-question scoping only** — never emulate the grammar's
-  gaps by re-aggregating agent-side.
+  generation is offloaded (Step 3), the policy read-back stays a main-thread
+  user turn — a subagent returns `gap_found` on a new gap instead of opening
+  one; and a live credential is placeholdered in the subagent, injected
+  host-side before build, never in its prompt, return, or narration
+  ([reference/scheduling.md](reference/scheduling.md)).
+- **Query is by measure/dimension name, not raw SQL or NL.** Ground the
+  NL→selection translation in `describe_models`. The desktop MCP query contract
+  accepts measures, dimensions, ANDed `filters[]`, `order_by[]` and `limit` for
+  **per-question scoping only** — never emulate its gaps by re-aggregating
+  agent-side.
 - **A standing ruling materializes; a filter never enforces one.** Apply the
   **Omission Test** ([reference/query-grammar.md](reference/query-grammar.md)):
   if no-filter querying would get a *wrong* number, the ruling belongs in the
@@ -464,16 +461,18 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
   the current endpoint.
 - **The supervisor data dir is off-limits.** Everything under `.pocket/state/`
   — pinned snapshots in `definitions/<id>/`, `state.sqlite*`, `staging/` — is
-  immutable supervisor-owned state. Never `chmod`, edit, or hand-write those
-  files to fix a closure. A concrete `.../staging/run-<id>/data.duckdb` path
-  inside a pinned `manifest.yaml` is the supervisor's own resolved runtime
-  path, not a defect. If a served closure is wrong, fix **your** source dir and
-  re-`serve` — the supervisor re-pins a fresh snapshot.
+  immutable supervisor-owned state; never `chmod`, edit, or hand-write it. A
+  `.../staging/run-<id>/data.duckdb` path inside a pinned `manifest.yaml` is the
+  supervisor's own resolved runtime path, not a defect. If a served closure is
+  wrong, fix **your** source dir and re-`serve` — the supervisor re-pins.
+- **Share only via `export_data_product`.** Never hand-zip a credential-bearing
+  closure to share it — the tool's fail-closed redaction is the credential
+  boundary ([reference/handoff-export.md](reference/handoff-export.md)).
 - **Bearer only as a tool parameter** — keep it out of narration and never
   persist or print it. **Never present a preview or truncated result as verified
-  data**, and never stall
-  silently. **The loop is bounded** — cap query remaps and regenerate cycles;
-  report non-convergence ([reference/scheduling.md](reference/scheduling.md)).
+  data**, and never stall silently. **The loop is bounded** — cap query remaps
+  and regenerate cycles; report non-convergence
+  ([reference/scheduling.md](reference/scheduling.md)).
 
 ## Reference skills
 
@@ -494,6 +493,8 @@ main thread);
 **context** (what persists vs. dies, resume-first reattach, rebuild fallback
 and `SENSITIVE` credential recovery, the session ledger);
 [reference/inference.md](reference/inference.md) owns **inference**
-(teach/judge/incremental agent judgement). Step 5's grammar:
+(teach/judge/incremental agent judgement);
+[reference/handoff-export.md](reference/handoff-export.md) owns the on-demand
+**export/handoff**. Step 5:
 [reference/query-grammar.md](reference/query-grammar.md); dlt:
 [reference/dlt.md](reference/dlt.md).
