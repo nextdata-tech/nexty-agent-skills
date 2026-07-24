@@ -58,20 +58,26 @@ python check_pocket_loop.py --mode agent --data-dir .pocket/state \
 It must end in `ALL CHECKS PASSED`. Then stop the supervisor with
 `nxd-desktop-supervisor stop --data-dir .pocket/state`.
 
-Phase C — reattach, don't rebuild. The endpoint and bearer you held are now
-dead (they never persist). Recover the product the way a fresh session would:
-list the published catalog, confirm `invoice-pulse` is present and available,
-then **resume** it — reattaching to the published artifact for a fresh endpoint
-and bearer in seconds, with no regeneration. Do not rebuild from the closure
-unless the catalog reports the artifact as collected or unavailable. Re-describe
-the catalog, then re-answer Phase-B question 5 from the resumed endpoint to prove
-the reattached product still carries the average metric. (On the direct-CLI
-surface, `nxd-desktop-supervisor serve` against the same `--workflow
-invoice-pulse` performs this reattach when the published artifact is intact.)
+Phase C — recover the product in a fresh session from its durable key. The
+endpoint and bearer you held are now dead (they never persist). The durable key
+is the closure directory plus the `invoice-pulse` workflow id — recover from
+those, not from a remembered endpoint. Re-serve the **same** workflow from the
+**same** closure directory with `nxd-desktop-supervisor serve --definition <dir>
+--workflow invoice-pulse --data-dir .pocket/state`, do **not** re-run inference
+or generation and do **not** author a new closure. Take the fresh endpoint and
+bearer that serve returns, re-run `describe`, then re-answer Phase-B question 5
+to prove the recovered product still carries the average metric.
+
+On this direct-CLI surface a re-serve is a rebuild from the closure, not a
+reattach to a running instance — narrate it honestly as such. (The MCP surface
+adds `list_data_products` + `resume_data_product`, which reattach to the
+published artifact in seconds without regeneration; that resume-first ordering
+is asserted separately by `evals/tests/test_resume_first_gate.py`.)
 
 In your final answer, give the five answers, the latest selection behind each,
-and state that the forcing-function check passed and that Phase C reattached by
-resume rather than rebuilding. Do not include bearer tokens.
+and state that the forcing-function check passed and that Phase C recovered the
+product from its durable closure + workflow id without re-authoring it. Do not
+include bearer tokens.
 
 ## Success checks
 

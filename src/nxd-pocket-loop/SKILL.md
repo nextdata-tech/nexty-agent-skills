@@ -246,10 +246,13 @@ directory.** Put it in a directory named by the workflow id
 (`…/nxd-pocket/<workflow>/`) on the file-writing surface, under whichever base
 the host-visible-absolute-path rules in Step 1 make legal, and **state that
 path to the user in the handoff**. The bearer is minted per session and never
-persists, so the closure path plus the workflow id are the durable key a later
-session reattaches with — via `list_data_products` → `resume_data_product` (see
-[reference/context-and-resume.md](reference/context-and-resume.md)). A closure
-written to a scratch dir is effectively lost when the session ends. The
+persists. A later session reattaches by **workflow id** — `list_data_products`
+→ `resume_data_product` — while the **closure path** is the key for the rebuild
+fallback when the published artifact is gone (see
+[reference/context-and-resume.md](reference/context-and-resume.md)). Name the
+directory by the workflow id (`…/nxd-pocket/<workflow>/`) so the two stay
+recoverable from each other. A closure written to a scratch dir is effectively
+lost when the session ends. The
 closure's `CONTEXT.md` (emitted by nxd-generate-dp)
 is the durable record a *later* session reads to continue the work — the reopen
 recipe, the sample-selection rule, per-field inference caveats, and the full

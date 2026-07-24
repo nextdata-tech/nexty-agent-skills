@@ -17,6 +17,7 @@ It asserts, over the shipped skill/reference text (no agent, no supervisor):
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -85,8 +86,20 @@ def test_fallback_is_gated_on_artifact_gone():
     # The rebuild fallback must be conditioned on the artifact being gone,
     # not offered as an unconditional alternative.
     assert "collected" in text and "artifact_unavailable" in text, (
-        "the rebuild fallback must be gated on collected / artifact_unavailable"
+        "the rebuild fallback must name the collected / artifact_unavailable states"
     )
+    # And the gating must be explicit: rebuild is the fallback / only-when path,
+    # never offered unconditionally. Guard against an edit that keeps the state
+    # names but drops the condition.
+    assert re.search(r"rebuild is the fallback", text) or re.search(
+        r"only when the (published )?artifact is (genuinely )?gone", text
+    ), "the rebuild fallback must be explicitly gated, not offered unconditionally"
+
+
+def _strip_markdown(text: str) -> str:
+    # Drop emphasis/code markers so a reintroduction that keeps the markdown
+    # (``**no** list, status``) still matches the plain stale phrase.
+    return re.sub(r"[*`_]", "", text).lower()
 
 
 @pytest.mark.parametrize(
@@ -95,7 +108,7 @@ def test_fallback_is_gated_on_artifact_gone():
     ids=lambda p: p.parent.name + "/" + p.name,
 )
 def test_no_stale_three_tool_framing(doc):
-    text = doc.read_text().lower()
+    text = _strip_markdown(doc.read_text())
     for phrase in STALE_PHRASES:
         assert phrase.lower() not in text, (
             f"{doc} still carries stale three-tool framing: {phrase!r}"
