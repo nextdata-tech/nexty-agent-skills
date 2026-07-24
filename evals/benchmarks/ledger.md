@@ -205,3 +205,35 @@ rebuild-first revert. The full `evals/tests/` suite passes (44). The
 rebuild from the durable closure, narrated as such — not a reattach), with the
 MCP resume-first assertion delegated to the gate test. A live before/after lands
 with the next real Desktop/Cowork run.
+
+---
+
+## 2026-07-24 — v0.21.0 — pocket-loop offload profiling/generation to subagents
+
+**Change:** `nxd-pocket-loop` gains a permitted path to offload Steps 2–3 (source
+profiling + closure code generation) to isolated subagents — split at the
+inference/authoring seam (profile subagent + generate subagent) — so the
+token-heavy work and its connector references stay out of the main conversation.
+The policy read-back user turn, the single-flight build, and host-side path
+verification + credential injection stay on the main thread. Adds a structured
+return contract, a `gap_found` bounce (both absence and profiling-ambiguity
+categories), and a placeholder + host-side credential boundary.
+
+**No before/after run table — the split is not measurable by the current
+harness.** Proving generation ran in a subagent (and the read-back stayed on the
+main thread) needs a fixture that does not exist: an MCP surface, a multi-source
+or procedure-bearing closure, and trace access to subagent dispatch. The only
+scenario exercising the loop end-to-end, `pocket-loop-serve-query-refine`, is
+`ci_skip`'d, single-source, and direct-CLI — precisely the case where the skill
+authors inline (offloading is permitted, not required), so it neither does nor
+should exercise the split. Same posture as the v0.19.0 / v0.18.0 entries above.
+
+**Evidence instead of a table:** the deterministic gate
+`evals/tests/test_generation_subagent_gate.py` (13 cases) pins the four safety
+properties at the meaning level — both `gap_found` bounce categories, every
+structured-return field, `credential_slots` key-names-only, the enumerated
+host-side verify file list (incl. `infra-profile.yaml`), and the two-subagent
+seam split — and fails on a reworded-but-broken revert. The full `evals/tests/`
+suite passes (60). The reworded orchestrator's inline path is unchanged in
+behavior; a live before/after judge/turns/tokens comparison on
+`pocket-loop-serve-query-refine` lands with the next real Desktop/Cowork run.
