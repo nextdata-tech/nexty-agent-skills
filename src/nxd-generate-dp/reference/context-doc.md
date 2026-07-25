@@ -137,7 +137,9 @@ Closure path:  <abs path to this dir>
   (Or author it inert now and promise it — preferred.)
 
 ## Reopen
-The bearer token is never persisted, so a later session reattaches by workflow
+The supervisor exposes build_data_product, describe_models and
+run_semantic_query for the query loop, plus export_data_product to hand this
+product to another machine. The bearer token is never persisted, so a later session reattaches by workflow
 id + closure path. Reopen resume-first — a rebuild is the fallback only when the
 published artifact is gone:
 1. list_data_products — is this workflow published, and is artifact_status
@@ -155,8 +157,10 @@ published artifact is gone:
 This closure holds a live credential in plaintext.
 - File: infra-profile.yaml — service <service-name>, keys: <key names only>
 - Rotate: replace the `value:` entries and rebuild the data product.
-- Do not commit, zip, or attach this directory. `.gitignore` covers
-  infra-profile.yaml; the other files are safe to share only if the data is.
+- Do not commit or hand-zip this directory with the credential intact.
+  `.gitignore` covers infra-profile.yaml. To share the product, use the
+  supervisor's export_data_product tool: it strips every credential fail-closed
+  and emits an IMPORT.md naming what the recipient must refill.
 
 ## Known blockers (separate from artifact correctness)
 - <e.g. build/serve readiness timeout>: <symptom>, <remedy>. The closure
