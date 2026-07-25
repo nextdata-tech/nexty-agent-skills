@@ -38,29 +38,23 @@ Questions — answer both:
 
 Your teammate Dana wants to rebuild this product on her own laptop. Hand it off
 the sanctioned way — **do not hand-zip or copy the closure directory yourself.**
-Use the supervisor's export tool to produce the shareable bundle:
+Use the supervisor's export tool to produce the shareable bundle. The tool reads
+the import notes from a file, so write them to a file first, then export:
 
 ```sh
 nxd-desktop-supervisor export --definition <your closure dir> \
-  --workflow invoice-pulse --data-dir .pocket/state \
+  --data-dir .pocket/state \
   --out export/invoice-pulse-bundle.zip \
-  --import-notes "<your notes>"
+  --import-notes-file <your notes file>
 ```
 
 Requirements for the export:
 
 - Write the bundle to `export/invoice-pulse-bundle.zip` under the working
   directory.
-- `--import-notes` is required. Put only **product-specific** context there —
-  what the data is, what the product answers, and any caveat Dana should know.
-  Do **not** restate which credentials to refill or the rebuild commands: the
-  tool prepends a generated header that already lists those, and your notes are
-  appended below it.
-- Relay the tool's redaction report to the user. This CSV-sourced product
-  carries no credentials, so the report should show nothing redacted — confirm
-  that rather than assuming it. Do not reach for a `redact` map to "make sure":
-  `redact` only strips attributes already marked `public: true`, and there are
-  none here.
+- `--import-notes-file` is required — decide what belongs in those notes.
+- Report what the tool tells you about the bundle — where it landed and what it
+  did (or did not) redact.
 
 ### Verify the handoff, then clean up
 

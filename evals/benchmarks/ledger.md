@@ -237,3 +237,49 @@ seam split — and fails on a reworded-but-broken revert. The full `evals/tests/
 suite passes (60). The reworded orchestrator's inline path is unchanged in
 behavior; a live before/after judge/turns/tokens comparison on
 `pocket-loop-serve-query-refine` lands with the next real Desktop/Cowork run.
+
+---
+
+## 2026-07-24 — v0.22.0 — pocket-loop export_data_product handoff + public classification
+
+**Change:** two behavior changes. (1) `nxd-pocket-loop` gains a sanctioned
+outbound-sharing route — `mcp__nxd-desktop__export_data_product` — with a new
+`reference/handoff-export.md`, a `Share only via export_data_product` invariant,
+and a corrected credential-invariant pointer (hand-zipping a credential-bearing
+closure is out; the tool's fail-closed redaction is the boundary). (2)
+`nxd-generate-dp` flips every non-secret db/API connector attribute (`host`,
+`port`, `database`, `schema`, `base_url`, `auth_type`, `region`) from
+`public: false` to `public: true`, so an export keeps the connection topology and
+redacts only the credentials the recipient refills. Confirmed against the pinned
+supervisor runtime: `public:` gates **only** `export_data_product` redaction — the
+transform reads every attribute via `secrets[...]` regardless — and export strips
+fail-closed (`ExportParams` / the export path in
+`components/desktop/supervisor/src/mcp_server.rs`; CLI `ExportOptions` in
+`bin/supervisor_main.rs`).
+
+**No before/after run table — not measurable by the current harness.** The only
+scenario exercising the export half, `pocket-loop-export-handoff` (new in this
+PR), is `ci_skip`'d: it needs a live `nxd-desktop-supervisor`
+(`EVAL_POCKET_SUPERVISOR_DIR` / `EVAL_POCKET_PYTHON`) that CI cannot provision.
+That scenario is also deliberately CSV-sourced (`attributes: []`), so it exercises
+the db/API `public:` flip **zero times** — credential redaction on real secret
+bytes is a documented follow-up (a db/REST-source variant that stands up the
+backend during preflight). Same posture as the v0.21.0 / v0.19.0 / v0.18.0
+entries above.
+
+**Evidence instead of a table:**
+- The new deterministic gate `evals/tests/test_export_public_classification_gate.py`
+  (5 cases) pins the security-load-bearing classification at the meaning level:
+  credentials/identity `public: false`, non-secret topology `public: true`,
+  "never mark a credential `public: true`", and the confirmed runtime fact that
+  `public:` controls only export redaction while the transform reads every
+  attribute — failing on a silent reclassification or a revert to the old
+  "supervisor drops any attribute not `public: false`" framing.
+- The `pocket-loop-export-handoff` scenario's own structural checks are the
+  strong-signal proof when run locally: the exported bundle carries the full
+  closure + `IMPORT.md` + `export.json`, and **re-serves from the bundle alone
+  and reproduces every answer** (`bundle_roundtrip_answers` all CORRECT).
+- The full `evals/tests/` suite passes (65).
+
+A live before/after on `pocket-loop-export-handoff` (and the credential-bearing
+redaction variant) lands with the next real Desktop/Cowork run.

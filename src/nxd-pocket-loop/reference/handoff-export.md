@@ -33,7 +33,8 @@ currently built and served — exporting does not disturb the running instance.
 mcp__nxd-desktop__export_data_product(
     definition   = "<abs path to the closure — the SAME path you built from>",
     import_notes = "<required; see below>",
-    redact       = { "<service>": ["<attr>", ...] }   # optional; rarely needed
+    redact       = { "<service>": ["<attr>", ...] },  # optional; rarely needed
+    destination  = "<abs path for the .zip>"          # optional; tool-chosen if omitted
 )
 ```
 
@@ -42,6 +43,10 @@ mcp__nxd-desktop__export_data_product(
   It is the same path `build_data_product` takes.
 - `import_notes` is **required**.
 - `redact` is optional and rarely needed — see the next section.
+- `destination` is optional: where to write the `.zip`. Omit it and the tool
+  picks the path — an `exports/` directory beside the supervisor's state, named
+  from the closure's content. Either way, the written path comes back as
+  `archive_path` in the result (see "Read the result").
 
 ## Fail-closed redaction — why you don't hunt for secrets
 
@@ -91,13 +96,24 @@ the header's job.
 
 The call returns:
 
-- **Everything it redacted** — relay this to the user so they can confirm the
-  bundle carries no live credential.
-- **A separate report of any misspelled service or attribute in `redact`.** This
-  is reported *apart* from the redaction list precisely so a typo is never
-  mistaken for a clean run. If you passed a `redact` map and a name was
-  misspelled, the value you meant to strip was **not** stripped — fix the name
-  and re-export before handing the bundle off.
+- **`archive_path` — where the bundle landed.** Relay this absolute path in the
+  handoff; it is the one thing the user needs to actually give the bundle to
+  anyone. When `destination` is omitted the path is tool-chosen and known *only*
+  from this field (the result also carries `archive_sha256` and the archive's
+  entry count if you want to confirm integrity).
+- **`redacted` — everything it stripped**, each entry naming the service, key,
+  and reason (`non_public` by the default rule, or `requested` via `redact`).
+  Relay it so the user can confirm the bundle carries no live credential.
+- **A separate report of any misspelled `redact` target** —
+  `unmatched_redact_services` (service name the profile doesn't declare) and
+  `unmatched_redact_keys` (service exists, no such key). Reported *apart* from
+  the redaction list precisely so a typo is never mistaken for a clean run: a
+  value you meant to strip was **not** stripped — fix the name and re-export
+  before handing the bundle off.
+- **`secret_ref_services` — services whose credentials come from an
+  `attributesSecretRef`.** Nothing was redacted for them, but each still needs a
+  refill after import (the reference points at a secret store the recipient does
+  not have) — flag them in the handoff alongside what the `IMPORT.md` header lists.
 
 ## What the recipient gets, and how they import it
 

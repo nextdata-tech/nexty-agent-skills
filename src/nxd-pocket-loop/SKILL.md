@@ -83,8 +83,9 @@ Choose this order before invoking any runtime command:
    `mcp__nxd-desktop__list_data_products`, `mcp__nxd-desktop__describe_models`,
    `mcp__nxd-desktop__run_semantic_query`, and `mcp__nxd-desktop__inspect_run`
    — use them for the entire discover, build, resume, describe, and query
-   sequence, plus a read-only `export_data_product` for on-demand handoffs. This
-   is the supported route for Claude Desktop and Claude Cowork.
+   sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
+   on-demand handoffs. This is the supported route for Claude Desktop and Claude
+   Cowork.
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
    `nxd-desktop-supervisor` only when the session context has positively
    established that the shell is the user's macOS host **and** both
@@ -392,7 +393,8 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
   placeholder — see the subagent invariant below); this differs from the
   bearer-token invariant below, never written to any file. Once landed, **the
   closure directory itself is sensitive** — don't commit, zip, attach it, or
-  reuse it as a template without first clearing the old credential.
+  reuse it as a template without first clearing the old credential; to *share*
+  it, use `export_data_product`, never a hand-zip (invariant below).
 - **Label every source once there are 2+.** A single-source data product needs
   no label. With multiple sources, each gets a short, distinct label used
   consistently across materialization, inference, and generation; never let two
@@ -465,14 +467,12 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
   `.../staging/run-<id>/data.duckdb` path inside a pinned `manifest.yaml` is the
   supervisor's own resolved runtime path, not a defect. If a served closure is
   wrong, fix **your** source dir and re-`serve` — the supervisor re-pins.
-- **Share only via `export_data_product`.** Never hand-zip a credential-bearing
-  closure to share it — the tool's fail-closed redaction is the credential
-  boundary ([reference/handoff-export.md](reference/handoff-export.md)).
-- **Bearer only as a tool parameter** — keep it out of narration and never
-  persist or print it. **Never present a preview or truncated result as verified
-  data**, and never stall silently. **The loop is bounded** — cap query remaps
-  and regenerate cycles; report non-convergence
-  ([reference/scheduling.md](reference/scheduling.md)).
+- **Share only via `export_data_product`.** Never hand-zip a credential-bearing closure —
+  its fail-closed redaction is the credential boundary ([reference/handoff-export.md](reference/handoff-export.md)).
+- **Bearer only as a tool parameter** — keep it out of narration, never persist
+  or print it. **Never present a preview or truncated result as verified data**,
+  and never stall silently. **The loop is bounded** — cap query remaps and
+  regenerate cycles; report non-convergence ([reference/scheduling.md](reference/scheduling.md)).
 
 ## Reference skills
 

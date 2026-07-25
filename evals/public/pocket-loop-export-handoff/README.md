@@ -28,20 +28,25 @@ persistent supervisor processes. It is CI-skipped (`ci_skip` in `checks.json`)
 because CI cannot provision a live desktop supervisor — run it locally or via
 `workflow_dispatch`.
 
-## Runtime-surface assumptions to confirm
+## Runtime surface (confirmed against the pinned runtime)
 
-This scenario is drafted against the export tool's documented contract. Two
-surface details must be confirmed against the pinned runtime and adjusted here
-if they differ; both are isolated to `prompt.md` and `check_pocket_loop.py`:
+This scenario is drafted against the export tool's real contract, confirmed
+against the NXD supervisor source:
 
-1. **CLI invocation.** The prompt drives export via
-   `nxd-desktop-supervisor export --definition <dir> --workflow <wf>
-   --data-dir .pocket/state --out export/invoice-pulse-bundle.zip
-   --import-notes "<notes>"`. Confirm the subcommand name, the output-path flag,
-   and the `--import-notes` flag. If the runtime writes the bundle to a
-   tool-chosen path instead of `--out`, update the prompt to have the agent move
-   it to `export/invoice-pulse-bundle.zip` (the verifier also globs for any
-   `*.zip` under the workspace as a fallback).
+1. **CLI invocation** (`ExportOptions`,
+   `components/desktop/supervisor/src/bin/supervisor_main.rs`). The `export`
+   subcommand takes `--definition <dir>`, `--out <path>` (optional; defaults to
+   `<data-dir>/exports/`, named from the closure's content), repeatable
+   `--redact SERVICE=ATTRIBUTE` pairs, and `--import-notes-file <path>` (notes
+   are read from a **file**, not an argv string). `--data-dir` is a global flag.
+   There is **no `--workflow` flag on `export`** — the definition directory alone
+   identifies the closure. The prompt writes the notes to a file, passes
+   `--import-notes-file`, and `--out export/invoice-pulse-bundle.zip`; the
+   verifier also globs for any `*.zip` under the workspace as a fallback.
+   The MCP tool `export_data_product` (`ExportParams`,
+   `components/desktop/supervisor/src/mcp_server.rs`) takes the same shape minus
+   the CLI framing: `definition`, `import_notes` (string), `redact` (map keyed by
+   service name), `destination` (optional output path).
 2. **Bundle layout.** `inspect_bundle` tolerates an optional single top-level
    directory and matches closure members by basename (`spec.py`, `models.py`,
    `transform/main.py`, `infra-profile.yaml`), plus `IMPORT.md` and
