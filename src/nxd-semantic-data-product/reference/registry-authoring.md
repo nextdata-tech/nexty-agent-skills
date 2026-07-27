@@ -267,9 +267,11 @@ dimension is not propagated to the related metrics.
   a useful slice. Everything else takes a role. A column that is neither roled
   nor aggregated produces no metric, dimension or join and is invisible to
   `describe_model` — that is a decision to make it unqueryable, not a neutral
-  default. The **marker model** is the one whole-model exception: it exists to
-  satisfy the storage port's produce-verification and is never a query target,
-  so its columns stay bare and out of the consumer's catalog.
+  default. The **marker model** is the one exception to the *role* rule: it
+  exists to satisfy the storage port's produce-verification and is never a
+  query target, so its columns stay bare and out of the consumer's catalog. It
+  still carries a `.description(...)` like any other `semantic_model` — both
+  shipped templates give it one.
 - Every dimension and metric carries a `description`, and every
   `semantic_model` a `.description(...)`. A `semantic_view` may carry one too
   (`semantic_view(..., description=)`); the gates do not require it. A concept the agent cannot tell apart from its
