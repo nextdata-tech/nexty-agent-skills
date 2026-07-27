@@ -44,11 +44,11 @@ customer_profile = (
             "CUSTOMER_ID": field(int64(), primary_key()),
             "COUNTRY": field(
                 string(),
-                dimension(name="country"),
+                dimension(name="country", description="ISO country of the customer's billing address."),
             ),
             "EMAIL": field(
                 string(),
-                dimension(name="email", pii=True),
+                dimension(name="email", description="Primary contact email address.", pii=True),
             ),
         }
     )
@@ -74,7 +74,12 @@ order_metrics = semantic_view("order_metrics", order_event).schema(
     {
         "order_count": metric_field(
             int64(),
-            metric(Agg.COUNT, of=order_event.field("ORDER_ID"), name="order_count"),
+            metric(
+                Agg.COUNT,
+                of=order_event.field("ORDER_ID"),
+                name="order_count",
+                description="Number of order events recorded, all statuses.",
+            ),
         ),
         "unique_customers_ordered": metric_field(
             int64(),
@@ -82,6 +87,7 @@ order_metrics = semantic_view("order_metrics", order_event).schema(
                 Agg.COUNT_DISTINCT,
                 of=order_event.field("CUSTOMER_ID"),
                 name="unique_customers_ordered",
+                description="Distinct customers with at least one order event.",
             ),
         ),
         "total_revenue": metric_field(
@@ -90,6 +96,7 @@ order_metrics = semantic_view("order_metrics", order_event).schema(
                 Agg.SUM,
                 of=order_event.field("AMOUNT_USD"),
                 name="total_revenue",
+                description="Gross order amount in USD across ALL statuses.",
             ),
         ),
     }

@@ -147,7 +147,14 @@ def base_model_schemas(tree: ast.AST) -> dict[str, ast.Dict]:
 
 
 def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
-    """Model name -> its description, from .description(...) or the kwarg."""
+    """Model name -> its description, from the chained .description(...) form.
+
+    Only the chained form is verified to reach the agent (it is what lands in
+    the manifest's Model.description and is emitted by list_models and
+    describe_model). The semantic_model(..., description=) constructor kwarg is
+    NOT accepted here, so this agrees with reference/nxd-spec-api.md and with
+    the self_check.py warning rather than contradicting them.
+    """
     results: dict[str, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -161,7 +168,7 @@ def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
         name = model_call.args[0]
         if not isinstance(name, ast.Constant) or not isinstance(name.value, str):
             continue
-        text = string_keyword(model_call, "description") or ""
+        text = ""
         for call in chain:
             if call_name(call.func) == "description" and call.args:
                 joined = joined_string(call.args[0])
@@ -173,7 +180,11 @@ def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
 
 
 def joined_string(node: ast.expr) -> str | None:
-    """A str constant, or implicitly-concatenated parts of one."""
+    """A str constant, or the literal parts of an f-string.
+
+    Adjacent string literals are folded into a single ast.Constant by the
+    parser, so the multi-line parenthesised form needs no special handling.
+    """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
