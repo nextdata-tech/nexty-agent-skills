@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.23.0
+  version: 0.24.0
 ---
 
 # nxd-generate-dp skill
@@ -268,13 +268,12 @@ matching the port in Step 4. Declare `PHYSICAL_MODELS` from the `.promise(...)`
 calls — base names first, then derived; use `duckdb.model_tables` only to resolve
 those names (it can also hold `.model(...)` views with no table).
 
-The complete `transform/main.py` template — docstring, imports, source-checkout
-shim, the `BASE_MODELS`/`DERIVED_MODELS`/`PHYSICAL_MODELS` tuples, the
-`@data_product.on_transform()` `ingest(duckdb, secrets)` body (run-local dlt
-state, the per-base-model `filesystem | read_csv` reader loop, one
-`pipeline.run(..., write_disposition="replace")`, the read-back-and-assert block,
-the `.transform-complete` touch) and the `__main__` guard — is in
-[reference/transform-template.md](reference/transform-template.md).
+The complete `transform/main.py` template — docstring, imports, source-checkout shim, the
+`BASE_MODELS`/`DERIVED_MODELS`/`PHYSICAL_MODELS` tuples, the `@data_product.on_transform()`
+`ingest(duckdb, secrets)` body (run-local dlt state, the per-base-model
+`filesystem | read_csv` reader loop, one `pipeline.run(..., write_disposition="replace")`,
+the read-back-and-assert block, the `.transform-complete` touch) and the `__main__` guard —
+is in [reference/transform-template.md](reference/transform-template.md).
 
 Contract facts baked into that template — keep every one:
 
@@ -288,7 +287,7 @@ Contract facts baked into that template — keep every one:
 - Writes go **through the port**: `dlt.destinations.duckdb(credentials=duckdb.path)`
   + `dataset_name=duckdb.schema`. NEVER a raw `duckdb.connect(...)` write, never
   `CREATE TABLE` / `CREATE VIEW` DDL, never a hardcoded staging path.
-- `write_disposition="replace"` — reruns must be idempotent, not duplicating.
+- `write_disposition="replace"` — reruns must be idempotent, not duplicating. An append-only source goes incremental ONLY via [reference/incremental-transforms.md](reference/incremental-transforms.md).
 - The read-back-and-assert block and the `.transform-complete` touch are
   MANDATORY: the first enforces the naming invariant, the second is what the
   readiness gate polls.
@@ -488,7 +487,7 @@ an exact fixture count. Without credentials, report it **not run**.
 - **Public semantic DSL only**: base models carry `primary_key` / `dimension` / `join`; metrics are `metric_field(metric(...))` on `semantic_view(...)`. Never import private modules or write metadata directly.
 - **Validated keys, by kind**: every promised physical model has one or more `primary_key()` fields. A **base** model's key is one or more EXISTING source columns whose tuple is non-null and unique across the supplied export — never synthesize one; stop and ask for the source key when that evidence is absent. A **derived** model's key is defined by the derivation's grain, constructed deterministically from source values plus the grain's ordinal, and proven unique by an in-transform assert. A dedupe keeps its source key; only a regrain declares a new composite.
 - **Connector via secrets, `infra-profile.yaml` shape**: source config only from `secrets[...]`, keyed per connector type per the connector-types table in Overview, one entry per source instance (labeled when 2+ of a type — `reference/multi-source.md`) — always delivered via `.secrets([...])` on the transform. The profile is `metadata.name: desktop-local` with at least three services (`duckdb`, `python-compute`, one connector service per source instance). `duckdb`, `python-compute`, `csv-source`, and `file-source` keep `attributes: []` (their companion path file is relative); `db-source`/`api-source` (and their labeled variants) carry one `{"key": ..., "value": ..., "public": <bool>}` attribute per connection field instead, marked `public:` by sensitivity — secrets/identity (password, user, tokens/keys) `false`, non-secret topology/config (host, port, database, schema, base_url, auth_type, region) `true` so it survives an export — see `reference/database-source.md` / `reference/api-source.md`. Never fabricate a credential, never narrate one in chat, never write a raw database password or API token into a committed closure file, and never let two same-type instances share a name. Any source instance carrying a populated `attributes:` list also emits `.gitignore` (naming `infra-profile.yaml`, never `*`) and `SENSITIVE` in the same step that writes the credential, plus `chmod 0600 infra-profile.yaml` where a shell can reach the closure — Phase C fails the closure without the two files.
-- **Run-local dlt state** (`pipelines_dir` under the run dir + `DLT_DATA_DIR` set; never `~/.dlt`); **`write_disposition="replace"`**; **`.transform-complete` touch** after the assert.
+- **Run-local dlt state** (`pipelines_dir` under the run dir + `DLT_DATA_DIR` set; never `~/.dlt`); **`write_disposition="replace"`**; **`.transform-complete` touch** after the assert. **Incrementality never relaxes the run-local half**: dlt's own state stays ephemeral under the run dir, and the durable watermark lives in the kernel's `transform_state` bag — two separate mechanisms, never composed. The one sanctioned incremental route is [reference/incremental-transforms.md](reference/incremental-transforms.md); read it before switching any disposition, because every failure mode here is silent. It gates on **every promised model being append-safe** (never an aggregate, regrain, or dedupe), addresses the bag through **`for_model()`** (flat indexing is dropped silently once a closure promises 2+ models), yields every promised model every run, and verifies the write by **row count** — the table-name assert cannot see a missing write under `"append"`. `"replace"` while yielding only a delta shrinks the table to the delta; `"append"` without a cursor is the duplicate-rows bug.
 - **Place, don't redesign**: semantic roles come from nxd-semantic-data-product. Preserve a file connector's supplied export exactly, and treat a database or API connector as read-only — cleaning, dedupe, reclassification and regrain happen ONLY in derived models downstream of pristine sources, never by editing the source export. Use an existing validated key for base models or surface the missing-key problem. Promise base and derived models, register metric views with `.model(...)`, and add no marker model on desktop.
 - **Reference data is landed, never hardcoded**: FX rates, merchant→category rulings, account mappings and similar judgements that exist in no source data are user-confirmed and landed as their own model, so they stay queryable and reviewable. **This includes any agent- or LLM-inferred score, verdict, or classification** — landed as data (`status = proposed`); a per-entity judgement literal in transform code is hardcoded even when the downstream arithmetic is computed. Never bake reference data into transform code as a constant dict or `if` ladder. With no user available to confirm, land the mapping anyway as PROPOSED, recorded as a row in the closure's landed `nxd_decisions` model — never a `DECISIONS.md` file — see [reference/derivation-plan.md](reference/derivation-plan.md) and, for agent judgement, [reference/llm-judgments.md](reference/llm-judgments.md). **The transform never calls a model**: judging is agent-side and lands as CSV before the build; no model call, API key, or network in `transform/main.py` — inferring from inside the transform is nondeterministic and re-judges every rerun.
 - **Proven pins**: `dlt[duckdb]==1.28.2`, `duckdb==1.5.4`, pandas, the nxd wheel; Python `>=3.12,<3.13`.

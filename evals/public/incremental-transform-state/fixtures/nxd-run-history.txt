@@ -1,0 +1,25 @@
+$ nxd pocket runs storefront-events
+
+WORKFLOW      storefront-events
+RUN           2 of 2
+STATUS        Succeeded
+
+  RUN  STARTED               DURATION  STATUS      events ROWS
+  1    2026-07-26T09:14:02Z  1m41s     Succeeded   100
+  2    2026-07-27T08:02:55Z  1m47s     Succeeded   100
+
+Row count is stable across runs: the transform lands
+write_disposition="replace", so each run rewrites the events table from the
+full export rather than adding to it.
+
+$ wc -l data/events/*.csv
+      61 data/events/part-0001.csv
+      41 data/events/part-0002.csv
+     102 total
+  (100 data rows + 2 header rows; event_id runs 1..100)
+
+Note from the author: the export only ever gains new files and new rows —
+nothing already written is ever revised or deleted, and event_id increases
+monotonically. Both runs above re-read all 100 rows from scratch. The vendor
+has started backfilling history and this export is expected to reach several
+million rows, at which point the full re-read stops being acceptable.

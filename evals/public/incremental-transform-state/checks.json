@@ -1,0 +1,72 @@
+{
+  "name": "Incremental Load of an Append-Only Source on Pocket",
+  "skills": [
+    "nxd-generate-dp"
+  ],
+  "checks": [
+    {
+      "id": "consults-the-skill-pack",
+      "check": "The agent actually consults the installed skill pack for the incremental-loading contract before writing code — a [tool_use:Skill] invocation of the generate-dp skill, or a Read/Grep of its SKILL.md or reference/incremental-transforms.md. Improvising from the workspace alone fails this check, and so does grepping some other checkout of the skills repo instead of the installed pack. This check gates the meaning of every other check in this file: a run that never opens the pack is measuring an unguided agent, not the guidance, so its remaining verdicts say nothing about the skill's quality. Mark it FAIL whenever the transcript shows no skill-pack consultation, even if the produced code happens to be correct."
+    },
+    {
+      "id": "uses-transform-state-kwarg",
+      "check": "The agent declares a parameter named transform_state on the @data_product.on_transform() function and uses it to hold the watermark, rather than inventing its own persistence (a JSON sidecar file, a marker table, or a durable dlt pipelines_dir)."
+    },
+    {
+      "id": "dlt-state-stays-run-local",
+      "check": "The agent keeps dlt's own pipeline state run-local and ephemeral: pipelines_dir stays under the run directory and DLT_DATA_DIR is still set there. The agent does NOT move dlt state to ~/.dlt or any other persistent location, and does NOT rely on dlt's own incremental cursor surviving between runs."
+    },
+    {
+      "id": "switches-to-append-not-replace-with-delta",
+      "check": "The agent switches the landing call to write_disposition=\"append\". The agent does NOT leave write_disposition=\"replace\" in place while yielding only the new rows — the agent should recognize, or the solution must avoid, that replace-with-a-delta rewrites the table to just the delta and destroys every previously landed row on a run that reports success."
+    },
+    {
+      "id": "confirms-models-are-append-safe",
+      "check": "The agent treats append-safety as a property of the OUTPUT MODELS, not only of the source. It confirms (or states) that the promised model is a pass-through of the append-only source and so is safe to append to. An agent that appends without considering the output side fails. Credit an agent that notes an aggregate, regrain, or dedupe model would NOT be append-safe and would need rebuilding with replace, or that warns the author if such a model is added later; do not require it to invent one."
+    },
+    {
+      "id": "cursor-advanced-after-write",
+      "check": "The cursor is advanced only AFTER the rows have been landed by pipeline.run(...) and after whatever post-write verification the solution uses. The agent does NOT set the new watermark before the write, and does not derive it from scanning the source independently of what was actually yielded."
+    },
+    {
+      "id": "verification-can-detect-a-missing-write",
+      "check": "The solution's post-write verification can actually detect that rows were not landed — e.g. comparing a row count read back from DuckDB against prior_count + len(new_rows), or an equivalent count//watermark read-back. Merely keeping the default table-name assert on pipeline.default_schema.data_table_names() does NOT satisfy this: under append, dlt rehydrates its schema from the destination, so a table landed by an earlier run is reported whether or not this run wrote to it. If the agent keeps the table-name assert as well, it must not be presented as proof that the write happened, and it must not raise on a legitimately empty first run (exact-equality against the promised set does raise there)."
+    },
+    {
+      "id": "no-false-rollback-assumption",
+      "check": "The agent does NOT claim or rely on a failed run rolling back rows already written by pipeline.run(...). On desktop the local DuckDB storage driver has no transaction, so dlt's writes are immediate and permanent while the transform_state bag is only committed when the run succeeds. Credit an agent that validates the batch BEFORE the write for this reason, or that explicitly notes rows and cursor do not share fate. An agent that asserts 'a raise commits neither the rows nor the cursor' fails this check."
+    },
+    {
+      "id": "append-paired-with-cursor-not-bare",
+      "check": "The agent treats the cursor as the thing that makes append idempotent, not as an optimization: the solution filters source rows against the prior watermark so a re-run with no new source rows lands nothing. An answer that adopts append without a filter that excludes already-landed rows fails this check."
+    },
+    {
+      "id": "first-run-empty-bag-takes-history",
+      "check": "The agent handles the first run, where the transform_state bag is empty, by reading through a .get(key, default) with a default that takes the whole history (e.g. 0 or a minimum sentinel). The agent does NOT index the bag directly in a way that raises on run one, and does NOT default the cursor to 'now' or to the source's current maximum, which would silently skip all existing history."
+    },
+    {
+      "id": "json-serializable-cursor",
+      "check": "The cursor value stored in the bag is JSON-serializable — an int, float, or string. The agent casts numpy/pandas scalars or timestamps (int(...), float(...), .isoformat()) rather than storing a numpy.int64, pandas.Timestamp, Decimal, set, or DataFrame."
+    },
+    {
+      "id": "state-bag-addressed-via-for-model",
+      "check": "The agent addresses the state bag through transform_state.for_model(\"events\") rather than indexing the handle flat (transform_state[\"max_event_id\"] = ...). Flat indexing only works while the closure declares exactly one model and is dropped SILENTLY once a second model is promised — adding one derived model is enough — so the cursor would never persist and every rerun would re-append the whole export. Credit an agent that uses for_model(); an agent that indexes flat fails even though this fixture currently promises one model."
+    },
+    {
+      "id": "readback-avoids-module-shadowing-and-first-run-io",
+      "check": "IF the solution reads back from DuckDB directly (for a row count or a watermark), it must work: the module is imported under an alias (e.g. `import duckdb as duckdb_lib`) because the port parameter is named `duckdb` and shadows it — a bare duckdb.connect(...) inside the transform raises AttributeError on the DuckDbOutput dataclass; and the missing-file case is handled, since connect(path, read_only=True) on a first run raises duckdb.IOException, not CatalogException (catching only CatalogException leaves the first run crashing). If the solution does no direct read-back at all, mark this check not applicable and do not penalize."
+    },
+    {
+      "id": "no-when-dag-no-databricks-sidecar",
+      "check": "The agent does NOT propose a .when(...) per-model DAG for the desktop/Pocket local driver, and does NOT reference NXD_TRANSFORM_STATE_SIDECAR_PATH or any Databricks-only transform-state sidecar mechanism."
+    },
+    {
+      "id": "preserves-transform-contract",
+      "check": "The rest of the transform contract survives: the port param stays typed DuckDbOutput, source config still comes from secrets[...], writes still go through the port via dlt.destinations.duckdb(credentials=...), and the .transform-complete touch is retained. Any raw duckdb.connect use is a read only, never a write or DDL. A naming check on the produced tables is still present in some form (exact-equality or an unpromised-extras check), so semantic views cannot leak into the output."
+    },
+    {
+      "id": "no-scheduler-framing",
+      "check": "The agent does NOT explain the behavior in terms of a schedule or cron (e.g. 'each scheduled run', 'nightly'). Pocket has no scheduler; re-runs are user-initiated refine cycles on the same workflow."
+    }
+  ]
+}
