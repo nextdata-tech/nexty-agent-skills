@@ -22,7 +22,7 @@
     },
     {
       "id": "metric-aggregations-correct",
-      "check": "A metric blob on AMOUNT_USD uses agg \"sum\" (total_revenue) and a metric blob counting orders uses agg \"count_distinct\" on ORDER_ID (order_count). Each is a {\"kind\": \"metric\", \"agg\": ...} __nxd_semantic__ blob, not a fluent SemanticRegistry().metric() call."
+      "check": "A metric blob on AMOUNT_USD uses agg \"expression\" (total_revenue) and a metric blob counting orders uses agg \"count_distinct\" on ORDER_ID (order_count). Each is a {\"kind\": \"metric\", \"agg\": ...} __nxd_semantic__ blob, not a fluent SemanticRegistry().metric() call."
     },
     {
       "id": "boolean-flag-metrics-correct",
