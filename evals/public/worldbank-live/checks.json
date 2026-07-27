@@ -1,0 +1,77 @@
+{
+  "name": "worldbank-live",
+  "skills": [
+    "nxd-generate-dp",
+    "nxd-semantic-data-product"
+  ],
+  "checks": [
+    {
+      "id": "payload-inspected-before-authoring",
+      "check": "The trace shows the agent actually calling both live endpoints and reading the returned payload BEFORE authoring models.py or the transform. The brief names the endpoints but describes none of their structure, so every subsequent decision this eval grades (the envelope, the nesting, the aggregate tell, the already-long grain) is discoverable only from a real response. Authoring from prior knowledge of the World Bank API, from the brief's prose, or from a vendored copy of this data found elsewhere on the machine is a FAIL even if the resulting closure happens to be correct."
+    },
+    {
+      "id": "rest-connector-not-hand-rolled",
+      "check": "Ingestion goes through dlt's REST connector — rest_api_source / rest_api_resources with a RESTAPIConfig, per the api-source reference — with an api-source service in infra-profile.yaml and an api-source-endpoints companion file. FAIL if the transform hand-rolls fetching with requests/urllib in a loop and feeds rows to dlt as a plain generator, and FAIL if base_url or either endpoint path is a literal in transform/main.py rather than read from secrets[\"api_source\"] and the companion file."
+    },
+    {
+      "id": "data-selector-present",
+      "check": "CRITICAL. Both endpoints return a TWO-ELEMENT envelope: [ {page,pages,per_page,total,lastupdated}, [ ...rows... ] ]. Each resource must declare a data_selector (or equivalent) that reaches the second element. Without it dlt lands the pagination-metadata dict as a row — the landed table then carries columns like page/pages/per_page/total and the observation rows are lost or mixed. FAIL if either resource omits it, and FAIL if the agent instead post-filters junk rows out after landing them."
+    },
+    {
+      "id": "pagination-configured",
+      "check": "Pagination is configured so the whole result set is retrieved, not just page 1. The indicator endpoint returns 17,490 observations across many pages (3,498 pages at per_page=5); the country endpoint returns ~295 entries. FAIL if the closure fetches a single page and lands a truncated slice, and FAIL if it 'solves' pagination by setting per_page to a huge number to force one page while the paginator itself is unconfigured — the landed row count must reflect the full set either way, and the trace must show the agent verifying the count rather than assuming it."
+    },
+    {
+      "id": "nested-fields-flattened",
+      "check": "The nested objects are flattened to scalar columns before landing: indicator.value and country.value on the observation rows, and region.value / incomeLevel.value on the metadata rows. Rows reaching pipeline.run must be flat scalar dicts. FAIL if a nested dict is yielded and dlt spawns parent__field child tables (indicator__id, country__value, region__value as separate tables), and FAIL if a promised model's declared key or dimension points at a column that only exists inside such a child table."
+    },
+    {
+      "id": "no-unpivot-invented",
+      "check": "The API returns observations ALREADY LONG — one row per country per year, carrying \"date\":\"2025\" as its own field. No unpivot, melt, or wide-to-long reshape is needed or performed. FAIL if the agent reshapes the response as though it were the wide 66-year-column CSV form of this dataset (the download-format shape), which would indicate it modelled from prior knowledge of the World Bank CSV rather than from the payload it fetched."
+    },
+    {
+      "id": "aggregate-rule-read-from-payload",
+      "check": "CRITICAL. The World Bank's roll-ups ('Africa Eastern and Southern', 'World', 'OECD members', income-group rows) are separated from real economies using the POSITIVE label the /country endpoint carries: region.value == \"Aggregates\" (78 of 295 entries; 217 are real countries). FAIL if the rule is a hardcoded list of aggregate names or ISO3 codes in transform code — that is a judgement baked into code, and it silently rots when the Bank adds an aggregate. FAIL ALSO if the agent uses the vendored-CSV tell instead — an EMPTY/blank region string — which is the correct discriminator for the bulk CSV download but matches nothing here, because on this endpoint aggregates are positively labelled. That substitution is the specific evidence of modelling from the other artifact."
+    },
+    {
+      "id": "aggregates-excluded-from-measures",
+      "check": "The region-ranking and income-group questions resolve over real countries only, so a consumer querying the GDP measure with NO filters cannot sum roll-ups alongside countries. Summing every returned row for 2023 gives ~8.85e14; the real-country total is ~1.06e14 — an 8.3x overstatement that raises no error and looks plausible. FAIL if the closure's default GDP measure spans both, i.e. if correctness depends on the caller remembering to filter. Retaining aggregates as separately-flagged rows in a distinct model, or as a dimension the default measure excludes, is acceptable; landing only a flag and expecting query-time filtering is not."
+    },
+    {
+      "id": "region-strings-normalized",
+      "check": "Region values carry trailing whitespace in the live payload — exactly 'Latin America & Caribbean ' and 'Sub-Saharan Africa ' (the other five regions do not). The closure strips/normalizes these before they become a dimension or join key. FAIL if an exact-match comparison or grouping against an untrimmed value splits or mis-buckets those two regions — the brief's own example question asks for Sub-Saharan Africa, so a caller filtering region == 'Sub-Saharan Africa' would get zero rows while the data plainly contains them."
+    },
+    {
+      "id": "join-across-both-endpoints",
+      "check": "The two endpoints are joined on the economy identifier (countryiso3code on observations to id on metadata), and that join is what supplies region and income group to the GDP grain. FAIL if the closure promises only the observation endpoint and answers the region/income questions from the country.value name string alone, and FAIL if the join is declared in the semantic layer but no derived model materializes the joined grain the ranking question needs."
+    },
+    {
+      "id": "missing-figures-visible-as-gaps",
+      "check": "Observations whose value is null (2,745 of 17,490 in the fetched snapshot) are handled as an explicit, queryable gap — the brief's question 4 asks which countries are MISSING a 2023 figure, so the answer must be reachable as a query over a landed column or row. FAIL if null-valued rows are silently dropped so a missing country is merely absent from a ranking, and FAIL if nulls are coerced to 0.0, which would make a country with no published figure appear as an economy of size zero in the region ranking."
+    },
+    {
+      "id": "tier1-asserts-against-refetched-source",
+      "check": "Every derived model carries Tier 1 asserts, in memory and before pipeline.run: declared-key uniqueness plus a grain-derived row count reconciled against source rows the transform read independently. Because the source is remote, 'independently read' means the assert's expected count derives from the fetched response (e.g. the envelope's total, or a separately-counted fetch), not from the same in-memory list the transform is about to yield. FAIL if the assert merely restates the transform's own arithmetic — len(rows) == len(rows) — which cannot detect a lost page or a dropped join."
+    },
+    {
+      "id": "tier2-measure-reconciliation",
+      "check": "Where a derived model carries a GDP measure column, a Tier 2 assert reconciles the signed measure total against the total computed from independently read source observations, with every intentional exclusion itemized as a NAMED term — aggregates removed and null-valued observations skipped each appearing as its own named quantity, not folded into one unexplained delta. FAIL if the exclusions are lumped together, and FAIL if the assert was loosened (a tolerance widened, a term dropped) to make a run pass."
+    },
+    {
+      "id": "no-hardcoded-reference-data-or-runtime-judgement",
+      "check": "No judgement is baked into transform/main.py as a dict literal or if-ladder: not the aggregate-vs-country ruling, not a region-name cleanup mapping, not an income-group ordering. FAIL on any per-entity classification typed into code, e.g. a set of aggregate ISO3 codes, a dict remapping region spellings, or a hardcoded ordering of income tiers — any mapping the closure needs beyond what the payload states is landed as its own model. The transform likewise contains no now(), no unseeded random, and no LLM/model call: judgement lands as data before the build, never inferred at run time. Inputs are sorted so the processing logic is deterministic even though the fetched data is not."
+    },
+    {
+      "id": "rulings-landed-in-decisions-model",
+      "check": "Rulings the agent had to make without a user — which entries count as real countries, how nulls are treated for question 4, any region-string normalization, and the as-of nature of the fetch — are recorded as rows in the landed nxd_decisions model with status=\"proposed\" (columns decision_id, status, ruling, applies_to, detail), never in a DECISIONS.md or a prose file at the closure root, which the skill forbids. Grade DISCLOSURE, not which ruling was chosen: several null-handling treatments are defensible, but leaving the choice unrecorded is not. A closure that genuinely made no ruling correctly emits no ledger — but this brief forces at least the aggregate ruling, so an absent ledger here is a FAIL."
+    },
+    {
+      "id": "no-credential-invented",
+      "check": "The API needs no authentication. The infra-profile's api-source service carries base_url and no auth_type or credential fields, and no .gitignore/SENSITIVE sensitivity artifacts are required since no secret is written. FAIL if the agent invents an API key, adds an auth_type it then leaves blank or placeholder-valued, or narrates a fabricated token — and FAIL if it claims the connectivity self-check could not run for want of credentials when the endpoints are public and reachable."
+    },
+    {
+      "id": "context-discloses-as-of-fetch",
+      "check": "CONTEXT.md honestly discloses that the landed data is a snapshot of a live source as of a fetch, that a rebuild will pick up revised figures, and — since the response envelope carries it — the upstream lastupdated value the fetch observed. It must NOT claim the closure is byte-reproducible or that reruns land identical rows. FAIL if CONTEXT.md is missing, if it presents the figures as static, or if it asserts a reproducibility guarantee this source cannot honor. The CC BY 4.0 attribution the brief asks for is also present."
+    }
+  ]
+}

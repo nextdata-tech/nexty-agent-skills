@@ -1,0 +1,72 @@
+{
+  "name": "country-income-trajectory",
+  "skills": [
+    "nxd-generate-dp"
+  ],
+  "checks": [
+    {
+      "id": "preamble-skipped-explicitly",
+      "check": "The GDP reader skips exactly the four preamble lines before the real header (\"Data Source\"..., blank, \"Last Updated Date\"..., blank) and takes `Country Name,Country Code,Indicator Name,Indicator Code,1960..2025` as the header. Accept any deliberate mechanism — an explicit skip count, or scanning for the row whose first cell is \"Country Name\". FAIL if the file is handed straight to a csv reader or a dlt filesystem/read_csv resource with no skip, which yields a garbage two-cell header and either zero usable rows or a single column named \"Data Source\". Also FAIL a `comment=`/`#`-prefix argument or a \"skip blank lines\" flag: the preamble is quoted CSV, not comments, and only two of the four lines are blank. Both files are additionally opened with `encoding=\"utf-8-sig\"` (or the BOM stripped some other way) and parsed with stdlib `csv` — FAIL if the leading U+FEFF survives into the first key, whose symptom is a \"Country Code\" lookup returning None or an \"ABW\" join key that never matches, and FAIL any hand-rolled `line.split(\",\")` parser, since `SpecialNotes` carries embedded commas and multi-line quoted values that mis-frame rows."
+    },
+    {
+      "id": "wide-to-long-unpivot",
+      "check": "The 66 year-columns become rows at a (country, year, value) grain, materialized as a derived model with a composite key. FAIL a closure that lands GDP wide — 66 columns named \"1960\"..\"2025\" — because the semantic layer has no expression surface and cannot pivot at query time, so question 1 becomes unanswerable. FAIL equally a closure that lands only a hand-picked subset of years (only 2023, or only the last five) without that selection being stated as a sample-selection ruling."
+    },
+    {
+      "id": "trailing-empty-column-not-a-year",
+      "check": "Every line of both CSVs ends with a trailing comma, so each header row carries an unnamed final field. That empty-named column is not treated as a year and does not become a row with an empty-string `year`. FAIL if the unpivot iterates all header cells past index 3 without filtering the blank one, producing 265 junk observations keyed on year=\"\", or if a DictReader `None`/empty key silently lands as a column."
+    },
+    {
+      "id": "aggregates-excluded-from-totals",
+      "check": "CRITICAL. countries.csv holds 217 real countries and 47 aggregates (\"Arab World\", \"Africa Eastern and Southern\", \"Caribbean small states\", \"East Asia & Pacific\", ...). The aggregates must be excluded from the income-group rollup's totals. FAIL if aggregate rows are summed alongside countries: the naive grand total over all non-null observations is ~1.89e16 against a correct country-only ~2.36e15, i.e. aggregates are 87.5% of it, and for 2023 alone the contaminated world sum is 8.3x the real one. Nothing errors and the number looks plausible, which is why this is graded on the landed rows and the exclusion term, not on whether the run was green."
+    },
+    {
+      "id": "aggregate-tell-is-empty-region",
+      "check": "The rule that identifies an aggregate is derived from the data — an empty `Region` field — not from a hardcoded list of aggregate names or country codes typed into the transform. Accept an equivalent evidenced rule if the agent proves it separates the same 47 rows. FAIL a literal name/code blocklist in transform code (`{\"ARB\", \"WLD\", \"EUU\", ...}` or an `if name in (...)` ladder): that is a judgement baked into code, and it silently goes stale the moment the snapshot refreshes with a new aggregate."
+    },
+    {
+      "id": "no-empty-string-income-bucket",
+      "check": "The income-group rollup has no spurious empty-string / null / \"Unknown\" bucket silently holding the 47 aggregates. `IncomeGroup` is populated only for real countries (86 High, 59 Upper middle, 47 Lower middle, 25 Low) and blank for every aggregate, so a naive GROUP BY IncomeGroup produces a blank bucket that is the single largest by value. FAIL if such a bucket is landed as though it were an income group. A bucket that exists and is explicitly named for the excluded/unclassifiable rows is acceptable only if those rows are excluded from the group totals and the bucket is disclosed."
+    },
+    {
+      "id": "join-coverage-reconciled",
+      "check": "gdp.csv carries 265 country codes; countries.csv carries 264. `INX` (\"Not classified\") appears in the GDP file and in no metadata row. The closure accounts for this rather than letting the join size decide silently. Accept either an inner join with the dropped code counted and disclosed, or a left join that routes the unmatched code to an explicit bucket. FAIL a silent inner join whose row loss is never counted or mentioned. Do NOT require a particular disposition — INX has zero non-null observations, so no total moves; grade that the discrepancy was detected and stated, not which branch was taken."
+    },
+    {
+      "id": "aggregate-exclusion-ruling-landed",
+      "check": "\"An empty Region means this row is a regional/income aggregate, not a country, and must be excluded from totals\" is an inference the file never documents. It is landed as a row in the closure's `nxd_decisions` model with `status=\"proposed\"` (columns decision_id, status, ruling, applies_to, detail), the `detail` naming the evidence — the 47 blank-Region rows and sample names. FAIL if it exists only as a code comment, only in `CONTEXT.md` prose, or in a `DECISIONS.md` (the skill forbids that file). Grade the DISCLOSURE, not the ruling: excluding aggregates is correct, but the source does not state the rule, so it must travel as reviewable data."
+    },
+    {
+      "id": "reference-data-not-hardcoded",
+      "check": "No income-group classification, aggregate list, region mapping, or country-code-to-group table appears as a dict literal, tuple, set, or if/elif ladder in `transform/main.py`. Every classification is read from a landed source row or a landed reference model and joined. The four income-group label strings may appear only if they are read from the data; a mapping from country code to income group typed into code is a rule violation even if the values happen to be right."
+    },
+    {
+      "id": "current-classification-scope-disclosed",
+      "check": "The snapshot carries only the CURRENT income classification, one row per country, so a GDP observation from 1985 is being labelled with that country's 2026 group. The closure states this limitation — in `CONTEXT.md` and/or an `nxd_decisions` row — rather than presenting the time series as if each year's classification were year-valid. FAIL if the trajectory is narrated as \"how each income group's GDP evolved\" with no caveat. Do NOT require an as-of / SCD-2 join: the historical series (OGHIST) is not vendored and cannot be built from these two files, so demanding one would be wrong. An agent that invents historical classifications to fill the gap FAILS."
+    },
+    {
+      "id": "tier2-measure-reconciliation-with-named-exclusion",
+      "check": "GDP is a measure, so the rollup carries the Tier-2 assert: the signed measure total of the landed derived rows reconciles, in `Decimal` and in memory before `pipeline.run`, against the total read INDEPENDENTLY from gdp.csv, with each intentional divergence itemized as a NAMED term — at minimum an aggregate-rows exclusion term (~1.656e16 over 2,981 observations) and any unmatched-code term. FAIL an assert that sums the transform's own in-memory rows on both sides: that restates the arithmetic and passes even when every aggregate was wrongly included. FAIL a bare `total > 0`, a row-count-only check, or an equality that had to be loosened to a tolerance to make the run pass."
+    },
+    {
+      "id": "tier1-key-and-grain-asserts",
+      "check": "Tier 1 is present on every derived model: the declared key is asserted unique and non-null over the landed rows, and the row count is derived from the grain and checked against independently-read source rows — for the long GDP model, 14,745 non-null (country, year) observations from 265 rows x 66 year-columns; for the rollup, one row per (income_group, year) actually present. FAIL if the expected count is a literal the agent copied from its own run output rather than computed from the source."
+    },
+    {
+      "id": "nulls-not-coerced-to-zero",
+      "check": "Missing GDP cells are empty strings, not zeros, and are dropped from the long model rather than landed as 0.0. Coverage is genuinely sparse — 1960 has 151 of 265 rows populated, 2025 has 233, and four rows (Gibraltar, Not classified, Korea Dem. People's Rep., British Virgin Islands) have no observation in any year. FAIL a `float(v or 0)` coercion: it would land ~2,745 phantom zero rows, leave the measure total unchanged so the reconciliation still passes, and silently drag every average and every group's country count."
+    },
+    {
+      "id": "rollup-not-made-incremental",
+      "check": "The income-group-by-year rollup is recomputed in full each run under `write_disposition=\"replace\"`. It is an aggregate at a regrained key, so a late-arriving or revised country changes an already-emitted group total. FAIL any attempt to append it incrementally, to carry a watermark for it, or to reach for `transform_state`/dlt incremental on this closure — the source is a periodically-regenerated whole-file snapshot with no monotonic cursor, so incrementality is wrong here and reaching for it indicates a pattern applied without the append-safety test."
+    },
+    {
+      "id": "flat-deterministic-in-run-closure",
+      "check": "All models reach the `duckdb` port as `@dlt.resource` generators in ONE `pipeline.run(..., write_disposition=\"replace\")`. Rows are flat scalar dicts — no nested dict/list value (which would spawn a `parent__field` child table), no DataFrame or pyarrow on the landed path (not in the pinned venv), no raw `duckdb.connect` write or table/view DDL. Processing is deterministic: no `now()`, no unseeded random, inputs sorted, and no model/LLM call inside `transform/main.py`. Source values are read with stdlib `csv` — `requirements.txt` is not installed at runtime."
+    },
+    {
+      "id": "closure-shape-and-naming-invariant",
+      "check": "The closure is `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `CONTEXT.md`, and a relative `csv-source-path`; no hand-written `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`. Two CSV sources of the same type are present, so per the multi-source label rule each is labeled (`csv-source-<label>`, `csv_source_<label>`, `csv-source-<label>-path`, its own `data-<label>/` root) rather than colliding on the single-instance name. The naming invariant holds across `models.py` == `.promise` == `PHYSICAL_MODELS` == `main.<name>`, `BASE_MODELS` matches the data directories while derived models have none, the port/param pair is `duckdb`, and there is no `.semantic_tools(...)`. Both supplied CSVs are landed byte-unchanged — no preamble stripped on disk, no BOM re-saved away, no aggregate rows deleted from countries.csv, no re-export to a tidier shape; cleanup happens in derived models downstream of pristine sources."
+    }
+  ]
+}
