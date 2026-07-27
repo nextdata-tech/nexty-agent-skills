@@ -1,0 +1,54 @@
+{
+  "name": "Annotation completeness for queryability",
+  "skills": [
+    "nxd-semantic-data-product"
+  ],
+  "workspace_files": [
+    "models.py",
+    "schema.json",
+    "**/models.py",
+    "**/schema.json"
+  ],
+  "checks": [
+    {
+      "id": "profiled-before-authoring",
+      "check": "The trace shows both CSV exports profiled into a combined schema.json BEFORE any models.py was authored, and every declared column exists in that profile. No invented or renamed columns."
+    },
+    {
+      "id": "questions-answerable",
+      "check": "The two stakeholder questions are answerable from the declared concepts: a sum metric over payments.amount_eur, a count metric over the payment grain, a validated many-to-one join from payments.merchant_id to the merchants grain so volume can be sliced by merchants.category, and a date dimension on payments.paid_at. Metrics are declared on a semantic_view via metric_field(metric(...)), never on a base-model field."
+    },
+    {
+      "id": "unasked-column-still-annotated",
+      "check": "payments.method — a low-cardinality column NO question mentions — is declared as a dimension with a description, not left as a bare type. This is the core of the scenario: the questions decide which ROLE a column takes, not whether it is annotated at all. A column left bare produces no metric, dimension or join and is absent from describe_model, so leaving an obviously sliceable column unannotated is a fail even though no question named it."
+    },
+    {
+      "id": "near-identical-names-disambiguated",
+      "check": "payments.status and payments.state are BOTH declared, and their descriptions distinguish them: status is the payment lifecycle (captured / refunded / failed) and state is the payer's regional code, which the profiled sample values show are unrelated. A consumer reading describe_model must be able to tell which is which from the descriptions alone. Declaring only one of them, or giving them descriptions that could apply to either, is a fail."
+    },
+    {
+      "id": "pii-inferred-from-data",
+      "check": "payments.payer_email is flagged pii=True even though no question asks for it — the flag comes from the profiled values looking like email addresses. No other column is marked pii. The exhaustive half is graded from the quoted models.py, which is the complete text."
+    },
+    {
+      "id": "non-additive-numeric-handled",
+      "check": "payments.balance_after is NOT declared as a sum metric — it is a running account balance and summing it answers nothing. It is also not left bare: it is exposed as a number dimension whose description says what it is and why it is not summed. Both failure modes count: a nonsense sum metric, and an unannotated column that hides it instead of explaining it."
+    },
+    {
+      "id": "descriptions-reach-the-agent",
+      "check": "Every description is written INSIDE the role builder — dimension(description=...) / metric(description=...) — never as a description= on the enclosing field(...) or metric_field(...), which is an attribute description that never reaches describe_model. Text present in the file but written on the wrapper is a fail, not a pass."
+    },
+    {
+      "id": "models-and-concepts-described",
+      "check": "Each semantic_model declares a description via .description(...) (or the description= constructor kwarg) saying what one row is, and every declared dimension and metric carries a non-empty description stating what the concept is and the population it covers. A concept declared with a name and no description arrives at the querying agent as a bare label."
+    },
+    {
+      "id": "bare-columns-justified",
+      "check": "The final answer accounts for every column left without a role, one line each, and the justifications are sound — a measure column an declared metric already aggregates is legitimately bare, an opaque surrogate or load timestamp is legitimately bare, and 'no question asked for it' is NOT a sound justification. If no column was left bare, the answer says so."
+    },
+    {
+      "id": "honest-result",
+      "check": "The agent does not claim a build, a deployment, or a governed semantic query it did not run. This scenario ships no acceptance script and no supervisor; the deliverable is the profile and the annotated models.py."
+    }
+  ]
+}
