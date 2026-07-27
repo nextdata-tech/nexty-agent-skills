@@ -22,11 +22,21 @@ only with the public `nxd.spec` DSL:
 | Dimension | Physical `semantic_model` field | `field(type, dimension(...))` |
 | Join | Physical `semantic_model` field | `field(type, join(...))` |
 | Metric | Query-time `semantic_view` field | `metric_field(type, metric(...))` |
+| Model description | The model itself | `semantic_model(name).description(text)` |
+| Concept description | **Inside** the dimension/metric role | `dimension(description=...)`, `metric(description=...)` |
 
 Every physical model has one or more entity-key fields. Multiple
 `primary_key()` fields define a composite key. A semantic view belongs to one
 base model and is registered with `.model(view)` on the output; it is never
 promised or written by the transform.
+
+**Every field carries semantic information.** A role decides whether the field
+is queryable at all — a column with none produces no metric, dimension or join
+and is absent from `describe_model` (see `overview.md`). A description decides
+whether it is queryable *correctly*: `describe_model` is the entire basis on
+which a consuming agent maps a question to a concept, so a dimension that
+arrives as a bare name gives it nothing to choose on. Declare a role and a
+description on every field, and a `.description(...)` on every model.
 
 ---
 
@@ -52,12 +62,29 @@ the source has a validated composite key.
 ```python
 "COUNTRY": field(
     string(),
-    dimension(name="country", pii=False),
+    dimension(
+        name="country",
+        description="ISO-3166 alpha-2 country of the customer's billing address.",
+        pii=False,
+    ),
 )
 ```
 
-`name` is the stable concept used in a semantic query, and `pii=True` marks
-governed personal data.
+`name` is the stable concept used in a semantic query, `description` is what the
+consuming agent reads when deciding whether this is the concept the question
+meant, and `pii=True` marks governed personal data.
+
+Write the description so it distinguishes this concept from its neighbours and
+states anything a consumer would otherwise have to assume — the unit, the
+basis, the population, or the ruling that produced it. "Country of the
+customer" is not enough when a model also carries a shipping country; name
+which one and where it comes from.
+
+> **Descriptions belong inside the role.** `dimension(description=...)` and
+> `metric(description=...)` reach `describe_model`. A `description=` on the
+> enclosing `field()` / `metric_field()` is an attribute description and is
+> **not** shown to the querying agent — see
+> [nxd-generate-dp's `reference/nxd-spec-api.md`](../../nxd-generate-dp/reference/nxd-spec-api.md).
 
 ### Join
 
@@ -84,11 +111,25 @@ order_metrics = semantic_view("order_metrics", orders).schema(
     {
         "order_count": metric_field(
             int64(),
-            metric(Agg.COUNT, of=orders.field("ORDER_ID"), name="order_count"),
+            metric(
+                Agg.COUNT,
+                of=orders.field("ORDER_ID"),
+                name="order_count",
+                description="Number of order rows, including cancelled orders.",
+            ),
         ),
         "total_revenue": metric_field(
             float64(),
-            metric(Agg.SUM, of=orders.field("AMOUNT_USD"), name="total_revenue"),
+            metric(
+                Agg.SUM,
+                of=orders.field("AMOUNT_USD"),
+                name="total_revenue",
+                description=(
+                    "Gross order amount in USD across ALL statuses, including "
+                    "refunded and cancelled. Filter on the order_status "
+                    "dimension for a net figure."
+                ),
+            ),
         ),
         "unique_customers": metric_field(
             int64(),
@@ -96,11 +137,18 @@ order_metrics = semantic_view("order_metrics", orders).schema(
                 Agg.COUNT_DISTINCT,
                 of=orders.field("CUSTOMER_ID"),
                 name="unique_customers",
+                description="Distinct customers with at least one order.",
             ),
         ),
     }
 )
 ```
+
+Every metric carries a `description`. It is the string the consuming agent
+matches a question against, so it must say what the number *is* — the unit, and
+the population it covers. `total_revenue` above is the pattern for an
+aggregation the role grammar cannot qualify: the metric is unconditional, so
+the description states that and points at the dimension a caller filters on.
 
 The aggregation vocabulary is closed: `Agg.COUNT`, `Agg.COUNT_DISTINCT`,
 `Agg.SUM`, `Agg.AVG`, `Agg.MIN`, and `Agg.MAX`. Put boolean counts on a `SUM`
@@ -126,39 +174,65 @@ from nxd.spec import Agg, dimension, field, join, metric, metric_field
 from nxd.spec import primary_key, semantic_model, semantic_view
 from nxd.spec.data_types import int64, string
 
-people = semantic_model("people").schema(
-    {
-        "PERSON_ID": field(int64(), primary_key()),
-        "COUNTRY_CODE": field(
-            string(),
-            dimension(name="country"),
-        ),
-        "EMAIL": field(
-            string(),
-            dimension(name="email", pii=True),
-        ),
-    }
+people = (
+    semantic_model("people")
+    .description("One row per registered person.")
+    .schema(
+        {
+            "PERSON_ID": field(int64(), primary_key()),
+            "COUNTRY_CODE": field(
+                string(),
+                dimension(
+                    name="country",
+                    description="ISO-3166 alpha-2 country the person registered from.",
+                ),
+            ),
+            "EMAIL": field(
+                string(),
+                dimension(
+                    name="email",
+                    description="Primary contact email address.",
+                    pii=True,
+                ),
+            ),
+        }
+    )
 )
 
-activity_events = semantic_model("activity_events").schema(
-    {
-        "EVENT_ID": field(int64(), primary_key()),
-        "EVENT_TYPE": field(
-            string(),
-            dimension(name="event_type"),
-        ),
-        "PERSON_ID": field(
-            int64(),
-            join(to="people", to_column="PERSON_ID"),
-        ),
-    }
+activity_events = (
+    semantic_model("activity_events")
+    .description("One row per product activity event emitted by a person.")
+    .schema(
+        {
+            "EVENT_ID": field(int64(), primary_key()),
+            "EVENT_TYPE": field(
+                string(),
+                dimension(
+                    name="event_type",
+                    description=(
+                        "Kind of activity recorded — one of login, view, "
+                        "export, share."
+                    ),
+                ),
+            ),
+            "PERSON_ID": field(
+                int64(),
+                join(to="people", to_column="PERSON_ID"),
+            ),
+        }
+    )
 )
 
 event_metrics = semantic_view("event_metrics", activity_events).schema(
     {
         "event_count": metric_field(
             int64(),
-            metric(Agg.COUNT, of=activity_events.field("EVENT_ID"), name="event_count"),
+            metric(
+                Agg.COUNT,
+                of=activity_events.field("EVENT_ID"),
+                name="event_count",
+                description="Number of activity events recorded.",
+            ),
         ),
         "unique_actors": metric_field(
             int64(),
@@ -166,11 +240,15 @@ event_metrics = semantic_view("event_metrics", activity_events).schema(
                 Agg.COUNT_DISTINCT,
                 of=activity_events.field("PERSON_ID"),
                 name="unique_actors",
+                description="Distinct people who emitted at least one event.",
             ),
         ),
     }
 )
 ```
+
+Note the join field carries no description — `join()` has no such parameter, and
+a join is not a concept an agent selects. Every other field does.
 
 `event_count` and `unique_actors` can be sliced by `country`; the PII `email`
 dimension is not propagated to the related metrics.
@@ -179,6 +257,19 @@ dimension is not propagated to the related metrics.
 
 ## Validation and common mistakes
 
+- Every field carries semantic information: either its own role, or it is the
+  `of=` target of a declared metric. A measure column an aggregation already
+  names needs no dimension of its own — grouping by a continuous amount is not
+  a useful slice. Everything else takes a role. A column that is neither roled
+  nor aggregated produces no metric, dimension or join and is invisible to
+  `describe_model` — that is a decision to make it unqueryable, not a neutral
+  default.
+- Every dimension and metric carries a `description`, and every model a
+  `.description(...)`. A concept the agent cannot tell apart from its
+  neighbours is as unusable as one that was never declared.
+- Put the description **inside** the role builder. `field(description=...)` and
+  `metric_field(description=...)` are attribute descriptions and never reach
+  the querying agent.
 - Use a unique, non-null source key for every physical model. Do not synthesize
   a key just to make the model compile.
 - Keep physical names and field names identical to the actual table and source

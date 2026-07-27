@@ -20,38 +20,87 @@ from nxd.spec import Agg, semantic_model, semantic_view
 from nxd.spec.data_types import number, string
 from nxd.spec import dimension, field, join, metric, metric_field, primary_key
 
-customers = semantic_model("customers").schema(
-    {
-        # Type IDs from observed values, not habit: numeric-looking is not
-        # numeric, and these keys are "C0417"-style strings.
-        "customer_id": field(string(), primary_key()),
-        "country_id": field(
-            string(),
-            dimension(name="customer_country"),
-        ),
-        "country": string(),
-    }
+customers = (
+    semantic_model("customers")
+    .description("One row per customer account.")
+    .schema(
+        {
+            # Type IDs from observed values, not habit: numeric-looking is not
+            # numeric, and these keys are "C0417"-style strings.
+            "customer_id": field(string(), primary_key()),
+            "country_id": field(
+                string(),
+                dimension(
+                    name="customer_country",
+                    # The description goes INSIDE dimension(). A description=
+                    # on the enclosing field() never reaches describe_models.
+                    description="ISO-3166 alpha-2 country of the billing address.",
+                ),
+            ),
+            # No question named this column, and it is annotated anyway: the
+            # questions decide the ROLE, not whether to annotate. Bare-typing
+            # it would drop it from describe_models entirely.
+            "country": field(
+                string(),
+                dimension(
+                    name="customer_country_name",
+                    description=(
+                        "Country display name. Duplicates country_id — prefer "
+                        "customer_country for grouping."
+                    ),
+                ),
+            ),
+            "email": field(
+                string(),
+                dimension(
+                    name="customer_email",
+                    description="Primary contact email.",
+                    # Flagged from the DATA — the samples are addresses — not
+                    # because a question asked for it.
+                    pii=True,
+                ),
+            ),
+        }
+    )
 )
 
-orders = semantic_model("orders").schema(
-    {
-        # order_id is number() here because its observed values are numeric —
-        # the two ID shapes sit side by side deliberately.
-        "order_id": field(number(), primary_key()),
-        "customer_id": field(
-            # Matches the customers.customer_id type; join endpoints must agree.
-            string(),
-            join(to="customers", to_column="customer_id"),
-        ),
-        "amount": number(),
-    }
+orders = (
+    semantic_model("orders")
+    .description("One row per placed order.")
+    .schema(
+        {
+            # order_id is number() here because its observed values are numeric —
+            # the two ID shapes sit side by side deliberately.
+            "order_id": field(number(), primary_key()),
+            "customer_id": field(
+                # Matches the customers.customer_id type; join endpoints must agree.
+                string(),
+                # join() has no description parameter — a join is not a concept
+                # an agent selects.
+                join(to="customers", to_column="customer_id"),
+            ),
+            # Bare is correct HERE and only here: a declared metric aggregates
+            # this column, so its meaning travels on total_order_amount. A
+            # numeric NO metric names would take a number dimension instead.
+            "amount": number(),
+        }
+    )
 )
 
 order_metrics = semantic_view("order_metrics", orders).schema(
     {
         "total_order_amount": metric_field(
             number(),
-            metric(Agg.SUM, of=orders.field("amount"), name="total_order_amount"),
+            metric(
+                Agg.SUM,
+                of=orders.field("amount"),
+                name="total_order_amount",
+                description=(
+                    "Gross order amount across ALL statuses. The role grammar "
+                    "has no filtered metrics, so this is unconditional — "
+                    "consumers filter at query time."
+                ),
+            ),
         ),
     }
 )

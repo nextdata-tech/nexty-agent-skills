@@ -217,19 +217,86 @@ same dlt reader loop with no special casing:
    selectable:
 
 ```python
-candidate_judgments = semantic_model("candidate_judgments").schema(
-    {
-        "entity_key": field(string(), primary_key()),
-        "criterion": field(string(), primary_key()),
-        "rubric_version": field(string(), primary_key()),
-        "judged_by": field(string(), primary_key()),
-        "score": field(number(), dimension(name="judgment_score")),
-        "verdict": field(string(), dimension(name="judgment_verdict")),
-        "evidence_field": field(string(), dimension(name="evidence_field")),
-        "evidence_quote": field(string(), dimension(name="evidence_quote")),
-        "flags": field(string(), dimension(name="judgment_flags")),
-        "status": field(string(), dimension(name="judgment_status")),
-    }
+# These rows are AGENT-PRODUCED. Nothing but the descriptions tells a later
+# consumer that — so the model description says it once and the score says it
+# again, because a score is what gets quoted out of context.
+candidate_judgments = (
+    semantic_model("candidate_judgments")
+    .description(
+        "One row per (entity, criterion, rubric_version, judged_by). Scores "
+        "are AGENT-PRODUCED against a landed rubric, not source facts; each "
+        "carries a verbatim evidence citation."
+    )
+    .schema(
+        {
+            "entity_key": field(string(), primary_key()),
+            "criterion": field(string(), primary_key()),
+            "rubric_version": field(string(), primary_key()),
+            "judged_by": field(string(), primary_key()),
+            "score": field(
+                number(),
+                dimension(
+                    name="judgment_score",
+                    description=(
+                        "Agent-assigned score, within [scale_min, scale_max] "
+                        "from the scoring_rubric row for this criterion. Not a "
+                        "source value — read it with rubric_version."
+                    ),
+                ),
+            ),
+            "verdict": field(
+                string(),
+                dimension(
+                    name="judgment_verdict",
+                    description=(
+                        "One of the landed verdict enum; empty when the "
+                        "criterion is not a verdict criterion."
+                    ),
+                ),
+            ),
+            "evidence_field": field(
+                string(),
+                dimension(
+                    name="evidence_field",
+                    description=(
+                        "Which source column the judgement read — a column "
+                        "name on the facts model."
+                    ),
+                ),
+            ),
+            "evidence_quote": field(
+                string(),
+                dimension(
+                    name="evidence_quote",
+                    description=(
+                        "Verbatim substring of the cited field's value for "
+                        "this entity, or the literal 'not stated' when the "
+                        "evidence is absent."
+                    ),
+                ),
+            ),
+            "flags": field(
+                string(),
+                dimension(
+                    name="judgment_flags",
+                    description=(
+                        "Free-text reviewer notes (e.g. jd-mirror, no-repo). "
+                        "Kept on this model only, never on a derived sheet."
+                    ),
+                ),
+            ),
+            "status": field(
+                string(),
+                dimension(
+                    name="judgment_status",
+                    description=(
+                        "'proposed' by default (agent-produced); 'confirmed' "
+                        "once a reviewer has checked it against the citation."
+                    ),
+                ),
+            ),
+        }
+    )
 )
 
 candidate_judgments_metrics = semantic_view(
@@ -242,6 +309,7 @@ candidate_judgments_metrics = semantic_view(
                 Agg.COUNT,
                 of=candidate_judgments.field("entity_key"),
                 name="judgment_count",
+                description="Number of judgement rows, any status.",
             ),
         ),
         "avg_score": metric_field(
@@ -250,6 +318,11 @@ candidate_judgments_metrics = semantic_view(
                 Agg.AVG,
                 of=candidate_judgments.field("score"),
                 name="avg_score",
+                description=(
+                    "Mean agent-assigned score. Averages across criteria "
+                    "unless the selection groups by criterion, and mixes "
+                    "rubric versions unless it filters on one."
+                ),
             ),
         ),
     }
