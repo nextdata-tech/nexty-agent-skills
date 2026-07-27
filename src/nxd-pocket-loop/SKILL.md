@@ -193,12 +193,12 @@ for the user's reply:
 ### Step 2 — Infer the semantic model
 
 Invoke the **nxd-semantic-data-product** skill in its inference mode: profile
-each source into `schema.json`, then derive the semantic model (grains,
-dimensions, metrics, joins, PII) from the profile(s) **and** the user's
-questions. With more than one source, profile each separately and carry its
-label forward on every model it produces — Step 3 needs that mapping to know
-which labeled source each physical model belongs to. That skill owns the public
-semantic role grammar — follow it; don't duplicate its guidance here.
+each source into `schema.json`, then derive the semantic model — grains,
+dimensions, metrics, joins, PII, **and a description on every model, dimension
+and metric** (Step 5 maps questions to concepts by reading them) — from the
+profile(s) **and** the user's questions. With more than one source, profile each
+separately and carry its label forward — Step 3 needs that mapping to know which
+labeled source each physical model belongs to. That skill owns the role grammar.
 
 ### Step 3 — Generate the runnable closure
 
@@ -339,9 +339,9 @@ and the non-convergence report live in
 - **Query-level** (cheapest) — the model is right but the selection was wrong
   or a dimension was missing. Re-describe, re-map, then re-query through MCP.
 - **Model / DP-level** — the inferred model is wrong (missing metric, wrong
-  grain, missing join, wrong PII), or the question needs a column or grain that
-  doesn't exist yet (a filtered figure, a ratio, a monthly rollup, a
-  classification). The latter is a **derived model**, not a query tweak: go
+  grain, missing join, wrong PII, or an undistinguishing description), or the
+  question needs a column or grain that doesn't exist (a ratio, a monthly
+  rollup, a classification). That is a **derived model**, not a query tweak: go
   back to Step 2/3 and have nxd-generate-dp materialize the ruling, then
   rebuild through MCP with the **same** `workflow`. **After every rebuild,
   refresh:** use the endpoint/token returned by that build, then describe the

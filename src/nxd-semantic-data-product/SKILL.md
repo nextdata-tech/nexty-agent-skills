@@ -48,7 +48,9 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 > - **Local end-to-end flow:** the AI generates AND runs the DP locally on a
 >   desktop supervisor — a **different shape** (local DuckDB port, dlt-in-transform,
 >   local Python executor) owned by **nxd-generate-dp**. Use this skill only for the
->   shared part: profile and infer public semantic roles, then hand off. The
+>   shared part: profile and infer public semantic roles **with their descriptions
+>   and PII flags**, then hand off. The generator PLACES what it receives — a
+>   description you don't infer here is one no later step adds. The
 >   generator translates them to the public DSL; do not write private metadata.
 >   **Do NOT
 >   follow the Snowflake/credential/deploy/consume steps below in the local flow.**
@@ -130,6 +132,13 @@ primary-key columns across the complete export, not a shard or lucky sample.
 Without evidence, request the source key; never invent one or generate a
 closure. Emit canonical `primary_key()` / `{"kind": "primary_key"}`, never
 the deprecated `grain` alias.
+
+**What crosses the boundary.** Per model: its `description`, and per column its
+`data_type`, its roles, and for each dimension/metric role a `name`, a
+`description`, and `pii` where it applies. Roles alone are an incomplete
+handoff — the generator places what it is given and infers nothing, so a
+concept that arrives without a description reaches `describe_models` as a bare
+name and stays that way.
 
 **Join validation.** Never use name similarity or a few overlapping samples.
 Every non-null FK must resolve on the ONE side, and its target column must be

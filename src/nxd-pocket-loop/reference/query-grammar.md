@@ -69,7 +69,10 @@ transform. Landing an `is_transfer` dimension and expecting callers to filter on
 it is the same silent failure wearing a column.
 
 Keep the excluded slice reachable via a classification dimension or a companion
-model — **never** by making correctness depend on a remembered filter.
+model — **never** by making correctness depend on a remembered filter. That
+dimension carries a `description=` naming the ruling that created it: a consumer
+who can see the column but not learn what it means has visibility without
+legibility, which is the same governance hole one level down.
 
 So for "transfers are never expenses", the correct shape is both of:
 
