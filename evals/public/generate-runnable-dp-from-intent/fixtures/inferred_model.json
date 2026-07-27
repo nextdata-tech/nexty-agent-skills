@@ -1,5 +1,5 @@
 {
-  "$comment": "Inferred semantic intent \u2014 the handoff artifact produced by nxd-semantic-data-product (inference mode) over the profiled CSV export and stakeholder questions. Per model: description, source column types, and required public semantic roles. Translate these roles with semantic_model, field, primary_key, dimension, join, semantic_view, and metric_field; do not write __nxd_semantic__ metadata directly. Every column carries a role and a description \u2014 the only bare-typed attributes are columns whose roles are all metrics \u2014 a base model cannot carry a metric, so they land in the schema bare and their meaning travels on the metric (here orders.amount_usd and customers.is_churned).",
+  "$comment": "Inferred semantic intent — the handoff artifact produced by nxd-semantic-data-product (inference mode) over the profiled CSV export and stakeholder questions. Per model: description, source column types, and required public semantic roles. Translate these roles with semantic_model, field, primary_key, dimension, join, semantic_view, and metric_field; do not write __nxd_semantic__ metadata directly. Every column carries a role and a description — the only bare-typed attributes are columns whose roles are all metrics — a base model cannot carry a metric, so they land in the schema bare and their meaning travels on the metric (here orders.amount_usd and customers.is_churned).",
   "produced_by": "nxd-semantic-data-product (inference mode)",
   "models": {
     "customers": {
@@ -89,7 +89,7 @@
               "kind": "dimension",
               "name": "loyalty_points",
               "type": "number",
-              "description": "Current loyalty-points balance. A point-in-time balance, not an additive measure \u2014 it is exposed as a dimension rather than summed."
+              "description": "Current loyalty-points balance. A point-in-time balance, not an additive measure — it is exposed as a dimension rather than summed."
             }
           ]
         }
@@ -151,7 +151,7 @@
             {
               "kind": "dimension",
               "name": "order_status",
-              "description": "Order lifecycle status. Revenue metrics are gross across ALL statuses (including refunded and cancelled) \u2014 filter on this dimension at query time.",
+              "description": "Order lifecycle status. Revenue metrics are gross across ALL statuses (including refunded and cancelled) — filter on this dimension at query time.",
               "type": "string"
             }
           ]

@@ -197,6 +197,9 @@ def joined_string(node: ast.expr) -> str | None:
         # an authored description; fall back to the source so this accepts the
         # same set self_check.py's desc_str() does.
         return "".join(parts) or ast.unparse(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        # "one row per " + entity — same reason as above; desc_str() takes it.
+        return ast.unparse(node)
     return None
 
 
@@ -217,7 +220,11 @@ def field_roles(field_spec: ast.expr) -> list[ast.Call]:
     """Return only roles passed directly to the public field() constructor."""
     if not isinstance(field_spec, ast.Call) or call_name(field_spec.func) != "field":
         return []
-    return [role for role in field_spec.args[1:] if isinstance(role, ast.Call)]
+    roles = [role for role in field_spec.args[1:] if isinstance(role, ast.Call)]
+    for keyword in field_spec.keywords:      # documented roles=[...] form
+        if keyword.arg == "roles" and isinstance(keyword.value, (ast.List, ast.Tuple)):
+            roles += [e for e in keyword.value.elts if isinstance(e, ast.Call)]
+    return roles
 
 
 def string_keyword(call: ast.Call, name: str) -> str | None:

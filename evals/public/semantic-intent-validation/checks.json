@@ -11,7 +11,7 @@
     },
     {
       "id": "echo-produced",
-      "check": "For each question the agent restates the resolved selection in plain language using the metric/dimension meanings from describe_model (not just the bare names) before executing \u2014 e.g. distinguishing \"count of every logged call\" (call_count) from \"count of converted calls\" (sales_calls)."
+      "check": "For each question the agent restates the resolved selection in plain language using the metric/dimension meanings from describe_model (not just the bare names) before executing — e.g. distinguishing \"count of every logged call\" (call_count) from \"count of converted calls\" (sales_calls)."
     },
     {
       "id": "q1-clarifies-does-not-execute",
@@ -19,7 +19,7 @@
     },
     {
       "id": "q1-grounded-in-catalog",
-      "check": "Q1's clarification names actual concepts returned by describe_model(\"rep_activity\") \u2014 call_count and sales_calls \u2014 not invented metrics, and notes that no month/date/time dimension exists on any model to bind \"last month\"."
+      "check": "Q1's clarification names actual concepts returned by describe_model(\"rep_activity\") — call_count and sales_calls — not invented metrics, and notes that no month/date/time dimension exists on any model to bind \"last month\"."
     },
     {
       "id": "q2-executes-no-overclarify",

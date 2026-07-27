@@ -307,7 +307,8 @@ def parse_models(src, path):
         # the documented signature and is what the shipped example corpus
         # uses, so rejecting it would fail correctly-authored models.
         if kind == "semantic_model" and not (
-                any(call_name(c) == "description" for c in chain)
+                any(call_name(c) == "description" and c.args
+                    and desc_str(c.args[0]) for c in chain)
                 or any(k.arg == "description" and desc_str(k.value)
                        for k in root.keywords)):
             bad(f"{path}: semantic_model('{model}') declares no description "

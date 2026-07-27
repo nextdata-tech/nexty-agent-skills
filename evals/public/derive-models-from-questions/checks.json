@@ -28,7 +28,7 @@
     },
     {
       "id": "refunds-netted",
-      "check": "CRITICAL. A refunded charge is not spend, so the landed spend measure must not count it as spend. Either shape is correct: retain refund rows carrying their negative amount so they net under signed summation (row count stays 324), or remove each refund and its matched charge. Judge the MEASURE, not the row count \u2014 a closure that keeps all 324 rows with signed amounts is correct. What fails is a closure whose spend total counts a refund as positive, e.g. one that stores or sums absolute values; its totals then match neither the netted nor the charges-only figure."
+      "check": "CRITICAL. A refunded charge is not spend, so the landed spend measure must not count it as spend. Either shape is correct: retain refund rows carrying their negative amount so they net under signed summation (row count stays 324), or remove each refund and its matched charge. Judge the MEASURE, not the row count — a closure that keeps all 324 rows with signed amounts is correct. What fails is a closure whose spend total counts a refund as positive, e.g. one that stores or sums absolute values; its totals then match neither the netted nor the charges-only figure."
     },
     {
       "id": "transfers-excluded",
@@ -40,7 +40,7 @@
     },
     {
       "id": "fx-handling-disclosed",
-      "check": "The export carries USD, GBP and EUR, and no exchange rate exists anywhere in the data. Currency handling must be a DISCLOSED decision, either: (a) rates proposed, landed as their own queryable model (never hardcoded in transform code), applied, and recorded as an unconfirmed ruling in the closure's landed decisions ledger; or (b) no conversion \u2014 amounts stay in source currency with currency as a dimension, and the ledger records the missing rates as a blocker that travels with every cross-currency answer. Silently inventing a rate, in code or in data, fails. Refusing to convert without disclosing why also fails. The ledger is the landed `nxd_decisions` model the skill mandates, queryable like any other model \u2014 a prose file at the closure root does not satisfy this, and the skill forbids one."
+      "check": "The export carries USD, GBP and EUR, and no exchange rate exists anywhere in the data. Currency handling must be a DISCLOSED decision, either: (a) rates proposed, landed as their own queryable model (never hardcoded in transform code), applied, and recorded as an unconfirmed ruling in the closure's landed decisions ledger; or (b) no conversion — amounts stay in source currency with currency as a dimension, and the ledger records the missing rates as a blocker that travels with every cross-currency answer. Silently inventing a rate, in code or in data, fails. Refusing to convert without disclosing why also fails. The ledger is the landed `nxd_decisions` model the skill mandates, queryable like any other model — a prose file at the closure root does not satisfy this, and the skill forbids one."
     },
     {
       "id": "category-ruling-landed",
@@ -64,7 +64,7 @@
     },
     {
       "id": "decisions-recorded",
-      "check": "Unconfirmed rulings are recorded as rows in the closure's landed `nxd_decisions` model (columns decision_id, status, ruling, applies_to, detail), not in a prose file \u2014 the skill explicitly forbids a DECISIONS.md. The merchant-to-category mapping is a classification over observed values, so it is landed and carries status=proposed. Currency is recorded either as proposed rates (if the closure chose to convert) or as status=blocked naming the absent rates and the questions limited until they arrive (if it declined). Either is acceptable; leaving the choice unrecorded is not. A closure with no rulings at all correctly emits no ledger."
+      "check": "Unconfirmed rulings are recorded as rows in the closure's landed `nxd_decisions` model (columns decision_id, status, ruling, applies_to, detail), not in a prose file — the skill explicitly forbids a DECISIONS.md. The merchant-to-category mapping is a classification over observed values, so it is landed and carries status=proposed. Currency is recorded either as proposed rates (if the closure chose to convert) or as status=blocked naming the absent rates and the questions limited until they arrive (if it declined). Either is acceptable; leaving the choice unrecorded is not. A closure with no rulings at all correctly emits no ledger."
     },
     {
       "id": "no-client-side-arithmetic",
@@ -72,7 +72,7 @@
     },
     {
       "id": "ruling-dimensions-described",
-      "check": "Every dimension a RULING created (a classification, reclassification, or exclusion \u2014 e.g. category, the transfer/refund treatment) carries a non-empty description= INSIDE dimension(...) naming that ruling and its review bucket, not on the field() wrapper. describe_models is the whole surface a later consumer sees: a ruling-derived column with no description looks like it came from the source."
+      "check": "Every dimension a RULING created (a classification, reclassification, or exclusion — e.g. category, the transfer/refund treatment) carries a non-empty description= INSIDE dimension(...) naming that ruling and its review bucket, not on the field() wrapper. describe_models is the whole surface a later consumer sees: a ruling-derived column with no description looks like it came from the source."
     },
     {
       "id": "decisions-ledger-legible",
@@ -80,7 +80,7 @@
     },
     {
       "id": "every-field-annotated",
-      "check": "No promised model leaves a column bare-typed unless a declared metric aggregates it. A numeric no question aggregates is exposed as a number dimension with a description saying why it is not summed, rather than left unannotated \u2014 a column with no role produces no metric, dimension or join and is absent from describe_models."
+      "check": "No promised model leaves a column bare-typed unless a declared metric aggregates it. A numeric no question aggregates is exposed as a number dimension with a description saying why it is not summed, rather than left unannotated — a column with no role produces no metric, dimension or join and is absent from describe_models."
     }
   ]
 }
