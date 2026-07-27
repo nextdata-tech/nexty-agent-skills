@@ -52,6 +52,32 @@ can reconstruct the same payload from the bundled model definition when no
 kernel-delivered payload is present; keep `pyyaml` in `requirements.txt` for that
 path.
 
+### What reaches the semantic surface — and what doesn't
+
+**Anything not on one of those four arrows is absent from the semantic surface.**
+A field with no role — a bare `dtype` in `.schema({...})` — never enters the
+compiled model's fields, so it produces no metric, no dimension, and no join. It
+is listed by none of them in `list_models` or `describe_model`. The structural
+`data_model` block is the only place such a column appears; it is not a place an
+agent can query from.
+
+Naming one in a selection is a hard failure, not a silent omission:
+`run_semantic_query` returns a structured `CompileError` — *"unknown dimension
+'loyalty_points'. Known dimensions: ..."* — and the consumer sees an error, not a
+quietly narrower answer.
+
+Roles decide **whether** a field can be queried. Descriptions decide whether it
+can be queried **correctly**: `describe_model` is the whole basis on which a
+consuming agent maps a natural-language question to a concept, and a dimension
+that arrives as a bare name carries no basis for that choice. Declare both on
+every field — see `registry-authoring.md`.
+
+> **Put the description inside the role, not on the field wrapper.**
+> `dimension(description=...)` and `metric(description=...)` are written into the
+> role blob and reach `describe_model`. The `description=` on the enclosing
+> `field()` / `metric_field()` is an attribute description — it lands in
+> `data_model` only, and the querying agent never sees it.
+
 ### Why the base tables still matter
 
 `.semantic_tools()` does not create a warehouse view. `run_semantic_query`

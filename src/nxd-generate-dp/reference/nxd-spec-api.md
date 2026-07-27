@@ -86,6 +86,41 @@ A field may also be written as a bare `dtype` (no role) or a
 below; `field()`/`metric_field()` are for when you need to attach `label`,
 `description`, or an explicit `name` inline.
 
+### `description=` — two parameters, only one reaches the agent
+
+`description=` appears on both the **role builders** and the **field wrappers**,
+and they land in different places. This is the single easiest thing to get
+wrong here:
+
+| Written as | Lands in | Seen by the querying agent? |
+|---|---|---|
+| `dimension(description=...)`, `metric(description=...)` | the role blob → `Role::Metric.description` / dimension description | **Yes** — this is what `describe_model` shows |
+| `field(description=...)`, `metric_field(description=...)` | `AttributeSpec._description` → manifest attribute description | **No** — the roles alone are serialized into the blob; it surfaces only in the structural `data_model` block |
+
+So the human sentence a consumer reads when choosing a measure or a dimension
+**must** go inside the role:
+
+```python
+# RIGHT — the description reaches describe_model
+"total_revenue": metric_field(
+    float64(),
+    metric(Agg.SUM, of=orders.field("AMOUNT_USD"),
+           name="total_revenue",
+           description="Gross order amount in USD across ALL statuses."),
+)
+
+# WRONG — this string only ever appears in data_model
+"total_revenue": metric_field(
+    float64(),
+    metric(Agg.SUM, of=orders.field("AMOUNT_USD"), name="total_revenue"),
+    description="Gross order amount in USD across ALL statuses.",
+)
+```
+
+Model-level `.description(text)` **does** reach the agent — it is emitted in both
+`list_models` and `describe_model` — but only when authored via
+`semantic_model(...).description(...)`.
+
 ## `Agg` — the closed aggregation vocabulary
 
 `from nxd.spec import Agg` — despite appearing as `TYPE_CHECKING`-only in the
