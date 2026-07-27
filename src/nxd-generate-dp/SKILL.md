@@ -225,9 +225,8 @@ types from `nxd.spec.data_types`). Place the table roles, then one semantic view
 per set of metrics over that table:
 
 - `semantic_model("<name>")` — the bare lowercase physical table name.
-- `.schema({...})` mapping each column to a typed value, `field(<type>(),
-  <role>())`. A column with no role produces no metric, dimension or join and is
-  absent from `describe_models` — bare-typing one makes it unqueryable.
+- `.schema({...})` maps each column to `field(<type>(), <role>())`. A column with no role
+  produces no metric, dimension or join and is absent from `describe_models` — unqueryable.
 - **Base models carry ONLY `primary_key()`, `dimension(...)`, or `join(...)`** —
   the DSL RAISES on a metric attached to a base-model field.
 - A metric belongs on `semantic_view("<base>_metrics", <base>)` with
@@ -237,13 +236,14 @@ per set of metrics over that table:
 Role builders: `field(number(), primary_key())` — never the deprecated `grain`;
 `field(string(), dimension(name=..., description=..., pii=<flag>))`; `field(number(), join(to="<model>", to_column="<col>"))` — `to=`, NOT `to_model=`.
 
-**Every field carries a role and a description; every model a
-`.description(...)`.** `describe_models` is all a later consumer sees, so a bare
-column is invisible and a bare name is unusable. Put the description INSIDE the
-role — on `field()`/`metric_field()` it never reaches the agent. A dimension a
-**ruling** created must state that ruling. Metrics stay question-driven: a
-numeric no question aggregates is a `number` dimension, not a bare column. No
-marker model: produce-verification is `.transform-complete`.
+**Every field carries a role and a description — except a column a declared
+metric already aggregates — and every model a `.description(...)`.**
+`describe_models` is all a later consumer sees, so a bare column is invisible
+and a bare name unusable. Put the description INSIDE the role — on
+`field()`/`metric_field()` it never reaches the agent. A dimension a **ruling**
+created must state that ruling. Metrics stay question-driven: a numeric no
+question aggregates is a `number` dimension. No marker model:
+produce-verification is `.transform-complete`.
 
 **Derived models are authored identically** — same DSL, role vocabulary, and
 `.schema({...})` shape. The only differences: its schema keys are the keys of the

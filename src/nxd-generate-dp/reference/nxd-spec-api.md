@@ -83,8 +83,9 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
 
 A field may also be written as a bare `dtype` (no role) or a
 `(dtype, *rest)` tuple inside `.schema({...})` — see `SemanticModelSpec`
-below; `field()`/`metric_field()` are for when you need to attach `label`,
-`description`, or an explicit `name` inline.
+below; `field()`/`metric_field()` are for when you need to attach `label` or an
+explicit `name` inline. `description=` is accepted there too, but it is an
+attribute description and never reaches the agent — see the next section.
 
 ### `description=` — two parameters, only one reaches the agent
 

@@ -44,7 +44,7 @@
     },
     {
       "id": "bare-columns-justified",
-      "check": "The final answer accounts for every column left without a role, one line each, and the justifications are sound — a measure column an declared metric already aggregates is legitimately bare, an opaque surrogate or load timestamp is legitimately bare, and 'no question asked for it' is NOT a sound justification. If no column was left bare, the answer says so."
+      "check": "The final answer accounts for every column left without a role, one line each, and the justifications are sound — a measure column a declared metric already aggregates is legitimately bare, an opaque surrogate or load timestamp is legitimately bare, and 'no question asked for it' is NOT a sound justification. If no column was left bare, the answer says so."
     },
     {
       "id": "honest-result",

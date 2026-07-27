@@ -188,7 +188,9 @@ column *could* be; the questions say what it *must* be:
   entity — cross-check against exact full-table cardinality 1.0).
 
 **Every column gets a role and a description** — the questions decide which
-role, not whether to annotate. A column with no role produces no metric,
+role, not whether to annotate. The one exception is a column a declared metric
+already aggregates: its meaning travels on the metric, and grouping by a
+continuous measure is not a useful slice. A column with no role produces no metric,
 dimension or join and is invisible to `describe_model`; leaving one bare is a
 decision to make it unqueryable. A spare dimension costs a line in the catalog;
 a missing one costs an unanswerable question and a rebuild. Flag from the DATA,

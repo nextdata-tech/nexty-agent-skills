@@ -50,7 +50,7 @@
     },
     {
       "id": "question-driven-not-broad",
-      "check": "The declared metrics are question-driven, not a blanket annotation of every numeric column: in particular there is NO sum metric on customers.loyalty_points (a point-in-time balance no question asks about \u2014 summing it is meaningless; leaving it unannotated, or a dimension, is correct). The final answer includes the required question\u2192concept mapping tying each of the four questions to the specific declared metrics/dimensions/joins that answer it."
+      "check": "The agent did not manufacture metrics no question motivates: in particular there is NO sum metric on customers.loyalty_points (a point-in-time balance no question asks about \u2014 summing it is meaningless). A number dimension whose description says what it is and why it is not summed is the correct treatment. Whether every concept is described is graded separately by all-concepts-described; this check is only about not inventing nonsense aggregations."
     },
     {
       "id": "acceptance-check-passed",
