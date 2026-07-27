@@ -6,8 +6,6 @@ The workspace contains a vendored World Bank snapshot under `data/`:
   Indicators, one row per country.
 - `data/countries/countries.csv` — the country metadata file that ships
   alongside it.
-- `data/PROVENANCE.md` — where the snapshot came from and what it is licensed
-  under.
 
 Both files are exactly as they came out of the upstream export. Do not edit,
 re-save, or re-shape them.

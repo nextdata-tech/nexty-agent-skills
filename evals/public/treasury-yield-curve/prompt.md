@@ -6,8 +6,6 @@ The workspace contains a vendored US Treasury snapshot under `data/`:
   Par Yield Curve Rates, one file per calendar year, five years in total.
 - `data/maturities/maturities.csv` — a small reference table describing the
   maturities that appear in those files.
-- `data/PROVENANCE.md` — where the snapshot came from and what it is licensed
-  under.
 
 Every file is exactly as it came out of the upstream export. Do not edit,
 re-save, re-shape, or re-order them.

@@ -1,5 +1,12 @@
 # World Bank GDP + country classification — vendored snapshot
 
+> **Maintainer record — deliberately outside `fixtures/`.**
+> This file names every trap in the data and how to handle it. The harness
+> copies `fixtures/` into the agent's workspace, so anything in there is
+> readable by the agent under test. Keeping this at scenario level is what
+> stops the checks that grade those traps from becoming free. Do not move it
+> back under `fixtures/`.
+
 ## Source
 
 World Bank, World Development Indicators — GDP (current US$), indicator
