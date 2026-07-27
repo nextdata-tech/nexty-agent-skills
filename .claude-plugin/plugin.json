@@ -2,13 +2,19 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "nexty-agent-skills",
   "displayName": "Nexty AI Pro",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Nextdata OS skills: set up the nxd CLI, analyze your data mesh, and build/query Python data products from your editor.",
   "author": {
     "name": "Nextdata"
   },
   "homepage": "https://github.com/nextdata-tech/nexty-agent-skills",
   "repository": "https://github.com/nextdata-tech/nexty-agent-skills",
-  "keywords": ["nextdata", "nxd", "data-product", "data-mesh", "etl"],
+  "keywords": [
+    "nextdata",
+    "nxd",
+    "data-product",
+    "data-mesh",
+    "etl"
+  ],
   "skills": "./src/"
 }
