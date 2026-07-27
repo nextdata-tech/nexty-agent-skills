@@ -69,6 +69,18 @@
     {
       "id": "no-client-side-arithmetic",
       "check": "The closure does not defer any of the four rulings (netting, transfer exclusion, monthly regrain, classification) to the caller. Each is materialized as a column or row the transform writes."
+    },
+    {
+      "id": "ruling-dimensions-described",
+      "check": "Every dimension a RULING created (a classification, reclassification, or exclusion \u2014 e.g. category, the transfer/refund treatment) carries a non-empty description= INSIDE dimension(...) naming that ruling and its review bucket, not on the field() wrapper. describe_models is the whole surface a later consumer sees: a ruling-derived column with no description looks like it came from the source."
+    },
+    {
+      "id": "decisions-ledger-legible",
+      "check": "If an nxd_decisions model is promised, its own columns are legible in the catalog: the model declares a .description(...) and status / ruling / applies_to / detail each carry a description= stating what the column holds (status naming the confirmed/proposed/blocked vocabulary). A ledger whose columns are unexplained in describe_models cannot be used to discover which numbers rest on unconfirmed rulings."
+    },
+    {
+      "id": "every-field-annotated",
+      "check": "No promised model leaves a column bare-typed unless a declared metric aggregates it. A numeric no question aggregates is exposed as a number dimension with a description saying why it is not summed, rather than left unannotated \u2014 a column with no role produces no metric, dimension or join and is absent from describe_models."
     }
   ]
 }

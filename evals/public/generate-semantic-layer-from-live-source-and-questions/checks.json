@@ -18,11 +18,11 @@
     },
     {
       "id": "models-match-profiled-columns",
-      "check": "models.py declares the two profiled semantic_model(...) objects under their BARE physical table names — semantic_model(\"customers\") and semantic_model(\"orders\") (not \"main.customers\", not renamed e.g. customer_profile/order_event). A third marker model (e.g. semantic_smoke_marker, carrying no semantic roles) is EXPECTED per the canonical pattern and must not be counted against the agent. Every annotated attribute is a column that exists in the profiled tables (customers: customer_id, email, full_name, country, segment, is_churned, signup_date, loyalty_points; orders: order_id, customer_id, order_date, channel, status, amount_usd) with the identifier matching BYTE-EXACTLY, case-sensitive — CUSTOMER_ID instead of the profiled customer_id fails. No invented or renamed columns."
+      "check": "models.py declares the two profiled semantic_model(...) objects under their BARE physical table names \u2014 semantic_model(\"customers\") and semantic_model(\"orders\") (not \"main.customers\", not renamed e.g. customer_profile/order_event). A third marker model (e.g. semantic_smoke_marker, carrying no semantic roles) is EXPECTED per the canonical pattern and must not be counted against the agent. Every annotated attribute is a column that exists in the profiled tables (customers: customer_id, email, full_name, country, segment, is_churned, signup_date, loyalty_points; orders: order_id, customer_id, order_date, channel, status, amount_usd) with the identifier matching BYTE-EXACTLY, case-sensitive \u2014 CUSTOMER_ID instead of the profiled customer_id fails. No invented or renamed columns."
     },
     {
       "id": "grains-inferred-correctly",
-      "check": "The customers model carries a {\"kind\": \"grain\"} __nxd_semantic__ blob on customer_id and the orders model carries one on order_id (directly or inside a {\"roles\": [...]} wrapper) — the unique-key columns the profile shows at exact full-table cardinality 1.0. Grain on any other column (e.g. customer_id in orders, or segment) fails."
+      "check": "The customers model carries a {\"kind\": \"grain\"} __nxd_semantic__ blob on customer_id and the orders model carries one on order_id (directly or inside a {\"roles\": [...]} wrapper) \u2014 the unique-key columns the profile shows at exact full-table cardinality 1.0. Grain on any other column (e.g. customer_id in orders, or segment) fails."
     },
     {
       "id": "revenue-question-sum-metric",
@@ -30,7 +30,7 @@
     },
     {
       "id": "revenue-ambiguity-surfaced",
-      "check": "The profile shows orders.status contains refunded and cancelled rows, and the role grammar has no filtered metrics — so \"total revenue\" is genuinely ambiguous. The agent surfaced this rather than silently summing: the revenue metric's description states the chosen interpretation (e.g. gross across ALL statuses, including refunded/cancelled), orders.status is declared as a dimension so consumers can filter at query time, and the final answer explicitly calls the ambiguity + resolution out. An agent that just declared SUM(amount_usd) with no acknowledgment of the status ambiguity fails."
+      "check": "The profile shows orders.status contains refunded and cancelled rows, and the role grammar has no filtered metrics \u2014 so \"total revenue\" is genuinely ambiguous. The agent surfaced this rather than silently summing: the revenue metric's description states the chosen interpretation (e.g. gross across ALL statuses, including refunded/cancelled), orders.status is declared as a dimension so consumers can filter at query time, and the final answer explicitly calls the ambiguity + resolution out. An agent that just declared SUM(amount_usd) with no acknowledgment of the status ambiguity fails."
     },
     {
       "id": "avg-order-value-metric",
@@ -38,7 +38,7 @@
     },
     {
       "id": "churn-question-boolean-metric",
-      "check": "Question 2 (churned customers per segment) is answerable: a metric blob on customers.is_churned sets BOTH \"boolean\": true AND \"agg\": \"sum\" — the dialect defines the boolean CASE-sum only for sum, so boolean:true with count/avg/any other agg fails, as does a plain numeric SUM without boolean:true. Plus a dimension blob on customers.segment."
+      "check": "Question 2 (churned customers per segment) is answerable: a metric blob on customers.is_churned sets BOTH \"boolean\": true AND \"agg\": \"sum\" \u2014 the dialect defines the boolean CASE-sum only for sum, so boolean:true with count/avg/any other agg fails, as does a plain numeric SUM without boolean:true. Plus a dimension blob on customers.segment."
     },
     {
       "id": "cross-table-question-join-declared",
@@ -46,19 +46,19 @@
     },
     {
       "id": "pii-inferred-from-profile",
-      "check": "The email and full_name dimension blobs set \"pii\": true — inferred from the profiled sample values (emails, person names), since no input document states it; the NULLs present in some email/full_name rows do not excuse skipping the flag — and no other column is marked pii."
+      "check": "The email and full_name dimension blobs set \"pii\": true \u2014 inferred from the profiled sample values (emails, person names), since no input document states it; the NULLs present in some email/full_name rows do not excuse skipping the flag \u2014 and no other column is marked pii."
     },
     {
       "id": "question-driven-not-broad",
-      "check": "The declared metrics are question-driven, not a blanket annotation of every numeric column: in particular there is NO sum metric on customers.loyalty_points (a point-in-time balance no question asks about — summing it is meaningless; leaving it unannotated, or a dimension, is correct). The final answer includes the required question→concept mapping tying each of the four questions to the specific declared metrics/dimensions/joins that answer it."
+      "check": "The declared metrics are question-driven, not a blanket annotation of every numeric column: in particular there is NO sum metric on customers.loyalty_points (a point-in-time balance no question asks about \u2014 summing it is meaningless; leaving it unannotated, or a dimension, is correct). The final answer includes the required question\u2192concept mapping tying each of the four questions to the specific declared metrics/dimensions/joins that answer it."
     },
     {
       "id": "acceptance-check-passed",
-      "check": "The trace shows the agent ran the shipped fixtures acceptance test (check_semantic_model.py) against its FINAL models.py + source.duckdb and it printed \"ALL CHECKS PASSED\" — i.e. the four stakeholder queries were actually executed from the declared concepts and matched. A run that never executes the acceptance test, finishes while it still fails, or edits/replaces check_semantic_model.py to make it pass, fails this check."
+      "check": "The trace shows the agent ran the shipped fixtures acceptance test (check_semantic_model.py) against its FINAL models.py + source.duckdb and it printed \"ALL CHECKS PASSED\" \u2014 i.e. the four stakeholder queries were actually executed from the declared concepts and matched. A run that never executes the acceptance test, finishes while it still fails, or edits/replaces check_semantic_model.py to make it pass, fails this check."
     },
     {
       "id": "final-answer-digest-matches-validated-models",
-      "check": "The acceptance test prints a `MODELS_SHA256: <hex>` line — the sha256 of the exact models.py it validated. Two things must both hold. (1) SOURCE-TO-DIGEST TIE (mechanical): the final answer wraps exactly one authoritative models.py between `===BEGIN FINAL models.py===` / `===END FINAL models.py===` markers, and that marked source matches the reported MODELS_SHA256. The runner re-hashes the marked source and emits a HARNESS-VERIFIED FACTS block reporting SATISFIED, MISMATCH, or UNSATISFIED (zero markers, or fail-closed on more than one marker pair) — grade this part FROM THAT FACT, which is authoritative over the agent's claims; SATISFIED is required. (2) PASSING-RUN PROVENANCE (judge-graded from the trace, NOT proven by the mechanical tie): the reported digest line must be the one printed by the FINAL run that printed ALL CHECKS PASSED — not a digest echoed from an earlier FAILING run. Fail if the mechanical fact is MISMATCH/UNSATISFIED, or if the trace shows the reported digest came from a failing rather than the passing run."
+      "check": "The acceptance test prints a `MODELS_SHA256: <hex>` line \u2014 the sha256 of the exact models.py it validated. Two things must both hold. (1) SOURCE-TO-DIGEST TIE (mechanical): the final answer wraps exactly one authoritative models.py between `===BEGIN FINAL models.py===` / `===END FINAL models.py===` markers, and that marked source matches the reported MODELS_SHA256. The runner re-hashes the marked source and emits a HARNESS-VERIFIED FACTS block reporting SATISFIED, MISMATCH, or UNSATISFIED (zero markers, or fail-closed on more than one marker pair) \u2014 grade this part FROM THAT FACT, which is authoritative over the agent's claims; SATISFIED is required. (2) PASSING-RUN PROVENANCE (judge-graded from the trace, NOT proven by the mechanical tie): the reported digest line must be the one printed by the FINAL run that printed ALL CHECKS PASSED \u2014 not a digest echoed from an earlier FAILING run. Fail if the mechanical fact is MISMATCH/UNSATISFIED, or if the trace shows the reported digest came from a failing rather than the passing run."
     },
     {
       "id": "final-answer-contains-artifacts",
@@ -82,7 +82,11 @@
     },
     {
       "id": "dependencies-present",
-      "check": "The project's dependency file lists the runtime this local-source data product actually uses: nxd.data_product[spec], duckdb (the local output-port backend the transform and semantic tools run against), pandas, and pyyaml (>=6.0.2, for the .semantic_tools() manifest fallback). It must NOT require snowflake-connector-python — the source and the acceptance test are DuckDB, so a Snowflake connector is the wrong backend for this scenario."
+      "check": "The project's dependency file lists the runtime this local-source data product actually uses: nxd.data_product[spec], duckdb (the local output-port backend the transform and semantic tools run against), pandas, and pyyaml (>=6.0.2, for the .semantic_tools() manifest fallback). It must NOT require snowflake-connector-python \u2014 the source and the acceptance test are DuckDB, so a Snowflake connector is the wrong backend for this scenario."
+    },
+    {
+      "id": "all-concepts-described",
+      "check": "Every declared dimension and metric carries a non-empty description, not only the ambiguous revenue metric: the description states what the concept is and the population it covers, and is written inside the role builder so it reaches describe_model. Each model also declares a description. A concept a consumer cannot tell apart from its neighbours is as unusable as one never declared."
     }
   ]
 }
