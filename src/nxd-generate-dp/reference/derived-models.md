@@ -109,34 +109,69 @@ from nxd.spec.data_types import number, string
 from nxd.spec import dimension, field, join, metric, metric_field, primary_key
 
 # BASE — landed 1:1 from data/invoices/*.csv. Key is an existing source column.
-invoices = semantic_model("invoices").schema(
-    {
-        # number() because every observed invoice_id is numeric. Check the
-        # source first: a "T1257"-style ID is string(), not number().
-        "invoice_id": field(number(), primary_key()),
-        "customer": field(string(), dimension(name="customer")),
-        "start_month": field(string(), dimension(name="start_month")),
-        "term_months": number(),
-        "amount": number(),
-    }
+invoices = (
+    semantic_model("invoices")
+    .description("One row per issued invoice, landed unchanged from the export.")
+    .schema(
+        {
+            # number() because every observed invoice_id is numeric. Check the
+            # source first: a "T1257"-style ID is string(), not number().
+            "invoice_id": field(number(), primary_key()),
+            "customer": field(
+                string(),
+                dimension(name="customer", description="Billed customer name as it appears on the invoice."),
+            ),
+            "start_month": field(
+                string(),
+                dimension(name="start_month", description="First month of the invoice's service term, as YYYY-MM."),
+            ),
+            # No metric aggregates these, so they take dimensions rather than
+            # staying bare — a roleless column never reaches describe_models.
+            "term_months": field(
+                number(),
+                dimension(name="term_months", description="Length of the service term in months. A duration, not an additive measure."),
+            ),
+            "amount": field(
+                number(),
+                dimension(name="invoice_amount", description="Invoice face value. Recognised revenue is amortised over the term — see amortization_schedule."),
+            ),
+        }
+    )
 )
 
 # DERIVED — row-EXPANDING, one row per (invoice, month) of its term. No
 # data/amortization_schedule/ directory backs it. Its key is the synthetic
 # composite the invoice x month grain implies, which is exactly why it is a
 # derived model and not a view.
-amortization_schedule = semantic_model("amortization_schedule").schema(
-    {
-        "schedule_id": field(string(), primary_key()),
-        "invoice_id": field(
-            number(),
-            join(to="invoices", to_column="invoice_id"),
-        ),
-        "customer": field(string(), dimension(name="schedule_customer")),
-        "period_month": field(string(), dimension(name="period_month")),
-        "period_index": number(),
-        "recognized_amount": number(),
-    }
+amortization_schedule = (
+    semantic_model("amortization_schedule")
+    .description(
+        "One row per invoice x month of its service term. Derived: the source "
+        "carries no such rows, they are computed by the transform."
+    )
+    .schema(
+        {
+            "schedule_id": field(string(), primary_key()),
+            "invoice_id": field(
+                number(),
+                join(to="invoices", to_column="invoice_id"),
+            ),
+            "customer": field(
+                string(),
+                dimension(name="schedule_customer", description="Billed customer, carried from the source invoice."),
+            ),
+            "period_month": field(
+                string(),
+                dimension(name="period_month", description="The month this row recognises revenue for, as YYYY-MM."),
+            ),
+            "period_index": field(
+                number(),
+                dimension(name="period_index", description="1-based ordinal of this month within the invoice's term."),
+            ),
+            # Bare is correct here: recognized_revenue aggregates this column.
+            "recognized_amount": number(),
+        }
+    )
 )
 
 amortization_metrics = semantic_view(
@@ -149,6 +184,11 @@ amortization_metrics = semantic_view(
                 Agg.SUM,
                 of=amortization_schedule.field("recognized_amount"),
                 name="recognized_revenue",
+                description=(
+                    "Revenue recognised in the selected period(s), straight-line "
+                    "amortised from invoice face value over the service term. "
+                    "Not invoiced amount — group by period_month for a schedule."
+                ),
             ),
         ),
     }
@@ -234,22 +274,64 @@ about to trust a number built on it.
 ```python
 # DERIVED — classification. `category` exists ONLY because of the confirmed
 # merchant_categories ruling; the source carries no such column.
-classified_spend = semantic_model("classified_spend").schema(
+classified_spend = (
+    semantic_model("classified_spend")
+    .description(
+        "One row per transaction, with a category assigned by the confirmed "
+        "merchant_categories ruling. Derived: the source carries no category."
+    )
+    .schema(
+        {
+            "transaction_id": field(number(), primary_key()),
+            "merchant": field(
+                string(),
+                dimension(name="merchant", description="Merchant name as it appears on the source transaction, unnormalised."),
+            ),
+            "category": field(
+                string(),
+                dimension(
+                    name="category",
+                    description=(
+                        "COGS/opex classification from the confirmed "
+                        "merchant_categories mapping. Merchants the mapping does "
+                        "not cover land in 'needs_review', not in a real category."
+                    ),
+                ),
+            ),
+            # Bare: classified_spend_metrics below aggregates it.
+            "amount": number(),
+        }
+    )
+)
+
+# The view that discharges the bare `amount` above — without it the column has
+# no role and no metric, so it would be absent from describe_models entirely.
+classified_spend_metrics = semantic_view(
+    "classified_spend_metrics", classified_spend
+).schema(
     {
-        "transaction_id": field(number(), primary_key()),
-        "merchant": field(string(), dimension(name="merchant")),
-        "category": field(
-            string(),
-            dimension(
-                name="category",
+        "total_spend": metric_field(
+            number(),
+            metric(
+                Agg.SUM,
+                of=classified_spend.field("amount"),
+                name="total_spend",
                 description=(
-                    "COGS/opex classification from the confirmed "
-                    "merchant_categories mapping. Merchants the mapping does "
-                    "not cover land in 'needs_review', not in a real category."
+                    "Total classified spend. Group by category to see the "
+                    "split, and check the needs_review share before quoting "
+                    "the headline number."
                 ),
             ),
         ),
-        "amount": number(),
+        "transaction_count": metric_field(
+            number(),
+            metric(
+                Agg.COUNT,
+                of=classified_spend.field("transaction_id"),
+                name="transaction_count",
+                description="Number of classified transactions.",
+            ),
+        ),
     }
 )
 ```

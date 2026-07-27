@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.22.0
+  version: 0.23.0
 ---
 
 # nxd-semantic-data-product skill
@@ -48,7 +48,9 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 > - **Local end-to-end flow:** the AI generates AND runs the DP locally on a
 >   desktop supervisor — a **different shape** (local DuckDB port, dlt-in-transform,
 >   local Python executor) owned by **nxd-generate-dp**. Use this skill only for the
->   shared part: profile and infer public semantic roles, then hand off. The
+>   shared part: profile and infer public semantic roles **with their descriptions
+>   and PII flags**, then hand off. The generator PLACES what it receives — a
+>   description you don't infer here is one no later step adds. The
 >   generator translates them to the public DSL; do not write private metadata.
 >   **Do NOT
 >   follow the Snowflake/credential/deploy/consume steps below in the local flow.**
@@ -68,7 +70,9 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 Interview the user or read the table DDL to establish, per source table:
 
 1. **Model** — the physical table: a unique name + one or more **primary-key**
-   columns (the entity key, e.g. `order_id`) + an optional description.
+   columns (the entity key, e.g. `order_id`) + a **description** (one line:
+   what one row is). It reaches the agent in both `list_models` and
+   `describe_model`.
 2. **Dimensions** — columns an agent can group or filter by. Each: a concept
    `name`, the physical `column`, a logical `type` (`string` / `date` / `number`),
    a `description`, and `pii: true` if governed.
@@ -129,6 +133,13 @@ Without evidence, request the source key; never invent one or generate a
 closure. Emit canonical `primary_key()` / `{"kind": "primary_key"}`, never
 the deprecated `grain` alias.
 
+**What crosses the boundary.** Per model: its `description`, and per column its
+`data_type`, its roles, and for each dimension/metric role a `name`, a
+`description`, and `pii` where it applies. Roles alone are an incomplete
+handoff — the generator places what it is given and infers nothing, so a
+concept that arrives without a description reaches `describe_models` as a bare
+name and stays that way.
+
 **Join validation.** Never use name similarity or a few overlapping samples.
 Every non-null FK must resolve on the ONE side, and its target column must be
 that model's full-table unique primary key; otherwise `many_to_one` is a lie.
@@ -141,8 +152,9 @@ it is **additive across rows** (amounts, quantities, per-row durations). Balance
 scores, points, percentages, rates, and point-in-time snapshots (e.g.
 `loyalty_points`, `account_balance`, `discount_pct`) are NOT sum metrics — summing
 them answers nothing. Aggregate such a column only when a question justifies it
-(`avg`/`min`/`max` can be legitimate); otherwise leave it unannotated or expose it
-as a `number` dimension.
+(`avg`/`min`/`max` can be legitimate); otherwise expose it as a `number`
+dimension whose description says what it is and why it is not summed. Never
+leave it unannotated — that hides the column instead of explaining it.
 
 **DuckDB declared type → `AttributeSpec` data type** (for the `models.py`
 attributes):
@@ -175,9 +187,24 @@ column *could* be; the questions say what it *must* be:
 - "per order / per customer ..." confirms the **grain** of each model (one row per
   entity — cross-check against exact full-table cardinality 1.0).
 
-Declare what the questions need plus the obviously useful dimensions; don't
-exhaustively annotate every column, and don't declare metrics no question motivates
-(that is how non-additive numerics end up as nonsense `sum`s).
+**Every column gets a role, and every dimension and metric role a
+description** — the questions decide which role, not whether to annotate.
+`primary_key()` and `join()` take no `description`; do not infer one for them,
+and never fall back to the enclosing `field()`, which the agent never sees. The
+one exception to the role rule is a column a declared metric already
+aggregates: its meaning travels on the metric. The marker model is exempt
+from the ROLE rule only — it still takes a `.description(...)`. A column with no role produces no metric,
+dimension or join and is invisible to `describe_model`; leaving one bare is a
+decision to make it unqueryable. A spare dimension costs a line in the catalog;
+a missing one costs an unanswerable question and a rebuild. Flag from the DATA,
+the same way `pii` is flagged — even when no question asks for it.
+
+**Metrics are the exception, and stay question-driven.** Do not declare metrics
+no question motivates — that is how non-additive numerics end up as nonsense
+`sum`s. A numeric that earns no metric is still annotated: expose it as a
+`number` dimension with a description saying what it is and why it is not
+summed (`loyalty_points`, `account_balance`, `discount_pct`). Unannotated is
+not the fallback; a dimension is.
 
 **3b. Surface ambiguity — don't silently resolve it.** The role grammar has
 **no filtered metrics, no derived ratios, and no default filters**: a metric is
@@ -229,8 +256,15 @@ orders = (
     .schema(
         {
             "ORDER_ID": field(int64(), primary_key()),
-            "REGION": field(string(), dimension(name="region")),
+            "REGION": field(
+                string(),
+                # The description goes INSIDE dimension() — on the enclosing
+                # field() it would never reach describe_model.
+                dimension(name="region", description="Sales region the order was booked in."),
+            ),
             "PRODUCT_ID": field(int64(), join(to="products", to_column="PRODUCT_ID")),
+            # Bare is correct here: the total_revenue metric below aggregates
+            # this column, so its meaning travels on the metric.
             "REVENUE_USD": field(float64()),
         }
     )
@@ -240,7 +274,12 @@ order_metrics = semantic_view("order_metrics", orders).schema(
     {
         "total_revenue": metric_field(
             float64(),
-            metric(Agg.SUM, of=orders.field("REVENUE_USD"), name="total_revenue"),
+            metric(
+                Agg.SUM,
+                of=orders.field("REVENUE_USD"),
+                name="total_revenue",
+                description="Gross order revenue in USD across all order statuses.",
+            ),
         ),
     }
 )
@@ -252,11 +291,17 @@ order_metrics = semantic_view("order_metrics", orders).schema(
 | Role | Public DSL |
 |------|------|
 | primary key | `field(<type>(), primary_key())` |
-| dimension | `field(<type>(), dimension(name=..., pii=<bool>))` |
-| metric | define on a `semantic_view(...)` with `metric_field(metric(...))`; do not add it to a physical base field |
-| join | `field(<type>(), join(to=..., to_column=...))` |
+| dimension | `field(<type>(), dimension(name=..., description=..., pii=<bool>))` |
+| metric | define on a `semantic_view(...)` with `metric_field(metric(..., description=...))`; do not add it to a physical base field |
+| join | `field(<type>(), join(to=..., to_column=...))` — no description parameter |
+| model | `semantic_model(...).description("One row per ...")` |
 
 Emit `primary_key()`; `grain` is deprecated.
+
+**The `description` goes INSIDE the role** — `dimension(description=...)`,
+`metric(description=...)`. A `description=` on the enclosing `field()` /
+`metric_field()` is an attribute description and never reaches
+`describe_model`, so the querying agent never sees it.
 
 See `reference/registry-authoring.md` for the full role vocabulary,
 auto-derivation rules, and a worked example.

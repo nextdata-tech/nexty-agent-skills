@@ -50,7 +50,7 @@
     },
     {
       "id": "question-driven-not-broad",
-      "check": "The declared metrics are question-driven, not a blanket annotation of every numeric column: in particular there is NO sum metric on customers.loyalty_points (a point-in-time balance no question asks about — summing it is meaningless; leaving it unannotated, or a dimension, is correct). The final answer includes the required question→concept mapping tying each of the four questions to the specific declared metrics/dimensions/joins that answer it."
+      "check": "The agent did not manufacture metrics no question motivates: in particular there is NO sum metric on customers.loyalty_points (a point-in-time balance no question asks about — summing it is meaningless). A number dimension whose description says what it is and why it is not summed is the correct treatment. Whether every concept is described is graded separately by all-concepts-described; this check is only about not inventing nonsense aggregations. The final answer also includes the required question→concept mapping, tying each of the four questions to the specific declared metrics/dimensions/joins that answer it."
     },
     {
       "id": "acceptance-check-passed",
@@ -83,6 +83,10 @@
     {
       "id": "dependencies-present",
       "check": "The project's dependency file lists the runtime this local-source data product actually uses: nxd.data_product[spec], duckdb (the local output-port backend the transform and semantic tools run against), pandas, and pyyaml (>=6.0.2, for the .semantic_tools() manifest fallback). It must NOT require snowflake-connector-python — the source and the acceptance test are DuckDB, so a Snowflake connector is the wrong backend for this scenario."
+    },
+    {
+      "id": "all-concepts-described",
+      "check": "Every declared dimension and metric carries a non-empty \"description\" in its __nxd_semantic__ blob — not only the ambiguous revenue metric — stating what the concept is and the population it covers, and each semantic_model declares a description. This scenario is graded in blob vocabulary, matching the other role checks in this file; the public-DSL placement rule (description inside dimension(...)/metric(...) rather than on the field wrapper) is graded in the two scenarios that use that DSL. A concept a consumer cannot tell apart from its neighbours is as unusable as one never declared."
     }
   ]
 }

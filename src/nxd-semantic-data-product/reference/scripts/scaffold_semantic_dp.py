@@ -66,7 +66,10 @@ your_model = (
             "<KEY_A>": field(int64(), primary_key()),
             "<DIM_COL>": field(
                 string(),
-                dimension(name="<dim_name>"),
+                dimension(
+                    name="<dim_name>",
+                    description="<what this dimension means to a consumer>",
+                ),
             ),
             "<METRIC_COL>": float64(),
         }
@@ -83,13 +86,15 @@ your_model_metrics = semantic_view("<model_a>_metrics", your_model).schema(
                 Agg.SUM,
                 of=your_model.field("<METRIC_COL>"),
                 name="<metric_name>",
+                description="<what this number is: unit, and the population it covers>",
             ),
         ),
         # COUNT example:
         # "<entity_count>": metric_field(
         #     int64(),
         #     metric(Agg.COUNT, of=your_model.field("<KEY_A>"),
-        #            name="<entity_count>"),
+        #            name="<entity_count>",
+        #            description="<what this counts>"),
         # ),
     }
 )

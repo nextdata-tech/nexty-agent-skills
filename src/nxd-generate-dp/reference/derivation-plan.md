@@ -251,14 +251,60 @@ model needs a real reason to exist.
    selectable (`run_semantic_query` needs a measure in the selection):
 
 ```python
-nxd_decisions = semantic_model("nxd_decisions").schema(
-    {
-        "decision_id": field(string(), primary_key()),
-        "status": field(string(), dimension(name="decision_status")),
-        "ruling": field(string(), dimension(name="decision_ruling")),
-        "applies_to": field(string(), dimension(name="decision_applies_to")),
-        "detail": field(string(), dimension(name="decision_detail")),
-    }
+# The column meanings in the Shape table above belong IN the descriptions, not
+# only in this doc. A ledger whose own columns are unexplained in the catalog
+# repeats the failure it exists to prevent.
+nxd_decisions = (
+    semantic_model("nxd_decisions")
+    .description(
+        "One row per ruling the closure encodes — confirmed, proposed, or "
+        "blocked. The governed record of every judgement behind the numbers."
+    )
+    .schema(
+        {
+            "decision_id": field(string(), primary_key()),
+            "status": field(
+                string(),
+                dimension(
+                    name="decision_status",
+                    description=(
+                        "Review state — exactly one of confirmed, proposed, "
+                        "blocked. An answer built on a model a 'proposed' "
+                        "decision applies_to must be reported as provisional."
+                    ),
+                ),
+            ),
+            "ruling": field(
+                string(),
+                dimension(
+                    name="decision_ruling",
+                    description="The ruling itself, in one sentence.",
+                ),
+            ),
+            "applies_to": field(
+                string(),
+                dimension(
+                    name="decision_applies_to",
+                    description=(
+                        "The models and columns this ruling materializes in "
+                        "(e.g. classified_spend.category). Empty for 'blocked', "
+                        "which materializes nothing."
+                    ),
+                ),
+            ),
+            "detail": field(
+                string(),
+                dimension(
+                    name="decision_detail",
+                    description=(
+                        "The evidence or basis a reviewer should check. For "
+                        "'blocked': the missing datum, and which questions stay "
+                        "limited until it arrives."
+                    ),
+                ),
+            ),
+        }
+    )
 )
 
 nxd_decisions_metrics = semantic_view(
@@ -271,6 +317,7 @@ nxd_decisions_metrics = semantic_view(
                 Agg.COUNT,
                 of=nxd_decisions.field("decision_id"),
                 name="decision_count",
+                description="Number of recorded rulings, any status.",
             ),
         ),
     }

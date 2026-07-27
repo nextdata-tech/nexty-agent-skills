@@ -175,6 +175,23 @@ def literal_str(node):
     return node.value if isinstance(node, ast.Constant) and isinstance(
         node.value, str) else None
 
+def desc_str(node):
+    """Any authored description form: literal, f-string, or concatenation.
+
+    Adjacent parenthesised literals are folded to one Constant by the parser,
+    but an f-string is a JoinedStr and a runtime `a + b` is a BinOp. Both are
+    legitimately-authored descriptions, so accept them here — the acceptance
+    eval's has_description() accepts them too, and the two gates must agree or
+    correctly-annotated code fails one of them.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value or None
+    if isinstance(node, ast.JoinedStr):
+        return ast.unparse(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return ast.unparse(node)
+    return None
+
 def check_kwargs(call, name, where):
     allowed = KWARGS[name]
     for kw in call.keywords:
@@ -194,6 +211,39 @@ def check_kwargs(call, name, where):
         if any(k.arg == "of" for k in call.keywords) and \
            any(k.arg == "column" for k in call.keywords):
             bad(f"{where}: metric() takes of= or column=, never both")
+    # Annotation reach, both graded as failures. A description on the WRAPPER
+    # is an attribute description: it lands in data_model and never reaches
+    # describe_models, so the author believes they documented the concept and
+    # did not. A MISSING description is the same defect by omission — and it
+    # is the one the benchmark actually measured, so warning here while the
+    # eval checks fail it would leave the only mechanical gate green on
+    # precisely the defect this guidance exists to prevent.
+    if name in ("field", "metric_field") and any(
+            k.arg == "description" and desc_str(k.value) for k in call.keywords):
+        # A wrapper description is a legal attribute description (it reaches
+        # the structural data_model block). The defect is using it INSTEAD of
+        # the role's, so only fail when the roles carry none — otherwise this
+        # would block a legal API call that is not the mistake.
+        roles = [a for a in call.args[1:] if isinstance(a, ast.Call)]
+        for kw in call.keywords:          # documented roles=[...] form
+            if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                roles += [e for e in kw.value.elts if isinstance(e, ast.Call)]
+        describable = [r for r in roles if call_name(r) in ("dimension", "metric")]
+        if not any(any(k.arg == "description" and desc_str(k.value)
+                       for k in r.keywords) for r in describable):
+            # Point at a fix that exists. With no dimension/metric role there
+            # is nowhere to move the text to — primary_key()/join() take no
+            # description — so the only remedy is to delete it.
+            remedy = ("move it inside dimension(...) / metric(...)"
+                      if describable else
+                      "primary_key()/join() take no description — drop it")
+            bad(f"{where}: description= on {name}() never reaches "
+                f"describe_models and the role carries none — {remedy}")
+    if name in ("dimension", "metric") and not any(
+            k.arg == "description" and desc_str(k.value)
+            for k in call.keywords):
+        bad(f"{where}: {name}() has no description= — it reaches "
+            f"describe_models as a bare name the agent cannot choose on")
 
 def check_dtype(node, where):
     """A call in dtype position must be a known data-type constructor."""
@@ -249,13 +299,31 @@ def parse_models(src, path):
         kind = call_name(root)
         if kind not in ("semantic_model", "semantic_view"):
             continue
-        model = literal_str(root.args[0]) if root.args else None
+        # The name may be positional or the documented name= keyword — the
+        # vendored example corpus writes semantic_model(name=..., description=...)
+        # throughout, and best_practices.md prefers it. Missing this shape does
+        # not just skip the name check, it skips the model's fields entirely.
+        name_node = (root.args[0] if root.args else
+                     next((k.value for k in root.keywords if k.arg == "name"), None))
+        model = literal_str(name_node) if name_node is not None else None
         if model is None or not SNAKE.match(model):
+            shown = ast.unparse(name_node) if name_node is not None else "<none>"
             bad(f"{path}: {kind}() name must be a lowercase snake_case string "
-                f"literal, got {ast.unparse(root.args[0]) if root.args else '<none>'}")
+                f"literal, got {shown}")
             continue
         var_name[target.id], var_kind[target.id] = model, kind
         joins.setdefault(model, []); has_pk[model] = False
+        # Either authoring form counts: the chained .description(...) is the
+        # verified one, but the description= constructor kwarg is pinned in
+        # the documented signature and is what the shipped example corpus
+        # uses, so rejecting it would fail correctly-authored models.
+        if kind == "semantic_model" and not (
+                any(call_name(c) == "description" and c.args
+                    and desc_str(c.args[0]) for c in chain)
+                or any(k.arg == "description" and desc_str(k.value)
+                       for k in root.keywords)):
+            bad(f"{path}: semantic_model('{model}') declares no description "
+                f"— both list_models and describe_model show it to the agent")
         in_view = kind == "semantic_view"
         for call in chain:
             if call_name(call) not in ("schema", "fields") or not call.args:

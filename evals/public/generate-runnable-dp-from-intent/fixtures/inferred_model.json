@@ -1,5 +1,5 @@
 {
-  "$comment": "Inferred semantic intent — the handoff artifact produced by nxd-semantic-data-product (inference mode) over the profiled CSV export and stakeholder questions. Per model: description, source column types, and required public semantic roles. Translate these roles with semantic_model, field, primary_key, dimension, join, semantic_view, and metric_field; do not write __nxd_semantic__ metadata directly. Empty roles mean a promised bare-typed attribute.",
+  "$comment": "Inferred semantic intent — the handoff artifact produced by nxd-semantic-data-product (inference mode) over the profiled CSV export and stakeholder questions. Per model: description, source column types, and required public semantic roles. Translate these roles with semantic_model, field, primary_key, dimension, join, semantic_view, and metric_field; do not write __nxd_semantic__ metadata directly. Every column carries a role and a description — the only bare-typed attributes are columns whose roles are all metrics — a base model cannot carry a metric, so they land in the schema bare and their meaning travels on the metric (here orders.amount_usd and customers.is_churned).",
   "produced_by": "nxd-semantic-data-product (inference mode)",
   "models": {
     "customers": {
@@ -7,35 +7,91 @@
       "columns": {
         "customer_id": {
           "data_type": "string",
-          "roles": [{"kind": "primary_key"}]
+          "roles": [
+            {
+              "kind": "primary_key"
+            }
+          ]
         },
         "email": {
           "data_type": "string",
-          "roles": [{"kind": "dimension", "name": "email", "description": "Customer email address.", "type": "string", "pii": true}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "email",
+              "description": "Customer email address.",
+              "type": "string",
+              "pii": true
+            }
+          ]
         },
         "full_name": {
           "data_type": "string",
-          "roles": [{"kind": "dimension", "name": "customer_name", "description": "Customer full name.", "type": "string", "pii": true}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "customer_name",
+              "description": "Customer full name.",
+              "type": "string",
+              "pii": true
+            }
+          ]
         },
         "country": {
           "data_type": "string",
-          "roles": [{"kind": "dimension", "name": "country", "description": "Customer country code.", "type": "string"}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "country",
+              "description": "Customer country code.",
+              "type": "string"
+            }
+          ]
         },
         "segment": {
           "data_type": "string",
-          "roles": [{"kind": "dimension", "name": "segment", "description": "Commercial segment (Enterprise / SMB / Consumer).", "type": "string"}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "segment",
+              "description": "Commercial segment (Enterprise / SMB / Consumer).",
+              "type": "string"
+            }
+          ]
         },
         "is_churned": {
           "data_type": "bool",
-          "roles": [{"kind": "metric", "name": "churned_customers", "agg": "sum", "description": "Customers flagged as churned (boolean CASE-sum of the churn flag).", "boolean": true}]
+          "roles": [
+            {
+              "kind": "metric",
+              "name": "churned_customers",
+              "agg": "sum",
+              "description": "Customers flagged as churned (boolean CASE-sum of the churn flag).",
+              "boolean": true
+            }
+          ]
         },
         "signup_date": {
           "data_type": "date",
-          "roles": [{"kind": "dimension", "name": "signup_date", "description": "Date the customer signed up.", "type": "date"}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "signup_date",
+              "description": "Date the customer signed up.",
+              "type": "date"
+            }
+          ]
         },
         "loyalty_points": {
           "data_type": "int",
-          "roles": []
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "loyalty_points",
+              "type": "number",
+              "description": "Current loyalty-points balance. A point-in-time balance, not an additive measure — it is exposed as a dimension rather than summed."
+            }
+          ]
         }
       }
     },
@@ -45,31 +101,76 @@
         "order_id": {
           "data_type": "string",
           "roles": [
-            {"kind": "primary_key"},
-            {"kind": "metric", "name": "order_count", "agg": "count_distinct", "description": "Distinct orders placed."}
+            {
+              "kind": "primary_key"
+            },
+            {
+              "kind": "metric",
+              "name": "order_count",
+              "agg": "count_distinct",
+              "description": "Distinct orders placed."
+            }
           ]
         },
         "customer_id": {
           "data_type": "string",
-          "roles": [{"kind": "join", "to_model": "customers", "to_column": "customer_id", "cardinality": "many_to_one"}]
+          "roles": [
+            {
+              "kind": "join",
+              "to_model": "customers",
+              "to_column": "customer_id",
+              "cardinality": "many_to_one"
+            }
+          ]
         },
         "order_date": {
           "data_type": "date",
-          "roles": [{"kind": "dimension", "name": "order_date", "description": "Date the order was placed.", "type": "date"}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "order_date",
+              "description": "Date the order was placed.",
+              "type": "date"
+            }
+          ]
         },
         "channel": {
           "data_type": "string",
-          "roles": [{"kind": "dimension", "name": "channel", "description": "Sales channel (web / mobile / partner).", "type": "string"}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "channel",
+              "description": "Sales channel (web / mobile / partner).",
+              "type": "string"
+            }
+          ]
         },
         "status": {
           "data_type": "string",
-          "roles": [{"kind": "dimension", "name": "order_status", "description": "Order lifecycle status. Revenue metrics are gross across ALL statuses (including refunded and cancelled) — filter on this dimension at query time.", "type": "string"}]
+          "roles": [
+            {
+              "kind": "dimension",
+              "name": "order_status",
+              "description": "Order lifecycle status. Revenue metrics are gross across ALL statuses (including refunded and cancelled) — filter on this dimension at query time.",
+              "type": "string"
+            }
+          ]
         },
         "amount_usd": {
           "data_type": "double",
           "roles": [
-            {"kind": "metric", "name": "revenue", "agg": "sum", "description": "Gross order amount in USD across ALL statuses, including refunded and cancelled."},
-            {"kind": "metric", "name": "avg_order_value", "agg": "avg", "description": "Average order amount in USD."}
+            {
+              "kind": "metric",
+              "name": "revenue",
+              "agg": "sum",
+              "description": "Gross order amount in USD across ALL statuses, including refunded and cancelled."
+            },
+            {
+              "kind": "metric",
+              "name": "avg_order_value",
+              "agg": "avg",
+              "description": "Average order amount in USD."
+            }
           ]
         }
       }

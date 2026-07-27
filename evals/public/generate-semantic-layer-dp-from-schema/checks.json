@@ -55,6 +55,10 @@
     {
       "id": "dependencies-present",
       "check": "The project's dependency file lists nxd.data_product[spec], nxd.drivers[rpc], snowflake-connector-python[pandas], pandas, and pyyaml (>=6.0.2) for the split-pod manifest fallback."
+    },
+    {
+      "id": "all-concepts-described",
+      "check": "Every declared dimension and metric carries a non-empty \"description\" stating what the concept is and the population it covers, and each semantic_model declares a description. Graded in this scenario's own blob vocabulary, matching its other role checks — the public-DSL placement rule (description inside dimension(...)/metric(...) rather than on the field wrapper) is graded in the scenarios that use that DSL. describe_model is the only surface the querying agent reads, so a concept declared with a name and no description arrives as a bare label it cannot choose on."
     }
   ]
 }

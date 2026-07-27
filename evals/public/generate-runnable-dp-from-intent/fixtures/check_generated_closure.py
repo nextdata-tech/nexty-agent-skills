@@ -104,25 +104,125 @@ def promised_models(tree: ast.AST) -> set[str]:
     return promised
 
 
+def builder_name(call: ast.Call, position: int = 0) -> str | None:
+    """A builder's string argument, positional or via its documented keyword.
+
+    The vendored nextdata-public-examples corpus writes
+    semantic_model(name=..., description=...) throughout and best_practices.md
+    prefers it, so locating the name positionally alone makes those models
+    invisible to every downstream check.
+    """
+    keyword_for = {0: "name", 1: "base"}
+    if len(call.args) > position:
+        node = call.args[position]
+    else:
+        node = next((k.value for k in call.keywords
+                     if k.arg == keyword_for.get(position)), None)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def chain_calls(node: ast.expr) -> list[ast.Call]:
+    """Every Call in a fluent chain, outermost first.
+
+    semantic_model("x").description("...").schema({...}) is as valid as the
+    bare semantic_model("x").schema({...}), so the builder call and the schema
+    call must be located anywhere in the chain rather than assumed adjacent.
+    """
+    out: list[ast.Call] = []
+    while isinstance(node, ast.Call):
+        out.append(node)
+        node = node.func.value if isinstance(node.func, ast.Attribute) else None
+    return out
+
+
+def chain_schema(chain: list[ast.Call]) -> ast.Dict | None:
+    for call in chain:
+        if call_name(call.func) in ("schema", "fields") and len(call.args) == 1:
+            if isinstance(call.args[0], ast.Dict):
+                return call.args[0]
+    return None
+
+
 def base_model_schemas(tree: ast.AST) -> dict[str, ast.Dict]:
     results: dict[str, ast.Dict] = {}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
-        value = node.value
-        if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
+        chain = chain_calls(node.value)
+        if not chain:
             continue
-        if value.func.attr != "schema" or not isinstance(value.func.value, ast.Call):
+        model_call = chain[-1]
+        if call_name(model_call.func) != "semantic_model":
             continue
-        model_call = value.func.value
-        if call_name(model_call.func) != "semantic_model" or len(model_call.args) != 1:
+        name = builder_name(model_call)
+        if name is None:
             continue
-        if not isinstance(model_call.args[0], ast.Constant) or not isinstance(model_call.args[0].value, str):
+        schema = chain_schema(chain)
+        if schema is None:
             continue
-        if len(value.args) != 1 or not isinstance(value.args[0], ast.Dict):
-            continue
-        results[model_call.args[0].value] = value.args[0]
+        results[name] = schema
     return results
+
+
+def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
+    """Model name -> its description, from either authoring form.
+
+    The chained semantic_model(...).description(...) is the form verified
+    against the runtime, but the description= constructor kwarg is pinned in
+    the documented signature and is what the vendored nextdata-public-examples
+    corpus uses throughout. Rejecting it would fail closures written the way
+    the shipped reference corpus writes them, so both are accepted; the prose
+    recommends the chained form rather than the checker enforcing it.
+    """
+    results: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        chain = chain_calls(node.value)
+        if not chain:
+            continue
+        model_call = chain[-1]
+        if call_name(model_call.func) != "semantic_model":
+            continue
+        model_name = builder_name(model_call)
+        if model_name is None:
+            continue
+        text = (string_keyword(model_call, "description")
+                or next((joined_string(k.value) or "" for k in model_call.keywords
+                         if k.arg == "description"), "") or "")
+        for call in chain:
+            if call_name(call.func) == "description" and call.args:
+                joined = joined_string(call.args[0])
+                if joined:
+                    text = joined
+        if text.strip():
+            results[model_name] = text.strip()
+    return results
+
+
+def joined_string(node: ast.expr) -> str | None:
+    """A str constant, or the literal parts of an f-string.
+
+    Adjacent string literals are folded into a single ast.Constant by the
+    parser, so the multi-line parenthesised form needs no special handling.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = [p.value for p in node.values
+                 if isinstance(p, ast.Constant) and isinstance(p.value, str)]
+        # An f-string of pure interpolations has no literal parts but is still
+        # an authored description; fall back to the source so this accepts the
+        # same set self_check.py's desc_str() does.
+        return "".join(parts) or ast.unparse(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        # "one row per " + entity — same reason as above; desc_str() takes it.
+        return ast.unparse(node)
+    return None
 
 
 def base_model_primary_keys(tree: ast.AST) -> dict[str, set[str]]:
@@ -142,7 +242,11 @@ def field_roles(field_spec: ast.expr) -> list[ast.Call]:
     """Return only roles passed directly to the public field() constructor."""
     if not isinstance(field_spec, ast.Call) or call_name(field_spec.func) != "field":
         return []
-    return [role for role in field_spec.args[1:] if isinstance(role, ast.Call)]
+    roles = [role for role in field_spec.args[1:] if isinstance(role, ast.Call)]
+    for keyword in field_spec.keywords:      # documented roles=[...] form
+        if keyword.arg == "roles" and isinstance(keyword.value, (ast.List, ast.Tuple)):
+            roles += [e for e in keyword.value.elts if isinstance(e, ast.Call)]
+    return roles
 
 
 def string_keyword(call: ast.Call, name: str) -> str | None:
@@ -166,24 +270,18 @@ def semantic_view_schemas(tree: ast.AST) -> dict[str, tuple[str, ast.Dict]]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
-        value = node.value
-        if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
+        chain = chain_calls(node.value)
+        if not chain:
             continue
-        if value.func.attr != "schema" or not isinstance(value.func.value, ast.Call):
+        view_call = chain[-1]
+        if call_name(view_call.func) != "semantic_view":
             continue
-        view_call = value.func.value
-        if call_name(view_call.func) != "semantic_view" or len(view_call.args) != 2:
+        name = builder_name(view_call, 0)
+        base = builder_name(view_call, 1)
+        schema = chain_schema(chain)
+        if name is None or base is None or schema is None:
             continue
-        name, base = view_call.args
-        if not (
-            isinstance(name, ast.Constant)
-            and isinstance(name.value, str)
-            and isinstance(base, ast.Name)
-            and len(value.args) == 1
-            and isinstance(value.args[0], ast.Dict)
-        ):
-            continue
-        views[node.targets[0].id] = (base.id, value.args[0])
+        views[node.targets[0].id] = (base, schema)
     return views
 
 
@@ -267,6 +365,135 @@ def semantic_errors(
                     for view_name, (base, view_schema) in views.items()
                 ):
                     errors.append(f"{model}.{column}: missing metric {role.get('name')!r}")
+    return errors
+
+
+def has_description(call: ast.Call) -> bool:
+    """A non-empty description= on this call."""
+    for keyword in call.keywords:
+        if keyword.arg != "description":
+            continue
+        # joined_string already accepts Constant / JoinedStr / BinOp-Add,
+        # which is exactly the set self_check.py's desc_str() accepts. Do not
+        # widen past it: a broader BinOp here would pass "%s" % x at acceptance
+        # and fail it in the closure's own self-check.
+        text = joined_string(keyword.value)
+        if text and text.strip():
+            return True
+    return False
+
+
+def annotation_errors(
+    tree: ast.AST, inferred: dict[str, object], promised: set[str], registered_views: set[str]
+) -> list[str]:
+    """Descriptions the inferred model supplied must survive into models.py.
+
+    describe_model is the only surface the querying agent reads, so a concept
+    placed with its name but not its description arrives as a bare label. The
+    inferred_model.json handoff carries a description on every dimension and
+    metric and on each model; this asserts they were carried through, and that
+    they were put where the compiler actually reads them.
+    """
+    errors: list[str] = []
+    schemas = base_model_schemas(tree)
+    views = semantic_view_schemas(tree)
+    descriptions = base_model_descriptions(tree)
+
+    # A description on the field()/metric_field() WRAPPER becomes an attribute
+    # description: it reaches the structural data_model block and never
+    # describe_model. The author believes the concept is documented and it is
+    # not, so this is an error rather than a warning.
+    # Column names, so a wrapper-description error can name the field it is on
+    # rather than repeating an identical location-less sentence per occurrence.
+    column_of: dict[int, str] = {}
+    for model, schema in schemas.items():
+        for column, field_spec in zip(schema.keys, schema.values, strict=True):
+            if isinstance(column, ast.Constant) and isinstance(column.value, str):
+                column_of[id(field_spec)] = f"{model}.{column.value}"
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if call_name(node.func) not in ("field", "metric_field"):
+            continue
+        if not has_description(node):
+            continue
+        # Matches scripts/self_check.py: a wrapper description is a legal
+        # attribute description (it reaches the structural data_model block).
+        # The defect is using it INSTEAD of the role's, so fail only when no
+        # sibling role carries one. The two gates must agree or correctly
+        # annotated code passes the closure's own self-check and then fails
+        # acceptance, which reads as a harness bug.
+        siblings = [a for a in node.args[1:] if isinstance(a, ast.Call)]
+        for kw in node.keywords:          # documented roles=[...] form
+            if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                siblings += [e for e in kw.value.elts if isinstance(e, ast.Call)]
+        describable = [r for r in siblings
+                       if call_name(r.func) in ("dimension", "metric")]
+        if any(has_description(r) for r in describable):
+            continue
+        # Same branching as scripts/self_check.py: with no dimension/metric
+        # role there is nowhere to move the text to, so the remedy is deletion.
+        remedy = ("move it inside dimension(...) / metric(...)" if describable
+                  else "primary_key()/join() take no description — drop it")
+        location = column_of.get(id(node), ast.unparse(node)[:60])
+        errors.append(
+            f"{location}: description= on {call_name(node.func)}() never "
+            f"reaches describe_model and no role carries one — {remedy}"
+        )
+
+    for model in sorted(promised):
+        spec = inferred.get(model) or {}
+        if (spec.get("description") or "").strip() and not descriptions.get(model):  # type: ignore[union-attr]
+            errors.append(
+                f"{model}: the inferred model supplied a description and the "
+                f"model declares none — list_models and describe_model show it"
+            )
+        schema = schemas.get(model)
+        if schema is None:
+            continue
+        field_specs = {
+            column.value: field_spec
+            for column, field_spec in zip(schema.keys, schema.values, strict=True)
+            if isinstance(column, ast.Constant) and isinstance(column.value, str)
+        }
+        for column, column_spec in ((spec.get("columns") or {})).items():  # type: ignore[union-attr]
+            if column not in field_specs:
+                continue
+            for role in column_spec.get("roles", []):
+                wanted = (role.get("description") or "").strip()
+                if not wanted:
+                    continue
+                kind = role.get("kind")
+                if kind == "dimension":
+                    matched = [
+                        call for call in field_roles(field_specs[column])
+                        if call_name(call.func) == "dimension"
+                        and string_keyword(call, "name") == role.get("name")
+                    ]
+                    if matched and not any(has_description(call) for call in matched):
+                        errors.append(
+                            f"{model}.{column}: dimension {role.get('name')!r} "
+                            f"placed without the supplied description"
+                        )
+                if kind == "metric":
+                    for view_name, (base, view_schema) in views.items():
+                        if base != model or view_name not in registered_views:
+                            continue
+                        for field_spec in view_schema.values:
+                            if not metric_matches(field_spec, model, column, role):
+                                continue
+                            metric_call = next(
+                                argument for argument in field_spec.args[1:]
+                                if isinstance(argument, ast.Call)
+                                and call_name(argument.func) == "metric"
+                            )
+                            if not has_description(metric_call):
+                                errors.append(
+                                    f"{model}.{column}: metric "
+                                    f"{role.get('name')!r} placed without the "
+                                    f"supplied description"
+                                )
     return errors
 
 
@@ -707,6 +934,8 @@ def main(root: Path) -> None:
     check("metric-view-registered", bool(registered_views), "no semantic view passed to .model(...)")
     inferred_errors = semantic_errors(model_tree, inferred, promised, registered_views)
     check("inferred-semantic-roles", not inferred_errors, "; ".join(inferred_errors))
+    annotation_issues = annotation_errors(model_tree, inferred, promised, registered_views)
+    check("annotations-carried-through", not annotation_issues, "; ".join(annotation_issues))
     wiring_errors = desktop_wiring_errors(spec, profile, requirements)
     check("desktop-wiring", not wiring_errors, "; ".join(wiring_errors))
     check("no-semantic-tools", ".semantic_tools(" not in spec)

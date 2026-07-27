@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.22.0
+  version: 0.23.0
 ---
 
 # nxd-generate-dp skill
@@ -225,24 +225,25 @@ types from `nxd.spec.data_types`). Place the table roles, then one semantic view
 per set of metrics over that table:
 
 - `semantic_model("<name>")` — the bare lowercase physical table name.
-- `.schema({...})` mapping each column to a typed value. Role-bearing columns are
-  `field(<type>(), <role>())`; one with no role is the bare type
-  (`"country": string()`), which still reaches the compiled schema.
+- `.schema({...})` maps each column to `field(<type>(), <role>())`. A column with no role
+  produces no metric, dimension or join and is absent from `describe_models` — unqueryable.
 - **Base models carry ONLY `primary_key()`, `dimension(...)`, or `join(...)`** —
   the DSL RAISES on a metric attached to a base-model field.
 - A metric belongs on `semantic_view("<base>_metrics", <base>)` with
   `metric_field(<type>(), metric(Agg.<AGG>, of=<base>.field("<column>"), ...))` —
   query-time, not a physical table.
 
-Role builders (verified DSL facts): `field(number(), primary_key())` — NEVER the
-deprecated `grain` alias; `field(string(), dimension(name="<concept>",
-pii=<flag>, description="..."))`; `field(number(), join(to="<model>",
-to_column="<col>"))` — note `to=` and `to_column=`, NOT `to_model=`.
+Role builders: `field(number(), primary_key())` — never the deprecated `grain`;
+`field(string(), dimension(name=..., description=..., pii=<flag>))`; `field(number(), join(to="<model>", to_column="<col>"))` — `to=`, NOT `to_model=`.
 
-Unannotated columns stay bare-typed (do not invent roles no question motivated).
-**A dimension a ruling created MUST carry `description=` stating that ruling** —
-`describe_models` is all a later consumer sees, so an unstated ruling is
-invisible. No marker model: produce-verification is `.transform-complete`.
+**Every field takes a role, except a measure a metric aggregates. Dimensions
+and metrics also take a description; `primary_key()`/`join()` have none. Every
+`semantic_model` takes a `.description(...)`.** `describe_models` is all a later
+consumer sees, so a bare column is invisible and a bare name unusable. Put the
+description INSIDE the role — on `field()`/`metric_field()` it never reaches
+the agent. A dimension a **ruling** created must state that ruling. Metrics
+stay question-driven: a numeric no question aggregates is a `number` dimension.
+No marker model: produce-verification is `.transform-complete`.
 
 **Derived models are authored identically** — same DSL, role vocabulary, and
 `.schema({...})` shape. The only differences: its schema keys are the keys of the

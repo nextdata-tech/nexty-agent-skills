@@ -1,0 +1,278 @@
+{
+  "date": "2026-07-27",
+  "label": "desktop loop: full field annotation as the default",
+  "notes": "New scenario annotation-completeness-for-queryability, run against the pre-change skills (git worktree at 10278d3) and the post-change skills. Two baseline runs are recorded, not one: the first after-run was invalid (the driver script cd'd into the before-worktree and never returned, so it re-measured the old tree) and is kept as before-run2 because it independently replicates the baseline. The same five annotation checks fail in BOTH baseline runs -- unasked column left bare, status/state not disambiguated, non-additive numeric neither summed nor described, no dimension or metric carrying a description, and bare columns justified with 'no question asks for it'. The second baseline agent wrote 'left unannotated to avoid over-declaring' unprompted. After the guidance change all ten pass, with turns/tool_calls at or below both baselines, so completeness cost no extra steps. Single run per arm: check verdicts are the gate, metric deltas at this n are noise.",
+  "plugin_version": "0.23.0",
+  "reports": {
+    "before-v0.22.0-run1": {
+      "elapsed_s": 195.7,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "annotation-completeness-for-queryability": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "annotation-completeness-for-queryability",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 20,
+            "duration_ms": 158807,
+            "total_cost_usd": 0.9309160999999998,
+            "input_tokens": 37,
+            "output_tokens": 12151,
+            "is_error": false,
+            "tool_calls": 18,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "profiled-before-authoring",
+                "pass": true,
+                "why": "The trace shows both CSVs read and profiled via a Python script, with `schema.json` written (row counts, types, null rates, cardinalities, sample values for both tables) before `models.py` was created, and every column declared in models.py appears in that profile under its real name."
+              },
+              {
+                "id": "questions-answerable",
+                "pass": true,
+                "why": "`total_payment_volume` is a SUM over `payments.amount_eur` and `payment_count` a COUNT over the payment grain, both declared as `metric_field(..., metric(...))` on a `semantic_view` (not on the base model), with a data-validated `join(to=\"merchants\", to_column=\"merchant_id\")` (all payment merchant_ids resolve; merchants key unique 5/5) and a `paid_at` date dimension."
+              },
+              {
+                "id": "unasked-column-still-annotated",
+                "pass": false,
+                "why": "`payments.method` is declared as `dimension(name=\"payment_method\")` with no description at all, so a consumer reading `describe_model` gets a bare label rather than the annotated dimension the check requires."
+              },
+              {
+                "id": "near-identical-names-disambiguated",
+                "pass": false,
+                "why": "`payments.state` is not declared at all \u2014 the agent deliberately left it bare, so nothing distinguishes it from `status`, and `status` itself carries no description either."
+              },
+              {
+                "id": "pii-inferred-from-data",
+                "pass": true,
+                "why": "`payer_email` is declared `dimension(name=\"payer_email\", pii=True)` grounded in the profiled email-shaped values (schema.json note \"email-shaped values -> PII\"), and no other column in models.py is marked pii."
+              },
+              {
+                "id": "non-additive-numeric-handled",
+                "pass": false,
+                "why": "`payments.balance_after` is correctly not summed, but it is left entirely bare rather than exposed as a described number dimension \u2014 the second failure mode the check explicitly calls out."
+              },
+              {
+                "id": "descriptions-reach-the-agent",
+                "pass": true,
+                "why": "No `description=` appears on any `field(...)` or `metric_field(...)` wrapper, so no description text is misplaced (the models' own descriptions use the correct `.description(...)` form) \u2014 though this passes only vacuously, since no role builder carries a description at all."
+              },
+              {
+                "id": "models-and-concepts-described",
+                "pass": false,
+                "why": "Both `semantic_model`s do declare grain via `.description(...)`, but not a single `dimension(...)` or `metric(...)` carries a description \u2014 every declared concept arrives at the querying agent as a bare name."
+              },
+              {
+                "id": "bare-columns-justified",
+                "pass": false,
+                "why": "The answer justifies only `balance_after` and `state`, misreports `amount_eur` as having been \"given a role\" when it is a plain untyped field, and the `state` justification (\"meaning can't be grounded from the data\") is unsound since the profiled values plainly show a low-cardinality regional code that should have been annotated."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent claimed only a Python syntax check (`py_compile`) and that `schema.json` and `models.py` were saved, asserting no build, deployment, or governed semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent profiled correctly, validated the join, and wired metrics onto a semantic view, but it annotated nothing with descriptions, left `state` and `balance_after` entirely bare, and justified those omissions unsoundly \u2014 failing the annotation-completeness core of the scenario."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- models.py (3108 bytes) ---\nfrom nxd.spec import Agg, dimension, field, join, metric, metric_field\nfrom nxd.spec import primary_key, semantic_model, semantic_view\nfrom nxd.spec.data_types import date32, float64, int64, string\n\n# Grain: one row per payment (payment_id is unique/non-null across all 16 rows\n# in schema.json). merchant_id -> merchants.merchant_id is a validated\n# many_to_one join: every payments.merchant_id value resolves against\n# merchants.merchant_id, which is unique across all 5 merchant rows.\npayments = (\n    semantic_model(\"payments\")\n    .description(\"One row per payment transaction.\")\n    .schema(\n        {\n            \"payment_id\": field(string(), primary_key()),\n            \"merchant_id\": field(\n                string(),\n                join(to=\"merchants\", to_column=\"merchant_id\"),\n            ),\n            \"payer_email\": field(\n                string(),\n                dimension(name=\"payer_email\", pii=True),\n            ),\n            \"amount_eur\": float64(),\n            \"status\": field(\n                string(),\n                dimension(name=\"payment_status\"),\n            ),\n            \"method\": field(\n                string(),\n                dimension(name=\"payment_method\"),\n            ),\n            \"paid_at\": field(\n                date32(),\n                dimension(name=\"paid_at\"),\n            ),\n        }\n    )\n)\n\n# Grain: one row per merchant (merchant_id is unique/non-null across all 5\n# rows in schema.json).\nmerchants = (\n    semantic_model(\"merchants\")\n    .description(\"One row per merchant.\")\n    .schema(\n        {\n            \"merchant_id\": field(string(), primary_key()),\n            \"merchant_name\": field(\n                string(),\n                dimension(name=\"merchant_name\"),\n            ),\n            \"category\": field(\n                string(),\n                dimension(name=\"merchant_category\"),\n            ),\n            \"country\": field(\n                string(),\n                dimension(name=\"merchant_country\"),\n            ),\n        }\n    )\n)\n\n# Metrics belong on a query-time semantic view, not on the physical base.\npayment_metrics = semantic_view(\"payment_metrics\", payments).schema(\n    {\n        # Q1: \"total payment volume by merchant category\" \u2014 gross sum across\n        # ALL statuses (captured/refunded/failed), since the question does not\n        # specify a status filter. payment_status is exposed as a dimension so\n        # a caller can restrict to e.g. status = \"captured\" if a net figure is\n        # wanted instead.\n        \"total_payment_volume\": metric_field(\n            float64(),\n            metric(Agg.SUM, of=payments.field(\"amount_eur\"), name=\"total_payment_volume\"),\n        ),\n        # Q2: \"how many payments did we take each month\" \u2014 a plain count of\n        # payment rows, sliced by the paid_at date dimension (the caller\n        # buckets paid_at to month granularity at query time; the role\n        # grammar has no derived/truncated dimension).\n        \"payment_count\": metric_field(\n            int64(),\n            metric(Agg.COUNT, of=payments.field(\"payment_id\"), name=\"payment_count\"),\n        ),\n    }\n)\n\n--- schema.json (5494 bytes) ---\n{\n  \"format\": \"csv\",\n  \"source_files\": {\n    \"payments\": \"data/payments/payments.csv\",\n    \"merchants\": \"data/merchants/merchants.csv\"\n  },\n  \"tables\": {\n    \"payments\": {\n      \"row_count\": 16,\n      \"columns\": {\n        \"payment_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"P-1001\", \"P-1002\", \"P-1003\", \"P-1004\", \"P-1005\"],\n          \"note\": \"unique, non-null across all 16 rows -> primary key candidate\"\n        },\n        \"merchant_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 0.3125,\n          \"sample_values\": [\"M-001\", \"M-002\", \"M-003\", \"M-004\", \"M-005\"],\n          \"note\": \"every value found in merchants.merchant_id (validated: payments merchant_id set == merchants merchant_id set, 5/5); merchants.merchant_id is unique across its 5 rows -> valid many_to_one FK\"\n        },\n        \"payer_email\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"lena.hofmann@example.de\",\n            \"marc.oliver@example.es\",\n            \"ingrid.dahl@example.no\",\n            \"tomasz.nowak@example.de\",\n            \"sofia.almeida@example.de\"\n          ],\n          \"note\": \"email-shaped values -> PII\"\n        },\n        \"amount_eur\": {\n          \"declared_type\": \"DOUBLE\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"42.50\", \"8.75\", \"310.00\", \"17.20\", \"225.00\"],\n          \"note\": \"per-transaction monetary amount, additive across rows -> sum metric candidate\"\n        },\n        \"status\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 3,\n          \"cardinality\": 0.1875,\n          \"sample_values\": [\"captured\", \"failed\", \"refunded\"],\n          \"note\": \"low-cardinality lifecycle state; includes refunded/failed rows, so a raw sum of amount_eur is a GROSS figure across all statuses unless the caller filters -> dimension\"\n        },\n        \"state\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 0.3125,\n          \"sample_values\": [\"BY\", \"D\", \"MD\", \"NW\", \"VL\"],\n          \"note\": \"2-3 letter codes, do NOT match merchants.country (DE/ES/IE/NO) or any other column -> meaning can't be grounded from the data, business definition unknown\"\n        },\n        \"method\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 3,\n          \"cardinality\": 0.1875,\n          \"sample_values\": [\"card\", \"sepa\", \"wallet\"],\n          \"note\": \"low-cardinality payment channel -> dimension\"\n        },\n        \"balance_after\": {\n          \"declared_type\": \"DOUBLE\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 14,\n          \"cardinality\": 0.875,\n          \"sample_values\": [\"1042.50\", \"1051.25\", \"1361.25\", \"1344.05\", \"1569.05\"],\n          \"note\": \"monotonically increasing running balance per merchant (point-in-time snapshot) -> NOT additive, not a valid sum/avg metric\"\n        },\n        \"paid_at\": {\n          \"declared_type\": \"DATE\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"2026-01-14\", \"2026-01-15\", \"2026-01-19\", \"2026-02-02\", \"2026-02-08\"],\n          \"note\": \"transaction date spanning Jan-Apr 2026 -> date dimension, basis for month grouping\"\n        }\n      }\n    },\n    \"merchants\": {\n      \"row_count\": 5,\n      \"columns\": {\n        \"merchant_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"M-001\", \"M-002\", \"M-003\", \"M-004\", \"M-005\"],\n          \"note\": \"unique, non-null across all 5 rows -> primary key\"\n        },\n        \"merchant_name\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"Aurora Books\", \"Bergen Freight\", \"Cortado Coffee\", \"Delta Clinics\", \"Estuary Software\"],\n          \"note\": \"human-readable label, 1:1 with merchant_id -> dimension\"\n        },\n        \"category\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"healthcare\", \"hospitality\", \"logistics\", \"retail\", \"software\"],\n          \"note\": \"business-category codes (unique per merchant only because the sample has 5 merchants in 5 different categories; semantically a categorical attribute, not an identifier) -> dimension, required by stakeholder Q1\"\n        },\n        \"country\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 4,\n          \"cardinality\": 0.8,\n          \"sample_values\": [\"DE\", \"ES\", \"IE\", \"NO\"],\n          \"note\": \"low-cardinality ISO-2 country codes -> dimension\"\n        }\n      }\n    }\n  }\n}\n"
+          ]
+        }
+      ]
+    },
+    "before-v0.22.0-run2": {
+      "elapsed_s": 156.6,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "annotation-completeness-for-queryability": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "annotation-completeness-for-queryability",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 17,
+            "duration_ms": 118347,
+            "total_cost_usd": 0.5854736,
+            "input_tokens": 31,
+            "output_tokens": 8573,
+            "is_error": false,
+            "tool_calls": 15,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "profiled-before-authoring",
+                "pass": true,
+                "why": "The trace shows both CSVs profiled and schema.json written (row counts, types, null rates, cardinalities, samples for both tables) before models.py was created, and every declared column (payment_id, merchant_id, amount_eur, status, paid_at, payer_email, merchants.merchant_id, category) appears verbatim in that profile."
+              },
+              {
+                "id": "questions-answerable",
+                "pass": true,
+                "why": "models.py declares SUM over payments.amount_eur and COUNT over payment_id as metric_field(metric(...)) on a semantic_view, a join from payments.merchant_id to merchants validated by checking every M-001..M-005 value resolves, and a date32 dimension on paid_at."
+              },
+              {
+                "id": "unasked-column-still-annotated",
+                "pass": false,
+                "why": "payments.method is not declared at all \u2014 the agent explicitly left it bare with the justification \"no question asks to slice by payment method... left unannotated to avoid over-declaring\", which is exactly the failure this check targets."
+              },
+              {
+                "id": "near-identical-names-disambiguated",
+                "pass": false,
+                "why": "payments.state is not declared at all, and payments.status is declared as dimension(name=\"payment_status\") with no description, so nothing in the model distinguishes the two."
+              },
+              {
+                "id": "pii-inferred-from-data",
+                "pass": true,
+                "why": "payer_email is declared as dimension(name=\"payer_email\", pii=True) despite no question asking for it, and no other field in models.py carries a pii flag."
+              },
+              {
+                "id": "non-additive-numeric-handled",
+                "pass": false,
+                "why": "balance_after correctly avoids becoming a sum metric but is left entirely undeclared rather than exposed as a described number dimension, hitting the second stated failure mode."
+              },
+              {
+                "id": "descriptions-reach-the-agent",
+                "pass": false,
+                "why": "No dimension(...) or metric(...) builder in models.py contains a description argument at all, so no concept-level description reaches describe_model; the only prose lives in Python comments, which are invisible to consumers."
+              },
+              {
+                "id": "models-and-concepts-described",
+                "pass": false,
+                "why": "Both semantic_models do carry .description(...), but every declared dimension (payment_status, paid_at, payer_email, merchant_category) and both metrics have no description and arrive as bare labels."
+              },
+              {
+                "id": "bare-columns-justified",
+                "pass": false,
+                "why": "The answer lists five bare columns but justifies method, state, and country with variants of \"no question asks for it\" \u2014 explicitly disallowed as unsound \u2014 and omits amount_eur, which is also left roleless."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent only claimed a py_compile syntax check and profiling/validation it actually ran, and did not assert any build, deployment, or governed semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent profiled correctly and covered the two asked questions with well-formed view-level metrics and a validated join, but failed the scenario's core traps: method, state, and balance_after were left bare with \"no question asked\" reasoning, and not a single dimension or metric carries a description."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- models.py (2541 bytes) ---\nfrom nxd.spec import Agg, dimension, field, join, metric, metric_field\nfrom nxd.spec import primary_key, semantic_model, semantic_view\nfrom nxd.spec.data_types import date32, float64, int64, string\n\n# Grain: one row per payment (payment_id is unique across all 16 rows,\n# cardinality 1.0, no nulls \u2014 validated in schema.json).\npayments = (\n    semantic_model(\"payments\")\n    .description(\"One row per payment transaction.\")\n    .schema(\n        {\n            \"payment_id\": field(string(), primary_key()),\n            \"merchant_id\": field(\n                string(),\n                join(to=\"merchants\", to_column=\"merchant_id\"),\n            ),\n            \"amount_eur\": field(float64()),\n            \"status\": field(\n                string(),\n                dimension(name=\"payment_status\"),\n            ),\n            \"paid_at\": field(\n                date32(),\n                dimension(name=\"paid_at\"),\n            ),\n            \"payer_email\": field(\n                string(),\n                dimension(name=\"payer_email\", pii=True),\n            ),\n        }\n    )\n)\n\n# Grain: one row per merchant (merchant_id is unique across all 5 rows,\n# cardinality 1.0, no nulls \u2014 validated in schema.json). The payments.merchant_id\n# join is validated: every payments.merchant_id value (M-001..M-005) resolves to\n# exactly one merchants.merchant_id, which is that table's full-table unique key.\nmerchants = (\n    semantic_model(\"merchants\")\n    .description(\"One row per merchant.\")\n    .schema(\n        {\n            \"merchant_id\": field(string(), primary_key()),\n            \"category\": field(\n                string(),\n                dimension(name=\"merchant_category\"),\n            ),\n        }\n    )\n)\n\n# Metrics live on a query-time semantic_view over the payments grain.\n# total_payment_volume is an UNCONDITIONAL sum across all payment statuses\n# (captured, refunded, failed) \u2014 \"status\" has no built-in filter, so a caller\n# who wants captured-only volume must filter by payment_status at query time.\npayment_metrics = semantic_view(\"payment_metrics\", payments).schema(\n    {\n        \"total_payment_volume\": metric_field(\n            float64(),\n            metric(\n                Agg.SUM,\n                of=payments.field(\"amount_eur\"),\n                name=\"total_payment_volume\",\n            ),\n        ),\n        \"payment_count\": metric_field(\n            int64(),\n            metric(\n                Agg.COUNT,\n                of=payments.field(\"payment_id\"),\n                name=\"payment_count\",\n            ),\n        ),\n    }\n)\n\n--- schema.json (4631 bytes) ---\n{\n  \"path\": \"data/\",\n  \"format\": \"csv\",\n  \"tables\": {\n    \"payments\": {\n      \"row_count\": 16,\n      \"columns\": {\n        \"payment_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"P-1001\",\n            \"P-1002\",\n            \"P-1003\",\n            \"P-1004\",\n            \"P-1005\"\n          ]\n        },\n        \"merchant_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 0.3125,\n          \"sample_values\": [\n            \"M-001\",\n            \"M-003\",\n            \"M-002\",\n            \"M-004\",\n            \"M-005\"\n          ]\n        },\n        \"payer_email\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"lena.hofmann@example.de\",\n            \"marc.oliver@example.es\",\n            \"ingrid.dahl@example.no\",\n            \"tomasz.nowak@example.de\",\n            \"sofia.almeida@example.de\"\n          ]\n        },\n        \"amount_eur\": {\n          \"declared_type\": \"DECIMAL\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"42.50\",\n            \"8.75\",\n            \"310.00\",\n            \"17.20\",\n            \"225.00\"\n          ]\n        },\n        \"status\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 3,\n          \"cardinality\": 0.1875,\n          \"sample_values\": [\n            \"captured\",\n            \"refunded\",\n            \"failed\"\n          ]\n        },\n        \"state\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 0.3125,\n          \"sample_values\": [\n            \"BY\",\n            \"MD\",\n            \"VL\",\n            \"NW\",\n            \"D\"\n          ]\n        },\n        \"method\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 3,\n          \"cardinality\": 0.1875,\n          \"sample_values\": [\n            \"card\",\n            \"sepa\",\n            \"wallet\"\n          ]\n        },\n        \"balance_after\": {\n          \"declared_type\": \"DECIMAL\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 14,\n          \"cardinality\": 0.875,\n          \"sample_values\": [\n            \"2769.05\",\n            \"2565.99\",\n            \"1042.50\",\n            \"1051.25\",\n            \"1361.25\"\n          ]\n        },\n        \"paid_at\": {\n          \"declared_type\": \"DATE\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"2026-01-14\",\n            \"2026-01-15\",\n            \"2026-01-19\",\n            \"2026-02-02\",\n            \"2026-02-08\"\n          ]\n        }\n      }\n    },\n    \"merchants\": {\n      \"row_count\": 5,\n      \"columns\": {\n        \"merchant_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"M-001\",\n            \"M-002\",\n            \"M-003\",\n            \"M-004\",\n            \"M-005\"\n          ]\n        },\n        \"merchant_name\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"Aurora Books\",\n            \"Bergen Freight\",\n            \"Cortado Coffee\",\n            \"Delta Clinics\",\n            \"Estuary Software\"\n          ]\n        },\n        \"category\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"retail\",\n            \"logistics\",\n            \"hospitality\",\n            \"healthcare\",\n            \"software\"\n          ]\n        },\n        \"country\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 4,\n          \"cardinality\": 0.8,\n          \"sample_values\": [\n            \"DE\",\n            \"NO\",\n            \"ES\",\n            \"IE\"\n          ]\n        }\n      }\n    }\n  }\n}"
+          ]
+        }
+      ]
+    },
+    "after-v0.23.0": {
+      "elapsed_s": 175.0,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "annotation-completeness-for-queryability": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "annotation-completeness-for-queryability",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 17,
+            "duration_ms": 128569,
+            "total_cost_usd": 0.6830674999999999,
+            "input_tokens": 31,
+            "output_tokens": 10768,
+            "is_error": false,
+            "tool_calls": 15,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "profiled-before-authoring",
+                "pass": true,
+                "why": "The trace shows both CSVs read and profiled (row counts, null rates, cardinalities, sample values) and schema.json written before models.py was created, and every column keyed in models.py (payment_id, merchant_id, payer_email, amount_eur, status, state, method, balance_after, paid_at; merchant_id, merchant_name, category, country) appears verbatim in the profile."
+              },
+              {
+                "id": "questions-answerable",
+                "pass": true,
+                "why": "models.py declares total_payment_volume as Agg.SUM over payments.amount_eur and payment_count as Agg.COUNT over payment_id, both via metric_field(metric(...)) on the semantic_view payment_metrics, plus a join role on payments.merchant_id validated in the trace by set containment (0 unresolved) against a fully unique merchants.merchant_id, and a paid_at date dimension."
+              },
+              {
+                "id": "unasked-column-still-annotated",
+                "pass": true,
+                "why": "payments.method is declared as dimension(name=\"payment_method\", description=\"Payment instrument used: card, wallet, or sepa.\") despite no question mentioning it."
+              },
+              {
+                "id": "near-identical-names-disambiguated",
+                "pass": true,
+                "why": "Both are declared and their descriptions are mutually exclusive \u2014 status is \"Lifecycle outcome of the payment: captured, refunded, or failed\" while state is named payer_state_code and described as a \"Short region/state code recorded against the payment\" that is not aligned with merchant country."
+              },
+              {
+                "id": "pii-inferred-from-data",
+                "pass": true,
+                "why": "payer_email carries pii=True inside its dimension role, grounded in the profile's note that values are email-shaped, and no other field in the quoted models.py sets pii."
+              },
+              {
+                "id": "non-additive-numeric-handled",
+                "pass": true,
+                "why": "balance_after is declared as a decimal dimension whose description states it is a point-in-time running balance snapshot that is \"not additive across rows -> not exposed as a sum metric\", and it appears in no metric."
+              },
+              {
+                "id": "descriptions-reach-the-agent",
+                "pass": true,
+                "why": "Every description= in the file sits inside a dimension(...) or metric(...) builder; no field(...) or metric_field(...) wrapper carries a description kwarg."
+              },
+              {
+                "id": "models-and-concepts-described",
+                "pass": true,
+                "why": "Both semantic_models use .description(...) stating the grain (\"One row per merchant.\", \"One row per payment attempt taken from a payer to a merchant.\") and every declared dimension and metric has a non-empty description of the concept and its population."
+              },
+              {
+                "id": "bare-columns-justified",
+                "pass": true,
+                "why": "amount_eur is the only column left without a role, and the final answer justifies it soundly as the of= measure target already aggregated by the total_payment_volume metric rather than by appealing to 'no question asked'."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent claims only that schema.json and models.py were written plus an ast.parse syntax check, and never asserts a build, deployment, or executed semantic query."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent profiled both exports into schema.json before authoring, validated the join from data, and produced a models.py that annotates every column including the four traps (method, status vs state, payer_email PII, non-additive balance_after) with role-internal descriptions, passing all ten checks."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- models.py (4944 bytes) ---\nfrom nxd.spec import Agg, dimension, field, join, metric, metric_field\nfrom nxd.spec import primary_key, semantic_model, semantic_view\nfrom nxd.spec.data_types import date32, decimal, int64, string\n\nmerchants = (\n    semantic_model(\"merchants\")\n    .description(\"One row per merchant.\")\n    .schema(\n        {\n            \"merchant_id\": field(string(), primary_key()),\n            \"merchant_name\": field(\n                string(),\n                dimension(\n                    name=\"merchant_name\",\n                    description=\"Human-readable merchant display name.\",\n                ),\n            ),\n            \"category\": field(\n                string(),\n                dimension(\n                    name=\"merchant_category\",\n                    description=(\n                        \"Merchant's business category (e.g. retail, logistics, \"\n                        \"hospitality, healthcare, software).\"\n                    ),\n                ),\n            ),\n            \"country\": field(\n                string(),\n                dimension(\n                    name=\"merchant_country\",\n                    description=\"ISO-3166 alpha-2 country the merchant is registered in.\",\n                ),\n            ),\n        }\n    )\n)\n\npayments = (\n    semantic_model(\"payments\")\n    .description(\"One row per payment attempt taken from a payer to a merchant.\")\n    .schema(\n        {\n            \"payment_id\": field(string(), primary_key()),\n            \"merchant_id\": field(\n                string(),\n                join(to=\"merchants\", to_column=\"merchant_id\"),\n            ),\n            \"payer_email\": field(\n                string(),\n                dimension(\n                    name=\"payer_email\",\n                    description=\"Email address of the payer who made the payment.\",\n                    pii=True,\n                ),\n            ),\n            \"amount_eur\": field(decimal(12, 2)),\n            \"status\": field(\n                string(),\n                dimension(\n                    name=\"payment_status\",\n                    description=(\n                        \"Lifecycle outcome of the payment: captured, refunded, or \"\n                        \"failed. Filter on this to get a net (captured-only) \"\n                        \"figure from an unconditional metric.\"\n                    ),\n                ),\n            ),\n            \"state\": field(\n                string(),\n                dimension(\n                    name=\"payer_state_code\",\n                    description=(\n                        \"Short region/state code recorded against the payment. \"\n                        \"Not aligned with merchant or merchant country in the \"\n                        \"profiled sample; origin/meaning not documented upstream.\"\n                    ),\n                ),\n            ),\n            \"method\": field(\n                string(),\n                dimension(\n                    name=\"payment_method\",\n                    description=\"Payment instrument used: card, wallet, or sepa.\",\n                ),\n            ),\n            \"balance_after\": field(\n                decimal(12, 2),\n                dimension(\n                    name=\"balance_after_eur\",\n                    description=(\n                        \"Running merchant account balance snapshot immediately \"\n                        \"after this payment posted, in EUR. Point-in-time, not \"\n                        \"additive across rows -> not exposed as a sum metric.\"\n                    ),\n                ),\n            ),\n            \"paid_at\": field(\n                date32(),\n                dimension(\n                    name=\"paid_at\",\n                    description=(\n                        \"Calendar date the payment was taken. Group by this to \"\n                        \"bucket payments by day or month.\"\n                    ),\n                ),\n            ),\n        }\n    )\n)\n\npayment_metrics = semantic_view(\"payment_metrics\", payments).schema(\n    {\n        \"total_payment_volume\": metric_field(\n            decimal(12, 2),\n            metric(\n                Agg.SUM,\n                of=payments.field(\"amount_eur\"),\n                name=\"total_payment_volume\",\n                description=(\n                    \"Gross payment volume in EUR across ALL statuses, including \"\n                    \"refunded and failed. Slice by merchant_category (via the \"\n                    \"merchants join) or filter on payment_status for a net figure.\"\n                ),\n            ),\n        ),\n        \"payment_count\": metric_field(\n            int64(),\n            metric(\n                Agg.COUNT,\n                of=payments.field(\"payment_id\"),\n                name=\"payment_count\",\n                description=(\n                    \"Number of payment rows, including refunded and failed \"\n                    \"attempts. Group by paid_at to get payments taken per month.\"\n                ),\n            ),\n        ),\n    }\n)\n\n--- schema.json (5962 bytes) ---\n{\n  \"path\": \"data/\",\n  \"format\": \"csv\",\n  \"tables\": {\n    \"payments\": {\n      \"source\": \"data/payments/payments.csv\",\n      \"row_count\": 16,\n      \"columns\": {\n        \"payment_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"P-1001\", \"P-1002\", \"P-1003\", \"P-1004\", \"P-1005\"],\n          \"notes\": \"Exact full-table unique, id-shaped. Primary key candidate.\"\n        },\n        \"merchant_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 0.3125,\n          \"sample_values\": [\"M-001\", \"M-003\", \"M-002\", \"M-004\", \"M-005\"],\n          \"notes\": \"Every value resolves to merchants.merchant_id (validated by set containment, 0 unresolved). merchants.merchant_id is exact full-table unique (5/5). many_to_one join candidate: payments -> merchants.\"\n        },\n        \"payer_email\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\n            \"lena.hofmann@example.de\",\n            \"marc.oliver@example.es\",\n            \"ingrid.dahl@example.no\",\n            \"tomasz.nowak@example.de\",\n            \"sofia.almeida@example.de\"\n          ],\n          \"notes\": \"Email-shaped values -> PII. High cardinality, not needed by either question.\"\n        },\n        \"amount_eur\": {\n          \"declared_type\": \"DECIMAL\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"42.50\", \"8.75\", \"310.00\", \"17.20\", \"225.00\"],\n          \"notes\": \"Per-row monetary amount, additive across rows. sum metric candidate -> answers 'total payment volume'.\"\n        },\n        \"status\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 3,\n          \"cardinality\": 0.1875,\n          \"sample_values\": [\"captured\", \"refunded\", \"failed\"],\n          \"notes\": \"Low-cardinality lifecycle state (captured/refunded/failed). Dimension candidate; qualifies whether a sum/count is gross or net.\"\n        },\n        \"state\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 0.3125,\n          \"sample_values\": [\"BY\", \"MD\", \"VL\", \"NW\", \"D\"],\n          \"notes\": \"Low-cardinality code, not aligned with merchant or country (same merchant appears under multiple codes). Dimension candidate; neither stakeholder question references it.\"\n        },\n        \"method\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 3,\n          \"cardinality\": 0.1875,\n          \"sample_values\": [\"card\", \"wallet\", \"sepa\"],\n          \"notes\": \"Low-cardinality payment method. Dimension candidate; not referenced by either question.\"\n        },\n        \"balance_after\": {\n          \"declared_type\": \"DECIMAL\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 14,\n          \"cardinality\": 0.875,\n          \"sample_values\": [\"1042.50\", \"1051.25\", \"1361.25\", \"1344.05\", \"1569.05\"],\n          \"notes\": \"Monotonically-increasing running balance snapshot (point-in-time), not additive across rows -> not a sum metric. Not referenced by either question.\"\n        },\n        \"paid_at\": {\n          \"declared_type\": \"DATE\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 16,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"2026-01-14\", \"2026-01-15\", \"2026-01-19\", \"2026-02-02\", \"2026-02-08\"],\n          \"notes\": \"Payment date. Dimension candidate; needed to bucket 'how many payments each month'.\"\n        }\n      }\n    },\n    \"merchants\": {\n      \"source\": \"data/merchants/merchants.csv\",\n      \"row_count\": 5,\n      \"columns\": {\n        \"merchant_id\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"M-001\", \"M-002\", \"M-003\", \"M-004\", \"M-005\"],\n          \"notes\": \"Exact full-table unique. Primary key; join target for payments.merchant_id.\"\n        },\n        \"merchant_name\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"Aurora Books\", \"Bergen Freight\", \"Cortado Coffee\", \"Delta Clinics\", \"Estuary Software\"],\n          \"notes\": \"Human-readable merchant name. Dimension candidate; not referenced by either question (category is what's asked for).\"\n        },\n        \"category\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 5,\n          \"cardinality\": 1.0,\n          \"sample_values\": [\"retail\", \"logistics\", \"hospitality\", \"healthcare\", \"software\"],\n          \"notes\": \"Merchant category. Dimension candidate; needed by 'total payment volume by merchant category'.\"\n        },\n        \"country\": {\n          \"declared_type\": \"VARCHAR\",\n          \"nullable\": false,\n          \"null_pct\": 0.0,\n          \"distinct_count\": 4,\n          \"cardinality\": 0.8,\n          \"sample_values\": [\"DE\", \"NO\", \"ES\", \"IE\"],\n          \"notes\": \"Low-cardinality merchant country. Dimension candidate; not referenced by either question.\"\n        }\n      }\n    }\n  },\n  \"join_validation\": {\n    \"payments.merchant_id -> merchants.merchant_id\": {\n      \"method\": \"set containment of all distinct payments.merchant_id values against merchants.merchant_id values\",\n      \"unresolved_count\": 0,\n      \"target_primary_key_cardinality\": 1.0,\n      \"verdict\": \"many_to_one confirmed\"\n    }\n  }\n}\n"
+          ]
+        }
+      ]
+    }
+  }
+}
