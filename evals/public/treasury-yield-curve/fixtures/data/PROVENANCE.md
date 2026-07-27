@@ -13,7 +13,7 @@ https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily
 ```
 
 Snapshot taken 2026-07-27. Years 2020–2024, one file per year.
-1,246 observation rows total (excluding headers), ~92 KB.
+1,251 data rows total (excluding headers): 251 + 251 + 249 + 250 + 250. ~100 KB.
 
 ## Licence
 
@@ -49,11 +49,21 @@ Note `Date` is `MM/DD/YYYY`.
    `(date, maturity, yield)` grain. Leaving them as 13 separate fields makes
    the cross-maturity spread a column formula the semantic layer cannot express.
 
-3. **Null vs zero.** Maturities were introduced at different times. In the
-   2020 file the `4 Mo` column is blank on all 251 rows (that maturity began
-   later); `1 Mo`, `2 Mo` and `30 Yr` are fully populated. Coercing blank to
-   `0` fabricates a 0% yield and silently corrupts every aggregate that
-   touches it. Blank must land as null and be excluded from aggregation.
+3. **Schema drift across files, then null vs zero.** These are two distinct
+   traps and the first is easy to miss.
+
+   The five files do **not** share one header. 2020 and 2021 carry **12**
+   maturity columns — there is no `4 Mo` column at all, not a `4 Mo` column
+   full of blanks. 2022–2024 carry 13. A closure that reads the header once
+   and assumes it holds for the rest either drops observations or, worse,
+   indexes positionally and silently shifts 2020–2021 values by one column
+   from `6 Mo` onward — wrong numbers, no error.
+
+   Within 2022, `4 Mo` is genuinely blank until the maturity was first
+   published on 2022-10-19: present on only **50 of 249** rows. Coercing
+   blank to `0` fabricates a 0% yield and corrupts part of one year while
+   2023–2024 spot-check clean. Blank must land as null and be excluded from
+   aggregation.
 
 4. **Maturity ordering.** Labels are `1 Mo` … `30 Yr`. Lexical sorting yields
    `1 Mo, 1 Yr, 10 Yr, 2 Mo, 2 Yr, …` — a nonsense curve. A correct model
