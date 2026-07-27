@@ -298,10 +298,41 @@ classified_spend = (
                     ),
                 ),
             ),
-            # Bare: the spend metric on this model's semantic_view aggregates it.
+            # Bare: classified_spend_metrics below aggregates it.
             "amount": number(),
         }
     )
+)
+
+# The view that discharges the bare `amount` above — without it the column has
+# no role and no metric, so it would be absent from describe_models entirely.
+classified_spend_metrics = semantic_view(
+    "classified_spend_metrics", classified_spend
+).schema(
+    {
+        "total_spend": metric_field(
+            number(),
+            metric(
+                Agg.SUM,
+                of=classified_spend.field("amount"),
+                name="total_spend",
+                description=(
+                    "Total classified spend. Group by category to see the "
+                    "split, and check the needs_review share before quoting "
+                    "the headline number."
+                ),
+            ),
+        ),
+        "transaction_count": metric_field(
+            number(),
+            metric(
+                Agg.COUNT,
+                of=classified_spend.field("transaction_id"),
+                name="transaction_count",
+                description="Number of classified transactions.",
+            ),
+        ),
+    }
 )
 ```
 
