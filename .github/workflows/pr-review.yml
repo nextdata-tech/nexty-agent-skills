@@ -95,23 +95,40 @@ jobs:
             --effort high
             --allowedTools "Bash(gh api:*),Bash(gh pr:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(python3:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(ls:*),Bash(wc:*),Bash(mkdir:*),Read,Write,Grep,Glob,Agent"
 
-      # The action step keeps continue-on-error so this step can still run and
-      # comment when it dies. Post the notice, then fail the JOB: a dead review
-      # must surface as a red check, not a green one. The check is advisory
-      # (non-required), so red is visible without blocking merge.
-      - name: Post fallback comment on action failure
-        if: steps.claude.outcome == 'failure'
+      # Verify a review actually landed, and fail the JOB if not.
+      #
+      # Checking `steps.claude.outcome == 'failure'` is NOT enough: the action
+      # has two distinct failure modes and only one sets a failure outcome.
+      #   1. It dies and exits non-zero — outcome 'failure'.
+      #   2. It dies ~6s in and exits ZERO without posting anything — outcome
+      #      'success', no review, no signal. Observed on this very PR.
+      # Both leave the PR unreviewed, so assert the OUTCOME THAT MATTERS (a
+      # review exists) rather than the action's self-reported status.
+      #
+      # `always()` so this runs whichever way the action step ended.
+      # The check is advisory (non-required, and main has no branch protection),
+      # so a red run is visible without blocking merge.
+      - name: Verify a review was posted
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
         run: |
           set -euo pipefail
-          BODY=$(printf '⚠️ Claude review did not run. The action step failed — most often a rate limit, auth failure, or SDK error. See the [workflow run](%s) for details. Push a new commit to retry once cleared.' "$RUN_URL")
-          # Never let a comment-posting failure mask the review failure itself:
-          # the notice is best-effort, the job status is the load-bearing signal.
+          # Count reviews left by the bot on the head commit of this run.
+          reviews=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            --jq '[.[] | select(.commit_id == "'"${GITHUB_SHA}"'")] | length' 2>/dev/null || echo "0")
+          if [ "${reviews:-0}" -gt 0 ]; then
+            echo "Review present for ${GITHUB_SHA} (${reviews})."
+            exit 0
+          fi
+          BODY=$(printf '⚠️ Claude review did not run (action outcome: `%s`). Most often a rate limit, auth failure, or SDK error — note the action can also exit 0 without posting. See the [workflow run](%s). Push a new commit to retry once cleared.' "$CLAUDE_OUTCOME" "$RUN_URL")
+          # Best-effort notice: a comment-posting failure must not mask the
+          # review failure itself. The job status is the load-bearing signal.
           gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY" || \
             echo "::warning::could not post the fallback comment; failing the job anyway"
-          echo "::error::Claude review did not run — the action step failed. See ${RUN_URL}"
+          echo "::error::No Claude review was posted for ${GITHUB_SHA} (action outcome: ${CLAUDE_OUTCOME}). See ${RUN_URL}"
           exit 1
