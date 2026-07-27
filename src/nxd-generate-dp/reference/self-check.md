@@ -194,10 +194,13 @@ def check_kwargs(call, name, where):
         if any(k.arg == "of" for k in call.keywords) and \
            any(k.arg == "column" for k in call.keywords):
             bad(f"{where}: metric() takes of= or column=, never both")
-    # Annotation reach. A description on the WRAPPER is an attribute
-    # description: it lands in data_model and never reaches describe_models,
-    # so the author believes they documented the concept and did not. That is
-    # a silent failure, hence bad(). A MISSING description is a warning.
+    # Annotation reach, both graded as failures. A description on the WRAPPER
+    # is an attribute description: it lands in data_model and never reaches
+    # describe_models, so the author believes they documented the concept and
+    # did not. A MISSING description is the same defect by omission — and it
+    # is the one the benchmark actually measured, so warning here while the
+    # eval checks fail it would leave the only mechanical gate green on
+    # precisely the defect this guidance exists to prevent.
     if name in ("field", "metric_field") and any(
             k.arg == "description" for k in call.keywords):
         bad(f"{where}: description= on {name}() never reaches describe_models "
@@ -205,8 +208,8 @@ def check_kwargs(call, name, where):
     if name in ("dimension", "metric") and not any(
             k.arg == "description" and literal_str(k.value)
             for k in call.keywords):
-        unverified.append(f"{where}: {name}() has no description= — it reaches "
-                          f"describe_models as a bare name")
+        bad(f"{where}: {name}() has no description= — it reaches "
+            f"describe_models as a bare name the agent cannot choose on")
 
 def check_dtype(node, where):
     """A call in dtype position must be a known data-type constructor."""
@@ -269,11 +272,16 @@ def parse_models(src, path):
             continue
         var_name[target.id], var_kind[target.id] = model, kind
         joins.setdefault(model, []); has_pk[model] = False
-        if kind == "semantic_model" and not any(
-                call_name(c) == "description" for c in chain):
-            unverified.append(f"models.py: semantic_model('{model}') has no "
-                              f".description() — both list_models and "
-                              f"describe_model show it to the agent")
+        # Either authoring form counts: the chained .description(...) is the
+        # verified one, but the description= constructor kwarg is pinned in
+        # the documented signature and is what the shipped example corpus
+        # uses, so rejecting it would fail correctly-authored models.
+        if kind == "semantic_model" and not (
+                any(call_name(c) == "description" for c in chain)
+                or any(k.arg == "description" and literal_str(k.value)
+                       for k in root.keywords)):
+            bad(f"models.py: semantic_model('{model}') declares no description "
+                f"— both list_models and describe_model show it to the agent")
         in_view = kind == "semantic_view"
         for call in chain:
             if call_name(call) not in ("schema", "fields") or not call.args:

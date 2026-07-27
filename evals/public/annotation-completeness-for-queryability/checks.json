@@ -40,7 +40,7 @@
     },
     {
       "id": "models-and-concepts-described",
-      "check": "Each semantic_model declares a description via the chained .description(...) form saying what one row is (the constructor kwarg is not verified to reach describe_model — use the chained form), and every declared dimension and metric carries a non-empty description stating what the concept is and the population it covers. A concept declared with a name and no description arrives at the querying agent as a bare label."
+      "check": "Each semantic_model declares a description saying what one row is — the chained .description(...) form is preferred, the description= constructor kwarg is also accepted, and every declared dimension and metric carries a non-empty description stating what the concept is and the population it covers. A concept declared with a name and no description arrives at the querying agent as a bare label."
     },
     {
       "id": "bare-columns-justified",

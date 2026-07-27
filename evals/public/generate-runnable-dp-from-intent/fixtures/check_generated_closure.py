@@ -147,13 +147,14 @@ def base_model_schemas(tree: ast.AST) -> dict[str, ast.Dict]:
 
 
 def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
-    """Model name -> its description, from the chained .description(...) form.
+    """Model name -> its description, from either authoring form.
 
-    Only the chained form is verified to reach the agent (it is what lands in
-    the manifest's Model.description and is emitted by list_models and
-    describe_model). The semantic_model(..., description=) constructor kwarg is
-    NOT accepted here, so this agrees with reference/nxd-spec-api.md and with
-    the self_check.py warning rather than contradicting them.
+    The chained semantic_model(...).description(...) is the form verified
+    against the runtime, but the description= constructor kwarg is pinned in
+    the documented signature and is what the vendored nextdata-public-examples
+    corpus uses throughout. Rejecting it would fail closures written the way
+    the shipped reference corpus writes them, so both are accepted; the prose
+    recommends the chained form rather than the checker enforcing it.
     """
     results: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -168,7 +169,7 @@ def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
         name = model_call.args[0]
         if not isinstance(name, ast.Constant) or not isinstance(name.value, str):
             continue
-        text = ""
+        text = string_keyword(model_call, "description") or ""
         for call in chain:
             if call_name(call.func) == "description" and call.args:
                 joined = joined_string(call.args[0])

@@ -118,9 +118,12 @@ So the human sentence a consumer reads when choosing a measure or a dimension
 )
 ```
 
-Model-level `.description(text)` **does** reach the agent — it is emitted in both
-`list_models` and `describe_model` — but only when authored via
-`semantic_model(...).description(...)`.
+Model-level description **does** reach the agent — it is emitted in both
+`list_models` and `describe_model`. The chained
+`semantic_model(...).description(...)` form is the one verified against the
+runtime; the `description=` constructor kwarg pinned in the signature above is
+documented and is what the vendored `nextdata-public-examples` corpus uses, but
+has not been traced end-to-end. Prefer the chained form; tooling accepts both.
 
 ## `Agg` — the closed aggregation vocabulary
 
