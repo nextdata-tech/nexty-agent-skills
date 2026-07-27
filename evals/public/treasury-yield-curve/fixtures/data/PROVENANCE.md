@@ -55,6 +55,47 @@ Note `Date` is `MM/DD/YYYY`.
    `0` fabricates a 0% yield and silently corrupts every aggregate that
    touches it. Blank must land as null and be excluded from aggregation.
 
-4. **Maturity ordering.** Labels are `1 Mo` … `30 Yr`. Lexical sorting puts
-   `10 Yr` before `2 Yr`. A correct model derives a numeric sort key
-   (e.g. maturity in months) rather than ordering on the label.
+4. **Maturity ordering.** Labels are `1 Mo` … `30 Yr`. Lexical sorting yields
+   `1 Mo, 1 Yr, 10 Yr, 2 Mo, 2 Yr, …` — a nonsense curve. A correct model
+   orders on a numeric key, and that key is supplied as a second source
+   (below) rather than hardcoded in transform code.
+
+## Second source: `maturities/maturities.csv`
+
+Hand-authored reference data, 13 rows — one per maturity label appearing in
+the yield files. Verified to join 1:1 against the labels actually present:
+13 labels, 13 rows, no unmatched label and no unused row.
+
+| column | meaning |
+|---|---|
+| `maturity_label` | joins to the unpivoted yield grain (`1 Mo` … `30 Yr`) |
+| `maturity_months` | numeric sort key — 1, 2, 3, 4, 6, 12, 24, 36, 60, 84, 120, 240, 360 |
+| `tenor_bucket` | `bill` (≤ 12 mo), `note` (2–10 yr), `bond` (20–30 yr) |
+| `first_published` | date Treasury began publishing that maturity |
+
+### Why this is a separate source rather than transform code
+
+The closure needs a label → months mapping to order the curve. The tempting
+shortcut is a dict literal in `transform/main.py`. That is a rule violation:
+reference data is landed, never hardcoded — a mapping baked into transform
+code is invisible to the semantic layer and unreviewable.
+
+Landing it as a source turns the temptation into the correct behaviour, and
+makes this scenario exercise **two-source consumption and a join** rather than
+a single-directory glob. The five yield files share one schema, so without
+this second source the ingest half of the closure is trivial.
+
+### What `first_published` explains
+
+It is the documented reason for the blank cells, and the data agrees exactly:
+
+- `4 Mo` — introduced 2022-10-19. Absent from all 251 rows of 2020 and all
+  251 of 2021; present on only **50 of 249 rows in 2022**; complete in 2023
+  and 2024.
+- The other twelve maturities are complete across all five years.
+
+The partial 2022 coverage is the sharper trap: a closure that coerces blank to
+`0` corrupts part of one year while the rest looks correct, so the damage is
+easy to miss in a spot check. Blank must land as null and be excluded from
+aggregation — an average yield over a period spanning the introduction date
+must not be dragged toward zero by rows where the maturity did not yet exist.
