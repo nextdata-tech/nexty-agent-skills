@@ -103,7 +103,7 @@ def check_kwargs(call, name, where):
         # the role's, so only fail when the roles carry none — otherwise this
         # would block a legal API call that is not the mistake.
         roles = [a for a in call.args[1:] if isinstance(a, ast.Call)]
-        if not any(call_name(r.func) in ("dimension", "metric")
+        if not any(call_name(r) in ("dimension", "metric")
                    and any(k.arg == "description" and desc_str(k.value)
                            for k in r.keywords)
                    for r in roles):
