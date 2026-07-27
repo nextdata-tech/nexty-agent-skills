@@ -104,6 +104,27 @@ def promised_models(tree: ast.AST) -> set[str]:
     return promised
 
 
+def builder_name(call: ast.Call, position: int = 0) -> str | None:
+    """A builder's string argument, positional or via its documented keyword.
+
+    The vendored nextdata-public-examples corpus writes
+    semantic_model(name=..., description=...) throughout and best_practices.md
+    prefers it, so locating the name positionally alone makes those models
+    invisible to every downstream check.
+    """
+    keyword_for = {0: "name", 1: "base"}
+    if len(call.args) > position:
+        node = call.args[position]
+    else:
+        node = next((k.value for k in call.keywords
+                     if k.arg == keyword_for.get(position)), None)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
 def chain_calls(node: ast.expr) -> list[ast.Call]:
     """Every Call in a fluent chain, outermost first.
 
@@ -135,14 +156,15 @@ def base_model_schemas(tree: ast.AST) -> dict[str, ast.Dict]:
         if not chain:
             continue
         model_call = chain[-1]
-        if call_name(model_call.func) != "semantic_model" or not model_call.args:
+        if call_name(model_call.func) != "semantic_model":
             continue
-        if not isinstance(model_call.args[0], ast.Constant) or not isinstance(model_call.args[0].value, str):
+        name = builder_name(model_call)
+        if name is None:
             continue
         schema = chain_schema(chain)
         if schema is None:
             continue
-        results[model_call.args[0].value] = schema
+        results[name] = schema
     return results
 
 
@@ -164,10 +186,10 @@ def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
         if not chain:
             continue
         model_call = chain[-1]
-        if call_name(model_call.func) != "semantic_model" or not model_call.args:
+        if call_name(model_call.func) != "semantic_model":
             continue
-        name = model_call.args[0]
-        if not isinstance(name, ast.Constant) or not isinstance(name.value, str):
+        model_name = builder_name(model_call)
+        if model_name is None:
             continue
         text = (string_keyword(model_call, "description")
                 or next((joined_string(k.value) or "" for k in model_call.keywords
@@ -178,7 +200,7 @@ def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
                 if joined:
                     text = joined
         if text.strip():
-            results[name.value] = text.strip()
+            results[model_name] = text.strip()
     return results
 
 
@@ -252,18 +274,14 @@ def semantic_view_schemas(tree: ast.AST) -> dict[str, tuple[str, ast.Dict]]:
         if not chain:
             continue
         view_call = chain[-1]
-        if call_name(view_call.func) != "semantic_view" or len(view_call.args) != 2:
+        if call_name(view_call.func) != "semantic_view":
             continue
-        name, base = view_call.args
+        name = builder_name(view_call, 0)
+        base = builder_name(view_call, 1)
         schema = chain_schema(chain)
-        if not (
-            isinstance(name, ast.Constant)
-            and isinstance(name.value, str)
-            and isinstance(base, ast.Name)
-            and schema is not None
-        ):
+        if name is None or base is None or schema is None:
             continue
-        views[node.targets[0].id] = (base.id, schema)
+        views[node.targets[0].id] = (base, schema)
     return views
 
 

@@ -173,10 +173,17 @@ def parse_models(src, path):
         kind = call_name(root)
         if kind not in ("semantic_model", "semantic_view"):
             continue
-        model = literal_str(root.args[0]) if root.args else None
+        # The name may be positional or the documented name= keyword — the
+        # vendored example corpus writes semantic_model(name=..., description=...)
+        # throughout, and best_practices.md prefers it. Missing this shape does
+        # not just skip the name check, it skips the model's fields entirely.
+        name_node = (root.args[0] if root.args else
+                     next((k.value for k in root.keywords if k.arg == "name"), None))
+        model = literal_str(name_node) if name_node is not None else None
         if model is None or not SNAKE.match(model):
+            shown = ast.unparse(name_node) if name_node is not None else "<none>"
             bad(f"{path}: {kind}() name must be a lowercase snake_case string "
-                f"literal, got {ast.unparse(root.args[0]) if root.args else '<none>'}")
+                f"literal, got {shown}")
             continue
         var_name[target.id], var_kind[target.id] = model, kind
         joins.setdefault(model, []); has_pk[model] = False
