@@ -1,0 +1,48 @@
+api-version: data-product.nextdata.com/v1
+models:
+  - name: customers
+    description: One row per customer.
+    attributes:
+      customer_id:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"primary_key"}'
+      customer_name:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"dimension","name":"customer_name","description":"Customer name."}'
+      billing_country:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"dimension","name":"billing_country","description":"Customer billing country."}'
+      segment:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"dimension","name":"customer_segment","description":"Customer segment."}'
+  - name: orders
+    description: One row per invoice order.
+    attributes:
+      order_id:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"roles":[{"kind":"primary_key"},{"kind":"metric","name":"invoice_count","agg":"count","description":"Number of invoices."}]}'
+      customer_id:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"join","to_model":"customers","to_column":"customer_id","cardinality":"many_to_one"}'
+      order_date:
+        data-type: date
+        metadata:
+          __nxd_semantic__: '{"kind":"dimension","name":"invoice_date","description":"Invoice date."}'
+      product_category:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"dimension","name":"product_category","description":"Invoice product category."}'
+      amount_eur:
+        data-type: number
+        metadata:
+          __nxd_semantic__: '{"kind":"metric","name":"total_invoice_amount_eur","agg":"sum","description":"Total invoiced amount in EUR."}'
+      is_overdue:
+        data-type: bool
+        metadata:
+          __nxd_semantic__: '{"kind":"metric","name":"overdue_invoice_count","agg":"sum","boolean":true,"description":"Number of overdue invoices."}'

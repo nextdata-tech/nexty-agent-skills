@@ -1,0 +1,5 @@
+{
+  "requires": "nxd-desktop-supervisor",
+  "workflow": "country-income-trajectory",
+  "description": "Run this scenario against the pinned local desktop supervisor runtime."
+}

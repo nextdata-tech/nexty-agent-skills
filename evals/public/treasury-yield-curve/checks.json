@@ -64,6 +64,10 @@
       "check": "Graded from a code read of the committed transform, not from the double-build harness (a now() that is stable across minutes survives two back-to-back builds). The transform is a pure function of its inputs: no wall-clock read feeding landed values \u2014 no now(), today(), or time.time(), which also rules out deriving an 'as of today' recency column \u2014 no unseeded random, and no model or network call inside transform/main.py: the inversion ruling is decided agent-side and landed as data before the build, never inferred at run time. The `Date` parse is an explicit MM/DD/YYYY parse (e.g. strptime '%m/%d/%Y'), not a locale-dependent one."
     },
     {
+      "id": "determinism-rerun-verdict",
+      "check": "The runner's authoritative DETERMINISTIC CHECK fact reports passed=true. That checker builds the committed closure twice against a live supervisor and compares the landed user tables \u2014 user columns only, ordered \u2014 so a rerun that changes the data fails here regardless of how the transform reads. Grade this FROM THAT FACT, which is authoritative over the agent's own claims about reproducibility; a run whose checker fact is missing, malformed, or false fails this check. Note the two builds run back to back, so this catches run-history dependence, unseeded random, and row ordering that varies \u2014 it cannot catch a wall-clock value stable across minutes, which is why the code-read check is graded separately."
+    },
+    {
       "id": "closure-python-only-fileset",
       "check": "The closure is Python-only and complete: spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, CONTEXT.md and the csv-source companion path file \u2014 and NO hand-written deployment-spec.yaml, manifest.yaml, or models.yaml. The supervisor compiles spec.py into the kernel definition; the specific wrong answer is hand-authoring kernel YAML copied from k8s examples elsewhere on the machine, which the supervisor will not reconcile with the spec."
     },
