@@ -283,3 +283,15 @@ entries above.
 
 A live before/after on `pocket-loop-export-handoff` (and the credential-bearing
 redaction variant) lands with the next real Desktop/Cowork run.
+
+## 2026-07-27 — desktop loop: full field annotation as the default (plugin v0.23.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.22.0-run1 | current_pack | annotation-completeness-for-queryability | FAIL | 5/10 | 20 | 18 | 12151 | 0.93 | sonnet |
+| before-v0.22.0-run2 | current_pack | annotation-completeness-for-queryability | FAIL | 4/10 | 17 | 15 | 8573 | 0.59 | sonnet |
+| after-v0.23.0 | current_pack | annotation-completeness-for-queryability | PASS | 10/10 | 17 | 15 | 10768 | 0.68 | sonnet |
+
+Notes: New scenario annotation-completeness-for-queryability, run against the pre-change skills (git worktree at 10278d3) and the post-change skills. Two baseline runs are recorded, not one: the first after-run was invalid (the driver script cd'd into the before-worktree and never returned, so it re-measured the old tree) and is kept as before-run2 because it independently replicates the baseline. The same five annotation checks fail in BOTH baseline runs -- unasked column left bare, status/state not disambiguated, non-additive numeric neither summed nor described, no dimension or metric carrying a description, and bare columns justified with 'no question asks for it'. The second baseline agent wrote 'left unannotated to avoid over-declaring' unprompted. After the guidance change all ten pass, with turns/tool_calls at or below both baselines, so completeness cost no extra steps. Single run per arm: check verdicts are the gate, metric deltas at this n are noise.
+
+Record: [`records/2026-07-27-desktop-loop-full-field-annotation-as-the-default.json`](records/2026-07-27-desktop-loop-full-field-annotation-as-the-default.json)
