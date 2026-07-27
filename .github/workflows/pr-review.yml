@@ -19,8 +19,11 @@ jobs:
   claude-review:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    # Advisory only — review failures must never block merge. Do not mark this a required check.
-    continue-on-error: true
+    # Advisory only — do NOT mark this a required check, so a red run never
+    # blocks merge. The job deliberately does NOT set `continue-on-error`: with
+    # it, a dead action still reported SUCCESS and PRs merged on a green board
+    # with no review (#121 did exactly that, twice). Advisory is enforced by
+    # leaving the check non-required, not by hiding the failure.
     permissions:
       contents: read
       pull-requests: write
@@ -92,8 +95,10 @@ jobs:
             --effort high
             --allowedTools "Bash(gh api:*),Bash(gh pr:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(python3:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(ls:*),Bash(wc:*),Bash(mkdir:*),Read,Write,Grep,Glob,Agent"
 
-      # Fallback: continue-on-error swallows a failed action step, leaving the PR
-      # with no review. Post a visible comment so reviewers know the bot didn't run.
+      # The action step keeps continue-on-error so this step can still run and
+      # comment when it dies. Post the notice, then fail the JOB: a dead review
+      # must surface as a red check, not a green one. The check is advisory
+      # (non-required), so red is visible without blocking merge.
       - name: Post fallback comment on action failure
         if: steps.claude.outcome == 'failure'
         env:
@@ -104,4 +109,9 @@ jobs:
         run: |
           set -euo pipefail
           BODY=$(printf '⚠️ Claude review did not run. The action step failed — most often a rate limit, auth failure, or SDK error. See the [workflow run](%s) for details. Push a new commit to retry once cleared.' "$RUN_URL")
-          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
+          # Never let a comment-posting failure mask the review failure itself:
+          # the notice is best-effort, the job status is the load-bearing signal.
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY" || \
+            echo "::warning::could not post the fallback comment; failing the job anyway"
+          echo "::error::Claude review did not run — the action step failed. See ${RUN_URL}"
+          exit 1
