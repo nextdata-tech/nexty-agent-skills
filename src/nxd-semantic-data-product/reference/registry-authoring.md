@@ -37,7 +37,7 @@ whether it is queryable *correctly*: `describe_model` is the entire basis on
 which a consuming agent maps a question to a concept, so a dimension that
 arrives as a bare name gives it nothing to choose on. Declare a role on every
 field, a `description` on every **dimension and metric** role, and a
-`.description(...)` on every model. `primary_key()` and `join()` accept no
+`.description(...)` on every `semantic_model`. `primary_key()` and `join()` accept no
 `description` — do not try to attach one, and never fall back to putting it on
 the enclosing `field()`, which never reaches the agent.
 
@@ -270,8 +270,9 @@ dimension is not propagated to the related metrics.
   default. The **marker model** is the one whole-model exception: it exists to
   satisfy the storage port's produce-verification and is never a query target,
   so its columns stay bare and out of the consumer's catalog.
-- Every dimension and metric carries a `description`, and every model a
-  `.description(...)`. A concept the agent cannot tell apart from its
+- Every dimension and metric carries a `description`, and every
+  `semantic_model` a `.description(...)`. A `semantic_view` may carry one too
+  (`semantic_view(..., description=)`); the gates do not require it. A concept the agent cannot tell apart from its
   neighbours is as unusable as one that was never declared.
 - Put the description **inside** the role builder. `field(description=...)` and
   `metric_field(description=...)` are attribute descriptions and never reach

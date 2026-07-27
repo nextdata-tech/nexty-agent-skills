@@ -103,6 +103,9 @@ def check_kwargs(call, name, where):
         # the role's, so only fail when the roles carry none — otherwise this
         # would block a legal API call that is not the mistake.
         roles = [a for a in call.args[1:] if isinstance(a, ast.Call)]
+        for kw in call.keywords:          # documented roles=[...] form
+            if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                roles += [e for e in kw.value.elts if isinstance(e, ast.Call)]
         if not any(call_name(r) in ("dimension", "metric")
                    and any(k.arg == "description" and desc_str(k.value)
                            for k in r.keywords)

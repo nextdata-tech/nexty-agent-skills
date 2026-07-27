@@ -379,13 +379,28 @@ def annotation_errors(
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if call_name(node.func) in ("field", "metric_field") and any(
-            keyword.arg == "description" for keyword in node.keywords
-        ):
-            errors.append(
-                f"description= on {call_name(node.func)}() never reaches "
-                f"describe_model — move it inside dimension(...) / metric(...)"
-            )
+        if call_name(node.func) not in ("field", "metric_field"):
+            continue
+        if not has_description(node):
+            continue
+        # Matches scripts/self_check.py: a wrapper description is a legal
+        # attribute description (it reaches the structural data_model block).
+        # The defect is using it INSTEAD of the role's, so fail only when no
+        # sibling role carries one. The two gates must agree or correctly
+        # annotated code passes the closure's own self-check and then fails
+        # acceptance, which reads as a harness bug.
+        siblings = [a for a in node.args[1:] if isinstance(a, ast.Call)]
+        for kw in node.keywords:          # documented roles=[...] form
+            if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                siblings += [e for e in kw.value.elts if isinstance(e, ast.Call)]
+        if any(call_name(r.func) in ("dimension", "metric") and has_description(r)
+               for r in siblings):
+            continue
+        errors.append(
+            f"description= on {call_name(node.func)}() never reaches "
+            f"describe_model and no sibling role carries one — move it "
+            f"inside dimension(...) / metric(...)"
+        )
 
     for model in sorted(promised):
         spec = inferred.get(model) or {}
