@@ -175,7 +175,7 @@ def parse_models(src, path):
                 any(call_name(c) == "description" for c in chain)
                 or any(k.arg == "description" and desc_str(k.value)
                        for k in root.keywords)):
-            bad(f"models.py: semantic_model('{model}') declares no description "
+            bad(f"{path}: semantic_model('{model}') declares no description "
                 f"— both list_models and describe_model show it to the agent")
         in_view = kind == "semantic_view"
         for call in chain:

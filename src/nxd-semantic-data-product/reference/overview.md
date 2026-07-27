@@ -70,9 +70,10 @@ Roles decide **whether** a field can be queried. Descriptions decide whether it
 can be queried **correctly**: `describe_model` is the whole basis on which a
 consuming agent maps a natural-language question to a concept, and a dimension
 that arrives as a bare name carries no basis for that choice. Declare a role on
-every field, and a description on every **dimension and metric** role —
-`primary_key()` and `join()` take no `description`, and neither is a concept an
-agent selects. See `registry-authoring.md`.
+every field a metric does not already aggregate — an aggregated measure's
+meaning travels on the metric — and a description on every **dimension and
+metric** role. `primary_key()` and `join()` take no `description`, and neither
+is a concept an agent selects. See `registry-authoring.md`.
 
 > **Put the description inside the role, not on the field wrapper.**
 > `dimension(description=...)` and `metric(description=...)` are written into the

@@ -236,9 +236,9 @@ per set of metrics over that table:
 Role builders: `field(number(), primary_key())` — never the deprecated `grain`;
 `field(string(), dimension(name=..., description=..., pii=<flag>))`; `field(number(), join(to="<model>", to_column="<col>"))` — `to=`, NOT `to_model=`.
 
-**Every field takes a role; dimensions and metrics also take a description
-(`primary_key()`/`join()` have none), except a measure a metric aggregates.
-Every model takes a `.description(...)`.** `describe_models` is all a later
+**Every field takes a role, except a measure a metric aggregates. Dimensions
+and metrics also take a description; `primary_key()`/`join()` have none. Every
+model takes a `.description(...)`.** `describe_models` is all a later
 consumer sees, so a bare column is invisible and a bare name unusable. Put the
 description INSIDE the role — on `field()`/`metric_field()` it never reaches
 the agent. A dimension a **ruling** created must state that ruling. Metrics

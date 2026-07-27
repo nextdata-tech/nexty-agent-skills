@@ -195,10 +195,9 @@ for the user's reply:
 Invoke the **nxd-semantic-data-product** skill in its inference mode: profile
 each source into `schema.json`, then derive the semantic model — grains,
 dimensions, metrics, joins, PII, **and a description on every model, dimension
-and metric** (Step 5 maps questions to concepts by reading them) — from the
-profile(s) **and** the user's questions. With more than one source, profile each
-separately and carry its label forward — Step 3 needs that mapping to know which
-labeled source each physical model belongs to. That skill owns the role grammar.
+and metric** (Step 5 reads them to map questions) — from the profile(s) **and**
+the user's questions. With 2+ sources profile each separately, carrying labels
+forward for Step 3. That skill owns the role grammar.
 
 ### Step 3 — Generate the runnable closure
 
@@ -340,8 +339,9 @@ and the non-convergence report live in
   or a dimension was missing. Re-describe, re-map, then re-query through MCP.
 - **Model / DP-level** — the inferred model is wrong (missing metric, wrong
   grain, missing join, wrong PII, or an undistinguishing description), or the
-  question needs a column or grain that doesn't exist (a ratio, a monthly
-  rollup, a classification). That is a **derived model**, not a query tweak: go
+  question needs a column or grain that doesn't exist (a filtered figure, a
+  ratio, a monthly rollup, a classification) — a **derived model**, not a
+  query tweak: go
   back to Step 2/3 and have nxd-generate-dp materialize the ruling, then
   rebuild through MCP with the **same** `workflow`. **After every rebuild,
   refresh:** use the endpoint/token returned by that build, then describe the
