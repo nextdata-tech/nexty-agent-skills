@@ -79,6 +79,20 @@ def bad(name: str, detail: str) -> None:
     FAILURES.append((name, detail))
 
 
+def pocket_python() -> Path | None:
+    """The provisioned venv interpreter that has nxd importable.
+
+    EVAL_POCKET_PYTHON is what the harness sets; the desktop setup script
+    provisions the same interpreter at ~/.nxd/desktop-venv. Either is fine —
+    what matters is that it is NOT a bare python3.
+    """
+    env_python = os.environ.get("EVAL_POCKET_PYTHON", "").strip()
+    if env_python and Path(env_python).is_file():
+        return Path(env_python)
+    fallback = Path.home() / ".nxd" / "desktop-venv" / "bin" / "python"
+    return fallback if fallback.is_file() else None
+
+
 def supervisor_binary() -> Path | None:
     """Locate the desktop supervisor the same way the harness does."""
     env_dir = os.environ.get("EVAL_POCKET_SUPERVISOR_DIR", "").strip()
@@ -104,9 +118,20 @@ def build_once(supervisor: Path, closure: Path, data_dir: Path, workflow: str) -
         "--definition", str(closure.resolve()),
         "--workflow", workflow,
     ]
+    # The kernel runs the transform with NXD_DESKTOP_PYTHON, falling back to a
+    # bare python3 that has no nxd installed — the transform then dies with
+    # ModuleNotFoundError after the full staging timeout. Pin it to the
+    # provisioned venv the harness already located, so this checker does not
+    # depend on the variable happening to be exported into its own environment.
+    env = dict(os.environ)
+    if not env.get("NXD_DESKTOP_PYTHON"):
+        venv_python = pocket_python()
+        if venv_python is not None:
+            env["NXD_DESKTOP_PYTHON"] = str(venv_python)
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT_S,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return f"build timed out after {BUILD_TIMEOUT_S}s"
