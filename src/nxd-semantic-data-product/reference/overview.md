@@ -62,9 +62,9 @@ is listed by none of them in `list_models` or `describe_model`. The structural
 agent can query from.
 
 Naming one in a selection is a hard failure, not a silent omission:
-`run_semantic_query` returns a structured `CompileError` — *"unknown dimension
-'loyalty_points'. Known dimensions: ..."* — and the consumer sees an error, not a
-quietly narrower answer.
+`run_semantic_query` returns a structured `CompileError` naming the unknown
+concept, so the consumer sees an error rather than a quietly narrower answer.
+See `compiler-and-routing.md` for the compile-path failures and their wording.
 
 Roles decide **whether** a field can be queried. Descriptions decide whether it
 can be queried **correctly**: `describe_model` is the whole basis on which a

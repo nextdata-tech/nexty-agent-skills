@@ -373,9 +373,11 @@ def has_description(call: ast.Call) -> bool:
     for keyword in call.keywords:
         if keyword.arg != "description":
             continue
+        # joined_string already accepts Constant / JoinedStr / BinOp-Add,
+        # which is exactly the set self_check.py's desc_str() accepts. Do not
+        # widen past it: a broader BinOp here would pass "%s" % x at acceptance
+        # and fail it in the closure's own self-check.
         text = joined_string(keyword.value)
-        if text is None and isinstance(keyword.value, ast.BinOp):
-            text = ast.unparse(keyword.value)
         if text and text.strip():
             return True
     return False
