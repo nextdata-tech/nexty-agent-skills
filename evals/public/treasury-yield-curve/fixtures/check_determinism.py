@@ -1,8 +1,19 @@
-"""Determinism check: a closure's transform must land identical data on a rerun.
+"""Determinism check: a transform's PROCESSING LOGIC must be reproducible.
 
-The invariant under test is that rebuilding an unchanged closure produces the
-same landed rows — no `now()`, no unseeded random, no dependence on wall-clock
-or on how many times the transform has run before.
+The invariant under test is that the transform is a pure function of its
+input: given the same source data, it lands the same rows. What that forbids
+is nondeterminism the transform itself introduces — `now()`, unseeded random,
+an LLM judgement made inline, iteration order that varies run to run, or any
+dependence on how many times the transform has run before.
+
+SCOPE. This gates processing logic, NOT source stability. A transform reading
+a live upstream that legitimately changed between two builds is not a defect,
+and this checker does not attempt to tell that case apart from a genuine logic
+bug — it builds twice back to back, so a stable source is assumed. Scenarios
+whose source can move under them should not attach this check until the
+harness can pin a source snapshot across both builds. Handling transient
+source behaviour (drift, rate limits, partial reads) is deliberately out of
+scope here.
 
 WHY THIS COMPARES ROWS AND NOT FILES. The obvious implementation — hash the
 artifact directory after each build and compare — fails on every honest
@@ -220,9 +231,14 @@ def main() -> int:
                     if hash_a != hash_b:
                         bad(f"rows-identical[{table}]",
                             f"{count_a} rows vs {count_b} rows; "
-                            f"{hash_a} != {hash_b}. The transform is not "
-                            f"deterministic — check for now(), unseeded random, "
-                            f"or ordering that depends on run history.")
+                            f"{hash_a} != {hash_b}. The transform's processing "
+                            f"logic is not reproducible — check for now(), "
+                            f"unseeded random, an inline model call, or "
+                            f"ordering that depends on run history. If this "
+                            f"closure reads a live source that changed between "
+                            f"the two builds, that is source drift rather than "
+                            f"a logic defect and this check does not belong on "
+                            f"the scenario.")
                         continue
                     ok(f"rows-identical[{table}]")
 
