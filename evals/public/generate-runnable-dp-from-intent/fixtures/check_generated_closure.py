@@ -169,7 +169,9 @@ def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
         name = model_call.args[0]
         if not isinstance(name, ast.Constant) or not isinstance(name.value, str):
             continue
-        text = string_keyword(model_call, "description") or ""
+        text = (string_keyword(model_call, "description")
+                or next((joined_string(k.value) or "" for k in model_call.keywords
+                         if k.arg == "description"), "") or "")
         for call in chain:
             if call_name(call.func) == "description" and call.args:
                 joined = joined_string(call.args[0])
@@ -191,7 +193,10 @@ def joined_string(node: ast.expr) -> str | None:
     if isinstance(node, ast.JoinedStr):
         parts = [p.value for p in node.values
                  if isinstance(p, ast.Constant) and isinstance(p.value, str)]
-        return "".join(parts) or None
+        # An f-string of pure interpolations has no literal parts but is still
+        # an authored description; fall back to the source so this accepts the
+        # same set self_check.py's desc_str() does.
+        return "".join(parts) or ast.unparse(node)
     return None
 
 

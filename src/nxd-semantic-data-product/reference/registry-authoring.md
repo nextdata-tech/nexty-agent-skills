@@ -267,7 +267,9 @@ dimension is not propagated to the related metrics.
   a useful slice. Everything else takes a role. A column that is neither roled
   nor aggregated produces no metric, dimension or join and is invisible to
   `describe_model` — that is a decision to make it unqueryable, not a neutral
-  default.
+  default. The **marker model** is the one whole-model exception: it exists to
+  satisfy the storage port's produce-verification and is never a query target,
+  so its columns stay bare and out of the consumer's catalog.
 - Every dimension and metric carries a `description`, and every model a
   `.description(...)`. A concept the agent cannot tell apart from its
   neighbours is as unusable as one that was never declared.

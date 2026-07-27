@@ -192,8 +192,8 @@ description** — the questions decide which role, not whether to annotate.
 `primary_key()` and `join()` take no `description`; do not infer one for them,
 and never fall back to the enclosing `field()`, which the agent never sees. The
 one exception to the role rule is a column a declared metric already
-aggregates: its meaning travels on the metric, and grouping by a
-continuous measure is not a useful slice. A column with no role produces no metric,
+aggregates: its meaning travels on the metric. The marker model is exempt
+whole — it satisfies produce-verification and is never a query target. A column with no role produces no metric,
 dimension or join and is invisible to `describe_model`; leaving one bare is a
 decision to make it unqueryable. A spare dimension costs a line in the catalog;
 a missing one costs an unanswerable question and a rebuild. Flag from the DATA,

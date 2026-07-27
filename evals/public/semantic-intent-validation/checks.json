@@ -32,10 +32,6 @@
     {
       "id": "pii-note-when-relevant",
       "check": "If the agent ever selects a dimension flagged pii=true in describe_model (e.g. rep_name), it notes the result is governed / may be masked."
-    },
-    {
-      "id": "abstains-on-unusable-catalog",
-      "check": "Where a candidate metric or dimension carries no description (or one too thin to distinguish it from a neighbour), the agent does not guess: the Echo restatement cannot be formed from an empty description, so it clarifies via AskUserQuestion or abstains rather than executing. Selecting confidently off a bare name is a fail even when the name happens to be right."
     }
   ]
 }

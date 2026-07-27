@@ -97,9 +97,19 @@ def check_kwargs(call, name, where):
     # eval checks fail it would leave the only mechanical gate green on
     # precisely the defect this guidance exists to prevent.
     if name in ("field", "metric_field") and any(
-            k.arg == "description" for k in call.keywords):
-        bad(f"{where}: description= on {name}() never reaches describe_models "
-            f"— move it inside dimension(...) / metric(...)")
+            k.arg == "description" and desc_str(k.value) for k in call.keywords):
+        # A wrapper description is a legal attribute description (it reaches
+        # the structural data_model block). The defect is using it INSTEAD of
+        # the role's, so only fail when the roles carry none — otherwise this
+        # would block a legal API call that is not the mistake.
+        roles = [a for a in call.args[1:] if isinstance(a, ast.Call)]
+        if not any(call_name(r.func) in ("dimension", "metric")
+                   and any(k.arg == "description" and desc_str(k.value)
+                           for k in r.keywords)
+                   for r in roles):
+            bad(f"{where}: description= on {name}() never reaches "
+                f"describe_models and the role carries none — move it inside "
+                f"dimension(...) / metric(...)")
     if name in ("dimension", "metric") and not any(
             k.arg == "description" and desc_str(k.value)
             for k in call.keywords):
