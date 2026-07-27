@@ -1,0 +1,6 @@
+carrier_id,carrier_name,mode
+C01,Northwind Freight,road
+C02,Baltic Air Cargo,air
+C03,Meridian Sea Lines,sea
+C04,Alpine Express,road
+C05,Corvus Air,air
