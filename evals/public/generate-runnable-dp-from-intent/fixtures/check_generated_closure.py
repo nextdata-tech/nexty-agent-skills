@@ -401,6 +401,14 @@ def annotation_errors(
     # description: it reaches the structural data_model block and never
     # describe_model. The author believes the concept is documented and it is
     # not, so this is an error rather than a warning.
+    # Column names, so a wrapper-description error can name the field it is on
+    # rather than repeating an identical location-less sentence per occurrence.
+    column_of: dict[int, str] = {}
+    for model, schema in schemas.items():
+        for column, field_spec in zip(schema.keys, schema.values, strict=True):
+            if isinstance(column, ast.Constant) and isinstance(column.value, str):
+                column_of[id(field_spec)] = f"{model}.{column.value}"
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -418,13 +426,18 @@ def annotation_errors(
         for kw in node.keywords:          # documented roles=[...] form
             if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
                 siblings += [e for e in kw.value.elts if isinstance(e, ast.Call)]
-        if any(call_name(r.func) in ("dimension", "metric") and has_description(r)
-               for r in siblings):
+        describable = [r for r in siblings
+                       if call_name(r.func) in ("dimension", "metric")]
+        if any(has_description(r) for r in describable):
             continue
+        # Same branching as scripts/self_check.py: with no dimension/metric
+        # role there is nowhere to move the text to, so the remedy is deletion.
+        remedy = ("move it inside dimension(...) / metric(...)" if describable
+                  else "primary_key()/join() take no description — drop it")
+        location = column_of.get(id(node), ast.unparse(node)[:60])
         errors.append(
-            f"description= on {call_name(node.func)}() never reaches "
-            f"describe_model and no sibling role carries one — move it "
-            f"inside dimension(...) / metric(...)"
+            f"{location}: description= on {call_name(node.func)}() never "
+            f"reaches describe_model and no role carries one — {remedy}"
         )
 
     for model in sorted(promised):

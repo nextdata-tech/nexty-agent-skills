@@ -228,13 +228,17 @@ def check_kwargs(call, name, where):
         for kw in call.keywords:          # documented roles=[...] form
             if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
                 roles += [e for e in kw.value.elts if isinstance(e, ast.Call)]
-        if not any(call_name(r) in ("dimension", "metric")
-                   and any(k.arg == "description" and desc_str(k.value)
-                           for k in r.keywords)
-                   for r in roles):
+        describable = [r for r in roles if call_name(r) in ("dimension", "metric")]
+        if not any(any(k.arg == "description" and desc_str(k.value)
+                       for k in r.keywords) for r in describable):
+            # Point at a fix that exists. With no dimension/metric role there
+            # is nowhere to move the text to — primary_key()/join() take no
+            # description — so the only remedy is to delete it.
+            remedy = ("move it inside dimension(...) / metric(...)"
+                      if describable else
+                      "primary_key()/join() take no description — drop it")
             bad(f"{where}: description= on {name}() never reaches "
-                f"describe_models and the role carries none — move it inside "
-                f"dimension(...) / metric(...)")
+                f"describe_models and the role carries none — {remedy}")
     if name in ("dimension", "metric") and not any(
             k.arg == "description" and desc_str(k.value)
             for k in call.keywords):
