@@ -253,8 +253,15 @@ orders = (
     .schema(
         {
             "ORDER_ID": field(int64(), primary_key()),
-            "REGION": field(string(), dimension(name="region")),
+            "REGION": field(
+                string(),
+                # The description goes INSIDE dimension() — on the enclosing
+                # field() it would never reach describe_model.
+                dimension(name="region", description="Sales region the order was booked in."),
+            ),
             "PRODUCT_ID": field(int64(), join(to="products", to_column="PRODUCT_ID")),
+            # Bare is correct here: the total_revenue metric below aggregates
+            # this column, so its meaning travels on the metric.
             "REVENUE_USD": field(float64()),
         }
     )
@@ -264,7 +271,12 @@ order_metrics = semantic_view("order_metrics", orders).schema(
     {
         "total_revenue": metric_field(
             float64(),
-            metric(Agg.SUM, of=orders.field("REVENUE_USD"), name="total_revenue"),
+            metric(
+                Agg.SUM,
+                of=orders.field("REVENUE_USD"),
+                name="total_revenue",
+                description="Gross order revenue in USD across all order statuses.",
+            ),
         ),
     }
 )
