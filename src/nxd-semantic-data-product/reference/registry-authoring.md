@@ -35,8 +35,11 @@ is queryable at all — a column with none produces no metric, dimension or join
 and is absent from `describe_model` (see `overview.md`). A description decides
 whether it is queryable *correctly*: `describe_model` is the entire basis on
 which a consuming agent maps a question to a concept, so a dimension that
-arrives as a bare name gives it nothing to choose on. Declare a role and a
-description on every field, and a `.description(...)` on every model.
+arrives as a bare name gives it nothing to choose on. Declare a role on every
+field, a `description` on every **dimension and metric** role, and a
+`.description(...)` on every model. `primary_key()` and `join()` accept no
+`description` — do not try to attach one, and never fall back to putting it on
+the enclosing `field()`, which never reaches the agent.
 
 ---
 
@@ -247,8 +250,9 @@ event_metrics = semantic_view("event_metrics", activity_events).schema(
 )
 ```
 
-Note the join field carries no description — `join()` has no such parameter, and
-a join is not a concept an agent selects. Every other field does.
+Note the primary-key and join fields carry no description — `primary_key()` and
+`join()` have no such parameter, and neither is a concept an agent selects.
+Every dimension and metric field does.
 
 `event_count` and `unique_actors` can be sliced by `country`; the PII `email`
 dimension is not propagated to the related metrics.

@@ -187,9 +187,12 @@ column *could* be; the questions say what it *must* be:
 - "per order / per customer ..." confirms the **grain** of each model (one row per
   entity — cross-check against exact full-table cardinality 1.0).
 
-**Every column gets a role and a description** — the questions decide which
-role, not whether to annotate. The one exception is a column a declared metric
-already aggregates: its meaning travels on the metric, and grouping by a
+**Every column gets a role, and every dimension and metric role a
+description** — the questions decide which role, not whether to annotate.
+`primary_key()` and `join()` take no `description`; do not infer one for them,
+and never fall back to the enclosing `field()`, which the agent never sees. The
+one exception to the role rule is a column a declared metric already
+aggregates: its meaning travels on the metric, and grouping by a
 continuous measure is not a useful slice. A column with no role produces no metric,
 dimension or join and is invisible to `describe_model`; leaving one bare is a
 decision to make it unqueryable. A spare dimension costs a line in the catalog;

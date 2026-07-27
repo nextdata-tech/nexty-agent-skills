@@ -53,6 +53,23 @@ def literal_str(node):
     return node.value if isinstance(node, ast.Constant) and isinstance(
         node.value, str) else None
 
+def desc_str(node):
+    """Any authored description form: literal, f-string, or concatenation.
+
+    Adjacent parenthesised literals are folded to one Constant by the parser,
+    but an f-string is a JoinedStr and a runtime `a + b` is a BinOp. Both are
+    legitimately-authored descriptions, so accept them here — the acceptance
+    eval's has_description() accepts them too, and the two gates must agree or
+    correctly-annotated code fails one of them.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value or None
+    if isinstance(node, ast.JoinedStr):
+        return ast.unparse(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return ast.unparse(node)
+    return None
+
 def check_kwargs(call, name, where):
     allowed = KWARGS[name]
     for kw in call.keywords:
@@ -84,7 +101,7 @@ def check_kwargs(call, name, where):
         bad(f"{where}: description= on {name}() never reaches describe_models "
             f"— move it inside dimension(...) / metric(...)")
     if name in ("dimension", "metric") and not any(
-            k.arg == "description" and literal_str(k.value)
+            k.arg == "description" and desc_str(k.value)
             for k in call.keywords):
         bad(f"{where}: {name}() has no description= — it reaches "
             f"describe_models as a bare name the agent cannot choose on")
@@ -156,7 +173,7 @@ def parse_models(src, path):
         # uses, so rejecting it would fail correctly-authored models.
         if kind == "semantic_model" and not (
                 any(call_name(c) == "description" for c in chain)
-                or any(k.arg == "description" and literal_str(k.value)
+                or any(k.arg == "description" and desc_str(k.value)
                        for k in root.keywords)):
             bad(f"models.py: semantic_model('{model}') declares no description "
                 f"— both list_models and describe_model show it to the agent")
