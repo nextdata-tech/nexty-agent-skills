@@ -78,14 +78,14 @@ multi-question analysis, prefer the reusable local-product path.
 Choose this order before invoking any runtime command:
 
 1. **MCP first.** The `nxd-desktop` server exposes six loop tools —
-   `mcp__nxd-desktop__build_data_product`,
-   `mcp__nxd-desktop__resume_data_product`,
+   `mcp__nxd-desktop__build_data_product`, `mcp__nxd-desktop__resume_data_product`,
    `mcp__nxd-desktop__list_data_products`, `mcp__nxd-desktop__describe_models`,
    `mcp__nxd-desktop__run_semantic_query`, and `mcp__nxd-desktop__inspect_run`
    — use them for the entire discover, build, resume, describe, and query
    sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
    on-demand handoffs. This is the supported route for Claude Desktop and Claude
-   Cowork.
+   Cowork. Read-only `nxd://` **resources** expose what a published release
+   *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
    `nxd-desktop-supervisor` only when the session context has positively
    established that the shell is the user's macOS host **and** both
