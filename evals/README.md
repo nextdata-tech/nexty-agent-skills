@@ -401,10 +401,20 @@ single-turn and runs on exactly the pre-existing path:
   correction" is unanswerable without turn 1 in view.
 
 `turns[i]` is turn `i+2` — turn 1 is `prompt.md`. The accumulated trace carries
-a `[user_turn N] <text>` separator line before each scripted turn, so a
+a `[user_turn N <state>] <text>` separator line before each scripted turn, so a
 `wants_trace` deterministic checker can grade **ordering** (e.g. fail if any
-closure write appears before `[user_turn 2]`) instead of leaving
+closure write appears before `[user_turn 2`) instead of leaving
 stopped-and-asked entirely to the stochastic judge.
+
+`<state>` is `after-await` when the previous turn ended with
+`[[AWAITING_USER_INPUT]]` and `unprompted` when it did not. Because turns
+default to `always`, a separator's presence proves only that the harness spoke
+— not that the agent had stopped to be spoken to. A scenario grading "did the
+agent stop and ask" must key on that state rather than on the delivery. The
+same fact reaches the judge as a `HARNESS FACT` line and is recorded in
+`metrics["awaited_input_turns"]`; an unprompted delivery instructs the judge to
+fail any check about the agent pausing for approval, so an agent that never
+stopped cannot inherit credit from a turn the harness sent anyway.
 
 Multi-turn requires a provider that can drive it. `claude` can; `codex` cannot
 (`codex exec` is single-shot with no persistent-stdin or resume protocol), and a

@@ -335,10 +335,16 @@ def test_multi_turn_drives_every_turn(fake_cli, tmp_path):
     assert "saw: third message" in trace
     # Separators are present and ordered, so a trace-reading checker can locate
     # the boundary and compare write positions against it.
-    i2 = trace.index("[user_turn 2]")
-    i3 = trace.index("[user_turn 3]")
+    i2 = trace.index("[user_turn 2")
+    i3 = trace.index("[user_turn 3")
     assert trace.index("saw: first prompt") < i2 < trace.index("saw: second message")
     assert i2 < i3 < trace.index("saw: third message")
+    # The fake CLI never emits the sentinel, so every delivery is unprompted —
+    # and the trace has to say so, or a checker cannot tell a turn the agent
+    # asked for from one the harness forced.
+    assert "[user_turn 2 unprompted]" in trace
+    assert "[user_turn 3 unprompted]" in trace
+    assert metrics["awaited_input_turns"] == []
     # Folded, not overwritten: one tool call per turn.
     assert metrics["tool_calls"] == 3
     assert metrics["num_turns"] == 3
@@ -369,6 +375,9 @@ def test_conditional_turn_fires_on_the_sentinel(fake_cli, tmp_path, monkeypatch)
     assert metrics["skipped_turns"] == []
     assert metrics["awaited_input_turns"] == [1]
     assert "saw: second" in trace
+    # The agent DID stop, so the separator must record that rather than the
+    # unprompted form — this is the case a stop-grading checker credits.
+    assert "[user_turn 2 after-await]" in trace
 
 
 def test_unconditional_turn_fires_without_the_sentinel(fake_cli, tmp_path):
@@ -612,6 +621,56 @@ def test_judge_is_told_to_fail_checks_whose_turn_never_fired():
     )
     assert "[NOT SENT]" in block
     assert "turn not sent" in block
+
+
+def test_judge_is_told_the_agent_did_not_stop_before_an_always_turn():
+    """An `always` turn arrives whether or not the agent stopped for it.
+
+    Without this the judge sees the conversation continue and can read it as a
+    checkpoint that happened — passing a "did it stop and ask" check on a run
+    where the harness simply talked over an agent that never yielded.
+    """
+    run = _load_run_module()
+    block = run.build_scripted_turns_block(
+        {"turns": [{"text": "go ahead"}]},
+        {"awaited_input_turns": []},
+    )
+    assert "did NOT end turn 1" in block
+    assert "delivered unconditionally" in block
+    assert "MUST be failed" in block
+
+
+def test_judge_is_told_the_agent_did_stop_when_it_did():
+    run = _load_run_module()
+    block = run.build_scripted_turns_block(
+        {"turns": [{"text": "go ahead"}]},
+        {"awaited_input_turns": [1]},
+    )
+    assert "stopped and waited" in block
+    assert "delivered unconditionally" not in block
+
+
+def test_a_skipped_turn_gets_no_stop_verdict():
+    """A turn that never fired has no delivery to characterise."""
+    run = _load_run_module()
+    block = run.build_scripted_turns_block(
+        {"turns": [{"text": "go ahead", "when": "awaiting_input"}]},
+        {"skipped_turns": [2], "awaited_input_turns": []},
+    )
+    assert "[NOT SENT]" in block
+    assert "delivered unconditionally" not in block
+
+
+def test_the_trace_separator_records_whether_the_agent_had_stopped():
+    """A trace-reading checker must be able to tell the two deliveries apart."""
+    assert "unprompted" in eb.turn_separator(2, "go ahead", after_await=False)
+    assert "after-await" in eb.turn_separator(2, "go ahead", after_await=True)
+    # Both stay matchable by the positional prefix that checkers key on.
+    for sep in (
+        eb.turn_separator(2, "x", after_await=False),
+        eb.turn_separator(2, "x", after_await=True),
+    ):
+        assert sep.startswith("[user_turn 2")
 
 
 def test_check_turn_annotation_reaches_the_judge():

@@ -78,9 +78,30 @@ TURN_SEPARATOR_PREFIX = "[user_turn "
 STDERR_TAIL_CHARS = 8000
 
 
-def turn_separator(turn_index: int, text: str) -> str:
-    """Render the trace separator announcing a scripted user turn."""
-    return f"{TURN_SEPARATOR_PREFIX}{turn_index}] {text}"
+def turn_separator(turn_index: int, text: str, *, after_await: bool = False) -> str:
+    """Render the trace separator announcing a scripted user turn.
+
+    ``after_await`` records whether the PRECEDING turn ended with the boundary
+    sentinel. Because turns default to ``when: "always"``, the separator's mere
+    presence says only that the harness spoke — not that the agent had stopped
+    to be spoken to. A trace-reading checker grading "did the agent stop and
+    ask" needs those two cases separated in the artifact it reads, so the state
+    is written into the separator line itself rather than left implicit.
+    """
+    state = AWAITED_MARK if after_await else NOT_AWAITED_MARK
+    return f"{TURN_SEPARATOR_PREFIX}{turn_index}{state}] {text}"
+
+
+# Appended inside the separator's bracket, which MOVES the closing bracket: the
+# rendered line is ``[user_turn 2 unprompted]``, so the literal ``[user_turn 2]``
+# no longer appears anywhere in a trace. A checker that only cares about position
+# must therefore match the unterminated prefix ``[user_turn 2`` (as
+# check_executable_policy.TURN_2_SEPARATOR does); one grading the stop matches
+# the fuller form. Keep any prose quoting this format in sync — a checker left
+# pinning the old bracketed literal silently stops finding the boundary and
+# collapses every ordering verdict to the same answer.
+AWAITED_MARK = " after-await"
+NOT_AWAITED_MARK = " unprompted"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -513,15 +534,18 @@ class ClaudeBackend:
             turn_index = offset + 1
             text = prompt if turn is None else turn.text
             if turn is not None:
-                if turn.when == WHEN_AWAITING_INPUT and not awaiting_input(
+                after_await = awaiting_input(
                     segments[-1][1].get("final_answer", "") if segments else ""
-                ):
+                )
+                if turn.when == WHEN_AWAITING_INPUT and not after_await:
                     # The agent did not declare that it was waiting, so sending
                     # this turn would talk over a finished run. Recorded, not an
                     # error — the scenario grades the stop separately.
                     skipped_turns.append(turn_index)
                     continue
-                segments.append((turn_separator(turn_index, text), {}))
+                segments.append(
+                    (turn_separator(turn_index, text, after_await=after_await), {})
+                )
                 turns_sent += 1
 
             message = {
