@@ -23,7 +23,9 @@ properties the ancestor does not measure:
 
 The unreachable branch is a fact about the source, not a judgement call: C5
 below scores on referee contact details, and `applicants.csv` has no referee
-column of any kind. Every row floors at 1; nothing reaches 5.
+column of any kind. Nothing reaches 5. Note that no row floors at 1 either —
+the whole criterion is uncaptured, so its bottom band is unreachable for the
+same reason its top band is.
 
 ## Task for the agent
 
@@ -114,7 +116,21 @@ prompt by `agent_task_from_prompt`.
 `availability_stated`. None of them carries referee identity or referee contact
 details, and no free-text column in any of the ten rows mentions a referee. C5's
 top band requires "two named referees with contact details on file". No row can
-reach it; every row floors at C5 = 1.
+reach it.
+
+**No row floors at C5 = 1 either, and an agent that lands a 1 for every row is
+wrong.** C5's bottom band ("no referee information at all") is a claim about a
+candidate the source describes as having no referees. Here the source says
+nothing about referees for anyone — the entire criterion is uncaptured, not
+observed-and-empty — so no row is eligible for that band. Scoring the
+fall-through would land a fabricated 1 for all ten entities. Per
+`reference/derived-models.md` § "Precedence: when the supplied rubric's bottom
+band *is* the absence case", a criterion the source cannot speak to at all is
+raised to the read-back gate, not resolved by the agent: the correct behaviour
+is to say C5 is unreachable in both directions and offer the two readings
+(score the absence a 1 as written, or land `None` + `limitation` and
+re-normalize the weights). Either encoding is acceptable once the user picks it;
+silently flooring at 1 is not.
 
 The exceptional-resume override is keyed on `C5 == 5`. It therefore cannot fire
 for any candidate in this source. Three of the ten rows (A-002, A-006, A-008)
