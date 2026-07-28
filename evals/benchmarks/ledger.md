@@ -368,4 +368,39 @@ SKILL.md rather than by relaxing the check.
 Output tokens fell ~29% (11936 → 8491) while checks went 5/6 → 6/6; single-run
 deltas are noise per the header, so read the verdict, not the efficiency.
 
+**CORRECTION (same day):** the `after-v0.25.2` PASS above was a single run and
+did not replicate — four further runs of that same content gave 1 PASS / 4 FAIL
+on the absence gloss. The gate fixes in that commit stand; the absence rule did
+not, and is fixed in the entry below. Do not cite this row's PASS as evidence.
+
 Record: [`records/2026-07-28-nxd-dp-static-artifact-visual-channel-and-absence-state-render-rules.json`](records/2026-07-28-nxd-dp-static-artifact-visual-channel-and-absence-state-render-rules.json)
+
+## 2026-07-28 — nxd-dp-static-artifact: absence rule branches on the key (plugin v0.25.2)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | agent |
+|---|---|---|---|---|---|---|---|---|
+| before (prose rule) ×5 | current_pack | dp-static-artifact-lifecycle | FAIL ×4, PASS ×1 | 5/6, 6/6 | 16–23 | 14–21 | 11.9–18.5k | sonnet |
+| after (key-branch + grep) ×5 | current_pack | dp-static-artifact-lifecycle | PASS ×5 | 6/6 | 15–26 | 13–24 | 9.1–13.1k | sonnet |
+
+Notes: N=5 PER ARM, deliberately — the entry above this one recorded a single
+PASS and was WRONG. Re-running that same content four more times gave 1 PASS /
+4 FAIL, all on the same assertion (a `null` gloss absent from the whole page).
+One green run on a nondeterministic agent is not evidence; this scenario needed
+N≥4 before its verdict was stable either way.
+
+Two root causes, found by diffing what the passing runs did. (1) The render step
+said to show a description "where present", which licenses dropping a `null`
+one — the agent was following the more specific instruction correctly. "Present"
+now means the KEY exists, and the rule is a two-branch decision (absent key →
+render nothing; present key → always render, gloss included) rather than five
+sentences of prose carrying a rule, an anti-rule and an exception. (2) Both
+passing runs ran a grep-style verification pass over the finished file; two of
+the three failures skipped it. Grepping the temp file for every gloss the bundle
+needs is now part of validating it before the atomic rename, stated in the
+file-and-safety contract rather than only in the handoff checklist.
+
+Efficiency moved the right way as a side effect (mean output tokens 14.9k →
+11.2k), but read the verdict column, not that: the point of this entry is 1/5 →
+5/5 on correctness.
+
+Record: [`records/2026-07-28-nxd-dp-static-artifact-absence-rule-branches-on-the-key.json`](records/2026-07-28-nxd-dp-static-artifact-absence-rule-branches-on-the-key.json)
