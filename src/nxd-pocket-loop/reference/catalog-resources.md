@@ -8,6 +8,7 @@
 - [What each document carries](#what-each-document-carries)
 - [Pinned, not live — what is deliberately absent](#pinned-not-live--what-is-deliberately-absent)
 - [Reading `outputs` without the union trap](#reading-outputs-without-the-union-trap)
+- [Static artifact lifecycle](#static-artifact-lifecycle)
 - [When a read fails](#when-a-read-fails)
 
 ## Resources vs. tools
@@ -132,6 +133,16 @@ To enumerate what a product actually exposes, walk `ports[].model_names` (and
 union them yourself if you need a flat list). This mirrors exactly what a
 deployed product reports for the same manifest, which is why the projection
 refuses to union on your behalf.
+
+## Static artifact lifecycle
+
+After build or resume, `nxd-dp-static-artifact` reads `current`, then the exact
+release `verified.json` and `outputs`, validates one matching release bundle,
+and writes a self-contained HTML file before `describe_models` or any query.
+It never calls a tool and fails whole on a missing or mismatched read.
+`list_data_products` is discovery only and never fills a release-document gap.
+After a same-workflow rebuild, discard cached resource URIs and rerender the
+new sequence; the older file is historical.
 
 ## When a read fails
 

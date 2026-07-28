@@ -380,6 +380,13 @@ def build_workspace(
 
     fixtures = scenario_dir / "fixtures"
     if fixtures.is_dir():
+        checks_path = scenario_dir / "checks.json"
+        deterministic_script = ""
+        if checks_path.is_file():
+            checks_cfg = json.loads(checks_path.read_text(encoding="utf-8"))
+            deterministic_script = str(
+                checks_cfg.get("deterministic_check", {}).get("script", "")
+            )
         for item in fixtures.iterdir():
             # Server-side MCP inputs must NOT land in the agent's workspace. The
             # catalog is the data the agent is supposed to obtain by CALLING the
@@ -392,6 +399,7 @@ def build_workspace(
             # particular, a sibling __pycache__/build_data.pyc would reveal
             # runner-only discriminator assertions to the agent.
             if (item.name.startswith(".") or item.name == "__pycache__"
+                    or item.name == deterministic_script
                     or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES
                     | DERIVATION_RUNNER_SIDE_FIXTURES):
                 continue

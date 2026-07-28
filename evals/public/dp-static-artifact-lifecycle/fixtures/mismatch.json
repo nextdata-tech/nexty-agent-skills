@@ -1,0 +1,7 @@
+{
+  "schema": "nxd-desktop-verified-v1",
+  "trust": "artifact_verified",
+  "workflow": "customer/health",
+  "publish_seq": 18,
+  "outputs": {"model_names": [], "models": [], "ports": []}
+}

@@ -1,0 +1,9 @@
+{
+  "code": -32002,
+  "message": "release 1 of \"customer/health\" is not the current release",
+  "data": {
+    "requested_publish_seq": 1,
+    "current_publish_seq": 17,
+    "current_uri": "nxd://data-products/customer%2Fhealth/releases/17/verified.json"
+  }
+}

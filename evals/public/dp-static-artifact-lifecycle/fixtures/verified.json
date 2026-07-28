@@ -1,0 +1,189 @@
+{
+  "schema": "nxd-desktop-verified-v1",
+  "trust": "artifact_verified",
+  "release": {
+    "workflow": "customer/health",
+    "publish_seq": 17,
+    "run_id": "run-39c0",
+    "definition_id": "definition-1f6c",
+    "artifact_id": "artifact-7aa9",
+    "compiler_id": "compiler-2f7d1a",
+    "published_at_unix_ms": 1785260400000
+  },
+  "evidence": {
+    "model_tables": [
+      {"dataset": "main", "table": "customers", "row_count": 24},
+      {"dataset": "main", "table": "orders", "row_count": 42}
+    ]
+  },
+  "identity": {
+    "name": "Customer health <script>alert(1)</script>",
+    "description": "Governed customer health metrics.",
+    "version": "1.4.0",
+    "domain": "revenue"
+  },
+  "services": [{"name": "analytics"}],
+  "models": {
+    "models": [
+      {
+        "name": "customers",
+        "primary_key": "customer_id",
+        "description": "One row per customer.",
+        "data_product": "",
+        "table": "",
+        "fields": [
+          {
+            "column": "customer_id",
+            "type": "string",
+            "roles": [
+              {"kind": "primary_key"},
+              {
+                "kind": "metric",
+                "name": "customer_count",
+                "agg": "count_distinct",
+                "description": "Distinct customers.",
+                "boolean": false
+              }
+            ]
+          },
+          {
+            "column": "email",
+            "type": "string",
+            "roles": [
+              {
+                "kind": "dimension",
+                "name": "contact_email",
+                "description": "Customer contact address.",
+                "pii": true
+              }
+            ]
+          }
+        ],
+        "is_view": false
+      },
+      {
+        "name": "orders",
+        "primary_key": "order_id",
+        "description": "One row per order.",
+        "data_product": "",
+        "table": "",
+        "fields": [
+          {
+            "column": "order_id",
+            "type": "string",
+            "roles": [
+              {"kind": "primary_key"},
+              {
+                "kind": "metric",
+                "name": "order_count",
+                "agg": "count_distinct",
+                "description": "Distinct orders.",
+                "boolean": false
+              }
+            ]
+          },
+          {
+            "column": "customer_id",
+            "type": "string",
+            "roles": [
+              {
+                "kind": "join",
+                "to_model": "customers",
+                "to_column": "customer_id",
+                "cardinality": "many_to_one"
+              }
+            ]
+          },
+          {
+            "column": "amount_usd",
+            "roles": [
+              {
+                "kind": "metric",
+                "name": "revenue",
+                "agg": "sum",
+                "description": "Gross revenue.",
+                "boolean": false
+              },
+              {
+                "kind": "metric",
+                "name": "average_order_value",
+                "agg": "avg",
+                "description": "Average gross order value.",
+                "boolean": false
+              }
+            ]
+          }
+        ],
+        "is_view": false
+      }
+    ],
+    "joins": [
+      {
+        "left": "orders",
+        "right": "customers",
+        "on": [["customer_id", "customer_id"]],
+        "cardinality": "many_to_one"
+      }
+    ]
+  },
+  "data_model": {
+    "models": [
+      {
+        "name": "customers",
+        "description": "One row per customer.",
+        "attributes": [
+          {
+            "name": "customer_id",
+            "data_type": "string",
+            "description": "Stable customer identifier."
+          },
+          {
+            "name": "email",
+            "data_type": "string",
+            "description": "Contact address.",
+            "semantic_tags": [{"key": "classification", "value": "pii"}]
+          },
+          {
+            "name": "loyalty_points",
+            "data_type": "int64",
+            "description": "Current loyalty balance.",
+            "constraints": {"min": "0", "nullable": false}
+          },
+          {
+            "name": "profile",
+            "data_type": {
+              "struct": {
+                "fields": [
+                  {"name": "timezone", "data-type": "string"},
+                  {"name": "segment", "data-type": "string"}
+                ]
+              }
+            },
+            "description": "Customer profile details."
+          }
+        ]
+      },
+      {
+        "name": "orders",
+        "description": "One row per order.",
+        "attributes": [
+          {
+            "name": "order_id",
+            "data_type": "string",
+            "description": "Order identifier."
+          },
+          {
+            "name": "customer_id",
+            "data_type": "string",
+            "description": "Customer foreign key."
+          },
+          {
+            "name": "amount_usd",
+            "data_type": {"decimal128": {"precision": 18, "scale": 2}},
+            "description": "Gross order amount."
+          }
+        ]
+      }
+    ]
+  }
+}

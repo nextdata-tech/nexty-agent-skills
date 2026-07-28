@@ -56,7 +56,7 @@ skill_sets:
       - "src/nxd-eval-harness"
       - "src/nxd-pocket-loop"
       - "src/nxd-generate-dp"
-      - "src/nxd-artifact"
+      - "src/nxd-dp-static-artifact"
 
   # Staging slot for skills under evaluation before promotion to current_pack.
   # Add new experimental skills here.
@@ -79,5 +79,4 @@ skill_sets:
       - "src/nxd-eval-harness"
       - "src/nxd-pocket-loop"
       - "src/nxd-generate-dp"
-      - "src/nxd-artifact"
-
+      - "src/nxd-dp-static-artifact"

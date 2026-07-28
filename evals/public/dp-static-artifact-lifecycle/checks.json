@@ -1,0 +1,15 @@
+{
+  "name": "dp-static-artifact-lifecycle",
+  "skills": ["nxd-dp-static-artifact", "nxd-pocket-loop"],
+  "deterministic_check": {
+    "script": "check_static_artifact.py",
+    "deps": []
+  },
+  "checks": [
+    {"id": "exact-release-bundle", "check": "The artifact reads current then its exact verified.json and outputs bundle, validates schema/trust and provenance equality, and fails whole rather than using list_data_products, info, models, describe_models, a source definition, endpoint, or query fallback."},
+    {"id": "superseded-redirect", "check": "The response says requested release 1 was superseded by current release 17 and renders 17 rather than ending in an error or claiming historical release 1 was served."},
+    {"id": "semantic-first-completeness", "check": "The static HTML orders identity, model overview, every data_model field, joins, ports/promises, evidence, closed provenance, then closed diagnostics; it preserves complex, unannotated, and multi-role fields."},
+    {"id": "lifecycle-order", "check": "Pocket renders the release after successful build/resume and before describe/query; a same-workflow rebuild rerenders the new sequence while a query remap does not."},
+    {"id": "offline-safe", "check": "The page has no Catalog/Query/results screen, raw payload, remote request/font/script, or unescaped hostile payload content."}
+  ]
+}

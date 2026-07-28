@@ -23,8 +23,9 @@ smallest path that can give an honest answer:
 | Situation | Route |
 |---|---|
 | **Explicit deployed/platform product** — the user names a remote DP, cluster, or platform endpoint | Hand off to `nxd-data-product-query`. Do not create a local replacement. |
-| **Existing local product** — the task supplies its `semantic_endpoint` and bearer token | Call `mcp__nxd-desktop__describe_models`, then answer through `mcp__nxd-desktop__run_semantic_query`. |
-| **Existing local product, but no endpoint/token** — the typical new session, since the bearer is per-session and never persisted | **Reattach, don't rebuild.** Call `mcp__nxd-desktop__list_data_products`, then `mcp__nxd-desktop__resume_data_product` with the workflow id — a fresh endpoint and bearer in seconds, no regeneration. Rebuild is the fallback only when the published artifact is gone. Full playbook: [context-and-resume.md](context-and-resume.md). |
+| **Existing local product with endpoint/token but no workflow id** | Explicit query-only exception: state that the static artifact is unavailable, then call `describe_models` and answer through `run_semantic_query`. |
+| **Existing local product, but no endpoint/token** — the typical new session, since the bearer is per-session and never persisted | **Reattach, don't rebuild.** Use `list_data_products` for discovery only, then `resume_data_product`, render the release with `nxd-dp-static-artifact`, then describe/query. A fresh endpoint and bearer arrive in seconds with no regeneration. Rebuild is the fallback only when the published artifact is gone. |
+| **Endpoint + bearer + workflow** | Render the pinned static artifact first, then describe/query. The artifact is release-scoped and does not consume the bearer. |
 | **Share / hand off a product** — the user wants to give it to another person or machine | Call `mcp__nxd-desktop__export_data_product` with the same `definition` path used to build it. Read-only and on demand — not part of the build/query loop. It zips the closure, strips credentials fail-closed, and emits a guided `IMPORT.md` for the recipient to rebuild. Full playbook: [handoff-export.md](handoff-export.md). |
 | **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, and its connection details pass through to generation exactly as the user gave them — **except a live credential, which never enters an offloaded generate subagent (see the credential boundary under "Offloading generation to a subagent"); it is injected host-side**. Never modify a supplied original. |
 | **No product and no source** | Ask one concise question naming the missing thing: the local data file/folder or an existing product to query. Do not manufacture a dataset, create a throwaway database, or probe Cowork uploads/workspaces with Bash in hope of finding one. |
@@ -38,7 +39,7 @@ shareable, or multi-question analysis, prefer the reusable local-product path.
 
 ## Step order and dependency edges
 
-The loop runs Steps 1–6 in `SKILL.md`. The order is not arbitrary — each step
+The loop runs Steps 1–6 plus Step 4a in `SKILL.md`. The order is not arbitrary — each step
 consumes the previous step's artifact, so a change upstream forces the
 downstream steps that depend on it to re-run:
 
@@ -46,7 +47,8 @@ downstream steps that depend on it to re-run:
 gather (1)  → infer (2)      (questions + source shape drive the model)
 infer (2)   → generate (3)   (the semantic model is placed into the closure)
 generate(3) → build (4)      (the closure is the --definition the supervisor pins)
-build (4)   → query (5)      (the served endpoint + catalog answer questions)
+build/resume → artifact (4a) (the pinned release is rendered once, offline)
+artifact(4a) → describe/query(5) (release page precedes query vocabulary)
 query (5)   → refine (6)     (a wrong answer routes back to 2/3 or stays in 5)
 ```
 
@@ -54,12 +56,14 @@ When a refine cycle (Step 6) changes an upstream artifact, re-run only the
 downstream steps that actually depend on the change, and say which ones before
 doing so:
 
-- A **query-level** fix (wrong selection, missing dimension) re-runs Step 5 only.
+- A **query-level** fix (wrong selection, missing dimension) re-runs Step 5 only;
+  it does not rerender the same release.
 - A **model/DP-level** fix (missing metric, wrong grain, a new derived model)
-  re-runs Steps 2/3 → 4 → 5 with the **same** workflow id.
+  re-runs Steps 2/3 → 4 → 4a → 5 with the **same** workflow id.
 
-After any rebuild the catalog can differ, so Step 5 always re-`describe_models`
-before mapping again — never map against a remembered catalog.
+After any same-workflow rebuild discard cached resource URIs and the former
+current artifact file, render the new publish sequence in Step 4a, then
+re-`describe_models` before mapping again — never map against a remembered catalog.
 
 ## Bounded-loop caps
 
