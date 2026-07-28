@@ -10,8 +10,8 @@ Three obligations live here rather than with the judge, because each is a
 positional or literal fact that a stochastic grader reads inconsistently:
 
 0. ORDERING. The rule card reached the user BEFORE the first materialization.
-   Measured against the ``[user_turn 2]`` separator the multi-turn driver writes
-   into the accumulated trace, so "wrote files, then described them" is
+   Measured against the ``[user_turn 2 ...]`` separator the multi-turn driver
+   writes into the accumulated trace, so "wrote files, then described them" is
    distinguishable from "described, stopped, then wrote".
 1. EXECUTABILITY. The pre-edit card quotes numerals: a verdict cut-off and the
    intermediate anchors. A card that promises to choose thresholds is not a
@@ -60,8 +60,11 @@ SUPPLIED_VERDICTS = {"ADVANCE", "HOLD", "REJECT", "NEEDS_MORE_INFO"}
 EDITED_ADVANCE_THRESHOLD = "4.25"
 
 # The separator the multi-turn driver writes before each scripted user turn.
-# Keep in sync with eval_backends.TURN_SEPARATOR_PREFIX.
-TURN_2_SEPARATOR = "[user_turn 2]"
+# Keep in sync with eval_backends.turn_separator, which renders
+# ``[user_turn 2 after-await]`` or ``[user_turn 2 unprompted]`` — the trailing
+# mark records whether the agent had actually stopped. Matching the prefix only
+# keeps this positional check working regardless of which mark was written.
+TURN_2_SEPARATOR = "[user_turn 2"
 
 
 def fail(message: str) -> None:
@@ -98,9 +101,26 @@ WRITE_MARKERS = tuple(f"[tool_use:{t}]" for t in WRITE_TOOLS)
 BASH_MARKER = "[tool_use:Bash]"
 # Shell is only a write when the command mutates. `head`/`cat`/`wc` on the
 # supplied CSV is exactly the inspection the gate permits.
+#
+# Interpreter NAMES are deliberately absent. Listing `python -c` or `uv run` as
+# mutations penalises the more diligent agent: the prompt explicitly allows
+# reading the source, and `uv run python -c "import csv; print(...)"` is a
+# read. Gating on the interpreter fails that agent for inspecting carefully,
+# which inverts what the scenario rewards. What matters is whether the command
+# BODY writes, so interpreted commands are scanned for write operations below.
 SHELL_MUTATIONS = (
     "mkdir", "cp ", "touch ", "tee ", "> ", ">>", "install -", "rsync",
-    "python -c", "uv run",
+    "mv ", "sed -i", "dd ",
+)
+
+# Write operations inside an interpreted command body. These catch a `python -c`
+# or `uv run` invocation that actually materializes something, without flagging
+# one that only reads.
+INTERPRETED_WRITES = (
+    "'w'", '"w"', "'a'", '"a"', "'x'", '"x"',
+    "to_csv", "to_parquet", "write_text", "write_bytes", "writelines",
+    ".write(", "shutil.", "os.makedirs", "makedirs", "os.mkdir", "Path.mkdir",
+    ".mkdir(", "os.rename", "os.replace", "duckdb.connect",
 )
 
 
@@ -109,7 +129,10 @@ def first_write_index(trace_lines: list[str]) -> int | None:
     for i, line in enumerate(trace_lines):
         if any(m in line for m in WRITE_MARKERS):
             return i
-        if BASH_MARKER in line and any(m in line for m in SHELL_MUTATIONS):
+        if BASH_MARKER in line and (
+            any(m in line for m in SHELL_MUTATIONS)
+            or any(m in line for m in INTERPRETED_WRITES)
+        ):
             return i
     return None
 
@@ -135,9 +158,21 @@ QUOTED_THRESHOLD = re.compile(
 )
 
 # An intermediate anchor: the numeral 2, 3 or 4 presented as a scale level with
-# a meaning attached, rather than incidentally (a weight, a row count, a year).
+# a meaning attached, rather than incidentally.
+#
+# The naive form of this pattern matched the thresholds it is supposed to be
+# independent of: "ADVANCE at >= 4.0" yields a `4` via the `\.` branch and
+# "HOLD >= 2.5" a `2`, so a card quoting only two verdict cut-offs and defining
+# no anchor at all cleared the >= 2 levels bar. The check could then never fail
+# whenever the threshold check passed. Criterion LABELS ("C2:", "C4 —") matched
+# for the same reason — a letter-prefixed digit is a name, not a level.
+#
+# So: the digit must not be preceded by a word character or a decimal point, and
+# must not be followed by one (which would make it the integer part of a
+# decimal). `.` and `)` are dropped as separators entirely — they are what made
+# "4.0" and "C4)" read as definitions.
 ANCHOR_LINE = re.compile(
-    r"(^|[^\d.])([234])\s*(?:=|:|—|–|-|means|\)|\.)\s*\S",
+    r"(^|[^\w.])([234])(?!\s*\.\s*\d)\s*(?:=|:|—|–|-|means)\s*\S",
     re.MULTILINE,
 )
 
@@ -181,7 +216,7 @@ def check_ordering_and_card(trace: str) -> None:
     check(
         "turn-2-was-sent",
         t2 is not None,
-        "no '[user_turn 2]' separator in the trace — the scripted edit never "
+        f"no {TURN_2_SEPARATOR!r} separator in the trace — the scripted edit never "
         "reached the agent, so the round-trip half of this rubric cannot be "
         "graded. This is a harness/driver failure, not an agent failure.",
     )
@@ -256,6 +291,26 @@ def policy_text(root: Path) -> str:
     return "\n".join(parts)
 
 
+def threshold_row_names_advance(root: Path) -> bool:
+    """True when a landed policy ROW carries the edited cut-off AND names ADVANCE.
+
+    Bare containment of ``4.25`` across every landed CSV is satisfied by any
+    coincidence — a computed ``weighted_avg`` of 4.25 on some applicant row
+    passes it with no policy row present at all, which is precisely the artifact
+    the round-trip is supposed to prove exists. Requiring the two facts in the
+    SAME row is what makes this evidence of the edit landing as policy.
+    """
+    for p, rows in landed_csv_rows(root):
+        if p.name == "applicants.csv":
+            continue
+        for row in rows:
+            cells = [str(v) for v in row.values() if v is not None]
+            blob = " ".join(cells)
+            if EDITED_ADVANCE_THRESHOLD in blob and "ADVANCE" in blob.upper():
+                return True
+    return False
+
+
 def literal_strings_and_numbers(src: str) -> set[str]:
     out: set[str] = set()
     for node in ast.walk(ast.parse(src)):
@@ -279,10 +334,12 @@ def check_edit_round_trip(root: Path) -> None:
     )
     check(
         "edited-threshold-in-landed-policy",
-        EDITED_ADVANCE_THRESHOLD in policy,
-        f"the user's edited ADVANCE cut-off {EDITED_ADVANCE_THRESHOLD!r} appears "
-        f"in no landed policy row. The correction was acknowledged in prose and "
-        f"dropped on the floor, or the agent kept its own proposed value.",
+        threshold_row_names_advance(root),
+        f"no landed policy ROW carries the user's edited ADVANCE cut-off "
+        f"{EDITED_ADVANCE_THRESHOLD!r} alongside the verdict it governs. The "
+        f"correction was acknowledged in prose and dropped on the floor, the "
+        f"agent kept its own proposed value, or {EDITED_ADVANCE_THRESHOLD} "
+        f"appears only as a computed score rather than as policy.",
     )
 
     # The edit must reach the artifact as data, not only as a code literal —
@@ -291,10 +348,17 @@ def check_edit_round_trip(root: Path) -> None:
     transform_src = (root / "transform" / "main.py").read_text()
     lits = literal_strings_and_numbers(transform_src)
     leaked = SUPPLIED_WEIGHTS & lits
+    # One weight-shaped integer is not a hardcoded rubric. `10`, `15`, `20` and
+    # `35` are ordinary numbers — a row-count assertion against the 10-row
+    # fixture, a column width, a slice bound — and failing the build on a single
+    # incidental literal punishes unrelated code. Two or more of the four
+    # supplied weights co-occurring is the actual signature of the rubric having
+    # been transcribed into the transform.
     check(
         "weights-not-hardcoded",
-        not leaked,
-        f"supplied weight(s) {sorted(leaked)} are literals in transform/main.py",
+        len(leaked) < 2,
+        f"supplied weight(s) {sorted(leaked)} are literals in transform/main.py "
+        f"— the weights belong in editable policy data, not in code",
     )
     check(
         "edited-threshold-not-hardcoded",

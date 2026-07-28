@@ -150,6 +150,6 @@ prose.
 
 See `checks.json`. The deterministic checker
 (`fixtures/check_executable_policy.py`) owns three things the judge cannot do
-reliably: the card-before-materialization ordering (via the `[user_turn 2]`
+reliably: the card-before-materialization ordering (via the `[user_turn 2 ...]`
 separator), the presence of quoted numerals in the pre-edit card, and the
 edited-threshold round-trip into landed data.
