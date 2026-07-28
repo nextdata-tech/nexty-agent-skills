@@ -10,6 +10,7 @@ clauses live in SKILL.md; this file is the shape they produce.
 - [Classifying free text: two defects that ship silently](#classifying-free-text-two-defects-that-ship-silently)
 - [Naming the ruling on the dimension it created](#naming-the-ruling-on-the-dimension-it-created)
 - [Absence is never a score](#absence-is-never-a-score)
+  - [Precedence: when the supplied rubric's bottom band *is* the absence case](#precedence-when-the-supplied-rubrics-bottom-band-is-the-absence-case)
 - [Score explainability: one row per scored criterion](#score-explainability-one-row-per-scored-criterion)
 - [The resource template](#the-resource-template)
 - [Reading the sources yourself](#reading-the-sources-yourself)
@@ -426,6 +427,48 @@ Three consequences that must hold together, or absence leaks back in:
 The composite's own description must say that absent criteria were excluded and
 name the covered-weight column — otherwise a consumer reads a re-normalized
 composite as if the whole rubric had been applied.
+
+### Precedence: when the supplied rubric's bottom band *is* the absence case
+
+A supplied rubric will sometimes define its minimum as an absence: `| C5
+reference strength | 10 | two named referees with contact details | no referee
+information at all |`. That reads as a direct instruction to score absence as a
+1, and it collides with this section. Encode-verbatim and the absence rule are
+both binding, so neither may be applied silently over the other.
+
+**They are not actually in conflict, because they answer different questions.**
+Encode-verbatim governs *what the rule says*; the absence rule governs *which
+rows are eligible for it*. A band worded "no referee information at all" is a
+claim about an entity the source **describes as having none** — it cannot be a
+claim about a row the extraction never read, because the rubric's author was
+describing candidates, not describing a gap in your capture step. So:
+
+- **The user's wording wins wherever the source actually speaks.** A row whose
+  referee field was read and is genuinely empty earns the band's 1 verbatim.
+  That is the case the author had in mind, and re-deriving it as `None` would be
+  overriding a rubric the user is entitled to have encoded as written.
+- **The absence rule wins wherever the source is silent or uncaptured.** A row
+  whose evidence is `listed_uncaptured` or `not_stated` scores `None` with a
+  `limitation`, whatever the bottom band's prose says. The band's 1 is a
+  *rating*; that row was never rated.
+
+**Neither branch is taken on your own authority when the whole criterion is
+absent.** When the source cannot distinguish the two — no referee column exists,
+so every row is uncaptured and *nothing* can reach the band as worded — the
+distinction above has no data to bite on, and scoring the fall-through as a 1
+would land a fabricated 1 for every entity. That is the read-back gate's
+**"Fires when"** condition (`evidence with no provenance or missing-evidence
+rule`; a band no row can reach) — so **raise it**, do not resolve it. Say which
+criterion is unreachable, that its bottom band cannot be told apart from a
+capture gap, and offer the two readings — score the absence a 1 as written, or
+land `None` + `limitation` and re-normalize. Encode whichever the user picks,
+verbatim.
+
+The gate is the resolution, not a third option: a rubric whose minimum is an
+absence is precisely a missing-evidence rule the user has not yet stated, and
+this file never licenses inventing one. What is **never** correct is the silent
+path — folding uncaptured rows into the bottom band because the prose seemed to
+allow it, which is the shipped defect this section opens with.
 
 ## Score explainability: one row per scored criterion
 

@@ -194,6 +194,16 @@ that actually scored. The full rule, its gate consequence (`UNKNOWN`, never
 [Absence is never a score](derived-models.md#absence-is-never-a-score) — it binds
 agent-produced rows exactly as it binds computed ones.
 
+**When the supplied rubric's own bottom band is worded as the absence case** — "no
+referee information at all" as the 1 — this rule does not silently override the
+user's wording, and the wording does not silently override this rule. The band
+applies where the source was read and genuinely says none; absence still scores
+empty where the evidence was never captured; and a criterion no row can reach
+goes to the read-back gate rather than being resolved by the agent. The
+precedence is stated once, in
+[Precedence: when the supplied rubric's bottom band *is* the absence
+case](derived-models.md#precedence-when-the-supplied-rubrics-bottom-band-is-the-absence-case).
+
 ## Batches: many CSV files in one model dir, not table-append
 
 Judgements accrue over runs — a second run judges entities the first did not.
