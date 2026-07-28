@@ -148,8 +148,55 @@ def constraints_in(node: ast.AST) -> FieldConstraints | None:
     return None
 
 
+def custom_verify_calls(source: str) -> list[str]:
+    """Names of any `custom(...)` / `.verify(...)` contract calls in the source.
+
+    Resolves through import aliases, so `from nxd.spec import custom as c`
+    followed by `c("x").verify(...)` is still found. A bare `.verify(...)` on
+    something unrelated is not reported — only a verify chained onto a call
+    whose root is the contract factory.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # A closure that does not parse fails elsewhere with a better message.
+        return []
+
+    aliases = {"custom"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "custom":
+                    aliases.add(alias.asname or alias.name)
+
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in aliases:
+            found.append(f"{func.id}(...)")
+        elif isinstance(func, ast.Attribute) and func.attr == "verify":
+            # Only when it chains off the contract factory.
+            root = func.value
+            while isinstance(root, (ast.Call, ast.Attribute)):
+                root = root.func if isinstance(root, ast.Call) else root.value
+            if isinstance(root, ast.Name) and root.id in aliases:
+                found.append(".verify(...)")
+
+    return found
+
+
 def violates(row: dict[str, str], column: str, declared: FieldConstraints) -> str | None:
-    """Would the declared constraints reject this row's value?"""
+    """Would the declared constraints reject this row's value?
+
+    Only columns present in the source are replayed. A derived model's column
+    is computed by the transform and has no source counterpart, so treating its
+    absence as a null would fail a closure whose constraints are correct.
+    """
+    if column not in row:
+        return None
+
     value = row.get(column)
 
     if declared.nullable is False and (value is None or value == ""):
@@ -185,13 +232,20 @@ def main() -> None:
     models = parse_models(source)
     check("models-parsed", bool(models), "no semantic_model(...) declarations found")
 
-    # 1. No custom verify: it fails at boot on the local runtime.
-    for banned in ("custom(", ".verify("):
-        check(
-            f"no-custom-verify{banned.replace('(', '').replace('.', '-')}",
-            banned not in source and banned not in (root / "spec.py").read_text(encoding="utf-8"),
-            f"{banned} is not runnable on the local runtime; use an in-transform assert",
-        )
+    spec_py = root / "spec.py"
+    check("spec-py-present", spec_py.exists(), f"{spec_py} missing")
+    spec_source = spec_py.read_text(encoding="utf-8")
+
+    # 1. No custom verify: it fails at boot on the local runtime. Parsed, not
+    #    grepped — `custom (name)` and an aliased import both slip past a
+    #    substring test, and an unrelated `self.verify(...)` false-fails one.
+    offenders = custom_verify_calls(source) + custom_verify_calls(spec_source)
+    check(
+        "no-custom-verify",
+        not offenders,
+        f"{', '.join(sorted(set(offenders)))} is not runnable on the local runtime; "
+        "express procedural checks as an in-transform assert",
+    )
 
     # 2. Each stated constraint is declared on the right field.
     for model_name, column, kind, value in STATED:
