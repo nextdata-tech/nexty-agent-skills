@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,7 @@ def test_renamed_static_skill_is_the_only_shipped_identity():
     assert not (ROOT / "src" / ("nxd-" + "artifact")).exists()
     text = (ARTIFACT / "SKILL.md").read_text()
     assert "name: nxd-dp-static-artifact" in text
-    assert "version: 0.25.1" in text
+    assert "version: 0.25.2" in text
     assert "inline" not in text.lower()
     assert "\n## Catalog" not in text and "\n## Query" not in text
 
@@ -87,6 +88,107 @@ def test_bridge_fixtures_pin_transport_equivalence_and_no_bypass():
 
     checks = json.loads((SCENARIO / "checks.json").read_text())
     assert any(check["id"] == "one-read-transport" for check in checks["checks"])
+
+
+def test_undeclared_joins_may_not_be_drawn_or_named():
+    """An empty join registry must produce no edges and no shape claim.
+
+    Observed: header, legend and prose all said "none declared" while the
+    diagram drew dashed edges between models sharing a column name, and the
+    prose then called the result "a small star". Honest captions do not
+    license a picture that contradicts them.
+    """
+    # Prose is hard-wrapped, so match on whitespace-normalized text.
+    flat = lambda p: " ".join((ARTIFACT / p).read_text().split())
+    skill = flat("SKILL.md")
+    contract = flat("reference/contract.md")
+    pitfalls = flat("reference/pitfalls.md")
+
+    # The rule binds the visual channel, not only the data.
+    assert "Every visual channel is an assertion" in contract
+    for phrase in ("no connecting lines at all", "not dashed ones", "legend"):
+        assert phrase in contract, phrase
+    # Shared column names are named as the specific false signal.
+    assert "column name" in contract and "is not a relationship" in contract
+    # Prose shape claims are banned alongside the drawing.
+    for phrase in ('"a star"', "no shape to name"):
+        assert phrase in contract, phrase
+
+    # SKILL.md carries it too — the agent reads that first.
+    assert "only for a declared join" in skill
+    assert "shared column names are not relationships" in skill.lower()
+    assert "joins: []" in skill
+
+    assert "## Inferred relationships" in pitfalls
+    assert "a diagram edge is an assertion" in pitfalls
+
+
+def test_absence_states_are_distinct_and_never_a_labelled_blank():
+    """null / [] / "" / absent are four states; a blank labelled cell is none of them.
+
+    All four co-occur in one real release: identity.description is null while a
+    model description is "", and registry joins is [] while per-model joins is
+    null. A blank cell under a populated header asserts "unset" over a payload
+    that said something more specific.
+    """
+    flat = lambda p: " ".join((ARTIFACT / p).read_text().split())
+    skill = flat("SKILL.md")
+    contract = flat("reference/contract.md")
+    pitfalls = flat("reference/pitfalls.md")
+
+    # All three glosses present verbatim, including the empty-string one.
+    for gloss in ("null · the manifest didn’t say", "[] · none declared", '"" · empty'):
+        assert gloss in skill, gloss
+        assert gloss in contract, gloss
+
+    # The blank-cell prohibition and the all-absent column rule.
+    assert "Never leave a labelled cell blank" in skill
+    assert "never a labelled blank" in contract
+    for phrase in ("omit the whole column", "even one row has a value"):
+        assert phrase in contract, phrase
+    assert "## Labelled blanks" in pitfalls
+
+    # Page must be clamped so a side panel does not scroll sideways.
+    assert "never scroll horizontally" in contract
+    assert "must never scroll sideways" in skill
+    example = (ARTIFACT / "assets" / "artifact-example.html").read_text()
+    assert "max-width: min(980px, 100%)" in example
+    assert "box-sizing: border-box" in example
+
+
+def test_developer_install_copies_bins_when_build_dir_is_outside_home():
+    """Symlinks into a separate volume stall the launching app in dyld.
+
+    Keep the symlink for an in-$HOME checkout (rebuilds stay live), copy when
+    the build dir is elsewhere so the runtime dir is self-contained.
+    """
+    # The installer lives in the nxd repo, which is a separate checkout. Assert
+    # against it when it is reachable; always assert the predicate itself, which
+    # is what actually encodes the fix.
+    rel = "components/desktop/supervisor/scripts/nxd-desktop-setup.sh"
+    for candidate in (Path(p) / rel for p in os.environ.get("NXD_REPO", "").split(os.pathsep) if p):
+        if candidate.exists():
+            body = candidate.read_text()
+            assert "build dir is outside \\$HOME" in body
+            assert 'TARGET_DEBUG_DIR#"${HOME%/}/"' in body
+            break
+
+    predicate = (
+        'if [ "${HOME%/}/" != "${TARGET_DEBUG_DIR%/}/" ] && '
+        '[ "${TARGET_DEBUG_DIR#"${HOME%/}/"}" = "$TARGET_DEBUG_DIR" ]; '
+        'then echo COPY; else echo SYMLINK; fi'
+    )
+    cases = {
+        "/Volumes/EXT/repo/target/debug": "COPY",
+        "$HOME/projects/nxd/target/debug": "SYMLINK",
+        "$HOME-evil/target/debug": "COPY",   # prefix confusion must not read as inside $HOME
+    }
+    for target, expected in cases.items():
+        out = subprocess.run(
+            ["bash", "-c", f'TARGET_DEBUG_DIR="{target}"; {predicate}'],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert out == expected, (target, out, expected)
 
 
 def test_pocket_renders_before_describe_and_query_and_rerenders_after_rebuild():

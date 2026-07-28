@@ -7,7 +7,8 @@
   <title>Customer health — release 17</title>
   <style>
     :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.45; }
-    body { max-width: 980px; margin: 2rem auto; padding: 0 1rem; background: Canvas; color: CanvasText; }
+    body { max-width: min(980px, 100%); margin: 2rem auto; padding: 0 1rem; background: Canvas; color: CanvasText; overflow-wrap: anywhere; }
+    * { box-sizing: border-box; } .scroll-x { overflow-x: auto; }
     h1 { margin-bottom: 0; } h2 { margin-top: 2rem; border-bottom: 1px solid color-mix(in srgb, CanvasText 25%, transparent); }
     .muted { color: color-mix(in srgb, CanvasText 65%, transparent); } .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .badge { display:inline-block; border:1px solid color-mix(in srgb, CanvasText 35%, transparent); border-radius:.25rem; padding:.05rem .35rem; margin:.05rem; font-size:.85em; }

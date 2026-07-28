@@ -6,6 +6,8 @@
 - [Read transports](#read-transports)
 - [Cross-document equality](#cross-document-equality)
 - [Semantic validation](#semantic-validation)
+  - [Every visual channel is an assertion](#every-visual-channel-is-an-assertion)
+  - [Absence is per-field, and never a labelled blank](#absence-is-per-field-and-never-a-labelled-blank)
 - [Safe output](#safe-output)
 - [Failure boundary](#failure-boundary)
 
@@ -90,12 +92,56 @@ independently from `ports[].model_names` and `ports[].models[].name`. Never
 replace those surfaces with a union. A missing local target, endpoint, or output
 model makes the entire artifact invalid.
 
+### Every visual channel is an assertion
+
+Position, grouping, and especially **connecting lines** claim things as loudly
+as text does, and a reader believes the picture over its caption. Every such
+claim must trace to a declared value.
+
+Draw a line between two models only for a declared join. When the registry
+declares `joins: []` and each model declares `joins: null`, the correct render
+has **no connecting lines at all** — not faint ones, not dashed ones, and not
+ones excused by a legend. Two models sharing a column name, a key-like suffix,
+or a type is not a relationship: identically named columns are exactly what an
+undeclared registry looks like, so inferring edges from them fabricates the very
+fact the payload withholds.
+
+The same bar applies to prose. Do not characterize an overall shape — "a star",
+"a snowflake", "normalized", "a hub" — unless declared joins produce it. With no
+declared joins there is no shape to name; say the registry declares none and
+stop. A caption admitting "none declared" does not license a diagram or a
+sentence asserting otherwise.
+
+### Absence is per-field, and never a labelled blank
+
+Four absence states are distinct and must not be normalized into one another:
+an **absent key** (this surface cannot know), `null` (the manifest didn't say),
+`""` (declared, empty), and `[]` (none declared). They co-occur inside a single
+release — `identity.description` is `null` while a model `description` is `""`,
+and registry `joins` is `[]` while per-model `joins` is `null`.
+
+Render `null` as `null · the manifest didn’t say`, `[]` as `[] · none declared`,
+and `""` as `"" · empty`. Never print one gloss for another value, and never
+leave the cell blank: an empty cell under a populated header asserts "this is
+unset" in a payload that said something more specific.
+
+In tabular layouts the header is itself a claim that the column carries data.
+When a column's value is absent for **every** row, omit the whole column rather
+than emitting a header over blank cells. Keep the column and gloss each cell
+when even one row has a value.
+
 ## Safe output
 
 Treat every payload value as hostile. Escape text and attributes. Escape JSON
 embedded in a script element by replacing `</script>` with `<\\/script>` and
 U+2028/U+2029 with their `\\u` forms. Emit no remote resource, no live fetch,
 and no generated raw payload inspector. Use system fonts plus an offline CSP.
+
+The file is read in a narrow side panel as often as in a full window. Clamp the
+page to the viewport (`max-width: min(<measure>, 100%)` with `box-sizing:
+border-box`) so the body never establishes a floor wider than its container, and
+give wide content — tables, long identifiers, serialized complex types — its own
+`overflow-x: auto` box. The page itself must never scroll horizontally.
 
 Write a sibling temporary file and atomically rename only after all validation
 and final-file checks pass. The destination name is

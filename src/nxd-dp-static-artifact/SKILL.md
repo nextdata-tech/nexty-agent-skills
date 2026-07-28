@@ -10,7 +10,7 @@ allowed-tools:
   - Grep
 metadata:
   author: nextdata
-  version: 0.25.1
+  version: 0.25.2
 ---
 
 # nxd-dp-static-artifact
@@ -111,7 +111,10 @@ raw-payload screens.
    present, semantic tags and constraints where present, and every overlaid
    role/PII marker. An unannotated field remains a field.
 4. **Joins** — every declared endpoint and cardinality after validating both
-   endpoints.
+   endpoints. Connect two models — visually or in prose — only for a declared
+   join. With `joins: []` and per-model `joins: null`, draw no lines and name no
+   shape ("a star", "normalized"); shared column names are not relationships. A
+   legend reading "none declared" does not license edges above it.
 5. **Output exposure and ports** — render output-level `model_names` / `models`
    as their own declaration, then preserve each port and read its own
    `model_names` / `models`. Never replace either surface with a union. Render
@@ -125,10 +128,19 @@ raw-payload screens.
 8. **Diagnostics** — a closed-by-default `details` after provenance, limited to
    resource URIs, schema, and validation state. Never expose raw payloads.
 
-Use the fixed glosses for values that are present as null or empty collections:
-`null · the manifest didn’t say` and `[] · none declared`.
+Use the fixed glosses for values that are present as null or empty:
+`null · the manifest didn’t say`, `[] · none declared`, and `"" · empty`. These
+states co-occur in one release — `identity.description` is `null` while a model
+`description` is `""` — so gloss each value for what it is and never print one
+for another.
 Render an optional field only when its key is present; an absent key produces
-no label, slot, dash, or placeholder. Never render live-only `external_url`,
+no label, slot, dash, or placeholder. Never leave a labelled cell blank: a
+header over empty cells asserts "unset" where the payload said something more
+specific. Omit a table column whose value is absent in every row; keep it and
+gloss each cell when even one row has a value.
+Clamp the page to the viewport and give tables and long values their own
+horizontal scroll box — the page itself must never scroll sideways in a narrow
+side panel. Never render live-only `external_url`,
 `environment`, `full_name`, `glossary`, or per-port `infra_profile_name`, and
 never render the semantic registry's intentionally empty `data_product` or
 `table`.
@@ -161,6 +173,9 @@ is the component reference. Do not use either as a source of live data.
       because the client exposes no resource operations, never to retry a failed
       resource read
 - [ ] All data-model fields, complex types, multi-role fields, joins, output-level models, ports and promises shown
+- [ ] No line drawn and no shape named without a declared join; no labelled
+      blank cell; each `null` / `[]` / `""` carries its own gloss
+- [ ] Page does not scroll horizontally at side-panel width
 - [ ] Evidence precedes closed Release provenance and closed Diagnostics
 - [ ] Provenance contains only its allowlist; Diagnostics contains only allowed fields
 - [ ] All resource and semantic validation passed as one exact release bundle
