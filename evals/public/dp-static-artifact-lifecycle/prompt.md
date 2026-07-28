@@ -11,6 +11,13 @@ returning an error. Do not call a runtime, query data rows, use
 Read `current.json`, then the matching `verified.json` and `outputs.json` as
 one release bundle. Treat `mismatch.json`, `missing-release.json`, and
 `list-fallback.json` as failure/temptation fixtures, not alternate inputs.
+
+`bridge-read-verified.json` and `bridge-read-release-1.json` show what the
+read-only `read_data_product_resource` bridge returns for those same uris on a
+client exposing no MCP resource operations: the identical sealed document, and
+the identical supersession redirect. They are reference shapes, not a second
+bundle — never combine bridge-read and resource-read documents in one bundle,
+and never reach for the bridge to retry a read that already returned an error.
 Show every declared schema field, including unannotated and complex fields,
 all role markers, validated joins, each port and its promises. Place evidence
 before closed Release provenance and closed Diagnostics. Escape all hostile

@@ -1,0 +1,10 @@
+{
+  "_comment": "read_data_product_resource called on the SUPERSEDED release-1 uri. The bridge runs the same reader as resources/read, so it returns this identical redirect rather than the historical bytes. Switching transports is not a way around a domain error.",
+  "code": -32002,
+  "message": "release 1 of \"customer/health\" is not the current release",
+  "data": {
+    "requested_publish_seq": 1,
+    "current_publish_seq": 17,
+    "current_uri": "nxd://data-products/customer%2Fhealth/releases/17/verified.json"
+  }
+}

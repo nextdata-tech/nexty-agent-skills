@@ -1,6 +1,6 @@
 ---
 name: nxd-dp-static-artifact
-description: Render one published NXD data-product release as a self-contained, offline HTML artifact. Use when the user asks to show, document, inspect, share, or create a static page for a published local data product or release. Read only the verified release catalog resources; never start a product, mint credentials, query rows, or substitute a partial catalog response.
+description: Render one published NXD data-product release as a self-contained, offline HTML artifact. Use when the user asks to show, document, inspect, share, or create a static page for a published local data product or release. Read only the verified release catalog documents — through native MCP resource operations, or, when the client exposes no resource primitives, through the read-only list_data_product_resources / read_data_product_resource bridge tools. Never start a product, mint credentials, query rows, or substitute a partial catalog response.
 allowed-tools:
   - Bash
   - Read
@@ -10,7 +10,7 @@ allowed-tools:
   - Grep
 metadata:
   author: nextdata
-  version: 0.25.0
+  version: 0.25.1
 ---
 
 # nxd-dp-static-artifact
@@ -22,12 +22,46 @@ preview is the same completed file written to disk.
 
 ## Read and validate before rendering
 
-Use only `nxd://` resources as payload input. Never call an nxd lifecycle,
+Use only `nxd://` documents as payload input. Never call an nxd lifecycle,
 catalog-action, or query tool to gather artifact content; local file operations
 may only construct, validate, and atomically land the HTML output. In
 particular, never use `list_data_products`, `describe_models`, `info`, a source
 definition, a live endpoint, or a query as a fallback. A failed read is an
 artifact failure, not permission to make a partial page.
+
+### Choose one read transport, then keep it
+
+The same `nxd://` documents are reachable two ways. Choose once, before the
+first read, and use that one transport for the whole bundle:
+
+1. **Native MCP resource operations** — the default. Use them whenever this
+   client exposes resource listing/reading at all.
+2. **The `nxd-desktop` bridge tools** `list_data_product_resources` and
+   `read_data_product_resource` — only when the client exposes **no** resource
+   primitives. Some clients connect to the server and still never surface
+   resources to the agent; that is what these exist for. They are read-only
+   transports over the identical sealed documents and take a canonical `nxd://`
+   uri verbatim.
+
+These two tools are the sole tool exception for artifact input, and only as
+transports: they may fetch the `current` / `verified.json` / `outputs` bundle
+this skill already requires. Reading `info` or `models` through the bridge is
+the same prohibited substitution it is through a resource read — the bundle is
+defined by which documents, not by how they arrive. Every other prohibition
+above stands unchanged.
+
+Never mix transports inside one bundle: a bundle assembled half from resource
+reads and half from tool reads is not a verified release bundle, even when
+every document validates.
+
+**Fall back on missing capability, never on a bad answer.** The only trigger is
+the client not offering resource operations — a fact about the client, knowable
+before the first read. A resource read that *fails* has told you something
+true about the release: a malformed uri, an unknown workflow, an integrity
+failure, or a supersession redirect. Retrying it through the bridge is not a
+fallback, it is asking a second time in the hope of a different answer, and it
+will return the same error because both transports run the same reader. Handle
+those per [reference/contract.md](reference/contract.md) § Failure boundary.
 
 1. Read the workflow's `current` resource, then read `verified.json` and
    `outputs` at its exact canonical `publish_seq`. Encode the workflow URI
@@ -123,6 +157,9 @@ is the component reference. Do not use either as a source of live data.
 ## Verify before handoff
 
 - [ ] One completed offline HTML file, no remote URL, no Query/Catalog/results UI
+- [ ] One read transport for the whole bundle; the bridge tools used only
+      because the client exposes no resource operations, never to retry a failed
+      resource read
 - [ ] All data-model fields, complex types, multi-role fields, joins, output-level models, ports and promises shown
 - [ ] Evidence precedes closed Release provenance and closed Diagnostics
 - [ ] Provenance contains only its allowlist; Diagnostics contains only allowed fields

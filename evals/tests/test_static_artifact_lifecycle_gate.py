@@ -19,7 +19,7 @@ def test_renamed_static_skill_is_the_only_shipped_identity():
     assert not (ROOT / "src" / ("nxd-" + "artifact")).exists()
     text = (ARTIFACT / "SKILL.md").read_text()
     assert "name: nxd-dp-static-artifact" in text
-    assert "version: 0.25.0" in text
+    assert "version: 0.25.1" in text
     assert "inline" not in text.lower()
     assert "\n## Catalog" not in text and "\n## Query" not in text
 
@@ -38,6 +38,55 @@ def test_static_artifact_fails_closed_and_validates_the_complete_contract():
     for phrase in required:
         assert phrase in text, phrase
     assert "release_id" in text and "Do not accept" in text
+
+
+def test_static_artifact_allows_the_bridge_only_on_missing_client_capability():
+    """The bridge is a transport for capability-limited clients, not an error retry.
+
+    Both halves matter. Dropping the first strands Cowork (no resource
+    primitives, so nothing renders); dropping the second turns any resource
+    error into a second attempt that dodges the diagnosis.
+    """
+    text = (ARTIFACT / "SKILL.md").read_text()
+    for phrase in (
+        "list_data_product_resources",
+        "read_data_product_resource",
+        "no** resource",
+        "Never mix transports",
+        "never on a bad answer",
+    ):
+        assert phrase in text, phrase
+
+    contract = (ARTIFACT / "reference" / "contract.md").read_text()
+    for phrase in ("Read transports", "one reader", "before the first read"):
+        assert phrase in contract, phrase
+
+    pitfalls = (ARTIFACT / "reference" / "pitfalls.md").read_text()
+    assert "Transport fallback used as error recovery" in pitfalls
+
+    # The lifecycle reference must no longer claim the artifact never calls a
+    # tool — that was true only while the bridge did not exist.
+    catalog = (POCKET / "reference" / "catalog-resources.md").read_text()
+    assert "It never calls a tool" not in catalog
+    assert "read_data_product_resource" in catalog
+
+
+def test_bridge_fixtures_pin_transport_equivalence_and_no_bypass():
+    fixtures = SCENARIO / "fixtures"
+    verified = json.loads((fixtures / "verified.json").read_text())
+    bridged = json.loads((fixtures / "bridge-read-verified.json").read_text())
+    # The bridge carries the sealed document verbatim inside a contents block.
+    assert json.loads(bridged["contents"][0]["text"]) == verified
+
+    native_error = json.loads((fixtures / "requested-release-1.json").read_text())
+    bridge_error = json.loads((fixtures / "bridge-read-release-1.json").read_text())
+    for key in ("code", "message", "data"):
+        assert bridge_error[key] == native_error[key], key
+    assert bridge_error["code"] == -32002
+    assert "kind" not in bridge_error["data"]
+
+    checks = json.loads((SCENARIO / "checks.json").read_text())
+    assert any(check["id"] == "one-read-transport" for check in checks["checks"])
 
 
 def test_pocket_renders_before_describe_and_query_and_rerenders_after_rebuild():

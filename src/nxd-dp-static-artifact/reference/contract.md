@@ -3,6 +3,7 @@
 ## Contents
 
 - [Required reads](#required-reads)
+- [Read transports](#read-transports)
 - [Cross-document equality](#cross-document-equality)
 - [Semantic validation](#semantic-validation)
 - [Safe output](#safe-output)
@@ -24,6 +25,35 @@ If the user names a non-current sequence, or a release read returns
 a redirect rather than a dead end: tell the user the requested sequence was
 superseded, name the current sequence, discard any partial bundle, and render
 the current release. Never claim that the historical payload itself was read.
+
+## Read transports
+
+The bundle is defined by the documents, not by how they were fetched. Two
+transports deliver them:
+
+| Transport | Use when | List | Read |
+|---|---|---|---|
+| Native MCP resources | the client exposes resource operations | `resources/list` | `resources/read` |
+| `nxd-desktop` bridge tools | it does not | `list_data_product_resources` | `read_data_product_resource` |
+
+Both are read-only, take no lock, boot no runtime, and return no credentials.
+The server implements them over one reader, so the uri grammar, document bytes,
+mime type, and every error code and payload are identical — including the
+supersession redirect carrying `requested_publish_seq`, `current_publish_seq`,
+and `current_uri`. Validate an assembled bundle exactly the same way regardless
+of transport; nothing in this contract relaxes for the bridge.
+
+Two rules constrain the choice:
+
+- **Decide before the first read, and keep it for the whole bundle.** Documents
+  fetched through different transports must not be combined, even though they
+  would be byte-identical. Mixing forfeits the single-transport guarantee that
+  makes a bundle auditable.
+- **Only a missing client capability justifies the bridge.** That is a property
+  of the client, established before reading. A resource read that returns an
+  error has answered — re-asking through the bridge returns the same error from
+  the same reader, so treating a domain failure as a transport failure buys
+  nothing and risks reporting a release state that was never read.
 
 ## Cross-document equality
 
@@ -78,6 +108,10 @@ On any read failure, mismatch, malformed document, orphan, unsupported schema,
 or failed atomic write, report `artifact: failed` with the reason. Preserve the
 separate endpoint state. A healthy endpoint may still be described and queried;
 the artifact must not be represented as having succeeded.
+
+Switching transports is never part of this recovery. A failed read is a fact
+about the release; the other transport reads the same bytes through the same
+reader and will fail identically.
 
 For a superseded read, discard all collected documents and restart from
 `current`; attempt the full bundle no more than twice. Never mix documents from

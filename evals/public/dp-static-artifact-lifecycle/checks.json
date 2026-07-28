@@ -10,6 +10,7 @@
     {"id": "superseded-redirect", "check": "The response says requested release 1 was superseded by current release 17 and renders 17 rather than ending in an error or claiming historical release 1 was served."},
     {"id": "semantic-first-completeness", "check": "The static HTML orders identity, model overview, every data_model field, joins, ports/promises, evidence, closed provenance, then closed diagnostics; it preserves complex, unannotated, and multi-role fields."},
     {"id": "lifecycle-order", "check": "Pocket renders the release after successful build/resume and before describe/query; a same-workflow rebuild rerenders the new sequence while a query remap does not."},
-    {"id": "offline-safe", "check": "The page has no Catalog/Query/results screen, raw payload, remote request/font/script, or unescaped hostile payload content."}
+    {"id": "offline-safe", "check": "The page has no Catalog/Query/results screen, raw payload, remote request/font/script, or unescaped hostile payload content."},
+    {"id": "one-read-transport", "check": "The whole bundle is read over a single transport. Bridge tools (list_data_product_resources / read_data_product_resource) are used only because the client exposes no MCP resource operations, never to retry or bypass a resource read that returned an error, and bridge-read documents are never mixed with resource-read documents in one bundle."}
   ]
 }

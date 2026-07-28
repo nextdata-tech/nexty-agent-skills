@@ -3,6 +3,7 @@
 ## Contents
 
 - [Partial catalog fallback](#partial-catalog-fallback)
+- [Transport fallback used as error recovery](#transport-fallback-used-as-error-recovery)
 - [Dropped fields](#dropped-fields)
 - [Unsafe HTML](#unsafe-html)
 - [Historical releases](#historical-releases)
@@ -13,6 +14,19 @@
 inputs. They can make a page look plausible while omitting the complete pinned
 schema or release provenance. Fail the artifact when the required bundle cannot
 be read.
+
+## Transport fallback used as error recovery
+
+`read_data_product_resource` exists because some clients never expose resource
+primitives — not because a resource read failed. The two paths share one
+reader, so a uri that returned `resource_not_found`, `artifact_unavailable`, or
+a supersession redirect returns exactly that again through the bridge. Retrying
+across transports only converts a clear diagnosis into an unexplained one, and
+tempts a partial page built on a release nobody actually read.
+
+The same reasoning bars mixing: a bundle whose documents arrived by different
+transports is unauditable even when each document is valid. Pick the transport
+from the client's capabilities before the first read, and keep it.
 
 ## Dropped fields
 

@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.25.0
+  version: 0.25.1
 ---
 
 # nxd-pocket-loop skill
@@ -85,8 +85,8 @@ Choose this order before invoking any runtime command:
    — use them for the entire discover, build, resume, describe, and query
    sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
    on-demand handoffs. This is the supported route for Claude Desktop and Claude
-   Cowork. Read-only `nxd://` **resources** expose what a published release
-   *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
+   Cowork. Read-only `nxd://` **resources** — with tool bridges where a client
+   exposes none — expose what a release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
    `nxd-desktop-supervisor` only when the session context has positively
    established that the shell is the user's macOS host **and** both
@@ -284,7 +284,8 @@ stop-on-failure.
 
 After every successful build or resume, invoke **nxd-dp-static-artifact** for
 the workflow before `describe_models` or any query. It reads only the current,
-verified, and outputs resources and writes one self-contained release HTML
+verified, and outputs documents (by resource operations, or the bridge tools on a
+client exposing none) and writes one self-contained release HTML
 file. Report artifact `status`, `path`, and `publish_seq` separately from the
 endpoint. If it fails, report that failure but keep a healthy endpoint usable
 for the later describe/query path. An endpoint plus bearer but **no workflow**

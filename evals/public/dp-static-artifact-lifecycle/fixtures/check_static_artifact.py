@@ -203,6 +203,17 @@ def valid_bundle(current: dict, verified: dict, outputs: dict) -> bool:
     return True
 
 
+def bridge_document(payload: dict) -> dict:
+    """The sealed document a `read_data_product_resource` result carries.
+
+    The bridge returns a `ReadResourceResult` shape, so the document is the
+    parsed `text` of its single content — not the envelope.
+    """
+    contents = payload["contents"]
+    assert len(contents) == 1, contents
+    return json.loads(contents[0]["text"])
+
+
 def valid_superseded_redirect(current: dict, error: dict) -> bool:
     data = error.get("data", {})
     requested = data.get("requested_publish_seq")
@@ -279,6 +290,29 @@ def main() -> None:
     )
     assert not valid_bundle(current, verified, load(args.fixtures, "mismatch.json"))
     assert not valid_bundle(current, load(args.fixtures, "missing-release.json"), outputs)
+
+    # Transport equivalence. The bridge tools exist for clients that expose no
+    # MCP resource primitives; they are only safe because they read the same
+    # sealed bytes through the same reader.
+    bridged_verified = bridge_document(load(args.fixtures, "bridge-read-verified.json"))
+    assert bridged_verified == verified, "bridge read must deliver the identical document"
+    assert valid_bundle(current, bridged_verified, outputs), (
+        "a bundle assembled over the bridge validates exactly like a native one"
+    )
+
+    # ...and the corollary that makes the fallback rule testable: the bridge is
+    # NOT an escape from a domain error. Reading the superseded release through
+    # it returns the same redirect, so an agent that "fell back" to dodge the
+    # supersession still cannot render release 1.
+    bridged_release_1 = load(args.fixtures, "bridge-read-release-1.json")
+    assert valid_superseded_redirect(current, bridged_release_1), (
+        "bridge preserves the supersession redirect verbatim"
+    )
+    native_release_1 = load(args.fixtures, "requested-release-1.json")
+    contract_fields = ("code", "message", "data")
+    assert all(
+        bridged_release_1[key] == native_release_1[key] for key in contract_fields
+    ), "bridge and resource errors are indistinguishable"
 
     if args.root:
         candidates = sorted(args.root.glob("*release-17.html"))
