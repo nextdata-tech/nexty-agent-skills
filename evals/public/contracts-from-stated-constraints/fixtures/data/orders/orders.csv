@@ -1,0 +1,9 @@
+order_id,customer_id,order_date,channel,status,amount_usd
+O1001,C001,2026-01-04,web,completed,420.00
+O1002,C001,2026-01-19,web,completed,185.50
+O1003,C002,2026-01-22,mobile,completed,62.10
+O1004,C003,2026-01-25,web,refunded,99.99
+O1005,C002,2026-02-02,mobile,completed,240.75
+O1006,C004,2026-02-11,web,completed,15.00
+O1007,C003,2026-02-14,partner,completed,308.20
+O1008,C001,2026-02-20,web,pending,77.40

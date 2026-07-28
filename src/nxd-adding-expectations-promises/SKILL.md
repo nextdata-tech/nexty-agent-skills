@@ -19,6 +19,23 @@ metadata:
 
 Use expectations to protect inputs before transform execution, and promises to verify outputs after writes.
 
+## This skill covers the platform (mesh) path only
+
+Everything below assumes a deployed platform data product — `nxd-setup`, a mesh,
+`nxd validate`. **A local desktop closure is a different runtime with a different
+contract surface**, and the custom-verify templates below do NOT work there:
+
+- a `custom(...).verify(code(...))` with no explicit compute routing resolves to
+  the platform contract executor, which a local profile does not declare — the
+  data product **fails at boot**;
+- routing it to local compute is **not established to work** either.
+
+On a local closure, declare constraints as **field-level model contracts**
+(`.constraints(nullable=/min=/max=)` chained onto `field()`) on a promised model,
+and put anything procedural in an in-transform assert. That path is owned by
+**`nxd-generate-dp`** — see its `reference/contracts.md`. Do not port the custom
+templates below into a local closure.
+
 ## Setup
 
 - Confirm `nxd-setup` has selected the mesh and produced `<session_config>`.

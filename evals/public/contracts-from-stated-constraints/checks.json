@@ -1,0 +1,17 @@
+{
+  "name": "Encode stated constraints as enforced contracts",
+  "skills": [
+    "nxd-generate-dp"
+  ],
+  "checks": [
+    {"id": "constraints-recognised", "check": "Both constraints stated in the prompt are treated as requirements on the built product, not as background colour: an order always has an order id, and an order amount is never negative."},
+    {"id": "constraints-declared-on-the-model", "check": "Each stated constraint lands as a .constraints(...) call on the named field of the promised model in models.py — nullable=False for order_id, min='0' for amount_usd. Bounds are strings. A constraint mentioned only in prose, a comment, or CONTEXT.md does not count; a constraint attached to a different column does not count."},
+    {"id": "constraints-enforce", "check": "The declared constraints actually reject a source that breaks them. A declaration wide enough to admit the violating data (min='-999999'), or attached to a column the violation does not touch, is a fail even though the file parses and the names match."},
+    {"id": "no-false-positives", "check": "The declared constraints accept every row of the supplied clean export. A constraint tight enough to reject valid supplied data would break every legitimate run and is a fail."},
+    {"id": "no-custom-verify", "check": "The closure declares no custom(...).verify(code(...)) contract in models.py or spec.py. On the local runtime the unrouted shape fails at boot and the routed shape is unproven; field constraints are the sanctioned shape."},
+    {"id": "no-invented-constraints", "check": "Only the two stated constraints are declared as contracts. Constraints the user did not state — a uniqueness claim, a bound on another column, a domain for status or channel — are not silently declared: profiling-discovered invariants require confirmation first, and this scenario supplies no such confirmation."},
+    {"id": "closure-complete", "check": "The closure is complete and runnable: spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, and csv-source-path are authored; deployment-spec.yaml, manifest.yaml, and models.yaml are not."},
+    {"id": "acceptance-check", "check": "Run fixtures/check_contracts.py against the final closure and obtain ALL CHECKS PASSED."},
+    {"id": "honest-result", "check": "Do not claim the contracts were enforced by a live supervisor build or that a publish was blocked — the harness replays the declarations offline and executes no kernel."}
+  ]
+}

@@ -20,9 +20,8 @@ metadata:
 ## Overview
 
 A semantic-layer data product exposes **named metrics and dimensions** over MCP.
-An AI agent calls `run_semantic_query` with concept names; the data product
-compiles a correct, governed SQL query and returns rows — no raw SQL escapes the
-DP boundary.
+An AI agent calls `run_semantic_query` with concept names; the DP compiles a
+correct, governed SQL query and returns rows — no raw SQL escapes the DP boundary.
 
 **You author only the per-field semantic annotations on the models.** A single
 `.semantic_tools(service=...)` flag on the spec auto-generates the four governed
@@ -50,9 +49,8 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 >   local Python executor) owned by **nxd-generate-dp**. Use this skill only for the
 >   shared part: profile and infer public semantic roles **with their descriptions
 >   and PII flags**, then hand off. The generator PLACES what it receives — a
->   description you don't infer here is one no later step adds. The
->   generator translates them to the public DSL; do not write private metadata.
->   **Do NOT
+>   description you don't infer here is one no later step adds. The generator
+>   translates them to the public DSL; do not write private metadata. **Do NOT
 >   follow the Snowflake/credential/deploy/consume steps below in the local flow.**
 
 ---
@@ -101,14 +99,14 @@ python <nxd-mesh-analyzer>/scripts/profile_tabular.py sample.duckdb <table1> <ta
 ```
 
 With two or more tables the profiler emits ONE combined document —
-`{"path": ..., "format": "duckdb", "tables": {<table>: <profile>, ...}}` — where
-each table's profile carries, per column: `declared_type`, `nullable`, `null_pct`,
+`{"path": ..., "format": "duckdb", "tables": {<table>: <profile>, ...}}` — where each
+table's profile carries, per column: `declared_type`, `nullable`, `null_pct`,
 `distinct_count`, `cardinality` (distinct/total, exact full-table), `sample_values`,
 plus freshness hints. `schema.json` is the **handoff artifact**: keep it in the
-workspace, infer by READING it (re-query the DuckDB file only for targeted
-follow-ups like the join-containment probe below), and leave it as the evidence
-for how the model was derived. **Ground the model in this profile — annotate only
-columns that exist in it; never invent or rename columns.**
+workspace, infer by READING it (re-query the DuckDB file only for targeted follow-ups
+like the join-containment probe below), and leave it as evidence for how the model
+was derived. **Ground the model in this profile** — annotate only columns that
+exist in it; never invent or rename columns.
 
 **2. Classify each column from its profile signals:**
 
@@ -127,11 +125,15 @@ uniqueness. Prefer a unique column that matches the entity or FK target; if
 needed, use a composite `{"kind": "primary_key"}` role and validate its
 non-null unique tuple with `COUNT(*)` versus `COUNT(DISTINCT (a, b))`.
 
-**Local-desktop handoff.** Every physical base needs one or more validated
-primary-key columns across the complete export, not a shard or lucky sample.
-Without evidence, request the source key; never invent one or generate a
-closure. Emit canonical `primary_key()` / `{"kind": "primary_key"}`, never
-the deprecated `grain` alias.
+**Local-desktop handoff.** Every physical base needs one or more validated primary-key
+columns across the complete export, not a shard or lucky sample. Without evidence,
+request the source key; never invent one or generate a closure. Emit canonical
+`primary_key()` / `{"kind": "primary_key"}`, never the deprecated `grain` alias.
+
+**Candidate invariants (local-desktop).** The same signals also evidence what is
+always TRUE of a column. Emit `candidate_invariants` with their evidence —
+**proposed, never adopted**; the generator confirms and declares them. Rules and
+rejection criteria: [reference/candidate-invariants.md](reference/candidate-invariants.md).
 
 **What crosses the boundary.** Per model: its `description`, and per column its
 `data_type`, its roles, and for each dimension/metric role a `name`, a
@@ -140,21 +142,20 @@ handoff — the generator places what it is given and infers nothing, so a
 concept that arrives without a description reaches `describe_models` as a bare
 name and stays that way.
 
-**Join validation.** Never use name similarity or a few overlapping samples.
-Every non-null FK must resolve on the ONE side, and its target column must be
-that model's full-table unique primary key; otherwise `many_to_one` is a lie.
-
-Declare the blob on the MANY-side FK with explicit `to_model` and `to_column`. If
-the samples don't overlap, that is evidence AGAINST the join — probe or ask.
+**Join validation.** Never use name similarity or a few overlapping samples. Every
+non-null FK must resolve on the ONE side, and its target column must be that
+model's full-table unique primary key; otherwise `many_to_one` is a lie. Declare
+the blob on the MANY-side FK with explicit `to_model` and `to_column`. If the
+samples don't overlap, that is evidence AGAINST the join — probe or ask.
 
 **Additive vs non-additive numerics.** A numeric column is a `sum` metric only if
 it is **additive across rows** (amounts, quantities, per-row durations). Balances,
 scores, points, percentages, rates, and point-in-time snapshots (e.g.
 `loyalty_points`, `account_balance`, `discount_pct`) are NOT sum metrics — summing
 them answers nothing. Aggregate such a column only when a question justifies it
-(`avg`/`min`/`max` can be legitimate); otherwise expose it as a `number`
-dimension whose description says what it is and why it is not summed. Never
-leave it unannotated — that hides the column instead of explaining it.
+(`avg`/`min`/`max` can be legitimate); otherwise expose it as a `number` dimension
+whose description says what it is and why it is not summed — never leave it
+unannotated, which hides the column instead of explaining it.
 
 **DuckDB declared type → `AttributeSpec` data type** (for the `models.py`
 attributes):
@@ -187,24 +188,24 @@ column *could* be; the questions say what it *must* be:
 - "per order / per customer ..." confirms the **grain** of each model (one row per
   entity — cross-check against exact full-table cardinality 1.0).
 
-**Every column gets a role, and every dimension and metric role a
-description** — the questions decide which role, not whether to annotate.
-`primary_key()` and `join()` take no `description`; do not infer one for them,
-and never fall back to the enclosing `field()`, which the agent never sees. The
-one exception to the role rule is a column a declared metric already
-aggregates: its meaning travels on the metric. The marker model is exempt
-from the ROLE rule only — it still takes a `.description(...)`. A column with no role produces no metric,
-dimension or join and is invisible to `describe_model`; leaving one bare is a
-decision to make it unqueryable. A spare dimension costs a line in the catalog;
-a missing one costs an unanswerable question and a rebuild. Flag from the DATA,
-the same way `pii` is flagged — even when no question asks for it.
+**Every column gets a role, and every dimension and metric role a description** —
+the questions decide which role, not whether to annotate. `primary_key()` and
+`join()` take no `description`; do not infer one for them, and never fall back to
+the enclosing `field()`, which the agent never sees. The one exception to the role
+rule is a column a declared metric already aggregates: its meaning travels on the
+metric. The marker model is exempt from the ROLE rule only — it still takes a
+`.description(...)`. A column with no role produces no metric, dimension or join
+and is invisible to `describe_model`; leaving one bare makes it unqueryable. A
+spare dimension costs a catalog line; a missing one costs an unanswerable
+question and a rebuild. Flag from the DATA, the same way `pii` is flagged — even
+when no question asks for it.
 
-**Metrics are the exception, and stay question-driven.** Do not declare metrics
-no question motivates — that is how non-additive numerics end up as nonsense
-`sum`s. A numeric that earns no metric is still annotated: expose it as a
-`number` dimension with a description saying what it is and why it is not
-summed (`loyalty_points`, `account_balance`, `discount_pct`). Unannotated is
-not the fallback; a dimension is.
+**Metrics are the exception, and stay question-driven.** Do not declare metrics no
+question motivates — that is how non-additive numerics end up as nonsense `sum`s.
+A numeric that earns no metric is still annotated: expose it as a `number`
+dimension with a description saying what it is and why it is not summed
+(`loyalty_points`, `account_balance`, `discount_pct`). Unannotated is not the
+fallback; a dimension is.
 
 **3b. Surface ambiguity — don't silently resolve it.** The role grammar has
 **no filtered metrics, no derived ratios, and no default filters**: a metric is
@@ -212,15 +213,15 @@ exactly `<agg>(<column>)`. When a question's business definition is ambiguous
 against the profiled data, do NOT hard-code one interpretation silently:
 
 - *Status-qualified totals* — "total revenue" over a table whose `status` samples
-  include `refunded` / `cancelled`: the metric can only be the unconditional
-  `sum`. Say so in the metric `description` (e.g. "Gross order amount across ALL
-  statuses, including refunded and cancelled") AND declare the status column as a
-  dimension so consumers filter at query time.
+  include `refunded` / `cancelled`: the metric can only be the unconditional `sum`.
+  Say so in the metric `description` (e.g. "Gross order amount across ALL statuses,
+  including refunded and cancelled") AND declare the status column as a dimension
+  so consumers filter at query time.
 - *Derived ratios* ("revenue per customer", "churn rate") — not expressible as one
-  metric; expose the component metrics and state that the ratio is computed by the
+  metric; expose the component metrics and state the ratio is computed by the
   caller from two queries.
 - In an interactive session, ask (AskUserQuestion) instead of guessing; in a
-  non-interactive run, record the ambiguity and your chosen interpretation in the
+  non-interactive run, record the ambiguity and chosen interpretation in the
   metric descriptions and your final report.
 
 **4. Naming invariant.** Each `semantic_model(name)` argument is the **bare

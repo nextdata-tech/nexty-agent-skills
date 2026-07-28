@@ -80,6 +80,16 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
 - **`metric_field(dtype, metric_role, description=None, name="")`** — the
   `semantic_view` counterpart to `field()`. `metric_role` must be a
   `metric()` result; anything else raises.
+- **`.constraints(nullable=None, min=None, max=None)`** — chained onto a
+  `field()` result (an `AttributeSpec` method, **not** a `field()` keyword
+  argument — passing one to `field()` raises). `min`/`max` are **strings**, for
+  numeric columns too (`min="0"`). Returns the field, so it chains. A field with
+  no `.constraints(...)` is nullable and unbounded.
+
+  On a local closure these are **enforced against the landed table** when the
+  model is promised: a non-nullable field holding nulls, or a numeric value
+  outside its bounds, stops the publish. Non-numeric bounds are not checked.
+  See [contracts.md](contracts.md).
 
 A field may also be written as a bare `dtype` (no role) or a
 `(dtype, *rest)` tuple inside `.schema({...})` — see `SemanticModelSpec`
