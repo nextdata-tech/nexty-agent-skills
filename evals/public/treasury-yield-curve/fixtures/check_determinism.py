@@ -72,8 +72,16 @@ DLT_TABLES = {"_dlt_loads", "_dlt_pipeline_state", "_dlt_version"}
 # be recorded as an infrastructure_error, failing the cell without producing a
 # verdict rather than reporting a determinism result.
 #
-# 240s each leaves headroom for uv and teardown while clearing the 170s wait.
-BUILD_TIMEOUT_S = 240
+# Budget, worst reachable case: build 1 finishing near its cap, build 2 timing
+# out AT the cap, then one `supervisor stop` per data dir, and uv's dependency
+# resolution on top of all of it. 2*200 + 2*30 = 460s leaves ~140s for uv and
+# process teardown inside the harness's 600s, while still clearing the
+# supervisor's own 170s staging wait with room to spare.
+BUILD_TIMEOUT_S = 200
+
+# Per-data-dir stop in the finally block. Charged against the same outer cap,
+# so it cannot be generous.
+STOP_TIMEOUT_S = 30
 
 PASSES: list[str] = []
 FAILURES: list[tuple[str, str]] = []
@@ -269,16 +277,17 @@ def main() -> int:
                             f"build 1 {cols_a} vs build 2 {cols_b}")
                         continue
                     if hash_a != hash_b:
+                        # Deliberately does NOT enumerate the defect classes a
+                        # rubric grades — see the header rule. This file lands
+                        # in the agent's workspace, and a list of causes here
+                        # is an answer key for the checks that grade them.
                         bad(f"rows-identical[{table}]",
                             f"{count_a} rows vs {count_b} rows; "
-                            f"{hash_a} != {hash_b}. The transform's processing "
-                            f"logic is not reproducible — check for now(), "
-                            f"unseeded random, an inline model call, or "
-                            f"ordering that depends on run history. If this "
-                            f"closure reads a live source that changed between "
-                            f"the two builds, that is source drift rather than "
-                            f"a logic defect and this check does not belong on "
-                            f"the scenario.")
+                            f"{hash_a} != {hash_b}. Two builds of the same "
+                            f"closure landed different data in this table. "
+                            f"(If the closure reads a source that can change "
+                            f"between builds, this check does not belong on "
+                            f"that scenario — see the SCOPE note above.)")
                         continue
                     ok(f"rows-identical[{table}]")
 
@@ -300,7 +309,7 @@ def main() -> int:
             try:
                 subprocess.run(
                     [str(supervisor), "stop", "--data-dir", str(data_dir.resolve())],
-                    capture_output=True, text=True, timeout=60,
+                    capture_output=True, text=True, timeout=STOP_TIMEOUT_S,
                     env=build_env(),
                 )
             except (OSError, subprocess.TimeoutExpired):

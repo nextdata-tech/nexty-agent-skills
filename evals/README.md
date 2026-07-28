@@ -228,12 +228,16 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Six scenarios are currently skipped:
+Ten scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
 | `pocket-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
 | `pocket-loop-export-handoff` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
+| `treasury-yield-curve` | same |
+| `country-income-trajectory` | same |
+| `incremental-multi-model` | same |
+| `worldbank-live` | same, plus outbound network to `api.worldbank.org` |
 | `pharma-cross-dp-mesh-query` | needs a live semantic MCP server reaching lower-env Snowflake |
 | `pharma-mesh-query-hard` | same |
 | `pharma-mesh-query-loop` | same |
@@ -244,9 +248,13 @@ skipped scenarios, so a PR touching it currently gets a green no-op. One more
 skill — `nxd-mesh-analyzer` — has no scenario at all: a scenario for it was
 authored but withdrawn because its fixture rewarded *not* following the skill,
 so it detected nothing (see the git history for
-`infra-profile-source-discovery`). Two of fifteen skills are therefore
-unguarded by CI. A green eval check on those PRs means "nothing ran", not
-"nothing regressed".
+`infra-profile-source-discovery`). `nxd-review-closure` is a third: no
+scenario's `skills` list names it, because it is dispatched as a subagent from
+`nxd-generate-dp` Step 6b rather than invoked directly — what a scenario can
+observe is its EFFECT on the landed closure, which is what the
+`no_review_control` arm in `skill-sets.yaml` measures. Three of sixteen skills
+are therefore unguarded by CI. A green eval check on those PRs means "nothing
+ran", not "nothing regressed".
 
 The three scenarios these gaps used to include — `nxd-adding-policy`,
 `nxd-policies`, `nxd-eval-harness` — now each have a scenario, though none is
