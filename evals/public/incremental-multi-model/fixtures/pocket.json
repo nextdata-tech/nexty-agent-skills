@@ -1,0 +1,5 @@
+{
+  "requires": "nxd-desktop-supervisor",
+  "workflow": "freight-shipments",
+  "description": "Run this scenario against the pinned local desktop supervisor runtime."
+}

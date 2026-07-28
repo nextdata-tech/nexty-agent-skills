@@ -1,0 +1,393 @@
+{
+  "date": "2026-07-28",
+  "label": "nxd-review-closure: adversarial review round over an authored closure",
+  "notes": "NO MEASURABLE CORRECTNESS EFFECT at N=1 per arm; recorded as such rather than as a win. All three runs scored 16/17 on treasury-yield-curve. The only check that moved, tier2-measure-reconciliation, went FAIL -> PASS -> FAIL across control, reviewed-run1 and reviewed-run2 (identical skill-set, prompt and scenario for the two reviewed runs), so it is unstable rather than responsive to the review round; an earlier reading of run1 alone as a win was withdrawn. What the runs do support: no correctness regression, and no efficiency regression - the reviewed runs used FEWER main-thread turns and tokens than the control (31-34 vs 35 turns, ~3% fewer output tokens, 5-9% cheaper), so dispatching the review subagent did not add turns to the orchestrator. The anti-signal this experiment was designed to catch - the reviewed arm scoring worse because the builder accepted fabricated critique instead of adjudicating it - did not appear. The scenario had only one check of headroom (control 16/17) because a prompt-extraction fix in this same PR raised the control from an earlier ~14/17, so this instrument could not have shown a large effect; N>=5 per arm, or a scenario with more semantic headroom, is needed for a real verdict. Runtime caveat: reviewed-run1's determinism cell failed for environmental reasons (the installed supervisor baked NXD_DESKTOP_REPO_ROOT to a deleted worktree); control ran on supervisor db0e8ab3a / wheels 0.41.143 and reviewed-run2 on 173737f6c / 0.41.144 after rebuilding from main, which is itself a confounder between those two cells.",
+  "plugin_version": "0.25.0",
+  "reports": {
+    "control-no-review": {
+      "elapsed_s": 1092.5,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "treasury-yield-curve": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "no_review_control",
+          "scenario": "treasury-yield-curve",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "pocket_preflight": "passed",
+            "pocket_preflight_endpoint": "http://127.0.0.1:63232/mcp/",
+            "num_turns": 35,
+            "duration_ms": 939196,
+            "total_cost_usd": 5.321843499999999,
+            "input_tokens": 57,
+            "output_tokens": 65563,
+            "is_error": false,
+            "tool_calls": 31,
+            "agent_model": "claude-opus-4-8",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "schema-drift-handled-not-crashed-into",
+                "pass": true,
+                "why": "The agent read all five files, explicitly identified that 2020\u20132021 lack the `4 Mo` column while 2022\u20132024 have it, verified dlt's union behavior empirically, and read raw headers per file with stdlib csv \u2014 confirmed by the landed data showing 2020-06-15 with exactly the 12 correct labels (no `4 Mo`, `30 Yr` present, no positional misalignment)."
+              },
+              {
+                "id": "unpivot-to-date-maturity-grain",
+                "pass": true,
+                "why": "`yield_curve_daily` lands 15,562 rows with `maturity_label` as a column value at (obs_date x maturity) grain, queried in the read-back as `select maturity_label, maturity_months, yield_pct ... order by maturity_months`."
+              },
+              {
+                "id": "blank-lands-as-null-not-zero",
+                "pass": true,
+                "why": "The tenor_bucket distribution (bill=6805 vs note=6255=5x1251) implies exactly 550 non-null `4 Mo` observations, so the 199 blank 2022 cells produced no fabricated 0.00% rows."
+              },
+              {
+                "id": "no-dense-grid-fabrication",
+                "pass": true,
+                "why": "Landed count is exactly 15,562 (not the dense 16,263), `4 Mo` totals 550 non-null observations, and the 2020-06-15 spot check shows `4 Mo` absent while `30 Yr` is present \u2014 the per-maturity-per-year distribution, not just the aggregate, is right."
+              },
+              {
+                "id": "maturity-order-from-landed-data",
+                "pass": true,
+                "why": "The derived rows carry `maturity_months` and `tenor_bucket` \u2014 the latter serves no arithmetic purpose and exists only in maturities.csv, showing the reference table is read and joined rather than a label\u2192months literal, and the read-back orders the curve by the numeric `maturity_months`."
+              },
+              {
+                "id": "maturities-reference-columns-land",
+                "pass": true,
+                "why": "`maturities` lands 1:1 from the pristine CSV (the agent's dlt probe confirmed all four columns \u2014 maturity_label, maturity_months, tenor_bucket, first_published \u2014 land), and the Q4 read-back answers bills/notes/bonds from `tenor_bucket` (6/5/2)."
+              },
+              {
+                "id": "yield-not-summed-over-time",
+                "pass": true,
+                "why": "The monthly Q3 figures are averages (2020-01 = 1.7576 for 10 Yr, not a sum), no Agg.SUM over yield appears anywhere, and the mean choice is explicitly stated in the handoff and landed as the `monthly_yield_aggregation` decision row."
+              },
+              {
+                "id": "daily-curve-summary-regrain",
+                "pass": true,
+                "why": "`curve_spread_daily` lands 1,251 rows \u2014 one per observation date \u2014 carrying `spread_pct`, `curve_shape`/inversion, and the endpoint labels, a genuine regrain keyed on date."
+              },
+              {
+                "id": "inversion-definition-landed-as-decision",
+                "pass": true,
+                "why": "The ruling is landed as queryable data (the `curve_spread_endpoints` row in the landed `nxd_decisions` model, verified by SQL read-back, plus per-row `short_maturity_label`/`long_maturity_label` columns) and the handoff states the definition used (day's extreme published maturities, 1 Mo/30 Yr, 511 inverted days) \u2014 the decision is not silent."
+              },
+              {
+                "id": "tier1-asserts-on-derived-models",
+                "pass": true,
+                "why": "The transform dry-run printed grain-derived counts for every model (yield_curve_daily 15,562; curve_spread_daily 1,251 reconciling to the 1,251 distinct source dates) and the agent states the asserts compare landed rows against an independent re-read of the source CSVs."
+              },
+              {
+                "id": "tier2-measure-reconciliation",
+                "pass": false,
+                "why": "Nothing in the trace or final answer shows a signed yield-total reconciliation for the measure-bearing `yield_curve_daily` model, nor an itemized named exclusion term for the 199 blank `4 Mo` cells required by the non-null-only shape it landed \u2014 only a generic 'reconciliation asserts' claim."
+              },
+              {
+                "id": "flat-rows-stdlib-csv-no-dataframes",
+                "pass": true,
+                "why": "The agent explicitly reads source headers/rows with stdlib `csv` for the derived unpivot, follows the template's single `pipeline.run` with resources appended, and no pandas/pyarrow or nested values appear (the read-back shows only the five expected flat tables, no `parent__field` children)."
+              },
+              {
+                "id": "deterministic-processing-logic",
+                "pass": true,
+                "why": "No wall-clock, random, or model/network call appears anywhere in the trace's transform description; dates land as ISO from the MM/DD/YYYY source via an explicit parse, and the inversion ruling was decided agent-side and landed as data before the build."
+              },
+              {
+                "id": "determinism-rerun-verdict",
+                "pass": true,
+                "why": "The authoritative runner fact reports {\"exit_code\": 0, \"failures\": [], \"passed\": true}, matching the trace's 8/8 PASS with rows identical across all five tables."
+              },
+              {
+                "id": "closure-python-only-fileset",
+                "pass": true,
+                "why": "The final `find` shows exactly CONTEXT.md, csv-source-path, data/*, infra-profile.yaml, models.py, requirements.txt, spec.py, transform/main.py \u2014 no hand-written deployment-spec.yaml, manifest.yaml, or models.yaml (those exist only under the supervisor-generated definitions snapshot)."
+              },
+              {
+                "id": "model-naming-and-base-set-alignment",
+                "pass": true,
+                "why": "BASE_MODELS (treasury_par_yields, maturities, nxd_decisions) each have a data/ directory and the two derived models (yield_curve_daily, curve_spread_daily) have none, and all five names read back consistently from the landed DuckDB, so PHYSICAL_MODELS covers the derived models too."
+              },
+              {
+                "id": "source-bytes-preserved",
+                "pass": true,
+                "why": "Sources were copied with `cp -p` and md5 comparison of source vs copy matched, no file was re-headered or padded (the 2022 file keeps its 199 blank `4 Mo` cells and 2020/2021 keep 12 maturity columns), and reshaping happens only in the derived unpivot."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "A near-exemplary run \u2014 correct drift-tolerant unpivot (15,562 rows, 550 non-null `4 Mo`), landed decisions ledger, deterministic double build \u2014 but the Tier-2 measure reconciliation with a named exclusion term for the 199 blank cells is never demonstrated in the transcript."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    },
+    "reviewed-run1": {
+      "elapsed_s": 999.1,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "treasury-yield-curve": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "treasury-yield-curve",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "pocket_preflight": "passed",
+            "pocket_preflight_endpoint": "http://127.0.0.1:49593/mcp/",
+            "num_turns": 34,
+            "duration_ms": 902224,
+            "total_cost_usd": 5.067581000000001,
+            "input_tokens": 55,
+            "output_tokens": 63574,
+            "is_error": false,
+            "tool_calls": 30,
+            "agent_model": "claude-opus-4-8",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL build-1"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "schema-drift-handled-not-crashed-into",
+                "pass": true,
+                "why": "The trace shows the agent diffed all five headers, identified the 12-vs-13 column drift and the added `4 Mo`, and the derived reader unions per-file by header name (self-check landed 15,562 observations, the exact non-null count), with sources untouched."
+              },
+              {
+                "id": "unpivot-to-date-maturity-grain",
+                "pass": true,
+                "why": "`yield_observations` landed 15,562 rows keyed by (date x maturity_label) \u2014 the Q1 probe returns one row per maturity for 2020-01-02 rather than 13 yield columns."
+              },
+              {
+                "id": "blank-lands-as-null-not-zero",
+                "pass": true,
+                "why": "The 199 blank 2022 `4 Mo` cells are excluded rather than coerced (15,562 landed rows, and the `4 Mo` monthly series correctly begins 2022-10), with the exclusion landed as the `unpublished_cells_excluded` ruling."
+              },
+              {
+                "id": "no-dense-grid-fabrication",
+                "pass": true,
+                "why": "Landed count is 15,562 (not the 16,263 dense grid), the 2020-01-02 curve reproduces the raw CSV line exactly with 12 maturities and no `4 Mo`, and `maturity_monthly` = 747 = 780 \u2212 33 months the 4 Mo did not exist, so no positional misalignment or fabricated rows."
+              },
+              {
+                "id": "maturity-order-from-landed-data",
+                "pass": true,
+                "why": "`yield_observations` carries `maturity_months` and `tenor_bucket` sourced from the landed maturities join (visible in the self-check distribution output), the Q1 probe orders numerically by months, and the spread endpoints are described as read from the data rather than hardcoded."
+              },
+              {
+                "id": "maturities-reference-columns-land",
+                "pass": true,
+                "why": "`maturities` lands the byte-exact 13-row CSV with all four columns, and Q4 is answered from `tenor_bucket` (6 bills / 5 notes / 2 bonds) while `first_published` is cited as the documented reason for the `4 Mo` gap."
+              },
+              {
+                "id": "yield-not-summed-over-time",
+                "pass": true,
+                "why": "The monthly rollup is a mean with month-end also materialized, and the mean-versus-end-of-period choice is stated both in the `monthly_yield_rollup` ruling row and the handoff, with no SUM aggregation over yield anywhere in evidence."
+              },
+              {
+                "id": "daily-curve-summary-regrain",
+                "pass": true,
+                "why": "`curve_spread` landed at 1,251 rows \u2014 one per observation date \u2014 carrying the long-minus-short spread and `is_inverted`, keyed on date rather than the composite key."
+              },
+              {
+                "id": "inversion-definition-landed-as-decision",
+                "pass": true,
+                "why": "The `curve_spread_definition` ruling (30 Yr \u2212 1 Mo, inverted when negative, alternative 10Y\u22122Y noted) landed as a queryable row in the `nxd_decisions` model and is restated in the handoff, so the decision was not made silently."
+              },
+              {
+                "id": "tier1-asserts-on-derived-models",
+                "pass": true,
+                "why": "The agent reports key-uniqueness plus grain row-count asserts on each derived model reconciled against sources re-read independently, and the dry-run counts (curve_spread 1,251 distinct dates, yield_observations 15,562) match the expected reconciliation targets."
+              },
+              {
+                "id": "tier2-measure-reconciliation",
+                "pass": true,
+                "why": "The observation model carries a Decimal signed-value reconciliation read independently from the source CSVs, with the 199 unpublished cells named as an explicit exclusion ruling rather than lumped into an unnamed residual."
+              },
+              {
+                "id": "flat-rows-stdlib-csv-no-dataframes",
+                "pass": true,
+                "why": "The dlt probes and dry-run show flat scalar dicts (date/str/int/float/bool) landing as single tables with no `parent__field` children, base ingest uses the prescribed dlt filesystem reader, and pandas appears only in the self-check harness invocation, not the transform."
+              },
+              {
+                "id": "deterministic-processing-logic",
+                "pass": true,
+                "why": "No wall-clock, random, or network call is evident in the transform, the agent's own back-to-back in-process build produced byte-identical rows for all six tables, and MM/DD/YYYY strings parse correctly to real dates (01/02/2020 \u2192 2020-01-02)."
+              },
+              {
+                "id": "determinism-rerun-verdict",
+                "pass": false,
+                "why": "The authoritative runner fact reports the DETERMINISTIC CHECK failed \u2014 exit_code 1, passed=false, failures ['FAIL build-1'] \u2014 so the committed closure did not survive the live-supervisor double build regardless of the agent's own reproducibility claims."
+              },
+              {
+                "id": "closure-python-only-fileset",
+                "pass": true,
+                "why": "The final tree lists exactly spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, CONTEXT.md and csv-source-path with no hand-written deployment-spec.yaml, manifest.yaml, or models.yaml."
+              },
+              {
+                "id": "model-naming-and-base-set-alignment",
+                "pass": true,
+                "why": "BASE_MODELS (yield_curve, maturities, nxd_decisions) matches the three data/ directories exactly, the three derived models have no data/ directory, and the read-back listing covers all six tables so derived models are present in PHYSICAL_MODELS."
+              },
+              {
+                "id": "source-bytes-preserved",
+                "pass": true,
+                "why": "`diff -rq` against the originals confirms all five yield CSVs and maturities.csv landed identical, with reshaping confined to derived models."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The closure is otherwise strong \u2014 schema drift unioned by header, blanks kept NULL, correct 15,562-row unpivot, landed reference data and rulings, and a date-grain spread model \u2014 but the authoritative determinism checker failed at build-1 (passed=false), so the cell fails. deterministic check failed: FAIL build-1"
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL build-1\"], \"passed\": false}"
+          ]
+        }
+      ]
+    },
+    "reviewed-run2": {
+      "elapsed_s": 1155.3,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "treasury-yield-curve": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "treasury-yield-curve",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "pocket_preflight": "passed",
+            "pocket_preflight_endpoint": "http://127.0.0.1:51128/mcp/",
+            "num_turns": 31,
+            "duration_ms": 1006898,
+            "total_cost_usd": 4.8304420000000015,
+            "input_tokens": 53,
+            "output_tokens": 63722,
+            "is_error": false,
+            "tool_calls": 28,
+            "agent_model": "claude-opus-4-8",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "schema-drift-handled-not-crashed-into",
+                "pass": true,
+                "why": "The agent inspected all five headers (finding 12 columns in 2020/2021 vs 13 in 2022-2024) and the landed distribution proves per-file union handling \u2014 bond tenors = 2502 = 2 \u00d7 1251 means `30 Yr` is present on every date, so no positional misalignment, and bills = 6805 = 6\u00d71251 \u2212 701 means `4 Mo` was never fabricated for 2020/2021."
+              },
+              {
+                "id": "unpivot-to-date-maturity-grain",
+                "pass": true,
+                "why": "`yield_observations` lands 15,562 rows at one row per (day, maturity) carrying `maturity_label`/`maturity_months`/`tenor_bucket` as column values, and Q1/Q3 read-backs order across maturities on a date."
+              },
+              {
+                "id": "blank-lands-as-null-not-zero",
+                "pass": true,
+                "why": "The landed tenor_bucket distribution (bill = 6805) implies exactly 550 non-null `4 Mo` observations, i.e. the 199 blank 2022 cells and the 502 absent 2020/2021 cells produced no row rather than a fabricated 0.00, matching the agent's stated rule that a blank cell yields no observation."
+              },
+              {
+                "id": "no-dense-grid-fabrication",
+                "pass": true,
+                "why": "15,562 landed observations over 1,251 dates with bill/note/bond counts of 6805/6255/2502 pins `4 Mo` at 550 non-null and `30 Yr` at all 1,251 dates \u2014 no dense 16,263-row grid and no positional 4 Mo/6 Mo swap."
+              },
+              {
+                "id": "maturity-order-from-landed-data",
+                "pass": true,
+                "why": "`yield_observations` carries `tenor_bucket` alongside `maturity_months` \u2014 attributes that can only come from joining the landed `maturities` reference (13 rows), not from ordering logic \u2014 and the Q1 read-back orders 1 Mo \u2192 30 Yr numerically rather than lexically."
+              },
+              {
+                "id": "maturities-reference-columns-land",
+                "pass": true,
+                "why": "`maturities` lands as a pristine base model from the untouched four-column CSV (13 rows), Q4 is answered from `tenor_bucket` (bill 6 / note 5 / bond 2), and the handoff ties the `4 Mo` gap to that table's `first_published` date of 2022-10-19."
+              },
+              {
+                "id": "yield-not-summed-over-time",
+                "pass": true,
+                "why": "The monthly figure in Q3 is an average (2020-01 = 1.7576, 2020-02 = 1.5042), never a sum, and the agent explicitly states and lands the mean-vs-month-end rollup choice as a ruling."
+              },
+              {
+                "id": "daily-curve-summary-regrain",
+                "pass": true,
+                "why": "`curve_spread` lands 1,251 rows \u2014 one per observation date \u2014 with `spread_pct`, endpoint labels, and a `curve_state` flag (740 normal / 511 inverted), a genuine regrain from the (date \u00d7 maturity) model."
+              },
+              {
+                "id": "inversion-definition-landed-as-decision",
+                "pass": true,
+                "why": "The ruling is landed as queryable data (`nxd_decisions`, 5 rows, status=proposed, including `spread_endpoints` and the strictly-negative inversion rule) and the handoff states plainly that the spread is longest-minus-shortest quoted tenor (30 Yr \u2212 1 Mo), explicitly not 10Y\u22122Y."
+              },
+              {
+                "id": "tier1-asserts-on-derived-models",
+                "pass": true,
+                "why": "The agent states the two derived models carry independent-source reconciliation asserts, and the executed phase-B dry run landed exactly the source-derived counts (15,562 observations; 1,251 distinct dates) without an assert firing."
+              },
+              {
+                "id": "tier2-measure-reconciliation",
+                "pass": false,
+                "why": "Nothing in the transcript shows a signed yield-total reconciliation against an independent stdlib-csv read, nor the named exclusion term the non-null-only 15,562-row shape requires for the 199 blank `4 Mo` cells \u2014 the only evidence is a generic narration of \"independent-source reconciliation asserts\" and a read-back remark about the 701-cell gap."
+              },
+              {
+                "id": "flat-rows-stdlib-csv-no-dataframes",
+                "pass": true,
+                "why": "The published DuckDB contains only the five expected user tables with no `parent__field` child tables, and the closure built and re-built successfully in the pinned desktop venv (which has no pyarrow), indicating flat scalar rows landed in one pipeline.run."
+              },
+              {
+                "id": "deterministic-processing-logic",
+                "pass": true,
+                "why": "The rulings are landed as a pre-build CSV rather than inferred at run time, dates render as explicit ISO from an M/D/YYYY parse the agent states, and no wall-clock, random, or network element appears anywhere in the transform's design or outputs."
+              },
+              {
+                "id": "determinism-rerun-verdict",
+                "pass": true,
+                "why": "The authoritative runner fact reports `passed: true` with exit_code 0 and no failures."
+              },
+              {
+                "id": "closure-python-only-fileset",
+                "pass": true,
+                "why": "The final layout is exactly CONTEXT.md, csv-source-path, data/**, infra-profile.yaml, models.py, requirements.txt, spec.py and transform/main.py \u2014 no hand-written deployment-spec.yaml, manifest.yaml, or models.yaml (those exist only inside the supervisor's own pinned definition directory)."
+              },
+              {
+                "id": "model-naming-and-base-set-alignment",
+                "pass": true,
+                "why": "The three data/ directories (yield_curve, maturities, nxd_decisions) correspond to the three base models, the two derived models have no data/ directory, and all five names land as tables matching the spec/models imports."
+              },
+              {
+                "id": "source-bytes-preserved",
+                "pass": true,
+                "why": "The agent copied both source directories with `cp -R` and verified with `diff -r` that they are identical, then never edited any CSV; reshaping happens only in the derived models."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "A strong run that handles the schema drift, blank-cell, fabrication, ordering, semi-additivity, disclosure, and determinism traps correctly, but the transcript provides no evidence of the required Tier-2 measure reconciliation with an itemized exclusion term for the 199 blank `4 Mo` cells."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    }
+  }
+}

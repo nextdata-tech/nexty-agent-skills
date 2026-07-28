@@ -1,0 +1,83 @@
+{
+  "name": "treasury-yield-curve",
+  "skills": [
+    "nxd-generate-dp"
+  ],
+  "ci_skip": "needs a live desktop supervisor (EVAL_POCKET_SUPERVISOR_DIR / EVAL_POCKET_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
+  "deterministic_check": {
+    "script": "check_determinism.py",
+    "deps": [
+      "duckdb"
+    ]
+  },
+  "checks": [
+    {
+      "id": "schema-drift-handled-not-crashed-into",
+      "check": "The wide-to-long reader tolerates the differing headers per file. The header is NOT constant across the export: treasury-2020.csv and treasury-2021.csv carry 12 maturity columns and no `4 Mo` column at all, while treasury-2022/2023/2024.csv carry 13. A per-file `csv.DictReader` that unions on whatever keys each file happens to have is correct; so is an explicit union of the maturity label set. What fails: a reader that fixes the column list from one file (silently dropping every `4 Mo` observation in 2022-2024), one that indexes rows positionally (which misaligns 2020/2021 values by one column from `6 Mo` onward, landing 6-month yields under `4 Mo`), or one that raises a KeyError on the 2020 file and gets 'fixed' by editing the source. The trace showing the schema taken from a single file and assumed to hold for the rest is the process-level tell of the same failure."
+    },
+    {
+      "id": "unpivot-to-date-maturity-grain",
+      "check": "The yield observations land at a (date x maturity) grain with the maturity label as a column value, NOT as 13 separate yield columns. Question 2 needs a spread between two maturities and question 1 needs the curve read across maturities; with one column per maturity both are column arithmetic the semantic layer has no expression surface for. The unpivot is a one-row-becomes-N derivation, so this model declares a new composite key (date + maturity) rather than reusing `Date`."
+    },
+    {
+      "id": "blank-lands-as-null-not-zero",
+      "check": "CRITICAL. Blank yield cells land as NULL and are excluded from aggregation \u2014 never coerced to 0.0, and never to an empty string that a later float() turns into 0. The `4 Mo` column exists in treasury-2022.csv but is blank on 199 of its 249 rows (Treasury began publishing that maturity on 2022-10-19; only 50 rows in 2022 carry a value). A `float(v or 0)` or `float(v.strip() or 0)` fabricates a 0.00% four-month yield on those 199 dates. This is the sharpest trap in the fixture because it corrupts only part of one year \u2014 2023 and 2024 are complete, so a spot check of recent data looks perfectly healthy while the 2022 average yield for `4 Mo` is dragged toward zero."
+    },
+    {
+      "id": "no-dense-grid-fabrication",
+      "check": "The unpivoted model does not fabricate observations for maturity/date combinations the source never published. The correct landed row count is 15,562 non-null observations over 1,251 dates (the source contains 15,761 date/column cells present in the files, of which 199 are blank). A dense 13 x 1,251 = 16,263-row grid has invented 701 observations; landing all 15,761 present cells with 199 explicit NULLs is also acceptable. Fabrication is detectable from the landed table without reading code: non-null `4 Mo` observations must be 0 in 2020, 0 in 2021, 50 in 2022, 250 in 2023 and 250 in 2024 (550 total), and `30 Yr` must be present on all 1,251 dates. A positional reader that maps 2020-2021's 12 value columns onto 13 labels lands ~502 fabricated `4 Mo` observations (251 per year \u2014 actually the 6-month yields) and nulls `30 Yr` on those same dates, while the aggregate non-null total stays 15,562 \u2014 so grade the per-maturity-per-year distribution, not just the total."
+    },
+    {
+      "id": "maturity-order-from-landed-data",
+      "check": "Curve ordering comes from `maturity_months` in the landed maturities model, joined in the transform \u2014 NOT from a dict literal, tuple, list, or if-ladder of label-to-months in transform/main.py. Reference data is landed, never hardcoded; a mapping baked into code is invisible to the semantic layer and unreviewable. Fail on any embedded `{\"1 Mo\": 1, \"2 Mo\": 2, ...}` or equivalent ordering constant even though it would produce identical numbers. Equally, nothing in the closure may order maturities by the label string: lexical order over these 13 labels gives `1 Mo, 1 Yr, 10 Yr, 2 Mo, 2 Yr, 20 Yr, ...` \u2014 a curve that jumps from one month to one year to ten years and back to two months. The ordinal exposed to queries is numeric, so 'read the curve short end to long end' is an order_by on a numeric column."
+    },
+    {
+      "id": "maturities-reference-columns-land",
+      "check": "All four maturities.csv columns land queryable \u2014 notably `tenor_bucket` and `first_published`, the two the transform's own arithmetic never needs. `tenor_bucket` is the only thing that answers question 4 (which maturities are bills, notes, and bonds); `first_published` is the only field distinguishing 'not yet issued' from 'not reported' and the documented reason the 199 blank `4 Mo` cells exist. The specific wrong answer: a closure that lands only `maturity_label` + `maturity_months` because ordering was all the join required \u2014 it passes the ordering check while leaving question 4 unanswerable and the `4 Mo` gap unexplained to a consumer."
+    },
+    {
+      "id": "yield-not-summed-over-time",
+      "check": "CRITICAL. No metric sums `yield` over time. A yield is semi-additive: it may be compared across maturities on one date and averaged over a period, but summing it is meaningless \u2014 the December-2024 10-year 'total' is 92.22, a number with no interpretation, versus a 4.39 mean and a 4.58 end-of-period value. Fail if the semantic view registers `Agg.SUM` over the yield column, or if the monthly view in question 3 is a sum. The monthly figure should be end-of-period (or, if the closure chooses a mean, that choice is stated) \u2014 and if end-of-period is chosen it is materialized as a derived column or flag, since the semantic layer cannot express 'last value by date within month'."
+    },
+    {
+      "id": "daily-curve-summary-regrain",
+      "check": "A derived model exists at DATE grain \u2014 one row per observation date \u2014 carrying the long-minus-short spread and an inversion flag. This is a regrain from (date x maturity) down to (date), so it declares a new key (date) rather than inheriting the composite one. Question 2 is not answerable without it: the spread is a difference between two rows of the unpivoted model, and the semantic layer has no expression surface to subtract one row from another."
+    },
+    {
+      "id": "inversion-definition-landed-as-decision",
+      "check": "CRITICAL \u2014 grade DISCLOSURE, not the ruling. No column anywhere in the export says which spread defines 'inverted'. 10Y-2Y is the conventional recession signal; 10Y-3M is equally standard and is the Fed's preferred measure. The two genuinely disagree on this fixture \u2014 541 inverted dates by 10Y-2Y versus 548 by 10Y-3M, differing on 163 of 1,251 dates \u2014 so the definition is a real judgement call that materially changes landed rows, and either choice is defensible. What is graded: (a) the ruling landed as queryable data \u2014 a row in a landed model, not a prose note, a code comment, or a standalone markdown file \u2014 and (b) the handoff states which definition the landed rows use. The only failure is deciding silently: spread and inversion rows landed with no queryable record of the definition and no statement of it in the handoff."
+    },
+    {
+      "id": "tier1-asserts-on-derived-models",
+      "check": "Every derived model carries Tier-1 asserts in memory before pipeline.run: declared-key uniqueness (the date x maturity tuple on the unpivoted model; date alone on the daily summary) plus a grain-derived row count reconciled against source rows read independently with stdlib csv. The daily summary's count must reconcile to 1,251 distinct dates \u2014 the count that catches a fan-out from a duplicated maturity join or a truncation from an inner join that dropped dates. An assert that recomputes the number from the same in-memory structure the transform just built does not count; it must re-read the source."
+    },
+    {
+      "id": "tier2-measure-reconciliation",
+      "check": "The unpivoted observation model carries a measure column, so it also carries the Tier-2 assert: its signed yield total reconciles against a total read independently from the source CSVs with stdlib csv. The exclusion term is conditional on the shape the closure chose: if it lands only non-null observations (15,562 rows), the 199 blank `4 Mo` cells are itemized as a named exclusion term; if it lands all 15,761 present cells with explicit NULLs, nothing is excluded and the reconciliation must be exact with no residual. Why a non-null-count term matters: coercing blanks to 0 leaves the yield total unchanged, so the total alone never catches it \u2014 under the non-null-only shape the row count does (15,761 landed vs 15,562 expected), but under the dense-NULL shape both total and row count pass and only a count-of-non-null term (550 non-null `4 Mo` observations) exposes the fabricated zeros. Fail if exclusions are lumped into one unnamed residual, or if the assert was loosened to make a run pass."
+    },
+    {
+      "id": "flat-rows-stdlib-csv-no-dataframes",
+      "check": "Derived rows are plain flat scalar dicts appended to the same `resources` list and landed in one pipeline.run \u2014 no pandas or pyarrow on the landed path (pyarrow is not in the pinned venv), and no nested values, which would spawn `parent__field` child tables. The sources are read with stdlib `csv`; requirements.txt is not installed at runtime, so an import added there does not make it available to the transform."
+    },
+    {
+      "id": "deterministic-processing-logic",
+      "check": "Graded from a code read of the committed transform, not from the double-build harness (a now() that is stable across minutes survives two back-to-back builds). The transform is a pure function of its inputs: no wall-clock read feeding landed values \u2014 no now(), today(), or time.time(), which also rules out deriving an 'as of today' recency column \u2014 no unseeded random, and no model or network call inside transform/main.py: the inversion ruling is decided agent-side and landed as data before the build, never inferred at run time. The `Date` parse is an explicit MM/DD/YYYY parse (e.g. strptime '%m/%d/%Y'), not a locale-dependent one."
+    },
+    {
+      "id": "determinism-rerun-verdict",
+      "check": "The runner's authoritative DETERMINISTIC CHECK fact reports passed=true. That checker builds the committed closure twice against a live supervisor and compares the landed user tables \u2014 user columns only, ordered \u2014 so a rerun that changes the data fails here regardless of how the transform reads. Grade this FROM THAT FACT, which is authoritative over the agent's own claims about reproducibility; a run whose checker fact is missing, malformed, or false fails this check. Note the two builds run back to back, so this catches run-history dependence, unseeded random, and row ordering that varies \u2014 it cannot catch a wall-clock value stable across minutes, which is why the code-read check is graded separately."
+    },
+    {
+      "id": "closure-python-only-fileset",
+      "check": "The closure is Python-only and complete: spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, CONTEXT.md and the csv-source companion path file \u2014 and NO hand-written deployment-spec.yaml, manifest.yaml, or models.yaml. The supervisor compiles spec.py into the kernel definition; the specific wrong answer is hand-authoring kernel YAML copied from k8s examples elsewhere on the machine, which the supervisor will not reconcile with the spec."
+    },
+    {
+      "id": "model-naming-and-base-set-alignment",
+      "check": "One name per model across all four surfaces \u2014 models.py, `.promise(...)`, `PHYSICAL_MODELS`, and the transform's landed table names \u2014 and `BASE_MODELS`, and only `BASE_MODELS`, matches the data/ directories, with derived models absent from data/. The specific failures: a derived model missing from `PHYSICAL_MODELS` escapes the read-back assert and can silently fail to land, and a derived model given a data/ directory gets treated as a base source."
+    },
+    {
+      "id": "source-bytes-preserved",
+      "check": "All five yield CSVs and maturities.csv are landed byte-for-byte. No file is re-saved, re-headered, or padded with a `4 Mo` column to make the five schemas agree, and no row is dropped to make a join or an assert succeed. Reshaping happens only in derived models downstream of pristine sources."
+    }
+  ]
+}
