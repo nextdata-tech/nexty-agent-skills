@@ -61,12 +61,12 @@ the one-DP-in-flight rule, and where the loop may fan out to subagents, all
 live in [reference/scheduling.md](reference/scheduling.md). The two routes that
 decide the whole loop:
 
-- **A source is in scope, no suitable local product exists** → run the loop:
-  gather, infer, generate, build, artifact, describe, query, present, refine.
+- **A source is in scope, no suitable local product exists** → run the loop: gather,
+  infer, generate, build, artifact, describe, query, present, refine.
 - **An existing local product but no live endpoint/token** (the typical new
-session, since the bearer never persists) → **reattach, don't rebuild**:
-  `list_data_products` → `resume_data_product` → artifact. `list_data_products`
-  is discovery only; it must never supply a static-artifact fallback. See
+  session, since the bearer never persists) → **reattach, don't rebuild**:
+  `list_data_products` → `resume_data_product` → artifact. `list_data_products` is
+  discovery only and must never supply a static-artifact fallback — see
   [reference/context-and-resume.md](reference/context-and-resume.md).
 
 Treat ambiguous requests conservatively: if a question could mean either a
@@ -85,8 +85,8 @@ Choose this order before invoking any runtime command:
    — use them for the entire discover, build, resume, describe, and query
    sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
    on-demand handoffs. This is the supported route for Claude Desktop and Claude
-   Cowork. Read-only `nxd://` **resources** — with tool bridges where a client
-   exposes none — expose what a release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
+   Cowork. Read-only `nxd://` **resources** — with tool bridges where a client exposes none —
+   expose what a release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
    `nxd-desktop-supervisor` only when the session context has positively
    established that the shell is the user's macOS host **and** both
@@ -282,17 +282,13 @@ stop-on-failure.
 
 ### Step 4a — Render the pinned static artifact
 
-After every successful build or resume, invoke **nxd-dp-static-artifact** for
-the workflow before `describe_models` or any query. It reads only the current,
-verified, and outputs documents (by resource operations, or the bridge tools on a
-client exposing none) and writes one self-contained release HTML
-file. Report artifact `status`, `path`, and `publish_seq` separately from the
-endpoint. If it fails, report that failure but keep a healthy endpoint usable
-for the later describe/query path. An endpoint plus bearer but **no workflow**
-is the explicit query-only exception: state that the artifact is unavailable,
-then describe/query without inventing a workflow; a query remap does not rerender.
-A same-workflow rebuild discards cached URIs and the former current
-file, then renders its new sequence before describe/query.
+After every successful build or resume, invoke **nxd-dp-static-artifact** for the workflow
+before `describe_models` or any query. It reads only the current, verified and outputs
+documents (via resource operations, or the bridge tools on a client exposing none) and
+writes one self-contained release HTML file. Report artifact `status`, `path` and
+`publish_seq` separately from the endpoint; on failure report it but keep a healthy
+endpoint usable for describe/query. With an endpoint but **no workflow**, say the artifact
+is unavailable and query on. A rebuild discards cached URIs and renders its new sequence.
 
 ### Step 5 — Describe, query, and present
 
@@ -355,15 +351,14 @@ and the non-convergence report live in
 - **Model / DP-level** — the inferred model is wrong (missing metric, wrong
   grain, missing join, wrong PII, or an undistinguishing description), or the
   question needs a column or grain that doesn't exist (a filtered figure, a
-  ratio, a monthly rollup, a classification) — a **derived model**, not a
-  query tweak: go
-  back to Step 2/3 and have nxd-generate-dp materialize the ruling, then
-  rebuild through MCP with the **same** `workflow`. **After every rebuild,
+  ratio, a monthly rollup, a classification) — a **derived model**, not a query
+  tweak: go back to Step 2/3 and have nxd-generate-dp materialize the ruling,
+  then rebuild through MCP with the **same** `workflow`. **After every rebuild,
   refresh:** discard cached artifact resources and current file; render the new
   release first, then use the endpoint/token returned by the build and describe
-  the catalog before mapping again. Define success as a catalog-grounded answer the user
-  accepts. If the loop doesn't converge within the caps, report what you tried,
-  what the product currently declares, and where the gap is — never loop
+  the catalog before mapping again. Success is a catalog-grounded answer the
+  user accepts. If the loop doesn't converge within the caps, report what you
+  tried, what the product declares, and where the gap is — never loop
   indefinitely or give up silently.
 
 ## When questions require inference
@@ -421,8 +416,14 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
   nxd-generate-dp, landed through the DuckDB output port, asserted in the
   transform. Never edit the source export to reach that outcome, and never
   emulate it agent-side.
-- **Land judgement as data, never code.** Confirm mappings and agent-produced
-  scores/verdicts, keep their evidence/status, and materialize them as models.
+- **A judgement not in the data is confirmed and landed, not hardcoded.** FX
+  rates, merchant→category and similar mappings are surfaced, confirmed, and
+  landed as their own queryable model — never embedded as transform constants.
+  **This covers agent-produced judgement too** — a per-entity
+  score/verdict/classification read from evidence, landed agent-side as data
+  (`status = proposed`, evidence-cited, rubric taught first); the build never
+  invokes a model, and a per-entity judgement baked in as a constant is
+  hardcoded even when weighted.
 - **A supplied procedure with a result-changing gap is read back BEFORE any
   materialization.** No closure directory, source copy, generated code, table,
   scoring, or build until the user has seen every proposed anchor, band and
@@ -443,9 +444,8 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
 - **Reattach, don't rebuild, when the artifact is live.** In a fresh session
   with no endpoint, `list_data_products` → `resume_data_product` → static
   artifact recovers a published workflow in seconds with a fresh bearer;
-  `list_data_products` remains discovery only; rebuild only when
-  `collected` / `artifact_unavailable`
-  ([reference/context-and-resume.md](reference/context-and-resume.md)).
+  `list_data_products` remains discovery only; rebuild only when `collected` /
+  `artifact_unavailable` ([reference/context-and-resume.md](reference/context-and-resume.md)).
 - **Hand off only host-visible paths.** Pass `build_data_product` an absolute
   generated-definition path explicitly exposed by the file-writing surface;
   never infer one from an attachment ID or isolated Linux path, and verify a

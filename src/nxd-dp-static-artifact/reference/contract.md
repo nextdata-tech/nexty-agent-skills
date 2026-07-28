@@ -78,7 +78,10 @@ not contractually carry.
 include each attribute, even when it has no role. Serialize complex
 `data_type` values as safe JSON rather than coercing them to a string. Render
 optional attribute descriptions, `semantic_tags`, and `constraints` only when
-their keys are present.
+their keys are present. "Present" means the key exists — a present key holding
+`null`, `""` or `[]` is rendered with its gloss, never dropped. Only an absent
+key produces no output at all; that distinction is the whole point of the
+glosses, and silently omitting an empty value collapses it.
 
 Overlay `models.models[].fields[].roles` onto matching
 `data_model.models[].attributes`; never render the semantic registry's

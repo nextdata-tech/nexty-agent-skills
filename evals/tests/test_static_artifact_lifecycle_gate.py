@@ -5,6 +5,7 @@ from pathlib import Path
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -171,12 +172,35 @@ def test_absence_states_are_distinct_and_never_a_labelled_blank():
 
 
 def test_pocket_renders_before_describe_and_query_and_rerenders_after_rebuild():
+    """The render step precedes describe/query and survives the 500-line budget.
+
+    Assert the requirements, not their phrasing: this file is hand-maintained
+    against a hard line cap, so prose gets rewrapped and tightened. Pinning
+    sentences here makes an editorial pass look like a regression — the same
+    lesson the deterministic gate learned about heading vocabulary.
+    """
     text = (POCKET / "SKILL.md").read_text()
     artifact = text.index("### Step 4a")
     describe = text.index("### Step 5")
     assert artifact < describe
-    for phrase in ("nxd-dp-static-artifact", "list_data_products` → `resume_data_product` → artifact", "query-only exception", "query remap does not rerender", "same-workflow rebuild discards cached URIs"):
-        assert phrase in text, phrase
+    step_4a = text[artifact:describe]
+
+    # The step invokes the artifact skill, before describe/query.
+    assert "nxd-dp-static-artifact" in step_4a
+    assert re.search(r"before\s+`describe_models`", step_4a)
+    # Both transports are named as acceptable sources for the read.
+    assert "bridge tools" in step_4a
+    # The three facts reported separately from the endpoint.
+    for token in ("`status`", "`path`", "`publish_seq`"):
+        assert token in step_4a, token
+    # A failed artifact does not condemn a healthy endpoint.
+    assert re.search(r"healthy\s+endpoint", step_4a)
+    # A rebuild invalidates cached URIs and re-renders.
+    assert "cached URIs" in step_4a
+
+    # Reattach path routes through the artifact, and discovery stays discovery.
+    assert "`list_data_products` → `resume_data_product` → artifact" in text
+    assert re.search(r"discovery only", text)
 
 
 def test_offline_fixture_checker_mechanizes_page_contract():

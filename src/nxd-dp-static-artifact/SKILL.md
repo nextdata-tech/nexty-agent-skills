@@ -107,9 +107,11 @@ raw-payload screens.
 1. **Identity** — name, description, version, and domain.
 2. **Model overview** — each model's name, description, and grain/role summary.
 3. **Complete schema** — every ordered `data_model` model and attribute;
-   show the exact scalar or safely serialized complex type, description where
-   present, semantic tags and constraints where present, and every overlaid
-   role/PII marker. An unannotated field remains a field.
+   show the exact scalar or safely serialized complex type, semantic tags and
+   constraints when their keys are present, and every overlaid role/PII marker.
+   A `description` key that is present but `null` or `""` is rendered with its
+   gloss, not dropped — dropping it is indistinguishable from a field that
+   declared one. An unannotated field remains a field.
 4. **Joins** — every declared endpoint and cardinality after validating both
    endpoints. Connect two models — visually or in prose — only for a declared
    join. With `joins: []` and per-model `joins: null`, draw no lines and name no
@@ -118,8 +120,9 @@ raw-payload screens.
 5. **Output exposure and ports** — render output-level `model_names` / `models`
    as their own declaration, then preserve each port and read its own
    `model_names` / `models`. Never replace either surface with a union. Render
-   each port's service name and `promises`, including explicit `null` and `[]`
-   states.
+   each port's service name and `promises`. A port whose `promises` is `null`
+   still renders the label with `null · the manifest didn’t say`, and one whose
+   `models` is `[]` renders `[] · none declared` — never omit the row.
 6. **Evidence** — only published artifact evidence. Show `compiler_id` only as
    evidence when non-zero; an all-zero ID is not meaningful provenance.
 7. **Release provenance** — a closed-by-default `details` after evidence, with
