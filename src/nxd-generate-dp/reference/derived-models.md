@@ -514,13 +514,23 @@ def _assert_explanations(
     source: list[dict[str, str]]
 ) -> None:
     """Every scored cell is explained, and every citation is real."""
-    # Coverage: an explanation for each (entity, criterion) that carries a score.
-    scored = {(r["entity_key"], r["criterion"]) for r in expl if r["score"] is not None}
+    # Coverage: read the scored cells off the SCORE SHEET, never off `expl`.
+    # Deriving both sides from `expl` makes the check self-referential — a
+    # criterion that scored but emitted no explanation row AT ALL is missing
+    # from both sets, subtracts to nothing, and ships green. That vanished row
+    # is precisely the defect this assert exists to catch.
+    scored = {
+        (r["entity_key"], crit)
+        for r in scores
+        for crit in CRITERIA               # the landed rubric's criterion ids
+        if r.get(f"{crit}_score") is not None
+    }
     explained = {(r["entity_key"], r["criterion"]) for r in expl if r["band_id"]}
     if scored - explained:
+        missing = sorted(scored - explained)
         raise RuntimeError(
-            f"{len(scored - explained)} scored cells carry no band_id, e.g. "
-            f"{sorted(scored - explained)[:3]}"
+            f"{len(missing)} scored cells have no explanation row carrying a "
+            f"band_id, e.g. {missing[:3]}"
         )
     # Anchoring: the quote really is a substring of the field it cites. This is
     # the substring assert llm-judgments.md defers to the consuming model — it
@@ -538,6 +548,14 @@ def _assert_explanations(
                 f"with a quote that is not a substring of it: {r['evidence_quote']!r}"
             )
 ```
+
+**Both sides of the coverage assert must not come from the same list.** Reading
+`scored` and `explained` off `expl` is the tempting one-liner and it is inert:
+the only cells it can compare are ones that already have an explanation row, so
+a criterion whose row was never emitted is invisible to it. The score sheet is
+the independent witness — take the scored set from there, and the assert can
+actually fail. Test it by deleting one explanation row and confirming the build
+goes red; an assert that stays green under that edit is decoration.
 
 The substring assert is what turns the citation from a claim into a check —
 without it a fabricated quote ships green, and the explainability model becomes
