@@ -28,7 +28,9 @@ contract surface**, and the custom-verify templates below do NOT work there:
 - a `custom(...).verify(code(...))` with no explicit compute routing resolves to
   the platform contract executor, which a local profile does not declare — the
   data product **fails at boot**;
-- routing it to local compute is **not established to work** either.
+- routing it to local compute **also fails at boot**: the run dies with
+  `Driver nxd:local/python/compute:0.1.0 not found`, because that driver
+  registers no contract capability.
 
 On a local closure, declare constraints as **field-level model contracts**
 (`.constraints(nullable=/min=/max=)` chained onto `field()`) on a promised model,

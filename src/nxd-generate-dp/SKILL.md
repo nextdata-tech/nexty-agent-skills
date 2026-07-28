@@ -284,7 +284,7 @@ below is mandatory:
 ### Step 3b — In-memory asserts: proving the derivation is right
 
 **This is the only place a derivation can be checked against its sources.** A declared contract (Step 4a)
-checks the landed table and stops the publish on a violation, but cannot see the closure's Python — so key
+checks the landed table but does not yet block the publish, and cannot see the closure's Python — so key
 uniqueness, a grain-derived row count and a measure total reconciled against independently-read source rows
 live HERE. Complementary, not alternatives; neither may be weakened because the other exists. Running over
 the complete derived set before the rows are yielded. One helper per derived model, invoked between deriving
@@ -337,9 +337,11 @@ Contract facts baked into that shape — keep every one:
 ### Step 4a — Declare the contracts the product guarantees
 
 A stated constraint, or a discovered one the user confirmed, becomes a **declared contract**:
-`.constraints(nullable=/min=/max=)` on a promised model's fields, so a violation **stops the publish** and
-the prior release stays served. **Never author `custom(...).verify(code(...))` locally** — unrouted fails at
-boot, routed is unproven; procedural checks go in Step 3b. Discovered invariants are confirmed before being
+`.constraints(nullable=/min=/max=)` on a promised model's fields, checked against the landed table. The
+publish is NOT yet gated on that verdict, so never tell a user a violating run will be stopped — Step-3b
+asserts remain the check that fails a build. **Never author `custom(...).verify(code(...))` locally**: both
+shapes fail at boot (`Driver nxd:local/python/compute:0.1.0 not found` on a live run); procedural checks go
+in Step 3b. Discovered invariants are confirmed before being
 declared, in their own turn — [reference/contracts.md](reference/contracts.md).
 
 ### Step 5 — `infra-profile.yaml`: the desktop-local profile (emitted prerequisite)

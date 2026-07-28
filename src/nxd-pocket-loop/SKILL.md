@@ -246,11 +246,13 @@ local database** — a successful build is the only proof the product is ready t
 CLI is used only under the confirmed host-local Darwin conditions in "Choose the execution
 surface," kept equivalent: same closure served, same stop-on-failure.
 
-**A build can fail because the DATA broke a declared contract** — the transform ran, but a
-promised model violated a stated or confirmed constraint, so nothing published and any previous
-version is still served. Not a broken closure: report **which constraint and column**, that
-nothing published, and the two choices — correct the data, or amend the constraint. **Never drop
-one for a green build.**
+**A declared contract can be violated without failing the build.** The local runtime checks a
+promised model against its landed table but does not yet block the publish on the verdict, so a
+run whose data breaks a stated constraint still publishes. Never tell a user their contracts
+stopped a bad run — they did not. What DOES fail a build is a Step-3b transform assert. If a
+contract violation surfaces, report **which constraint and column**, say the data published
+anyway, and offer the two choices — correct the data, or amend the constraint. **Never drop one
+for a green build.**
 
 ### Step 4a — Render the pinned static artifact
 
@@ -397,12 +399,13 @@ degrade); the row schema is nxd-generate-dp's `reference/llm-judgments.md`.
   precedence rule and replied. A technical delivery question is not approval;
   "use your judgement" licenses authoring the proposal, not skipping the turn.
 - **A stated constraint becomes a declared contract; a failed one is reported,
-  never removed.** Gathered verbatim in Step 1. A build failing on one reports
-  which constraint and column, that nothing published and the prior version is
-  served — correct the data or amend the constraint; dropping it for a green
-  build is worse than never declaring it. Constraints the user did NOT state are
-  proposed from evidence and confirmed in their own turn, never folded into the
-  policy read-back's reply.
+  never removed.** Gathered verbatim in Step 1. A violation is reported by
+  constraint and column — but the local runtime does NOT yet block the publish
+  on it, so never claim the contract stopped a bad run; the check that fails a
+  build is the transform assert. Correct the data or amend the constraint;
+  dropping it for a green build is worse than never declaring it. Constraints
+  the user did NOT state are proposed from evidence and confirmed in their own
+  turn, never folded into the policy read-back's reply.
 - **A ruling behind a number is stated with the number.** When a dimension's
   catalog description names the ruling that created it, the answer says so, and
   a classified total reports its review-bucket share whenever nonzero —

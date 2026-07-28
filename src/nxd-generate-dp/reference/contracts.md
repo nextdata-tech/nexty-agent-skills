@@ -27,8 +27,8 @@ a consumer as a guarantee. Only the first row below is available today:
 
 | Shape | Local runtime | Use it? |
 |---|---|---|
-| **Model contract** — a `semantic_model` passed to `.promise(...)` | The storage driver checks the landed table: every declared column present, declared non-nullable columns hold no nulls, declared numeric ranges hold. A violation **stops the publish** — the release pointer does not move and the previously published version stays served. | **Yes** — this is the sanctioned shape. |
-| **Custom verify** — `custom("name").verify(code(fn))` | **Do not author one.** Its execution path on the local runtime is unresolved: the shape without explicit compute routing fails at boot, and the routed shape is not established to work either. | **No** — see "Custom checks" below. |
+| **Model contract** — a `semantic_model` passed to `.promise(...)` | The storage driver checks the landed table: every declared column present, declared non-nullable columns hold no nulls, declared numeric ranges hold. It reports a real verdict rather than the empty result it used to return. **The publish is not yet gated on that verdict** — see below. | **Yes** — this is the sanctioned shape. |
+| **Custom verify** — `custom("name").verify(code(fn))` | **Never author one.** Both shapes fail at boot: without compute routing the spec resolves to a contract executor the local profile does not declare, and routed to local compute the run dies with `Driver nxd:local/python/compute:0.1.0 not found` — confirmed on a live run, not inferred. | **No** — see "Custom checks" below. |
 | **Input expectation** — `.expectation(...)` on an input | Base models land in the same database as outputs, so a base model's contract is checked when it is promised on the output port. There is no separate source-side check. | Express it as a **promise** on the landed model. |
 
 Everything here therefore attaches to the **output port**, even for a constraint
@@ -50,10 +50,21 @@ A failure names the column and the count of offending rows. Non-numeric bounds
 are not checked: comparing them correctly needs collation rules, and a check
 that guesses is worse than one that abstains.
 
-Declaring a field non-nullable is therefore a real, enforced claim — not
-documentation. Do not mark a field non-nullable because it *looks* required;
-mark it non-nullable because the data must never omit it and a run that omits it
-should not publish.
+Declare a field non-nullable because the data must never omit it — not because
+it *looks* required. The declaration is the product's stated guarantee, and it
+is what a consumer reads.
+
+**What it does NOT yet do: block the publish.** The driver computes and reports
+the verdict, but the local runtime tears the kernel down as soon as the
+transform's output lands — before the phase that would act on it — so a run
+whose data violates a declared contract still publishes today. This is a known
+runtime gap, established by a live run rather than assumed.
+
+So: declare contracts, because they are the durable statement of what the
+product guarantees and they become enforcing the moment that gap closes. But do
+not tell a user a violating run will be stopped — say the contract is declared
+and checked, and keep the **Step-3b transform asserts** as the check that
+actually fails a build today.
 
 ---
 
@@ -184,11 +195,17 @@ example, and over re-reading library source.
 
 Do **not** author `custom(...).verify(code(...))` in a local closure.
 
-The shape with no explicit compute routing resolves to a platform contract
-executor the local profile does not declare, and fails at boot. Routing it to
-local compute is **not established to work** either: the local compute driver
-registers no contract capability, and the local run path skips kernel-side
-contract execution entirely.
+Both shapes fail at boot. Without explicit compute routing the spec resolves to
+a platform contract executor the local profile does not declare. Routing it to
+local compute fails too — confirmed on a live run, which died 913ms in with:
+
+```
+Error: Driver nxd:local/python/compute:0.1.0 not found
+```
+
+The local compute driver registers no contract capability, so the kernel cannot
+resolve an executor for the contract even though the same service runs the
+transform perfectly well. There is no third shape to try.
 
 A constraint that genuinely needs procedural logic — spanning rows, comparing
 against an independently-read source, reconciling a total — belongs in a
