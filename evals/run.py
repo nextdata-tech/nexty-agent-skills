@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import hashlib
 import json
 import os
@@ -50,8 +51,10 @@ from pathlib import Path
 from eval_backends import (
     AGENT_BACKENDS,
     JUDGE_BACKENDS,
+    FollowupTurn,
     get_agent_backend,
     get_judge_backend,
+    parse_followup_turns,
 )
 
 
@@ -1170,12 +1173,50 @@ JUDGE_SYSTEM = (
 )
 
 
+def build_scripted_turns_block(checks: dict, metrics: dict | None = None) -> str:
+    """Describe the scripted user turns to the judge, or "" for single-turn.
+
+    Without this the judge reads a transcript in which the agent suddenly
+    adopts a correction it was handed, cannot attribute it to the user, and may
+    credit the agent for the user's idea. The turns are quoted verbatim, and the
+    turns that did NOT fire are named so their checks are not graded against a
+    conversation that never happened.
+    """
+    turns = checks.get("turns") or []
+    if not turns:
+        return ""
+    skipped = set((metrics or {}).get("skipped_turns") or [])
+    lines = [
+        "\n--- SCRIPTED USER TURNS (supplied by the HARNESS, not authored by "
+        "the agent — the agent's first message answers the task above; these "
+        "arrived afterwards as the user speaking) ---"
+    ]
+    for i, turn in enumerate(turns):
+        index = i + 2  # turn 1 is the scenario prompt
+        status = " [NOT SENT]" if index in skipped else ""
+        lines.append(f'  [user_turn {index}]{status} {turn.get("text", "")}')
+    if skipped:
+        lines.append(
+            "  A turn marked [NOT SENT] never reached the agent, because the "
+            "agent did not signal it was waiting for input. Any check tagged "
+            "with that turn number MUST be failed with the reason \"turn not "
+            "sent\" — do not grade it against this transcript, and do not "
+            "credit the agent for behaviour the turn would have prompted."
+        )
+    return "\n".join(lines) + "\n"
+
+
 def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
-                       final_answer: str, facts: list[str] | None = None) -> str:
+                       final_answer: str, facts: list[str] | None = None,
+                       metrics: dict | None = None) -> str:
     prompt_md = (scenario_dir / "prompt.md").read_text(encoding="utf-8")
     check_lines = "\n".join(
-        f'  {i + 1}. [id={c["id"]}] {c["check"]}' for i, c in enumerate(checks["checks"])
+        f'  {i + 1}. [id={c["id"]}]'
+        + (f' (about user_turn {c["turn"]})' if c.get("turn") else "")
+        + f' {c["check"]}'
+        for i, c in enumerate(checks["checks"])
     )
+    scripted_turns = build_scripted_turns_block(checks, metrics)
     # Opt-in mechanical facts the harness computed itself (not the agent's word)
     # — e.g. re-hashing the reproduced models.py to tie it to the reported
     # digest. Only present when the scenario declares it in checks.json.
@@ -1194,7 +1235,7 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 
 --- SCENARIO DEFINITION (for your context only) ---
 {prompt_md}
-
+{scripted_turns}
 --- SUCCESS CHECKS (grade each one) ---
 {check_lines}
 
@@ -1238,11 +1279,15 @@ Respond with ONE JSON object and nothing else, in this exact shape:
 
 def run_judge(judge_backend, scenario_dir: Path, checks: dict, trace: str,
               final_answer: str, model: str, timeout_s: int,
-              effort: str = "", facts: list[str] | None = None) -> dict:
+              effort: str = "", facts: list[str] | None = None,
+              metrics: dict | None = None) -> dict:
     """Grade one transcript. Builds the provider-independent judge prompt (which
-    folds in the harness-verified ``facts``), then delegates the actual model
-    call to the selected judge backend."""
-    prompt = build_judge_prompt(scenario_dir, checks, trace, final_answer, facts)
+    folds in the harness-verified ``facts`` and, for multi-turn scenarios, the
+    scripted user turns), then delegates the actual model call to the selected
+    judge backend."""
+    prompt = build_judge_prompt(
+        scenario_dir, checks, trace, final_answer, facts, metrics
+    )
     return judge_backend.run_judge(prompt, JUDGE_SYSTEM, model, timeout_s, effort)
 
 
@@ -1518,11 +1563,20 @@ def _fixtures_fingerprint(scenario_dir: Path) -> str:
 
 
 def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
-                     backend: str, model: str, effort: str) -> str:
-    """Cache key for an agent run. Independent of the judge / checks.json, so
-    iterating on grading reuses the expensive agent transcript. Includes the
-    agent backend so switching provider (claude ↔ codex) never reuses the other
-    provider's transcript."""
+                     backend: str, model: str, effort: str,
+                     followup_turns: list[FollowupTurn] | None = None) -> str:
+    """Cache key for an agent run. Independent of the judge and of checks.json's
+    GRADING fields, so iterating on the rubric reuses the expensive agent
+    transcript. Includes the agent backend so switching provider (claude ↔
+    codex) never reuses the other provider's transcript.
+
+    Scripted follow-up turns are hashed in even though they live in checks.json:
+    they are not grading, they are agent INPUT that shapes the transcript.
+    ``_fixtures_fingerprint`` covers only ``fixtures/``, so without this an
+    edited turn script would silently replay a transcript recorded against the
+    old wording. A scenario with no turns contributes NOTHING to the hash, so
+    every single-turn key predates this change unchanged and no existing cached
+    transcript is discarded by multi-turn support merely existing."""
     h = hashlib.sha256()
     pocket_runtime_key = ""
     if scenario_needs_pocket(scenario_dir) is not None:
@@ -1530,7 +1584,7 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
             os.environ.get("EVAL_POCKET_SUPERVISOR_DIR", ""),
             os.environ.get("EVAL_POCKET_PYTHON", ""),
         ))
-    for part in (
+    parts = [
         skill_set.name,
         ",".join(sorted(skill_set.skills)),
         scenario_dir.name,
@@ -1540,7 +1594,16 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
         effort,
         _fixtures_fingerprint(scenario_dir),
         pocket_runtime_key,
-    ):
+    ]
+    # APPENDED ONLY when the scenario actually scripts turns. A single-turn
+    # scenario must contribute no field at all — even an empty string still
+    # feeds its \x00 delimiter into the digest and would invalidate every
+    # cached transcript in the repo.
+    if followup_turns:
+        parts.append(json.dumps(
+            [dataclasses.asdict(t) for t in followup_turns], sort_keys=True
+        ))
+    for part in parts:
         h.update(part.encode())
         h.update(b"\x00")
     return h.hexdigest()
@@ -1562,6 +1625,24 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     agent_backend = get_agent_backend(args.agent_backend)
     judge_backend = get_judge_backend(args.judge_backend)
+
+    # Scripted follow-up turns. Absent/empty ⇒ single-turn, which takes exactly
+    # the pre-existing path all the way down to the backend.
+    try:
+        followup_turns = parse_followup_turns(checks.get("turns"))
+    except ValueError as exc:
+        res.error = f"invalid turns declaration: {exc}"
+        return res
+    if followup_turns and not getattr(agent_backend, "supports_multi_turn", False):
+        # Checked BEFORE a workspace is built or an agent run is burned, and
+        # reported as a hard error rather than degrading to single-turn: a
+        # turn-1-only transcript graded against a multi-turn rubric reads as an
+        # agent regression instead of an unsupported provider.
+        res.error = (
+            f"scenario scripts {len(followup_turns)} follow-up turn(s); agent "
+            f"backend {agent_backend.name!r} cannot drive multi-turn"
+        )
+        return res
 
     # Codex has no --plugin-dir skill activation: the skills are staged into the
     # workspace and the agent is told where to read them. Claude activates them
@@ -1617,7 +1698,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     if cache_dir:
         key = _agent_cache_key(
             skill_set, scenario_dir, prompt, agent_backend.name,
-            agent_model, args.agent_effort,
+            agent_model, args.agent_effort, followup_turns,
         )
         cache_file = cache_dir / f"agent-{key}.json"
 
@@ -1643,6 +1724,10 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # on PATH so the query skill's shipped HTTP toolchain drives the real
         # tools. Tool calls reach Snowflake, so allow a longer timeout.
         mcp_spec = scenario_needs_mcp(scenario_dir)
+        # Omitted entirely for single-turn scenarios so their call is byte-for-
+        # byte what it was, and a backend that never sees the kwarg cannot be
+        # perturbed by multi-turn support existing.
+        turn_kwargs = {"followup_turns": followup_turns} if followup_turns else {}
         agent_timeout = (
             max(args.agent_timeout, MCP_AGENT_TIMEOUT_S)
             if mcp_spec is not None
@@ -1670,7 +1755,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             ws, prompt, agent_model, agent_timeout,
                             extra_dirs=extra_dirs, effort=args.agent_effort,
                             env_overrides=env_over, path_prepend=bin_dir,
-                            skill_pack_dir=plugin_dir,
+                            skill_pack_dir=plugin_dir, **turn_kwargs,
                         )
                 except (RuntimeError, TimeoutError) as exc:
                     res.error = f"MCP server setup failed: {exc}"
@@ -1702,11 +1787,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                     # sandbox-based ones (Codex) ignore it, so a pocket run is
                     # not comparable across providers.
                     pocket_kwargs = {"allowed_tools": POCKET_AGENT_ALLOWED_TOOLS}
+                    # The guard wraps the WHOLE turn loop: run_agent returns
+                    # only once every turn is done, so the cleanup below fires
+                    # once at the end and never sweeps a supervisor out from
+                    # under a turn still to come.
                     ok, trace, metrics = agent_backend.run_agent(
                         ws, prompt, agent_model, agent_timeout,
                         extra_dirs=[], effort=args.agent_effort,
                         env_overrides=env_over, path_prepend=bin_dir,
                         skill_pack_dir=plugin_dir, **pocket_kwargs,
+                        **turn_kwargs,
                     )
                     if checks.get("pocket_verify"):
                         facts.append(pocket_harness_fact(
@@ -1717,7 +1807,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 ok, trace, metrics = agent_backend.run_agent(
                     ws, prompt, agent_model, agent_timeout,
                     extra_dirs=extra_dirs, effort=args.agent_effort,
-                    skill_pack_dir=plugin_dir,
+                    skill_pack_dir=plugin_dir, **turn_kwargs,
                 )
 
             # Read the produced files INSIDE the `with`, while the temporary
@@ -1814,7 +1904,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     res.verdict = run_judge(
         judge_backend, scenario_dir, checks, trace, final_answer,
         args.judge_model, args.judge_timeout, effort=args.judge_effort,
-        facts=facts,
+        facts=facts, metrics=metrics,
     )
     if checks.get("pocket_verify") and not pocket_facts_passed(facts):
         # The verifier re-serves the actual published closure and is the hard

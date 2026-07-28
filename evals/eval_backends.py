@@ -34,10 +34,16 @@ Stdlib only, to match ``run.py`` (no third-party deps in the runner).
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import json
 import os
+import queue
 import re
 import subprocess
+import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Protocol
 
@@ -45,6 +51,142 @@ from typing import Protocol
 # Cap each tool-result block fed to the judge so a huge file read doesn't blow
 # up the judge prompt; the head is enough to see what the agent inspected.
 TOOL_RESULT_HEAD_CHARS = 1500
+
+# Multi-turn scenarios instruct the agent to emit this marker when it is
+# stopping to wait on a user answer. No structural signal in the CLI's result
+# event distinguishes "asked and waiting" from "task complete" — both report the
+# same stop reason — so the boundary is DECLARED by the agent, not inferred.
+#
+# The marker gates only turns that opt into ``when: "awaiting_input"``. Turns
+# default to ``when: "always"`` precisely so a missed marker cannot cascade: an
+# agent that asks its question in prose still receives the follow-up and the
+# rest of the rubric still gets graded. Whether it *stopped* correctly is graded
+# separately — by the judge, and mechanically by trace-ordering checkers that
+# compare write positions against the turn separator below.
+TURN_BOUNDARY_SENTINEL = "[[AWAITING_USER_INPUT]]"
+
+# Written into the accumulated trace between turns so both the judge and
+# trace-reading deterministic checkers can locate the boundary. A checker that
+# grades "did the agent write anything before the user replied" matches this
+# line and compares positions — keep the format stable.
+TURN_SEPARATOR_PREFIX = "[user_turn "
+
+# Cap on the stderr retained from a multi-turn CLI process. The stream must be
+# drained continuously — an undrained PIPE deadlocks the child once the OS pipe
+# buffer fills, which would surface as a bogus turn timeout — but only the tail
+# is ever reported, so an unbounded buffer is pure memory growth on a chatty run.
+STDERR_TAIL_CHARS = 8000
+
+
+def turn_separator(turn_index: int, text: str) -> str:
+    """Render the trace separator announcing a scripted user turn."""
+    return f"{TURN_SEPARATOR_PREFIX}{turn_index}] {text}"
+
+
+@dataclasses.dataclass(frozen=True)
+class FollowupTurn:
+    """One scripted user message sent after the agent's previous turn ends.
+
+    Turns are static text from the scenario's ``checks.json``. Nothing here is
+    model-generated: a simulated user would add a second stochastic process to
+    the measurement instrument.
+    """
+
+    #: The scripted user message, sent verbatim.
+    text: str
+    #: ``"always"`` sends unconditionally (the default and the recommended
+    #: shape); ``"awaiting_input"`` sends only when the previous turn's final
+    #: answer ended with :data:`TURN_BOUNDARY_SENTINEL`.
+    when: str = "always"
+    #: Per-turn wall-clock budget, further bounded by whatever remains of the
+    #: run-level ``timeout_s`` — which stays a whole-RUN budget regardless of
+    #: how many turns a scenario scripts.
+    timeout_s: int | None = None
+
+
+WHEN_ALWAYS = "always"
+WHEN_AWAITING_INPUT = "awaiting_input"
+TURN_WHEN_VALUES = (WHEN_ALWAYS, WHEN_AWAITING_INPUT)
+
+
+def parse_followup_turns(raw: object) -> list[FollowupTurn]:
+    """Build :class:`FollowupTurn` objects from a scenario's ``turns`` array.
+
+    Raises ``ValueError`` on a malformed declaration rather than dropping the
+    turn: a silently ignored turn would grade a multi-turn scenario against a
+    single-turn transcript and report the resulting failures as agent quality.
+    """
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("checks.json 'turns' must be a list")
+    turns: list[FollowupTurn] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"checks.json turns[{i}] must be an object")
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"checks.json turns[{i}] needs a non-empty 'text'")
+        when = item.get("when", WHEN_ALWAYS)
+        if when not in TURN_WHEN_VALUES:
+            raise ValueError(
+                f"checks.json turns[{i}] 'when' must be one of "
+                f"{', '.join(TURN_WHEN_VALUES)}; got {when!r}"
+            )
+        timeout_s = item.get("timeout_s")
+        if timeout_s is not None and (not isinstance(timeout_s, int) or timeout_s <= 0):
+            raise ValueError(
+                f"checks.json turns[{i}] 'timeout_s' must be a positive int"
+            )
+        turns.append(FollowupTurn(text=text, when=when, timeout_s=timeout_s))
+    return turns
+
+
+def awaiting_input(final_answer: str) -> bool:
+    """True when a turn's final answer ends with the boundary sentinel.
+
+    Trailing-line match only, so an agent that merely *discusses* the marker
+    (quoting it back, explaining the protocol) is not counted as waiting.
+    """
+    non_empty = [ln.strip() for ln in (final_answer or "").splitlines() if ln.strip()]
+    return bool(non_empty) and non_empty[-1].endswith(TURN_BOUNDARY_SENTINEL)
+
+
+# Metrics the stream parser reports per turn that describe a QUANTITY of work,
+# so the run-level number is their sum. Anything not listed here is not summable
+# and is handled explicitly by _merge_turn_metrics.
+_SUMMED_TURN_METRICS = (
+    "num_turns",
+    "duration_ms",
+    "total_cost_usd",
+    "input_tokens",
+    "output_tokens",
+    "tool_calls",
+)
+
+
+def _merge_turn_metrics(per_turn: list[dict]) -> dict:
+    """Fold per-turn metrics dicts into one run-level dict.
+
+    Each turn is parsed on its own, so each yields its own metrics — the parser
+    rebuilds its counters per call and overwrites ``metrics`` wholesale on the
+    turn's ``result`` event. Reporting the last turn's numbers as the run's
+    would silently undercount every earlier turn (a 3-turn run showing one
+    turn's tool calls looks like an efficient run, not a broken metric), so the
+    quantities are summed here and the non-quantities resolved deliberately.
+    """
+    merged: dict = {"is_error": False}
+    for metrics in per_turn:
+        for key in _SUMMED_TURN_METRICS:
+            value = metrics.get(key)
+            if value is not None:
+                merged[key] = (merged.get(key) or 0) + value
+        # Any turn erroring taints the whole conversation.
+        if metrics.get("is_error"):
+            merged["is_error"] = True
+    # The conversation's answer is the last turn's answer, not a concatenation.
+    merged["final_answer"] = per_turn[-1].get("final_answer", "") if per_turn else ""
+    return merged
 
 
 # --------------------------------------------------------------------------- #
@@ -56,6 +198,12 @@ class AgentBackend(Protocol):
     #: Stable identifier used on the CLI (``--agent-backend <name>``) and in
     #: the cache key so switching providers invalidates cached transcripts.
     name: str
+
+    #: Whether this provider can drive scripted follow-up turns. A provider that
+    #: cannot MUST reject ``followup_turns`` loudly rather than running turn 1
+    #: and returning: that would grade a multi-turn scenario against a
+    #: single-turn transcript and report a bogus pass rate.
+    supports_multi_turn: bool
 
     def run_agent(
         self,
@@ -70,6 +218,7 @@ class AgentBackend(Protocol):
         path_prepend: Path | None = None,
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
+        followup_turns: list[FollowupTurn] | None = None,
     ) -> tuple[bool, str, dict]:
         """Return ``(ok, trace, metrics)``.
 
@@ -83,6 +232,11 @@ class AgentBackend(Protocol):
         ``allowed_tools`` narrows the agent's tool surface for scenarios that
         measure behaviour under a restricted toolset. Providers that gate tools
         per-call honour it; sandbox-based providers (Codex) ignore it.
+
+        ``followup_turns`` scripts user messages sent after the agent's first
+        turn ends. ``None``/empty is single-turn and MUST take exactly the
+        pre-existing code path. ``timeout_s`` remains a whole-RUN budget across
+        every turn, not a per-turn one.
         """
         ...
 
@@ -136,24 +290,25 @@ class ClaudeBackend:
     """Agent + judge via the Claude Code CLI (``claude -p``)."""
 
     name = "claude"
+    supports_multi_turn = True
 
     # -- agent ----------------------------------------------------------------
-    def run_agent(
+    def _agent_command(
         self,
         ws: Path,
-        prompt: str,
         model: str,
-        timeout_s: int,
         *,
-        extra_dirs: list[Path] | None = None,
-        effort: str = "",
-        env_overrides: dict | None = None,
-        path_prepend: Path | None = None,
-        skill_pack_dir: Path | None = None,
-        allowed_tools: str | None = None,
-    ) -> tuple[bool, str, dict]:
+        extra_dirs: list[Path] | None,
+        effort: str,
+        skill_pack_dir: Path | None,
+        allowed_tools: str | None,
+    ) -> list[str]:
+        """Flags shared by the single-turn and multi-turn invocations.
+
+        Only the prompt-delivery flags differ between them, so everything that
+        shapes the agent's capabilities lives here and cannot drift apart.
+        """
         cmd = [
-            "claude", "-p", prompt,
             # stream-json + verbose emits per-step events so we can reconstruct
             # the tool-call trace, not just the final answer.
             "--output-format", "stream-json", "--verbose",
@@ -176,12 +331,51 @@ class ClaudeBackend:
             cmd += ["--effort", effort]
         for d in extra_dirs or []:
             cmd += ["--add-dir", str(d)]
+        return cmd
 
+    @staticmethod
+    def _agent_env(
+        env_overrides: dict | None, path_prepend: Path | None
+    ) -> dict[str, str]:
         env = dict(os.environ)
         if env_overrides:
             env.update(env_overrides)
         if path_prepend is not None:
             env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
+        return env
+
+    def run_agent(
+        self,
+        ws: Path,
+        prompt: str,
+        model: str,
+        timeout_s: int,
+        *,
+        extra_dirs: list[Path] | None = None,
+        effort: str = "",
+        env_overrides: dict | None = None,
+        path_prepend: Path | None = None,
+        skill_pack_dir: Path | None = None,
+        allowed_tools: str | None = None,
+        followup_turns: list[FollowupTurn] | None = None,
+    ) -> tuple[bool, str, dict]:
+        # Multi-turn takes a separate, persistent-process implementation. The
+        # single-turn path below is left byte-for-byte as it was so a scenario
+        # that scripts no turns cannot regress from multi-turn work.
+        if followup_turns:
+            return self._run_agent_multi_turn(
+                ws, prompt, model, timeout_s,
+                extra_dirs=extra_dirs, effort=effort,
+                env_overrides=env_overrides, path_prepend=path_prepend,
+                skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
+                followup_turns=followup_turns,
+            )
+        cmd = ["claude", "-p", prompt] + self._agent_command(
+            ws, model, extra_dirs=extra_dirs, effort=effort,
+            skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
+        )
+
+        env = self._agent_env(env_overrides, path_prepend)
         try:
             proc = subprocess.run(
                 cmd, cwd=ws, capture_output=True, text=True, timeout=timeout_s,
@@ -203,6 +397,201 @@ class ClaudeBackend:
         trace, metrics = self._trace_from_stream(proc.stdout)
         if not trace and not metrics.get("final_answer"):
             return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}"}
+        return not metrics.get("is_error", False), trace, metrics
+
+    # -- agent (multi-turn) ---------------------------------------------------
+    def _run_agent_multi_turn(
+        self,
+        ws: Path,
+        prompt: str,
+        model: str,
+        timeout_s: int,
+        *,
+        extra_dirs: list[Path] | None,
+        effort: str,
+        env_overrides: dict | None,
+        path_prepend: Path | None,
+        skill_pack_dir: Path | None,
+        allowed_tools: str | None,
+        followup_turns: list[FollowupTurn],
+    ) -> tuple[bool, str, dict]:
+        """Drive one conversation over a single long-lived CLI process.
+
+        One ``Popen`` per scenario, fed one JSON user message per turn on stdin.
+        A live process is used rather than re-invoking the CLI per turn because
+        the process-level flags (``--add-dir``, ``--plugin-dir``) are set once on
+        a process that never restarts, and because a Pocket cell's supervisor
+        children stay under a single process lineage for the caller's cleanup
+        guard to sweep — which it does once, after this method returns.
+
+        ``timeout_s`` is a whole-RUN budget: a monotonic deadline is taken at
+        entry and every turn is bounded by what remains, so an N-turn scenario
+        cannot run N times the single-turn budget.
+        """
+        # `-p` with no prompt argument: turn 1's text goes over stdin like every
+        # other turn, so the turn loop has exactly one code path.
+        session_id = str(uuid.uuid4())
+        cmd = [
+            "claude", "-p",
+            "--input-format", "stream-json",
+            "--session-id", session_id,
+        ] + self._agent_command(
+            ws, model, extra_dirs=extra_dirs, effort=effort,
+            skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
+        )
+        env = self._agent_env(env_overrides, path_prepend)
+
+        deadline = time.monotonic() + timeout_s
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=ws, env=env, text=True, bufsize=1,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as exc:
+            return False, "", {"error": f"could not start claude: {exc}"}
+
+        stdout_q: queue.Queue[str | None] = queue.Queue()
+        stderr_chunks: list[str] = []
+
+        def _drain_stdout() -> None:
+            for line in proc.stdout:  # type: ignore[union-attr]
+                stdout_q.put(line)
+            stdout_q.put(None)
+
+        def _drain_stderr() -> None:
+            # stderr MUST be drained continuously even though it is only ever
+            # reported as a tail: leaving the pipe unread deadlocks the child
+            # once the OS buffer fills mid-turn, which would surface as a turn
+            # timeout — an infrastructure failure wearing an agent failure's
+            # clothes.
+            for line in proc.stderr:  # type: ignore[union-attr]
+                stderr_chunks.append(line)
+                if len(stderr_chunks) > 2000:
+                    del stderr_chunks[:1000]
+
+        readers = [
+            threading.Thread(target=_drain_stdout, daemon=True),
+            threading.Thread(target=_drain_stderr, daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+
+        def _stderr_tail() -> str:
+            return "".join(stderr_chunks).strip()[-STDERR_TAIL_CHARS:]
+
+        def _abort(error: str) -> tuple[bool, str, dict]:
+            # Kill BEFORE returning. The caller's process guard sweeps pid files
+            # in its `finally`; a CLI still alive at that moment can re-write one
+            # after the sweep ran and leak a supervisor for the rest of the run.
+            with contextlib.suppress(OSError, ValueError):
+                proc.kill()
+            with contextlib.suppress(OSError, ValueError):
+                proc.wait(timeout=30)
+            detail = _stderr_tail()
+            return False, "", {"error": f"{error}: {detail[-2000:]}" if detail else error}
+
+        segments: list[tuple[str, dict]] = []
+        turns_sent = 1
+        skipped_turns: list[int] = []
+        awaited_input_turns: list[int] = []
+        pending: list[FollowupTurn | None] = [None] + list(followup_turns)
+
+        for offset, turn in enumerate(pending):
+            turn_index = offset + 1
+            text = prompt if turn is None else turn.text
+            if turn is not None:
+                if turn.when == WHEN_AWAITING_INPUT and not awaiting_input(
+                    segments[-1][1].get("final_answer", "") if segments else ""
+                ):
+                    # The agent did not declare that it was waiting, so sending
+                    # this turn would talk over a finished run. Recorded, not an
+                    # error — the scenario grades the stop separately.
+                    skipped_turns.append(turn_index)
+                    continue
+                segments.append((turn_separator(turn_index, text), {}))
+                turns_sent += 1
+
+            message = {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}],
+                },
+            }
+            try:
+                proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")  # type: ignore[union-attr]
+                proc.stdin.flush()  # type: ignore[union-attr]
+            except (BrokenPipeError, OSError):
+                return _abort(
+                    f"claude closed its input before turn {turn_index}"
+                )
+
+            lines: list[str] = []
+            saw_result = False
+            while True:
+                remaining = deadline - time.monotonic()
+                if turn is not None and turn.timeout_s is not None:
+                    remaining = min(remaining, turn.timeout_s)
+                if remaining <= 0:
+                    return _abort(
+                        f"agent timed out after {timeout_s}s during turn "
+                        f"{turn_index}"
+                    )
+                try:
+                    line = stdout_q.get(timeout=remaining)
+                except queue.Empty:
+                    return _abort(
+                        f"agent timed out after {timeout_s}s during turn "
+                        f"{turn_index}"
+                    )
+                if line is None:
+                    return _abort(
+                        f"claude exited during turn {turn_index} without a "
+                        "result event"
+                    )
+                lines.append(line)
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    if json.loads(stripped).get("type") == "result":
+                        saw_result = True
+                except json.JSONDecodeError:
+                    continue
+                if saw_result:
+                    break
+
+            seg_trace, seg_metrics = self._trace_from_stream("".join(lines))
+            segments.append((seg_trace, seg_metrics))
+            if awaiting_input(seg_metrics.get("final_answer", "")):
+                awaited_input_turns.append(turn_index)
+
+        # Closing stdin ends the session; the CLI drains and exits.
+        with contextlib.suppress(OSError, ValueError):
+            proc.stdin.close()  # type: ignore[union-attr]
+        try:
+            returncode = proc.wait(timeout=max(5, int(deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError, ValueError):
+                proc.kill()
+            returncode = proc.wait(timeout=30)
+        for reader in readers:
+            reader.join(timeout=5)
+
+        trace = "\n".join(part for part, _ in segments if part)
+        metrics = _merge_turn_metrics([m for _, m in segments if m])
+        metrics.update({
+            "session_id": session_id,
+            "turns_sent": turns_sent,
+            "skipped_turns": skipped_turns,
+            "awaited_input_turns": awaited_input_turns,
+        })
+        if not trace and not metrics.get("final_answer"):
+            detail = _stderr_tail()
+            return False, "", {
+                "error": f"empty stream output (exit {returncode}): {detail[-2000:]}"
+            }
         return not metrics.get("is_error", False), trace, metrics
 
     @staticmethod
@@ -364,9 +753,18 @@ class CodexBackend:
         already skip missing keys).
       * **Runs outside a git repo.** Workspaces are tmpdirs, so ``exec`` is
         launched with ``--skip-git-repo-check``.
+      * **No multi-turn.** ``codex exec`` is single-shot: the prompt arrives on
+        stdin and the process ends with the answer. There is no persistent-stdin
+        protocol and no resume flag, so scripted follow-up turns cannot be
+        driven. See :attr:`supports_multi_turn`.
     """
 
     name = "codex"
+    # Concatenating a scenario's turns into one prompt would run without error
+    # while measuring a different thing entirely: an agent told the correction
+    # up front never has to stop and ask, which is usually the behaviour under
+    # test. So multi-turn is refused, not approximated.
+    supports_multi_turn = False
 
     # -- agent ----------------------------------------------------------------
     def run_agent(
@@ -382,7 +780,18 @@ class CodexBackend:
         path_prepend: Path | None = None,
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
+        followup_turns: list[FollowupTurn] | None = None,
     ) -> tuple[bool, str, dict]:
+        if followup_turns:
+            # Loud, not silent. Running turn 1 and returning would produce a
+            # single-turn transcript graded against a multi-turn rubric and
+            # report the resulting failures as agent quality.
+            raise ValueError(
+                f"agent backend {self.name!r} cannot drive multi-turn scenarios: "
+                f"this scenario scripts {len(followup_turns)} follow-up turn(s), "
+                "and codex exec has no persistent-stdin or resume protocol. Run "
+                "it with --agent-backend claude."
+            )
         # allowed_tools is intentionally unused here: Codex gates capability with
         # a sandbox policy, not a per-tool allowlist, so a scenario's narrowed
         # tool surface cannot be reproduced exactly. Runs of a tool-restricted

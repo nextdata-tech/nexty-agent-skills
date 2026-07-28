@@ -359,6 +359,55 @@ Each scenario directory holds:
   (`{"name": ..., "checks": [{"id", "check"}]}`). **Judge-only; never shown to
   the agent.** This is where expected reasoning is spelled out.
 
+### Multi-turn scenarios (scripted follow-up turns)
+
+Some behaviours only appear across a conversation: proposing a plan, *stopping*,
+and then applying a correction the user supplies. A single-turn cell cannot
+measure them — an agent told the correction up front never has to stop and ask.
+
+Declare follow-up turns in `checks.json`. Absent or empty, the scenario is
+single-turn and runs on exactly the pre-existing path:
+
+```json
+{
+  "name": "...",
+  "turns": [
+    {"text": "Approved with two corrections: ... go ahead and build it."}
+  ],
+  "checks": [
+    {"id": "applies-supplied-corrections", "check": "...", "turn": 2}
+  ]
+}
+```
+
+- `turns[].text` (required) — the scripted user message, sent verbatim. Turns
+  are static; nothing is model-generated, because a simulated user would add a
+  second stochastic process to the measurement instrument.
+- `turns[].when` — `"always"` (default) or `"awaiting_input"`. Prefer `always`.
+  A conditional turn only fires when the previous turn's final answer *ends*
+  with `[[AWAITING_USER_INPUT]]`; if the agent asks its question in prose
+  instead the turn is skipped and the rest of the rubric would go ungraded, so
+  gate a turn only when sending it to a finished agent would corrupt the
+  measurement. Skipped turns are recorded in `metrics["skipped_turns"]`, and the
+  judge is told to fail their annotated checks as "turn not sent" rather than
+  grade them against a conversation that never happened.
+- `turns[].timeout_s` — optional per-turn cap. The run-level `--agent-timeout`
+  stays a **whole-run** budget regardless of turn count.
+- `checks[].turn` — annotation only. It tells the judge which turn a check is
+  about; it never slices the trace, because "did the agent honour the
+  correction" is unanswerable without turn 1 in view.
+
+`turns[i]` is turn `i+2` — turn 1 is `prompt.md`. The accumulated trace carries
+a `[user_turn N] <text>` separator line before each scripted turn, so a
+`wants_trace` deterministic checker can grade **ordering** (e.g. fail if any
+closure write appears before `[user_turn 2]`) instead of leaving
+stopped-and-asked entirely to the stochastic judge.
+
+Multi-turn requires a provider that can drive it. `claude` can; `codex` cannot
+(`codex exec` is single-shot with no persistent-stdin or resume protocol), and a
+multi-turn scenario on `--agent-backend codex` fails loudly before a workspace
+is built rather than silently grading a turn-1-only transcript.
+
 ### CI
 
 `.github/workflows/evals.yml` has two entry points.
