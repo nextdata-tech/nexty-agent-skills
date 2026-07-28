@@ -30,7 +30,7 @@ spec = (
         .port(
             "snowflake",
             storage("https://example.com/infra-profile/commerce-demo#/services/nxd-snowflake")
-            .config(snowflake_config("CURATED").target_table("ORDERS_CURATED", orders_curated_model)),
+            .config(snowflake_config(schema="CURATED").target_table("ORDERS_CURATED", orders_curated_model)),
         )
     )
     .transform(script("transform.py"))

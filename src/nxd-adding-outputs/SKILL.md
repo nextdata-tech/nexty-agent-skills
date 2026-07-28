@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.25.2
+  version: 0.25.3
 ---
 
 # NXD Adding Outputs
@@ -48,6 +48,7 @@ nxd validate --config <session_config> <data_product_directory> --debug
 ## Driver Notes
 
 - For Snowflake, Postgres, BigQuery, Databricks, and similar table stores, confirm database/schema/table behavior from the infra profile and docs before writing.
+- For Snowflake, always pass the schema by keyword: `snowflake_config(schema="MY_SCHEMA")`. `database` is the first positional parameter, so `snowflake_config("MY_SCHEMA")` binds the schema name to `database` and lets the schema fall back to the data-product name — writing to `MY_SCHEMA.<data-product-name>` if such a database exists, and otherwise failing with a "database does not exist" error naming the value you meant as the schema.
 - For S3, ADLS, MinIO, and GCS, confirm format and partition path. Do not assume Parquet unless the user or existing product establishes it.
 - For pgvector, confirm embedding dimension, text column, metadata shape, and whether the platform or library owns table creation. Prefer explicit vector config, for example `pg_vector_config(schema="public").vector("embedding", PgVectorType.VECTOR)`, unless the user or current SDK validation proves it must be omitted. Keep one model per pgvector port and align the model name with the intended physical table name.
 - For scheduled pgvector writes, choose an idempotency strategy before launch: deterministic document IDs/upsert, truncate-then-write, or an explicitly approved append-only table. Do not catch every database exception and treat it as "table already exists"; check the specific error.

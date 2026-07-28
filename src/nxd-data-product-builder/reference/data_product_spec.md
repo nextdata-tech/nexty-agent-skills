@@ -285,7 +285,7 @@ spec = (
         .port(
             "BI_on_snowflake",
             storage("<app_url>/infra-profile/<profile>#/services/snowflake-aws").config(
-                snowflake_config("RETAIL").target_table("TRENDING_SALES", trending_sales)
+                snowflake_config(schema="RETAIL").target_table("TRENDING_SALES", trending_sales)
             ),
         )
         .port("s3", storage("<app_url>/infra-profile/<profile>#/services/nxd-s3").config(s3_config(SupportedFormat.PARQUET)))
@@ -345,7 +345,7 @@ A storage port connects an output to a storage service. Created with `storage()`
 ```
 port = (
     storage("<app_url>/infra-profile/<profile>#/services/snowflake-aws")
-    .config(snowflake_config("RETAIL").target_table("TRENDING_SALES", trending_sales))
+    .config(snowflake_config(schema="RETAIL").target_table("TRENDING_SALES", trending_sales))
     .promise(trending_sales)
     .managed_access()
 )
@@ -462,11 +462,23 @@ See also: Snowflake driver
 from nxd.spec import snowflake_config
 
 snowflake_config(schema="RETAIL").target_table("TRENDING_SALES", trending_sales)
+
+# Optional: override the database for this port only. If omitted, the port writes
+# to the database configured on the infra-profile Snowflake service.
+snowflake_config(database="ANALYTICS", schema="RETAIL").target_table("TRENDING_SALES", trending_sales)
 ```
+
+Always pass `schema=` by keyword. `database` is the first positional parameter, so
+a single-positional call such as `snowflake_config("RETAIL")` binds the value to
+`database` and leaves `schema` unset — the driver then falls back to the
+data-product name for the schema. If a database named `RETAIL` exists the port
+silently writes to `RETAIL.<data-product-name>`; if it does not, the driver fails
+with a "database does not exist" error naming the value you meant as the schema.
+If you encounter that form in an older example, do not copy it.
 
 | Method | Description |
 | --- | --- |
-| `snowflake_config(schema)` | Create Snowflake config |
+| `snowflake_config(database=..., schema=...)` | Create Snowflake config; `database` is an optional per-port override, `schema` should always be passed by keyword |
 | `.target_table(table, model)` | Set target table and model |
 
 ### Kafka

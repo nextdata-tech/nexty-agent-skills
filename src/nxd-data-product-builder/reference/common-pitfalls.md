@@ -26,6 +26,23 @@ source_aligned_input().when(scheduled("* * * * *"))
 .transform(script("transform/main.py").when(scheduled("* * * * *")))
 ```
 
+**`snowflake_config()` called positionally binds `database`, not `schema`**
+`database` is the first parameter and both are optional, so `snowflake_config("MY_SCHEMA")`
+sets the database and leaves the schema unset; the driver falls back to the
+data-product name for the schema. Symptom: a table appears under a schema named
+after the data product in the wrong database — or, if no database by that name
+exists, a driver-side "database does not exist" error naming the value you intended
+as the schema.
+```python
+# Wrong — binds MY_SCHEMA to `database`, schema left unset
+snowflake_config("MY_SCHEMA")
+
+# Correct
+snowflake_config(schema="MY_SCHEMA")
+```
+See
+[data_product_spec.md](data_product_spec.md) (Snowflake) for the full signature.
+
 **`updated()` takes input name, not upstream DP name**
 `updated("my-input")` matches the name from `.input("my-input", ...)`. Passing the upstream DP name never fires.
 ```python
