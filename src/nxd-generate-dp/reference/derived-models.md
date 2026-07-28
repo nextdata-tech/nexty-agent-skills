@@ -502,8 +502,16 @@ reshape a table. It is the same long-form argument judgement rows make.
 | `band_id` | `dimension()` | the landed rule/band that fired — the addressable identity of the branch, not its prose |
 | `evidence_field` | `dimension()` | which source column the band read |
 | `evidence_quote` | `dimension()` | verbatim substring of that column's value, or `not stated` |
-| `provenance` | `dimension()` | `fact` when the band matched a source value directly; `inference` when it rests on a heuristic over the value |
+| `evidence_kind` | `dimension()` | `fact` when the band matched a source value directly; `inference` when it rests on a heuristic over the value |
 | `limitation` | `dimension()` | empty, `listed_uncaptured`, or `not_stated` — the absence kind above |
+
+> **Not to be confused with `nxd_decisions.provenance`.** `evidence_kind` is
+> per-explanation-row and answers *how firmly the source supports this one
+> reading* (`fact` / `inference`). `nxd_decisions.provenance` is per-ruling and
+> answers *who authored the decision* (`user_confirmed`, `agent_proposed_approved`,
+> `source_derived`, `deferred`) — see
+> [reference/derivation-plan.md](derivation-plan.md). Different grains, disjoint
+> vocabularies; never populate one from the other.
 
 `band_id` is what makes the row queryable rather than merely readable. A prose
 justification string cannot be grouped, counted, or diffed across runs; a band id
@@ -512,7 +520,7 @@ can — "how many rows did band `c1_multi_service` fire for?" is a
 `UNIFORM` defect the self-check read-back reports. The ids come from the landed
 rubric, never from a transform literal, for the same reason weights do.
 
-`provenance` is the honesty column. A band that matched `degree` containing
+`evidence_kind` is the honesty column. A band that matched `degree` containing
 `"BSc Computer Science"` is a **fact** — the source says it. A band that inferred
 "multi-service backend systems" from a skills list mentioning three technologies
 is an **inference** — defensible, but the source never said it. Both are
@@ -531,7 +539,7 @@ def _score_c1(row: dict[str, str], bands: list[dict[str, str]]) -> dict[str, Any
     if raw == "not stated" or not raw:
         # Absent: no score, no band fired, and the quote takes the sentinel.
         return {**base, "score": None, "band_id": "", "evidence_quote": "not stated",
-                "provenance": "", "limitation": "not_stated"}
+                "evidence_kind": "", "limitation": "not_stated"}
     words = set(re.findall(r"[a-z0-9+#.]+", raw.lower()))
     for band in bands:                      # landed rows, ordered by the rubric
         matched = words & set(band["tokens"].split())
@@ -543,10 +551,10 @@ def _score_c1(row: dict[str, str], bands: list[dict[str, str]]) -> dict[str, Any
                     # never a paraphrase and never the band's own prose.
                     "evidence_quote": next(t for t in raw.split("; ")
                                            if set(t.lower().split()) & matched),
-                    "provenance": band["provenance"],   # 'fact' or 'inference'
+                    "evidence_kind": band["evidence_kind"],  # 'fact' or 'inference'
                     "limitation": ""}
     return {**base, "score": None, "band_id": "", "evidence_quote": raw,
-            "provenance": "", "limitation": ""}   # read, matched nothing
+            "evidence_kind": "", "limitation": ""}   # read, matched nothing
 ```
 
 Three asserts, on top of the Tier-1 pair, and each is falsifiable — coverage,
