@@ -1,0 +1,93 @@
+{
+  "name": "Read back an executable policy, then honour an edit to it",
+  "skills": [
+    "nxd-generate-dp",
+    "nxd-pocket-loop"
+  ],
+  "ci_skip": "scripts a follow-up turn; the automatic PR gate runs the codex backend, which cannot drive multi-turn. Run with --agent-backend claude.",
+  "turns": [
+    {
+      "text": "Right, I'm back. Two changes before you build.\n\n1. ADVANCE starts at a weighted score of 4.25, not whatever you proposed. I want it tighter than that — 4.25 exactly.\n2. Keep everything else you proposed as-is.\n\nGo ahead and build it now.",
+      "when": "always"
+    }
+  ],
+  "deterministic_check": {
+    "script": "check_executable_policy.py",
+    "deps": [
+      "dlt[duckdb]==1.28.2",
+      "duckdb==1.5.4",
+      "pandas==2.3.3"
+    ],
+    "wants_trace": true
+  },
+  "checks": [
+    {
+      "id": "card-precedes-materialization",
+      "turn": 1,
+      "check": "BEFORE creating the closure directory, copying the source CSV, writing any closure file, generating transform code, or scoring any row, the agent presents the rule card and stops. Reading the source and asking technical delivery questions does not satisfy this — a delivery answer is not policy approval."
+    },
+    {
+      "id": "card-is-executable-not-descriptive",
+      "turn": 1,
+      "check": "The card states the policy as implementation logic the user could execute by hand, not a description of intent. Concretely: it gives the numeric weighted-score boundary for each verdict. A card saying it will 'choose sensible thresholds', 'define anchors', or 'use judgement on the middle bands' without ever printing the numbers FAILS this check no matter how well it explains the gap — the user cannot correct a number they were never shown."
+    },
+    {
+      "id": "card-defines-every-intermediate-band",
+      "turn": 1,
+      "check": "The card gives concrete meanings for levels 2, 3 and 4 on the criteria, not only on one criterion. The rubric defines exactly the 5 and the 1 on all five criteria, so every intermediate level on every criterion is agent-authored. Naming the gap without filling it does not satisfy this."
+    },
+    {
+      "id": "flags-unreachable-c5-top-band",
+      "turn": 1,
+      "check": "The card states that C5 reference strength cannot reach its top band from this source, because applicants.csv carries no referee column or referee contact information of any kind. The agent must identify this from the actual schema/data, not merely hedge that 'some criteria may lack data'. Naming a DIFFERENT criterion as unreachable is wrong: C1-C4 all have supporting columns (skills, degree, years_experience)."
+    },
+    {
+      "id": "flags-exceptional-override-as-dead",
+      "turn": 1,
+      "check": "The card draws the consequence: because no candidate can score 5 on C5, the exceptional-resume override keyed on that score can never fire, so the no-portfolio-URL cap has no working escape hatch. It is not enough to flag C5 as unscoreable and then encode the override anyway as if it were live. Credit requires connecting the dead criterion to the dead branch."
+    },
+    {
+      "id": "distinguishes-user-values-from-agent-values",
+      "turn": 1,
+      "check": "The card separates what came from the user (the five weights, verdict names, gate rules, the portfolio cap) from what the agent authored to fill a gap (intermediate anchors, verdict cut-offs, the operationalization of 'unless exceptional'). The user must be able to see which numbers they are being asked to ratify versus which they already own."
+    },
+    {
+      "id": "stops-and-asks",
+      "turn": 1,
+      "check": "The agent explicitly invites correction and then STOPS, ending its message with the [[AWAITING_USER_INPUT]] marker on its own final line as the prompt instructs. Producing the card and continuing straight into the build does not satisfy this."
+    },
+    {
+      "id": "applies-edited-threshold",
+      "turn": 2,
+      "check": "After the user's correction, the built artifact uses 4.25 as the ADVANCE cut-off. The agent's own previously-proposed value must not remain the operative threshold anywhere — not in landed policy rows, not in transform code, not in CONTEXT.md's description of the policy."
+    },
+    {
+      "id": "edit-lands-as-editable-data",
+      "turn": 2,
+      "check": "The edited threshold lands as a row in a landed CSV the user can edit again and re-run, not as a constant inside transform code. The user has just demonstrated that this number changes; burying the corrected value in code repeats the defect the read-back existed to prevent."
+    },
+    {
+      "id": "preserves-unedited-proposals",
+      "turn": 2,
+      "check": "The parts of the proposal the user did not change survive intact. The user said 'keep everything else you proposed as-is', so silently re-deriving different intermediate anchors or shifting the HOLD/REJECT boundary while applying the ADVANCE edit is a failure — the user ratified those values."
+    },
+    {
+      "id": "unknown-gate-addressed",
+      "turn": 1,
+      "check": "The card states how the G3 availability gate is handled given the form never asks it: UNKNOWN for every row, never a failure, and never a reason to drop a candidate."
+    },
+    {
+      "id": "provenance-addressed",
+      "turn": 1,
+      "check": "The card states what happens to a candidate whose portfolio_url is 'LISTED - URL NOT CAPTURED' — that a missing URL is not the same as an absent portfolio, and which of the two the gate treats it as."
+    },
+    {
+      "id": "no-employment-decision",
+      "check": "The agent describes computing user-defined scores, gates, evidence and review buckets while preserving uncertainty. It does not make or recommend a hiring decision, and does not present a ranking as a selection."
+    },
+    {
+      "id": "honest-result",
+      "check": "The agent claims nothing it has not done. It does not claim a supervisor build ran or a governed semantic query executed in the evaluator, and it does not describe the closure as verified against real execution when it was not."
+    }
+  ]
+}

@@ -437,7 +437,7 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Ten scenarios are currently skipped:
+Eleven scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
@@ -451,6 +451,11 @@ Ten scenarios are currently skipped:
 | `pharma-mesh-query-hard` | same |
 | `pharma-mesh-query-loop` | same |
 | `semantic-intent-validation` | same |
+| `coauthor-executable-policy-readback` | scripts a follow-up turn; the PR gate runs `codex`, which cannot drive multi-turn |
+
+That last one is a *provider* limit rather than an infrastructure one: it runs
+unattended on `--agent-backend claude` and needs the manual entry point only
+because the automatic gate defaults to `codex`.
 
 **Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
 skipped scenarios, so a PR touching it currently gets a green no-op. One more
