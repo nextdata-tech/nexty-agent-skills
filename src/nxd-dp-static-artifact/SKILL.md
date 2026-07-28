@@ -139,13 +139,19 @@ port's `promises` or `models`, and any optional identity field. These states
 co-occur in one release — `identity.description` is `null` while a model
 `description` is `""`, and registry `joins` is `[]` while a model's `joins` is
 `null` — so gloss each value for what it is and never print one for another.
-Silently dropping a field because its value is empty is the same defect as
-leaving its cell blank: the reader cannot tell the manifest was silent.
-Render an optional field only when its key is present; an absent key produces
-no label, slot, dash, or placeholder. Never leave a labelled cell blank: a
-header over empty cells asserts "unset" where the payload said something more
-specific. Omit a table column whose value is absent in every row; keep it and
-gloss each cell when even one row has a value.
+For every optional value, branch on the **key**, never on the value:
+
+- **Key absent** — render nothing at all: no label, slot, dash, or placeholder.
+- **Key present** — always render the label, with the value or its gloss. This
+  holds for `null`, `""` and `[]` exactly as it does for a real value. Dropping
+  the field because the value looked empty, or leaving its cell blank, both
+  tell the reader the same false thing: that nothing was declared.
+
+Before writing the file, walk every `null`, `""` and `[]` in the bundle and
+confirm each one appears in the page with its gloss. A missing gloss is a
+failed artifact, not a cosmetic gap.
+Omit a table column whose value is absent in every row; keep it and gloss each
+cell when even one row has a value.
 Clamp the page to the viewport and give tables and long values their own
 horizontal scroll box — the page itself must never scroll sideways in a narrow
 side panel. Never render live-only `external_url`,
@@ -156,7 +162,17 @@ never render the semantic registry's intentionally empty `data_product` or
 ## File and safety contract
 
 Build a sibling temporary file, validate it, then atomically rename it to
-`<workflow>-release-<publish_seq>.html` in the selected safe directory. Escape
+`<workflow>-release-<publish_seq>.html` in the selected safe directory.
+
+**Validating the temp file includes grepping it for each gloss.** Collect every
+`null`, `""` and `[]` the bundle declares — a port's `promises`, a field's or
+model's `description`, an empty `models` list — and confirm each appears in the
+file with its gloss before the rename. A gloss the bundle needs and the file
+lacks means the render dropped a declared value: fix it and re-validate rather
+than landing the file. This is the step that most often gets skipped, and
+skipping it is how an incomplete page reaches the user looking finished.
+
+Escape
 all payload-derived text and attribute values. If embedding JSON, escape
 `</script>`, U+2028, and U+2029. Use a restrictive local CSP, system-font
 fallbacks, and no remote scripts, fonts, requests, or live tool calls. On
@@ -181,8 +197,11 @@ is the component reference. Do not use either as a source of live data.
       because the client exposes no resource operations, never to retry a failed
       resource read
 - [ ] All data-model fields, complex types, multi-role fields, joins, output-level models, ports and promises shown
-- [ ] No line drawn and no shape named without a declared join; no labelled
-      blank cell; each `null` / `[]` / `""` carries its own gloss
+- [ ] No line drawn and no shape named without a declared join
+- [ ] Grep the finished file for each gloss: every `null`, `""` and `[]` in the
+      bundle — including a port's `null` promises and a field's `null`
+      description — appears with its gloss. Zero hits for a gloss whose value
+      the bundle contains means the artifact is incomplete, not tidy.
 - [ ] Page does not scroll horizontally at side-panel width
 - [ ] Evidence precedes closed Release provenance and closed Diagnostics
 - [ ] Provenance contains only its allowlist; Diagnostics contains only allowed fields

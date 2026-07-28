@@ -46,7 +46,7 @@ def test_static_artifact_fails_closed_and_validates_the_complete_contract():
         "data_model", "unannotated", "complex", "roles as a set", "joins",
         "ports[].model_names", "promises", "Release provenance", "Diagnostics",
         "external_url", "infra_profile_name", "data_product", "table",
-        "superseded", "requested release", "current bundle", "absent key",
+        "superseded", "requested release", "current bundle", "Key absent",
         "atomic", "</script>", "U+2028", "U+2029",
     )
     for phrase in required:
@@ -154,8 +154,10 @@ def test_absence_states_are_distinct_and_never_a_labelled_blank():
         assert gloss in skill, gloss
         assert gloss in contract, gloss
 
-    # The blank-cell prohibition and the all-absent column rule.
-    assert "Never leave a labelled cell blank" in skill
+    # The decision branches on the KEY, not the value — that distinction is what
+    # kept getting lost, so assert both branches rather than one sentence.
+    assert "Key absent" in skill and "Key present" in skill
+    assert re.search(r"leaving its cell blank", skill)
     assert "never a labelled blank" in contract
     for phrase in ("omit the whole column", "even one row has a value"):
         assert phrase in contract, phrase
