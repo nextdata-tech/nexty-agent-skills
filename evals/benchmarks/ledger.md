@@ -404,3 +404,52 @@ Efficiency moved the right way as a side effect (mean output tokens 14.9k →
 5/5 on correctness.
 
 Record: [`records/2026-07-28-nxd-dp-static-artifact-absence-rule-branches-on-the-key.json`](records/2026-07-28-nxd-dp-static-artifact-absence-rule-branches-on-the-key.json)
+
+## 2026-07-28 — v0.25.3 — nxd-data-product-builder: keyword `schema=` for `snowflake_config`
+
+**Change:** doc correctness across the builder skill's Snowflake surface, forced by
+an upstream signature change. `nxd.spec.snowflake_config` became
+`snowflake_config(database=None, schema=None)` — `database` is now the FIRST
+parameter and both are optional (nextdata-tech/nxd#7321). Every positional call
+site in the pack therefore bound a schema name to `database` and left `schema` at
+its default. Neither spec-build nor launch errors: the port writes to
+`<intended-schema>.<data-product-name>` where a database of that name exists, and
+otherwise fails at the driver with a database-not-found error naming the value the
+author meant as the schema. Fixed the two `data_product_spec.md` snippets, the
+`promises-contracts.md` snippet, the `policy-compliance-failure` eval fixture, and
+the signature table (which still described the pre-change single-argument form);
+added a worked `database` example plus the positional-binding pitfall to
+`data_product_spec.md`, `storage-configs.md` and `common-pitfalls.md`; and bumped
+the `nextdata-public-examples` submodule so the bundled examples the pack tells
+agents to imitate no longer demonstrate the positional form.
+
+**No before/after run table — not measurable by the current harness.** The
+`policy-compliance-failure` cell did move FAIL -> PASS across the PR runs, but that
+is NOT attributable to this change and is deliberately not presented as evidence:
+none of that scenario's five checks observe `snowflake_config`'s schema/database
+binding (they cover identifying the policy type, separating input expectations from
+output promises, adding an enforced quality promise, `nxd activate policy` flag
+shape, and the verify commands). The fixture edit changes one line of the STARTING
+spec that no check reads, so the flip is run-to-run variance on n=1 before and n=2
+after. The baseline is left at FAIL accordingly.
+
+No table for the reference-doc edits themselves: no scenario asserts on
+`snowflake_config` call shape, so the harness cannot distinguish the keyword form
+from the positional one — the failure it prevents lands at runtime as a wrong
+target or a driver-side error, neither of which an offline check observes. Same posture as the v0.22.0 / v0.21.0
+entries above.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py` passes; version surfaces agree at 0.25.3 across
+  `plugin.json`, `marketplace.json` and all 15 `SKILL.md`.
+- `./build-skills.sh` packages every skill `ok`; `nxd-data-product-builder` is 168
+  entries after the submodule bump, under the 200-entry cap.
+- No positional `snowflake_config(` survives in any repo-owned file or in the
+  bumped submodule; the only positional forms left are the quoted anti-examples in
+  the new pitfall prose.
+- Signature verified against the upstream source, not inferred:
+  `components/nxd_py/data_product/nxd/spec/__init__.py::snowflake_config` and
+  `_spec.py::SnowflakeConfig.__init__` (both parameters `Optional[str] = None`),
+  with the driver-side fallback that makes the mistake silent in
+  `driver_impls/drivers/nxd-snowflake/src/storage/mod.rs` (absent `schema` falls
+  back to the data-product name rather than erroring).

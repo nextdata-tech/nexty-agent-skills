@@ -94,7 +94,18 @@ adls_config(SupportedFormat.CSV, container="my-container").target_file("path/fil
 from nxd.spec import snowflake_config
 
 snowflake_config(schema="MY_SCHEMA").target_table("MY_TABLE", model)
+
+# Optional per-port database override. If omitted, the port writes to the database
+# configured on the infra-profile Snowflake service.
+snowflake_config(database="ANALYTICS", schema="MY_SCHEMA").target_table("MY_TABLE", model)
 ```
+
+Always pass `schema=` by keyword. `database` is the first positional parameter, so
+`snowflake_config("MY_SCHEMA")` binds the value to `database` and leaves `schema`
+unset — the driver then falls back to the data-product name for the schema. If a
+database named `MY_SCHEMA` exists the port silently writes to
+`MY_SCHEMA.<data-product-name>`; if it does not, the driver fails with a "database
+does not exist" error naming the value you meant as the schema.
 
 ### Kafka
 
