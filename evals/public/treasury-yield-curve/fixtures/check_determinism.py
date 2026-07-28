@@ -249,7 +249,14 @@ def main() -> int:
             data_dir = work / f"build{index}"
             error = build_once(supervisor, closure, data_dir, "determinism-probe")
             if error:
-                bad(f"build-{index}", error)
+                # Named `infrastructure-build-N`, not `build-N`, so the outcome
+                # is legible from the harness's `failures` list alone. A build
+                # that never completes says nothing about determinism — the
+                # closure may be perfectly reproducible — and conflating the
+                # two produced exactly that misreading once: a run whose
+                # supervisor pointed at a deleted worktree was recorded as a
+                # determinism failure and reported as one.
+                bad(f"infrastructure-build-{index}", error)
                 break
             db = landed_database(data_dir)
             if db is None:
