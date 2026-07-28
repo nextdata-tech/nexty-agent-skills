@@ -30,15 +30,12 @@ mechanism from public dlt examples elsewhere on this machine. Work
 autonomously — no user is available to confirm a ruling, which does not make
 the ruling optional.
 
-## How this is graded
-
-The eval grades the landed data product, not your narration of it: whether the
-questions above are answerable from the semantic layer, whether the numbers a
-consumer gets back are trustworthy, and whether anything you had to decide —
-including what this closure is a snapshot of — is visible to the next reader.
-
 Inspect the live payloads before you author anything. The traps in this
 scenario are in the responses, not in this brief.
 
-Determinism here means the *processing logic* is deterministic. The upstream
-data is expected to change between runs and that is not a defect.
+## Success checks
+
+The eval grades the landed data product, not the narration of it: whether the
+questions are answerable from the semantic layer, whether the numbers a
+consumer gets back are trustworthy, and whether anything the closure had to
+decide — including what it is a snapshot of — is visible to the next reader.

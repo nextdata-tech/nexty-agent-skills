@@ -1,19 +1,18 @@
-"""Determinism check: a transform's PROCESSING LOGIC must be reproducible.
+"""Rerun check: building the same closure twice must land the same rows.
 
-The invariant under test is that the transform is a pure function of its
-input: given the same source data, it lands the same rows. What that forbids
-is nondeterminism the transform itself introduces — `now()`, unseeded random,
-an LLM judgement made inline, iteration order that varies run to run, or any
-dependence on how many times the transform has run before.
+NOTE FOR MAINTAINERS — this file is copied into the agent's workspace. The
+harness requires a scenario's checker under `fixtures/`, and the copy loop
+excludes only dotfiles, `__pycache__`, and the runner-side name lists. So do
+NOT enumerate here the specific defects a rubric grades: an agent that reads
+this file would be handed the answer to the checks that grade them, the same
+way the trap catalogue in PROVENANCE.md is kept at scenario level for being
+agent-visible under `fixtures/`. Describe the MECHANISM, not the failures.
 
-SCOPE. This gates processing logic, NOT source stability. A transform reading
-a live upstream that legitimately changed between two builds is not a defect,
-and this checker does not attempt to tell that case apart from a genuine logic
-bug — it builds twice back to back, so a stable source is assumed. Scenarios
-whose source can move under them should not attach this check until the
-harness can pin a source snapshot across both builds. Handling transient
-source behaviour (drift, rate limits, partial reads) is deliberately out of
-scope here.
+SCOPE. This compares two back-to-back builds of one closure, so it assumes a
+stable source. A closure reading a live upstream that legitimately changed
+between the two builds is not defective, and this checker cannot tell that
+case apart from a genuine one — scenarios whose source moves should not attach
+it until the harness can pin a source snapshot across both builds.
 
 WHY THIS COMPARES ROWS AND NOT FILES. The obvious implementation — hash the
 artifact directory after each build and compare — fails on every honest
@@ -62,10 +61,19 @@ import duckdb
 DLT_COLUMN_PREFIX = "_dlt"
 DLT_TABLES = {"_dlt_loads", "_dlt_pipeline_state", "_dlt_version"}
 
-# A build has to boot a kernel child, run the transform, and publish. The
+# A build boots a kernel child, runs the transform, and publishes. The
 # supervisor's own staging wait is 170s, so this must exceed it or a slow
 # machine reports a determinism failure that is really a timeout.
-BUILD_TIMEOUT_S = 600
+#
+# The ceiling is the harness's, not ours: run.py caps the WHOLE checker
+# invocation at DETERMINISTIC_CHECK_TIMEOUT_S = 600s, and that budget covers
+# two builds plus uv's dependency resolution. A per-build budget of 600s is
+# therefore unreachable — two honest 320s builds would trip the outer cap and
+# be recorded as an infrastructure_error, failing the cell without producing a
+# verdict rather than reporting a determinism result.
+#
+# 240s each leaves headroom for uv and teardown while clearing the 170s wait.
+BUILD_TIMEOUT_S = 240
 
 PASSES: list[str] = []
 FAILURES: list[tuple[str, str]] = []
@@ -104,6 +112,23 @@ def supervisor_binary() -> Path | None:
     return Path(found) if found else None
 
 
+def build_env() -> dict[str, str]:
+    """Environment for every supervisor call this checker makes.
+
+    The kernel runs the transform with NXD_DESKTOP_PYTHON, falling back to a
+    bare python3 that has no nxd installed — the transform then dies with
+    ModuleNotFoundError after the full staging timeout. Pin it to the
+    provisioned venv the harness already located, so this checker does not
+    depend on the variable happening to be exported into its own environment.
+    """
+    env = dict(os.environ)
+    if not env.get("NXD_DESKTOP_PYTHON"):
+        venv_python = pocket_python()
+        if venv_python is not None:
+            env["NXD_DESKTOP_PYTHON"] = str(venv_python)
+    return env
+
+
 def build_once(supervisor: Path, closure: Path, data_dir: Path, workflow: str) -> str | None:
     """Build the closure into a fresh data dir. Return an error string, or None.
 
@@ -118,20 +143,10 @@ def build_once(supervisor: Path, closure: Path, data_dir: Path, workflow: str) -
         "--definition", str(closure.resolve()),
         "--workflow", workflow,
     ]
-    # The kernel runs the transform with NXD_DESKTOP_PYTHON, falling back to a
-    # bare python3 that has no nxd installed — the transform then dies with
-    # ModuleNotFoundError after the full staging timeout. Pin it to the
-    # provisioned venv the harness already located, so this checker does not
-    # depend on the variable happening to be exported into its own environment.
-    env = dict(os.environ)
-    if not env.get("NXD_DESKTOP_PYTHON"):
-        venv_python = pocket_python()
-        if venv_python is not None:
-            env["NXD_DESKTOP_PYTHON"] = str(venv_python)
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT_S,
-            env=env,
+            env=build_env(),
         )
     except subprocess.TimeoutExpired:
         return f"build timed out after {BUILD_TIMEOUT_S}s"
@@ -272,6 +287,24 @@ def main() -> int:
                         "no user tables landed; a determinism pass over an "
                         "empty database proves nothing")
     finally:
+        # Stop each build's runtime BEFORE removing its data dir. `create` can
+        # report published=yes while a kernel-host child is still attached, and
+        # a child that outlives the tree would keep writing into build1/ or
+        # build2/ after they are gone — surfacing later as a bogus row-hash
+        # mismatch rather than as the process leak it is. run.py takes the same
+        # precaution around its own preflight.
+        for index in (1, 2):
+            data_dir = work / f"build{index}"
+            if not data_dir.exists():
+                continue
+            try:
+                subprocess.run(
+                    [str(supervisor), "stop", "--data-dir", str(data_dir.resolve())],
+                    capture_output=True, text=True, timeout=60,
+                    env=build_env(),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         shutil.rmtree(work, ignore_errors=True)
 
     for name in PASSES:
