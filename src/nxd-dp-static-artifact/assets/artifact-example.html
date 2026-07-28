@@ -30,6 +30,7 @@
     <table><thead><tr><th>Model</th><th>Description</th><th>Grain and roles</th></tr></thead><tbody>
       <tr><td class="mono">customers</td><td>One row per customer.</td><td>primary key: <code>customer_id</code>; metric: <code>customer_count</code>; dimension: <code>contact_email</code></td></tr>
       <tr><td class="mono">orders</td><td>One row per order.</td><td>primary key: <code>order_id</code>; metrics: <code>order_count</code>, <code>revenue</code>, <code>average_order_value</code></td></tr>
+      <tr><td class="mono">support_tickets</td><td><span class="muted">"" · empty</span></td><td>primary key: <code>ticket_id</code>; metric: <code>ticket_count</code>; dimension: <code>opened_at</code></td></tr>
     </tbody></table>
   </section>
 
@@ -47,9 +48,15 @@
       <article class="field"><h4><code>customer_id</code><span class="type"><code>string</code></span></h4><p>Customer foreign key.</p><p><strong>Roles:</strong> <span class="badge">join: customers.customer_id / many_to_one</span></p></article>
       <article class="field"><h4><code>amount_usd</code><span class="type"><code>{&quot;decimal128&quot;:{&quot;precision&quot;:18,&quot;scale&quot;:2}}</code></span></h4><p>Gross order amount.</p><p><strong>Roles:</strong> <span class="badge">metric: revenue / sum</span><span class="badge">metric: average_order_value / avg</span></p></article>
     </div>
+    <h3 class="mono">support_tickets</h3><p class="muted">"" · empty</p>
+    <div class="fields">
+      <article class="field"><h4><code>ticket_id</code><span class="type"><code>string</code></span></h4><p>Ticket identifier.</p><p><strong>Roles:</strong> <span class="badge">primary_key</span><span class="badge">metric: ticket_count / count_distinct</span></p></article>
+      <article class="field"><h4><code>customer_id</code><span class="type"><code>string</code></span></h4><p>Customer reference (no join declared).</p></article>
+      <article class="field"><h4><code>opened_at</code><span class="type"><code>timestamp</code></span></h4><p class="muted">null · the manifest didn’t say</p><p><strong>Roles:</strong> <span class="badge">dimension</span></p></article>
+    </div>
   </section>
 
-  <section aria-labelledby="joins"><h2 id="joins">Joins</h2><p><code>orders.customer_id</code> → <code>customers.customer_id</code> · many_to_one</p></section>
+  <section aria-labelledby="joins"><h2 id="joins">Joins</h2><p><code>orders.customer_id</code> → <code>customers.customer_id</code> · many_to_one</p><p class="muted"><code>support_tickets.customer_id</code> shares a column name with the models above, but the registry declares no join for it — so none is drawn.</p></section>
   <section aria-labelledby="ports"><h2 id="ports">Output ports</h2>
     <p><strong>Output-level models:</strong> <code>orders</code> <span class="muted">(metadata: null · the manifest didn’t say)</span></p>
     <div class="fields">

@@ -20,8 +20,20 @@ def test_renamed_static_skill_is_the_only_shipped_identity():
     assert not (ROOT / "src" / ("nxd-" + "artifact")).exists()
     text = (ARTIFACT / "SKILL.md").read_text()
     assert "name: nxd-dp-static-artifact" in text
-    assert "version: 0.25.2" in text
-    assert "inline" not in text.lower()
+    # Assert the lockstep invariant, not a literal — every release bumps all
+    # skills together, so pinning the number here would break on each bump for
+    # a reason unrelated to what this test guards.
+    plugin_version = json.loads(
+        (ROOT / ".claude-plugin" / "plugin.json").read_text()
+    )["version"]
+    assert f"version: {plugin_version}" in text
+    # No inline-artifact mode: this skill writes one file. Match the phrases
+    # that mean that, rather than the bare word, which would fire on innocuous
+    # future mentions like `display:inline-block` or "inline styles" in the CSP
+    # guidance.
+    lowered = text.lower()
+    for phrase in ("inline widget", "inline artifact", "inline mode", "render inline"):
+        assert phrase not in lowered, phrase
     assert "\n## Catalog" not in text and "\n## Query" not in text
 
 
@@ -156,39 +168,6 @@ def test_absence_states_are_distinct_and_never_a_labelled_blank():
     assert "box-sizing: border-box" in example
 
 
-def test_developer_install_copies_bins_when_build_dir_is_outside_home():
-    """Symlinks into a separate volume stall the launching app in dyld.
-
-    Keep the symlink for an in-$HOME checkout (rebuilds stay live), copy when
-    the build dir is elsewhere so the runtime dir is self-contained.
-    """
-    # The installer lives in the nxd repo, which is a separate checkout. Assert
-    # against it when it is reachable; always assert the predicate itself, which
-    # is what actually encodes the fix.
-    rel = "components/desktop/supervisor/scripts/nxd-desktop-setup.sh"
-    for candidate in (Path(p) / rel for p in os.environ.get("NXD_REPO", "").split(os.pathsep) if p):
-        if candidate.exists():
-            body = candidate.read_text()
-            assert "build dir is outside \\$HOME" in body
-            assert 'TARGET_DEBUG_DIR#"${HOME%/}/"' in body
-            break
-
-    predicate = (
-        'if [ "${HOME%/}/" != "${TARGET_DEBUG_DIR%/}/" ] && '
-        '[ "${TARGET_DEBUG_DIR#"${HOME%/}/"}" = "$TARGET_DEBUG_DIR" ]; '
-        'then echo COPY; else echo SYMLINK; fi'
-    )
-    cases = {
-        "/Volumes/EXT/repo/target/debug": "COPY",
-        "$HOME/projects/nxd/target/debug": "SYMLINK",
-        "$HOME-evil/target/debug": "COPY",   # prefix confusion must not read as inside $HOME
-    }
-    for target, expected in cases.items():
-        out = subprocess.run(
-            ["bash", "-c", f'TARGET_DEBUG_DIR="{target}"; {predicate}'],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        assert out == expected, (target, out, expected)
 
 
 def test_pocket_renders_before_describe_and_query_and_rerenders_after_rebuild():

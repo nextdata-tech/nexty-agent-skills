@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -103,10 +104,11 @@ def valid_bundle(current: dict, verified: dict, outputs: dict) -> bool:
             return False
         for field in model.get("fields", []):
             column = field.get("column")
-            if (
-                column not in model_fields[name]
-                or not isinstance(field.get("roles"), list)
-                or not field["roles"]
+            # An empty roles list is valid: the skill requires that an
+            # unannotated field still renders as a field. Only a missing or
+            # non-list roles key is malformed.
+            if column not in model_fields[name] or not isinstance(
+                field.get("roles"), list
             ):
                 return False
             for role in field["roles"]:
@@ -229,21 +231,54 @@ def valid_superseded_redirect(current: dict, error: dict) -> bool:
     return data.get("current_uri") == expected_uri
 
 
+# The render order the skill contract prescribes, as alternative headings per
+# section rather than one literal each. The contract states the ORDER and what
+# each section carries; it does not dictate exact heading wording, so matching
+# a single literal would grade an agent on copying the example asset instead of
+# on following the contract. Each entry is a regex matched against heading text
+# only — a bare word like "joins" appearing in an id or a schema field must not
+# be mistaken for the section.
+SECTION_ORDER = (
+    ("model overview", r"model\s+overview|models?\b"),
+    ("complete schema", r"(complete\s+)?schema|fields?\b"),
+    ("joins", r"joins?\b|relationships?\b"),
+    ("output exposure and ports", r"output[\w\s,]*\bports?\b|ports?\s+and\s+exposure"),
+    ("evidence", r"evidence"),
+    ("release provenance", r"release\s+provenance|provenance"),
+    ("diagnostics", r"diagnostics"),
+)
+
+# <h1>..<h6> and <summary> text, in document order. Closed-by-default sections
+# are <details><summary>, so summaries are headings for ordering purposes.
+HEADING_RE = re.compile(
+    r"<(h[1-6]|summary)\b[^>]*>(.*?)</\1>", re.IGNORECASE | re.DOTALL
+)
+
+
 def assert_html(html_path: Path) -> None:
-    html = html_path.read_text(encoding="utf-8").lower()
-    positions = [
-        html.index(part)
-        for part in (
-            "model overview",
-            "complete schema",
-            "joins",
-            "output ports",
-            "evidence",
-            "release provenance",
-            "diagnostics",
-        )
+    raw = html_path.read_text(encoding="utf-8")
+    html = raw.lower()
+
+    headings = [
+        (m.start(), re.sub(r"<[^>]+>", " ", m.group(2)).strip().lower())
+        for m in HEADING_RE.finditer(raw)
     ]
-    assert positions == sorted(positions)
+    assert headings, "no <h1>-<h6> or <summary> headings found"
+
+    positions = []
+    for label, pattern in SECTION_ORDER:
+        rx = re.compile(pattern, re.IGNORECASE)
+        hit = next((pos for pos, text in headings if rx.search(text)), None)
+        assert hit is not None, (
+            f"no heading matches the {label!r} section "
+            f"(headings seen: {[t for _, t in headings]})"
+        )
+        positions.append((label, hit))
+
+    assert [p for _, p in positions] == sorted(p for _, p in positions), (
+        "sections out of contract order: "
+        f"{[label for label, _ in sorted(positions, key=lambda kv: kv[1])]}"
+    )
     for field in (
         "loyalty_points",
         "profile",
@@ -252,20 +287,127 @@ def assert_html(html_path: Path) -> None:
         "average_order_value",
         "many_to_one",
         "classification",
-        "min: 0",
-        "nullable: false",
         "decimal128",
-        "output-level models",
         "empty-declaration",
         "freshness &lt; 24h",
         "null · the manifest didn’t say",
         "[] · none declared",
+        # support_tickets carries description "" — declared and empty, which is
+        # a different statement from null and must carry its own gloss.
+        "support_tickets",
+        '"" · empty',
     ):
         assert field in html, field
+
+    # Constraints must reach the page, but the contract fixes no formatting for
+    # them ("constraints where present"). Require the declared key and its value
+    # in the field block, letting the page punctuate them however it likes.
+    loyalty = next(
+        (
+            block
+            for block in re.findall(
+                r"<article[^>]*\bclass=[\"']?[^\"'>]*\bfield\b.*?</article>",
+                html,
+                re.DOTALL,
+            )
+            if re.search(r"<code>\s*loyalty_points\s*</code>", block)
+        ),
+        None,
+    )
+    assert loyalty, "loyalty_points field block missing from the schema"
+    for key, value in (("min", "0"), ("nullable", "false")):
+        assert key in loyalty and value in loyalty, (
+            f"loyalty_points must render its {key} constraint: "
+            + " ".join(re.sub(r"<[^>]+>", " ", loyalty).split())[:140]
+        )
+
+    # The output-level declaration must survive as its own surface rather than
+    # being replaced by a union of the ports. The fixture declares exactly
+    # [orders] at the top level while the analytics port declares customers AND
+    # orders, so a page that unioned them would show customers as output-level.
+    # Checked by structure, not by a prescribed heading phrase: the contract
+    # fixes the surfaces, not the vocabulary naming them.
+    ports_section = re.search(
+        r"<h2[^>]*>[^<]*\bports?\b.*?(?=<h2|\Z)", html, re.DOTALL
+    )
+    assert ports_section, "no output/ports section found"
+    before_first_port = re.split(
+        r"<h3|<article", ports_section.group(0), maxsplit=1
+    )[0]
+    assert "orders" in before_first_port, (
+        "the output-level declaration must be rendered before the per-port "
+        "breakdown, as its own surface"
+    )
+    assert "customers" not in before_first_port, (
+        "output-level models must not be unioned with the ports' models: "
+        "customers is declared by the analytics port, not at the output level"
+    )
+
+    # support_tickets shares customer_id with customers/orders but declares no
+    # join, so no relationship may be drawn for it. Check the joins SECTION
+    # structurally rather than hunting literal arrow spellings: any line there
+    # that pairs support_tickets with another model is an inferred edge, however
+    # it is punctuated or marked up. Lines that merely say no join is declared
+    # are the honest case and must survive.
+    joins_section = re.search(
+        r"<section[^>]*\bid=[\"']?joins\b.*?</section>"
+        r"|<h2[^>]*>\s*joins?\b.*?(?=<h2|<section|\Z)",
+        html,
+        re.DOTALL,
+    )
+    assert joins_section, "no joins section found"
+    for line in re.split(r"</p>|<br\s*/?>|</li>", joins_section.group(0)):
+        text = re.sub(r"<[^>]+>", " ", line)
+        if "support_tickets" not in text:
+            continue
+        pairs_another_model = any(m in text for m in ("customers", "orders"))
+        disclaims = re.search(r"no\s+join|not\s+declared|declares\s+no", text)
+        assert not (pairs_another_model and not disclaims), (
+            "inferred join rendered for support_tickets, which declares none: "
+            + " ".join(text.split())[:120]
+        )
+
+    # Absence glosses must sit in the cell/slot for the value they describe, not
+    # merely appear somewhere on the page. support_tickets' description is ""
+    # and opened_at's is null; a blank slot beside a populated label is exactly
+    # the defect these glosses exist to prevent.
+    overview_row = re.search(
+        r"<tr>(?:(?!</tr>).)*support_tickets(?:(?!</tr>).)*</tr>", html, re.DOTALL
+    )
+    assert overview_row, "support_tickets missing from the model overview"
+    row_cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", overview_row.group(0), re.DOTALL)
+    assert any('"" · empty' in c for c in row_cells), (
+        "support_tickets' empty description must be glossed in its own cell, "
+        "not left blank: " + " | ".join(re.sub(r"<[^>]+>", "", c).strip() for c in row_cells)
+    )
+
+    # The field block that *contains* opened_at — not the first mention of the
+    # name, which appears in the overview's roles column.
+    opened_at = next(
+        (
+            block
+            for block in re.findall(
+                r"<article[^>]*\bclass=[\"']?[^\"'>]*\bfield\b.*?</article>",
+                html,
+                re.DOTALL,
+            )
+            if re.search(r"<code>\s*opened_at\s*</code>", block)
+        ),
+        None,
+    )
+    assert opened_at, "opened_at field block missing from the schema"
+    assert "null · the manifest didn’t say" in opened_at, (
+        "opened_at's null description must be glossed in its own field block"
+    )
     assert "customer health &lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>alert" not in html
-    assert "<details><summary>release provenance" in html
-    assert "<details><summary>diagnostics" in html
+    # Closed by default, but tolerate attributes and whitespace between the
+    # tags — the contract requires a closed <details>, not exact markup.
+    for label in ("release provenance", "diagnostics"):
+        assert re.search(
+            r"<details(?![^>]*\bopen\b)[^>]*>\s*<summary[^>]*>\s*" + label,
+            html,
+        ), f"{label} must be a closed-by-default <details><summary>"
     assert "customer%2fhealth" in html
     assert "nxd://data-products/customer/health/" not in html
     for field in FORBIDDEN_PAYLOAD_FIELDS:

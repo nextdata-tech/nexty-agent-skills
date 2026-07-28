@@ -128,11 +128,16 @@ raw-payload screens.
 8. **Diagnostics** — a closed-by-default `details` after provenance, limited to
    resource URIs, schema, and validation state. Never expose raw payloads.
 
-Use the fixed glosses for values that are present as null or empty:
-`null · the manifest didn’t say`, `[] · none declared`, and `"" · empty`. These
-states co-occur in one release — `identity.description` is `null` while a model
-`description` is `""` — so gloss each value for what it is and never print one
-for another.
+Every value you render that is present-but-empty carries a gloss — no
+exceptions, and check each one as you write it. The fixed glosses are
+`null · the manifest didn’t say`, `[] · none declared`, and `"" · empty`.
+This applies wherever the value appears: a model or field `description`, a
+port's `promises` or `models`, and any optional identity field. These states
+co-occur in one release — `identity.description` is `null` while a model
+`description` is `""`, and registry `joins` is `[]` while a model's `joins` is
+`null` — so gloss each value for what it is and never print one for another.
+Silently dropping a field because its value is empty is the same defect as
+leaving its cell blank: the reader cannot tell the manifest was silent.
 Render an optional field only when its key is present; an absent key produces
 no label, slot, dash, or placeholder. Never leave a labelled cell blank: a
 header over empty cells asserts "unset" where the payload said something more

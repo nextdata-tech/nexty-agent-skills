@@ -12,8 +12,16 @@
   },
   "evidence": {
     "model_tables": [
-      {"dataset": "main", "table": "customers", "row_count": 24},
-      {"dataset": "main", "table": "orders", "row_count": 42}
+      {
+        "dataset": "main",
+        "table": "customers",
+        "row_count": 24
+      },
+      {
+        "dataset": "main",
+        "table": "orders",
+        "row_count": 42
+      }
     ]
   },
   "identity": {
@@ -22,7 +30,11 @@
     "version": "1.4.0",
     "domain": "revenue"
   },
-  "services": [{"name": "analytics"}],
+  "services": [
+    {
+      "name": "analytics"
+    }
+  ],
   "models": {
     "models": [
       {
@@ -36,7 +48,9 @@
             "column": "customer_id",
             "type": "string",
             "roles": [
-              {"kind": "primary_key"},
+              {
+                "kind": "primary_key"
+              },
               {
                 "kind": "metric",
                 "name": "customer_count",
@@ -72,7 +86,9 @@
             "column": "order_id",
             "type": "string",
             "roles": [
-              {"kind": "primary_key"},
+              {
+                "kind": "primary_key"
+              },
               {
                 "kind": "metric",
                 "name": "order_count",
@@ -115,13 +131,59 @@
           }
         ],
         "is_view": false
+      },
+      {
+        "name": "support_tickets",
+        "primary_key": "ticket_id",
+        "description": "",
+        "data_product": "",
+        "table": "",
+        "joins": null,
+        "fields": [
+          {
+            "column": "ticket_id",
+            "type": "string",
+            "roles": [
+              {
+                "kind": "primary_key"
+              },
+              {
+                "kind": "metric",
+                "name": "ticket_count",
+                "agg": "count_distinct",
+                "description": "Distinct tickets.",
+                "boolean": false
+              }
+            ]
+          },
+          {
+            "column": "customer_id",
+            "type": "string",
+            "roles": []
+          },
+          {
+            "column": "opened_at",
+            "type": "timestamp",
+            "roles": [
+              {
+                "kind": "dimension"
+              }
+            ]
+          }
+        ],
+        "is_view": false
       }
     ],
     "joins": [
       {
         "left": "orders",
         "right": "customers",
-        "on": [["customer_id", "customer_id"]],
+        "on": [
+          [
+            "customer_id",
+            "customer_id"
+          ]
+        ],
         "cardinality": "many_to_one"
       }
     ]
@@ -141,21 +203,35 @@
             "name": "email",
             "data_type": "string",
             "description": "Contact address.",
-            "semantic_tags": [{"key": "classification", "value": "pii"}]
+            "semantic_tags": [
+              {
+                "key": "classification",
+                "value": "pii"
+              }
+            ]
           },
           {
             "name": "loyalty_points",
             "data_type": "int64",
             "description": "Current loyalty balance.",
-            "constraints": {"min": "0", "nullable": false}
+            "constraints": {
+              "min": "0",
+              "nullable": false
+            }
           },
           {
             "name": "profile",
             "data_type": {
               "struct": {
                 "fields": [
-                  {"name": "timezone", "data-type": "string"},
-                  {"name": "segment", "data-type": "string"}
+                  {
+                    "name": "timezone",
+                    "data-type": "string"
+                  },
+                  {
+                    "name": "segment",
+                    "data-type": "string"
+                  }
                 ]
               }
             },
@@ -179,8 +255,34 @@
           },
           {
             "name": "amount_usd",
-            "data_type": {"decimal128": {"precision": 18, "scale": 2}},
+            "data_type": {
+              "decimal128": {
+                "precision": 18,
+                "scale": 2
+              }
+            },
             "description": "Gross order amount."
+          }
+        ]
+      },
+      {
+        "name": "support_tickets",
+        "description": "",
+        "attributes": [
+          {
+            "name": "ticket_id",
+            "data_type": "string",
+            "description": "Ticket identifier."
+          },
+          {
+            "name": "customer_id",
+            "data_type": "string",
+            "description": "Customer reference (no join declared)."
+          },
+          {
+            "name": "opened_at",
+            "data_type": "timestamp",
+            "description": null
           }
         ]
       }
