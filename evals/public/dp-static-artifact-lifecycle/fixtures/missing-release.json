@@ -1,0 +1,10 @@
+{
+  "schema": "nxd-desktop-verified-v1",
+  "trust": "artifact_verified",
+  "release": {
+    "workflow": "customer/health",
+    "publish_seq": 17,
+    "definition_id": "definition-1f6c",
+    "artifact_id": "artifact-7aa9"
+  }
+}

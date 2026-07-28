@@ -1,0 +1,5 @@
+{
+  "requires": "nxd-desktop-supervisor",
+  "workflow": "worldbank-live",
+  "description": "Run this scenario against the pinned local desktop supervisor runtime. Also needs outbound network to api.worldbank.org."
+}

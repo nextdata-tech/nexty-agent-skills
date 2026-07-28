@@ -1,0 +1,16 @@
+{
+  "_comment": "Ground truth. Runner-side only - never copied into the agent workspace.",
+  "_fx_note": "Deliberately carries NO exchange rates. No rate appears anywhere in the source export, so any rate here would be a fabrication that the checker would then enforce as the only correct answer. Totals are stored PRE-FX and PER-CURRENCY; the checker composes whichever signature a closure's disclosed FX stance implies.",
+  "source_rows": 324,
+  "refund_rows": 18,
+  "transfer_rows": 25,
+  "tolerance_usd": "1.00",
+  "netted_per_currency": {
+    "cogs": {"USD": "186755.74"},
+    "opex": {"USD": "185800.62", "GBP": "69880.17", "EUR": "70284.47"}
+  },
+  "charges_only_per_currency": {
+    "cogs": {"USD": "196343.94"},
+    "opex": {"USD": "205772.72", "GBP": "75686.84", "EUR": "72949.40"}
+  }
+}

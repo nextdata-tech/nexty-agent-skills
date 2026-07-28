@@ -1,0 +1,17 @@
+payment_id,merchant_id,payer_email,amount_eur,status,state,method,balance_after,paid_at
+P-1001,M-001,lena.hofmann@example.de,42.50,captured,BY,card,1042.50,2026-01-14
+P-1002,M-003,marc.oliver@example.es,8.75,captured,MD,wallet,1051.25,2026-01-15
+P-1003,M-002,ingrid.dahl@example.no,310.00,captured,VL,sepa,1361.25,2026-01-19
+P-1004,M-001,tomasz.nowak@example.de,17.20,refunded,NW,card,1344.05,2026-02-02
+P-1005,M-004,sofia.almeida@example.de,225.00,captured,BY,sepa,1569.05,2026-02-08
+P-1006,M-005,cian.murphy@example.ie,1200.00,captured,D,card,2769.05,2026-02-11
+P-1007,M-003,elena.rossi@example.es,12.40,failed,MD,wallet,2769.05,2026-02-17
+P-1008,M-002,ola.hansen@example.no,88.90,captured,VL,sepa,2857.95,2026-03-03
+P-1009,M-001,jonas.weber@example.de,63.15,captured,NW,card,2921.10,2026-03-09
+P-1010,M-004,marta.silva@example.de,410.00,captured,BY,sepa,3331.10,2026-03-14
+P-1011,M-005,aoife.byrne@example.ie,950.00,refunded,D,card,2381.10,2026-03-22
+P-1012,M-003,pablo.ruiz@example.es,9.60,captured,MD,wallet,2390.70,2026-04-01
+P-1013,M-002,kari.olsen@example.no,145.30,captured,VL,sepa,2536.00,2026-04-07
+P-1014,M-001,nina.schulz@example.de,29.99,captured,NW,card,2565.99,2026-04-12
+P-1015,M-004,rui.costa@example.de,180.50,failed,BY,sepa,2565.99,2026-04-19
+P-1016,M-005,sean.kelly@example.ie,1450.00,captured,D,card,4015.99,2026-04-26

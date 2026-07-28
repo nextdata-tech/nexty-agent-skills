@@ -1,0 +1,61 @@
+{
+  "name": "Add a Case to an Eval Suite and State the Pass Criterion",
+  "skills": [
+    "nxd-eval-harness"
+  ],
+  "workspace_files": [
+    "suite.py",
+    "STATUS.md",
+    "**/STATUS.md"
+  ],
+  "checks": [
+    {
+      "id": "no-false-gate-claim",
+      "check": "STATUS.md's stated verdict on the 'at least 90%' target is that it is NOT met / not defensible from this run. A verdict of met, achieved, hit, or passed fails; so does a verdict that resolves the question purely by reporting the 90.6% mean against the 90% target. Reporting 90.6% elsewhere as context does not by itself fail this check — grade the verdict sentence. Graded from the quoted STATUS.md, which is the complete text."
+    },
+    {
+      "id": "cites-lower-bound-not-mean",
+      "check": "STATUS.md grounds its verdict in the lower bound of the confidence interval rather than the point estimate, stating in some form that the interval's pessimistic end falls below the 90% target. Any phrasing conveying that idea passes; no specific numeral need be reproduced."
+    },
+    {
+      "id": "identifies-insufficient-n",
+      "check": "STATUS.md states that the current sample cannot support the requested +/-5% precision, on the grounds that the observed interval is materially wider than +/-5%. Any arithmetic or qualitative form of that comparison passes (e.g. 'the interval spans roughly 14 points, far wider than +/-5%'); no half-width figure need be computed or named."
+    },
+    {
+      "id": "remedy-is-more-distinct-questions",
+      "check": "STATUS.md's remedy for reaching a defensible claim is to grow the number of DISTINCT questions in the suite. Any phrasing conveying more distinct/stratified questions — rather than more runs of the existing ones — passes."
+    },
+    {
+      "id": "remedy-rejects-more-epochs",
+      "check": "STATUS.md does not present raising the epoch count, or re-running the existing questions more times, as a way to grow the sample toward the required precision."
+    },
+    {
+      "id": "treats-sample-as-discounted",
+      "check": "STATUS.md's sizing reasoning treats the effective sample as smaller than the 96 raw sample-epochs — it does not use 96 as the sample size when reasoning about sufficiency. Citing N_eff (66.2) in place of 96 satisfies this; no explanation of the deff/ICC mechanism is required."
+    },
+    {
+      "id": "adds-clarify-case",
+      "check": "suite.py contains a new Case about transit time whose expect value is 'clarify' (not 'answer'). Graded on the expect value of the added transit-time case."
+    },
+    {
+      "id": "clarify-question-stays-ambiguous",
+      "check": "The new transit-time case's question text does not itself resolve the ambiguity: it must not name transit_days_avg or transit_days_sum, nor otherwise specify average-versus-total, since doing so would remove the very ambiguity the case exists to test."
+    },
+    {
+      "id": "clarify-check-string-added",
+      "check": "The clarify=[...] list passed to checks(...) in suite.py gains an entry covering the transit-time ambiguity (average versus total). The entry must be distinct from the pre-existing worst-carrier entry about late count versus freight cost. Guidance placed only in the case's metadata['why'] does not satisfy this check — it must be in the clarify list."
+    },
+    {
+      "id": "existing-cases-intact",
+      "check": "suite.py still contains all five original cases — q1-total-shipments, q2-by-carrier, q3-late-by-lane, q4-worst-carrier, q5-fuel-surcharge — with expect values answer, answer, answer, clarify, abstain respectively, and with q1/q2/q3 still linked to gold_ids g_shipments_total, g_shipments_by_carrier, g_late_by_lane."
+    },
+    {
+      "id": "gold-records-unchanged",
+      "check": "The three original gold records in suite.py are unchanged from their starting values: g_shipments_total is a single row with shipment_count 4820; g_shipments_by_carrier has NORTHWIND 2104/388420.0, PACIFICA 1655/301775.5, MERIDIAN 1061/190330.0; g_late_by_lane has SEA-LAX 118, SEA-ORD 94, LAX-DFW 61. Any edited, dropped, or added row in these three records fails."
+    },
+    {
+      "id": "no-gold-for-clarify-case",
+      "check": "The new clarify case does NOT carry a gold_id and no gold record was invented for it. Clarify cases are graded by the judge, not by deterministic row comparison, so attaching gold rows to one is wrong."
+    }
+  ]
+}

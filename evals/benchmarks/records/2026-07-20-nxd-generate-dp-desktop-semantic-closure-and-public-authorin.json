@@ -1,0 +1,195 @@
+{
+  "date": "2026-07-20",
+  "label": "nxd-generate-dp: desktop semantic closure and public authoring",
+  "notes": "Replaces the obsolete hand-authored local closure topology and private semantic authoring with the desktop supervisor's Python-only public DSL closure, parsed wiring checks, validated base-key tuples, and exact semantic-view metric roles.",
+  "plugin_version": "0.11.0",
+  "reports": {
+    "before-v0.10.0": {
+      "elapsed_s": 206.0,
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 22,
+            "duration_ms": 162150,
+            "total_cost_usd": 0.8720393,
+            "input_tokens": 41,
+            "output_tokens": 9350,
+            "is_error": false,
+            "tool_calls": 20,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs-before-generating",
+                "pass": true,
+                "why": "The trace shows `cat inferred_model.json` and `head -3` on both data/customers/customers.csv and data/orders/orders.csv before any file was written."
+              },
+              {
+                "id": "closure-complete",
+                "pass": true,
+                "why": "The final `find` listing shows spec.py, models.py, transform/main.py (in transform/), requirements.txt, deployment-spec.yaml, manifest.yaml, models.yaml, and csv-source-path, with csv-source-path written as the relative value `data`."
+              },
+              {
+                "id": "naming-invariant-held",
+                "pass": true,
+                "why": "manifest.yaml carries the identity map `customers: customers` / `orders: orders`, models.yaml names and data/ subdirs match, and the acceptance test's model-tables-identity-lowercase, models-py-names, and live-naming-invariant checks all passed."
+              },
+              {
+                "id": "transform-dlt-through-port",
+                "pass": true,
+                "why": "The transform's `ingest(output: DuckDbOutput, secrets: dict)` builds `filesystem(bucket_url=..., file_glob=\"*.csv\") | read_csv()` readers named from `output.model_tables` and runs them through `dlt.pipeline(destination=dlt.destinations.duckdb(credentials=output.path), dataset_name=output.schema)` with `write_disposition=\"replace\"`, with no duckdb.connect, DDL, or hard-coded staging path."
+              },
+              {
+                "id": "transform-readback-and-marker",
+                "pass": true,
+                "why": "It compares `pipeline.default_schema.data_table_names()` against `output.model_tables.values()` and raises RuntimeError on mismatch, touches `.transform-complete` in `Path(output.path).parent` only afterward, and ends with the `if __name__ == \"__main__\": data_product.main()` entrypoint."
+              },
+              {
+                "id": "connector-via-secrets",
+                "pass": true,
+                "why": "The source root comes solely from `secrets[\"csv_source\"]`, and dlt state is kept run-local via `pipelines_dir` under the run dir plus `DLT_DATA_DIR` set to `run_dir / \"dlt-data\"`."
+              },
+              {
+                "id": "wiring-matches-s0-shape",
+                "pass": true,
+                "why": "deployment-spec.yaml declares `nxd:local/duckdb/storage:0.1.0` and `nxd:generic-secrets:1.0.0`, manifest.yaml declares `nxd:local/python/compute:0.1.0` with csv-source under executor.secrets and a single `output` port carrying model_tables and `schema: main`, and the acceptance test's manifest-wiring, deployment-spec-services, and models-yaml-matches-connector checks passed."
+              },
+              {
+                "id": "staging-placeholder-verbatim",
+                "pass": true,
+                "why": "manifest.yaml's output port config contains `path: __NXD_STAGING_DATA__` verbatim and the transform derives paths from `output.path` rather than embedding the placeholder."
+              },
+              {
+                "id": "spec-promises-and-semantic-tools",
+                "pass": true,
+                "why": "The acceptance test's spec-promises-models, spec-semantic-tools, and spec-no-rpc-output checks all passed, and no extra marker model appears in models.yaml or the model_tables map."
+              },
+              {
+                "id": "blobs-placed-verbatim",
+                "pass": true,
+                "why": "The acceptance test's blobs-placed-verbatim check passed, and the agent explicitly notes loyalty_points was left unannotated per the inferred model's empty roles list."
+              },
+              {
+                "id": "requirements-pinned",
+                "pass": true,
+                "why": "requirements.txt contains `nxd.data_product[spec]`, `dlt[duckdb]==1.28.2`, `duckdb==1.5.4`, and `pandas==2.3.3`, and requirements-pinned passed in the acceptance run."
+              },
+              {
+                "id": "acceptance-check-passed",
+                "pass": true,
+                "why": "The agent ran the prescribed `uv run ... python check_generated_closure.py` command against the final closure and it printed `ALL CHECKS PASSED (22/22)` including the live-transform-run and live-data-integrity checks, with no edits to the test."
+              },
+              {
+                "id": "final-answer-artifacts",
+                "pass": true,
+                "why": "The final answer includes the inventory, the transform source (functionally identical to what was written and executed, differing only by a stripped explanatory comment block), the model\u2192table mapping with explicit five-surface agreement, and the full acceptance-test output."
+              },
+              {
+                "id": "no-fabricated-boot",
+                "pass": true,
+                "why": "The agent claims runnability only on the basis of the executed acceptance test and never invents a supervisor boot or semantic MCP query results."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent read both inputs first, generated a complete and correctly wired closure, and grounded every claim in a real acceptance run that printed ALL CHECKS PASSED (22/22); the only blemish is a comment block stripped from the \"verbatim\" transform in the final answer."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-v0.11.0": {
+      "elapsed_s": 107.1,
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 16,
+            "duration_ms": 88850,
+            "total_cost_usd": 0.5211188999999999,
+            "input_tokens": 19,
+            "output_tokens": 6775,
+            "is_error": false,
+            "tool_calls": 14,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The trace shows a Read of inferred_model.json plus `head`/`cat` of both CSVs (headers and full contents) before any Write call."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The agent wrote spec.py, models.py, infra-profile.yaml, transform/main.py, requirements.txt, and csv-source-path containing `data`, and the checker reported PASS python-only-files, no-source-yaml, and relative-csv-source."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "No write touched the data/ directory and the checker's SHA-256 comparisons reported PASS csv-preserved for both customers.csv and orders.csv."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "The agent verified customer_id and order_id are non-null and unique via shell uniq/grep checks, declared them with primary_key(), and the checker reported PASS promised-base-primary-keys and promised-base-primary-key-tuples."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "models.py imports only public names from nxd.spec (semantic_model, semantic_view, metric_field, primary_key, dimension, join) with no `nxd.spec._*` imports, and the checker reported PASS public-semantic-dsl and no-private-semantic-metadata."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "The checker reported PASS desktop-wiring, no-semantic-tools, and duckdb-port, and the final answer documents views registered via .model(...) rather than .promise(...)."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "transform/main.py was authored as a dlt-through-port ingest and the checker reported PASS transform-contract, no-direct-duckdb-ddl, loaded:customers, loaded:orders, and transform-complete."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": true,
+                "why": "The agent ran the exact shipped uv command against the final closure and the output ended with ALL CHECKS PASSED across all 22 listed checks."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer explicitly scopes the result to a well-formed closure and a transform run against a scratch DuckDB, stating it does not mean a supervisor build or live semantic query ran."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent inspected the inferred model and CSVs first, authored a correct Python-only closure with validated real primary keys, obtained ALL CHECKS PASSED from the shipped checker, and reported the outcome without overclaiming a supervisor build or semantic query."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}

@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.9.1
+  version: 0.25.3
 ---
 
 # nxd-semantic-data-product skill
@@ -41,19 +41,19 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 
 > **This skill teaches the `.semantic_tools()` pattern.**
 
-> **Two flows use the inference in this skill — pick the right one before continuing.**
-> - **Regular platform flow (this skill):** a governed semantic DP on the Nextdata OS
->   platform — Snowflake/warehouse output, the split-pod k8s `.semantic_tools()`
->   topology, and a deploy step. The workflow, credential, deploy, and "consuming a
->   deployed DP" sections below assume this flow.
-> - **Local end-to-end flow:** the AI generates **and runs** the whole data product
->   locally on a desktop supervisor. That DP has a **different shape** — a local
->   DuckDB output port, dlt-in-transform ingestion, and a local Python executor —
->   owned by the **nxd-generate-dp** skill. Use this skill only for the shape-neutral
->   part it shares: profiling a source, inferring the model, and writing the
->   `__nxd_semantic__` annotations, then hand off to nxd-generate-dp for the closure.
->   **Do NOT follow the Snowflake / credential / deploy / consume steps below in the
->   local flow** — they are platform-only and produce the wrong DP shape locally.
+> **Two flows use the inference here — pick one first.**
+> - **Platform flow (this skill):** a governed semantic DP on Nextdata OS —
+>   Snowflake/warehouse output, split-pod k8s `.semantic_tools()`, a deploy step.
+>   The workflow/credential/deploy/consume sections below assume this flow.
+> - **Local end-to-end flow:** the AI generates AND runs the DP locally on a
+>   desktop supervisor — a **different shape** (local DuckDB port, dlt-in-transform,
+>   local Python executor) owned by **nxd-generate-dp**. Use this skill only for the
+>   shared part: profile and infer public semantic roles **with their descriptions
+>   and PII flags**, then hand off. The generator PLACES what it receives — a
+>   description you don't infer here is one no later step adds. The
+>   generator translates them to the public DSL; do not write private metadata.
+>   **Do NOT
+>   follow the Snowflake/credential/deploy/consume steps below in the local flow.**
 
 ---
 
@@ -69,8 +69,10 @@ See `reference/overview.md` for the design and how annotations flow to the tools
 
 Interview the user or read the table DDL to establish, per source table:
 
-1. **Model** — the physical table: a unique name + the **grain** column (the
-   entity key, e.g. `order_id`) + an optional description.
+1. **Model** — the physical table: a unique name + one or more **primary-key**
+   columns (the entity key, e.g. `order_id`) + a **description** (one line:
+   what one row is). It reaches the agent in both `list_models` and
+   `describe_model`.
 2. **Dimensions** — columns an agent can group or filter by. Each: a concept
    `name`, the physical `column`, a logical `type` (`string` / `date` / `number`),
    a `description`, and `pii: true` if governed.
@@ -120,22 +122,27 @@ columns that exist in it; never invent or rename columns.**
 | `DATE`/`TIMESTAMP` (freshness hints) | **dimension** (`type: "date"`) |
 | samples look like emails, names, phones, addresses | dimension with **`"pii": true`** — flag from the DATA, even if no question asks for it (NULLs in some rows don't unmark it) |
 
-**Grain selection.** Trust only the exact full-table `cardinality` (DuckDB mode
-computes it over the whole table; a sample-only profile can fake uniqueness). If
-SEVERAL columns are fully unique, prefer the one whose name matches the table's
-entity (`orders` → `order_id`) and/or the one other tables' FK candidates point
-at. If NO single column is unique, use a **composite grain** — a `{"kind":
-"grain"}` blob on each component column; confirm the combination is unique with a
-targeted `COUNT(*) vs COUNT(DISTINCT (a, b))` query.
+**Primary-key selection.** Trust exact full-table cardinality; samples can fake
+uniqueness. Prefer a unique column that matches the entity or FK target; if
+needed, use a composite `{"kind": "primary_key"}` role and validate its
+non-null unique tuple with `COUNT(*)` versus `COUNT(DISTINCT (a, b))`.
 
-**Join validation.** Never declare a join from name similarity or a handful of
-overlapping `sample_values` alone. Before writing the blob, verify BOTH:
+**Local-desktop handoff.** Every physical base needs one or more validated
+primary-key columns across the complete export, not a shard or lucky sample.
+Without evidence, request the source key; never invent one or generate a
+closure. Emit canonical `primary_key()` / `{"kind": "primary_key"}`, never
+the deprecated `grain` alias.
 
-- **Containment** — every non-null FK value resolves on the ONE side:
-  `SELECT COUNT(*) FROM <many> WHERE <fk> IS NOT NULL AND <fk> NOT IN
-  (SELECT <to_column> FROM <one>)` must be 0 (or explain the orphans).
-- **Uniqueness of the ONE side** — `to_column` must be the target model's grain
-  (full-table cardinality 1.0), or `many_to_one` is a lie.
+**What crosses the boundary.** Per model: its `description`, and per column its
+`data_type`, its roles, and for each dimension/metric role a `name`, a
+`description`, and `pii` where it applies. Roles alone are an incomplete
+handoff — the generator places what it is given and infers nothing, so a
+concept that arrives without a description reaches `describe_models` as a bare
+name and stays that way.
+
+**Join validation.** Never use name similarity or a few overlapping samples.
+Every non-null FK must resolve on the ONE side, and its target column must be
+that model's full-table unique primary key; otherwise `many_to_one` is a lie.
 
 Declare the blob on the MANY-side FK with explicit `to_model` and `to_column`. If
 the samples don't overlap, that is evidence AGAINST the join — probe or ask.
@@ -145,8 +152,9 @@ it is **additive across rows** (amounts, quantities, per-row durations). Balance
 scores, points, percentages, rates, and point-in-time snapshots (e.g.
 `loyalty_points`, `account_balance`, `discount_pct`) are NOT sum metrics — summing
 them answers nothing. Aggregate such a column only when a question justifies it
-(`avg`/`min`/`max` can be legitimate); otherwise leave it unannotated or expose it
-as a `number` dimension.
+(`avg`/`min`/`max` can be legitimate); otherwise expose it as a `number`
+dimension whose description says what it is and why it is not summed. Never
+leave it unannotated — that hides the column instead of explaining it.
 
 **DuckDB declared type → `AttributeSpec` data type** (for the `models.py`
 attributes):
@@ -179,9 +187,24 @@ column *could* be; the questions say what it *must* be:
 - "per order / per customer ..." confirms the **grain** of each model (one row per
   entity — cross-check against exact full-table cardinality 1.0).
 
-Declare what the questions need plus the obviously useful dimensions; don't
-exhaustively annotate every column, and don't declare metrics no question motivates
-(that is how non-additive numerics end up as nonsense `sum`s).
+**Every column gets a role, and every dimension and metric role a
+description** — the questions decide which role, not whether to annotate.
+`primary_key()` and `join()` take no `description`; do not infer one for them,
+and never fall back to the enclosing `field()`, which the agent never sees. The
+one exception to the role rule is a column a declared metric already
+aggregates: its meaning travels on the metric. The marker model is exempt
+from the ROLE rule only — it still takes a `.description(...)`. A column with no role produces no metric,
+dimension or join and is invisible to `describe_model`; leaving one bare is a
+decision to make it unqueryable. A spare dimension costs a line in the catalog;
+a missing one costs an unanswerable question and a rebuild. Flag from the DATA,
+the same way `pii` is flagged — even when no question asks for it.
+
+**Metrics are the exception, and stay question-driven.** Do not declare metrics
+no question motivates — that is how non-additive numerics end up as nonsense
+`sum`s. A numeric that earns no metric is still annotated: expose it as a
+`number` dimension with a description saying what it is and why it is not
+summed (`loyalty_points`, `account_balance`, `discount_pct`). Unannotated is
+not the fallback; a dimension is.
 
 **3b. Surface ambiguity — don't silently resolve it.** The role grammar has
 **no filtered metrics, no derived ratios, and no default filters**: a metric is
@@ -208,94 +231,77 @@ rename). Attribute names must match the profiled column names **byte-exactly**
 seeds those same tables (unquoted), so compiler, seed, and profile resolve to one
 object.
 
-### Step 2 — Author `models.py` with per-field `__nxd_semantic__` annotations
+### Step 2 — Author `models.py` with the public semantic DSL
 
-The semantic vocabulary is declared as a reserved `__nxd_semantic__` JSON blob on
-each model attribute. The kernel reads those blobs from every **promised** model's
-manifest, compiles them into a typed `SemanticRegistry`, and delivers it to the pod
-at boot as `<root>/.nxd/semantic/<model>.json`; the runtime rebuilds the four tools
-from those payloads.
+Use the public `nxd.spec` field builders only. The platform compiles those public
+roles for every **promised** model at build time; never mutate private attribute
+metadata or add a second semantic representation.
 
-> **STOPGAP — no public author API yet.** `AttributeSpec` has no public
-> `.semantic_annotation()` setter, so the blob is injected by writing the
-> **private** `_metadata` dict directly via an `_annotate()` helper — the only
-> mechanism until that public API ships. Keep the injection isolated to
-> `models.py` and clearly marked. Before publishing, verify the wheel: if a public
-> `AttributeSpec.semantic_annotation(blob)` exists, use it instead of `_annotate()`.
+`primary_key()` is canonical (never the deprecated `grain` alias). Use
+`join(to="<model>", to_column="<col>")`, not `to_model=`, and give every
+dimension its stable business name and PII flag when applicable.
 
 Keep every module **flat at the DP root** — `models.py`, `transform.py`, `spec.py`
 are siblings. No `transform/` subdir package.
 
 ```python
 # models.py
-import json
-
-from nxd.spec import semantic_model
-from nxd.spec._model import AttributeSpec
+from nxd.spec import Agg, dimension, field, join, metric, metric_field, primary_key
+from nxd.spec import semantic_model, semantic_view
 from nxd.spec.data_types import float64, int64, string
-
-_SEMANTIC_KEY = "__nxd_semantic__"
-
-
-def _annotate(attr: AttributeSpec, role: dict) -> AttributeSpec:
-    """Inject a __nxd_semantic__ blob (stopgap — replace with the public
-    AttributeSpec.semantic_annotation() once it ships)."""
-    attr._metadata[_SEMANTIC_KEY] = json.dumps(role, separators=(",", ":"))
-    return attr
-
 
 orders = (
     semantic_model("orders")
     .description("One row per order.")
     .schema(
         {
-            "ORDER_ID": _annotate(
-                AttributeSpec(name="ORDER_ID", data_type=int64()),
-                {"kind": "grain"},
+            "ORDER_ID": field(int64(), primary_key()),
+            "REGION": field(
+                string(),
+                # The description goes INSIDE dimension() — on the enclosing
+                # field() it would never reach describe_model.
+                dimension(name="region", description="Sales region the order was booked in."),
             ),
-            "REGION": _annotate(
-                AttributeSpec(name="REGION", data_type=string(),
-                              _description="Sales region."),
-                {"kind": "dimension", "name": "region",
-                 "description": "Sales region.", "type": "string"},
-            ),
-            # Multi-role: join key (N:1) AND a count_distinct metric.
-            "PRODUCT_ID": _annotate(
-                AttributeSpec(name="PRODUCT_ID", data_type=int64()),
-                {"roles": [
-                    {"kind": "join", "to_model": "products",
-                     "to_column": "PRODUCT_ID", "cardinality": "many_to_one"},
-                ]},
-            ),
-            "REVENUE_USD": _annotate(
-                AttributeSpec(name="REVENUE_USD", data_type=float64(),
-                              _description="Order revenue in USD."),
-                {"kind": "metric", "name": "revenue", "agg": "sum",
-                 "description": "Total revenue in USD."},
-            ),
+            "PRODUCT_ID": field(int64(), join(to="products", to_column="PRODUCT_ID")),
+            # Bare is correct here: the total_revenue metric below aggregates
+            # this column, so its meaning travels on the metric.
+            "REVENUE_USD": field(float64()),
         }
     )
 )
 
-# To put COUNT on the grain column, patch a full {"roles": [...]} list post-hoc
-# (the bare {"kind": "grain"} shorthand has no inline multi-role form; the roles
-# list REPLACES the bare-grain blob):
-_annotate(orders._attributes["ORDER_ID"], {"roles": [
-    {"kind": "grain"},
-    {"kind": "metric", "name": "order_count", "agg": "count_distinct",
-     "description": "Distinct orders placed."},
-]})
+order_metrics = semantic_view("order_metrics", orders).schema(
+    {
+        "total_revenue": metric_field(
+            float64(),
+            metric(
+                Agg.SUM,
+                of=orders.field("REVENUE_USD"),
+                name="total_revenue",
+                description="Gross order revenue in USD across all order statuses.",
+            ),
+        ),
+    }
+)
+
 ```
 
-**Role grammar** (one blob per column):
+**Role grammar** — public `field()` DSL:
 
-| Role | Blob |
+| Role | Public DSL |
 |------|------|
-| grain | `{"kind": "grain"}` |
-| dimension | `{"kind": "dimension", "name": ..., "description": ..., "type": ..., "pii": <bool?>}` |
-| metric | `{"kind": "metric", "name": ..., "agg": "count\|count_distinct\|sum\|avg\|min\|max", "description": ..., "boolean": <bool?>}` |
-| join | `{"kind": "join", "to_model": ..., "to_column": ..., "cardinality": "many_to_one"}` |
-| multi-role | `{"roles": [ {...}, {...} ]}` |
+| primary key | `field(<type>(), primary_key())` |
+| dimension | `field(<type>(), dimension(name=..., description=..., pii=<bool>))` |
+| metric | define on a `semantic_view(...)` with `metric_field(metric(..., description=...))`; do not add it to a physical base field |
+| join | `field(<type>(), join(to=..., to_column=...))` — no description parameter |
+| model | `semantic_model(...).description("One row per ...")` |
+
+Emit `primary_key()`; `grain` is deprecated.
+
+**The `description` goes INSIDE the role** — `dimension(description=...)`,
+`metric(description=...)`. A `description=` on the enclosing `field()` /
+`metric_field()` is an attribute description and never reaches
+`describe_model`, so the querying agent never sees it.
 
 See `reference/registry-authoring.md` for the full role vocabulary,
 auto-derivation rules, and a worked example.
@@ -365,7 +371,7 @@ the marker model so produce-verification passes.
 # spec.py
 from nxd.spec import code, data_product, data_product_output, storage
 from transform import transform
-from models import orders, provision_marker   # provision_marker = the marker model
+from models import orders, order_metrics, provision_marker   # provision_marker = the marker model
 
 INFRA_PROFILE = "<infra-profile-name>"
 
@@ -373,6 +379,7 @@ _storage = (
     data_product_output()
     .promise(provision_marker)
     .promise(orders)
+    .model(order_metrics)
     .port("snowflake", storage(f"/infra-profile/{INFRA_PROFILE}#/services/<snowflake>"))
 )
 
@@ -432,9 +439,8 @@ Without this file the compute pod can't install its runtime. `pyyaml` powers the
 `semantic_model(...).link(Predicate.GlossaryTerm, "<term-uri>")` attaches
 governed glossary terms (model-level and, with an attribute name as the first
 arg, per-attribute). `attribute(int64(), "SUBJECT_ID").referencing(data_product=...,
-model=..., attribute=[...])` on a schema attribute (still wrapped in `_annotate`
-with its dimension blob) declares a cross-DP foreign key the discover UI renders
-as a SEMANTIC RELATIONSHIP.
+model=..., attribute=[...])` on a schema attribute declares a cross-DP foreign
+key the discover UI renders as a SEMANTIC RELATIONSHIP.
 
 Declare the runtime dependency with `.input(...).source(...)` in `spec.py`
 (before `.transform()`); the `.referencing(...)` makes the FK render as a semantic
@@ -462,9 +468,9 @@ is finished. Before reporting done, confirm all four files exist in the workspac
   call `data_product_rpc_output()` alongside it (raises `ValidationError`).
 - **Promise every annotated model.** Un-promised model → no manifest attributes →
   no `.nxd/semantic/<model>.json` payload → that model is invisible to the tools.
-- **The semantic vocabulary is per-field `__nxd_semantic__` blobs**, injected via
-  the `_annotate()` stopgap until a public setter ships. Keep it isolated
-  to `models.py`.
+- **Use the public field DSL only.** Author keys, dimensions, and joins with
+  `field(..., role(...))`; author metrics on semantic views. Never mutate private
+  model metadata.
 - **No `@on_provision`, no view DDL.** The tools compile against base tables. Seed
   them with `CREATE OR REPLACE TABLE` + `write_pandas` in the transform.
 - **Always declare a `.transform(...)`** — it seeds the base tables AND bundles
@@ -483,7 +489,7 @@ is finished. Before reporting done, confirm all four files exist in the workspac
 
 | File | Content |
 |------|---------|
-| `reference/overview.md` | Design + how `__nxd_semantic__` annotations flow to the 4 tools |
+| `reference/overview.md` | Design + how public semantic roles flow to the 4 tools |
 | `reference/registry-authoring.md` | Full role grammar + auto-derivation + worked example |
 | `reference/compiler-and-routing.md` | Compile paths + chasm-trap + Snowflake dialect |
 | `reference/runtime-and-dependencies.md` | Requirements, wheel version, payload delivery + fallback, lineage |

@@ -1,0 +1,7 @@
+customer_id,name,country,segment
+1,Acme Corp,United States,enterprise
+2,Globex,United Kingdom,enterprise
+3,Initech,United States,smb
+4,Umbrella,Spain,smb
+5,Soylent,United States,enterprise
+6,Hooli,United Kingdom,smb

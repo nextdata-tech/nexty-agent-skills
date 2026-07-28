@@ -1,0 +1,7 @@
+[
+  {
+    "workflow": "customer/health",
+    "artifact_status": "available",
+    "models": [{"dataset": "main", "table": "orders", "row_count": 42}]
+  }
+]

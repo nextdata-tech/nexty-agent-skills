@@ -3,13 +3,51 @@ name: evals
 # Runs the skill-pack eval suite (evals/run.py): drives a headless agent over
 # each scenario with a chosen skill-set and grades it with an LLM judge.
 #
-# DISABLED BY DEFAULT. This workflow is manual-only (workflow_dispatch) and is
-# not wired to push/PR: it spends model tokens and needs a Claude credential in
-# CI, so it runs on demand rather than on every push. Until a CI credential is
-# provisioned the suite is run locally (see evals/README.md).
+# Two entry points:
+#
+#   pull_request  — automatic, but only for PRs that touch skills or the eval
+#                   harness. Runs the *affected* scenarios (the ones whose
+#                   checks.json declares a changed skill) on the codex backend
+#                   with current_pack, and gates on regression against
+#                   evals/baselines/public.json. See the `evals-pr` job.
+#   workflow_dispatch — manual, full control over backend/model/skill-set.
+#
+# Cost control is by scenario selection, not by disabling the workflow: a PR
+# touching one skill runs only that skill's scenarios (see
+# evals/affected_scenarios.py).
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/**'
+      - 'evals/**'
+      - '.github/workflows/evals.yml'
+      # Files under evals/ that cannot change a verdict. Excluding them keeps a
+      # docs edit or a baseline re-record from spending a full agent run to
+      # confirm nothing moved. `paths-ignore` cannot be combined with `paths`,
+      # so these are negations within the same list — later patterns win.
+      - '!evals/README.md'
+      - '!evals/**/*.md'
+      # The baseline is read by the gate, never by a run: re-recording it
+      # changes which verdicts are acceptable, not what the agent or judge does.
+      - '!evals/baselines/**'
+      # Reporting/analysis tools the graded run never imports.
+      - '!evals/flakiness.py'
+      - '!evals/benchmark_record.py'
+      - '!evals/benchmarks/**'
   workflow_dispatch:
     inputs:
+      mode:
+        description: "suite = run the eval suite once. stability = run it N times on identical input and report which cells flip."
+        required: false
+        type: choice
+        options: [suite, stability]
+        default: suite
+      repeats:
+        description: "stability mode only: how many times to run the selected scenarios."
+        required: false
+        type: string
+        default: "5"
       skill_set:
         description: "Skill set to run: no_skills | current_pack | candidate_pack (blank = all)."
         required: false
@@ -19,16 +57,28 @@ on:
         description: "Single scenario name to run (omit for the whole suite)."
         required: false
         type: string
+      agent_backend:
+        description: "Backend driving the agent under test."
+        required: false
+        type: choice
+        options: [claude, codex]
+        default: codex
+      judge_backend:
+        description: "Backend grading the transcript."
+        required: false
+        type: choice
+        options: [claude, codex]
+        default: codex
       agent_model:
-        description: "Model for the agent under test."
+        description: "Model for the agent under test (blank = the backend's default)."
         required: false
         type: string
-        default: sonnet
+        default: ""
       judge_model:
-        description: "Model for the LLM judge."
+        description: "Model for the LLM judge (blank = the backend's default)."
         required: false
         type: string
-        default: opus
+        default: ""
       docs_base:
         description: "Public platform docs base URL (fetchable .md base) given to every run."
         required: false
@@ -43,8 +93,181 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Supersede an in-flight run when a PR is pushed again; eval runs are long and
+  # only the newest head matters. Manual runs key off the run id so two
+  # dispatches never cancel each other.
+  group: evals-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Automatic PR gate: affected scenarios only, codex backend, regression-gated.
+  # ---------------------------------------------------------------------------
+  evals-pr:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # need the merge base to diff changed paths
+          submodules: recursive   # example data products the scenarios reference
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Deterministic scenario checkers shell out to `uv` to run in a pinned
+      # environment. Without it they abort the whole step with an infrastructure
+      # ERROR before the regression gate can run.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Select affected scenarios
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Diff against the merge base, not the base tip, so unrelated commits
+          # landed on main since the PR branched are not counted as changes.
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          git diff --name-only "$merge_base" "$HEAD_SHA" > changed.txt
+          echo "Changed files:"; cat changed.txt
+
+          python3 evals/affected_scenarios.py --changed-file changed.txt > decision.json
+          cat decision.json
+
+          reason="$(python3 -c 'import json;print(json.load(open("decision.json"))["reason"])')"
+          count="$(python3 -c 'import json;print(len(json.load(open("decision.json"))["scenarios"]))')"
+          {
+            echo "count=$count"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+
+          # Emit the repeated --scenario flags the runner consumes.
+          python3 -c '
+          import json
+          d = json.load(open("decision.json"))
+          print("\n".join(d["scenarios"]))
+          ' > selected.txt
+
+          {
+            echo "### Eval selection"
+            echo ""
+            echo "$reason"
+            echo ""
+            if [ "$count" -gt 0 ]; then
+              echo "Scenarios:"
+              sed 's/^/- /' selected.txt
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install and authenticate Codex CLI
+        if: steps.select.outputs.count != '0'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex
+
+          # `codex` does NOT pick up OPENAI_API_KEY from the environment: it
+          # defaults to ChatGPT-style websocket auth and 401s without a stored
+          # credential. The key has to be handed to an explicit login.
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "OPENAI_API_KEY secret is empty — the codex backend cannot authenticate." >&2
+            exit 1
+          fi
+          printenv OPENAI_API_KEY | codex login --with-api-key
+          codex login status
+
+          # `codex` installs bundled system skills on first run and fails with
+          # "Directory not empty (os error 39)" when the target already exists
+          # from the npm install. Clearing it lets the first run populate it.
+          rm -rf "${CODEX_HOME:-$HOME/.codex}/skills" || true
+
+      - name: Run affected scenarios
+        if: steps.select.outputs.count != '0'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Codex's workspace-write sandbox is bubblewrap-based and cannot
+          # create a network namespace on a GitHub-hosted runner: every shell
+          # call fails with `bwrap: loopback: Failed RTM_NEWADDR` before the
+          # command runs. A hosted runner is already an ephemeral, isolated VM
+          # that we discard after the job, so dropping Codex's own sandbox here
+          # does not widen the blast radius. Never set this on a shared machine.
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
+        run: |
+          set -euo pipefail
+          args=(--suite public --report eval-report.json
+                --agent-backend codex --judge-backend codex
+                --skill-set current_pack
+                --concurrency 4)
+          while IFS= read -r scenario; do
+            [ -n "$scenario" ] && args+=(--scenario "$scenario")
+          done < selected.txt
+          python3 evals/run.py "${args[@]}"
+
+      - name: Gate on regression vs baseline
+        id: gate
+        if: steps.select.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          # First pass: report, and capture any regressed cells for a retry.
+          # Do not fail here — a single agent run is too noisy to block on. The
+          # same cell has been observed PASS, FAIL, then PASS again on identical
+          # input, so one failure is not yet evidence of a regression.
+          status=0
+          python3 evals/compare_baseline.py --report eval-report.json --suite public \
+            --write-regressed regressed.txt | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
+          if [ -s regressed.txt ]; then
+            echo "retry=true" >> "$GITHUB_OUTPUT"
+            echo "Regressed cells to retry:"; cat regressed.txt
+          else
+            echo "retry=false" >> "$GITHUB_OUTPUT"
+            exit $status
+          fi
+
+      - name: Retry regressed scenarios
+        if: steps.gate.outputs.retry == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
+        run: |
+          set -euo pipefail
+          args=(--suite public --report eval-retry.json
+                --agent-backend codex --judge-backend codex
+                --skill-set current_pack
+                --concurrency 4)
+          while IFS= read -r scenario; do
+            [ -n "$scenario" ] && args+=(--scenario "$scenario")
+          done < regressed.txt
+          python3 evals/run.py "${args[@]}"
+
+      - name: Confirm regressions against the retry
+        if: steps.gate.outputs.retry == 'true'
+        run: |
+          set -euo pipefail
+          # A cell fails the build only if it regressed twice. One that passes on
+          # retry is reported as FLAKY-RUN and does not block.
+          python3 evals/compare_baseline.py --report eval-report.json --suite public \
+            --confirm-with eval-retry.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval report
+        if: always() && steps.select.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-pr
+          path: eval-report.json
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Manual full-control run.
+  # ---------------------------------------------------------------------------
   evals:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'suite'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -56,7 +279,25 @@ jobs:
           python-version: '3.11'
 
       - name: Install Claude Code CLI
+        if: inputs.agent_backend == 'claude' || inputs.judge_backend == 'claude'
         run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install and authenticate Codex CLI
+        if: inputs.agent_backend == 'codex' || inputs.judge_backend == 'codex'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex
+          # See the evals-pr job: the env var alone is not a credential for
+          # `codex`, which needs an explicit api-key login.
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "OPENAI_API_KEY secret is empty — the codex backend cannot authenticate." >&2
+            exit 1
+          fi
+          printenv OPENAI_API_KEY | codex login --with-api-key
+          codex login status
+          rm -rf "${CODEX_HOME:-$HOME/.codex}/skills" || true
 
       - name: Run eval suite
         env:
@@ -64,8 +305,14 @@ jobs:
           # historical misnomer: it holds an OAuth token from `claude
           # setup-token`, consumed by the CLI as CLAUDE_CODE_OAUTH_TOKEN.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # See the evals-pr job: bubblewrap cannot namespace on a hosted
+          # runner, and the runner is itself the disposable isolation boundary.
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
           # Bind workflow inputs as env vars (not inline ${{ }} in the script)
           # so a crafted input cannot break out of its intended shell argument.
+          AGENT_BACKEND: ${{ inputs.agent_backend }}
+          JUDGE_BACKEND: ${{ inputs.judge_backend }}
           AGENT_MODEL: ${{ inputs.agent_model }}
           JUDGE_MODEL: ${{ inputs.judge_model }}
           DOCS_BASE: ${{ inputs.docs_base }}
@@ -75,10 +322,19 @@ jobs:
         run: |
           set -euo pipefail
           args=(--suite public --report eval-report.json
-                --agent-model "$AGENT_MODEL"
-                --judge-model "$JUDGE_MODEL"
+                --agent-backend "$AGENT_BACKEND"
+                --judge-backend "$JUDGE_BACKEND"
                 --docs-base "$DOCS_BASE"
                 --concurrency "$CONCURRENCY")
+          # Model flags are omitted when blank so each backend's own default
+          # applies — Codex model ids differ from Claude's, and forcing one
+          # backend's id onto the other is always wrong.
+          if [ -n "$AGENT_MODEL" ]; then
+            args+=(--agent-model "$AGENT_MODEL")
+          fi
+          if [ -n "$JUDGE_MODEL" ]; then
+            args+=(--judge-model "$JUDGE_MODEL")
+          fi
           if [ -n "$SKILL_SET" ]; then
             args+=(--skill-set "$SKILL_SET")
           fi
@@ -86,6 +342,18 @@ jobs:
             args+=(--scenario "$SCENARIO")
           fi
           python3 evals/run.py "${args[@]}"
+
+      - name: Compare against baseline (report only)
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f eval-report.json ]; then
+            # Manual runs report drift but never fail on it: the dispatcher
+            # chooses arbitrary backends/models, so a mismatch against the
+            # PR-gate baseline is expected rather than a regression.
+            python3 evals/compare_baseline.py --report eval-report.json --suite public \
+              | tee -a "$GITHUB_STEP_SUMMARY" || true
+          fi
 
       - name: Upload eval report
         if: always()
@@ -99,6 +367,7 @@ jobs:
   # Vendor-agnostic; runs the live baseline over the stdio MCP transport with a
   # cheap OpenAI model. Manual-only, gated on the OPENAI_API_KEY repo secret.
   nxd-eval-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'suite'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -123,7 +392,8 @@ jobs:
           uv run --extra openai python -c "
           from inspect_ai import eval as inspect_eval
           import spike_stdio as m
-          lg = inspect_eval(m.spike_stdio(), model='openai/gpt-5.4-mini', log_dir='logs')[0]
+          lg = inspect_eval(m.spike_stdio(), model='openai/gpt-5.6-luna',
+                            reasoning_effort='low', log_dir='logs')[0]
           s = lg.samples[0]
           print('status', lg.status, 'answer', repr(s.output.completion.strip()), 'score', s.scores['includes'].value)
           assert lg.status == 'success', lg.status
@@ -137,4 +407,114 @@ jobs:
         with:
           name: nxd-eval-smoke-log
           path: evals/nxd_eval/logs/*.eval
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Stability probe — run the same scenarios N times on identical input and
+  # report which cells disagree with themselves.
+  #
+  # Deliberately manual and off the pull-request path. The PR gate assumes a
+  # cell's verdict says something about the skill; this is how that assumption
+  # gets checked. Running it per-PR would multiply cost on every change while
+  # measuring nothing a one-off run does not already establish.
+  # ---------------------------------------------------------------------------
+  evals-stability:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'stability'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive   # example data products the scenarios reference
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Claude Code CLI
+        if: inputs.agent_backend == 'claude' || inputs.judge_backend == 'claude'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install and authenticate Codex CLI
+        if: inputs.agent_backend == 'codex' || inputs.judge_backend == 'codex'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "OPENAI_API_KEY secret is empty — the codex backend cannot authenticate." >&2
+            exit 1
+          fi
+          printenv OPENAI_API_KEY | codex login --with-api-key
+          codex login status
+          rm -rf "${CODEX_HOME:-$HOME/.codex}/skills" || true
+
+      - name: Run the suite N times
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
+          AGENT_BACKEND: ${{ inputs.agent_backend }}
+          JUDGE_BACKEND: ${{ inputs.judge_backend }}
+          AGENT_MODEL: ${{ inputs.agent_model }}
+          JUDGE_MODEL: ${{ inputs.judge_model }}
+          DOCS_BASE: ${{ inputs.docs_base }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          SKILL_SET: ${{ inputs.skill_set }}
+          SCENARIO: ${{ inputs.scenario }}
+          REPEATS: ${{ inputs.repeats }}
+        run: |
+          set -euo pipefail
+          case "$REPEATS" in
+            ''|*[!0-9]*) echo "repeats must be a positive integer, got '$REPEATS'" >&2; exit 2 ;;
+          esac
+          if [ "$REPEATS" -lt 2 ]; then
+            # One run cannot disagree with itself; the analysis would report
+            # every cell "stable" while having measured nothing.
+            echo "repeats must be at least 2 to measure stability, got $REPEATS" >&2
+            exit 2
+          fi
+
+          args=(--suite public
+                --agent-backend "$AGENT_BACKEND"
+                --judge-backend "$JUDGE_BACKEND"
+                --docs-base "$DOCS_BASE"
+                --concurrency "$CONCURRENCY")
+          if [ -n "$AGENT_MODEL" ]; then args+=(--agent-model "$AGENT_MODEL"); fi
+          if [ -n "$JUDGE_MODEL" ]; then args+=(--judge-model "$JUDGE_MODEL"); fi
+          if [ -n "$SKILL_SET" ]; then args+=(--skill-set "$SKILL_SET"); fi
+          if [ -n "$SCENARIO" ]; then args+=(--scenario "$SCENARIO"); fi
+
+          # No --cache-dir anywhere here. A cached agent transcript would be
+          # replayed identically on every repeat, so the measured flip rate
+          # would be zero by construction regardless of the real one.
+          for i in $(seq 1 "$REPEATS"); do
+            echo "::group::stability run $i/$REPEATS"
+            # A run that dies must not abort the probe: the remaining runs still
+            # carry evidence, and an ERROR cell is itself recorded and reported.
+            python3 evals/run.py "${args[@]}" --report "stability-$i.json" || true
+            echo "::endgroup::"
+          done
+
+      - name: Analyse verdict stability
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          reports=(stability-*.json)
+          if [ "${#reports[@]}" -lt 2 ]; then
+            echo "only ${#reports[@]} report(s) produced — not enough to measure stability" >&2
+            exit 1
+          fi
+          python3 evals/flakiness.py --report "${reports[@]}" --json stability.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload stability reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-stability
+          path: |
+            stability-*.json
+            stability.json
           if-no-files-found: warn

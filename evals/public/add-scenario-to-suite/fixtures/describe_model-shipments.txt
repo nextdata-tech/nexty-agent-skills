@@ -1,0 +1,29 @@
+$ describe_model shipments
+{
+  "model": "shipments",
+  "grain": "SHIPMENT_ID",
+  "description": "One row per shipment leg.",
+  "metrics": [
+    {"name": "shipment_count",      "agg": "COUNT_DISTINCT", "column": "SHIPMENT_ID",
+     "description": "Distinct shipments."},
+    {"name": "freight_cost_usd",    "agg": "SUM",  "column": "FREIGHT_COST_USD",
+     "description": "Total freight cost in USD."},
+    {"name": "late_shipment_count", "agg": "SUM",  "column": "IS_LATE", "boolean": true,
+     "description": "Count of shipments flagged late (boolean flag)."},
+    {"name": "transit_days_avg",    "agg": "AVG",  "column": "TRANSIT_DAYS",
+     "description": "Mean transit time in days."},
+    {"name": "transit_days_sum",    "agg": "SUM",  "column": "TRANSIT_DAYS",
+     "description": "Total transit days across shipments."}
+  ],
+  "dimensions": [
+    {"name": "carrier",       "column": "CARRIER",       "type": "string", "pii": false,
+     "description": "Carrier name."},
+    {"name": "lane",          "column": "LANE",          "type": "string", "pii": false,
+     "description": "Origin-destination lane code."},
+    {"name": "service_tier",  "column": "SERVICE_TIER",  "type": "string", "pii": false,
+     "description": "Service tier (ground, express, freight)."},
+    {"name": "consignee_tax_id", "column": "CONSIGNEE_TAX_ID", "type": "string", "pii": true,
+     "description": "Consignee tax identifier. PII."}
+  ],
+  "joins": []
+}

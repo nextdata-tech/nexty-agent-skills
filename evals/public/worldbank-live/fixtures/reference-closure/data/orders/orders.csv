@@ -1,0 +1,17 @@
+order_id,customer_id,order_date,product_category,amount_eur,is_overdue
+O001,C001,2025-04-05,Software,120,false
+O002,C001,2025-06-20,Services,80,true
+O003,C002,2025-05-10,Hardware,130,false
+O004,C002,2025-03-31,Software,700,true
+O005,C003,2025-04-15,Hardware,440,false
+O006,C003,2025-06-30,Software,250,true
+O007,C003,2025-07-01,Services,1000,false
+O008,C004,2025-05-31,Services,300,false
+O009,C005,2025-04-01,Hardware,220,true
+O010,C005,2025-03-15,Services,110,false
+O011,C006,2025-06-01,Software,90,true
+O012,C007,2025-04-20,Hardware,500,false
+O013,C007,2025-06-15,Software,50,true
+O014,C008,2025-05-01,Services,70,false
+O015,C004,2025-04-02,Hardware,120,true
+O016,C006,2025-07-10,Hardware,200,false

@@ -4,7 +4,43 @@ skill_sets:
     skills: []
 
   current_pack:
-    description: "Shipped customer-facing skill pack (all 15 skills, v0.9.1)."
+    description: "Shipped customer-facing skill pack (every skill under src/)."
+    skills:
+      - "src/nxd-review-closure"
+      - "src/nxd-setup"
+      - "src/nxd-data-product-builder"
+      - "src/nxd-data-product-query"
+      - "src/nxd-mesh-analyzer"
+      - "src/nxd-policies"
+      - "src/nxd-adding-inputs"
+      - "src/nxd-adding-outputs"
+      - "src/nxd-adding-expectations-promises"
+      - "src/nxd-adding-policy"
+      - "src/nxd-complying-with-failing-policy"
+      - "src/nxd-debugging-data-products"
+      - "src/nxd-semantic-data-product"
+      - "src/nxd-eval-harness"
+      - "src/nxd-pocket-loop"
+      - "src/nxd-generate-dp"
+      - "src/nxd-dp-static-artifact"
+
+  # Control arm for the adversarial-review experiment: the shipped pack with
+  # nxd-review-closure REMOVED. Its Step 6b dispatch is conditional on that
+  # skill being installed, so this arm runs the pre-review workflow while every
+  # other skill stays byte-identical to current_pack.
+  #
+  # Hypothesis under test: a second reader holding the original request catches
+  # semantic omissions the structural self-check cannot see. Signal to watch is
+  # a scenario demanding a derived model starting to pass. ANTI-signal is the
+  # reviewed arm scoring WORSE — that would mean the builder is accepting
+  # fabricated critique instead of adjudicating it, which is the failure mode
+  # the citation-backed rejection contract exists to prevent.
+  #
+  # Compare: --skill-set no_review_control vs --skill-set current_pack, N>=3 per
+  # cell (agent variance across identical prompts is large enough that a single
+  # run cannot decide pass/fail).
+  no_review_control:
+    description: "Shipped pack minus nxd-review-closure — control for the review experiment."
     skills:
       - "src/nxd-setup"
       - "src/nxd-data-product-builder"
@@ -21,12 +57,14 @@ skill_sets:
       - "src/nxd-eval-harness"
       - "src/nxd-pocket-loop"
       - "src/nxd-generate-dp"
+      - "src/nxd-dp-static-artifact"
 
   # Staging slot for skills under evaluation before promotion to current_pack.
   # Add new experimental skills here.
   candidate_pack:
     description: "Shipped pack plus any skills under evaluation."
     skills:
+      - "src/nxd-review-closure"
       - "src/nxd-setup"
       - "src/nxd-data-product-builder"
       - "src/nxd-data-product-query"
@@ -41,6 +79,5 @@ skill_sets:
       - "src/nxd-semantic-data-product"
       - "src/nxd-eval-harness"
       - "src/nxd-pocket-loop"
-      # Under evaluation (NEX-783): desktop DP closure generation.
       - "src/nxd-generate-dp"
-
+      - "src/nxd-dp-static-artifact"

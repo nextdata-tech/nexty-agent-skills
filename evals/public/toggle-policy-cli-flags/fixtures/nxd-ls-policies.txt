@@ -1,0 +1,5 @@
+ID    POLICY                    NAME                              CONSEQUENCE  DP ACTIVATION ID
+4172  DataQualityCompliance     require-shipment-output-quality   STOP         9038
+4180  SensitivityCompliance     mask-recipient-contact            WARN         9041
+
+2 active policy activations.

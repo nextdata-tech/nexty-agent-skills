@@ -1,660 +1,1039 @@
 #!/usr/bin/env python3
-"""Acceptance test for the generated data-product closure (run me before finishing).
-
-Validates the closure the way the desktop supervisor would consume it — minus
-the kernel:
-
-  1. STATIC: the closure is complete and internally consistent — the naming
-     invariant holds across models.py / models.yaml / manifest model_tables /
-     the data/ connector layout; the wiring YAMLs carry the exact S0 driver
-     ids and the verbatim ``__NXD_STAGING_DATA__`` placeholder; spec.py
-     promises the models and uses ``.semantic_tools()``; models.py places the
-     provided inferred blobs verbatim; the transform is dlt-through-port (no
-     direct DuckDB writes, no DDL).
-  2. LIVE: actually EXECUTES transform/main.py (nxd stubbed, dlt real)
-     against the closure's own data/ connector export into a scratch run dir,
-     then verifies the produced DuckDB: every promised model landed as
-     ``main.<name>``, row counts and numeric column sums match the CSVs, and
-     the ``.transform-complete`` readiness marker was touched.
-
-Usage (from the workspace/closure root):
-
-    uv run --python 3.12 --with "dlt[duckdb]==1.28.2" --with "duckdb==1.5.4" \
-        --with "pandas==2.3.3" --with pyyaml \
-        python check_generated_closure.py [closure_dir]
-
-Notes:
-  * nxd itself is STUBBED (spec API + transform runtime + DuckDbOutput), so
-    no nxd wheel is needed; dlt/duckdb/pandas/pyyaml must be importable.
-  * This encodes the runnability contract only. Judgment calls (how the
-    intent was interpreted, the quality of the final report) are graded
-    separately, not here.
-
-Exit 0 and ``ALL CHECKS PASSED`` when everything holds; exit 1 otherwise;
-exit 2 when a required package is missing.
-"""
+"""Validate a Python-only desktop closure and execute its transform."""
 
 from __future__ import annotations
 
+import ast
 import csv
-import io
+import hashlib
 import json
 import os
 import re
 import sys
 import tempfile
 import types
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-SEMANTIC_KEY = "__nxd_semantic__"
 
-DUCKDB_STORAGE_DRIVER = "nxd:local/duckdb/storage:0.1.0"
-GENERIC_SECRETS_DRIVER = "nxd:generic-secrets:1.0.0"
-PYTHON_COMPUTE_DRIVER = "nxd:local/python/compute:0.1.0"
-STAGING_PLACEHOLDER = "__NXD_STAGING_DATA__"
-
-REQUIRED_FILES = [
+REQUIRED = (
     "spec.py",
     "models.py",
+    "infra-profile.yaml",
     "transform/main.py",
     "requirements.txt",
-    "deployment-spec.yaml",
-    "manifest.yaml",
-    "models.yaml",
     "csv-source-path",
-]
+)
+FORBIDDEN = ("deployment-spec.yaml", "manifest.yaml", "models.yaml")
 
-# ---------------------------------------------------------------------------
-# nxd stubs — enough surface to execute models.py, spec.py, and
-# transform/main.py without the nxd wheel, while capturing what they declare.
-# ---------------------------------------------------------------------------
-
-_MODELS: list["_SemanticModel"] = []
-_PROMISED: list[str] = []
-_SEMANTIC_TOOLS_CALLS: list[dict] = []
-_RPC_OUTPUT_CALLS: list[int] = []
-_TRANSFORMS: list = []
-
-
-class _AttributeSpec:
-    def __init__(self, name=None, data_type=None, **kwargs):
-        self.name = name
-        self.data_type = data_type
-        self._metadata: dict = {}
-
-    def semantic_annotation(self, blob):  # post-stopgap public API
-        self._metadata[SEMANTIC_KEY] = (
-            blob if isinstance(blob, str) else json.dumps(blob)
-        )
-        return self
-
-    def referencing(self, *args, **kwargs):
-        return self
-
-    def __getattr__(self, item):
-        def _chain(*args, **kwargs):
-            return self
-
-        return _chain
+# Digests of the CSV export this harness ships. They pin the supplied-data
+# invariant for the fixture closure: the author must not edit a header or a row
+# to manufacture a key. A closure generated over a DIFFERENT export (a derived-
+# model closure over transactions/invoices, say) legitimately has none of these
+# files; for those, `csv-source-unmodified` degrades to a presence check on the
+# base models' own directories, and the no-editing rule is enforced by the
+# generating harness that supplied the export.
+CSV_SHA256 = {
+    "customers/customers.csv": "e839803bf3f5d44488dbed69d5605114f9436249cdd421bd0b38a8cd40d6914b",
+    "orders/orders.csv": "24f7a01bbb4a5fa9b12489a0c0475de885a86a01a37a404ec62a196cb2a4e69d",
+}
 
 
-def _attribute(data_type=None, name=None, *args, **kwargs):
-    return _AttributeSpec(name=name, data_type=data_type)
+def fail(message: str) -> None:
+    print(f"FAIL {message}")
+    raise SystemExit(1)
 
 
-class _SemanticModel:
-    def __init__(self, name):
-        self.name = name
-        self._attributes: dict[str, _AttributeSpec] = {}
-        _MODELS.append(self)
-
-    def description(self, *_a, **_k):
-        return self
-
-    def link(self, *_a, **_k):
-        return self
-
-    def schema(self, mapping):
-        for key, value in dict(mapping).items():
-            attr = value if isinstance(value, _AttributeSpec) else _AttributeSpec(name=key)
-            if attr.name is None:
-                attr.name = key
-            self._attributes[key] = attr
-        return self
-
-    def __getattr__(self, item):
-        def _chain(*args, **kwargs):
-            return self
-
-        return _chain
-
-
-class _Anything:
-    def __call__(self, *args, **kwargs):
-        return self
-
-    def __getattr__(self, item):
-        return self
-
-
-class _OutputChain:
-    def promise(self, model):
-        _PROMISED.append(getattr(model, "name", str(model)))
-        return self
-
-    def port(self, *args, **kwargs):
-        return self
-
-    def __getattr__(self, item):
-        def _chain(*args, **kwargs):
-            return self
-
-        return _chain
-
-
-class _SpecChain:
-    def semantic_tools(self, *args, **kwargs):
-        _SEMANTIC_TOOLS_CALLS.append({"args": args, "kwargs": kwargs})
-        return self
-
-    def __getattr__(self, item):
-        def _chain(*args, **kwargs):
-            return self
-
-        return _chain
-
-
-def _data_product(*args, **kwargs):
-    return _SpecChain()
-
-
-def _data_product_output(*args, **kwargs):
-    return _OutputChain()
-
-
-def _data_product_rpc_output(*args, **kwargs):
-    _RPC_OUTPUT_CALLS.append(1)
-    return _OutputChain()
+def check(label: str, condition: bool, detail: str = "") -> None:
+    if not condition:
+        fail(f"{label}: {detail}" if detail else label)
+    print(f"PASS {label}")
 
 
 @dataclass
-class _DuckDbOutput:
+class DuckDbOutput:
     path: str
     schema: str
-    model_tables: dict
-    models: dict = field(default_factory=dict)
-
-    def full_table_name(self, model: str) -> str:
-        table = self.model_tables.get(model)
-        if not table:
-            raise ValueError(f"Invalid model name {model!r}")
-        return f"{self.schema}.{table}"
-
-    def models_dict(self) -> dict:
-        return self.models
+    model_tables: dict[str, str]
 
 
-class _DataProductRuntime:
-    """Stub for `from nxd import data_product` (the transform runtime)."""
-
+class Runtime:
     def on_transform(self, *args, **kwargs):
         if args and callable(args[0]) and not kwargs:
-            _TRANSFORMS.append(args[0])
             return args[0]
-
-        def deco(fn):
-            _TRANSFORMS.append(fn)
-            return fn
-
-        return deco
+        return lambda fn: fn
 
     def main(self):
         return None
 
-    def __getattr__(self, item):
-        return _Anything()
 
-
-def _install_stubs() -> None:
-    def module(name: str) -> types.ModuleType:
-        mod = types.ModuleType(name)
-        mod.__getattr__ = lambda item: _Anything()  # PEP 562 fallback
-        sys.modules[name] = mod
-        return mod
-
-    nxd = module("nxd")
-    runtime = _DataProductRuntime()
-    nxd.data_product = runtime
-    dp_mod = module("nxd.data_product")
-    dp_mod.on_transform = runtime.on_transform
-    dp_mod.main = runtime.main
-
-    spec = module("nxd.spec")
-    spec.semantic_model = _SemanticModel
-    spec.attribute = _attribute
-    spec.Predicate = _Anything()
-    spec.data_product = _data_product
-    spec.data_product_output = _data_product_output
-    spec.data_product_rpc_output = _data_product_rpc_output
-    spec.storage = _Anything()
-    spec.code = _Anything()
-    nxd.spec = spec
-
-    model_mod = module("nxd.spec._model")
-    model_mod.AttributeSpec = _AttributeSpec
-    module("nxd.spec.data_types")  # every factory via __getattr__
-
-    core = module("nxd.core")
-    ctx = module("nxd.core.context")
-    ctx.DuckDbOutput = _DuckDbOutput
-    core.context = ctx
+def install_transform_stubs() -> None:
+    nxd = types.ModuleType("nxd")
+    core = types.ModuleType("nxd.core")
+    context = types.ModuleType("nxd.core.context")
+    context.DuckDbOutput = DuckDbOutput
+    core.context = context
     nxd.core = core
+    nxd.data_product = Runtime()
+    sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": context})
 
 
-def _exec_module(path: Path, module_name: str) -> types.ModuleType:
-    source = path.read_text(encoding="utf-8")
-    mod = types.ModuleType(module_name)
-    mod.__file__ = str(path)
-    sys.modules[module_name] = mod
-    exec(compile(source, str(path), "exec"), mod.__dict__)  # noqa: S102
-    return mod
+def csv_count(path: Path) -> int:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return sum(1 for row in csv.reader(handle) if row) - 1
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _canonical_roles(blob) -> list[str]:
-    roles = blob["roles"] if isinstance(blob, dict) and "roles" in blob else [blob]
-    return sorted(json.dumps(r, sort_keys=True, separators=(",", ":")) for r in roles)
-
-
-def _registry_from_models() -> dict[str, dict[str, list[str]]]:
-    registry: dict[str, dict[str, list[str]]] = {}
-    for model in _MODELS:
-        columns: dict[str, list[str]] = {}
-        for col, attr in model._attributes.items():
-            raw = attr._metadata.get(SEMANTIC_KEY)
-            if raw is None:
-                continue
-            blob = json.loads(raw) if isinstance(raw, str) else raw
-            columns[col] = _canonical_roles(blob)
-        registry[model.name] = columns
-    return registry
+def call_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
 
 
-def _csv_stats(model_dir: Path) -> tuple[list[str], int, dict[str, float]]:
-    """Header, data-row count, and per-numeric-column sum across the model's CSVs."""
-    header: list[str] = []
-    rows = 0
-    values: dict[str, list[str]] = {}
-    for csv_file in sorted(model_dir.glob("*.csv")):
-        with io.open(csv_file, newline="", encoding="utf-8") as fh:
-            reader = csv.reader(fh)
-            file_header = next(reader, None) or []
-            if not header:
-                header = file_header
-                values = {col: [] for col in header}
-            for row in reader:
-                if not any(cell.strip() for cell in row):
-                    continue
-                rows += 1
-                for col, cell in zip(header, row):
-                    values[col].append(cell)
-    sums: dict[str, float] = {}
-    for col, cells in values.items():
-        non_empty = [c for c in cells if c.strip() != ""]
-        if not non_empty:
+def promised_models(tree: ast.AST) -> set[str]:
+    promised: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
-        try:
-            sums[col] = sum(float(c) for c in non_empty)
-        except ValueError:
+        if node.func.attr != "promise" or len(node.args) != 1:
             continue
-    return header, rows, sums
+        argument = node.args[0]
+        if isinstance(argument, ast.Name):
+            promised.add(argument.id)
+    return promised
 
 
-# ---------------------------------------------------------------------------
-# Checks
-# ---------------------------------------------------------------------------
+def builder_name(call: ast.Call, position: int = 0) -> str | None:
+    """A builder's string argument, positional or via its documented keyword.
 
-def run_checks(root: Path) -> list[tuple[str, str]]:
-    import duckdb
-    import yaml
-
-    failures: list[tuple[str, str]] = []
-    passed: list[str] = []
-
-    def check(check_id: str, ok: bool, why: str = "") -> None:
-        (passed.append(check_id) if ok else failures.append((check_id, why)))
-
-    # 1. Closure completeness.
-    missing = [f for f in REQUIRED_FILES if not (root / f).is_file()]
-    check("closure-files-present", not missing, f"missing: {missing}")
-    if missing:
-        _emit(passed, failures)
-        return failures
-
-    manifest = yaml.safe_load((root / "manifest.yaml").read_text(encoding="utf-8")) or {}
-    deployment = yaml.safe_load((root / "deployment-spec.yaml").read_text(encoding="utf-8")) or {}
-    models_yaml = yaml.safe_load((root / "models.yaml").read_text(encoding="utf-8")) or {}
-
-    # 2. Manifest wiring: executor + the output port shape S0 pins.
-    executor = manifest.get("executor") or {}
-    ports = ((manifest.get("output") or {}).get("ports") or {})
-    port = ports.get("output") or {}
-    config = port.get("config") or {}
-    model_tables = config.get("model_tables") or {}
-    errs = []
-    if executor.get("driver") != PYTHON_COMPUTE_DRIVER:
-        errs.append(f"executor.driver={executor.get('driver')!r} != {PYTHON_COMPUTE_DRIVER!r}")
-    if "csv-source" not in (executor.get("secrets") or []):
-        errs.append("executor.secrets missing 'csv-source'")
-    if set(ports) != {"output"}:
-        errs.append(f"output.ports keys {sorted(ports)} != ['output'] (port name == transform param)")
-    if port.get("service") != "output":
-        errs.append(f"port service={port.get('service')!r} != 'output'")
-    if config.get("path") != STAGING_PLACEHOLDER:
-        errs.append(f"config.path={config.get('path')!r} — must be the verbatim {STAGING_PLACEHOLDER}")
-    if config.get("schema") != "main":
-        errs.append(f"config.schema={config.get('schema')!r} != 'main'")
-    if not model_tables or not isinstance(model_tables, dict):
-        errs.append("config.model_tables missing/empty")
-    check("manifest-wiring", not errs, "; ".join(errs))
-
-    # 3. The naming invariant inside model_tables: identity map, lowercase.
-    bad = [
-        f"{k!r}: {v!r}"
-        for k, v in model_tables.items()
-        if k != v or not re.fullmatch(r"[a-z_][a-z0-9_]*", str(k) or "")
-    ]
-    check("model-tables-identity-lowercase", bool(model_tables) and not bad,
-          f"model_tables must map <name> -> <name>, lowercase snake_case: {bad}")
-    models = sorted(str(k) for k in model_tables)
-
-    # 4. Deployment spec: the two S0 services with exact driver ids.
-    services = {s.get("name"): s.get("driver") for s in (deployment.get("services") or [])}
-    errs = []
-    if services.get("output") != DUCKDB_STORAGE_DRIVER:
-        errs.append(f"service 'output' driver={services.get('output')!r} != {DUCKDB_STORAGE_DRIVER!r}")
-    if services.get("csv-source") != GENERIC_SECRETS_DRIVER:
-        errs.append(f"service 'csv-source' driver={services.get('csv-source')!r} != {GENERIC_SECRETS_DRIVER!r}")
-    check("deployment-spec-services", not errs, "; ".join(errs))
-
-    # 5. csv-source-path: relative, resolves, one subdir per model with CSVs.
-    raw = (root / "csv-source-path").read_text(encoding="utf-8").strip()
-    errs = []
-    csv_root = None
-    if not raw:
-        errs.append("csv-source-path is empty")
-    elif Path(raw).is_absolute():
-        errs.append(f"csv-source-path {raw!r} is absolute — must be relative to the closure root")
+    The vendored nextdata-public-examples corpus writes
+    semantic_model(name=..., description=...) throughout and best_practices.md
+    prefers it, so locating the name positionally alone makes those models
+    invisible to every downstream check.
+    """
+    keyword_for = {0: "name", 1: "base"}
+    if len(call.args) > position:
+        node = call.args[position]
     else:
-        csv_root = (root / raw).resolve()
-        if not csv_root.is_dir():
-            errs.append(f"csv-source-path {raw!r} does not resolve to a directory")
-        else:
-            for m in models:
-                if not list((csv_root / m).glob("*.csv")):
-                    errs.append(f"no CSVs at <csv-source>/{m}/*.csv")
-    check("csv-source-layout", not errs, "; ".join(errs))
-    if csv_root is None or errs:
-        _emit(passed, failures)
-        return failures
+        node = next((k.value for k in call.keywords
+                     if k.arg == keyword_for.get(position)), None)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
 
-    csv_stats = {m: _csv_stats(csv_root / m) for m in models}
 
-    # 6. models.yaml: promised models == model_tables keys; attributes are the
-    #    CSV headers byte-exactly, typed as the inferred model dictated.
-    inferred_path = root / "inferred_model.json"
-    inferred = {}
-    if inferred_path.is_file():
-        inferred = (json.loads(inferred_path.read_text(encoding="utf-8"))).get("models", {})
-    declared = {m.get("name"): m for m in (models_yaml.get("models") or [])}
-    errs = []
-    if sorted(declared) != models:
-        errs.append(f"models.yaml names {sorted(declared)} != model_tables {models}")
-    else:
-        for m in models:
-            attrs = declared[m].get("attributes") or {}
-            header = csv_stats[m][0]
-            if sorted(attrs) != sorted(header):
-                errs.append(f"{m}: attributes {sorted(attrs)} != CSV header {sorted(header)}")
-                continue
-            for col, spec_ in attrs.items():
-                want = ((inferred.get(m, {}).get("columns", {}).get(col) or {}).get("data_type"))
-                got = (spec_ or {}).get("data-type")
-                if want and got != want:
-                    errs.append(f"{m}.{col}: data-type {got!r} != inferred {want!r}")
-    check("models-yaml-matches-connector", not errs, "; ".join(errs[:4]))
+def chain_calls(node: ast.expr) -> list[ast.Call]:
+    """Every Call in a fluent chain, outermost first.
 
-    # 7. models.py under stubs: names + the provided blobs placed verbatim.
-    sys.path.insert(0, str(root))
-    try:
-        _exec_module(root / "models.py", "models")
-    except Exception as exc:  # noqa: BLE001 — surface the author error verbatim
-        check("models-py-loads", False, f"executing models.py raised {exc!r}")
-        _emit(passed, failures)
-        return failures
-    check("models-py-loads", True)
+    semantic_model("x").description("...").schema({...}) is as valid as the
+    bare semantic_model("x").schema({...}), so the builder call and the schema
+    call must be located anywhere in the chain rather than assumed adjacent.
+    """
+    out: list[ast.Call] = []
+    while isinstance(node, ast.Call):
+        out.append(node)
+        node = node.func.value if isinstance(node.func, ast.Attribute) else None
+    return out
 
-    model_names = sorted(m.name for m in _MODELS)
-    check("models-py-names", model_names == models,
-          f"semantic_model names {model_names} != model_tables {models} "
-          "(bare lowercase physical names; no extra/marker models on desktop)")
 
-    registry = _registry_from_models()
-    errs = []
-    if inferred:
-        for m, spec_ in inferred.items():
-            placed = registry.get(m, {})
-            for col, col_spec in spec_.get("columns", {}).items():
-                want = sorted(
-                    json.dumps(r, sort_keys=True, separators=(",", ":"))
-                    for r in col_spec.get("roles", [])
-                )
-                got = placed.get(col, [])
-                if want and got != want:
-                    errs.append(f"{m}.{col}: placed roles differ from inferred_model.json")
-                elif not want and got:
-                    errs.append(f"{m}.{col}: annotated, but the inferred model left it unannotated")
-            extra = set(placed) - set(spec_.get("columns", {}))
-            if extra:
-                errs.append(f"{m}: blobs on unknown columns {sorted(extra)}")
-    else:
-        errs.append("inferred_model.json not found next to the closure — cannot verify placement")
-    check("blobs-placed-verbatim", not errs, "; ".join(errs[:4]))
+def chain_schema(chain: list[ast.Call]) -> ast.Dict | None:
+    for call in chain:
+        if call_name(call.func) in ("schema", "fields") and len(call.args) == 1:
+            if isinstance(call.args[0], ast.Dict):
+                return call.args[0]
+    return None
 
-    # 8. spec.py under stubs: promises + .semantic_tools(), no rpc output.
-    try:
-        _exec_module(root / "spec.py", "spec_under_test")
-    except Exception as exc:  # noqa: BLE001
-        check("spec-py-loads", False, f"executing spec.py raised {exc!r}")
-        _emit(passed, failures)
-        return failures
-    check("spec-py-loads", True)
-    check("spec-promises-models", sorted(set(_PROMISED)) == models,
-          f"promised {sorted(set(_PROMISED))} != model_tables {models}")
-    st_ok = (
-        len(_SEMANTIC_TOOLS_CALLS) == 1
-        and bool(_SEMANTIC_TOOLS_CALLS[0]["kwargs"].get("service")
-                 or _SEMANTIC_TOOLS_CALLS[0]["args"])
+
+def base_model_schemas(tree: ast.AST) -> dict[str, ast.Dict]:
+    results: dict[str, ast.Dict] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        chain = chain_calls(node.value)
+        if not chain:
+            continue
+        model_call = chain[-1]
+        if call_name(model_call.func) != "semantic_model":
+            continue
+        name = builder_name(model_call)
+        if name is None:
+            continue
+        schema = chain_schema(chain)
+        if schema is None:
+            continue
+        results[name] = schema
+    return results
+
+
+def base_model_descriptions(tree: ast.AST) -> dict[str, str]:
+    """Model name -> its description, from either authoring form.
+
+    The chained semantic_model(...).description(...) is the form verified
+    against the runtime, but the description= constructor kwarg is pinned in
+    the documented signature and is what the vendored nextdata-public-examples
+    corpus uses throughout. Rejecting it would fail closures written the way
+    the shipped reference corpus writes them, so both are accepted; the prose
+    recommends the chained form rather than the checker enforcing it.
+    """
+    results: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        chain = chain_calls(node.value)
+        if not chain:
+            continue
+        model_call = chain[-1]
+        if call_name(model_call.func) != "semantic_model":
+            continue
+        model_name = builder_name(model_call)
+        if model_name is None:
+            continue
+        text = (string_keyword(model_call, "description")
+                or next((joined_string(k.value) or "" for k in model_call.keywords
+                         if k.arg == "description"), "") or "")
+        for call in chain:
+            if call_name(call.func) == "description" and call.args:
+                joined = joined_string(call.args[0])
+                if joined:
+                    text = joined
+        if text.strip():
+            results[model_name] = text.strip()
+    return results
+
+
+def joined_string(node: ast.expr) -> str | None:
+    """A str constant, or the literal parts of an f-string.
+
+    Adjacent string literals are folded into a single ast.Constant by the
+    parser, so the multi-line parenthesised form needs no special handling.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = [p.value for p in node.values
+                 if isinstance(p, ast.Constant) and isinstance(p.value, str)]
+        # An f-string of pure interpolations has no literal parts but is still
+        # an authored description; fall back to the source so this accepts the
+        # same set self_check.py's desc_str() does.
+        return "".join(parts) or ast.unparse(node)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        # "one row per " + entity — same reason as above; desc_str() takes it.
+        return ast.unparse(node)
+    return None
+
+
+def base_model_primary_keys(tree: ast.AST) -> dict[str, set[str]]:
+    results: dict[str, set[str]] = {}
+    for model, schema in base_model_schemas(tree).items():
+        results[model] = {
+            column.value
+            for column, field_spec in zip(schema.keys, schema.values, strict=True)
+            if isinstance(column, ast.Constant)
+            and isinstance(column.value, str)
+            and any(call_name(role.func) == "primary_key" for role in field_roles(field_spec))
+        }
+    return results
+
+
+def field_roles(field_spec: ast.expr) -> list[ast.Call]:
+    """Return only roles passed directly to the public field() constructor."""
+    if not isinstance(field_spec, ast.Call) or call_name(field_spec.func) != "field":
+        return []
+    roles = [role for role in field_spec.args[1:] if isinstance(role, ast.Call)]
+    for keyword in field_spec.keywords:      # documented roles=[...] form
+        if keyword.arg == "roles" and isinstance(keyword.value, (ast.List, ast.Tuple)):
+            roles += [e for e in keyword.value.elts if isinstance(e, ast.Call)]
+    return roles
+
+
+def string_keyword(call: ast.Call, name: str) -> str | None:
+    for keyword in call.keywords:
+        if keyword.arg == name and isinstance(keyword.value, ast.Constant):
+            return keyword.value.value if isinstance(keyword.value.value, str) else None
+    return None
+
+
+def bool_keyword(call: ast.Call, name: str) -> bool:
+    return any(
+        keyword.arg == name
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is True
+        for keyword in call.keywords
     )
-    check("spec-semantic-tools", st_ok,
-          f"need exactly one .semantic_tools(service=...) call; saw {len(_SEMANTIC_TOOLS_CALLS)}")
-    check("spec-no-rpc-output", not _RPC_OUTPUT_CALLS,
-          "data_product_rpc_output() called — it raises alongside .semantic_tools()")
-
-    # 9. Transform source: dlt-through-port, no direct-write escape hatches.
-    source = (root / "transform" / "main.py").read_text(encoding="utf-8")
-    must = [
-        ("on_transform", r"on_transform"),
-        ("DuckDbOutput handle", r"DuckDbOutput"),
-        ("names from output.model_tables", r"output\.model_tables"),
-        ("dlt pipeline", r"dlt\.pipeline\("),
-        ("filesystem source", r"filesystem\("),
-        ("read_csv reader", r"read_csv"),
-        ("duckdb destination on the port path", r"credentials\s*=\s*output\.path"),
-        ("dataset from the port schema", r"dataset_name\s*=\s*output\.schema"),
-        ("run-local pipelines_dir", r"pipelines_dir"),
-        ("idempotent replace", r"write_disposition\s*=\s*['\"]replace['\"]"),
-        ("read-back of produced tables", r"data_table_names\("),
-        ("readiness marker", r"\.transform-complete"),
-        ("connector via secrets", r"csv_source"),
-        ("entrypoint", r"data_product\.main\(\)"),
-    ]
-    errs = [f"missing {label}" for label, pat in must if not re.search(pat, source)]
-    forbidden = [
-        ("direct duckdb write", r"duckdb\.connect"),
-        ("DDL", r"(?i)CREATE\s+(OR\s+REPLACE\s+)?(TABLE|VIEW)"),
-        ("staging placeholder leaked into code", STAGING_PLACEHOLDER),
-    ]
-    errs += [f"forbidden: {label}" for label, pat in forbidden if re.search(pat, source)]
-    check("transform-dlt-through-port", not errs, "; ".join(errs[:5]))
-
-    # 10. LIVE: execute the transform against the closure's own connector data.
-    live_failures = _live_run(root, models, dict(model_tables), csv_root,
-                              csv_stats, check, duckdb)
-    if live_failures:
-        _emit(passed, failures)
-        return failures
-
-    # 11. Requirements: the proven pins + the nxd wheel.
-    req = (root / "requirements.txt").read_text(encoding="utf-8")
-    lines = [ln.strip() for ln in req.splitlines() if ln.strip() and not ln.strip().startswith("#")]
-    errs = []
-    if not any(re.fullmatch(r"dlt\[duckdb\]==1\.28\.2", ln) for ln in lines):
-        errs.append("missing pin dlt[duckdb]==1.28.2")
-    if not any(re.fullmatch(r"duckdb==1\.5\.4", ln) for ln in lines):
-        errs.append("missing pin duckdb==1.5.4")
-    if not any(ln.startswith("pandas") for ln in lines):
-        errs.append("missing pandas (dlt read_csv requires it)")
-    if not any(ln.startswith("nxd") for ln in lines):
-        errs.append("missing the nxd wheel dependency")
-    check("requirements-pinned", not errs, "; ".join(errs))
-
-    _emit(passed, failures)
-    return failures
 
 
-def _live_run(root, models, model_tables, csv_root, csv_stats, check, duckdb) -> bool:
-    """Execute the transform for real. Returns True on a fatal (early-emit) failure."""
-    import inspect
+def semantic_view_schemas(tree: ast.AST) -> dict[str, tuple[str, ast.Dict]]:
+    views: dict[str, tuple[str, ast.Dict]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+        chain = chain_calls(node.value)
+        if not chain:
+            continue
+        view_call = chain[-1]
+        if call_name(view_call.func) != "semantic_view":
+            continue
+        name = builder_name(view_call, 0)
+        base = builder_name(view_call, 1)
+        schema = chain_schema(chain)
+        if name is None or base is None or schema is None:
+            continue
+        views[node.targets[0].id] = (base, schema)
+    return views
 
-    os.environ.pop("NXD_DESKTOP_REPO_ROOT", None)  # keep the run hermetic
-    try:
-        _exec_module(root / "transform" / "main.py", "transform_main_under_test")
-    except Exception as exc:  # noqa: BLE001
-        check("transform-loads", False, f"importing transform/main.py raised {exc!r}")
-        return True
-    check("transform-loads", True)
 
-    if not _TRANSFORMS:
-        check("transform-registered", False, "no @data_product.on_transform() function registered")
-        return True
-    fn = _TRANSFORMS[-1]
-    params = list(inspect.signature(fn).parameters)
-    sig_ok = params[:1] == ["output"] and "secrets" in params
-    check("transform-registered", sig_ok,
-          f"params {params} — first must be 'output' (== the manifest port name), plus 'secrets'")
-    if not sig_ok:
-        return True
+def registered_model_views(tree: ast.AST) -> set[str]:
+    return {
+        call.args[0].id
+        for call in method_calls(tree, "model")
+        if len(call.args) == 1 and isinstance(call.args[0], ast.Name)
+    }
 
-    with tempfile.TemporaryDirectory(prefix="closure-live-run-") as tmp:
-        run_dir = Path(tmp) / "run"
-        run_dir.mkdir()
-        staging = run_dir / "data.duckdb"
-        out = _DuckDbOutput(path=str(staging), schema="main", model_tables=model_tables)
-        old_dlt_dir = os.environ.get("DLT_DATA_DIR")
-        try:
-            fn(output=out, secrets={"csv_source": str(csv_root)})
-        except Exception as exc:  # noqa: BLE001
-            check("live-transform-run", False, f"transform raised {exc!r}")
+
+def metric_matches(
+    field_spec: ast.expr, model: str, column: str, role: dict[str, object]
+) -> bool:
+    if not isinstance(field_spec, ast.Call) or call_name(field_spec.func) != "metric_field":
+        return False
+    metric_call = next(
+        (argument for argument in field_spec.args[1:] if isinstance(argument, ast.Call) and call_name(argument.func) == "metric"),
+        None,
+    )
+    if metric_call is None:
+        return False
+    aggregation = metric_call.args[0] if metric_call.args else None
+    source = named_argument(metric_call, "of")
+    return (
+        string_keyword(metric_call, "name") == role.get("name")
+        and isinstance(aggregation, ast.Attribute)
+        and aggregation.attr.lower() == role.get("agg")
+        and (not role.get("boolean") or bool_keyword(metric_call, "boolean"))
+        and isinstance(source, ast.Call)
+        and isinstance(source.func, ast.Attribute)
+        and source.func.attr == "field"
+        and is_name(source.func.value, model)
+        and is_string(source.args[0] if source.args else None, column)
+    )
+
+
+def semantic_errors(
+    tree: ast.AST, inferred: dict[str, object], promised: set[str], registered_views: set[str]
+) -> list[str]:
+    errors: list[str] = []
+    schemas = base_model_schemas(tree)
+    views = semantic_view_schemas(tree)
+    for model in sorted(promised):
+        columns = ((inferred.get(model) or {}).get("columns") or {})  # type: ignore[union-attr]
+        schema = schemas.get(model)
+        if schema is None:
+            errors.append(f"{model}: missing semantic_model schema")
+            continue
+        field_specs = {
+            column.value: field_spec
+            for column, field_spec in zip(schema.keys, schema.values, strict=True)
+            if isinstance(column, ast.Constant) and isinstance(column.value, str)
+        }
+        for column, column_spec in columns.items():
+            if column not in field_specs:
+                errors.append(f"{model}.{column}: missing source column")
+                continue
+            for role in column_spec.get("roles", []):
+                kind = role.get("kind")
+                calls = field_roles(field_specs[column])
+                if kind == "primary_key" and not any(call_name(call.func) == kind for call in calls):
+                    errors.append(f"{model}.{column}: missing primary_key()")
+                if kind == "dimension" and not any(
+                    call_name(call.func) == kind and string_keyword(call, "name") == role.get("name")
+                    and (not role.get("pii") or bool_keyword(call, "pii"))
+                    for call in calls
+                ):
+                    errors.append(f"{model}.{column}: missing dimension {role.get('name')!r}")
+                if kind == "join" and not any(
+                    call_name(call.func) == kind
+                    and string_keyword(call, "to") == role.get("to_model")
+                    and string_keyword(call, "to_column") == role.get("to_column")
+                    for call in calls
+                ):
+                    errors.append(f"{model}.{column}: missing join to {role.get('to_model')!r}")
+                if kind == "metric" and not any(
+                    base == model
+                    and view_name in registered_views
+                    and any(metric_matches(field_spec, model, column, role) for field_spec in view_schema.values)
+                    for view_name, (base, view_schema) in views.items()
+                ):
+                    errors.append(f"{model}.{column}: missing metric {role.get('name')!r}")
+    return errors
+
+
+def has_description(call: ast.Call) -> bool:
+    """A non-empty description= on this call."""
+    for keyword in call.keywords:
+        if keyword.arg != "description":
+            continue
+        # joined_string already accepts Constant / JoinedStr / BinOp-Add,
+        # which is exactly the set self_check.py's desc_str() accepts. Do not
+        # widen past it: a broader BinOp here would pass "%s" % x at acceptance
+        # and fail it in the closure's own self-check.
+        text = joined_string(keyword.value)
+        if text and text.strip():
             return True
-        finally:
-            if old_dlt_dir is None:
-                os.environ.pop("DLT_DATA_DIR", None)
-            else:
-                os.environ["DLT_DATA_DIR"] = old_dlt_dir
-        check("live-transform-run", True)
-
-        check("live-staging-materialized",
-              staging.is_file() and staging.stat().st_size > 0,
-              "staging DuckDB missing/empty after the transform")
-        check("live-readiness-marker", (run_dir / ".transform-complete").is_file(),
-              ".transform-complete not touched in the run dir (parent of output.path)")
-
-        con = duckdb.connect(str(staging), read_only=True)
-        try:
-            landed = {
-                r[0]
-                for r in con.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = 'main' AND table_name NOT LIKE '\\_dlt%' ESCAPE '\\'"
-                ).fetchall()
-            }
-            check("live-naming-invariant", landed == set(models),
-                  f"main.* data tables {sorted(landed)} != promised {models}")
-
-            errs = []
-            for m in models:
-                header, rows, sums = csv_stats[m]
-                try:
-                    count = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
-                except Exception as exc:  # noqa: BLE001
-                    errs.append(f"unquoted SELECT ... FROM main.{m} failed: {exc!r}")
-                    continue
-                if count != rows:
-                    errs.append(f"main.{m}: {count} rows != {rows} CSV data rows")
-                cols = {r[0] for r in con.execute(f"DESCRIBE main.{m}").fetchall()}
-                missing_cols = [c for c in header if c not in cols]
-                if missing_cols:
-                    errs.append(f"main.{m}: CSV columns not landed byte-exactly: {missing_cols}")
-                    continue
-                for col, want in sums.items():
-                    got = con.execute(f'SELECT SUM("{col}") FROM main.{m}').fetchone()[0]
-                    if got is None or abs(float(got) - want) > 0.01:
-                        errs.append(f"main.{m}.{col}: SUM {got} != CSV sum {round(want, 2)}")
-            check("live-data-integrity", not errs, "; ".join(errs[:4]))
-        finally:
-            con.close()
     return False
 
 
-def _emit(passed: list[str], failures: list[tuple[str, str]]) -> None:
-    for check_id in passed:
-        print(f"PASS {check_id}")
-    for check_id, why in failures:
-        print(f"FAIL {check_id}: {why}")
-    total = len(passed) + len(failures)
-    if failures:
-        print(f"{len(failures)}/{total} CHECKS FAILED")
-    else:
-        print(f"ALL CHECKS PASSED ({total}/{total})")
+def annotation_errors(
+    tree: ast.AST, inferred: dict[str, object], promised: set[str], registered_views: set[str]
+) -> list[str]:
+    """Descriptions the inferred model supplied must survive into models.py.
 
+    describe_model is the only surface the querying agent reads, so a concept
+    placed with its name but not its description arrives as a bare label. The
+    inferred_model.json handoff carries a description on every dimension and
+    metric and on each model; this asserts they were carried through, and that
+    they were put where the compiler actually reads them.
+    """
+    errors: list[str] = []
+    schemas = base_model_schemas(tree)
+    views = semantic_view_schemas(tree)
+    descriptions = base_model_descriptions(tree)
 
-def main() -> int:
-    try:
-        import dlt  # noqa: F401
-        import duckdb  # noqa: F401
-        import pandas  # noqa: F401
-        import yaml  # noqa: F401
-    except ImportError as exc:
-        print(
-            f"missing dependency ({exc.name}). Run:\n"
-            '  uv run --python 3.12 --with "dlt[duckdb]==1.28.2" '
-            '--with "duckdb==1.5.4" --with "pandas==2.3.3" --with pyyaml '
-            "python check_generated_closure.py"
+    # A description on the field()/metric_field() WRAPPER becomes an attribute
+    # description: it reaches the structural data_model block and never
+    # describe_model. The author believes the concept is documented and it is
+    # not, so this is an error rather than a warning.
+    # Column names, so a wrapper-description error can name the field it is on
+    # rather than repeating an identical location-less sentence per occurrence.
+    column_of: dict[int, str] = {}
+    for model, schema in schemas.items():
+        for column, field_spec in zip(schema.keys, schema.values, strict=True):
+            if isinstance(column, ast.Constant) and isinstance(column.value, str):
+                column_of[id(field_spec)] = f"{model}.{column.value}"
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if call_name(node.func) not in ("field", "metric_field"):
+            continue
+        if not has_description(node):
+            continue
+        # Matches scripts/self_check.py: a wrapper description is a legal
+        # attribute description (it reaches the structural data_model block).
+        # The defect is using it INSTEAD of the role's, so fail only when no
+        # sibling role carries one. The two gates must agree or correctly
+        # annotated code passes the closure's own self-check and then fails
+        # acceptance, which reads as a harness bug.
+        siblings = [a for a in node.args[1:] if isinstance(a, ast.Call)]
+        for kw in node.keywords:          # documented roles=[...] form
+            if kw.arg == "roles" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                siblings += [e for e in kw.value.elts if isinstance(e, ast.Call)]
+        describable = [r for r in siblings
+                       if call_name(r.func) in ("dimension", "metric")]
+        if any(has_description(r) for r in describable):
+            continue
+        # Same branching as scripts/self_check.py: with no dimension/metric
+        # role there is nowhere to move the text to, so the remedy is deletion.
+        remedy = ("move it inside dimension(...) / metric(...)" if describable
+                  else "primary_key()/join() take no description — drop it")
+        location = column_of.get(id(node), ast.unparse(node)[:60])
+        errors.append(
+            f"{location}: description= on {call_name(node.func)}() never "
+            f"reaches describe_model and no role carries one — {remedy}"
         )
-        return 2
 
-    root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
-    if not root.is_dir():
-        print(f"not a directory: {root}", file=sys.stderr)
-        return 2
-    _install_stubs()
-    return 1 if run_checks(root) else 0
+    for model in sorted(promised):
+        spec = inferred.get(model) or {}
+        if (spec.get("description") or "").strip() and not descriptions.get(model):  # type: ignore[union-attr]
+            errors.append(
+                f"{model}: the inferred model supplied a description and the "
+                f"model declares none — list_models and describe_model show it"
+            )
+        schema = schemas.get(model)
+        if schema is None:
+            continue
+        field_specs = {
+            column.value: field_spec
+            for column, field_spec in zip(schema.keys, schema.values, strict=True)
+            if isinstance(column, ast.Constant) and isinstance(column.value, str)
+        }
+        for column, column_spec in ((spec.get("columns") or {})).items():  # type: ignore[union-attr]
+            if column not in field_specs:
+                continue
+            for role in column_spec.get("roles", []):
+                wanted = (role.get("description") or "").strip()
+                if not wanted:
+                    continue
+                kind = role.get("kind")
+                if kind == "dimension":
+                    matched = [
+                        call for call in field_roles(field_specs[column])
+                        if call_name(call.func) == "dimension"
+                        and string_keyword(call, "name") == role.get("name")
+                    ]
+                    if matched and not any(has_description(call) for call in matched):
+                        errors.append(
+                            f"{model}.{column}: dimension {role.get('name')!r} "
+                            f"placed without the supplied description"
+                        )
+                if kind == "metric":
+                    for view_name, (base, view_schema) in views.items():
+                        if base != model or view_name not in registered_views:
+                            continue
+                        for field_spec in view_schema.values:
+                            if not metric_matches(field_spec, model, column, role):
+                                continue
+                            metric_call = next(
+                                argument for argument in field_spec.args[1:]
+                                if isinstance(argument, ast.Call)
+                                and call_name(argument.func) == "metric"
+                            )
+                            if not has_description(metric_call):
+                                errors.append(
+                                    f"{model}.{column}: metric "
+                                    f"{role.get('name')!r} placed without the "
+                                    f"supplied description"
+                                )
+    return errors
+
+
+def assigned_strings(tree: ast.AST) -> dict[str, str]:
+    strings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        if not isinstance(node.value.value, str):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                strings[target.id] = node.value.value
+    return strings
+
+
+def method_calls(tree: ast.AST, method: str) -> list[ast.Call]:
+    return [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == method
+    ]
+
+
+def named_argument(call: ast.Call, name: str) -> ast.expr | None:
+    return next((keyword.value for keyword in call.keywords if keyword.arg == name), None)
+
+
+def is_name(node: ast.expr | None, name: str) -> bool:
+    return isinstance(node, ast.Name) and node.id == name
+
+
+def is_string(node: ast.expr | None, value: str) -> bool:
+    return isinstance(node, ast.Constant) and node.value == value
+
+
+def profile_services(profile: str) -> tuple[str | None, dict[str, str]]:
+    lines = [line.split("#", 1)[0].rstrip() for line in profile.splitlines()]
+    metadata_name: str | None = None
+    services: dict[str, str] = {}
+    in_metadata = False
+    current_service: str | None = None
+    for line in lines:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        stripped = line.strip()
+        if stripped == "metadata:":
+            in_metadata = True
+            current_service = None
+            continue
+        if indent == 0:
+            in_metadata = False
+        if in_metadata and stripped.startswith("name:"):
+            metadata_name = stripped.split(":", 1)[1].strip()
+        service = re.fullmatch(r"-\s*name:\s*(\S+)", stripped)
+        if service:
+            current_service = service.group(1)
+            continue
+        if current_service and stripped.startswith("driver:"):
+            services[current_service] = stripped.split(":", 1)[1].strip()
+    return metadata_name, services
+
+
+def desktop_wiring_errors(spec: str, profile: str, requirements: str) -> list[str]:
+    errors: list[str] = []
+    profile_name, services = profile_services(profile)
+    if profile_name != "desktop-local":
+        errors.append("infra-profile metadata.name must be desktop-local")
+    expected_services = {
+        "duckdb": "nxd:local/duckdb/storage:0.1.0",
+        "python-compute": "nxd:local/python/compute:0.1.0",
+        "csv-source": "nxd:generic-secrets:1.0.0",
+    }
+    for name, driver in expected_services.items():
+        if services.get(name) != driver:
+            errors.append(f"infra-profile service {name!r} must use {driver!r}")
+
+    tree = ast.parse(spec, filename="spec.py")
+    bindings = assigned_strings(tree)
+    expected_refs = {
+        "_duckdb": "/infra-profile/desktop-local#/services/duckdb",
+        "_compute": "/infra-profile/desktop-local#/services/python-compute",
+        "_csv": "/infra-profile/desktop-local#/services/csv-source",
+    }
+    for name, reference in expected_refs.items():
+        if bindings.get(name) != reference:
+            errors.append(f"spec.py {name} must bind {reference!r}")
+
+    products = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node.func) == "data_product"]
+    if not any(is_string(named_argument(call, "infra_profile"), "desktop-local") for call in products):
+        errors.append("spec.py data_product() must set infra_profile=desktop-local")
+    scripts = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node.func) == "script"]
+    if not any(is_string(call.args[0] if call.args else None, "transform/main.py") for call in scripts):
+        errors.append("spec.py must use script(transform/main.py)")
+    if not any(is_name(call.args[0] if call.args else None, "_compute") for call in method_calls(tree, "compute")):
+        errors.append("spec.py must bind python-compute with .compute(_compute)")
+    if not any(
+        len(call.args) == 1
+        and isinstance(call.args[0], ast.List)
+        and len(call.args[0].elts) == 1
+        and is_name(call.args[0].elts[0], "_csv")
+        for call in method_calls(tree, "secrets")
+    ):
+        errors.append("spec.py must bind csv-source with .secrets([_csv])")
+    if not any(
+        len(call.args) == 2
+        and is_string(call.args[0], "duckdb")
+        and isinstance(call.args[1], ast.Call)
+        and call_name(call.args[1].func) == "storage"
+        and is_name(call.args[1].args[0] if call.args[1].args else None, "_duckdb")
+        for call in method_calls(tree, "port")
+    ):
+        errors.append("spec.py must bind duckdb with .port(duckdb, storage(_duckdb))")
+
+    requirement_lines = {
+        line.split("#", 1)[0].strip()
+        for line in requirements.splitlines()
+        if line.split("#", 1)[0].strip()
+    }
+    exact_requirements = {"dlt[duckdb]==1.28.2", "duckdb==1.5.4", "pandas==2.3.3"}
+    missing = sorted(exact_requirements - requirement_lines)
+    errors.extend(f"requirements.txt missing {requirement!r}" for requirement in missing)
+    if not any(line.startswith("nxd.data_product[spec]") for line in requirement_lines):
+        errors.append("requirements.txt missing nxd.data_product[spec]")
+    return errors
+
+
+def string_tuple_constant(tree: ast.AST, name: str) -> tuple[str, ...] | None:
+    """Read a module-level ``NAME = ("a", "b")`` string tuple/list literal."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or target.id != name:
+            continue
+        if not isinstance(node.value, (ast.Tuple, ast.List)):
+            continue
+        if all(isinstance(element, ast.Constant) and isinstance(element.value, str) for element in node.value.elts):
+            return tuple(element.value for element in node.value.elts)  # type: ignore[union-attr]
+    return None
+
+
+def physical_model_names(tree: ast.AST) -> tuple[tuple[str, ...], tuple[str, ...], list[str]]:
+    """Resolve (BASE_MODELS, DERIVED_MODELS) from the transform's own constants.
+
+    The closure declares its landed tables; the harness must not re-derive them
+    from the `data/` listing, which by design cannot represent a derived model.
+    `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` is the contract, so a
+    closure with no derived models may omit DERIVED_MODELS entirely.
+    """
+    errors: list[str] = []
+    base = string_tuple_constant(tree, "BASE_MODELS")
+    derived = string_tuple_constant(tree, "DERIVED_MODELS")
+    if base is None:
+        errors.append("transform must declare BASE_MODELS as a literal string tuple")
+        base = ()
+    if derived is None:
+        derived = ()
+    overlap = sorted(set(base) & set(derived))
+    if overlap:
+        errors.append(f"models in both BASE_MODELS and DERIVED_MODELS: {overlap}")
+    return base, derived, errors
+
+
+def derived_resource_flatness_errors(tree: ast.AST, derived: tuple[str, ...]) -> list[str]:
+    """Reject nested literals yielded by a derived resource.
+
+    dlt routes a nested dict/list to a `parent__field` child table, which breaks
+    the read-back assert; and the pinned desktop venv has no pyarrow, so a
+    DataFrame cannot be routed at all. Both failures are statically visible when
+    the resource yields dict literals, which is the shape the contract requires.
+    """
+    if not derived:
+        return []
+    errors: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if not any(
+            isinstance(decorator, ast.Call)
+            and call_name(decorator.func) == "resource"
+            for decorator in node.decorator_list
+        ):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and call_name(inner.func) in {"DataFrame", "from_records", "from_dict"}:
+                errors.append(f"{node.name}: yields a DataFrame; the pinned venv has no pyarrow")
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Dict):
+                continue
+            for value in inner.values:
+                if isinstance(value, (ast.Dict, ast.List, ast.Set)):
+                    errors.append(
+                        f"{node.name}: nested value in yielded dict spawns a dlt child table"
+                    )
+    return errors
+
+
+def derived_rows_are_flat(rows: object, model: str) -> list[str]:
+    """Runtime flatness assert over the rows a derived model actually landed."""
+    errors: list[str] = []
+    if not isinstance(rows, list):
+        return errors
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            errors.append(f"{model}: row {index} is {type(row).__name__}, expected dict")
+            continue
+        for column, value in row.items():
+            if isinstance(value, (dict, list, set, tuple)):
+                errors.append(f"{model}.{column}: nested {type(value).__name__} at row {index}")
+    return errors
+
+
+def validate_primary_key_tuples(data: Path, keys_by_model: dict[str, set[str]]) -> list[str]:
+    """Prove each BASE model's declared key over its supplied CSV export.
+
+    Derived models are excluded by the caller: they have no `data/<name>/`
+    directory by design, and their key is proven post-run against the landed
+    table plus the transform's own in-memory assert.
+    """
+    errors: list[str] = []
+    for model, columns in sorted(keys_by_model.items()):
+        if not columns:
+            errors.append(f"{model}: no primary_key() field")
+            continue
+        model_dir = data / model
+        csv_paths = sorted(model_dir.glob("*.csv")) if model_dir.is_dir() else []
+        if not csv_paths:
+            errors.append(f"{model}: no CSV export")
+            continue
+        seen: set[tuple[str, ...]] = set()
+        for csv_path in csv_paths:
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                missing = columns - set(reader.fieldnames or ())
+                if missing:
+                    errors.append(f"{model}: missing key columns {sorted(missing)}")
+                    continue
+                for line, row in enumerate(reader, start=2):
+                    key = tuple(row[column] or "" for column in sorted(columns))
+                    if any(not value.strip() for value in key):
+                        errors.append(f"{model}: null/empty key at {csv_path.name}:{line}")
+                        continue
+                    if key in seen:
+                        errors.append(f"{model}: duplicate key {key!r}")
+                    seen.add(key)
+    return errors
+
+
+def executable_source(source: str) -> str:
+    """Return the source with comments and docstrings removed.
+
+    The DDL ban below is a raw substring scan, and it must judge what the
+    transform DOES, not what its prose says. A docstring stating "no raw
+    duckdb.connect, no DDL" is the closure honouring the ban, yet a scan over
+    the whole file reads it as a violation. Stripping non-executable text keeps
+    the ban exactly as strict over real code while removing that false positive:
+    a string used as an actual DDL argument is an expression, not a docstring,
+    and survives this pass.
+    """
+    tree = ast.parse(source)
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        body = getattr(node, "body", [])
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            docstrings.add(id(body[0].value))
+
+    class StripDocstrings(ast.NodeTransformer):
+        def visit_Expr(self, node: ast.Expr):  # noqa: N802
+            if isinstance(node.value, ast.Constant) and id(node.value) in docstrings:
+                return None
+            return node
+
+    stripped = StripDocstrings().visit(tree)
+    ast.fix_missing_locations(stripped)
+    return ast.unparse(stripped)
+
+
+DDL_TOKENS = ("duckdb.connect", "CREATE TABLE", "CREATE VIEW")
+DDL_STATEMENTS = ("create table", "create view", "create or replace")
+
+
+def out_of_port_write_errors(tree: ast.AST) -> list[str]:
+    """Catch writes outside the dlt port that the literal token scan misses.
+
+    The substring ban reads `duckdb.connect(...)` but not `from duckdb import
+    connect as c; c(...)`, and reads a `CREATE TABLE` literal but not one
+    assembled or cased differently. Writing outside the port escapes the
+    pin-substituted staging path that the publish step promotes crash-safely,
+    so the alias route is closed here rather than left to the substring scan.
+    """
+    errors: list[str] = []
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "duckdb" and alias.asname:
+                    aliases.add(alias.asname)
+        elif isinstance(node, ast.ImportFrom) and node.module == "duckdb":
+            for alias in node.names:
+                if alias.name == "connect":
+                    errors.append("imports duckdb.connect directly; write through the dlt port")
+                    aliases.add(alias.asname or alias.name)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "connect" and isinstance(func.value, ast.Name) and func.value.id in aliases:
+            errors.append(f"{func.value.id}.connect(...) opens a write outside the dlt port")
+        if isinstance(func, ast.Name) and func.id in aliases and func.id != "duckdb":
+            errors.append(f"{func.id}(...) opens a duckdb connection outside the dlt port")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            lowered = " ".join(node.value.lower().split())
+            for statement in DDL_STATEMENTS:
+                if statement in lowered:
+                    errors.append(f"DDL statement in a string literal: {statement!r}")
+                    break
+    return sorted(set(errors))
+
+
+def landed_key_errors(connection, model: str, columns: set[str]) -> list[str]:
+    """Prove a derived model's declared key over the table it actually landed."""
+    ordered = sorted(columns)
+    projection = ", ".join(ordered)
+    predicate = " OR ".join(f"{column} IS NULL" for column in ordered)
+    errors: list[str] = []
+    nulls = connection.execute(
+        f"SELECT COUNT(*) FROM main.{model} WHERE {predicate}"
+    ).fetchone()[0]
+    if nulls:
+        errors.append(f"{model}: {nulls} rows with a null key column {ordered}")
+    total, distinct = connection.execute(
+        f"SELECT COUNT(*), COUNT(DISTINCT ({projection})) FROM main.{model}"
+    ).fetchone()
+    if total != distinct:
+        errors.append(f"{model}: key {ordered} not unique ({total} rows, {distinct} distinct)")
+    return errors
+
+
+def main(root: Path) -> None:
+    missing = [name for name in REQUIRED if not (root / name).is_file()]
+    check("python-only-files", not missing)
+    check("no-source-yaml", not any((root / name).exists() for name in FORBIDDEN))
+
+    source_root = (root / "csv-source-path").read_text(encoding="utf-8").strip()
+    check("relative-csv-source", bool(source_root) and not Path(source_root).is_absolute())
+    data = root / source_root
+    check("csv-source-exists", data.is_dir())
+    # The shipped fixture export is digest-pinned. A closure built over another
+    # export has none of these paths and is checked for presence instead.
+    for relative, digest in CSV_SHA256.items():
+        path = data / relative
+        if not path.is_file():
+            continue
+        check(f"csv-preserved:{relative}", hashlib.sha256(path.read_bytes()).hexdigest() == digest)
+
+    # Skipping absent pinned paths is deliberate (above), but on its own it is a
+    # bypass: rewriting rows into a DIFFERENT filename under a pinned model's
+    # own directory escapes the digest entirely while `loaded:` row counts still
+    # pass. If the directory is present, every CSV in it must be a pinned name.
+    pinned_by_dir: dict[str, set[str]] = {}
+    for relative in CSV_SHA256:
+        parent, _, name = relative.rpartition("/")
+        pinned_by_dir.setdefault(parent, set()).add(name)
+    for parent, names in pinned_by_dir.items():
+        directory = data / parent if parent else data
+        if not directory.is_dir():
+            continue
+        unpinned = sorted(p.name for p in directory.glob("*.csv") if p.name not in names)
+        check(
+            f"csv-no-unpinned:{parent or '.'}",
+            not unpinned,
+            f"unpinned CSVs alongside a pinned export: {unpinned}",
+        )
+
+    models = (root / "models.py").read_text(encoding="utf-8")
+    spec = (root / "spec.py").read_text(encoding="utf-8")
+    profile = (root / "infra-profile.yaml").read_text(encoding="utf-8")
+    requirements = (root / "requirements.txt").read_text(encoding="utf-8")
+    transform_path = root / "transform/main.py"
+    transform = transform_path.read_text(encoding="utf-8")
+    check("public-semantic-dsl", all(token in models for token in ("semantic_model", "semantic_view", "metric_field", "metric(")))
+    check("no-private-semantic-metadata", "__nxd_semantic__" not in models and "nxd.spec._" not in models)
+    model_tree = ast.parse(models, filename=str(root / "models.py"))
+    spec_tree = ast.parse(spec, filename=str(root / "spec.py"))
+    transform_tree = ast.parse(transform, filename=str(transform_path))
+    promised = promised_models(spec_tree)
+
+    base_models, derived_models, model_name_errors = physical_model_names(transform_tree)
+    check("physical-model-declaration", not model_name_errors, "; ".join(model_name_errors))
+    physical = tuple(base_models) + tuple(derived_models)
+
+    # The naming invariant, in both directions: every landed table is promised,
+    # every base model has a data/ directory, and no derived model does.
+    invariant_errors: list[str] = []
+    invariant_errors.extend(
+        f"{model}: in PHYSICAL_MODELS but not .promise()d" for model in sorted(set(physical) - promised)
+    )
+    data_dirs = {directory.name for directory in data.iterdir() if directory.is_dir()}
+    invariant_errors.extend(
+        f"{model}: base model has no data/{model}/ directory" for model in sorted(set(base_models) - data_dirs)
+    )
+    invariant_errors.extend(
+        f"{model}: derived model must not have a data/{model}/ directory"
+        for model in sorted(set(derived_models) & data_dirs)
+    )
+    invariant_errors.extend(
+        f"{model}: data/{model}/ directory has no base model" for model in sorted(data_dirs - set(base_models))
+    )
+    check("physical-models-match-data-dirs", not invariant_errors, "; ".join(invariant_errors))
+    check("models-promised", bool(physical) and set(physical) <= promised)
+
+    model_primary_keys = base_model_primary_keys(model_tree)
+    missing_primary_keys = sorted(model for model in promised if not model_primary_keys.get(model))
+    check("promised-primary-keys", not missing_primary_keys, ", ".join(missing_primary_keys))
+    # Base keys are proven against the supplied export. Derived keys cannot be —
+    # there is no export — so they are proven post-run against the landed table.
+    key_errors = validate_primary_key_tuples(
+        data, {model: model_primary_keys[model] for model in promised if model in base_models}
+    )
+    check("promised-base-primary-key-tuples", not key_errors, "; ".join(key_errors))
+    flatness_errors = derived_resource_flatness_errors(transform_tree, derived_models)
+    check("derived-resources-flat", not flatness_errors, "; ".join(flatness_errors))
+    inferred_path = root / "inferred_model.json"
+    check("inferred-model-present", inferred_path.is_file())
+    inferred = json.loads(inferred_path.read_text(encoding="utf-8"))["models"]
+    registered_views = registered_model_views(spec_tree)
+    check("metric-view-registered", bool(registered_views), "no semantic view passed to .model(...)")
+    inferred_errors = semantic_errors(model_tree, inferred, promised, registered_views)
+    check("inferred-semantic-roles", not inferred_errors, "; ".join(inferred_errors))
+    annotation_issues = annotation_errors(model_tree, inferred, promised, registered_views)
+    check("annotations-carried-through", not annotation_issues, "; ".join(annotation_issues))
+    wiring_errors = desktop_wiring_errors(spec, profile, requirements)
+    check("desktop-wiring", not wiring_errors, "; ".join(wiring_errors))
+    check("no-semantic-tools", ".semantic_tools(" not in spec)
+    check("duckdb-port", ".port(\"duckdb\"" in spec and "DuckDbOutput" in transform and "def ingest(duckdb:" in transform)
+    check("transform-contract", all(token in transform for token in ("PHYSICAL_MODELS", "secrets[\"csv_source\"]", "pipeline.default_schema.data_table_names()", "write_disposition=\"replace\"", ".transform-complete")))
+    # Scans executable code only — a docstring naming the ban is not a breach.
+    # The token list is unchanged: writing outside the dlt port is still fatal,
+    # which is what keeps output inside the pin-substituted staging path.
+    transform_code = executable_source(transform)
+    check("no-direct-duckdb-ddl", all(token not in transform_code for token in DDL_TOKENS))
+    out_of_port = out_of_port_write_errors(ast.parse(transform_code))
+    check("no-out-of-port-write", not out_of_port, "; ".join(out_of_port))
+
+    try:
+        import dlt
+        import duckdb
+    except ImportError as exc:
+        fail(f"missing runtime dependency: {exc}")
+    install_transform_stubs()
+    module = types.ModuleType("desktop_transform")
+    module.__file__ = str(transform_path)
+    # Register before exec: dlt's @dlt.resource decorator reflects the defining
+    # function's module (inspect.getmodule) to build its spec, and a module
+    # missing from sys.modules resolves to None there. Base CSV readers never
+    # hit that path; a derived model's decorated resource always does.
+    sys.modules["desktop_transform"] = module
+    exec(compile(transform, str(transform_path), "exec"), module.__dict__)  # noqa: S102
+    ingest = module.ingest
+
+    # model_tables is the supervisor's identity map over PHYSICAL_MODELS — base
+    # AND derived. Building it from the data/ listing would KeyError the moment a
+    # derived model resolves its table name.
+    model_tables = {model: model for model in physical}
+    # The compiled supervisor mapping also contains semantic views registered
+    # with .model(...). They are query-time only and must not be ingested.
+    model_tables["semantic_view_probe"] = "semantic_view_probe"
+    run = Path(tempfile.mkdtemp())
+    output = DuckDbOutput(str(run / "data.duckdb"), "main", model_tables)
+    ingest(output, {"csv_source": str(data)})
+    connection = duckdb.connect(output.path, read_only=True)
+
+    # Base models land 1:1 with their export, so row counts must match exactly.
+    for model in base_models:
+        expected = sum(csv_count(path) for path in (data / model).glob("*.csv"))
+        actual = connection.execute(f"SELECT COUNT(*) FROM main.{model}").fetchone()[0]
+        check(f"loaded:{model}", actual == expected)
+
+    # Derived models have no export to count against. What is checkable here is
+    # that the table exists, carries rows, and honours its declared key — the
+    # in-transform assert (Step 3b) owns the semantic reconciliation.
+    for model in derived_models:
+        rows = connection.execute(f"SELECT COUNT(*) FROM main.{model}").fetchone()[0]
+        check(f"derived-landed:{model}", rows > 0, "derived model landed zero rows")
+        derived_key_errors = landed_key_errors(connection, model, model_primary_keys.get(model, set()))
+        check(f"derived-key:{model}", not derived_key_errors, "; ".join(derived_key_errors))
+        # A nested value survives as a flattened `field__key` column (or, for a
+        # list, as a child table caught by no-child-tables below). Either way
+        # the model no longer matches the schema its semantic roles describe.
+        schema = base_model_schemas(model_tree).get(model)
+        declared = {
+            key.value
+            for key in (schema.keys if schema is not None else [])
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        landed_columns = {
+            name
+            for (name,) in connection.execute(
+                "SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = 'main' AND table_name = '{model}'"
+            ).fetchall()
+            if not name.startswith("_dlt")
+        }
+        nested = sorted(column for column in landed_columns - declared if "__" in column)
+        check(
+            f"derived-flat:{model}",
+            not nested,
+            f"nested values flattened into {nested!r}; yield scalar-only dicts",
+        )
+
+    # A nested value would have made dlt emit a `parent__field` child table.
+    # Assert the landed tables are exactly the promised physical models.
+    # dlt's own _dlt_* bookkeeping tables are expected and are not data tables;
+    # this mirrors pipeline.default_schema.data_table_names().
+    landed = {
+        name
+        for (name,) in connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' AND table_name NOT LIKE '\\_dlt\\_%' ESCAPE '\\'"
+        ).fetchall()
+    }
+    check(
+        "no-child-tables",
+        landed == set(physical),
+        f"landed {sorted(landed)!r}, expected {sorted(physical)!r}",
+    )
+    check("transform-complete", (run / ".transform-complete").is_file())
+    print("ALL CHECKS PASSED")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main(Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd())

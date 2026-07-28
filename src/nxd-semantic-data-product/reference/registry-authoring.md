@@ -1,339 +1,292 @@
-# Semantic annotation authoring guide
+# Semantic authoring guide
 
 ## Contents
 - Core concepts
-- The `__nxd_semantic__` role grammar
-- Agg vocabulary (closed)
-- Cardinality vocabulary
-- Multi-role columns
-- Auto-derivation of cross-model dimension reach
-- Worked generic example: people + events
-- Validation rules
-- Common mistakes
+- Public role grammar
+- Metrics on semantic views
+- Cross-model dimensions
+- Worked example
+- Validation and common mistakes
 
 ---
 
 ## Core concepts
 
-A **registry** is a frozen description of your semantic model: which tables exist,
-which columns are dimensions or metrics, and how tables relate. Under the
-`.semantic_tools()` pattern you do **not** build the registry with a fluent
-`SemanticRegistry()` builder — you declare it as **per-field `__nxd_semantic__`
-annotations** on each promised model's attributes. The kernel compiles the
-annotations into the same frozen `CompiledRegistry` at boot and delivers it to the
-pod (`<root>/.nxd/semantic/<model>.json`).
+A semantic registry describes physical models, their entity keys and dimensions,
+their N:1 relationships, and the metrics available over each model. Author it
+only with the public `nxd.spec` DSL:
 
-The registry has four element types, each expressed as a role blob on a column:
+| Element | Where it belongs | Public form |
+|---|---|---|
+| Entity key | Physical `semantic_model` field | `field(type, primary_key())` |
+| Dimension | Physical `semantic_model` field | `field(type, dimension(...))` |
+| Join | Physical `semantic_model` field | `field(type, join(...))` |
+| Metric | Query-time `semantic_view` field | `metric_field(type, metric(...))` |
+| Model description | The model itself | `semantic_model(name).description(text)` |
+| Concept description | **Inside** the dimension/metric role | `dimension(description=...)`, `metric(description=...)` |
 
-| Type | What it represents | Blob `kind` |
-|------|--------------------|-------------|
-| Model | A physical table with a grain (entity key column) | (the `semantic_model(...)` itself; grain via `{"kind": "grain"}`) |
-| Dimension | A column an agent can group or filter by | `dimension` |
-| Metric | A named aggregated measure | `metric` |
-| Join | A documented relationship between two models | `join` |
+Every physical model has one or more entity-key fields. Multiple
+`primary_key()` fields define a composite key. A semantic view belongs to one
+base model and is registered with `.model(view)` on the output; it is never
+promised or written by the transform.
 
-> The fluent `SemanticRegistry().model().dimension().metric().join().build()`
-> builder still exists in `nxd.experimental.semantic` — but it is now the
-> **runtime reconstruction engine** (`build_semantic_tools_from_payload` feeds
-> payloads through `SemanticRegistry.from_dict().build()`), not the author surface.
-> Author with `__nxd_semantic__` blobs.
-
----
-
-## The `__nxd_semantic__` role grammar
-
-Each model attribute carries at most one `__nxd_semantic__` blob, injected via the
-`_annotate()` stopgap (see SKILL.md Step 2). The blob is a JSON object — either a
-single bare role (`{"kind": ...}`) or a multi-role wrapper (`{"roles": [...]}`).
-
-### grain
-
-```json
-{"kind": "grain"}
-```
-
-Marks the column as (part of) the model's grain — the entity key that uniquely
-identifies one row. Every model needs at least one grain column. Multiple grain
-columns form a composite grain.
-
-### dimension
-
-```json
-{"kind": "dimension",
- "name": "<concept_name>",
- "description": "<plain-language description>",
- "type": "string|date|number",
- "pii": false,
- "label_column": "<optional column holding a display label>"}
-```
-
-- `name` — unique concept name used in `run_semantic_query` and surfaced in
-  `describe_model`. Required.
-- `description` — plain-language description for the agent.
-- `type` — logical type hint; informational, does not affect SQL.
-- `pii` — `true` marks the dimension a governance target (flagged in
-  `describe_model`; may be masked/rejected per caller access). Default `false`.
-- The physical column is the attribute the blob is attached to.
-
-### metric
-
-```json
-{"kind": "metric",
- "name": "<concept_name>",
- "agg": "count|count_distinct|sum|avg|min|max",
- "description": "<plain-language description>",
- "boolean": false,
- "extra_dimensions": ["<dim>", ...]}
-```
-
-- `name` — unique concept name (e.g. `order_count`, `revenue`). Required.
-- `agg` — one of the six closed aggregations (see below). Required.
-- `boolean` — `true` when the column is a flag; SQL becomes a CASE-sum
-  (`SUM(CASE WHEN ... THEN 1 ELSE 0 END)`), robust to BOOLEAN and VARCHAR physical
-  types, instead of a numeric cast-sum. Default `false`. **Requires
-  `agg: "sum"`** — the dialect defines the boolean CASE expression only for
-  `sum` (see `compiler-and-routing.md`); `boolean: true` with any other agg is
-  invalid.
-- `extra_dimensions` — explicit override of the dimensions this metric can be
-  sliced by. **Leave unset** to let the compiler auto-derive cross-model reach from
-  N:1 joins. Use only when the auto-derived set is wrong.
-- The physical column is the attribute the blob is attached to. For a bare
-  `COUNT(*)`-style total, anchor the metric on the grain column with
-  `agg: "count"` (see the multi-role example).
-
-### join
-
-```json
-{"kind": "join",
- "to_model": "<other model name>",
- "to_column": "<column on the other model>",
- "cardinality": "many_to_one"}
-```
-
-- Declared on the **MANY-side** model's join-key column.
-- `to_model` — the ONE-side model. Required.
-- `to_column` — the join key on the ONE side (defaults to the same column name).
-- `cardinality` — defaults to `many_to_one` (the only cardinality that makes
-  cross-model dimension slicing safe).
+**Every field carries semantic information.** A role decides whether the field
+is queryable at all — a column with none produces no metric, dimension or join
+and is absent from `describe_model` (see `overview.md`). A description decides
+whether it is queryable *correctly*: `describe_model` is the entire basis on
+which a consuming agent maps a question to a concept, so a dimension that
+arrives as a bare name gives it nothing to choose on. Declare a role on every
+field **a metric does not already aggregate**, a `description` on every
+**dimension and metric** role, and a `.description(...)` on every
+`semantic_model`. `primary_key()` and `join()` accept no
+`description` — do not try to attach one, and never fall back to putting it on
+the enclosing `field()`, which never reaches the agent.
 
 ---
 
-## Agg vocabulary (closed)
-
-```
-count   count_distinct   sum   avg   min   max
-```
-
-No custom aggregation functions. These six values are the closed vocabulary,
-aligned with the planned first-class DSL. (The Python `Agg` enum mirrors them:
-`Agg.COUNT`, `Agg.COUNT_DISTINCT`, `Agg.SUM`, `Agg.AVG`, `Agg.MIN`, `Agg.MAX`.)
-
----
-
-## Cardinality vocabulary
-
-```
-one_to_one   one_to_many   many_to_one   many_to_many
-```
-
-Only `many_to_one` joins make cross-model dimension slicing safe (the MANY side's
-grain is preserved through the join) and trigger cross-model dimension
-auto-derivation. (`Cardinality.MANY_TO_ONE` is the enum form.)
-
----
-
-## Multi-role columns
-
-One column often plays two roles — a grain column that is also a `count` metric,
-or a join key that is also a `count_distinct` metric. Use the `{"roles": [...]}`
-wrapper. Because the bare `{"kind": ...}` shorthand has no inline multi-role form,
-the idiom is to write the grain blob first, then **patch a full roles list
-post-hoc** (the roles list REPLACES the bare blob):
+## Public role grammar
 
 ```python
-# CUSTOMER_ID is a join key AND a count_distinct metric.
-"CUSTOMER_ID": _annotate(
-    AttributeSpec(name="CUSTOMER_ID", data_type=int64()),
-    {"roles": [
-        {"kind": "join", "to_model": "customer_profile",
-         "to_column": "CUSTOMER_ID", "cardinality": "many_to_one"},
-        {"kind": "metric", "name": "unique_customers_ordered",
-         "agg": "count_distinct",
-         "description": "Distinct customers who placed an order."},
-    ]},
-),
+from nxd.spec import Agg, dimension, field, join, metric, metric_field
+from nxd.spec import primary_key, semantic_model, semantic_view
+from nxd.spec.data_types import float64, int64, string
+```
 
-# ORDER_ID is the grain AND a count metric — patched post-hoc.
-_annotate(
-    order_event._attributes["ORDER_ID"],
-    {"roles": [
-        {"kind": "grain"},
-        {"kind": "metric", "name": "order_count", "agg": "count",
-         "description": "Total number of orders."},
-    ]},
+### Entity key
+
+```python
+"ORDER_ID": field(int64(), primary_key())
+```
+
+The key must identify one row of the physical model. Use more than one field when
+the source has a validated composite key.
+
+### Dimension
+
+```python
+"COUNTRY": field(
+    string(),
+    dimension(
+        name="country",
+        description="ISO-3166 alpha-2 country of the customer's billing address.",
+        pii=False,
+    ),
 )
 ```
 
----
+`name` is the stable concept used in a semantic query, `description` is what the
+consuming agent reads when deciding whether this is the concept the question
+meant, and `pii=True` marks governed personal data.
 
-## Auto-derivation of cross-model dimension reach
+Write the description so it distinguishes this concept from its neighbours and
+states anything a consumer would otherwise have to assume — the unit, the
+basis, the population, or the ruling that produced it. "Country of the
+customer" is not enough when a model also carries a shipping country; name
+which one and where it comes from.
 
-When the kernel compiles the registry, for every metric whose `extra_dimensions`
-is unset (the default), it inspects all `many_to_one` joins where the metric's
-model is on the MANY side. The ONE side's **non-PII** dimensions are added to that
-metric's reachable dimension set.
+> **Descriptions belong inside the role.** `dimension(description=...)` and
+> `metric(description=...)` reach `describe_model`. A `description=` on the
+> enclosing `field()` / `metric_field()` is an attribute description and is
+> **not** shown to the querying agent — see
+> [nxd-generate-dp's `reference/nxd-spec-api.md`](../../nxd-generate-dp/reference/nxd-spec-api.md).
 
-So if `orders` joins to `products` via a `many_to_one` join and `order_count` lives
-on `orders`, then `order_count` can be sliced by `products`-model dimensions
-(`category`, `brand`, …) automatically — without listing them in
-`extra_dimensions`. PII dimensions on the ONE side are excluded from
-auto-derivation; they stay accessible from their own model's queries but do not
-silently propagate to joined metrics.
-
----
-
-## Worked generic example: people + events
-
-Two models (people + activity events), no domain-specific names.
+### Join
 
 ```python
-import json
+"CUSTOMER_ID": field(
+    int64(),
+    join(to="customer_profile", to_column="CUSTOMER_ID"),
+)
+```
 
-from nxd.spec import semantic_model
-from nxd.spec._model import AttributeSpec
+Declare the join on the many-side foreign key. `to` is the one-side model and
+`to_column` is its entity key. Only a validated many-to-one relationship is safe
+for slicing a fact metric by dimensions from the related model.
+
+---
+
+## Metrics on semantic views
+
+Do not add a metric role to a physical base field. A metric is a query-time view
+field that names an aggregation over a base-model column:
+
+```python
+order_metrics = semantic_view("order_metrics", orders).schema(
+    {
+        "order_count": metric_field(
+            int64(),
+            metric(
+                Agg.COUNT,
+                of=orders.field("ORDER_ID"),
+                name="order_count",
+                description="Number of order rows, including cancelled orders.",
+            ),
+        ),
+        "total_revenue": metric_field(
+            float64(),
+            metric(
+                Agg.SUM,
+                of=orders.field("AMOUNT_USD"),
+                name="total_revenue",
+                description=(
+                    "Gross order amount in USD across ALL statuses, including "
+                    "refunded and cancelled. Filter on the order_status "
+                    "dimension for a net figure."
+                ),
+            ),
+        ),
+        "unique_customers": metric_field(
+            int64(),
+            metric(
+                Agg.COUNT_DISTINCT,
+                of=orders.field("CUSTOMER_ID"),
+                name="unique_customers",
+                description="Distinct customers with at least one order.",
+            ),
+        ),
+    }
+)
+```
+
+Every metric carries a `description`. It is the string the consuming agent
+matches a question against, so it must say what the number *is* — the unit, and
+the population it covers. `total_revenue` above is the pattern for an
+aggregation the role grammar cannot qualify: the metric is unconditional, so
+the description states that and points at the dimension a caller filters on.
+
+The aggregation vocabulary is closed: `Agg.COUNT`, `Agg.COUNT_DISTINCT`,
+`Agg.SUM`, `Agg.AVG`, `Agg.MIN`, and `Agg.MAX`. Put boolean counts on a `SUM`
+metric over the flag field only when the intended result is a count of truthy
+rows.
+
+---
+
+## Cross-model dimensions
+
+The compiler derives compatible dimensions from a validated N:1 join. If
+`orders.CUSTOMER_ID` joins to `customer_profile.CUSTOMER_ID`, metrics on the
+`orders` view can be sliced by non-PII customer dimensions such as `country`.
+Do not model a many-to-many relationship as a direct semantic join; it can change
+the fact row count and invalidate metric results.
+
+---
+
+## Worked example: people and events
+
+```python
+from nxd.spec import Agg, dimension, field, join, metric, metric_field
+from nxd.spec import primary_key, semantic_model, semantic_view
 from nxd.spec.data_types import int64, string
-
-_SEMANTIC_KEY = "__nxd_semantic__"
-
-
-def _annotate(attr: AttributeSpec, role: dict) -> AttributeSpec:
-    attr._metadata[_SEMANTIC_KEY] = json.dumps(role, separators=(",", ":"))
-    return attr
-
 
 people = (
     semantic_model("people")
-    .description("One row per person in the system.")
-    .schema({
-        "PERSON_ID": _annotate(
-            AttributeSpec(name="PERSON_ID", data_type=int64()),
-            {"kind": "grain"},
-        ),
-        "COUNTRY_CODE": _annotate(
-            AttributeSpec(name="COUNTRY_CODE", data_type=string(),
-                          _description="ISO-2 country code."),
-            {"kind": "dimension", "name": "country",
-             "description": "ISO-2 country code of the person.", "type": "string"},
-        ),
-        "EMAIL": _annotate(
-            AttributeSpec(name="EMAIL", data_type=string(),
-                          _description="Person's email."),
-            {"kind": "dimension", "name": "email",
-             "description": "Person's email address.", "type": "string",
-             "pii": True},
-        ),
-    })
-)
-# total_people = COUNT on the people grain.
-_annotate(
-    people._attributes["PERSON_ID"],
-    {"roles": [
-        {"kind": "grain"},
-        {"kind": "metric", "name": "total_people", "agg": "count",
-         "description": "Total number of people."},
-    ]},
+    .description("One row per registered person.")
+    .schema(
+        {
+            "PERSON_ID": field(int64(), primary_key()),
+            "COUNTRY_CODE": field(
+                string(),
+                dimension(
+                    name="country",
+                    description="ISO-3166 alpha-2 country the person registered from.",
+                ),
+            ),
+            "EMAIL": field(
+                string(),
+                dimension(
+                    name="email",
+                    description="Primary contact email address.",
+                    pii=True,
+                ),
+            ),
+        }
+    )
 )
 
 activity_events = (
     semantic_model("activity_events")
-    .description("One row per activity event; FK to people.")
-    .schema({
-        "EVENT_ID": _annotate(
-            AttributeSpec(name="EVENT_ID", data_type=int64()),
-            {"kind": "grain"},
-        ),
-        "EVENT_TYPE": _annotate(
-            AttributeSpec(name="EVENT_TYPE", data_type=string(),
-                          _description="Event category."),
-            {"kind": "dimension", "name": "event_type",
-             "description": "Category of the activity event.", "type": "string"},
-        ),
-        # join key + count_distinct metric.
-        "PERSON_ID": _annotate(
-            AttributeSpec(name="PERSON_ID", data_type=int64()),
-            {"roles": [
-                {"kind": "join", "to_model": "people",
-                 "to_column": "PERSON_ID", "cardinality": "many_to_one"},
-                {"kind": "metric", "name": "unique_actors", "agg": "count_distinct",
-                 "description": "Distinct people who had at least one event."},
-            ]},
-        ),
-    })
+    .description("One row per product activity event emitted by a person.")
+    .schema(
+        {
+            "EVENT_ID": field(int64(), primary_key()),
+            "EVENT_TYPE": field(
+                string(),
+                dimension(
+                    name="event_type",
+                    description=(
+                        "Kind of activity recorded — one of login, view, "
+                        "export, share."
+                    ),
+                ),
+            ),
+            "PERSON_ID": field(
+                int64(),
+                join(to="people", to_column="PERSON_ID"),
+            ),
+        }
+    )
 )
-# event_count = COUNT on the events grain.
-_annotate(
-    activity_events._attributes["EVENT_ID"],
-    {"roles": [
-        {"kind": "grain"},
-        {"kind": "metric", "name": "event_count", "agg": "count",
-         "description": "Total number of activity events."},
-    ]},
+
+event_metrics = semantic_view("event_metrics", activity_events).schema(
+    {
+        "event_count": metric_field(
+            int64(),
+            metric(
+                Agg.COUNT,
+                of=activity_events.field("EVENT_ID"),
+                name="event_count",
+                description="Number of activity events recorded.",
+            ),
+        ),
+        "unique_actors": metric_field(
+            int64(),
+            metric(
+                Agg.COUNT_DISTINCT,
+                of=activity_events.field("PERSON_ID"),
+                name="unique_actors",
+                description="Distinct people who emitted at least one event.",
+            ),
+        ),
+    }
 )
 ```
 
-After compilation:
+Note the primary-key and join fields carry no description — `primary_key()` and
+`join()` have no such parameter, and neither is a concept an agent selects.
+Every dimension and metric field does.
 
-- `event_count` and `unique_actors` (on `activity_events`) can be sliced by
-  `country` (on `people`) — auto-derived from the N:1 join. `email` is excluded
-  (PII).
-- `total_people` (on `people`) can be sliced by `country` directly (same model). It
-  cannot be sliced by `event_type` because that is on the MANY side, and
-  auto-derivation only runs MANY → ONE.
+`event_count` and `unique_actors` can be sliced by `country`; the PII `email`
+dimension is not propagated to the related metrics.
 
 ---
 
-## Validation rules
+## Validation and common mistakes
 
-The kernel's compile rejects (errors surface at `nxd launch` build / pod boot):
-
-| Rule | Error |
-|------|-------|
-| Duplicate model name | `Duplicate model name 'X'` |
-| Duplicate metric name | `Duplicate metric name 'X'` |
-| Duplicate dimension name | `Duplicate dimension name 'X'` |
-| Empty grain on a model | `Model 'X' must declare a non-empty grain` |
-| Metric/dimension on an un-promised model | the model's payload is never written; the tool never sees it |
-| Join `to_model` references an undeclared model | `Join 'A' -> 'B': endpoint 'X' is not a declared model` |
-| `agg` outside the closed vocabulary | rejected at blob parse |
-
----
-
-## Common mistakes
-
-**Mistake**: annotating a model but not `.promise(...)`-ing it in `spec.py`.
-**Result**: the model's attributes never reach the manifest, so no
-`.nxd/semantic/<model>.json` payload is written; the tools never see it.
-**Fix**: `.promise(<model>)` every annotated model on the storage port.
-
-**Mistake**: writing a bare `{"kind": "grain"}` AND a separate
-`{"kind": "metric"}` blob on the same column (two `_annotate()` calls).
-**Result**: the second blob overwrites the first — only the metric role survives,
-the grain is lost.
-**Fix**: use a single `{"roles": [...]}` blob, or patch the full roles list
-post-hoc (see Multi-role columns).
-
-**Mistake**: putting two metrics from different models in one
-`run_semantic_query` call.
-**Result**: `CompileError: metrics span multiple grains (...); query one grain at
-a time`.
-**Fix**: split into two queries.
-
-**Mistake**: referencing a dimension not on the metric's model and not reachable
-via a documented N:1 join.
-**Result**: `CompileError: dimension 'X' is not compatible with metric 'Y'`.
-**Fix**: add the join blob, or check the dimension is on the right model.
-
-**Mistake**: setting `extra_dimensions` when only auto-derivation is needed.
-**Result**: no error, but the explicit list overrides the auto-derived set,
-possibly hiding reachable dimensions.
-**Fix**: omit `extra_dimensions` and let the compiler derive the set.
+- Every field carries semantic information: either its own role, or it is the
+  `of=` target of a declared metric. A measure column an aggregation already
+  names needs no dimension of its own — grouping by a continuous amount is not
+  a useful slice. Everything else takes a role. A column that is neither roled
+  nor aggregated produces no metric, dimension or join and is invisible to
+  `describe_model` — that is a decision to make it unqueryable, not a neutral
+  default. The **marker model** is the one exception to the *role* rule: it
+  exists to satisfy the storage port's produce-verification and is never a
+  query target, so its columns stay bare and out of the consumer's catalog. It
+  still carries a `.description(...)` like any other `semantic_model` — both
+  shipped templates give it one.
+- Every dimension and metric carries a `description`, and every
+  `semantic_model` a `.description(...)`. A `semantic_view` may carry one too
+  (`semantic_view(..., description=)`); the gates do not require it. A concept the agent cannot tell apart from its
+  neighbours is as unusable as one that was never declared.
+- Put the description **inside** the role builder. `field(description=...)` and
+  `metric_field(description=...)` are attribute descriptions and never reach
+  the querying agent.
+- Use a unique, non-null source key for every physical model. Do not synthesize
+  a key just to make the model compile.
+- Keep physical names and field names identical to the actual table and source
+  columns. The transform must seed the same physical tables.
+- Promise every physical base with `.promise(base)`. Register every metric view
+  with `.model(view)`.
+- Do not put metrics from different base models into one semantic query. Query
+  each model separately.
+- Do not use a relationship until foreign-key containment and the target key's
+  uniqueness have been validated.

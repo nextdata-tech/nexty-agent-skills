@@ -1,0 +1,38 @@
+{
+  "schema": "nxd-desktop-verified-v1",
+  "trust": "artifact_verified",
+  "workflow": "customer/health",
+  "publish_seq": 17,
+  "outputs": {
+    "model_names": ["orders"],
+    "models": [{"name": "orders", "metadata": null}],
+    "ports": [
+      {
+        "name": "analytics",
+        "infra_service_name": "output",
+        "model_names": ["customers", "orders"],
+        "models": [
+          {"name": "customers", "metadata": null},
+          {"name": "orders", "metadata": null}
+        ],
+        "promises": {
+          "model": ["orders"],
+          "custom": [
+            {
+              "name": "freshness",
+              "models": ["orders"],
+              "description": "freshness < 24h"
+            }
+          ]
+        }
+      },
+      {
+        "name": "empty-declaration",
+        "infra_service_name": "empty",
+        "model_names": [],
+        "models": [],
+        "promises": null
+      }
+    ]
+  }
+}

@@ -1,5 +1,11 @@
 {
   "name": "API To Vector Data Product Build",
+  "skills": [
+    "nxd-data-product-builder",
+    "nxd-adding-inputs",
+    "nxd-adding-outputs",
+    "nxd-adding-expectations-promises"
+  ],
   "checks": [
     {
       "id": "no-secrets-in-source",

@@ -9,7 +9,12 @@ For each (skill-set x scenario) pair this runner:
      the workspace so the agent has the same artifacts a real session would.
   3. Runs ``claude -p`` from the workspace with the scenario ``prompt.md`` and
      captures the transcript + run metrics (turns, tokens, cost, duration).
-  4. Asks a separate ``claude -p`` judge to grade the transcript against the
+  4. Runs any runner-side deterministic checker the scenario declares against
+     the landed workspace (opt-in via ``deterministic_check`` in checks.json).
+     Its verdict is stated to the judge as an authoritative fact AND enforced
+     mechanically, so a closure with wrong numbers cannot pass on a generous
+     judge read.
+  5. Asks a separate ``claude -p`` judge to grade the transcript against the
      scenario's ``checks.json`` (the structured form of the prose success
      checks). The judge never sees the prompt-under-test's hints; the agent
      never sees ``checks.json``.
@@ -42,16 +47,69 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from eval_backends import (
+    AGENT_BACKENDS,
+    JUDGE_BACKENDS,
+    get_agent_backend,
+    get_judge_backend,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EVALS_DIR = REPO_ROOT / "evals"
 SKILL_SETS_FILE = EVALS_DIR / "skill-sets.yaml"
 
-# Models. The agent under test runs on sonnet (the cheaper model we measure);
-# the judge runs on opus because grading is the call we want to trust most.
-# Override either on the CLI.
-DEFAULT_AGENT_MODEL = "sonnet"
-DEFAULT_JUDGE_MODEL = "opus"
+# Providers driving the agent-under-test and the judge. `claude` shells the
+# Claude Code CLI; `codex` shells the OpenAI Codex CLI. Both implement the same
+# AgentBackend/JudgeBackend interface (see eval_backends.py). Pick per-side on
+# the CLI (--agent-backend / --judge-backend). Default: claude for both.
+DEFAULT_AGENT_BACKEND = "claude"
+DEFAULT_JUDGE_BACKEND = "claude"
+
+# Default models per provider. The agent under test runs on the cheaper model we
+# measure; the judge runs on the stronger model because its grading is the call
+# we most want to trust. Codex model ids differ from Claude's, so the default
+# resolves from the chosen backend when --agent-model / --judge-model is unset.
+DEFAULT_MODELS = {
+    "claude": {"agent": "sonnet", "judge": "opus"},
+    "codex": {"agent": "gpt-5.6-luna", "judge": "gpt-5.6-terra"},
+}
+
+# Codex reasoning effort is a separate axis from Claude's, and its useful range
+# differs (no "xhigh"). These apply only when the corresponding side runs on the
+# codex backend AND the user did not pass an explicit --agent-effort /
+# --judge-effort. Claude's effort defaults below are unchanged.
+#
+# Both sides run lower than the Claude defaults to keep the per-pull-request
+# gate cheap, since it runs on every touched skill. This is a cost/signal trade,
+# not a free win: a weaker agent fails more cells for real reasons, and a weaker
+# judge is more prone to the transcript-skim misreads that a stronger one
+# catches. Verdicts recorded at one effort are not comparable to another, so
+# changing these invalidates evals/baselines/ — re-measure with
+# `mode: stability` before trusting a baseline recorded at a different effort.
+#   agent: low was measured and reverted. On low the agent writes the fluent
+#   API (metric()/join()/dimension(pii=True)/primary_key()) instead of the
+#   required per-field __nxd_semantic__ blobs, sometimes leaving the blobs in
+#   comments or module-level maps. generate-semantic-layer-dp-from-schema fell
+#   from [P P P P P] to [F P F F F] on an unchanged commit. That is a real skill
+#   failure the judge described correctly, not a grading artifact, so the cheaper
+#   agent buys nothing: it fails cells for reasons the skill did not cause.
+#
+#   judge: xhigh -> medium was measured and reverted, but NOT for the reason
+#   first recorded here. The evidence used was false-pass-validation going
+#   [F F F] at medium, read at the time as medium grading a check literally
+#   where xhigh credited substance. Later observations at xhigh show F, P, F —
+#   one pass in six across both efforts, always the same check. The cell simply
+#   flakes on whether the agent names the next command, independent of judge
+#   effort, so it was never evidence about the judge at all.
+#
+#   What the judge drop actually has going for it: it held [P P P P P] on
+#   generate-semantic-layer-dp-from-schema. What is still unknown is whether it
+#   errs toward false PASS, which no passing cell can reveal. Reverted on that
+#   uncertainty rather than on the misread — the whole baseline was recorded
+#   under xhigh, and re-grading ten cells to save judge tokens is a poor trade.
+CODEX_DEFAULT_AGENT_EFFORT = "medium"
+CODEX_DEFAULT_JUDGE_EFFORT = "xhigh"
 
 # Reasoning effort. The agent under test mirrors a real session (medium). The
 # judge runs at xhigh because grading is the call we most want to trust — a
@@ -69,22 +127,18 @@ DEFAULT_CONCURRENCY = 4
 DEFAULT_AGENT_TIMEOUT_S = 1200
 DEFAULT_JUDGE_TIMEOUT_S = 300
 
-# Tools the agent under test may use. Read/write/inspect the workspace, run the
-# (mocked) shell, and fetch the public platform docs. WebFetch is what lets the
-# no_skills baseline reach the same public docs a real user has, so the only
-# variable between skill-sets is the curated skills themselves.
+# The generic agent tool allowlist now lives with the Claude backend
+# (``CLAUDE_AGENT_ALLOWED_TOOLS`` in eval_backends.py), because it is a
+# provider-specific concept: Codex gates the agent through a sandbox policy
+# instead of a per-tool allowlist.
 #
-# NOTE: `Skill` MUST be here or installed skills never activate — the agent only
-# stumbles onto skill *files* by globbing the workspace and reading some ad hoc,
-# so a skill's SKILL.md body (its actual guidance) is never loaded through
-# activation. That silently under-measures every skill-set: the lift attributable
-# to a skill collapses to "whatever files the agent happened to read." With Skill
-# present the agent invokes the matching skill and its body loads as designed.
-AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,Skill"
 # Pocket's proven smoke invocation is deliberately narrower than the generic
 # eval harness: no web/docs escape hatch and no helper tools beyond the local
 # file + shell surface. Skill remains essential: without it the installed
 # plugin bodies never activate, so this would not measure the Pocket skills.
+# It stays here because it is a *scenario* constraint, not a provider default;
+# it is applied only on the Claude backend (see run_one), the only provider that
+# has a per-tool allowlist to narrow.
 POCKET_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
@@ -118,6 +172,29 @@ POCKET_RUNNER_SIDE_FIXTURES = {
     "reference-closure",
     "build_data.py",     # contains fixture discriminator fingerprints
 }
+DERIVATION_RUNNER_SIDE_FIXTURES = {
+    # Ground-truth totals for the derivation scenario. Handing these to the
+    # agent hands it the answer key: the scenario measures whether the closure
+    # materializes the rulings a question needs, and truth.json states the exact
+    # numbers a correct closure produces (and the exact ones a closure that
+    # forgets to net refunds produces). Runner-side only.
+    "truth.json",
+    # The checker leaks the answer key too: its docstring names the seeded
+    # merchant->category mapping and the netted-vs-charges-only discrimination
+    # strategy. The agent cannot run it anyway (no truth.json), so it has no
+    # reason to be in the workspace.
+    "check_derived_closure.py",
+}
+STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES = {
+    # The checker states the exact render order, required glosses and forbidden
+    # payload fields. Handing it to the agent turns "follow the skill contract"
+    # into "satisfy this file", which is the opposite of what the scenario
+    # measures. Scoped to this scenario rather than to every scenario declaring
+    # a deterministic_check, so other scenarios' workspaces are unchanged.
+    # (The bridge-read-*.json fixtures stay in the workspace — prompt.md points
+    # the agent at them as reference transport shapes.)
+    "check_static_artifact.py",
+}
 # MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
 # file read, so MCP scenarios get a longer agent timeout.
 MCP_AGENT_TIMEOUT_S = 1800
@@ -127,6 +204,19 @@ POCKET_AGENT_TIMEOUT_S = 2400
 # The verified local smoke used Opus 4.8.  Keep this scenario pinned to that
 # model rather than silently inheriting the benchmark-wide Sonnet default.
 POCKET_AGENT_MODEL = "claude-opus-4-8"
+
+
+def effective_agent_model(is_pocket: bool, backend_name: str, default_model: str) -> str:
+    """Resolve the model a scenario actually runs on.
+
+    Pocket is pinned to a verified Claude model, but that id is meaningless to
+    any other provider, so the pin applies only on the Claude backend. The
+    dispatch path and the report must agree on this or a report attributes a
+    Codex pocket run to a Claude model and poisons the benchmark ledger.
+    """
+    if is_pocket and backend_name == "claude":
+        return POCKET_AGENT_MODEL
+    return default_model
 # The verifier may legitimately re-serve the final snapshot plus several
 # earlier published snapshots.  Give that work most of the agent budget, then
 # report a timeout as runner infrastructure rather than an agent failure.
@@ -242,7 +332,12 @@ def discover_scenarios(suite: str) -> list[Path]:
     return sorted(p.parent for p in base.glob("*/prompt.md"))
 
 
-def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple[Path, Path | None]:
+def build_workspace(
+    tmp: Path,
+    skill_set: SkillSet,
+    scenario_dir: Path,
+    stage_skills_in_workspace: bool = False,
+) -> tuple[Path, Path | None]:
     """Create an isolated agent workspace + a per-skill-set plugin dir.
 
     Returns ``(workspace, plugin_dir)``. ``plugin_dir`` is None for the
@@ -250,12 +345,19 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple
     minimal `.claude-plugin/plugin.json` + the set's skills, loaded by the agent
     via ``--plugin-dir``.
 
-    Skills MUST be loaded as a plugin: copying skill dirs into the workspace's
-    ``.claude/skills/`` does NOT register them — ``claude -p --setting-sources
-    project`` ignores project-directory skills, so they never activate and the
-    agent only benefits from files it happens to read. ``--plugin-dir`` with a
-    `plugin.json` is the mechanism that actually surfaces them as invokable
-    skills (`<plugin>:<skill>`)."""
+    Skills MUST be loaded as a plugin for the Claude backend: copying skill dirs
+    into the workspace's ``.claude/skills/`` does NOT register them — ``claude -p
+    --setting-sources project`` ignores project-directory skills, so they never
+    activate and the agent only benefits from files it happens to read.
+    ``--plugin-dir`` with a `plugin.json` is the mechanism that actually surfaces
+    them as invokable skills (`<plugin>:<skill>`).
+
+    ``stage_skills_in_workspace`` is for providers without plugin-dir skill
+    activation (Codex): the skill dirs are additionally copied under
+    ``<workspace>/.skills/<name>`` so the agent can read their SKILL.md files as
+    context. The agent prompt points at that directory (see ``build_agent_prompt``
+    with ``skills_in_workspace=True``). The plugin_dir is still built and returned
+    (harmless; Codex just ignores it)."""
     ws = tmp / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
 
@@ -279,6 +381,12 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple
         (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
             json.dumps(manifest), encoding="utf-8"
         )
+        if stage_skills_in_workspace:
+            ws_skills = ws / SKILLS_WORKSPACE_DIR
+            ws_skills.mkdir(parents=True, exist_ok=True)
+            for rel in skill_set.skills:
+                src = REPO_ROOT / rel
+                shutil.copytree(src, ws_skills / src.name)
 
     fixtures = scenario_dir / "fixtures"
     if fixtures.is_dir():
@@ -294,7 +402,9 @@ def build_workspace(tmp: Path, skill_set: SkillSet, scenario_dir: Path) -> tuple
             # particular, a sibling __pycache__/build_data.pyc would reveal
             # runner-only discriminator assertions to the agent.
             if (item.name.startswith(".") or item.name == "__pycache__"
-                    or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES):
+                    or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES
+                    | STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES
+                    | DERIVATION_RUNNER_SIDE_FIXTURES):
                 continue
             dst = ws / item.name
             if item.is_dir():
@@ -355,13 +465,25 @@ def agent_task_from_prompt(prompt_md: str) -> str:
     return "\n".join(lines[:cut]).strip()
 
 
-def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool) -> str:
-    """Prepend the shared context every skill-set gets (docs + examples)."""
+def build_agent_prompt(
+    scenario_prompt: str,
+    docs_base: str,
+    has_examples: bool,
+    skills_in_workspace: bool = False,
+) -> str:
+    """Prepend the shared context every skill-set gets (docs + examples).
+
+    ``skills_in_workspace`` is set for providers that cannot activate skills as a
+    plugin (Codex): the skill dirs are staged under ``<workspace>/.skills/`` and
+    this adds a line telling the agent to read them, so the skill guidance is
+    available as context. Providers that activate skills natively (Claude) leave
+    this False — the skills load through the Skill tool, not by file-reading."""
     lines = [
         "You are working on a Nextdata OS (nxd) data-product task.",
         "",
         "Available context (the same for every run):",
-        f"- Public platform docs: fetch markdown pages with WebFetch at "
+        f"- Public platform docs: fetch markdown pages (WebFetch, or curl if "
+        f"WebFetch is unavailable) at "
         f"{docs_base}<path>.md (e.g. {docs_base}dp_development/debugging.md). "
         f"Start from the index {docs_base}_sidebar.md to find the right page. "
         "Use the .md URLs directly — the docs viewer's #/ links are not fetchable.",
@@ -377,71 +499,23 @@ def build_agent_prompt(scenario_prompt: str, docs_base: str, has_examples: bool)
             "real spec.py / models.py / transform.py / contracts). Read it for "
             "working patterns."
         )
+    if skills_in_workspace:
+        lines.append(
+            f"- A curated skill pack is staged under `{SKILLS_WORKSPACE_DIR}/` in "
+            "your workspace: each subdirectory is a skill with a `SKILL.md` "
+            "describing a procedure for this platform. BEFORE improvising, list "
+            f"`{SKILLS_WORKSPACE_DIR}/`, read the `SKILL.md` of any skill whose "
+            "description matches this task, and follow its steps and referenced "
+            "files."
+        )
     lines += ["", "--- TASK ---", scenario_prompt]
     return "\n".join(lines)
 
 
-# Cap each tool-result block fed to the judge so a huge file read doesn't blow
-# up the judge prompt; the head is enough to see what the agent inspected.
-TOOL_RESULT_HEAD_CHARS = 1500
-
-
-def _trace_from_stream(stdout: str) -> tuple[str, dict]:
-    """Parse stream-json lines into a readable trace + the final metrics.
-
-    The trace interleaves the agent's reasoning text, each tool call (name +
-    input), and a truncated tool result — so the judge can see *what the agent
-    inspected*, not just its final answer. Process checks ("read the logs before
-    concluding") are only gradeable from this.
-    """
-    parts: list[str] = []
-    final_answer = ""
-    tool_calls = 0
-    metrics: dict = {"is_error": False}
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        typ = d.get("type")
-        if typ == "assistant":
-            for block in d.get("message", {}).get("content", []):
-                if block.get("type") == "text" and block.get("text", "").strip():
-                    parts.append(f"[assistant] {block['text'].strip()}")
-                elif block.get("type") == "tool_use":
-                    tool_calls += 1
-                    inp = json.dumps(block.get("input", {}), ensure_ascii=False)
-                    parts.append(f"[tool_use:{block.get('name')}] {inp[:600]}")
-        elif typ == "user":
-            for block in d.get("message", {}).get("content", []):
-                if block.get("type") == "tool_result":
-                    content = block.get("content", "")
-                    if isinstance(content, list):
-                        content = " ".join(
-                            c.get("text", "") for c in content if isinstance(c, dict)
-                        )
-                    content = str(content)[:TOOL_RESULT_HEAD_CHARS]
-                    parts.append(f"[tool_result] {content}")
-        elif typ == "result":
-            final_answer = d.get("result", "")
-            usage = d.get("usage", {}) or {}
-            metrics = {
-                "num_turns": d.get("num_turns"),
-                "duration_ms": d.get("duration_ms"),
-                "total_cost_usd": d.get("total_cost_usd"),
-                "input_tokens": usage.get("input_tokens"),
-                "output_tokens": usage.get("output_tokens"),
-                "is_error": d.get("is_error", False),
-            }
-    # tool_calls is the "how many steps did this take" efficiency signal the
-    # README's metrics table asks for; ride it along with the result metrics so
-    # reports can compare step counts across skill-sets and over time.
-    metrics["tool_calls"] = tool_calls
-    trace = "\n".join(parts)
-    return trace, {"final_answer": final_answer, **metrics}
+# Where the skill pack is staged inside the agent workspace for providers that
+# lack plugin-dir skill activation (Codex). Claude ignores this (it loads the
+# pack via --plugin-dir instead).
+SKILLS_WORKSPACE_DIR = ".skills"
 
 
 def scenario_needs_mcp(scenario_dir: Path) -> dict | None:
@@ -813,6 +887,155 @@ def pocket_facts_infrastructure_error(facts: list[str]) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Runner-side deterministic check (opt-in per scenario).
+#
+# Some scenarios ship a checker that can decide correctness by ARITHMETIC
+# rather than by a judge reading a transcript — but only because it reads a
+# ground-truth fixture that states the right answer. Such a checker cannot be
+# an agent self-check: handing the agent the checker or its truth file hands it
+# the answer key. So the harness runs it AFTER the agent finishes, against the
+# landed workspace, with the truth fixture supplied from the scenario directory
+# (which is runner-side and deliberately excluded from the workspace copy).
+#
+# Contrast with a self-check like generate-runnable-dp-from-intent's, which the
+# agent runs itself and the judge grades from the transcript: that checker
+# embeds no withheld answer, so it can safely live in the workspace.
+#
+# Opt-in and guarded: only scenarios declaring ``"deterministic_check"`` in
+# checks.json activate this. Config keys:
+#   script  — checker filename under the scenario's ``fixtures/`` (required)
+#   deps    — extra PyPI deps for ``uv run --with`` (default: ["duckdb"])
+#
+# The result is emitted as an authoritative fact (visible to the judge) AND
+# enforced mechanically: a failed check fails the cell regardless of how
+# generously the judge read the transcript.
+# ---------------------------------------------------------------------------
+
+DETERMINISTIC_CHECK_TIMEOUT_S = 600
+DETERMINISTIC_CHECK_PREFIX = "DETERMINISTIC CHECK (authoritative runner facts): "
+# Deliberately stable: report code and callers distinguish this cell outcome
+# without parsing checker-specific detail.
+DETERMINISTIC_CHECK_FAILED = "deterministic check failed"
+
+
+def deterministic_check_fact(
+    scenario_dir: Path, ws: Path, cfg: dict, trace: str = ""
+) -> str:
+    """Run a scenario's runner-side checker against the landed workspace.
+
+    ``--fixtures`` points at the scenario's own ``fixtures/`` directory, never
+    at the workspace: that is where the withheld ground truth lives and it must
+    stay out of the agent's reach.
+
+    ``--trace`` is passed only when the scenario sets ``"wants_trace": true``.
+    A landed workspace records WHAT the agent produced but not the ORDER it
+    acted in, so a scenario asserting that a conversational checkpoint preceded
+    the first write cannot be graded from disk alone. The trace file lands in
+    its own temp dir, never inside ``ws``: a file in the workspace would be
+    visible to the agent and would perturb any workspace-files assertion.
+    """
+    fixtures = scenario_dir / "fixtures"
+    script = fixtures / str(cfg.get("script", ""))
+    if not script.is_file():
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False,
+             "infrastructure_error": f"checker not found: {script}"},
+            sort_keys=True,
+        )
+    deps = cfg.get("deps") or ["duckdb"]
+    cmd = ["uv", "run", "--no-project"]
+    for dep in deps:
+        cmd += ["--with", str(dep)]
+    cmd += ["python", str(script), "--fixtures", str(fixtures), "--root", str(ws)]
+    if cfg.get("wants_trace"):
+        trace_file = Path(tempfile.mkdtemp(prefix="nxd-eval-trace-")) / "trace.txt"
+        trace_file.write_text(trace, encoding="utf-8")
+        cmd += ["--trace", str(trace_file)]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=DETERMINISTIC_CHECK_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False,
+             "infrastructure_error": (
+                 f"checker timed out after {DETERMINISTIC_CHECK_TIMEOUT_S}s: {exc}")},
+            sort_keys=True,
+        )
+    except OSError as exc:
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False, "infrastructure_error": f"checker failed to start: {exc}"},
+            sort_keys=True,
+        )
+    stdout = proc.stdout
+    # Fail closed on the exit code, and require the checker's own success
+    # sentinel: a checker that dies mid-report can exit 0 without having run
+    # the gate that matters.
+    passed = proc.returncode == 0 and "ALL CHECKS PASSED" in stdout
+    facts: dict[str, object] = {
+        "passed": passed,
+        "exit_code": proc.returncode,
+        # Only the FAIL lines: the judge needs the naming detail, not the
+        # dozen PASS lines that would crowd its context.
+        "failures": [line for line in stdout.splitlines() if line.startswith("FAIL ")],
+    }
+    if not passed and not facts["failures"]:
+        # Exit-code failure with no FAIL line means the checker aborted rather
+        # than graded. Carry stderr so that is diagnosable instead of silent.
+        facts["detail"] = (stdout[-1500:] + proc.stderr[-1500:]).strip()
+    return DETERMINISTIC_CHECK_PREFIX + json.dumps(facts, sort_keys=True)
+
+
+def deterministic_check_passed(facts: list[str]) -> bool:
+    """Whether an authoritative deterministic-check fact explicitly passed.
+
+    Fail-closed: a missing, malformed, or negative fact is not rescued by a
+    lenient judge.
+    """
+    for fact in facts:
+        if fact.startswith(DETERMINISTIC_CHECK_PREFIX):
+            try:
+                return json.loads(fact[len(DETERMINISTIC_CHECK_PREFIX):]).get("passed") is True
+            except json.JSONDecodeError:
+                return False
+    return False
+
+
+def deterministic_check_infrastructure_error(facts: list[str]) -> str | None:
+    """Return a checker infrastructure failure, if one was recorded.
+
+    A checker that never started or timed out proves nothing about the agent;
+    the caller reports it as infrastructure rather than as an agent FAIL.
+    """
+    for fact in facts:
+        if fact.startswith(DETERMINISTIC_CHECK_PREFIX):
+            try:
+                error = json.loads(fact[len(DETERMINISTIC_CHECK_PREFIX):]).get(
+                    "infrastructure_error"
+                )
+            except json.JSONDecodeError:
+                return "deterministic check facts were malformed"
+            return str(error) if error else None
+    return None
+
+
+def deterministic_check_detail(facts: list[str]) -> str:
+    """Human-readable failure detail from the deterministic-check fact."""
+    for fact in facts:
+        if fact.startswith(DETERMINISTIC_CHECK_PREFIX):
+            try:
+                data = json.loads(fact[len(DETERMINISTIC_CHECK_PREFIX):])
+            except json.JSONDecodeError:
+                return "deterministic check facts were malformed"
+            if data.get("infrastructure_error"):
+                return str(data["infrastructure_error"])
+            failures = data.get("failures") or []
+            return "; ".join(str(f) for f in failures) or str(data.get("detail", ""))
+    return "deterministic check did not run"
+
+
 def _free_port() -> int:
     import socket
 
@@ -938,67 +1161,6 @@ def _write_fake_nxd(bin_dir: Path) -> None:
     shim.chmod(0o755)
 
 
-def run_agent(ws: Path, prompt: str, model: str, timeout_s: int,
-              extra_dirs: list[Path] | None = None,
-              effort: str = "",
-              env_overrides: dict | None = None,
-              path_prepend: Path | None = None,
-              plugin_dir: Path | None = None,
-              allowed_tools: str | None = None) -> tuple[bool, str, dict]:
-    """Run the headless agent. Returns (ok, trace, metrics).
-
-    The trace (full tool-call transcript) is what the judge grades; the final
-    answer and run metrics ride along in ``metrics`` (metrics["final_answer"]).
-
-    For MCP scenarios the agent reaches the semantic tools through the query
-    skill's shipped HTTP toolchain (``nxd mcp health`` + Streamable-HTTP), so no
-    --mcp-config is needed: ``env_overrides`` carries EVAL_MCP_ENDPOINT and
-    ``path_prepend`` puts the fake ``nxd`` on PATH. The agent uses Bash (already
-    allowed) to run the skill's scripts.
-    """
-    cmd = [
-        "claude", "-p", prompt,
-        # stream-json + verbose emits per-step events so we can reconstruct the
-        # tool-call trace, not just the final answer.
-        "--output-format", "stream-json", "--verbose",
-        "--model", model,
-        # Isolate to the workspace project so user/global skills don't leak in
-        # and confound the no_skills baseline.
-        "--setting-sources", "project",
-        "--allowedTools", allowed_tools or AGENT_ALLOWED_TOOLS,
-        "--add-dir", str(ws),
-    ]
-    # Load the skill-set as a plugin so its skills actually activate (invokable as
-    # nxd-eval-pack:<skill>). Copying into .claude/skills/ does NOT register them.
-    # no_skills baseline passes plugin_dir=None → genuinely zero curated skills.
-    if plugin_dir is not None:
-        cmd += ["--plugin-dir", str(plugin_dir)]
-    if effort:
-        cmd += ["--effort", effort]
-    for d in extra_dirs or []:
-        cmd += ["--add-dir", str(d)]
-
-    env = dict(os.environ)
-    if env_overrides:
-        env.update(env_overrides)
-    if path_prepend is not None:
-        env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
-    try:
-        proc = subprocess.run(
-            cmd, cwd=ws, capture_output=True, text=True, timeout=timeout_s,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return False, "", {"error": f"agent timed out after {timeout_s}s"}
-    if proc.returncode != 0:
-        return False, "", {"error": f"claude exited {proc.returncode}: {proc.stderr[-2000:]}"}
-
-    trace, metrics = _trace_from_stream(proc.stdout)
-    if not trace and not metrics.get("final_answer"):
-        return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}"}
-    return not metrics.get("is_error", False), trace, metrics
-
-
 JUDGE_SYSTEM = (
     "You are an exacting eval grader for an AI agent. You are given a scenario, "
     "a list of success checks, and the agent's final answer transcript. Grade "
@@ -1047,7 +1209,11 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 --- INSTRUCTIONS ---
 Grade every check as pass or fail with a one-sentence justification grounded in
 the trace and final answer. A "did the agent inspect X" check passes only if the
-trace shows the corresponding tool call/result. Give an overall pass only if ALL
+trace shows the corresponding tool call/result. That rule is about the agent's
+PROCESS. It does not apply to checks about the CONTENT of a file the agent
+wrote: when a WORKSPACE FILES block is present it is the authoritative record of
+what the agent produced, so grade those checks against the quoted file contents
+and do not fail one merely because the trace never echoed the file. Give an overall pass only if ALL
 checks pass. Where a HARNESS-VERIFIED FACTS block is present, it is authoritative
 for exactly what it states and no more: it settles whether the final-answer
 source matches the reported digest (use it, not the agent's self-report, for
@@ -1070,55 +1236,14 @@ Respond with ONE JSON object and nothing else, in this exact shape:
   "overall_pass": true|false, "summary": "<one sentence>"}}"""
 
 
-def run_judge(scenario_dir: Path, checks: dict, trace: str, final_answer: str,
-              model: str, timeout_s: int, effort: str = "",
-              facts: list[str] | None = None) -> dict:
+def run_judge(judge_backend, scenario_dir: Path, checks: dict, trace: str,
+              final_answer: str, model: str, timeout_s: int,
+              effort: str = "", facts: list[str] | None = None) -> dict:
+    """Grade one transcript. Builds the provider-independent judge prompt (which
+    folds in the harness-verified ``facts``), then delegates the actual model
+    call to the selected judge backend."""
     prompt = build_judge_prompt(scenario_dir, checks, trace, final_answer, facts)
-    cmd = [
-        "claude", "-p", prompt,
-        "--output-format", "json",
-        "--model", model,
-        "--setting-sources", "project",
-        "--append-system-prompt", JUDGE_SYSTEM,
-        "--allowedTools", "",   # judge reasons over given text; no tools
-    ]
-    if effort:
-        cmd += ["--effort", effort]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        return {"error": f"judge timed out after {timeout_s}s", "overall_pass": False}
-    if proc.returncode != 0:
-        return {"error": f"judge exited {proc.returncode}: {proc.stderr[-1000:]}",
-                "overall_pass": False}
-    try:
-        outer = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {"error": "judge wrapper not JSON", "overall_pass": False}
-    verdict_text = outer.get("result", "")
-    parsed = _extract_json(verdict_text)
-    if parsed is None:
-        return {"error": f"judge verdict not JSON: {verdict_text[:500]}",
-                "overall_pass": False}
-    return parsed
-
-
-def _extract_json(text: str) -> dict | None:
-    """Pull the first {...} JSON object out of a model response."""
-    text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if fence:
-        candidate = fence.group(1)
-    else:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        candidate = text[start:end + 1]
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
+    return judge_backend.run_judge(prompt, JUDGE_SYSTEM, model, timeout_s, effort)
 
 
 # ---------------------------------------------------------------------------
@@ -1270,6 +1395,113 @@ def digest_tie_fact(final_answer: str, cfg: dict) -> str | None:
             f"digest-tie check as FAILED.")
 
 
+# Opt-in and guarded: only scenarios that declare ``"workspace_files"`` in
+# checks.json get this. Checks about what an agent *wrote* cannot be graded from
+# a transcript — tool results are truncated, and an agent that writes a correct
+# file without echoing it back looks identical to one that wrote nothing. That
+# ambiguity does not fail such a check honestly; it fails it for lack of
+# evidence, and it flips run to run with how chatty the agent happened to be.
+# Reading the files the agent actually left behind replaces that guesswork.
+WORKSPACE_FILE_BUDGET = 60_000
+
+# Directories the harness stages into the workspace as INPUT. Their contents are
+# never the agent's output, so quoting them as such would misattribute authorship
+# to the agent and burn the budget the agent's real files need.
+_STAGED_INPUT_DIRS = frozenset({".skills", ".claude", "fixtures", ".pocket"})
+
+
+def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
+    """Quote the agent's produced files verbatim for the judge, or None when the
+    scenario doesn't opt in.
+
+    ``cfg`` (checks.json ``workspace_files``) is a list of workspace-relative
+    glob patterns, e.g. ``["models.py", "spec.py", "requirements.txt"]``.
+    """
+    if not cfg:
+        return None
+
+    # Distinguish "the agent wrote nothing" from "the harness looked after the
+    # workspace was deleted". Both otherwise yield zero matches and produce an
+    # identical, confident-sounding "never written" verdict — which is how a
+    # read-too-late bug once graded a whole scenario as an agent failure.
+    if not ws.is_dir():
+        raise RuntimeError(
+            f"workspace {ws} does not exist when reading workspace_files; "
+            "the fact must be collected before the temporary workspace is "
+            "cleaned up, otherwise absence of files is unmeasurable"
+        )
+
+    matched: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in cfg:
+        # Anchor every match inside the workspace. A pattern escaping upward
+        # (``../``) would quote harness files into the judge prompt, where they
+        # would read as the agent's work.
+        for path in sorted(ws.glob(pattern)):
+            resolved = path.resolve()
+            if not resolved.is_file():
+                continue
+            if not resolved.is_relative_to(ws.resolve()):
+                continue
+            # The staged skill pack ships reference data products whose files
+            # carry exactly the names a scenario asks about. They are input the
+            # harness placed, not output the agent wrote, and a recursive
+            # pattern matches dozens of them — enough to exhaust the quoting
+            # budget and starve the agent's own files, which is how a correct
+            # run graded FAIL for "requirements.txt was not quoted".
+            if any(part in _STAGED_INPUT_DIRS for part in resolved.parts):
+                continue
+            if resolved not in seen:
+                seen.add(resolved)
+                matched.append(path)
+
+    # Shallowest first, so the agent's own top-level files are quoted before any
+    # deeper match. Depth is the only signal available for "most likely to be
+    # the answer" and the budget is finite; without this the ordering is
+    # alphabetical and a nested directory can crowd out the real output.
+    matched.sort(key=lambda p: (len(p.relative_to(ws).parts), p.as_posix()))
+
+    if not matched:
+        # State the absence explicitly. Silence would let the judge fall back to
+        # the transcript and re-introduce exactly the evidence guesswork this
+        # exists to remove.
+        return ("WORKSPACE FILES: NONE — the harness looked for "
+                f"{', '.join(cfg)} in the agent's workspace after the run and "
+                "found no such file. Any check about the content of those files "
+                "must FAIL: they were never written.")
+
+    sections: list[str] = []
+    budget = WORKSPACE_FILE_BUDGET
+    omitted: list[str] = []
+    for path in matched:
+        rel = path.relative_to(ws).as_posix()
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            sections.append(f"--- {rel} (UNREADABLE: {exc}) ---")
+            continue
+        if len(body) > budget:
+            # Never silently truncate a file into the judge prompt: a check
+            # about a missing annotation would then fail on a cut that the
+            # harness made, which is the same false signal in a new place.
+            omitted.append(rel)
+            continue
+        budget -= len(body)
+        sections.append(f"--- {rel} ({len(body)} bytes) ---\n{body}")
+
+    note = ""
+    if omitted:
+        note = ("\nNOTE: these files exceeded the quoting budget and are NOT "
+                f"shown: {', '.join(omitted)}. Do not infer anything about "
+                "their contents either way.")
+
+    return ("WORKSPACE FILES (read by the harness from the agent's workspace "
+            "after the run — this is the agent's actual output, authoritative "
+            "over anything the transcript does or does not show; grade content "
+            "checks about these files from here, NOT from whether the agent "
+            "echoed them):\n" + "\n".join(sections) + note)
+
+
 def _fixtures_fingerprint(scenario_dir: Path) -> str:
     """Hash the scenario fixtures so a fixture edit invalidates the cache."""
     h = hashlib.sha256()
@@ -1286,9 +1518,11 @@ def _fixtures_fingerprint(scenario_dir: Path) -> str:
 
 
 def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
-                     model: str, effort: str) -> str:
+                     backend: str, model: str, effort: str) -> str:
     """Cache key for an agent run. Independent of the judge / checks.json, so
-    iterating on grading reuses the expensive agent transcript."""
+    iterating on grading reuses the expensive agent transcript. Includes the
+    agent backend so switching provider (claude ↔ codex) never reuses the other
+    provider's transcript."""
     h = hashlib.sha256()
     pocket_runtime_key = ""
     if scenario_needs_pocket(scenario_dir) is not None:
@@ -1301,6 +1535,7 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
         ",".join(sorted(skill_set.skills)),
         scenario_dir.name,
         prompt,
+        backend,
         model,
         effort,
         _fixtures_fingerprint(scenario_dir),
@@ -1325,15 +1560,31 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     # leak the answer and the rubric. The judge still sees the full prompt.md.
     agent_task = agent_task_from_prompt(prompt_md)
 
+    agent_backend = get_agent_backend(args.agent_backend)
+    judge_backend = get_judge_backend(args.judge_backend)
+
+    # Codex has no --plugin-dir skill activation: the skills are staged into the
+    # workspace and the agent is told where to read them. Claude activates them
+    # as a plugin, so its prompt gets no skill-file hint. `has_skills` is only
+    # relevant for the file-hint (baseline no_skills skips it either way).
+    skills_in_workspace = (
+        agent_backend.name != "claude" and bool(skill_set.skills)
+    )
+
     pocket_spec = scenario_needs_pocket(scenario_dir)
-    # Pocket cells run the agent with extra_dirs=[] (see the run_agent call
-    # below), so the prompt must not advertise an examples directory the agent
-    # can never --add-dir, or it wastes turns hunting for it.
+    # Pocket cells run the agent with extra_dirs=[] (see the agent call below),
+    # so the prompt must not advertise an examples directory the agent can never
+    # --add-dir, or it wastes turns hunting for it.
     extra_dirs = [] if pocket_spec is not None else (
         [EXAMPLES_DIR] if EXAMPLES_DIR.is_dir() else []
     )
-    prompt = build_agent_prompt(agent_task, args.docs_base, bool(extra_dirs))
-    agent_model = POCKET_AGENT_MODEL if pocket_spec is not None else args.agent_model
+    prompt = build_agent_prompt(
+        agent_task, args.docs_base, bool(extra_dirs),
+        skills_in_workspace=skills_in_workspace,
+    )
+    agent_model = effective_agent_model(
+        pocket_spec is not None, agent_backend.name, args.agent_model
+    )
     preflight_metrics: dict[str, object] = {}
     if pocket_spec is not None:
         # Run the infrastructure gate even when an agent transcript is cached:
@@ -1365,12 +1616,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     cache_file = None
     if cache_dir:
         key = _agent_cache_key(
-            skill_set, scenario_dir, prompt, agent_model, args.agent_effort
+            skill_set, scenario_dir, prompt, agent_backend.name,
+            agent_model, args.agent_effort,
         )
         cache_file = cache_dir / f"agent-{key}.json"
 
     cached = None
     facts: list[str] = []
+    ws_fact: str | None = None
+    det_fact: str | None = None
     if cache_file and cache_file.exists():
         try:
             loaded = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -1398,7 +1652,10 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
             try:
-                ws, plugin_dir = build_workspace(Path(tmp), skill_set, scenario_dir)
+                ws, plugin_dir = build_workspace(
+                    Path(tmp), skill_set, scenario_dir,
+                    stage_skills_in_workspace=skills_in_workspace,
+                )
             except FileNotFoundError as exc:
                 res.error = str(exc)
                 return res
@@ -1409,11 +1666,11 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 _write_fake_nxd(bin_dir)
                 try:
                     with semantic_http_server(scenario_dir, mcp_spec) as (_ep, env_over):
-                        ok, trace, metrics = run_agent(
+                        ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
                             extra_dirs=extra_dirs, effort=args.agent_effort,
                             env_overrides=env_over, path_prepend=bin_dir,
-                            plugin_dir=plugin_dir,
+                            skill_pack_dir=plugin_dir,
                         )
                 except (RuntimeError, TimeoutError) as exc:
                     res.error = f"MCP server setup failed: {exc}"
@@ -1440,11 +1697,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 with pocket_process_guard(
                     ws, bin_dir / "nxd-desktop-supervisor", env_over
                 ):
-                    ok, trace, metrics = run_agent(
+                    # Pocket narrows the tool allowlist (no web/docs escape
+                    # hatch). Backends that gate per-tool (Claude) honour it;
+                    # sandbox-based ones (Codex) ignore it, so a pocket run is
+                    # not comparable across providers.
+                    pocket_kwargs = {"allowed_tools": POCKET_AGENT_ALLOWED_TOOLS}
+                    ok, trace, metrics = agent_backend.run_agent(
                         ws, prompt, agent_model, agent_timeout,
                         extra_dirs=[], effort=args.agent_effort,
                         env_overrides=env_over, path_prepend=bin_dir,
-                        plugin_dir=plugin_dir, allowed_tools=POCKET_AGENT_ALLOWED_TOOLS,
+                        skill_pack_dir=plugin_dir, **pocket_kwargs,
                     )
                     if checks.get("pocket_verify"):
                         facts.append(pocket_harness_fact(
@@ -1452,15 +1714,37 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             str(pocket_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
                         ))
             else:
-                ok, trace, metrics = run_agent(
+                ok, trace, metrics = agent_backend.run_agent(
                     ws, prompt, agent_model, agent_timeout,
                     extra_dirs=extra_dirs, effort=args.agent_effort,
-                    plugin_dir=plugin_dir,
+                    skill_pack_dir=plugin_dir,
                 )
+
+            # Read the produced files INSIDE the `with`, while the temporary
+            # workspace still exists. Outside it the directory is already
+            # deleted and every pattern silently matches nothing, which the
+            # fact then reports as "never written" — a confident-looking claim
+            # that is purely an artefact of reading too late.
+            ws_fact = (
+                workspace_files_fact(ws, checks.get("workspace_files"))
+                if ok else None
+            )
+            # Same reason as ws_fact: the checker reads the landed closure off
+            # disk, so it has to run before the temporary workspace is removed.
+            if ok and checks.get("deterministic_check"):
+                det_fact = deterministic_check_fact(
+                    scenario_dir, ws, checks["deterministic_check"], trace
+                )
+
         # Never cache a transcript whose facts carry a verifier infrastructure
         # failure: the workspace is gone on a later cache hit, so the verifier
         # cannot re-run and run_one would re-report the transient failure
         # forever. Drop the cache entry so the next run re-verifies from scratch.
+        #
+        # `facts` deliberately does NOT include the workspace-files fact yet: on
+        # a cache hit the workspace no longer exists, and replaying quoted file
+        # contents as authoritative ground truth would describe a run that never
+        # happened.
         if ok and cache_file and pocket_facts_infrastructure_error(facts) is None:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
@@ -1468,8 +1752,47 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 encoding="utf-8",
             )
 
+        if ws_fact:
+            facts.append(ws_fact)
+        # Appended after the cache write for the same reason as ws_fact: the
+        # verdict it carries belongs to THIS run's workspace, and replaying it
+        # on a later cache hit would describe a closure that was never checked.
+        if det_fact:
+            facts.append(det_fact)
+
+    if cached and checks.get("workspace_files"):
+        # A cached transcript has no workspace behind it, so the files cannot be
+        # read. Say so rather than letting the judge silently fall back to
+        # transcript-guessing, which is the failure mode this replaces.
+        facts.append(
+            "WORKSPACE FILES: UNAVAILABLE — this run replayed a cached agent "
+            "transcript, so the workspace no longer exists and the produced "
+            "files could not be read. Grade file-content checks as unproven "
+            "rather than inferring them from the transcript."
+        )
+
+    if cached and checks.get("deterministic_check"):
+        # No workspace behind a cached transcript, so there is no landed closure
+        # to check. Record the skip explicitly: silently treating an unrun
+        # deterministic gate as a pass is exactly the hole this stage closes.
+        det_status = "skipped: cached transcript, no workspace"
+        facts.append(
+            "DETERMINISTIC CHECK: UNAVAILABLE — this run replayed a cached agent "
+            "transcript, so the workspace no longer exists and the closure's "
+            "numbers could not be verified. Grade numeric-correctness checks as "
+            "unproven rather than inferring them from the transcript."
+        )
+    elif checks.get("deterministic_check"):
+        det_status = "passed" if deterministic_check_passed(facts) else "failed"
+    else:
+        det_status = ""
+
     res.transcript = trace
     res.metrics = {**preflight_metrics, **metrics, "agent_model": agent_model}
+    if det_status:
+        res.metrics["deterministic_check"] = det_status
+        if det_status == "failed":
+            res.metrics["deterministic_check_detail"] = deterministic_check_detail(facts)
     res.facts = facts
     if not ok:
         res.error = str(metrics.get("error", "agent run failed"))
@@ -1480,9 +1803,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         res.error = f"pocket harness infrastructure failure: {verifier_infrastructure_error}"
         return res
 
+    det_infrastructure_error = deterministic_check_infrastructure_error(facts)
+    if det_infrastructure_error:
+        # A checker that could not run says nothing about the agent. Report it
+        # as infrastructure so it is not counted as an agent FAIL in the ledger.
+        res.error = f"deterministic check infrastructure failure: {det_infrastructure_error}"
+        return res
+
     final_answer = metrics.get("final_answer", "")
     res.verdict = run_judge(
-        scenario_dir, checks, trace, final_answer,
+        judge_backend, scenario_dir, checks, trace, final_answer,
         args.judge_model, args.judge_timeout, effort=args.judge_effort,
         facts=facts,
     )
@@ -1493,6 +1823,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         prior = str(res.verdict.get("summary", ""))
         res.verdict["summary"] = (
             f"{prior} Pocket verifier did not pass; the cell is mechanically failed."
+        ).strip()
+    if det_status == "failed":
+        # The checker computes the answer from ground truth; it is the hard
+        # acceptance gate, not advisory evidence. A closure whose numbers are
+        # wrong fails the cell however generously the judge read the transcript.
+        res.verdict["overall_pass"] = False
+        prior = str(res.verdict.get("summary", ""))
+        res.verdict["summary"] = (
+            f"{prior} {DETERMINISTIC_CHECK_FAILED}: "
+            f"{res.metrics['deterministic_check_detail']}"
         ).strip()
     res.ok = True
     return res
@@ -1506,13 +1846,30 @@ def main() -> int:
                         help="Skill set(s) to run; repeatable. Default: all.")
     parser.add_argument("--scenario", action="append", dest="scenarios",
                         help="Scenario name(s) to run; repeatable. Default: all.")
-    parser.add_argument("--agent-model", default=DEFAULT_AGENT_MODEL)
-    parser.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
-    parser.add_argument("--agent-effort", default=DEFAULT_AGENT_EFFORT,
+    parser.add_argument("--agent-backend", default=DEFAULT_AGENT_BACKEND,
+                        choices=AGENT_BACKENDS,
+                        help="Provider driving the agent-under-test "
+                             f"(default: {DEFAULT_AGENT_BACKEND}).")
+    parser.add_argument("--judge-backend", default=DEFAULT_JUDGE_BACKEND,
+                        choices=JUDGE_BACKENDS,
+                        help="Provider driving the judge "
+                             f"(default: {DEFAULT_JUDGE_BACKEND}).")
+    parser.add_argument("--agent-model", default=None,
+                        help="Agent model. Default resolves from --agent-backend "
+                             f"({DEFAULT_MODELS}).")
+    parser.add_argument("--judge-model", default=None,
+                        help="Judge model. Default resolves from --judge-backend.")
+    parser.add_argument("--agent-effort", default=None,
                         help="Reasoning effort for the agent (low|medium|high|"
-                             "xhigh|max; '' = CLI default).")
-    parser.add_argument("--judge-effort", default=DEFAULT_JUDGE_EFFORT,
-                        help="Reasoning effort for the judge.")
+                             "xhigh|max; '' = CLI default). Default resolves "
+                             f"from --agent-backend (claude: "
+                             f"{DEFAULT_AGENT_EFFORT}, codex: "
+                             f"{CODEX_DEFAULT_AGENT_EFFORT}).")
+    parser.add_argument("--judge-effort", default=None,
+                        help="Reasoning effort for the judge. Default resolves "
+                             f"from --judge-backend (claude: "
+                             f"{DEFAULT_JUDGE_EFFORT}, codex: "
+                             f"{CODEX_DEFAULT_JUDGE_EFFORT}).")
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S)
     parser.add_argument("--judge-timeout", type=int, default=DEFAULT_JUDGE_TIMEOUT_S)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY,
@@ -1527,6 +1884,27 @@ def main() -> int:
     parser.add_argument("--list", action="store_true",
                         help="List skill sets and scenarios, then exit.")
     args = parser.parse_args()
+
+    # Resolve per-backend default models when not overridden on the CLI, so
+    # `--agent-backend codex` picks a codex model id (not Claude's "sonnet").
+    if args.agent_model is None:
+        args.agent_model = DEFAULT_MODELS[args.agent_backend]["agent"]
+    if args.judge_model is None:
+        args.judge_model = DEFAULT_MODELS[args.judge_backend]["judge"]
+
+    # Same for reasoning effort: codex's scale has no "xhigh", so an unset
+    # effort resolves per-backend. An explicit --agent-effort / --judge-effort
+    # (including "") always wins.
+    if args.agent_effort is None:
+        args.agent_effort = (
+            CODEX_DEFAULT_AGENT_EFFORT if args.agent_backend == "codex"
+            else DEFAULT_AGENT_EFFORT
+        )
+    if args.judge_effort is None:
+        args.judge_effort = (
+            CODEX_DEFAULT_JUDGE_EFFORT if args.judge_backend == "codex"
+            else DEFAULT_JUDGE_EFFORT
+        )
 
     sets = parse_skill_sets(SKILL_SETS_FILE)
     scenarios = discover_scenarios(args.suite)
@@ -1604,11 +1982,14 @@ def main() -> int:
     if args.report:
         report = {
             "elapsed_s": round(time.time() - started, 1),
+            "agent_backend": args.agent_backend,
+            "judge_backend": args.judge_backend,
             "agent_model": args.agent_model,
             "scenario_agent_models": {
-                scenario.name: (
-                    POCKET_AGENT_MODEL if scenario_needs_pocket(scenario) is not None
-                    else args.agent_model
+                scenario.name: effective_agent_model(
+                    scenario_needs_pocket(scenario) is not None,
+                    args.agent_backend,
+                    args.agent_model,
                 )
                 for scenario in scenarios
             },

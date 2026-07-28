@@ -1,0 +1,23 @@
+freight-shipments — local run history
+=====================================
+
+run 1  2026-07-20  shipments=160  carriers=5   (export had parts 1)
+run 2  2026-07-24  shipments=240  carriers=5   (part-0002 arrived)
+run 3  2026-07-26  shipments=240  carriers=5   (no new parts)
+
+Author's note
+-------------
+
+The shipment export is append-only. Our TMS writes a new part file when it
+flushes; it never rewrites a part it has already written, and it never revises
+or deletes a shipment once exported. `shipment_id` is assigned by the TMS in
+strictly increasing order, so it doubles as the load cursor.
+
+Carriers is a small reference table and is republished whole each time — five
+rows today, unlikely to reach fifty.
+
+The backfill is the problem. We are loading historical shipments in batches and
+expect to land several million rows over the next few weeks. Run 3 above took
+noticeably longer than run 1 despite landing no new data, because the transform
+re-reads the whole export every time. That does not scale to where this is
+going.

@@ -70,7 +70,7 @@ from nxd.spec.validations import gx, soda
         "snowflake",
         storage("https://<app_url>/infra-profile/<profile>#/services/<snowflake-service>")
         .config(
-            snowflake_config("SCHEMA")
+            snowflake_config(schema="SCHEMA")
             .target_table("TABLE_NAME", accounts)
         )
         # GE promise — port-level, scoped to one model

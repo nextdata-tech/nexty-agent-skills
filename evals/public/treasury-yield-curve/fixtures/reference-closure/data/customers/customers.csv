@@ -1,0 +1,9 @@
+customer_id,customer_name,billing_country,segment
+C001,Iberia Labs,Spain,Enterprise
+C002,Sol Retail,Spain,SMB
+C003,Rhine GmbH,Germany,Enterprise
+C004,Atlas SAS,France,Mid-Market
+C005,Nordic AB,Sweden,SMB
+C006,Roma SRL,Italy,Mid-Market
+C007,Lisboa SA,Portugal,Enterprise
+C008,Baltic OU,Estonia,SMB

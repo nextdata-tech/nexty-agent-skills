@@ -1,0 +1,70 @@
+{
+  "name": "incremental-multi-model",
+  "skills": [
+    "nxd-generate-dp",
+    "nxd-pocket-loop"
+  ],
+  "ci_skip": "needs a live desktop supervisor (EVAL_POCKET_SUPERVISOR_DIR / EVAL_POCKET_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
+  "checks": [
+    {
+      "id": "consults-the-skill-pack",
+      "check": "The trace shows the agent consulting the installed incremental-transform guidance before editing the closure, rather than inferring the mechanism from the existing transform, from dlt's own documentation, or from unrelated examples on the machine."
+    },
+    {
+      "id": "state-bag-addressed-via-for-model",
+      "check": "Durable cursor state is addressed through transform_state.for_model(\"<model>\") — never flat indexing such as transform_state[\"max_shipment_id\"]. This closure promises two models from the outset (shipments and carriers), so a flat write is silently dropped and persists nothing. Fail if any flat write reaches the committed transform, even if the agent later adds for_model alongside it."
+    },
+    {
+      "id": "flat-index-never-appears-as-an-intermediate",
+      "check": "The agent does not pass through a flat-indexed implementation that it later corrects only because a build failed. Flat indexing does not raise — it produces a green run that persists nothing — so arriving at for_model by trial and error rather than from the contract indicates the failure mode was not understood. Grade the reasoning in the trace, not merely the final file."
+    },
+    {
+      "id": "uses-transform-state-kwarg",
+      "check": "The durable watermark lives in the kernel's transform_state kwarg, not in a hand-rolled mechanism (a file beside the data, a table in the output database, a dlt state hack, or an environment variable)."
+    },
+    {
+      "id": "dlt-state-stays-run-local",
+      "check": "dlt's own pipeline state stays run-local and ephemeral. The agent does NOT move pipelines_dir or DLT_DATA_DIR outside the run directory, and does not point them at ~/.dlt, in order to make dlt's own incremental cursor survive between runs."
+    },
+    {
+      "id": "switches-to-append-not-replace-with-delta",
+      "check": "Where the transform yields only new shipment rows, the landing disposition is write_disposition=\"append\". Leaving \"replace\" in place while yielding a delta shrinks the table to just the delta, destroying history."
+    },
+    {
+      "id": "append-paired-with-cursor-not-bare",
+      "check": "\"append\" is paired with a cursor that bounds which rows are yielded. A bare append with no cursor re-yields the whole export every run and duplicates every row."
+    },
+    {
+      "id": "lane-summary-append-safety-assessed",
+      "check": "The agent recognises that the per-lane summary is an aggregate and therefore NOT append-safe: a new shipment on an existing lane changes that lane's already-emitted totals. It must not be appended incrementally alongside the shipment rows. Accept any correct handling — recomputing the summary in full each run while the base rows load incrementally, or declining incrementality for that model — but the append-safety of the new model must be reasoned about explicitly, not assumed from the source being append-only."
+    },
+    {
+      "id": "carriers-not-made-incremental",
+      "check": "The carriers reference table is republished whole rather than given a cursor. It is small, has no monotonic cursor column, and is rewritten upstream each publish."
+    },
+    {
+      "id": "every-promised-model-yielded-each-run",
+      "check": "Every promised model is yielded on every run. A model omitted from a run because it had no new rows is a missing write, not a no-op."
+    },
+    {
+      "id": "cursor-advanced-after-write",
+      "check": "The cursor advances only after the rows are written and verified. The agent does not advance it before the write, and does not assume a raise will roll back rows already landed — rows and cursor do not share fate."
+    },
+    {
+      "id": "verification-by-row-count",
+      "check": "The write is verified by counting landed rows, not by asserting table names. Under \"append\" the table-name assert still passes when nothing was written, so it cannot detect a missing write."
+    },
+    {
+      "id": "first-run-empty-bag-takes-history",
+      "check": "The first run against an empty state bag takes the whole history rather than erroring or skipping rows, and the cursor default makes that explicit rather than relying on an accidental comparison against None."
+    },
+    {
+      "id": "json-serializable-cursor",
+      "check": "The value stored in the state bag is JSON-serializable — a plain int or str, not a numpy scalar, Decimal, date object, or pandas value."
+    },
+    {
+      "id": "closure-still-builds",
+      "check": "The final closure is coherent: PHYSICAL_MODELS lists every promised landed model including the new summary, the naming invariant holds across spec.py, models.py and the transform, and the read-back assert is preserved rather than deleted to make a run pass."
+    }
+  ]
+}

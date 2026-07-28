@@ -1,0 +1,7 @@
+$ nxd --config /tmp/nxd-acme-prod.yaml ls contracts
+
+NAME                        DESCRIPTION                                  UPDATED
+orders-output-quality       Great Expectations suite for orders output   2026-05-02T11:14:07Z
+shipments-freshness         Freshness window check on shipments          2026-06-18T09:31:55Z
+
+2 contracts.

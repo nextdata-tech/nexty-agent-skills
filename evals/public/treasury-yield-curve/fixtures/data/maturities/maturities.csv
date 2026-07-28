@@ -1,0 +1,14 @@
+maturity_label,maturity_months,tenor_bucket,first_published
+1 Mo,1,bill,2001-07-31
+2 Mo,2,bill,2018-10-16
+3 Mo,3,bill,1990-01-02
+4 Mo,4,bill,2022-10-19
+6 Mo,6,bill,1990-01-02
+1 Yr,12,bill,1990-01-02
+2 Yr,24,note,1990-01-02
+3 Yr,36,note,1990-01-02
+5 Yr,60,note,1990-01-02
+7 Yr,84,note,1990-01-02
+10 Yr,120,note,1990-01-02
+20 Yr,240,bond,1993-10-01
+30 Yr,360,bond,1990-01-02

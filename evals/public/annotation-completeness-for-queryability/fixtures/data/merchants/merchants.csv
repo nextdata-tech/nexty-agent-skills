@@ -1,0 +1,6 @@
+merchant_id,merchant_name,category,country
+M-001,Aurora Books,retail,DE
+M-002,Bergen Freight,logistics,NO
+M-003,Cortado Coffee,hospitality,ES
+M-004,Delta Clinics,healthcare,DE
+M-005,Estuary Software,software,IE

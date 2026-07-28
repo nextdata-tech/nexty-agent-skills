@@ -1,0 +1,15 @@
+$ nxd --config /tmp/nxd-acme-prod.yaml create contract --help
+
+Register a computational contract on the selected mesh. A contract is the code a
+policy executes; policies reference it by name.
+
+Usage:
+  nxd create contract [flags]
+
+Flags:
+      --name string          Contract name; policies reference this value (required)
+      --code string          Path to the contract file or directory to upload (required)
+      --description string   Human-readable description
+      --skip-version-check   Skip the client/server version compatibility check
+      --config string        Path to the session mesh config
+  -h, --help                 Help for create contract

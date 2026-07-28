@@ -1,0 +1,5 @@
+{
+  "requires": "nxd-desktop-supervisor",
+  "workflow": "treasury-yield-curve",
+  "description": "Run this scenario against the pinned local desktop supervisor runtime."
+}
