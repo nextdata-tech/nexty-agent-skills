@@ -328,3 +328,79 @@ Record: [`records/2026-07-27-nxd-generate-dp-incremental-transforms-via-transfor
 Notes: NO MEASURABLE CORRECTNESS EFFECT at N=1 per arm; recorded as such rather than as a win. All three runs scored 16/17 on treasury-yield-curve, but they did not fail the same check: control failed tier2-measure-reconciliation, reviewed-run1 failed determinism-rerun-verdict while PASSING tier2, and reviewed-run2 failed tier2 again. Two checks moved, not one. tier2 going FAIL -> PASS -> FAIL across runs whose two reviewed cells shared an identical skill-set, prompt and scenario makes it unstable rather than responsive to the review round; an earlier reading of run1 alone as a win was withdrawn. reviewed-run1's determinism failure is ENVIRONMENTAL, not a content failure: the installed supervisor had baked NXD_DESKTOP_REPO_ROOT to a deleted worktree, so its build-1 aborted before the transform ran. It is kept in the table rather than dropped, because removing a run that contradicts the other would misrepresent the evidence. What the runs do support: no correctness regression, and no efficiency regression - the reviewed runs used FEWER main-thread turns and tokens than the control (31-34 vs 35 turns, ~3% fewer output tokens, 5-9% cheaper), so dispatching the review subagent did not add turns to the orchestrator. The anti-signal this experiment was designed to catch - the reviewed arm scoring worse because the builder accepted fabricated critique instead of adjudicating it - did not appear. The scenario had only one check of headroom (control 16/17) because a prompt-extraction fix in this same PR raised the control from an earlier ~14/17, so this instrument could not have shown a large effect; N>=5 per arm, or a scenario with more semantic headroom, is needed for a real verdict. Model note: all three cells ran on claude-opus-4-8, NOT the sonnet passed to --agent-model - run.py's effective_agent_model pins a model per scenario for pocket-path scenarios and overrides the flag, which the per-report scenario_agent_models field records. Runtime caveat: control ran on supervisor db0e8ab3a / wheels 0.41.143 and reviewed-run2 on 173737f6c / 0.41.144 after rebuilding from main, which is a confounder between those two cells.
 
 Record: [`records/2026-07-28-nxd-review-closure-adversarial-review-round-over-an-authored.json`](records/2026-07-28-nxd-review-closure-adversarial-review-round-over-an-authored.json)
+## 2026-07-28 — nxd-dp-static-artifact: read-only tool bridge fallback for clients without MCP resource primitives (plugin v0.25.1, superseded below by the v0.25.2 run)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.25.0 | current_pack | dp-static-artifact-lifecycle | FAIL | 4/5 | 17 | 15 | 12287 | 0.53 | sonnet |
+| after-v0.25.1 | current_pack | dp-static-artifact-lifecycle | FAIL | 5/6 | 20 | 18 | 11936 | 0.57 | sonnet |
+
+Notes: Adds a two-transport read strategy: native MCP resource ops preferred, list_data_product_resources/read_data_product_resource used only when the client exposes no resource primitives. New scenario check one-read-transport passes in the after run (5/6 vs 4/5). Both runs fail the SAME pre-existing deterministic HTML check (a required substring the generated page omits), unrelated to this change — no regression.
+
+Record: [`records/2026-07-28-nxd-dp-static-artifact-read-only-tool-bridge-fallback-for-cl.json`](records/2026-07-28-nxd-dp-static-artifact-read-only-tool-bridge-fallback-for-cl.json)
+
+## 2026-07-28 — nxd-dp-static-artifact: visual-channel and absence-state render rules (plugin v0.25.2)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | agent |
+|---|---|---|---|---|---|---|---|---|
+| before-v0.25.1 | current_pack | dp-static-artifact-lifecycle | FAIL | 5/6 | 20 | 18 | 11936 | sonnet |
+| after-v0.25.2 | current_pack | dp-static-artifact-lifecycle | PASS | 6/6 | 21 | 19 | 8491 | sonnet |
+
+Notes: FIRST PASSING RUN of this scenario — the prior entry's both-arms-FAIL was
+not a property of the skill but of the gate. `check_static_artifact.py` required
+heading and formatting vocabulary the skill contract never prescribes
+(`"output ports"`, `"output-level models"`, `"min: 0"`), so an agent following
+the prose failed while only the example asset could pass. The gate now derives
+required sections from the contract's render order, matches headings tolerantly,
+and asserts constraints/output-level surfaces structurally rather than by
+punctuation. Ordering, union-avoidance and escaping assertions are unchanged.
+
+The behaviour change this measures (`e83fab3` + this commit): no drawn or named
+relationship without a declared join, per-value absence glosses including the new
+`"" · empty`, omit-all-absent columns, and a viewport clamp. Fixture extended
+with a `support_tickets` model carrying `description: ""`, a `null`-description
+attribute, a `customer_id` shared with the other models but declaring NO join,
+and per-model `joins: null` — so the new rules have something to bite on. Two
+intermediate runs failed on real skill defects the strengthened fixture exposed
+(a dropped `null` gloss), fixed by making the gloss obligation explicit in
+SKILL.md rather than by relaxing the check.
+
+Output tokens fell ~29% (11936 → 8491) while checks went 5/6 → 6/6; single-run
+deltas are noise per the header, so read the verdict, not the efficiency.
+
+**CORRECTION (same day):** the `after-v0.25.2` PASS above was a single run and
+did not replicate — four further runs of that same content gave 1 PASS / 4 FAIL
+on the absence gloss. The gate fixes in that commit stand; the absence rule did
+not, and is fixed in the entry below. Do not cite this row's PASS as evidence.
+
+Record: [`records/2026-07-28-nxd-dp-static-artifact-visual-channel-and-absence-state-render-rules.json`](records/2026-07-28-nxd-dp-static-artifact-visual-channel-and-absence-state-render-rules.json)
+
+## 2026-07-28 — nxd-dp-static-artifact: absence rule branches on the key (plugin v0.25.2)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | agent |
+|---|---|---|---|---|---|---|---|---|
+| before (prose rule) ×5 | current_pack | dp-static-artifact-lifecycle | FAIL ×4, PASS ×1 | 5/6, 6/6 | 16–23 | 14–21 | 11.9–18.5k | sonnet |
+| after (key-branch + grep) ×5 | current_pack | dp-static-artifact-lifecycle | PASS ×5 | 6/6 | 15–26 | 13–24 | 9.1–13.1k | sonnet |
+
+Notes: N=5 PER ARM, deliberately — the entry above this one recorded a single
+PASS and was WRONG. Re-running that same content four more times gave 1 PASS /
+4 FAIL, all on the same assertion (a `null` gloss absent from the whole page).
+One green run on a nondeterministic agent is not evidence; this scenario needed
+N≥4 before its verdict was stable either way.
+
+Two root causes, found by diffing what the passing runs did. (1) The render step
+said to show a description "where present", which licenses dropping a `null`
+one — the agent was following the more specific instruction correctly. "Present"
+now means the KEY exists, and the rule is a two-branch decision (absent key →
+render nothing; present key → always render, gloss included) rather than five
+sentences of prose carrying a rule, an anti-rule and an exception. (2) Both
+passing runs ran a grep-style verification pass over the finished file; two of
+the three failures skipped it. Grepping the temp file for every gloss the bundle
+needs is now part of validating it before the atomic rename, stated in the
+file-and-safety contract rather than only in the handoff checklist.
+
+Efficiency moved the right way as a side effect (mean output tokens 14.9k →
+11.2k), but read the verdict column, not that: the point of this entry is 1/5 →
+5/5 on correctness.
+
+Record: [`records/2026-07-28-nxd-dp-static-artifact-absence-rule-branches-on-the-key.json`](records/2026-07-28-nxd-dp-static-artifact-absence-rule-branches-on-the-key.json)

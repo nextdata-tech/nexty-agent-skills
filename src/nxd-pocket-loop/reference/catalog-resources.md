@@ -8,6 +8,7 @@
 - [What each document carries](#what-each-document-carries)
 - [Pinned, not live — what is deliberately absent](#pinned-not-live--what-is-deliberately-absent)
 - [Reading `outputs` without the union trap](#reading-outputs-without-the-union-trap)
+- [Static artifact lifecycle](#static-artifact-lifecycle)
 - [When a read fails](#when-a-read-fails)
 
 ## Resources vs. tools
@@ -31,6 +32,25 @@ it is the query-facing view, and it requires a live `endpoint` and bearer
 bytes, so it answers for a product that is published but not currently served.
 Use it to show a user what shipped, or to read a product's shape before
 deciding whether to resume it.
+
+### When the client exposes no resource operations
+
+Some clients connect to the server, receive `resources/list` fine, and still
+never surface resource listing or reading to the agent. Two read-only tools
+bridge exactly that gap:
+
+| Tool | Equivalent to |
+|---|---|
+| `list_data_product_resources` | `resources/list` |
+| `read_data_product_resource` (takes `uri`) | `resources/read` |
+
+They are the one place a *tool* may supply pinned-document content. The server
+implements them over the same reader as the resource methods, so the documents,
+mime types, and error payloads are identical — they take no lock, boot no
+runtime, and return no credentials. They are still the fallback, not the
+default: prefer the resource operations whenever the client offers them, and
+reach for the bridge only on the client's lack of that capability, never to
+retry a read that failed.
 
 ## The five resources
 
@@ -132,6 +152,21 @@ To enumerate what a product actually exposes, walk `ports[].model_names` (and
 union them yourself if you need a flat list). This mirrors exactly what a
 deployed product reports for the same manifest, which is why the projection
 refuses to union on your behalf.
+
+## Static artifact lifecycle
+
+After build or resume, `nxd-dp-static-artifact` reads `current`, then the exact
+release `verified.json` and `outputs`, validates one matching release bundle,
+and writes a self-contained HTML file before `describe_models` or any query.
+It fails whole on a missing or mismatched read.
+`list_data_products` is discovery only and never fills a release-document gap.
+After a same-workflow rebuild, discard cached resource URIs and rerender the
+new sequence; the older file is historical.
+
+It reads those documents through the resource operations when the client
+exposes them, and through the two bridge tools above when it does not — one
+transport for the whole bundle either way. No other tool may supply artifact
+content.
 
 ## When a read fails
 

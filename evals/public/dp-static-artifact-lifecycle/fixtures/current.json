@@ -1,0 +1,7 @@
+{
+  "workflow": "customer/health",
+  "publish_seq": 17,
+  "definition_id": "definition-1f6c",
+  "artifact_id": "artifact-7aa9",
+  "release_uri": "nxd://data-products/customer%2Fhealth/releases/17/verified.json"
+}

@@ -51,8 +51,9 @@ cross-session catalog and a fast re-serve; use them:
    `mcp__nxd-desktop__resume_data_product` with that `workflow` id (pass it
    verbatim). It reuses the durable published artifact and returns a fresh
    `semantic_endpoint` plus a session `bearer_token` — the same shape
-   `build_data_product` returns — in seconds, with **no** regeneration. Every
-   ruling encoded when the product was built is preserved.
+   `build_data_product` returns — in seconds, with **no** regeneration. Then
+   render the pinned release with `nxd-dp-static-artifact` before describing or
+   querying it. Every ruling encoded when the product was built is preserved.
 3. **Describe, then answer.** Call `mcp__nxd-desktop__describe_models` with the
    returned endpoint/token before mapping any question — the authoritative
    measure and dimension names live there, not in the `list_data_products` table

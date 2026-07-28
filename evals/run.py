@@ -185,6 +185,16 @@ DERIVATION_RUNNER_SIDE_FIXTURES = {
     # reason to be in the workspace.
     "check_derived_closure.py",
 }
+STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES = {
+    # The checker states the exact render order, required glosses and forbidden
+    # payload fields. Handing it to the agent turns "follow the skill contract"
+    # into "satisfy this file", which is the opposite of what the scenario
+    # measures. Scoped to this scenario rather than to every scenario declaring
+    # a deterministic_check, so other scenarios' workspaces are unchanged.
+    # (The bridge-read-*.json fixtures stay in the workspace — prompt.md points
+    # the agent at them as reference transport shapes.)
+    "check_static_artifact.py",
+}
 # MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
 # file read, so MCP scenarios get a longer agent timeout.
 MCP_AGENT_TIMEOUT_S = 1800
@@ -393,6 +403,7 @@ def build_workspace(
             # runner-only discriminator assertions to the agent.
             if (item.name.startswith(".") or item.name == "__pycache__"
                     or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES
+                    | STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES
                     | DERIVATION_RUNNER_SIDE_FIXTURES):
                 continue
             dst = ws / item.name
