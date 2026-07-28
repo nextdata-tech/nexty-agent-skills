@@ -549,7 +549,10 @@ def _score_c1(row: dict[str, str], bands: list[dict[str, str]]) -> dict[str, Any
             "provenance": "", "limitation": ""}   # read, matched nothing
 ```
 
-Two asserts, on top of the Tier-1 pair, and both are falsifiable:
+Three asserts, on top of the Tier-1 pair, and each is falsifiable — coverage,
+absence, and anchoring. They are separate because each is blind to the others'
+defect: coverage cannot see a row that scored an absence, and anchoring skips
+that row because its quote is the exempt sentinel.
 
 ```python
 def _assert_explanations(
@@ -574,6 +577,21 @@ def _assert_explanations(
         raise RuntimeError(
             f"{len(missing)} scored cells have no explanation row carrying a "
             f"band_id, e.g. {missing[:3]}"
+        )
+    # Absence: no explanation row may carry BOTH a score and a limitation.
+    # That pair is the silent path this file's absence section forbids — an
+    # uncaptured row folded into the bottom band — and neither check above can
+    # see it: the row has a band_id, so coverage is satisfied, and its quote is
+    # the exempt sentinel, so anchoring skips it. It needs its own assert.
+    scored_absences = [
+        (r["entity_key"], r["criterion"], r["limitation"])
+        for r in expl
+        if r["limitation"] and r["score"] is not None
+    ]
+    if scored_absences:
+        raise RuntimeError(
+            f"{len(scored_absences)} cells scored despite an absence limitation, "
+            f"e.g. {scored_absences[:3]} — absence takes no score"
         )
     # Anchoring: the quote really is a substring of the field it cites. This is
     # the substring assert llm-judgments.md defers to the consuming model — it
