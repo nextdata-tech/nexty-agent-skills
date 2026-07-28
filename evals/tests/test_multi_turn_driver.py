@@ -69,6 +69,10 @@ def test_turn_defaults_to_always():
         [{"text": "x", "when": "maybe"}],
         [{"text": "x", "timeout_s": 0}],
         [{"text": "x", "timeout_s": "60"}],
+        # `bool` subclasses `int`, so a bare isinstance check accepts this and
+        # silently installs a ~1-second turn cap nobody wrote.
+        [{"text": "x", "timeout_s": True}],
+        [{"text": "x", "timeout_s": False}],
         ["just a string"],
     ],
 )
@@ -261,8 +265,31 @@ for line in sys.stdin:
     text = msg["message"]["content"][0]["text"]
     if mode == "wedge" and turn == 2:
         time.sleep(600)          # never answers: forces the deadline path
+    if mode == "chatty" and turn == 2:
+        # Streams forever without ever emitting a result event. A per-turn cap
+        # recomputed per line would be reset by each of these and never fire.
+        while True:
+            print(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "heartbeat"}]}}), flush=True)
+            time.sleep(0.2)
     if mode == "die" and turn == 2:
         sys.exit(3)              # dies mid-conversation
+    if mode == "dirty_exit" and turn == 2:
+        # Answers in full, THEN dies. The transcript looks complete, so an
+        # ignored exit code grades a disowned run as success.
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": f"saw: {text}"}]}}), flush=True)
+        print(json.dumps({"type": "result", "result": "answer 2",
+                          "is_error": False, "num_turns": 1}), flush=True)
+        sys.stderr.write("fatal: session store corrupted\n")
+        sys.stderr.flush()
+        sys.exit(1)
+    if mode == "hang_on_close" and turn == 2:
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": f"saw: {text}"}]}}), flush=True)
+        print(json.dumps({"type": "result", "result": "answer 2",
+                          "is_error": False, "num_turns": 1}), flush=True)
+        time.sleep(600)          # never exits after stdin closes
     for _ in range(noise):       # fill the stderr pipe to prove it is drained
         sys.stderr.write("x" * 512 + "\n")
     sys.stderr.flush()
@@ -413,6 +440,89 @@ def test_the_run_budget_is_whole_run_not_per_turn(fake_cli, tmp_path):
     # Comfortably under 2x the budget, which is what a per-turn deadline would
     # have allowed for these two turns.
     assert elapsed < 8, elapsed
+
+
+def test_a_per_turn_cap_is_wall_clock_not_a_gap_between_lines(fake_cli, tmp_path):
+    """A turn that streams continuously must still trip its own cap.
+
+    Recomputing the cap inside the read loop makes every streamed line reset it,
+    so a turn emitting heartbeats or tool chatter runs to the RUN deadline while
+    reporting a per-turn budget it never enforced — the per-turn cap silently
+    becomes decoration on exactly the runaway turns it exists to bound.
+    """
+    started = time.monotonic()
+    ok, _trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 60,
+        env_overrides={"FAKE_MODE": "chatty"},
+        followup_turns=[eb.FollowupTurn(text="second", timeout_s=1)],
+    )
+    elapsed = time.monotonic() - started
+    assert not ok
+    # Nowhere near the 60s run budget: the TURN cap is what stopped it.
+    assert elapsed < 15, elapsed
+    # And it says so — blaming the run budget sends the reader to raise
+    # --agent-timeout, which cannot fix a turn-level cap.
+    assert "1s turn budget" in metrics["error"]
+    assert "during turn 2" in metrics["error"]
+    assert not _surviving_fake_cli_pids(fake_cli)
+
+
+def test_the_run_budget_is_still_named_when_it_is_the_one_that_expires(
+    fake_cli, tmp_path
+):
+    """The turn-vs-run attribution must not flip the other way: a wedged turn
+    with no per-turn cap still reports the run budget."""
+    ok, _trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 4,
+        env_overrides={"FAKE_MODE": "wedge"},
+        followup_turns=[eb.FollowupTurn(text="second")],
+    )
+    assert not ok
+    assert "timed out after 4s" in metrics["error"]
+    assert "turn budget" not in metrics["error"]
+
+
+def test_a_dirty_exit_after_a_complete_transcript_is_not_success(
+    fake_cli, tmp_path
+):
+    """Multi-turn must fail a nonzero exit exactly as single-turn does. A CLI
+    that emits its result events and then dies has disowned the run; grading the
+    transcript ok reports an error path as agent success."""
+    ok, _trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 60,
+        env_overrides={"FAKE_MODE": "dirty_exit"},
+        followup_turns=[eb.FollowupTurn(text="second")],
+    )
+    assert not ok, metrics
+    assert metrics["exit_code"] == 1
+    assert "session store corrupted" in metrics["error"]
+
+
+def test_a_cli_that_hangs_on_close_is_recorded_not_silently_passed(
+    fake_cli, tmp_path
+):
+    """A CLI SIGKILL'd because it never exited after stdin closed must not
+    report a clean run — and must not leave the child behind."""
+    ok, _trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 60,
+        env_overrides={"FAKE_MODE": "hang_on_close"},
+        followup_turns=[eb.FollowupTurn(text="second")],
+    )
+    assert not ok, metrics
+    assert metrics["killed_on_close"] is True
+    assert "did not exit after its input was closed" in metrics["error"]
+    assert not _surviving_fake_cli_pids(fake_cli)
+
+
+def test_a_clean_multi_turn_run_records_its_exit_code(fake_cli, tmp_path):
+    """The exit-code gate must not fail healthy runs."""
+    ok, _trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 60,
+        followup_turns=[eb.FollowupTurn(text="second")],
+    )
+    assert ok, metrics
+    assert metrics["exit_code"] == 0
+    assert metrics["killed_on_close"] is False
 
 
 def _surviving_fake_cli_pids(bin_dir: Path) -> list[int]:

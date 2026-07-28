@@ -391,8 +391,11 @@ single-turn and runs on exactly the pre-existing path:
   measurement. Skipped turns are recorded in `metrics["skipped_turns"]`, and the
   judge is told to fail their annotated checks as "turn not sent" rather than
   grade them against a conversation that never happened.
-- `turns[].timeout_s` — optional per-turn cap. The run-level `--agent-timeout`
-  stays a **whole-run** budget regardless of turn count.
+- `turns[].timeout_s` — optional per-turn cap (positive int; `true` is
+  rejected). Wall-clock from the moment the turn is sent, so a turn that streams
+  continuously does not extend it. The run-level `--agent-timeout` stays a
+  **whole-run** budget regardless of turn count, and whichever budget expires
+  first is named in the error.
 - `checks[].turn` — annotation only. It tells the judge which turn a check is
   about; it never slices the trace, because "did the agent honour the
   correction" is unanswerable without turn 1 in view.

@@ -98,9 +98,11 @@ class FollowupTurn:
     #: shape); ``"awaiting_input"`` sends only when the previous turn's final
     #: answer ended with :data:`TURN_BOUNDARY_SENTINEL`.
     when: str = "always"
-    #: Per-turn wall-clock budget, further bounded by whatever remains of the
-    #: run-level ``timeout_s`` — which stays a whole-RUN budget regardless of
-    #: how many turns a scenario scripts.
+    #: Per-turn wall-clock budget, measured from the moment the turn is sent
+    #: and further bounded by whatever remains of the run-level ``timeout_s`` —
+    #: which stays a whole-RUN budget regardless of how many turns a scenario
+    #: scripts. A chatty turn does not extend it: the cap is a fixed instant,
+    #: not a gap between streamed lines.
     timeout_s: int | None = None
 
 
@@ -134,7 +136,14 @@ def parse_followup_turns(raw: object) -> list[FollowupTurn]:
                 f"{', '.join(TURN_WHEN_VALUES)}; got {when!r}"
             )
         timeout_s = item.get("timeout_s")
-        if timeout_s is not None and (not isinstance(timeout_s, int) or timeout_s <= 0):
+        # `bool` is a subclass of `int`, so a bare isinstance check accepts
+        # `true` and silently yields a ~1-second cap — a turn budget nobody
+        # wrote, failing the turn as an agent timeout. Reject it explicitly.
+        if timeout_s is not None and (
+            isinstance(timeout_s, bool)
+            or not isinstance(timeout_s, int)
+            or timeout_s <= 0
+        ):
             raise ValueError(
                 f"checks.json turns[{i}] 'timeout_s' must be a positive int"
             )
@@ -486,7 +495,10 @@ class ClaudeBackend:
             # after the sweep ran and leak a supervisor for the rest of the run.
             with contextlib.suppress(OSError, ValueError):
                 proc.kill()
-            with contextlib.suppress(OSError, ValueError):
+            # TimeoutExpired subclasses SubprocessError, NOT OSError, so it
+            # would escape a suppress(OSError) and crash the whole eval run
+            # instead of erroring this one scenario.
+            with contextlib.suppress(OSError, ValueError, subprocess.TimeoutExpired):
                 proc.wait(timeout=30)
             detail = _stderr_tail()
             return False, "", {"error": f"{error}: {detail[-2000:]}" if detail else error}
@@ -529,22 +541,34 @@ class ClaudeBackend:
 
             lines: list[str] = []
             saw_result = False
-            while True:
-                remaining = deadline - time.monotonic()
-                if turn is not None and turn.timeout_s is not None:
-                    remaining = min(remaining, turn.timeout_s)
-                if remaining <= 0:
-                    return _abort(
-                        f"agent timed out after {timeout_s}s during turn "
-                        f"{turn_index}"
+            # Both budgets are fixed points in time, taken ONCE before the read
+            # loop. Deriving the turn cap inside the loop instead would restart
+            # it on every streamed line, turning a wall-clock cap into a
+            # gap-between-lines cap: a turn emitting steady heartbeats or tool
+            # chatter would never trip it and would run to the run deadline.
+            turn_deadline = deadline
+            if turn is not None and turn.timeout_s is not None:
+                turn_deadline = min(deadline, time.monotonic() + turn.timeout_s)
+
+            def _timeout_error(_turn_deadline: float = turn_deadline) -> str:
+                # Name the budget that actually expired. Reporting the run
+                # budget for a per-turn timeout sends the reader off raising
+                # --agent-timeout, which cannot fix a turn-level cap.
+                if _turn_deadline < deadline:
+                    return (
+                        f"agent exceeded its {turn.timeout_s}s turn budget "  # type: ignore[union-attr]
+                        f"during turn {turn_index}"
                     )
+                return f"agent timed out after {timeout_s}s during turn {turn_index}"
+
+            while True:
+                remaining = turn_deadline - time.monotonic()
+                if remaining <= 0:
+                    return _abort(_timeout_error())
                 try:
                     line = stdout_q.get(timeout=remaining)
                 except queue.Empty:
-                    return _abort(
-                        f"agent timed out after {timeout_s}s during turn "
-                        f"{turn_index}"
-                    )
+                    return _abort(_timeout_error())
                 if line is None:
                     return _abort(
                         f"claude exited during turn {turn_index} without a "
@@ -570,12 +594,21 @@ class ClaudeBackend:
         # Closing stdin ends the session; the CLI drains and exits.
         with contextlib.suppress(OSError, ValueError):
             proc.stdin.close()  # type: ignore[union-attr]
+        killed_on_close = False
         try:
             returncode = proc.wait(timeout=max(5, int(deadline - time.monotonic())))
         except subprocess.TimeoutExpired:
+            # Hung on stdin close. Kill and reap, but remember that we did: the
+            # transcript is complete, yet the process did not shut down cleanly.
+            killed_on_close = True
             with contextlib.suppress(OSError, ValueError):
                 proc.kill()
-            returncode = proc.wait(timeout=30)
+            try:
+                returncode = proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                # Killed but unreapable (a child wedged in uninterruptible I/O).
+                # Raising here would abort the entire eval run.
+                returncode = None
         for reader in readers:
             reader.join(timeout=5)
 
@@ -586,12 +619,25 @@ class ClaudeBackend:
             "turns_sent": turns_sent,
             "skipped_turns": skipped_turns,
             "awaited_input_turns": awaited_input_turns,
+            "exit_code": returncode,
+            "killed_on_close": killed_on_close,
         })
         if not trace and not metrics.get("final_answer"):
             detail = _stderr_tail()
             return False, "", {
                 "error": f"empty stream output (exit {returncode}): {detail[-2000:]}"
             }
+        # A nonzero exit fails the run exactly as it does on the single-turn
+        # path. A CLI that emits its result events and then dies with a fatal
+        # error would otherwise be graded ok on a transcript it disowned.
+        if returncode != 0:
+            detail = _stderr_tail()
+            reason = (
+                "did not exit after its input was closed"
+                if killed_on_close else f"exited {returncode}"
+            )
+            metrics["error"] = f"claude {reason}: {detail[-2000:]}"
+            return False, trace, metrics
         return not metrics.get("is_error", False), trace, metrics
 
     @staticmethod
