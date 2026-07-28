@@ -255,6 +255,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-eval-harness` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
 | `nxd-generate-dp` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
 | `nxd-pocket-loop` | Drive the local Nexty Pocket loop end to end — infer a semantic model, generate a runnable data product, serve it on the local desktop supervisor, answer natural-language questions against it, and refine wrong answers back into a regenerate |
+| `nxd-review-closure` | Review an authored closure adversarially against the original request — hunt the logical and semantic defects a structural self-check cannot see (an unanswerable question, a capability dismissed rather than researched, an aggregation wrong for its grain, a silently-resolved ruling, an assert that restates its own arithmetic) and return them as claims the builder must adjudicate |
 
 ## Usage
 

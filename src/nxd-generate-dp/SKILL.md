@@ -445,7 +445,8 @@ surfaces — rulings still land as data (`nxd_decisions`) and the Step-3b assert
 
 ### Step 7 — Self-check before handing off (MANDATORY)
 
-Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the
+**Step 6b, only when `nxd-review-closure` is installed**: first dispatch a read-only reviewer with the closure AND the verbatim request, to hunt what this structural check cannot see (an unanswerable question, a capability dismissed rather than researched, an aggregation wrong for its grain, a silently-resolved ruling, an assert restating its own arithmetic). What returns are CLAIMS — adjudicate each `accepted`/`rejected`/`out_of_scope`, reject ONLY with a `file:line` or request-text citation, bounce a HIGH finding needing a new ruling back as `gap_found`, record the round in `CONTEXT.md`. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
+Then the self-check itself. Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the
 naming invariant (`models.py` == `.promise` == `PHYSICAL_MODELS` ==
 `main.<name>`), then separately confirm `BASE_MODELS` — and only `BASE_MODELS` —
 matches the `data/` directories (derived models and `.model(...)` views have no
