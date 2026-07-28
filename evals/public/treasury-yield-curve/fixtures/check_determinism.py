@@ -319,8 +319,14 @@ def main() -> int:
     for name in PASSES:
         print(f"PASS {name}")
     for name, detail in FAILURES:
-        print(f"FAIL {name}")
-        print(f"  {detail}")
+        # The harness keeps ONLY lines starting "FAIL " (run.py builds its
+        # `failures` list that way), so an indented follow-up line is dropped
+        # and the recorded fact degrades to a bare name like "FAIL build-1" —
+        # which says a build failed but not why, leaving no way to tell a
+        # closure defect from an environment one without re-running by hand.
+        # Keep the cause on the FAIL line, collapsed to one line.
+        one_line = " ".join(str(detail).split())
+        print(f"FAIL {name}: {one_line[:600]}")
     print()
     print(f"{len(PASSES)} passed, {len(FAILURES)} failed")
     if not FAILURES:
