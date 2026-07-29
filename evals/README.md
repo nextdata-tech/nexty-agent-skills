@@ -33,7 +33,7 @@ it is evidence that it never ran.
 | | Runs on every PR | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 6 `ci_skip` | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 11 `ci_skip` | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | any | any |
 | **Backend** | `codex` both sides | any | any |
 | **Gate** | fails on regression vs. baseline | reports drift, never fails | — |
@@ -49,7 +49,7 @@ one is responsible when a change ships unmeasured:
   scenarios whose `checks.json` names a changed skill (computed by
   `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
   `skill-sets.yaml`, the workflow — select every scenario.
-- **The 6 `ci_skip` scenarios never run automatically**, so the skills they
+- **The 11 `ci_skip` scenarios never run automatically**, so the skills they
   cover are unguarded. `nxd-data-product-query` is covered *only* by skipped
   scenarios and `nxd-mesh-analyzer` has no scenario at all — for those two, a
   green eval check means "nothing ran", not "nothing regressed". Run them
@@ -150,8 +150,10 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 2 of 23 public scenarios use this today (`derive-models-from-questions`,
-`coauthor-supplied-rubric`). It is the strongest signal available — prefer it
+Only 5 of 29 public scenarios use this today
+(`coauthor-executable-policy-readback`, `coauthor-supplied-rubric`,
+`derive-models-from-questions`, `dp-static-artifact-lifecycle`,
+`treasury-yield-curve`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)

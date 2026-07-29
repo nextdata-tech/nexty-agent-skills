@@ -32,6 +32,7 @@ import ast
 import csv
 import hashlib
 import io
+import json
 import re
 import sys
 import tempfile
@@ -108,20 +109,51 @@ BASH_MARKER = "[tool_use:Bash]"
 # read. Gating on the interpreter fails that agent for inspecting carefully,
 # which inverts what the scenario rewards. What matters is whether the command
 # BODY writes, so interpreted commands are scanned for write operations below.
+#
+# Matched as word-anchored regexes against the PARSED `command`, never as bare
+# substrings over the serialized tool input. Both mattered: `"dd "` matched
+# inside `add ` (so `head -5 …` described as "Add up the criteria columns"
+# registered as a write), and scanning the whole JSON let the `description`
+# field — prose the agent writes about its own intent — decide a hard gate.
 SHELL_MUTATIONS = (
-    "mkdir", "cp ", "touch ", "tee ", "> ", ">>", "install -", "rsync",
-    "mv ", "sed -i", "dd ",
+    r"\bmkdir\b", r"\bcp\s", r"\btouch\s", r"\btee\s", r">\s", r">>",
+    # coreutils `install` copies files into place. `pip install` / `uv pip
+    # install` provision the interpreter the agent inspects WITH and write
+    # nothing into the closure, so they must not read as materialization.
+    r"(?<!pip )\binstall\s+-[mDdt]", r"\brsync\b", r"\bmv\s", r"\bsed\s+-i",
+    r"\bdd\s",
 )
 
 # Write operations inside an interpreted command body. These catch a `python -c`
 # or `uv run` invocation that actually materializes something, without flagging
 # one that only reads.
+#
+# `duckdb.connect` is deliberately absent: `duckdb.connect()` with no path is an
+# in-memory read, which is exactly the careful inspection this gate permits.
+# Only a connect that names a file materializes one, and that is caught by the
+# file-writing markers below.
 INTERPRETED_WRITES = (
     "'w'", '"w"', "'a'", '"a"', "'x'", '"x"',
     "to_csv", "to_parquet", "write_text", "write_bytes", "writelines",
     ".write(", "shutil.", "os.makedirs", "makedirs", "os.mkdir", "Path.mkdir",
-    ".mkdir(", "os.rename", "os.replace", "duckdb.connect",
+    ".mkdir(", "os.rename", "os.replace",
 )
+
+
+def bash_command(line: str) -> str:
+    """The `command` a Bash tool_use line ran, or "" if it cannot be parsed.
+
+    Only the command is graded. The sibling `description` field is prose the
+    agent writes ABOUT its intent, so letting it reach the mutation matchers
+    lets a phrase like "Add up the criteria columns" fail a hard ordering gate.
+    """
+    payload = line.split(BASH_MARKER, 1)[1].strip() if BASH_MARKER in line else ""
+    try:
+        return str(json.loads(payload).get("command", ""))
+    except (ValueError, AttributeError):
+        # Truncated or non-JSON payload: fall back to the whole thing rather
+        # than silently grading nothing, which would open the gate entirely.
+        return payload
 
 
 def first_write_index(trace_lines: list[str]) -> int | None:
@@ -129,11 +161,12 @@ def first_write_index(trace_lines: list[str]) -> int | None:
     for i, line in enumerate(trace_lines):
         if any(m in line for m in WRITE_MARKERS):
             return i
-        if BASH_MARKER in line and (
-            any(m in line for m in SHELL_MUTATIONS)
-            or any(m in line for m in INTERPRETED_WRITES)
-        ):
-            return i
+        if BASH_MARKER in line:
+            cmd = bash_command(line)
+            if any(re.search(p, cmd) for p in SHELL_MUTATIONS) or any(
+                m in cmd for m in INTERPRETED_WRITES
+            ):
+                return i
     return None
 
 
@@ -160,9 +193,18 @@ def turn_2_index(trace_lines: list[str]) -> int | None:
 #
 # The numeral must also sit close to the operator: a relation and a digit 40
 # characters apart are usually two unrelated clauses.
+#
+# 3. A criterion label must not supply the operator. `C5 = 5` and `C1 = 35` are
+#    a criterion SCORE and a criterion WEIGHT — both values the USER supplied in
+#    the prompt. Admitting them let the gate pass on prompt echo: the rubric's
+#    own "caps at NEEDS_MORE_INFO unless C5 = 5" line appears in essentially
+#    every read-back, so a card whose only forward-looking statement was "I'll
+#    pick the cut-offs later" scored as executable. What this gate grades is a
+#    cut-off the AGENT chose, so a `C<digit>`-anchored equality is excluded.
 QUOTED_THRESHOLD = re.compile(
     r"(ADVANCE|HOLD|REJECT|NEEDS[_ ]MORE[_ ]INFO)"
     r"[^\n]{0,80}?"
+    r"(?<!\bC\d)(?<!\bC\d )"
     r"(>=|≥|>|<=|≤|<|=|\bat\b|\babove\b|\bbelow\b|\bbetween\b|\bscore of\b)"
     r"[^\n]{0,12}?"
     r"(\d+(?:\.\d+)?)",

@@ -110,7 +110,7 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-17 of 23 public scenarios. The remaining 6 declare `ci_skip` in their
+18 of 29 public scenarios. The remaining 11 declare `ci_skip` in their
 `checks.json` and need a Tier 2 or Tier 3 install:
 
 | Scenario | Needs |
