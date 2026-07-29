@@ -488,6 +488,30 @@ def test_a_stdout_only_fatal_error_reaches_the_caller(fake_cli, tmp_path):
     assert "Invalid API key" in metrics["error"], metrics["error"]
 
 
+def test_a_long_description_cannot_truncate_the_command_away():
+    """The trace caps tool input at 600 chars, and gates parse `command` out.
+
+    With a long `description` serialized first, the cut could land before
+    `command` ever appeared — the extractor would find nothing, the ordering
+    gate would see no write, and `card-before-materialization` would PASS on a
+    run that did materialize. Serializing `command` first makes that
+    unreachable.
+    """
+    payload = eb._tool_input_json({
+        "description": "x" * 900,
+        "command": "mkdir -p ws/data/applicants",
+    })
+    assert payload[:600].startswith('{"command":')
+    # And the gate really can read it back out of the truncated line.
+    sys.path.insert(0, str(
+        EVALS_DIR / "public" / "coauthor-executable-policy-readback" / "fixtures"
+    ))
+    import check_executable_policy as chk  # noqa: E402
+    line = f"[tool_use:Bash] {payload[:600]}"
+    assert "mkdir" in chk.bash_command(line)
+    assert chk.first_write_index([line]) == 0
+
+
 def test_an_abort_keeps_the_completed_turns_for_diagnosis(fake_cli, tmp_path):
     """A late-turn timeout otherwise discards everything that DID happen.
 

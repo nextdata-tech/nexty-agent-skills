@@ -87,6 +87,24 @@ PARTIAL_TRACE_CHARS = 20_000
 CLOSE_GRACE_S = 30
 
 
+def _tool_input_json(inp: object) -> str:
+    """Serialize a tool_use input, `command` first.
+
+    The rendered line is truncated at 600 chars, and trace-reading gates parse
+    `command` out of it to decide whether a run materialized anything. With
+    dict order left to the CLI, a long `description` serialized ahead of
+    `command` could push the command past the cut — the extractor would then
+    find nothing, the gate would see no write, and `card-before-materialization`
+    would PASS on a run that did write. Ordering the key that gates a verdict
+    first makes that unreachable rather than merely unlikely.
+    """
+    if not isinstance(inp, dict):
+        return json.dumps(inp, ensure_ascii=False)
+    ordered = {k: inp[k] for k in ("command",) if k in inp}
+    ordered.update({k: v for k, v in inp.items() if k not in ordered})
+    return json.dumps(ordered, ensure_ascii=False)
+
+
 def turn_separator(turn_index: int, text: str, *, after_await: bool = False) -> str:
     """Render the trace separator announcing a scripted user turn.
 
@@ -763,8 +781,10 @@ class ClaudeBackend:
                         parts.append(f"[assistant] {block['text'].strip()}")
                     elif block.get("type") == "tool_use":
                         tool_calls += 1
-                        inp = json.dumps(block.get("input", {}), ensure_ascii=False)
-                        parts.append(f"[tool_use:{block.get('name')}] {inp[:600]}")
+                        parts.append(
+                            f"[tool_use:{block.get('name')}] "
+                            f"{_tool_input_json(block.get('input', {}))[:600]}"
+                        )
             elif typ == "user":
                 for block in d.get("message", {}).get("content", []):
                     if block.get("type") == "tool_result":
