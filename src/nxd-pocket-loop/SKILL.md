@@ -32,8 +32,8 @@ intent + source + questions
    → infer the semantic model        (nxd-semantic-data-product)
    → generate the runnable closure    (nxd-generate-dp)
    → build + serve on the supervisor  (nxd-desktop MCP)
-   → translate NL question → query    (this skill, agent-side)
-   → answer, and refine wrong answers back into a regenerate
+   → render the pinned static release  (nxd-dp-static-artifact)
+   → describe → translate NL → query → present → refine
 ```
 
 This skill is the **orchestrator** and the **entry point for any end-to-end
@@ -61,11 +61,12 @@ the one-DP-in-flight rule, and where the loop may fan out to subagents, all
 live in [reference/scheduling.md](reference/scheduling.md). The two routes that
 decide the whole loop:
 
-- **A source is in scope, no suitable local product exists** → run the loop
-  (Steps 1–6): gather, infer, generate, build, query, refine.
+- **A source is in scope, no suitable local product exists** → run the loop: gather,
+  infer, generate, build, artifact, describe, query, present, refine.
 - **An existing local product but no live endpoint/token** (the typical new
   session, since the bearer never persists) → **reattach, don't rebuild**:
-  `list_data_products` → `resume_data_product`. See
+  `list_data_products` → `resume_data_product` → artifact. `list_data_products` is
+  discovery only and must never supply a static-artifact fallback — see
   [reference/context-and-resume.md](reference/context-and-resume.md).
 
 Treat ambiguous requests conservatively: if a question could mean either a
@@ -84,8 +85,8 @@ Choose this order before invoking any runtime command:
    — use them for the entire discover, build, resume, describe, and query
    sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
    on-demand handoffs. This is the supported route for Claude Desktop and Claude
-   Cowork. Read-only `nxd://` **resources** expose what a published release
-   *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
+   Cowork. Read-only `nxd://` **resources** — with tool bridges where a client exposes none —
+   expose what a release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
    `nxd-desktop-supervisor` only when the session context has positively
    established that the shell is the user's macOS host **and** both
@@ -279,12 +280,22 @@ CLI is used only under the confirmed host-local Darwin conditions in "Choose
 the execution surface," kept equivalent: same closure served, same
 stop-on-failure.
 
-### Step 5 — Answer the questions (NL → governed query)
+### Step 4a — Render the pinned static artifact
+
+After every successful build or resume, invoke **nxd-dp-static-artifact** for the workflow
+before `describe_models` or any query. It reads only the current, verified and outputs
+documents (via resource operations, or the bridge tools on a client exposing none) and
+writes one self-contained release HTML file. Report artifact `status`, `path` and
+`publish_seq` separately from the endpoint; on failure report it but keep a healthy
+endpoint usable for describe/query. With an endpoint but **no workflow**, say the artifact
+is unavailable and query on. A rebuild discards cached URIs and renders its new sequence.
+
+### Step 5 — Describe, query, and present
 
 The query surface is **structured** (measure/dimension names); the
 natural-language translation is yours to do. For each question:
 
-1. **Discover the catalog first.** Call `mcp__nxd-desktop__describe_models`
+1. **Describe the served catalog first.** Call `mcp__nxd-desktop__describe_models`
    with the endpoint/token returned by the build (or supplied for an existing
    local product) — the declared vocabulary is canonical, don't guess concept
    names from source columns.
@@ -340,15 +351,14 @@ and the non-convergence report live in
 - **Model / DP-level** — the inferred model is wrong (missing metric, wrong
   grain, missing join, wrong PII, or an undistinguishing description), or the
   question needs a column or grain that doesn't exist (a filtered figure, a
-  ratio, a monthly rollup, a classification) — a **derived model**, not a
-  query tweak: go
-  back to Step 2/3 and have nxd-generate-dp materialize the ruling, then
-  rebuild through MCP with the **same** `workflow`. **After every rebuild,
-  refresh:** use the endpoint/token returned by that build, then describe the
-  catalog before mapping again — the regenerated model is exactly when the
-  catalog can differ. Define success as a catalog-grounded answer the user
-  accepts. If the loop doesn't converge within the caps, report what you tried,
-  what the product currently declares, and where the gap is — never loop
+  ratio, a monthly rollup, a classification) — a **derived model**, not a query
+  tweak: go back to Step 2/3 and have nxd-generate-dp materialize the ruling,
+  then rebuild through MCP with the **same** `workflow`. **After every rebuild,
+  refresh:** discard cached artifact resources and current file; render the new
+  release first, then use the endpoint/token returned by the build and describe
+  the catalog before mapping again. Success is a catalog-grounded answer the
+  user accepts. If the loop doesn't converge within the caps, report what you
+  tried, what the product declares, and where the gap is — never loop
   indefinitely or give up silently.
 
 ## When questions require inference
@@ -432,10 +442,10 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
   MCP build is a reported failure, not permission to use a workspace-shell or
   database fallback.
 - **Reattach, don't rebuild, when the artifact is live.** In a fresh session
-  with no endpoint, `list_data_products` → `resume_data_product` recovers a
-  published workflow in seconds with a fresh bearer; rebuild only when
-  `collected` / `artifact_unavailable`
-  ([reference/context-and-resume.md](reference/context-and-resume.md)).
+  with no endpoint, `list_data_products` → `resume_data_product` → static
+  artifact recovers a published workflow in seconds with a fresh bearer;
+  `list_data_products` remains discovery only; rebuild only when `collected` /
+  `artifact_unavailable` ([reference/context-and-resume.md](reference/context-and-resume.md)).
 - **Hand off only host-visible paths.** Pass `build_data_product` an absolute
   generated-definition path explicitly exposed by the file-writing surface;
   never infer one from an attachment ID or isolated Linux path, and verify a
@@ -480,21 +490,11 @@ schema is nxd-generate-dp's `reference/llm-judgments.md`.
 |-------|------------------|
 | `nxd-semantic-data-product` | Infers the semantic model from the source + questions (Step 2) |
 | `nxd-generate-dp` | Generates the runnable local closure the supervisor serves (Step 3), including local-file, database, and REST API connector config — see its own `reference/` for the connector-type-specific shape, and `reference/llm-judgments.md` for landing an agent judgement (score/verdict/classification) as data. |
+| `nxd-dp-static-artifact` | Renders the pinned release HTML after build/resume and before describe/query (Step 4a) |
 | `nxd-data-product-query` | Source of the question→concept mapping approach (Step 5) |
 
 ## Reference docs (this skill)
 
-Two concerns live in their own docs so this file stays the orchestrator:
-[reference/scheduling.md](reference/scheduling.md) owns **task scheduling**
-(routing table, step order and dependency edges, remap/regenerate caps,
-one-DP-in-flight, subagent fan-out and offloading profiling/generation off the
-main thread);
-[reference/context-and-resume.md](reference/context-and-resume.md) owns
-**context** (what persists vs. dies, resume-first reattach, rebuild fallback
-and `SENSITIVE` credential recovery, the session ledger);
-[reference/inference.md](reference/inference.md) owns **inference**
-(teach/judge/incremental agent judgement);
-[reference/handoff-export.md](reference/handoff-export.md) owns the on-demand
-**export/handoff**. Step 5:
-[reference/query-grammar.md](reference/query-grammar.md); dlt:
-[reference/dlt.md](reference/dlt.md).
+Use [scheduling](reference/scheduling.md), [context-and-resume](reference/context-and-resume.md),
+[inference](reference/inference.md), [handoff-export](reference/handoff-export.md),
+[query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for their named details.
