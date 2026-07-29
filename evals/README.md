@@ -4,6 +4,71 @@ Use these scenarios to measure how fast and reliably an LLM can complete Nextdat
 
 `evals/` is a measurement harness, not customer-facing skill content. Keep shared scenarios generic. Put customer-specific, commercial-demo, or proprietary artifacts in `evals/private/`, which is ignored by git.
 
+> **New here?** [`GETTING-STARTED.md`](GETTING-STARTED.md) is the setup guide:
+> what to install per harness, how to run against OpenAI or Anthropic, and the
+> full environment-variable reference. The scenario suite this file documents
+> needs **no installs at all** — see "Running the suite" below.
+
+## This file covers one of four harnesses
+
+`evals/` holds four independent harnesses with separate dependencies and
+separate entry points. **This README documents the first one only.**
+
+| Harness | Entry point | Docs |
+|---|---|---|
+| **Scenario suite** (this file) | `evals/run.py` | you are here |
+| **`nxd_eval`** — Inspect-based, deterministic-EX + judged scoring with a Wilson/McNemar/FDR statistics contract | `uv run --project evals/nxd_eval` | [`nxd_eval/README.md`](nxd_eval/README.md), [`METHODOLOGY.md`](nxd_eval/METHODOLOGY.md) |
+| **Semantic MCP server** — makes the semantic tools real for 4 scenarios in *this* suite | started by `run.py` | [`mcp/README.md`](mcp/README.md) |
+| **Query loop** — multi-turn query refinement against a pharma mesh fixture | `evals/query-loop/run_query_loop.py` | — |
+
+A fifth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
+customer-facing form lives under `evals/private/cross-dp-joins/`.
+
+## What runs in CI vs. what only runs locally
+
+Only a narrow slice of the above runs automatically. Everything else is
+local-only, which means **a green PR is not evidence that it passed** —
+it is evidence that it never ran.
+
+| | Runs on every PR | Manual (`workflow_dispatch`) | Local only |
+|---|---|---|---|
+| **Harness** | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
+| **Scenarios** | only those covering changed skills, minus 6 `ci_skip` | any, incl. `ci_skip` | any |
+| **Skill set** | `current_pack` | any | any |
+| **Backend** | `codex` both sides | any | any |
+| **Gate** | fails on regression vs. baseline | reports drift, never fails | — |
+
+The scenario suite's own harness tests (`evals/tests/`) do run on every PR,
+under `ci.yml` — those cover the deterministic checkers and gates, not the
+skills.
+
+The automatic gate narrows on three axes at once, so be explicit about which
+one is responsible when a change ships unmeasured:
+
+- **Scenario selection.** A PR touching `src/**` or `evals/**` runs only the
+  scenarios whose `checks.json` names a changed skill (computed by
+  `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
+  `skill-sets.yaml`, the workflow — select every scenario.
+- **The 6 `ci_skip` scenarios never run automatically**, so the skills they
+  cover are unguarded. `nxd-data-product-query` is covered *only* by skipped
+  scenarios and `nxd-mesh-analyzer` has no scenario at all — for those two, a
+  green eval check means "nothing ran", not "nothing regressed". Run them
+  locally (see [`GETTING-STARTED.md`](GETTING-STARTED.md) tiers 2–3) when you
+  change either.
+- **Only `current_pack` runs.** The `no_skills` baseline and
+  `candidate_pack` comparisons — the numbers that actually show skill lift —
+  are local or manual only.
+
+`nxd_eval` has one manual-only CI job (`nxd-eval-smoke`): a live baseline over
+the stdio MCP transport with a cheap OpenAI model, gated on the
+`OPENAI_API_KEY` secret. It is a substrate smoke test — it proves the harness
+runs, not that any skill is good. The query loop and cross-dp-joins have no CI
+entry point at all.
+
+Detail on selection, the baseline, retry-on-regression, and flakiness markers
+is in [CI](#ci) below; per-harness setup is in
+[`GETTING-STARTED.md`](GETTING-STARTED.md).
+
 The target comparison is:
 
 | Variant | Purpose |
