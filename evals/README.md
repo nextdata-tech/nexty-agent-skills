@@ -107,6 +107,98 @@ Record these metrics for every run:
 | `success` | Whether the scenario-specific checks pass |
 | `variance_notes` | Differences between repeated runs of the same variant |
 
+## How a scenario is graded
+
+A cell's verdict comes from up to three graders of **descending trust**. The
+design principle: push as much of the verdict as possible onto mechanical
+evidence, and leave the judge only the questions that genuinely need reading
+comprehension.
+
+| Grader | Trust | What it can see | Where it lives |
+|---|---|---|---|
+| **Deterministic checker** | authoritative — overrides the judge | the landed workspace, plus withheld ground truth in `fixtures/` | `deterministic_check` in `checks.json` |
+| **Workspace-file quoting** | ground truth, but only about *content* | files the agent actually wrote | `workspace_files` in `checks.json` |
+| **LLM judge** | fallible; the fallback | the run trace + final answer, with tool results truncated | `checks[]` in `checks.json` |
+
+### 1. Deterministic checks (mechanical, authoritative)
+
+Opt-in per scenario. A checker script under the scenario's `fixtures/` runs
+against the landed workspace after the agent finishes, and its result is both
+**stated to the judge as an authoritative fact** and **enforced mechanically**:
+
+> a failed check fails the cell regardless of how generously the judge read the
+> transcript.
+
+```json
+"deterministic_check": { "script": "check_derived_closure.py", "deps": ["duckdb"] }
+```
+
+The checker gets `--fixtures` pointing at the scenario's own directory — never
+the workspace — because that is where withheld ground truth lives and it must
+stay out of the agent's reach. This is what stops a closure that produces wrong
+numbers from passing on a sympathetic judge read.
+
+Two properties worth knowing:
+
+- **A landed workspace records *what* the agent produced, not the *order* it
+  acted in.** A scenario asserting that a conversational checkpoint preceded
+  the first write cannot be graded from disk alone, so it sets `"wants_trace":
+  true` and receives the trace as a file — placed in its own temp dir, never
+  inside the workspace, since a file there would be visible to the agent and
+  would perturb any workspace-files assertion.
+- **A checker that could not run is an infrastructure error, not a `FAIL`.** It
+  says nothing about the agent, so it is reported separately and never recorded
+  in the ledger as an agent failure.
+
+Only 2 of 23 public scenarios use this today (`derive-models-from-questions`,
+`coauthor-supplied-rubric`). It is the strongest signal available — prefer it
+whenever a claim can be checked by running something.
+
+### 2. Workspace-file quoting (mechanical facts, judged)
+
+**A check about file content cannot be graded from a transcript.** An agent
+that writes a correct `models.py` without echoing it back is indistinguishable
+from one that wrote nothing, so the check fails for lack of evidence rather
+than for being wrong — and it flips run to run with how chatty the agent
+happened to be.
+
+Declaring `workspace_files` makes the harness read those files out of the
+workspace and quote them to the judge as authoritative. Used by 5 scenarios.
+Full detail, and the two traps that produced confident wrong verdicts before
+being fixed, in [Writing checks that can actually be
+graded](#writing-checks-that-can-actually-be-graded).
+
+### 3. The LLM judge (probabilistic)
+
+Everything else. The judge reads the trace and the final answer against the
+scenario's `checks.json` and returns a per-check verdict. It never sees the
+agent's prompt hints; the agent never sees `checks.json`.
+
+This is the fallible layer, and its failure modes are the reason the other two
+exist. **Tool results in the trace are truncated**, so a judge asked about file
+content is guessing. **One check must test one thing** — a check bundling three
+requirements forces the judge to collapse "two of three" into a single boolean,
+and it lands differently each run. That is not agent nondeterminism; it is an
+unanswerable question.
+
+### Why the verdict is still noisy
+
+Even with mechanical layers, an agent run is nondeterministic end to end. The
+harness treats that as a measurement problem rather than pretending otherwise:
+CI gates on regression rather than absolute pass, re-runs a regressing cell
+before blocking, marks genuinely unstable cells `flaky` so they never gate in
+either direction, and ships `flakiness.py` to *measure* instability instead of
+guessing at it. Read a disagreement asymmetrically — **a flip proves
+instability, but agreement only fails to disprove it.** See [CI](#ci) and
+[Measuring stability](#measuring-stability).
+
+For the statistics contract used by the *other* harness — Wilson lower bounds,
+McNemar paired tests, FDR correction, judge test-retest, and the
+execution-accuracy lineage — see
+[`nxd_eval/METHODOLOGY.md`](nxd_eval/METHODOLOGY.md). That framework grades a
+different question (how reliably an agent answers questions against a data
+product) with a heavier deterministic-EX + judged split.
+
 ## Running the suite (automated)
 
 `run.py` runs the whole loop — install a skill-set, drive a headless agent over

@@ -14,6 +14,12 @@ guide. Once you know which harness you need, its own README is authoritative.
 **If you are new and want to run something today: Tier 0 below needs no
 installs and covers 17 of the 23 public scenarios.**
 
+**If you want to understand what a verdict *means* before you trust one:**
+[How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
+three graders — mechanical deterministic checks that override the judge,
+workspace-file quoting, and the fallible LLM judge — and why the verdict is
+noisy even so.
+
 ---
 
 ## Tier 0 — the scenario suite (zero install)
