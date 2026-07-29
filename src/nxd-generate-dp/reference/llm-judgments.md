@@ -121,7 +121,7 @@ a re-judge append rows without reshaping a table.
 | `verdict` | `dimension()` | one of the landed verdict enum, or empty when the criterion is not a verdict criterion |
 | `evidence_field` | `dimension()` | which source field the judgement read — a column name on the facts model |
 | `evidence_quote` | `dimension()` | verbatim substring of `facts[entity_key][evidence_field]`, or literal `not stated` — see below |
-| `limitation` | `dimension()` | empty, or the absence kind when `score` is empty: `listed_uncaptured` (the source names the thing but its value was not extracted) or `not_stated` (the source says nothing) |
+| `limitation` | `dimension()` | empty, or the reason `score` is empty — never empty when it is. Absence kinds: `listed_uncaptured` (the source names the thing but its value was not extracted), `not_stated` (the source says nothing). Coverage kind: `no_band_matched` (the evidence was read, but the rubric had no band for it — a gap in the rubric, not in the source) |
 | `flags` | `dimension()` | free-text notes (e.g. `jd-mirror`, `no-repo`). Kept on this model only, never on the derived score sheet. |
 | `status` | `dimension()` | `proposed` by default (agent-produced); `confirmed` once reviewed |
 
@@ -327,13 +327,15 @@ candidate_judgments = (
                     name="judgment_limitation",
                     description=(
                         "Empty when the criterion was scored. Otherwise the "
-                        "absence kind that left 'score' empty: "
+                        "why 'score' is empty — set whenever it is. "
                         "'listed_uncaptured' (the source names the thing but "
                         "its value was not extracted — recoverable by "
-                        "re-extracting) or 'not_stated' (the source says "
-                        "nothing). Absence is never scored as the scale "
-                        "minimum, so a set limitation means NOT ASSESSED, "
-                        "not a low rating."
+                        "re-extracting), 'not_stated' (the source says "
+                        "nothing), or 'no_band_matched' (the evidence was "
+                        "read, but no band covered it — fix the rubric, not "
+                        "the extraction). Absence is never scored as the "
+                        "scale minimum, so a set limitation means NOT "
+                        "ASSESSED, not a low rating."
                     ),
                 ),
             ),
@@ -383,10 +385,11 @@ candidate_judgments_metrics = semantic_view(
                 description=(
                     "Mean agent-assigned score. Averages across criteria "
                     "unless the selection groups by criterion, and mixes "
-                    "rubric versions unless it filters on one. Skips rows "
-                    "whose score is empty (evidence absent), so group by "
-                    "limitation to see how much of the rubric was assessed "
-                    "before quoting this."
+                    "rubric versions unless it filters on one. Skips every "
+                    "row whose score is empty — absent evidence AND evidence "
+                    "no band covered — so group by limitation to see how "
+                    "much of the rubric was assessed, and which gap is the "
+                    "rubric's rather than the source's, before quoting this."
                 ),
             ),
         ),

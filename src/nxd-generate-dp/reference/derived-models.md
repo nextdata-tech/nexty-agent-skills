@@ -553,14 +553,22 @@ def _score_c1(row: dict[str, str], bands: list[dict[str, str]]) -> dict[str, Any
                                            if set(t.lower().split()) & matched),
                     "evidence_kind": band["evidence_kind"],  # 'fact' or 'inference'
                     "limitation": ""}
+    # Read, matched no band. `score` is empty, so `limitation` MUST name why:
+    # an empty one lands this row in the "assessed" bucket when consumers group
+    # by `limitation`, counting a rubric gap as a completed assessment.
+    # `no_band_matched` stays distinct from `not_stated` — the evidence WAS
+    # present and readable, the rubric simply had no band for it. That is a
+    # defect in the rubric, not in the source, and the two want different fixes.
     return {**base, "score": None, "band_id": "", "evidence_quote": raw,
-            "evidence_kind": "", "limitation": ""}   # read, matched nothing
+            "evidence_kind": "", "limitation": "no_band_matched"}
 ```
 
-Three asserts, on top of the Tier-1 pair, and each is falsifiable — coverage,
-absence, and anchoring. They are separate because each is blind to the others'
-defect: coverage cannot see a row that scored an absence, and anchoring skips
-that row because its quote is the exempt sentinel.
+Four asserts, on top of the Tier-1 pair, and each is falsifiable — coverage,
+absence, unexplained gap, and anchoring. They are separate because each is blind
+to the others' defect: coverage cannot see a row that scored an absence, the
+absence assert fires only when a score and a limitation appear TOGETHER so it
+cannot see a row carrying neither, and anchoring skips both because their quotes
+are the exempt sentinel.
 
 ```python
 def _assert_explanations(
@@ -600,6 +608,21 @@ def _assert_explanations(
         raise RuntimeError(
             f"{len(scored_absences)} cells scored despite an absence limitation, "
             f"e.g. {scored_absences[:3]} — absence takes no score"
+        )
+    # The inverse, and just as silent: unscored with NO limitation saying why.
+    # Such a row is skipped by every average (no score) yet groups under the
+    # empty limitation, so a consumer counting assessed coverage reads it as
+    # assessed. The unmatched-band fall-through is the path that produces it.
+    unexplained_gaps = [
+        (r["entity_key"], r["criterion"])
+        for r in expl
+        if r["score"] is None and not r["limitation"]
+    ]
+    if unexplained_gaps:
+        raise RuntimeError(
+            f"{len(unexplained_gaps)} cells are unscored with no limitation "
+            f"naming why, e.g. {unexplained_gaps[:3]} — an empty score must "
+            f"always say what stopped it"
         )
     # Anchoring: the quote really is a substring of the field it cites. This is
     # the substring assert llm-judgments.md defers to the consuming model — it
