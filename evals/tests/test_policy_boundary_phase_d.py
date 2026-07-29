@@ -106,7 +106,8 @@ def test_ledger_without_status_column_fails(tmp_path):
         tmp_path,
         base_models=("nxd_decisions",),
         physical_models=("nxd_decisions",),
-        ledger="decision_id,category,ruling\nw1,weight,C1 = 25\n",
+        ledger="decision_id,category,provenance,ruling\n"
+               "w1,weight,user_confirmed,C1 = 25\n",
         transform=CLEAN_TRANSFORM,
     )
     assert "no 'status' column" in out
@@ -117,19 +118,93 @@ def test_ledger_with_bad_status_value_fails(tmp_path):
         tmp_path,
         base_models=("nxd_decisions",),
         physical_models=("nxd_decisions",),
-        ledger="decision_id,status,ruling\nw1,approved,C1 = 25\n",
+        ledger="decision_id,status,provenance,ruling\n"
+               "w1,approved,user_confirmed,C1 = 25\n",
         transform=CLEAN_TRANSFORM,
     )
     assert "status has ['approved']" in out
 
 
-def test_well_formed_ledger_passes(tmp_path):
+def test_ledger_without_provenance_column_fails(tmp_path):
+    """status alone cannot say who authored a ruling.
+
+    A ledger carrying only status is the defect this column exists to close: a
+    weight the user supplied and a threshold the agent invented to fill an
+    underspecified rubric are the same row there.
+    """
     out = _run_phase_d(
         tmp_path,
         base_models=("nxd_decisions",),
         physical_models=("nxd_decisions",),
-        ledger=("decision_id,status,ruling\n"
-                "w1,confirmed,C1 = 25\nw2,proposed,mid-scale anchors\n"),
+        ledger="decision_id,status,ruling\nw1,confirmed,C1 = 25\n",
+        transform=CLEAN_TRANSFORM,
+    )
+    assert "no 'provenance' column" in out
+
+
+def test_ledger_with_bad_provenance_value_fails(tmp_path):
+    """The vocabulary is closed — that is what makes the class queryable."""
+    out = _run_phase_d(
+        tmp_path,
+        base_models=("nxd_decisions",),
+        physical_models=("nxd_decisions",),
+        ledger="decision_id,status,provenance,ruling\n"
+               "w1,confirmed,agent_invented,C1 = 25\n",
+        transform=CLEAN_TRANSFORM,
+    )
+    assert "provenance has ['agent_invented']" in out
+
+
+def test_status_and_provenance_are_checked_independently(tmp_path):
+    """Two axes, two verdicts — one bad column must not mask the other.
+
+    Written as an ordering trap: if the checks were nested (validate provenance
+    only once status is clean, or the reverse), one of these two complaints
+    would be silently dropped and half the ledger would go unvalidated.
+    """
+    out = _run_phase_d(
+        tmp_path,
+        base_models=("nxd_decisions",),
+        physical_models=("nxd_decisions",),
+        ledger="decision_id,status,provenance,ruling\n"
+               "w1,approved,agent_invented,C1 = 25\n",
+        transform=CLEAN_TRANSFORM,
+    )
+    assert "status has ['approved']" in out
+    assert "provenance has ['agent_invented']" in out
+
+
+def test_missing_provenance_still_reports_bad_status(tmp_path):
+    """The absent-column branch must not skip the other column's value check."""
+    out = _run_phase_d(
+        tmp_path,
+        base_models=("nxd_decisions",),
+        physical_models=("nxd_decisions",),
+        ledger="decision_id,status,ruling\nw1,approved,C1 = 25\n",
+        transform=CLEAN_TRANSFORM,
+    )
+    assert "no 'provenance' column" in out
+    assert "status has ['approved']" in out
+
+
+def test_well_formed_ledger_passes(tmp_path):
+    """Every combination of the two axes is legal, including the orthogonal one.
+
+    `confirmed` + `agent_authored` is the row the issue is about: the
+    user approved a threshold the AGENT authored. Settled, but not the user's
+    value — and the gate must accept it rather than push it toward
+    `user_confirmed`.
+    """
+    out = _run_phase_d(
+        tmp_path,
+        base_models=("nxd_decisions",),
+        physical_models=("nxd_decisions",),
+        ledger=("decision_id,status,provenance,ruling\n"
+                "w1,confirmed,user_confirmed,C1 = 25\n"
+                "w2,confirmed,agent_authored,mid-scale anchors\n"
+                "w3,proposed,agent_authored,merchant mapping\n"
+                "w4,confirmed,source_derived,observed currency set\n"
+                "w5,blocked,deferred,no FX rates supplied\n"),
         transform=CLEAN_TRANSFORM,
     )
     assert "FAIL" not in out

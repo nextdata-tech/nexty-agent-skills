@@ -35,7 +35,7 @@
     },
     {
       "id": "aggregate-exclusion-ruling-landed",
-      "check": "\"An empty Region means this row is a regional/income aggregate, not a country, and must be excluded from totals\" is an inference the file never documents. It is landed as a row in the closure's `nxd_decisions` model with `status=\"proposed\"` (columns decision_id, status, ruling, applies_to, detail), the `detail` naming the evidence \u2014 the 47 blank-Region rows and sample names. FAIL if it exists only as a code comment, only in `CONTEXT.md` prose, or in a `DECISIONS.md` (the skill forbids that file). Grade the DISCLOSURE, not the ruling: excluding aggregates is correct, but the source does not state the rule, so it must travel as reviewable data."
+      "check": "\"An empty Region means this row is a regional/income aggregate, not a country, and must be excluded from totals\" is an inference the file never documents. It is landed as a row in the closure's `nxd_decisions` model with `status=\"proposed\"` and `provenance=\"agent_authored\"` (columns decision_id, status, provenance, ruling, applies_to, detail), the `detail` naming the evidence \u2014 the 47 blank-Region rows and sample names. FAIL if it exists only as a code comment, only in `CONTEXT.md` prose, or in a `DECISIONS.md` (the skill forbids that file). Grade the DISCLOSURE, not the ruling: excluding aggregates is correct, but the source does not state the rule, so it must travel as reviewable data."
     },
     {
       "id": "reference-data-not-hardcoded",

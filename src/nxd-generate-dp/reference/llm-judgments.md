@@ -34,7 +34,7 @@ a third class that sits alongside them:
 | Value set | closed and observed | continuous | **closed and rubric-defined** — the score scale or verdict enum is fixed by the landed rubric |
 | Produced by | one mapping over distinct values | (never produced — refused) | **per entity, by reading that entity's evidence** |
 | Reviewability | each mapping row checkable on its face | a wrong rate is invisible in the data | **each judgement row checkable against the cited evidence** |
-| Channel | land as data, `status = proposed`, `needs_review` for misses | `blocked` row, no model | **inherits the classification channel** — land as data, `proposed`, `needs_review` — **plus one new obligation below** |
+| Channel | land as data, `status = proposed` + `provenance = agent_authored`, `needs_review` for misses | `blocked` row with `provenance = deferred`, no model | **inherits the classification channel** — land as data, `proposed`, `agent_authored`, `needs_review` — **plus one new obligation below** |
 
 Inference is proposable for the same reason classification is: the output set is
 closed and each row is individually reviewable. The user can look at "this
@@ -78,9 +78,12 @@ Before any entity is judged, the rubric is landed as data by the existing
 supplied-ruling flow —
 [When the user supplies the ruling](derivation-plan.md#when-the-user-supplies-the-ruling).
 A rubric with weighted criteria and score-banded verdicts lands as its own base
-models, `nxd_decisions` row at `status = confirmed` (user-supplied) or
-`status = proposed` (agent-proposed anchors), transform reads them and contains
-no weight, threshold, or verdict string:
+models, with an `nxd_decisions` row per ruling classified on both axes —
+`status = confirmed` / `provenance = user_confirmed` for what the user supplied,
+`provenance = agent_authored` for anchors **you** filled in, whatever its
+`status` later becomes: an anchor nobody has looked at is `agent_authored`
+at `status = proposed`. The transform reads them and
+contains no weight, threshold, or verdict string:
 
 ```
 scoring_rubric(criterion, weight, scale_min, scale_max, scale_5_anchor, scale_1_anchor, kind)
@@ -423,6 +426,11 @@ session can discover that an answer rests on proposed agent judgements:
 - `decision_id`: the rubric's stable slug (e.g. `candidate_scoring_rubric`).
 - `status`: `proposed` while the judgements are agent-produced and unreviewed;
   `confirmed` once a reviewer accepts them.
+- `provenance`: `agent_authored` — the scores are yours. It stays that
+  way when a reviewer accepts them: acceptance moves `status`, while
+  `provenance` keeps recording who produced the values. A rubric the user
+  supplied is a **separate row** at `user_confirmed`, even though the judgements
+  scored against it are not — one row per ruling, each classified on its own.
 - `ruling`: one sentence — "candidates scored against the agentic-engineer
   rubric v1 by agent judgement."
 - `applies_to`: the models the judgements materialize in.
