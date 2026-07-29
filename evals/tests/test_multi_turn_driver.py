@@ -274,6 +274,12 @@ for line in sys.stdin:
             time.sleep(0.2)
     if mode == "die" and turn == 2:
         sys.exit(3)              # dies mid-conversation
+    if mode == "stdout_fatal" and turn == 1:
+        # The real CLI reports an expired OAuth session on STDOUT, not stderr,
+        # and exits without a result event. Reporting stderr alone renders this
+        # as a bare exit with no detail.
+        print("Invalid API key - please run /login", flush=True)
+        sys.exit(1)
     if mode == "dirty_exit" and turn == 2:
         # Answers in full, THEN dies. The transcript looks complete, so an
         # ignored exit code grades a disowned run as success.
@@ -405,6 +411,22 @@ def test_a_wedged_turn_times_out_and_kills_the_process(fake_cli, tmp_path):
     assert "during turn 2" in metrics["error"]
     # Nothing of ours is still running: no `claude` child survived the abort.
     assert not _surviving_fake_cli_pids(fake_cli)
+
+
+def test_a_stdout_only_fatal_error_reaches_the_caller(fake_cli, tmp_path):
+    """The CLI reports some fatal errors on stdout — expired auth is the common
+    one — so an error path reading stderr alone renders them as a bare exit with
+    no detail, indistinguishable from a crash. The single-turn path falls back
+    to stdout for exactly this; multi-turn must too, and its consuming loop
+    empties the queue, so the text has to be kept somewhere else to survive.
+    """
+    ok, trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 30,
+        env_overrides={"FAKE_MODE": "stdout_fatal"},
+        followup_turns=[eb.FollowupTurn(text="second")],
+    )
+    assert not ok
+    assert "Invalid API key" in metrics["error"], metrics["error"]
 
 
 def test_a_process_death_mid_conversation_is_not_graded_as_success(

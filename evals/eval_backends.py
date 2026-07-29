@@ -483,9 +483,18 @@ class ClaudeBackend:
 
         stdout_q: queue.Queue[str | None] = queue.Queue()
         stderr_chunks: list[str] = []
+        # Mirrors stderr_chunks. The CLI reports some fatal errors on stdout —
+        # an expired OAuth session is the common one — so an error path that
+        # reads stderr alone renders those as a bare exit code with no detail.
+        # The consuming loop takes lines off the queue, which empties it, so
+        # the text has to be kept here to stay reachable from the error paths.
+        stdout_chunks: list[str] = []
 
         def _drain_stdout() -> None:
             for line in proc.stdout:  # type: ignore[union-attr]
+                stdout_chunks.append(line)
+                if len(stdout_chunks) > 2000:
+                    del stdout_chunks[:1000]
                 stdout_q.put(line)
             stdout_q.put(None)
 
@@ -510,6 +519,15 @@ class ClaudeBackend:
         def _stderr_tail() -> str:
             return "".join(stderr_chunks).strip()[-STDERR_TAIL_CHARS:]
 
+        def _stdout_tail() -> str:
+            return "".join(stdout_chunks).strip()[-STDERR_TAIL_CHARS:]
+
+        def _failure_detail() -> str:
+            # Same precedence the single-turn path uses: stderr when there is
+            # any, else stdout, so a stdout-only fatal error still names itself
+            # instead of arriving as an undiagnosable bare exit.
+            return _stderr_tail() or _stdout_tail()
+
         def _abort(error: str) -> tuple[bool, str, dict]:
             # Kill BEFORE returning. The caller's process guard sweeps pid files
             # in its `finally`; a CLI still alive at that moment can re-write one
@@ -521,7 +539,12 @@ class ClaudeBackend:
             # instead of erroring this one scenario.
             with contextlib.suppress(OSError, ValueError, subprocess.TimeoutExpired):
                 proc.wait(timeout=30)
-            detail = _stderr_tail()
+            # The child is dead, so both reader threads are about to hit EOF.
+            # Joining briefly lets them append whatever the CLI wrote on its way
+            # out — which for a stdout-only fatal error is the whole diagnosis.
+            for reader in readers:
+                reader.join(timeout=5)
+            detail = _failure_detail()
             return False, "", {"error": f"{error}: {detail[-2000:]}" if detail else error}
 
         segments: list[tuple[str, dict]] = []
@@ -647,7 +670,7 @@ class ClaudeBackend:
             "killed_on_close": killed_on_close,
         })
         if not trace and not metrics.get("final_answer"):
-            detail = _stderr_tail()
+            detail = _failure_detail()
             return False, "", {
                 "error": f"empty stream output (exit {returncode}): {detail[-2000:]}"
             }
@@ -655,7 +678,7 @@ class ClaudeBackend:
         # path. A CLI that emits its result events and then dies with a fatal
         # error would otherwise be graded ok on a transcript it disowned.
         if returncode != 0:
-            detail = _stderr_tail()
+            detail = _failure_detail()
             reason = (
                 "did not exit after its input was closed"
                 if killed_on_close else f"exited {returncode}"
