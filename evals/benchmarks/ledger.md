@@ -608,3 +608,32 @@ Same posture as the v0.25.3 / v0.22.0 / v0.21.0 entries above.
   The worked example now also puts `.promise()` at port level, per
   `troubleshooting.md:102` (output-level promises are silently ineffective),
   while keeping a model registered at output level as validation requires.
+
+## 2026-07-30 — nxd-generate-dp: transform_state is the only route; watermark fallback deleted (plugin v0.26.2)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.26.0 | current_pack | incremental-multi-model | PASS | 15/15 | 32 | 29 | 56499 | 3.84 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 22 | 20 | 8059 | 0.69 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 13 | 11 | 4364 | 0.50 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | FAIL | 5/16 | 17 | 15 | 7501 | 0.49 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 13 | 11 | 3810 | 0.38 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | FAIL | 5/16 | 23 | 21 | 9320 | 0.64 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 10 | 9 | 3868 | 0.38 | sonnet |
+| after-deletion | current_pack | incremental-multi-model | PASS | 15/15 | 40 | 38 | 48076 | 3.35 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | FAIL | 6/16 | 18 | 16 | 5496 | 0.48 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | FAIL | 6/16 | 17 | 15 | 6992 | 0.47 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | FAIL | 6/16 | 22 | 20 | 12327 | 0.69 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | FAIL | 14/16 | 14 | 12 | 4109 | 0.39 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | PASS | 16/16 | 25 | 23 | 13978 | 0.97 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | PASS | 16/16 | 20 | 18 | 8760 | 0.69 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | FAIL | 14/16 | 23 | 59 | 13849 | 1.75 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | FAIL | 5/16 | 27 | 25 | 11664 | 1.07 | sonnet |
+| after-deletion | current_pack | incremental-transform-state | FAIL | 6/16 | 21 | 19 | 8622 | 0.62 | sonnet |
+| after-keepboth-fix | current_pack | incremental-transform-state | PASS | 16/16 | 12 | 10 | 4177 | 0.46 | sonnet |
+| after-keepboth-fix | current_pack | incremental-transform-state | FAIL | 5/16 | 41 | 39 | 13672 | 1.29 | sonnet |
+| after-keepboth-fix | current_pack | incremental-transform-state | PASS | 16/16 | 17 | 15 | 6940 | 0.58 | sonnet |
+
+Notes: Three arms. Before is origin/main at 81848fc (v0.26.0), NOT a mid-branch revision: an earlier attempt baselined against fb0d472 (this branch's own gated-fallback commit) and reported incremental-multi-model as FAIL 13/15 to PASS 15/15 -- that improvement was an ARTIFACT of the wrong baseline. Against real main the scenario was ALREADY PASS 15/15, so the deletion shows no improvement there. current_pack only. NOTE the agent column reads sonnet for incremental-multi-model but that scenario ran on claude-opus-4-8 in both arms (see scenario_agent_models in the record); benchmark_record.py fills the column from the report-level agent_model and flattens the per-scenario override. incremental-transform-state is bimodal on consults-the-skill-pack: opened-the-pack runs score 14-16/16, the rest score 5-6/16 and conclude from public docs that transform_state is k8s-only, so only the consulting cell measures the doc. That cell: before 4/4 PASS at exactly 16/16; after-deletion 2/4 (16, 16, 14, 14); after-keepboth-fix 2/2 at 16/16. Both 14/16 runs failed preserves-transform-contract -- the agent REPLACED the table-name assert with the row-count check instead of keeping both -- and that check failed in zero before runs. It is not attributable to the deletion: git diff 81848fc..80a861f changes no line of the Verifying-the-write section, the data_table_names guidance, or the .transform-complete touch, so that text was byte-identical across the first two arms. Treated as a real misread of pre-existing wording rather than variance: the guidance now states the row-count check is an addition and never a replacement, plus a Do NOT bullet against deleting either check, and the third arm confirms the consulting cell back at 16/16.
+
+Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json`](records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json)

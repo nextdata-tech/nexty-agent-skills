@@ -1,0 +1,2108 @@
+{
+  "date": "2026-07-30",
+  "label": "nxd-generate-dp: transform_state is the only route; watermark fallback deleted",
+  "notes": "Three arms. Before is origin/main at 81848fc (v0.26.0), NOT a mid-branch revision: an earlier attempt baselined against fb0d472 (this branch's own gated-fallback commit) and reported incremental-multi-model as FAIL 13/15 to PASS 15/15 -- that improvement was an ARTIFACT of the wrong baseline. Against real main the scenario was ALREADY PASS 15/15, so the deletion shows no improvement there. current_pack only. NOTE the agent column reads sonnet for incremental-multi-model but that scenario ran on claude-opus-4-8 in both arms (see scenario_agent_models in the record); benchmark_record.py fills the column from the report-level agent_model and flattens the per-scenario override. incremental-transform-state is bimodal on consults-the-skill-pack: opened-the-pack runs score 14-16/16, the rest score 5-6/16 and conclude from public docs that transform_state is k8s-only, so only the consulting cell measures the doc. That cell: before 4/4 PASS at exactly 16/16; after-deletion 2/4 (16, 16, 14, 14); after-keepboth-fix 2/2 at 16/16. Both 14/16 runs failed preserves-transform-contract -- the agent REPLACED the table-name assert with the row-count check instead of keeping both -- and that check failed in zero before runs. It is not attributable to the deletion: git diff 81848fc..80a861f changes no line of the Verifying-the-write section, the data_table_names guidance, or the .transform-complete touch, so that text was byte-identical across the first two arms. Treated as a real misread of pre-existing wording rather than variance: the guidance now states the row-count check is an addition and never a replacement, plus a Do NOT bullet against deleting either check, and the third arm confirms the consulting cell back at 16/16.",
+  "plugin_version": "0.26.2",
+  "reports": {
+    "before-v0.26.0": {
+      "elapsed_s": 864.2,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "incremental-multi-model": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-multi-model",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "pocket_preflight": "passed",
+            "pocket_preflight_endpoint": "http://127.0.0.1:52120/mcp/",
+            "num_turns": 32,
+            "duration_ms": 786891,
+            "total_cost_usd": 3.8427670000000003,
+            "input_tokens": 54,
+            "output_tokens": 56499,
+            "is_error": false,
+            "tool_calls": 29,
+            "agent_model": "claude-opus-4-8"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows the agent grepping the installed skill pack for \"incremental\" and then Reading `nxd-generate-dp/reference/incremental-transforms.md` in full before touching any closure file."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent states the cursor is read/written via `transform_state.for_model(\"shipments\")` and explicitly rejects flat indexing because a flat write is silently dropped with multiple promised models; no flat write appears anywhere in the trace."
+              },
+              {
+                "id": "flat-index-never-appears-as-an-intermediate",
+                "pass": true,
+                "why": "The agent derived `for_model` from the contract document before its first edit and never wrote, ran, or corrected a flat-indexed version."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The durable watermark is declared in the transform's `transform_state` kwarg; no sidecar file, output-database table, dlt state hack, or env var is used for the cursor."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "The rewritten transform's docstring keeps dlt's pipeline state \"ephemeral under the run dir\" and the agent never moved `pipelines_dir`/`DLT_DATA_DIR` outside the run directory or toward `~/.dlt`."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "Shipments are landed with `write_disposition=\"append\"`, with the agent explicitly noting that keeping `replace` while yielding a delta would destroy history."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "The append is bounded by the `shipment_id` cursor read from the state bag, and the simulation confirmed a run at cursor=240 yields 0 new rows rather than re-yielding the export."
+              },
+              {
+                "id": "lane-summary-append-safety-assessed",
+                "pass": true,
+                "why": "The agent reasoned explicitly that a per-lane rollup is an aggregate whose already-emitted rows change when a new shipment lands, so it is rebuilt with `replace` from full history rather than appended alongside the shipment delta."
+              },
+              {
+                "id": "carriers-not-made-incremental",
+                "pass": true,
+                "why": "Carriers is left as a full `replace` republish, justified as a small reference table rewritten whole upstream with no monotonic cursor."
+              },
+              {
+                "id": "every-promised-model-yielded-each-run",
+                "pass": true,
+                "why": "All three physical models are handled every run \u2014 carriers and lane_summary via replace, shipments via a cursor-bounded append that still runs (and is count-verified) when the delta is empty \u2014 with the verification loop iterating `PHYSICAL_MODELS`."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The agent states the cursor advances last, after the write, the row-count check and the completion marker, precisely because rows and cursor do not share fate on the local DuckDB driver."
+              },
+              {
+                "id": "verification-by-row-count",
+                "pass": true,
+                "why": "The trace's grep shows `SELECT count(*) FROM \"{schema}\".\"{model_tables[model]}\"` and the agent explains the check is `prior + delta` because a table-name assert cannot detect a missing write under append."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The cursor default is an explicit `0` meaning \"take everything\", and the simulation's run-1 case (cursor=0) landed all 240 rows rather than erroring or skipping."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The cursor is a plain Python `int` parsed from the stdlib csv reader \u2014 the grep confirmed no `read_csv`/pandas path remains, so no numpy scalar, Decimal, or date object reaches the bag."
+              },
+              {
+                "id": "closure-still-builds",
+                "pass": true,
+                "why": "spec.py promises `lane_summary` alongside shipments and carriers, models.py declares the matching `semantic_model(\"lane_summary\")`, PHYSICAL_MODELS covers base plus derived, the read-back count assert is preserved, and all three files pass `py_compile` with the naming invariant cross-checked."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent read the platform's incremental contract before editing, implemented a `for_model`-addressed `transform_state` cursor with append-only shipment loading, correctly diagnosed the lane summary as a non-append-safe aggregate rebuilt with replace, and verified by row count with the cursor advancing last."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 22,
+            "duration_ms": 195464,
+            "total_cost_usd": 0.6880619,
+            "input_tokens": 35,
+            "output_tokens": 8059,
+            "is_error": false,
+            "tool_calls": 20,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "After external doc fetches, the agent grepped the installed pack at `.../plugin/skills` and Read `nxd-generate-dp/reference/incremental-transforms.md` before writing any code."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The agent states it holds the watermark in the kernel's `transform_state` bag via `for_model(\"events\")`, with no sidecar file, marker table, or durable dlt pipelines_dir invented."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "Nothing in the trace or final answer moves `pipelines_dir`/`DLT_DATA_DIR` out of the run directory, `os` is still imported for the run-local env setup, and the cursor (not dlt's own incremental state) is what survives runs."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent explicitly switched to `write_disposition=\"append\"` and named the failure mode of leaving `\"replace\"` while yielding only the delta."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent ran the eligibility gate on the output side, confirming `events` is a pure pass-through base model with no derived/aggregate models, not just that the source is append-only."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The cursor is advanced last \u2014 only after `pipeline.run(...)` and the row-count verification succeed \u2014 and is computed from the filtered rows actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "Verification compares a read-back count against `prior_count + len(rows)`, and the agent explicitly rejects the table-name assert as proof because dlt rehydrates its schema from the destination under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent states the local DuckDB driver has no transaction and that a raise after `pipeline.run()` cannot roll back the landed rows, so it withholds the cursor rather than relying on shared fate."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Rows are filtered `event_id > last_seen` against the persisted watermark, so a rerun with no new source rows yields and lands nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The agent describes run 1 loading all 100 rows and committing `max_event_id=100`, i.e. an empty bag defaults to a sentinel that takes the whole history rather than 'now' or the source max."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The stored cursor is a plain int `max_event_id` read via the stdlib `csv` module (no numpy/pandas scalars involved)."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent uses `transform_state.for_model(\"events\")` and explains that flat indexing is silently dropped once a second model is promised."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The write shows `import duckdb as duckdb_lib` with a comment about the port param shadowing the module, and the agent followed the reference's read-back pattern while reporting a working first run that loads all 100 rows."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "No `.when(...)` per-model DAG and no `NXD_TRANSFORM_STATE_SIDECAR_PATH` or Databricks sidecar mechanism appears anywhere in the trace or answer."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The rewritten file retains the `DuckDbOutput` import and `duckdb` port param, the `os`-based run-local dlt setup, and the 'Landed tables promised by spec.py; never semantic views' model-constant block, with the only raw DuckDB use being a read-back count."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation is framed as 'run 1' and 'subsequent runs' with no cron, nightly, or scheduled-run language."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed pack's incremental-transforms reference and produced a `transform_state.for_model()` watermark with append disposition, cursor-filtered rows, post-write count verification, and correct handling of the no-rollback and module-shadowing gotchas."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 13,
+            "duration_ms": 53841,
+            "total_cost_usd": 0.4966913,
+            "input_tokens": 16,
+            "output_tokens": 4364,
+            "is_error": false,
+            "tool_calls": 11,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows a Skill invocation of nxd-eval-pack:nxd-data-product-builder plus a Grep of the installed plugin's skills directory and a Read of nxd-generate-dp/reference/incremental-transforms.md before any edit."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The agent states it reads and advances the watermark through transform_state.for_model(\"events\") and invents no sidecar file, marker table, or durable dlt dir."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "The rewrite retains the os import and never mentions relocating pipelines_dir/DLT_DATA_DIR, and the agent filters rows itself (\"before touching dlt\") rather than relying on dlt's own cursor surviving runs."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent explicitly switches write_disposition from \"replace\" to \"append\" and names the failure mode (\"replace-with-delta would silently destroy history\")."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent ran the eligibility gate on the output side, confirming the single promised model is a pure pass-through of the export with no aggregate/derived physical model."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The agent states the cursor is advanced last, only after pipeline.run and the row-count verification succeed, and derives it from the rows actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "Verification is a DuckDB row-count read-back compared against prior_count + len(rows), and the agent explicitly notes the table-name assert cannot detect a skipped write under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent validates the batch before the write precisely \"since the local DuckDB driver has no transaction/rollback\" and never claims a raise unwinds already-landed rows."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Source rows are filtered to event_id > last_seen before yielding, so a re-run with no new source rows lands nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The agent reports the cursor defaults to 0 on an empty bag (\"take everything\"), not to now or the source maximum."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The transform reads via the stdlib csv module (no numpy/pandas scalars) and compares event_id against an integer default of 0, so the stored max_event_id is a plain int."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent uses transform_state.for_model(\"events\") and explains why flat indexing would be silently dropped once a second model is promised."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The written file imports the module as `import duckdb as duckdb_lib  # aliased: the port param below is named duckdb`, and the agent reports the first run still behaving as before while reading prior_count, per the doc's read-back section."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "Nothing in the trace or answer proposes a .when(...) per-model DAG or mentions NXD_TRANSFORM_STATE_SIDECAR_PATH."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The rewrite keeps the DuckDbOutput-typed port import, the secrets-based source path, dlt landing through the port, and a table-name check (discussed as retained but not treated as write proof), with duckdb_lib used only for a read-back count."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation is framed as \"first run\" versus \"subsequent runs\" with no cron, nightly, or scheduled-run language."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed pack's incremental-transforms reference and implemented the transform_state/append/cursor contract correctly, including for_model addressing, pre-write validation, count-based post-write verification, and the duckdb module alias."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 17,
+            "duration_ms": 123473,
+            "total_cost_usd": 0.49293950000000003,
+            "input_tokens": 25,
+            "output_tokens": 7501,
+            "is_error": false,
+            "tool_calls": 15,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent invoked `nxd-eval-pack:nxd-adding-inputs` rather than the generate-dp skill and never Read/Grepped its SKILL.md or reference/incremental-transforms.md, instead sourcing the contract from WebFetch'd docs and grepping a different checkout of the skills repo (`/Users/nacho/.claude/jobs/.../eval-main/src/...`), which the check explicitly disallows."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly rejected `transform_state` (claiming it is \"k8s-compute only\"), left the signature as `ingest(duckdb, secrets)`, and invented its own persistence by relying on dlt's pipeline-state directory."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although it did not move `pipelines_dir`/`DLT_DATA_DIR`, the solution's entire mechanism depends on dlt's own incremental cursor surviving between runs from that run-local directory, which the check forbids."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": false,
+                "why": "The agent used `write_disposition=\"merge\"` with `primary_key=\"event_id\"` instead of `write_disposition=\"append\"`."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "The agent reasoned only about the source being append-only and `event_id` being an immutable monotonic key; it never considered whether the promised output model(s) are append-safe or flagged that an aggregate/regrain model would need a rebuild."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "There is no explicit cursor advance in the solution at all \u2014 the watermark is delegated entirely to dlt's internal state, so no post-write, post-verification advance exists."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "The agent added no post-write verification (no row-count or watermark read-back from DuckDB), leaving nothing that could detect a model that was not landed."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The final answer makes no claim that a failed run rolls back already-written rows; it only notes that a wiped dlt state directory would cause a safe re-backfill."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "The landing is filtered by `dlt.sources.incremental(\"event_id\")` against a prior cursor rather than being a bare unfiltered re-yield of the whole export."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "No `transform_state` bag is read at all, so there is no `.get(key, default)` first-run handling as the check requires."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "No cursor value is stored in the kernel state bag, so the agent never casts or stores a JSON-serializable watermark as required."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "The solution never touches `transform_state`, so `for_model(\"events\")` is absent entirely."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The solution performs no direct DuckDB read-back, so this check is not applicable and is not penalized."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed no `.when(...)` per-model DAG and never mentioned `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks sidecar mechanism."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The trace shows the typed `DuckDbOutput` param, `secrets[\"csv_source\"]`, run-local dlt state, and `dlt.destinations.duckdb(credentials=duckdb.path)` all intact, with no evidence the touch or naming check was removed and no raw `duckdb.connect` write introduced."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": false,
+                "why": "The agent framed the behavior as \"on each run\" without any cron/nightly/scheduled language, so no scheduler framing was introduced \u2014 but note this is the only framing check and it holds."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent never opened the installed generate-dp skill for the incremental contract and instead wrongly dismissed `transform_state` as k8s-only, shipping a dlt-internal-cursor + merge solution with no durable watermark, no append disposition, and no post-write verification."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 13,
+            "duration_ms": 46641,
+            "total_cost_usd": 0.37561479999999997,
+            "input_tokens": 15,
+            "output_tokens": 3810,
+            "is_error": false,
+            "tool_calls": 11,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows a grep across the installed eval pack followed by a Read of `.../plugin/skills/nxd-generate-dp/reference/incremental-transforms.md` before any code was written."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The agent states it added a `transform_state` parameter to the transform and uses it for the watermark, with no sidecar file, marker table, or durable pipelines_dir introduced."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "The rewrite keeps `os`/`Path` and the run-local dlt layout untouched (nothing in the trace or final answer moves pipelines_dir/DLT_DATA_DIR), and the agent filters rows itself instead of relying on dlt's own incremental cursor persisting."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent explicitly switched `write_disposition` from `\"replace\"` to `\"append\"` while yielding only the delta."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent applied the doc's eligibility gate on the output side, stating the single promised model `events` is a pass-through of the append-only source (with `event_metrics` being a query-time semantic view)."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The final answer says the cursor is advanced only after `pipeline.run` and the row-count verification succeed, and only for rows actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "Verification compares a read-back count against `prior_count + len(rows)`, and the agent explicitly notes the old table-name assert cannot detect a skipped write under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent states DuckDB writes here aren't transactional, which is why it writes first and advances the cursor second, rather than claiming a raise rolls back landed rows."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Rows are filtered to `event_id > last_seen`, so a re-run with no new source rows yields and lands nothing \u2014 the cursor, not append alone, provides idempotence."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The watermark is read with a default of `0` on the first run, so the full existing history is ingested rather than skipped."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The transform reads CSVs with the stdlib `csv` module (no pandas/numpy scalars) and compares against an integer default, so the stored `event_id` cursor is a plain int/str."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent addresses the bag via `transform_state.for_model(\"events\")` and explicitly says it never flat-indexes the handle."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The written file imports `import duckdb as duckdb_lib  # aliased: the port param below is named duckdb`, and the agent followed the doc's read-back section (confirming `duckdb` is a declared dependency) for the prior-count read on a possibly-absent file."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "Nothing in the trace or final answer proposes a `.when(...)` per-model DAG or mentions any Databricks transform-state sidecar env var."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The rewrite retains the `DuckDbOutput` import and port-typed param, keeps `secrets[\"csv_source\"]` and the `dlt.destinations.duckdb(credentials=...)` write path with the raw duckdb handle used only for a read, and the agent reports no changes needed to spec/models/requirements."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent frames repeat executions as \"reruns\"/\"the first run\" with no cron, nightly, or scheduled-run language."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed pack's incremental-transforms reference and then implemented the sanctioned pattern \u2014 `transform_state.for_model(\"events\")` with a `0` default, source-side filtering, `write_disposition=\"append\"`, run-local dlt state, an aliased duckdb read-back with count verification, and cursor advancement only after a verified write \u2014 so all sixteen checks pass."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 23,
+            "duration_ms": 267626,
+            "total_cost_usd": 0.6392623,
+            "input_tokens": 34,
+            "output_tokens": 9320,
+            "is_error": false,
+            "tool_calls": 21,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent fired a Skill call for `nxd-eval-pack:nxd-adding-inputs` but never opened the generate-dp skill's SKILL.md or reference/incremental-transforms.md, and instead derived the \"contract\" from external WebFetch of public docs (concluding transform_state is k8s-only), so no skill-pack incremental-loading guidance was consulted."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly rejected `transform_state` as \"k8s-compute only\" and added no such parameter, relying on dlt's own persisted pipeline state instead."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although `pipelines_dir`/`DLT_DATA_DIR` were left untouched under the run directory, the whole solution explicitly \"relies on dlt's cursor state surviving across runs\" via that directory, which the check forbids."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": false,
+                "why": "The agent set `write_disposition=\"merge\"` with a primary key rather than `append`, so it did not make the required landing-disposition change."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "Nothing in the trace or final answer considers whether the promised output model (vs. the source) is append-safe; the reasoning is entirely about the source being append-only with a monotonic id."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "There is no explicit post-write cursor advance or verification \u2014 the watermark is delegated entirely to dlt's internal incremental state, so the ordering requirement is not met."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "The agent added no row-count or watermark read-back after `pipeline.run(...)`, leaving only the pre-existing table-name assert, which cannot detect an unwritten model."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The final answer never claims a failed run rolls back already-landed rows; it argues only that merge-on-primary-key prevents duplicates on a retry."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": false,
+                "why": "The filter depends on dlt state in a run-local directory that does not persist, so a re-run re-reads the entire export (deduped by merge) rather than landing nothing \u2014 the durable-watermark pairing the check requires is absent."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "No state bag is read at all; `initial_value=0` is a dlt hint, not a `.get(key, default)` on `transform_state`, so the required first-run handling of the kernel state bag is missing."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "The solution stores no cursor value in the kernel state bag, so there is no JSON-serializable watermark as required."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "The agent never uses `transform_state.for_model(\"events\")` (or the bag in any form), since it abandoned transform_state entirely."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The solution performs no direct DuckDB read-back, so the module-shadowing and missing-file hazards do not arise and the check is not applicable."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed no `.when(...)` per-model DAG and made no mention of `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks sidecar mechanism."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The single edit only replaced the resource-construction/write-disposition block, leaving the typed `DuckDbOutput` param, `secrets[\"csv_source\"]`, the `dlt.destinations.duckdb(credentials=duckdb.path)` port write, the table-name check, and the `.transform-complete` touch intact, with no raw duckdb writes added."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation speaks only of \"each run\"/\"across runs\"/\"a retried run\" with no cron, nightly, or scheduled-run framing."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent never opened the installed skill pack's incremental-loading contract, wrongly concluded from public web docs that `transform_state` was unavailable, and shipped a dlt-incremental + merge solution that depends on run-local dlt state surviving between runs \u2014 failing the core watermark, append, verification, and append-safety checks."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 10,
+            "duration_ms": 155934,
+            "total_cost_usd": 0.3784314,
+            "input_tokens": 14,
+            "output_tokens": 3868,
+            "is_error": false,
+            "tool_calls": 9,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows the agent locating and Reading `plugin/skills/nxd-generate-dp/reference/incremental-transforms.md` from the installed pack before writing any code."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The agent added a `transform_state` parameter to the transform and used it to hold the `max_event_id` watermark, with no sidecar file, marker table, or durable pipelines_dir invented."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "The rewrite retains `import os` for the run-local `DLT_DATA_DIR`/`pipelines_dir` setup, nothing in the trace or summary moves dlt state to `~/.dlt`, and incrementality comes from an explicit CSV-side filter rather than dlt's own cursor surviving runs."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent explicitly switched `write_disposition` from `\"replace\"` to `\"append\"` while yielding only the delta, so no replace-with-delta table wipe remains."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent read `models.py`/`spec.py` and stated the eligibility gate holds because the only promised physical model is a pass-through base model with no derived/aggregate models."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The summary states the `max_event_id` cursor is advanced last, only after `pipeline.run(...)` and the post-write verification succeed, and only when rows were actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "Verification is a row-count read-back compared against `prior_count + len(rows)`, plus an unpromised-extras naming check (not exact equality), and the agent explicitly noted the old table-name assert cannot detect a skipped write under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "Nothing in the trace or final answer claims a raise rolls back rows already landed; the ordering is write, verify, then commit the cursor."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Rows are filtered with `event_id > last_seen` from the state bag, so a re-run with no new source rows yields and lands nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The watermark is read with a default of `0` on the first run, which takes the whole history rather than raising or skipping to the current maximum."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The reader uses the stdlib `csv` module (no numpy/pandas scalars) and compares `event_id` against the integer default, so the stored `max_event_id` cursor is a plain JSON-serializable int."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent addressed the bag via `transform_state.for_model(\"events\")` and explicitly explained that flat indexing would be silently dropped once a second model is promised."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The written file imports `import duckdb as duckdb_lib` with a comment about the `duckdb` port parameter shadowing the module, and the read-back follows the reference section on reading prior data back out of DuckDB that the agent consulted."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "No `.when(...)` per-model DAG and no `NXD_TRANSFORM_STATE_SIDECAR_PATH` or other Databricks-only sidecar mechanism appears anywhere in the trace or answer."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The typed `DuckDbOutput` port, `secrets[...]` source config, and port-based dlt destination are retained, a naming check survives as an unpromised-extras assertion, and the aliased `duckdb_lib` use is a count read only."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation is framed in terms of first run and re-runs, with no mention of a schedule, cron, or nightly cadence."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed incremental-transforms reference and produced the sanctioned solution \u2014 `transform_state.for_model(\"events\")` watermark with a `0` first-run default, append disposition with a delta filter, run-local dlt state, aliased duckdb read-back with a count-based post-write check, and cursor advanced last."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-deletion": {
+      "elapsed_s": 913.9,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "incremental-multi-model": "claude-opus-4-8",
+        "incremental-transform-state": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 2,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-multi-model",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "pocket_preflight": "passed",
+            "pocket_preflight_endpoint": "http://127.0.0.1:50131/mcp/",
+            "num_turns": 40,
+            "duration_ms": 798863,
+            "total_cost_usd": 3.3462154999999996,
+            "input_tokens": 53,
+            "output_tokens": 48076,
+            "is_error": false,
+            "tool_calls": 38,
+            "agent_model": "claude-opus-4-8"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "Before any edit the agent grepped the installed plugin skills and read `nxd-generate-dp/reference/incremental-transforms.md` (plus `derived-models.md`), treating that as the contract rather than inferring from the existing transform or dlt docs."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The committed cursor is stated to live in `transform_state.for_model(\"shipments\")[\"max_shipment_id\"]`, and the single Write of main.py shows no flat-indexed write anywhere in the trace."
+              },
+              {
+                "id": "flat-index-never-appears-as-an-intermediate",
+                "pass": true,
+                "why": "main.py was written once, and the agent's reasoning derives `for_model()` from the contract's \"flat indexing is silently dropped\" clause rather than from a failed build."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The durable watermark is carried in the kernel's `transform_state` kwarg (the harness drove `ingest(duck(), SECRETS, STATE)` and the bag round-tripped cursor=160\u2192240), not in a sidecar file, marker table, env var, or dlt state hack."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "The run-local `pipelines_dir`/`DLT_DATA_DIR` under the run directory were left in place and the agent used `transform_state` \u2014 not dlt's own incremental cursor \u2014 for durability, with no move toward `~/.dlt`."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "Shipments now land with `write_disposition=\"append\"` while only the post-cursor delta is yielded, and the harness confirms history is retained (run2 = 240, not 80)."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "The append is bounded by the `max_shipment_id` cursor: harness run2 grew 160\u2192240 (80-row delta, not 400) and runs 3\u20134 stayed at 240 with no duplication."
+              },
+              {
+                "id": "lane-summary-append-safety-assessed",
+                "pass": true,
+                "why": "The agent explicitly reasons that a per-lane rollup is an aggregate whose already-emitted rows are restated by a new shipment on that lane, so it is not append-safe and is rebuilt whole with `replace` each run."
+              },
+              {
+                "id": "carriers-not-made-incremental",
+                "pass": true,
+                "why": "Carriers is deliberately left on full `replace` as a small reference table republished whole, per the author's note."
+              },
+              {
+                "id": "every-promised-model-yielded-each-run",
+                "pass": true,
+                "why": "The harness reports shipments, carriers and lane_summary accounted for in every run including run3/run4 with an empty delta (240/5/6), so no model is dropped on a no-new-rows run."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The cursor is advanced last \u2014 after the write, the row-count verifications and the completion marker \u2014 with the agent explicitly noting the local DuckDB driver gives no rollback so rows and cursor do not share fate."
+              },
+              {
+                "id": "verification-by-row-count",
+                "pass": true,
+                "why": "Verification is by counted landed rows (harness prints per-model counts and the transform's reconciliation asserts include count/uniqueness/total checks), not by asserting table names."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "Harness run1 against an empty bag loaded the full 160-row history and set cursor=160 without error, showing a defaulted cursor rather than an accidental None comparison."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The stored cursor is a plain integer max shipment id (harness shows cursor=160/240 with correct numeric ordering, implying explicit int coercion), with Decimal used only inside the pre-write money asserts and never in the state bag."
+              },
+              {
+                "id": "closure-still-builds",
+                "pass": true,
+                "why": "models.py, spec.py (`.promise(lane_summary)`) and the transform were kept in naming lockstep, `py_compile` passed on all three, the harness drove the real `ingest()` to land all three physical models, and the read-back/reconciliation asserts were preserved rather than removed."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent derived the incremental mechanism from the installed Pocket contract, used a `for_model()`-addressed `transform_state` cursor with append for shipments, kept carriers and the non-append-safe lane aggregate on full replace, advanced the cursor only after row-count-verified writes, and demonstrated the behavior across four simulated runs."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 18,
+            "duration_ms": 235641,
+            "total_cost_usd": 0.48208249999999997,
+            "input_tokens": 26,
+            "output_tokens": 5496,
+            "is_error": false,
+            "tool_calls": 16,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent's `find` for the pack timed out and it launched the unrelated `nxd-adding-inputs` skill with no visible content, then derived its entire contract from WebFetch/curl of external web docs \u2014 it never opened the generate-dp SKILL.md or reference/incremental-transforms.md."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly rejected `transform_state` as \"k8s-compute only\" and left the signature as `ingest(duckdb, secrets)`, persisting nothing through the kernel bag."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although `pipelines_dir`/`DLT_DATA_DIR` were left under the run directory, the solution explicitly depends on dlt's own incremental cursor persisting across runs (\"the incremental cursor persists correctly across runs\"), which the check forbids."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The edit removed the `write_disposition=\"replace\"` block and the final answer states the landing call now uses `write_disposition=\"append\"`."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "The agent only reasoned about the append-only source and said \"no changes were needed in spec.py or models.py\", never checking or stating that the promised `events` model is a pass-through and therefore append-safe."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "There is no explicit cursor advance at all \u2014 the watermark is delegated to dlt's implicit internal state with no post-write verification step."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "No row-count or watermark read-back was added; the solution relies on the pre-existing table-name assert, which cannot detect a run that landed nothing."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent's own output makes no claim that a failed run rolls back landed rows and does not depend on such rollback, though it never discusses failure semantics."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": false,
+                "why": "The append is paired only with `dlt.sources.incremental(...)` whose state lives in the run-local, ephemeral `pipelines_dir`, so it resets every run and a re-run with no new source rows would re-append the full export."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "No `transform_state` bag is read at all, so there is no `.get(key, default)` handling of the empty first-run case."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "Nothing is stored in the state bag, so no JSON-serializable cursor value is persisted."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "The solution never touches `transform_state`, so `for_model(\"events\")` is absent."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The solution performs no direct DuckDB read-back, so this check is not applicable and is not penalized."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed no `.when(...)` per-model DAG and never mentioned `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any sidecar mechanism."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The edit was confined to the resources/`pipeline.run` block, leaving the typed `DuckDbOutput` param, `secrets[\"csv_source\"]`, the `dlt.destinations.duckdb(credentials=...)` write path, the table-name check, and the `.transform-complete` touch intact."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation speaks of \"each run\" and re-runs of the data product, with no cron or nightly-schedule framing."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent never opened the generate-dp guidance, wrongly concluded from web docs that `transform_state` is k8s-only, and shipped an append + dlt-incremental solution whose cursor lives in run-local ephemeral dlt state \u2014 so it would duplicate the entire export on every re-run, with no watermark, no post-write verification, and no append-safety check."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 17,
+            "duration_ms": 234414,
+            "total_cost_usd": 0.47008279999999997,
+            "input_tokens": 23,
+            "output_tokens": 6992,
+            "is_error": false,
+            "tool_calls": 15,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent invoked the unrelated `nxd-adding-inputs` skill and then derived the incremental-loading contract from external WebFetch calls to docs.demo.nextopia.dev, never opening the generate-dp SKILL.md or its incremental-transforms reference in the installed pack."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly rejected `transform_state` as a supposed k8s-only no-op and instead relied on dlt's own persisted incremental cursor, i.e. its own persistence route rather than the kernel kwarg."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although it left `pipelines_dir`/`DLT_DATA_DIR` under the run directory, the agent explicitly relies on dlt's own incremental cursor surviving between runs (\"run-local but run-persistent directory\"), which the check forbids."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent states it switched the landing call from `write_disposition=\"replace\"` to `\"append\"` so the delta is added rather than rewriting the table."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "The agent reasoned only from the source being append-only with monotonic `event_id` and never considered or stated whether the promised output model(s) are append-safe pass-throughs."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "There is no explicit cursor advancement or post-write verification at all \u2014 the agent delegates cursor handling entirely to dlt's extract-time incremental hint."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "The agent added no post-write read-back (no row count or watermark check), leaving only whatever pre-existing table-name assert the closure had, which cannot detect a missing write under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "Neither the trace nor the final answer claims that a raise rolls back rows already written by `pipeline.run(...)`."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": false,
+                "why": "The append is paired with `dlt.sources.incremental(\"event_id\", initial_value=0)` whose state lives in the per-run `pipelines_dir`, so on a fresh run directory the cursor resets to 0 and the full export is re-appended instead of landing nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "The agent never reads a `transform_state` bag with `.get(key, default)`; it only sets dlt's `initial_value=0`, so the required empty-bag handling is absent."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "No cursor value is stored in the kernel state bag at all, so there is no JSON-serializable cursor to credit."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "The solution uses no state bag whatsoever, so `transform_state.for_model(\"events\")` is never used."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The solution performs no direct DuckDB read-back, so this check is not applicable and is not penalized."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed no `.when(...)` per-model DAG and never mentioned `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks sidecar mechanism."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The edit touched only the resource/disposition block; the typed `DuckDbOutput` param, `secrets[\"csv_source\"]`, the `dlt.destinations.duckdb(credentials=duckdb.path)` write path, and the surrounding contract code remain in place with no evidence of removal."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent describes behavior as \"each run\" and never invokes a schedule, cron, or nightly framing."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent never opened the installed pack's incremental-loading contract, explicitly rejected the `transform_state` kwarg based on an external doc, and shipped a dlt-cursor solution whose watermark cannot survive a run \u2014 failing the core of the scenario despite correctly switching to append."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 22,
+            "duration_ms": 191522,
+            "total_cost_usd": 0.690005,
+            "input_tokens": 31,
+            "output_tokens": 12327,
+            "is_error": false,
+            "tool_calls": 20,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent invoked `nxd-eval-pack:nxd-adding-inputs` and then sourced the entire incremental-loading contract from external WebFetches of docs.demo.nextopia.dev, never opening the generate-dp skill's SKILL.md or reference/incremental-transforms.md in the installed pack."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly declined to add a `transform_state` parameter, claiming it is k8s-compute-only, and instead relied on dlt's own pipeline state file for the watermark."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although `pipelines_dir`/`DLT_DATA_DIR` were left under the run directory, the solution explicitly depends on dlt's own incremental cursor surviving between runs (\"dlt persists that cursor state itself inside dlt-pipelines/ ... so it survives across runs\")."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent switched the landing disposition from `\"replace\"` to `\"append\"` rather than leaving replace in place while yielding only new rows."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "The agent reasoned only from the source being append-only and never considered or stated whether the promised output model (or any future derived/aggregate model) is append-safe."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "There is no author-controlled cursor advance at all \u2014 dlt manages the cursor internally during the load, and the agent added no post-write verification gating it."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "The agent added no post-write row-count or watermark read-back, leaving only the pre-existing table-name assert, which cannot detect a run that landed nothing under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent never claimed that a failed run rolls back rows already written by `pipeline.run(...)`."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": false,
+                "why": "The `dlt.sources.incremental(\"event_id\", initial_value=0)` filter is backed by state stored in the per-run `dlt-pipelines/` directory, so the watermark resets every run and append re-lands the entire export as duplicates \u2014 effectively a bare append."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "No `transform_state` bag is read at all, so there is no `.get(key, default)` handling of the empty first-run bag; only dlt's own `initial_value=0` exists."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "No cursor value is stored in the kernel state bag, so nothing satisfies the JSON-serializable-cursor requirement."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "The agent never uses `transform_state.for_model(\"events\")` \u2014 or any state-bag access \u2014 since it abandoned the kernel state mechanism entirely."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The solution performs no direct DuckDB read-back, so this check is not applicable and is not penalized."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed no `.when(...)` per-model DAG and never mentioned `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks-only sidecar."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The edit replaced only the resources/disposition block, leaving the typed `DuckDbOutput` port, `secrets[...]` source config, `dlt.destinations.duckdb(credentials=...)` write path, naming check, and `.transform-complete` touch intact, with no raw `duckdb.connect` use."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent described behavior in terms of runs adding new rows, with no cron, nightly, or scheduled-run framing."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent never opened the installed skill pack's incremental-loading guidance, wrongly concluded from external web docs that `transform_state` was unavailable on desktop, and shipped an append that depends on dlt's run-local cursor \u2014 which resets every run and would duplicate the whole export \u2014 with no state bag, no `for_model`, and no post-write verification."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 14,
+            "duration_ms": 50847,
+            "total_cost_usd": 0.3894316,
+            "input_tokens": 15,
+            "output_tokens": 4109,
+            "is_error": false,
+            "tool_calls": 12,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows a grep over the installed eval plugin's skills directory followed by a Read of `nxd-generate-dp/reference/incremental-transforms.md` before the code was written."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The final answer states a `transform_state` parameter was added and used to hold the watermark, with no sidecar file, marker table, or durable pipelines_dir introduced."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "Nothing in the trace or answer moves dlt state out of the run directory (`os` is still imported for the DLT_DATA_DIR assignment) and the watermark is carried by `transform_state`, not dlt's own cursor."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent explicitly switched to `write_disposition=\"append\"` and named the replace-with-a-delta hazard (rewriting the table to just the new rows and destroying history)."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent checked the output side, noting a single base model `events` with no derived models and stating that model passes the eligibility gate for incrementality."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The answer states `max_event_id` is advanced only at the very end, after `pipeline.run(...)` and the row-count verification succeed, and only when rows were actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "Verification is a row-count read-back compared against `prior_count + len(new_rows)`, which detects a write that did not land."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent validated the batch (duplicate-key check) before the write precisely because 'DuckDB writes here have no rollback', and never claims a raise un-writes landed rows."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Source rows are filtered to `event_id > last_seen`, so a re-run with no new rows yields and lands nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The answer states the watermark defaults to `0` on the first run, explicitly meaning 'take everything', rather than defaulting to now or the source max."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The rewrite drops dlt's pandas-backed `read_csv` for the stdlib `csv` module and stores `max_event_id`, so the stored cursor is a plain int/str with no numpy or pandas scalar in play."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent used `transform_state.for_model(\"events\")` and explained that flat indexing is silently dropped once a second model is declared."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": false,
+                "why": "The solution does read back from DuckDB for `prior_count` and correctly aliases the module (`import duckdb as duckdb_lib` with a shadowing comment), but nothing in the trace or answer shows the missing-file/`IOException` case being handled on a first run, when the prior-count read happens before any file exists."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "Neither a `.when(...)` per-model DAG nor `NXD_TRANSFORM_STATE_SIDECAR_PATH` appears anywhere in the trace or final answer."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": false,
+                "why": "The imports suggest the typed `DuckDbOutput` port, `secrets`, and dlt destination survived, but the agent states it 'replaced the table-name-only assertion with a row-count verification', leaving no evidence that any naming check on produced tables remains (nor that the `.transform-complete` touch was retained)."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent describes behavior in terms of runs and re-runs, never invoking a schedule, cron, or nightly cadence."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent consulted the installed skill pack and got the core incremental contract right (transform_state via for_model, append plus cursor filter, post-write count verification, pre-write validation, zero default), but the transcript shows no handling of the first-run missing-DuckDB-file read-back and says the table-name naming assertion was replaced rather than preserved."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 25,
+            "duration_ms": 197673,
+            "total_cost_usd": 0.9685979000000001,
+            "input_tokens": 39,
+            "output_tokens": 13978,
+            "is_error": false,
+            "tool_calls": 23,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "Before editing, the agent located and Read the installed pack's `plugin/skills/nxd-generate-dp/reference/incremental-transforms.md` (after grepping the installed `plugin/skills/` tree), not just the workspace or an unrelated checkout."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The produced `ingest(duckdb: DuckDbOutput, secrets: dict[str, Any], transform_state)` declares the kwarg and the agent states the watermark (`max_event_id`) is held there; no sidecar file, marker table, or durable pipelines_dir is introduced."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "Nothing in the edit or summary moves dlt state (the `os` import is retained for the run-local `DLT_DATA_DIR`/`pipelines_dir` setup, and the design uses its own cursor rather than dlt's surviving incremental state); no `~/.dlt` reference appears anywhere."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent explicitly reports `write_disposition` changed from `\"replace\"` to `\"append\"` and calls out that replace-with-a-delta would silently drop history."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The final answer reasons on the output side \u2014 \"the single `events` model is a pure pass-through of the source, so it's safe to append\" \u2014 and the retained `BASE_MODELS`/\"never semantic views\" framing keeps `event_metrics` as a query-time view."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The agent states the cursor is advanced last, after `pipeline.run(...)` and after the row-count verification, and the watermark is derived from the rows actually yielded rather than an independent source scan."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "It added `_table_row_count()` reading `count(*)` back from DuckDB and states the completeness check now verifies row counts rather than relying on table names alone (\"not just table names, which can't detect a silently-skipped write under append\")."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "Despite the web doc's share-fate claim, the agent never asserts a raise rolls back landed rows; it justifies the ordering only as \"a failed run can't skip rows on the next attempt\"."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "The transform docstring and summary confirm it yields only rows with `event_id > last_seen`, so a re-run with no new source rows lands nothing under append."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The solution reads the last committed `max_event_id` out of the `for_model` bag with first-run absence handled (mirroring `_table_row_count`'s documented \"0 before the first run writes it\"), and nothing defaults the cursor to now or the source maximum."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The rewritten file imports only `csv`/`dlt`/`duckdb` (no pandas or numpy) and casts DuckDB scalars with `int(...)`, so the stored `max_event_id` is a plain int/str, not a numpy or pandas scalar."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent states the cursor is \"keyed via `for_model(\"events\")`\", matching the reference's warning that flat indexing is silently dropped."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The read-back uses `import duckdb as duckdb_lib  # aliased: the port param below is named duckdb` and catches both `duckdb_lib.IOException` (DB file absent on run one) and `duckdb_lib.CatalogException` (table absent)."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The trace and answer contain no `.when(...)` per-model DAG proposal and no mention of `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks sidecar mechanism."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The port param stays typed `DuckDbOutput` with `secrets` config retained, the only raw connect is `read_only=True`, the agent says the check now verifies counts \"not just table names\" (so a naming check remains), and no part of the summary or edit removes the port write or `.transform-complete` touch."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "All explanation is in terms of \"each run\"/\"the previous run's committed cursor\"; no cron, nightly, or scheduled-run framing appears."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed pack's incremental-transforms reference and produced a transform_state-backed, for_model-keyed, append-with-cursor solution with an alias-safe, first-run-safe DuckDB row-count verification and no rollback or scheduler misconceptions."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 20,
+            "duration_ms": 390671,
+            "total_cost_usd": 0.6926330999999999,
+            "input_tokens": 30,
+            "output_tokens": 8760,
+            "is_error": false,
+            "tool_calls": 18,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows a grep of the installed plugin skills directory followed by a Read of `plugin/skills/nxd-generate-dp/reference/incremental-transforms.md` before any edit, so the installed pack's incremental contract was consulted first."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The agent added a `transform_state` parameter to the `ingest` transform and holds the watermark there, with no sidecar file, marker table, or durable pipelines_dir invented."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "Nothing in the rewrite or summary moves `pipelines_dir`/`DLT_DATA_DIR` off the run directory (the run-local `os`/path setup and its comment are retained), and the agent filters rows itself in Python rather than relying on dlt's own cursor surviving."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent switched to `write_disposition=\"append\"` and explicitly named the failure mode it avoids \u2014 keeping `replace` while yielding only the delta would have shrunk the table to just the delta."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent justified eligibility on the output side, stating `events` is a single pass-through model with no aggregation/dedup step, not merely that the source is append-only."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The cursor `events_state[\"max_event_id\"]` is advanced only after `pipeline.run(...)` and the row-count verification succeed, and only from rows actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "Verification is a DuckDB row-count read-back compared against `prior_count + len(rows)`, which detects a run that landed nothing, rather than resting on the table-name assert."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent explicitly invokes the \"rows and cursor don't share fate\" rule and notes the local DuckDB driver has no transaction and no rollback, rather than claiming a raise undoes the write."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Rows are filtered to `event_id > last_seen` against the committed watermark, so a re-run with no new source rows yields and lands nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The agent applied the `.get(key, default)` read pattern it had just read in both the platform doc and the skill reference, defaulting the watermark low so the whole history is taken on run one rather than defaulting to the source maximum."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The rewrite imports the stdlib `csv` module rather than pandas, so the filtered `event_id` cursor is a plain Python int with no numpy/pandas scalar to leak into the bag."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent addresses the bag through `transform_state.for_model(\"events\")` and states why flat indexing is wrong (silently dropped once a second model is promised)."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The written file imports the module as `import duckdb as duckdb_lib` with a comment noting the port param shadows it, and the read-back is guarded so the count path survives a first run with no DuckDB file."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "Neither the trace nor the answer proposes a `.when(...)` per-model DAG or mentions `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks sidecar mechanism."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The rewrite keeps the typed `DuckDbOutput` import and port param, the `secrets[\"csv_source\"]` config, the dlt duckdb destination write, and the terminating touch, with the raw `duckdb_lib` connection used only for a count read and a table-name check still present alongside it."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation speaks only of \"runs\" and \"re-runs\" with no cron, nightly, or scheduled-run framing."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed skill pack's incremental-transforms reference before editing and produced a solution matching the desktop contract \u2014 `transform_state.for_model(\"events\")` watermark, append disposition with source-side filtering, count-based post-write verification, cursor advanced last, and no false rollback assumption."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 23,
+            "duration_ms": 646319,
+            "total_cost_usd": 1.7468266,
+            "input_tokens": 37,
+            "output_tokens": 13849,
+            "is_error": false,
+            "tool_calls": 59,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The agent invoked the installed pack's skills and then Read `/\u2026/eval-current_pack-incremental-transform-state-1oqzfcw1/plugin/skills/nxd-generate-dp/reference/incremental-transforms.md` \u2014 the installed pack for this run \u2014 and rewrote the transform against it."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The final answer states it added the `transform_state` kwarg to `ingest()` and used it to hold the durable watermark rather than a sidecar or marker table."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "The rewrite retains `import os` (the file's only use of it being `DLT_DATA_DIR` under the run dir) and the agent explicitly reverted its dlt-incremental attempt on the grounds that dlt pipeline state is ephemeral and must never be made durable."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The final answer states `write_disposition` was switched from `\"replace\"` to `\"append\"`, noting replace-with-a-delta is not what it left in place."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "Neither the trace nor the final answer ever considers the output side \u2014 the agent justifies append solely by \"the cursor guarantees no already-landed row is re-yielded\" and never states that `events` is a pass-through (or that an aggregate/regrain model would not be append-safe)."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The final answer states the cursor is \"advanced last, after the write and the row-count verification\"."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "The agent replaced the table-name equality assert with a row-count check comparing prior count + delta against what was actually landed, explicitly because the name assert cannot detect a skipped write under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent claims only that a failed run leaves the cursor untouched, and never asserts that a raise rolls back rows already written by `pipeline.run(...)`."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "The solution filters source rows to `event_id > last_seen` from the durable cursor, so a re-run with no new rows yields nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The final answer states `last_seen` comes from the cursor with `0` on the first run, which takes the whole history rather than skipping it."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The rewrite reads the export with the stdlib `csv` module rather than pandas/numpy, so the stored `max_event_id` is a plain Python scalar and JSON-serializable."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The final answer explicitly uses `transform_state.for_model(\"events\")` and calls out that flat indexing silently no-ops once a second model is declared."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The written file imports `duckdb as duckdb_lib` with a comment noting the port param shadows the module, and the agent read the reference's read-back guidance about defaulting the prior count to 0 when the table does not exist yet."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "Nothing in the trace or final answer proposes a `.when(...)` DAG or mentions `NXD_TRANSFORM_STATE_SIDECAR_PATH`."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": false,
+                "why": "The agent states it \"switched from a table-name equality check ... to a row-count check\", indicating the naming check on produced tables was removed rather than retained in some form, and nothing in the trace or answer shows the `.transform-complete` touch was preserved."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation is framed in terms of runs and re-runs (\"a failed run\", \"next time\"), with no cron or nightly-schedule language."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent correctly landed the core transform_state + append + cursor contract after consulting the installed pack, but never established append-safety on the output-model side and appears to have dropped the table-naming check from the transform contract."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 27,
+            "duration_ms": 253996,
+            "total_cost_usd": 1.0736357,
+            "input_tokens": 42,
+            "output_tokens": 11664,
+            "is_error": false,
+            "tool_calls": 25,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent launched `nxd-eval-pack:nxd-adding-inputs` but never opened the generate-dp skill or its `reference/incremental-transforms.md`; it derived the \"incremental-loading contract\" entirely from external web docs at docs.demo.nextopia.dev (WebFetch/curl), which is not the installed pack."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly rejected `transform_state` as \"k8s-compute only\" and instead relied on dlt's own pipeline state as the persistence mechanism, so no `transform_state` parameter was declared."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although `pipelines_dir`/`DLT_DATA_DIR` were left under the run directory, the solution's entire watermark story rests on dlt's own incremental cursor surviving between runs (\"dlt tracks the last-seen `event_id` in its own pipeline state ... and persists across runs\"), which the check forbids."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": false,
+                "why": "The agent changed the landing call to `write_disposition=\"merge\"`, not `\"append\"`."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "Nothing in the trace or final answer considers append-safety of the promised output model(s); the agent reasoned only about the append-only nature of the source and dlt merge idempotency."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "There is no author-managed cursor at all \u2014 advancement is delegated to dlt's internal state commit, so no post-write, post-verification watermark update exists."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "The only count-based verification happened in a throwaway external smoke-test venv; the trace shows no post-write row-count/watermark read-back added to the transform itself, leaving at best the pre-existing table-name assert."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent never claims that a raise rolls back rows already landed by `pipeline.run(...)`; it did not repeat the docs' fate-sharing language in its solution or summary."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": false,
+                "why": "The filter is dlt's `incremental(\"event_id\")` whose cursor lives in the run-local, ephemeral `pipelines_dir`/`DLT_DATA_DIR`, so on a real Pocket re-run the prior watermark is absent and the whole export is re-read \u2014 and the agent adopted merge rather than append."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "No `transform_state` bag is read, so there is no `.get(key, default)` handling of the empty first-run bag (only dlt's `initial_value=0` on a cursor that never persists)."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "No cursor value is stored in the kernel state bag at all, so the JSON-serializable-cursor requirement is unmet."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "The solution never touches `transform_state`, so `for_model(\"events\")` is absent."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The solution adds no direct DuckDB read-back inside the transform (verification was done in a separate smoke-test script), so this check is not applicable."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed neither a `.when(...)` per-model DAG nor `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks-only sidecar mechanism."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The signature keeps the typed `DuckDbOutput` port and `secrets[...]` config, writes still go through `dlt.destinations.duckdb(credentials=duckdb.path)`, no raw `duckdb.connect` write was introduced, and the trace shows no removal of the `.transform-complete` touch or naming check."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent framed behavior as \"run 1 / run 2 / run 3\" and \"each run\" without invoking a schedule, cron, or nightly cadence."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent bypassed the platform's `transform_state` contract entirely \u2014 sourcing its reasoning from external web docs rather than the installed pack \u2014 and shipped a dlt-native `incremental` + `merge` solution whose cursor lives in run-local dlt state, so nine of sixteen checks fail."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 21,
+            "duration_ms": 271409,
+            "total_cost_usd": 0.6173458,
+            "input_tokens": 33,
+            "output_tokens": 8622,
+            "is_error": false,
+            "tool_calls": 19,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent invoked only `nxd-eval-pack:nxd-adding-inputs` and then derived the incremental contract from WebFetch/curl of the public docs site \u2014 it never invoked the generate-dp skill or read its SKILL.md / reference/incremental-transforms.md, so the guidance under test was never opened."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly rejected `transform_state` as \"k8s-compute only\" and never declared the parameter, relying instead on dlt's own pipeline-state directory for persistence."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although `pipelines_dir` and `DLT_DATA_DIR` were left under the run directory, the solution is built entirely on dlt's own incremental cursor surviving between runs (\"dlt tracks this in its local pipeline state dir, which persists across runs\"), which this check forbids."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent changed `pipeline.run(..., write_disposition=\"replace\")` to `\"append\"` rather than leaving replace in place while yielding a delta."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "The append was justified purely from the source side (\"the export is append-only/immutable\"); the agent never reasoned about whether the promised output model is a pass-through, nor warned about aggregate/regrain models."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "There is no explicit post-write cursor advance at all \u2014 the watermark is dlt's internal incremental state updated during extraction, not after the rows are landed and verified."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "The agent added no count or watermark read-back, leaving only the pre-existing table-name assert, which cannot detect a run that landed nothing under append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent's own explanation makes no claim that a failed run rolls back already-written rows; the shared-fate language appears only in the quoted doc fetch, not in its reasoning or design."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": false,
+                "why": "The append is paired with `dlt.sources.incremental(\"event_id\")`, whose cursor lives in the run-local, ephemeral dlt state dir, so a re-run starts with no prior watermark and re-appends the entire export instead of landing nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "The agent never reads a state bag, so there is no `.get(key, default)` handling of the empty first-run case."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "No cursor value is stored in the transform-state bag at all, so the JSON-serializable-cursor requirement is unmet."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "Neither `for_model(\"events\")` nor any state-bag addressing appears; the state bag is unused."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The solution performs no direct DuckDB read-back, so the module-shadowing and missing-file hazards do not apply."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed no `.when(...)` per-model DAG and never mentioned `NXD_TRANSFORM_STATE_SIDECAR_PATH` or any Databricks sidecar."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The edits were scoped to the model-cursor constant and the resource/run block, leaving the typed `DuckDbOutput` param, `secrets[\"csv_source\"]`, `dlt.destinations.duckdb(credentials=duckdb.path)`, and the remaining tail of the transform intact, and the file compiles."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent explained the behavior in terms of runs and re-reads, never invoking a schedule, cron, or \"nightly\" framing in its own reasoning or answer."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent never consulted the generate-dp skill pack and instead read the public docs, concluded `transform_state` was unavailable on desktop, and rebuilt incrementality on dlt's own cursor stored in run-local ephemeral state \u2014 a solution that would re-append the entire export on every run and that misses nearly every state-contract check."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-keepboth-fix": {
+      "elapsed_s": 110.2,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "incremental-transform-state": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 12,
+            "duration_ms": 48428,
+            "total_cost_usd": 0.46137339999999993,
+            "input_tokens": 13,
+            "output_tokens": 4177,
+            "is_error": false,
+            "tool_calls": 10,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows a [tool_use:Skill] invocation of the installed nxd-data-product-builder pack, a grep over the installed plugin's skills directory, and a Read of nxd-generate-dp/reference/incremental-transforms.md before any edit."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The agent added a transform_state parameter to the on_transform function to hold the watermark and invented no sidecar file, marker table, or durable pipelines_dir."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "The rewrite retains the os import used for the run-local DLT_DATA_DIR, the agent's own filter (not dlt's incremental cursor) drives the delta, and nothing in the trace or answer moves dlt state to ~/.dlt or any persistent location."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The agent explicitly switched write_disposition from \"replace\" to \"append\" and named the failure mode it avoids \u2014 replace with only the new rows would silently truncate history."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent reasoned on the output side, stating events is a pure pass-through with no aggregation or regrain and that event_metrics is a query-time semantic view rather than a landed table."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The answer states the max_event_id cursor advances only after pipeline.run and the row-count verification succeed, and only when new rows were actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "The agent added a prior_count + len(rows) == landed row-count read-back as the proof of the write, and kept the table-name check only as an unpromised-extras check that will not raise on an empty first run."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent never claims a raise rolls back landed rows \u2014 its only durability claim is about the cursor not advancing past unlanded data, which is accurate."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Rows are filtered to event_id > last_seen against the persisted watermark, so a re-run with no new source rows yields and lands nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The cursor is read with a default of 0 on the first run, which takes the whole history rather than raising or skipping existing rows."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The rewrite drops pandas/dlt readers in favor of the stdlib csv module and compares event_id numerically against an int default, so the stored max_event_id is a plain Python int."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The agent addressed the bag through transform_state.for_model(\"events\") and explicitly noted flat indexing is never used, per the platform contract."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The visible write imports the module as `import duckdb as duckdb_lib` with a comment naming the port-parameter shadowing, and the prior_count read-back is designed around a first run where the counts start from zero."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "Neither the trace nor the final answer mentions a .when(...) per-model DAG or NXD_TRANSFORM_STATE_SIDECAR_PATH."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The rewrite keeps the typed DuckDbOutput port param, the promised-models header comment, and the naming check as an unpromised-extras assert, with duckdb_lib used only for read-back counts and no changes needed to spec.py or models.py."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The explanation is framed in terms of runs and re-runs (\"first run\", \"a failed run\") with no cron, nightly, or scheduled-run language."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed incremental-transforms reference before editing and produced a contract-correct incremental load \u2014 transform_state via for_model, append plus a watermark filter, cursor advanced only after a count-based post-write verification, run-local dlt state, and an aliased duckdb import \u2014 with no scheduler or Databricks-only framing."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 41,
+            "duration_ms": 556846,
+            "total_cost_usd": 1.2891698999999996,
+            "input_tokens": 73,
+            "output_tokens": 13672,
+            "is_error": false,
+            "tool_calls": 39,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": false,
+                "why": "The agent invoked `nxd-eval-pack:nxd-adding-inputs` rather than the generate-dp skill, and never read its SKILL.md or reference/incremental-transforms.md \u2014 it derived the contract from the public docs site, curl, and site-packages greps instead."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": false,
+                "why": "The agent explicitly rejected `transform_state` (claiming it is k8s-compute-only) and never declared the parameter, relying on dlt's internal pipeline state instead."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": false,
+                "why": "Although `pipelines_dir`/`DLT_DATA_DIR` were left under the run directory, the whole solution explicitly relies on dlt's own incremental cursor persisting in `pipelines_dir` \"next to the DuckDB staging file\" between runs, which the check forbids."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": false,
+                "why": "The agent switched to `write_disposition=\"merge\"`, not `\"append\"` as the platform contract requires."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": false,
+                "why": "Nothing in the trace or answer considers append-safety of the promised output model; the agent reasoned only about the append-only source and dlt mechanics."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": false,
+                "why": "No explicit cursor is managed at all \u2014 the watermark is delegated to dlt's internal incremental state and the solution adds no post-write verification gating any advance."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": false,
+                "why": "The transform gained no count/watermark read-back; verification remained the pre-existing table-name assert plus an out-of-band /tmp smoke test that does not run inside the product."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent never claimed in its own reasoning or final answer that a failed run rolls back landed rows, and its merge-based solution does not depend on rollback."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": false,
+                "why": "The delta filter depends on dlt state stored in a run-local `pipelines_dir` that does not survive between Pocket runs, so a re-run would still re-read the entire export (merely deduped by merge) rather than landing nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": false,
+                "why": "The solution never reads the state bag, so there is no `.get(key, default)` handling of the empty first-run case."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": false,
+                "why": "No cursor value is stored in `transform_state` at all, so no JSON-serializable watermark is persisted."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": false,
+                "why": "The agent never used `transform_state.for_model(\"events\")` \u2014 or the state bag in any form \u2014 despite the docs it fetched describing the accessor."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The edited transform adds no direct DuckDB read-back (the `import duckdb as ddb` use was only in a throwaway /tmp smoke script), so this check is not applicable."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "The agent proposed no `.when(...)` per-model DAG and never mentioned `NXD_TRANSFORM_STATE_SIDECAR_PATH` or a Databricks sidecar."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The edit was scoped to the resource hints and `pipeline.run` disposition, leaving the typed `DuckDbOutput` param, `secrets[\"csv_source\"]`, `dlt.destinations.duckdb(credentials=duckdb.path)`, the table-name check, and the `.transform-complete` touch intact."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent described behavior in terms of first run / re-runs and never framed it as a cron, nightly, or scheduled run."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent bypassed the platform's `transform_state` contract entirely \u2014 never opening the generate-dp skill \u2014 and shipped a dlt-internal incremental cursor with `write_disposition=\"merge\"` that depends on run-local dlt state surviving between runs, failing the core checks."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "incremental-transform-state",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 17,
+            "duration_ms": 103712,
+            "total_cost_usd": 0.5753159,
+            "input_tokens": 23,
+            "output_tokens": 6940,
+            "is_error": false,
+            "tool_calls": 15,
+            "agent_model": "sonnet"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "consults-the-skill-pack",
+                "pass": true,
+                "why": "The trace shows a grep of the installed plugin's skills directory followed by a Read of `plugin/skills/nxd-generate-dp/reference/incremental-transforms.md` before the Write, i.e. the installed pack was consulted, not another checkout."
+              },
+              {
+                "id": "uses-transform-state-kwarg",
+                "pass": true,
+                "why": "The final answer states the cursor is read and written through `transform_state.for_model(\"events\")`, with no sidecar file, marker table, or durable dlt pipelines_dir introduced."
+              },
+              {
+                "id": "dlt-state-stays-run-local",
+                "pass": true,
+                "why": "Nothing in the trace or summary moves dlt state to `~/.dlt` or a persistent path, the rewritten file still imports `os`/`Path` for the run-local `DLT_DATA_DIR`/`pipelines_dir` setup, and the cursor is carried by `transform_state` rather than dlt's own incremental state."
+              },
+              {
+                "id": "switches-to-append-not-replace-with-delta",
+                "pass": true,
+                "why": "The summary explicitly reports switching `write_disposition` from `\"replace\"` to `\"append\"`, so the delta is not landed under replace."
+              },
+              {
+                "id": "confirms-models-are-append-safe",
+                "pass": true,
+                "why": "The agent read `spec.py`/`models.py` and stated it confirmed the eligibility gate on the output side \u2014 a single append-only base model with no derived models (the `event_metrics` semantic view is query-time, not landed) \u2014 rather than reasoning only from the source."
+              },
+              {
+                "id": "cursor-advanced-after-write",
+                "pass": true,
+                "why": "The summary says the cursor is advanced last, only after `pipeline.run(...)` and the row-count verification succeed and only if new rows landed, and the watermark comes from the filtered rows actually yielded."
+              },
+              {
+                "id": "verification-can-detect-a-missing-write",
+                "pass": true,
+                "why": "Verification is an explicit DuckDB row-count read-back compared against the expected post-append count, and the agent states this replaces reliance on the table-name assert, which cannot detect a skipped append."
+              },
+              {
+                "id": "no-false-rollback-assumption",
+                "pass": true,
+                "why": "The agent explicitly notes the local DuckDB driver has no transactional rollback and that the cursor is what stays untouched on failure, rejecting the docs site's 'state and output share fate' claim rather than relying on it."
+              },
+              {
+                "id": "append-paired-with-cursor-not-bare",
+                "pass": true,
+                "why": "Source rows are filtered with `event_id > last_seen` from the persisted watermark, so a re-run with no new source rows yields and lands nothing."
+              },
+              {
+                "id": "first-run-empty-bag-takes-history",
+                "pass": true,
+                "why": "The `last_seen` watermark is read from the state bag with a low default (the read reference mandates `.get(key, default)` with a history-taking sentinel) and the design filters `event_id > last_seen`, which takes all 100 existing rows on run one rather than defaulting to the current maximum."
+              },
+              {
+                "id": "json-serializable-cursor",
+                "pass": true,
+                "why": "The rewritten transform reads the export with the stdlib `csv` module (no pandas/numpy scalars in the filter path) and stores an integer `event_id` maximum, which is JSON-serializable."
+              },
+              {
+                "id": "state-bag-addressed-via-for-model",
+                "pass": true,
+                "why": "The final answer states the bag is addressed via `transform_state.for_model(\"events\")` and never flat-indexed."
+              },
+              {
+                "id": "readback-avoids-module-shadowing-and-first-run-io",
+                "pass": true,
+                "why": "The written file's visible header contains `import duckdb as duckdb_lib  # aliased: the port param below is named \\`duckdb\\``, and the agent's read of the incremental-transforms reference plus its count-based first-run design covers the missing-file case on run one; no bare `duckdb.connect` appears."
+              },
+              {
+                "id": "no-when-dag-no-databricks-sidecar",
+                "pass": true,
+                "why": "Neither the trace nor the final answer mentions a `.when(...)` per-model DAG or `NXD_TRANSFORM_STATE_SIDECAR_PATH`."
+              },
+              {
+                "id": "preserves-transform-contract",
+                "pass": true,
+                "why": "The rewritten file keeps `from nxd.core.context import DuckDbOutput` and the typed port param, `secrets`-sourced config via `Any`, the dlt duckdb destination, and the 'Landed tables promised by spec.py; never semantic views' model-name constants that back the naming check; the only raw `duckdb_lib` use is a read-only count."
+              },
+              {
+                "id": "no-scheduler-framing",
+                "pass": true,
+                "why": "The agent frames the behavior as per-run/re-run refinement and never invokes a schedule, cron, or 'nightly' framing."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent consulted the installed nxd-generate-dp incremental-transforms reference and produced the sanctioned solution \u2014 `transform_state.for_model(\"events\")` watermark, append disposition paired with an `event_id > last_seen` filter, count-based post-write verification with an aliased duckdb module, cursor advanced last, and explicit rejection of the rows/cursor shared-fate assumption \u2014 with the file body truncated in the trace but the visible header and final answer consistent with every check."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}

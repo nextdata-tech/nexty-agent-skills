@@ -321,9 +321,12 @@ first run whose delta is empty for every model therefore produces **no** data
 tables at all, `data_table_names()` returns `[]`, and the table-name assert
 **fails** — on a run that did nothing wrong.
 
-So keep the table-name assert (it still enforces the naming invariant and still
-catches semantic views leaking into the output), but scope it to what it can
-actually prove, and add a row-count check that verifies the write:
+So the transform ends up with **both checks, not one**. The row-count check is an
+**addition**, never a replacement: keep the table-name assert (it still enforces
+the naming invariant and still catches semantic views leaking into the output),
+scope it to what it can actually prove, and add the row-count check beside it.
+Swapping one for the other drops the naming invariant — and the
+`.transform-complete` touch stays exactly where the default template puts it:
 
 ```python
 # Naming invariant: dlt must never write a table we did not promise. Under
@@ -478,6 +481,10 @@ full replace and say so.
   that wrote that model's rows.
 - **Do NOT treat the table-name assert as proof the write happened.** It cannot
   see a missing write under `"append"`. Count rows.
+- **Do NOT delete the table-name assert when you add the row-count check.** They
+  prove different things — naming invariant vs. what landed — and the transform
+  keeps both. Same for the `.transform-complete` touch: adding verification never
+  removes it.
 - **Do NOT assume a raise rolls back the rows.** The local DuckDB driver has no
   transaction; rows are permanent the moment `pipeline.run(...)` returns. Check
   before writing.
