@@ -148,11 +148,23 @@ def turn_2_index(trace_lines: list[str]) -> int | None:
 # A verdict name within a short window of a comparison operator and a decimal or
 # integer numeral. This is the difference between "ADVANCE if the score is high
 # enough" and "ADVANCE at >= 4.0" — only the second is correctable.
+#
+# Two things keep this from passing the cards it exists to reject:
+#
+# 1. The operator group holds only RELATIONS, never the nouns `threshold`,
+#    `cut-off` or `band`. Those are what a vague card PROMISES to pick, so
+#    admitting them let the promise supply its own operator — "I'll choose
+#    thresholds that suit the 10 rows" scored as a stated cut-off.
+# 2. The word operators carry `\b`. Without it, `at` matched inside `that`,
+#    `data` and `state`, so any verdict name near any digit passed.
+#
+# The numeral must also sit close to the operator: a relation and a digit 40
+# characters apart are usually two unrelated clauses.
 QUOTED_THRESHOLD = re.compile(
     r"(ADVANCE|HOLD|REJECT|NEEDS[_ ]MORE[_ ]INFO)"
     r"[^\n]{0,80}?"
-    r"(>=|≥|>|<=|≤|<|=|at|above|below|band|between|cut-?off|threshold|score of)"
-    r"[^\n]{0,40}?"
+    r"(>=|≥|>|<=|≤|<|=|\bat\b|\babove\b|\bbelow\b|\bbetween\b|\bscore of\b)"
+    r"[^\n]{0,12}?"
     r"(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
@@ -171,8 +183,16 @@ QUOTED_THRESHOLD = re.compile(
 # must not be followed by one (which would make it the integer part of a
 # decimal). `.` and `)` are dropped as separators entirely — they are what made
 # "4.0" and "C4)" read as definitions.
+# A markdown table (`| 4 | one production service |`) and a bolded level
+# (`- **4** - …`) are the two most natural renderings of "define 2, 3 and 4 on
+# every criterion", and both scored zero levels: `|` was not a separator, and
+# `**` sat between the digit and its separator where `\s*` could not cross it.
+# A false negative here is expensive — `check()` exits non-zero, so one missed
+# format fails the whole scenario for a correct read-back. Emphasis markers are
+# therefore skipped on both sides, and `|` joins the separator class. The
+# `(?!\s*\.\s*\d)` guard still keeps `4.0` from reading as a level.
 ANCHOR_LINE = re.compile(
-    r"(^|[^\w.])([234])(?!\s*\.\s*\d)\s*(?:=|:|—|–|-|means)\s*\S",
+    r"(^|[^\w.])[*_]{0,2}([234])[*_]{0,2}(?!\s*\.\s*\d)\s*(?:=|:|—|–|-|\||means)\s*\S",
     re.MULTILINE,
 )
 
@@ -269,6 +289,11 @@ def check_ordering_and_card(trace: str) -> None:
 
     anchors = ANCHOR_LINE.findall(card)
     levels = {lvl for _, lvl in anchors}
+    # Deliberately looser than the judge: `card-defines-every-intermediate-band`
+    # in checks.json wants 2, 3 AND 4 defined on every criterion. This gate only
+    # separates "named some levels" from "named none", because it must not turn
+    # a formatting difference into a hard exit. Do not raise it to match the
+    # judge — the judge is where completeness is graded.
     check(
         "card-quotes-intermediate-anchors",
         len(levels) >= 2,

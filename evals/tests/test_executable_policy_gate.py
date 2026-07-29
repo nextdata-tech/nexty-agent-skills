@@ -114,6 +114,70 @@ def test_threshold_only_card_fails_the_anchor_check(tmp_path):
     assert "FAIL card-quotes-intermediate-anchors" in proc.stdout, proc.stdout
 
 
+def test_vague_card_naming_verdicts_still_fails_the_threshold_check(tmp_path):
+    """The false green: a card that PROMISES to pick cut-offs must not pass.
+
+    `threshold` / `cut-off` / `band` used to sit in the operator alternation, so
+    a card promising to choose one supplied its own operator and then needed
+    only a nearby digit — and this scenario always has one ("5 criteria").
+    `checks.json` calls this card a failure outright; the mechanical gate has to
+    agree. The older `test_card_without_numerals_fails` misses it because its
+    fixture names no verdict, so it fails on the verdict term first.
+    """
+    trace = (
+        "[assistant] Verdicts: ADVANCE, HOLD, REJECT, NEEDS_MORE_INFO. "
+        "I'll choose thresholds that suit the 10 rows, and pick a sensible "
+        "ADVANCE cut-off once we've discussed the 5 criteria.\n"
+        f"{TURN_2}\n{WRITE_LINE}\n"
+    )
+    proc = _run(tmp_path, trace)
+    assert "FAIL card-quotes-a-decisive-threshold" in proc.stdout, proc.stdout
+
+
+def test_word_operator_does_not_match_inside_a_longer_word(tmp_path):
+    """`at` without a word boundary matched inside `that`, `data`, `state`."""
+    trace = (
+        "[assistant] HOLD is for candidates that need 2 more signals before "
+        "a decision, and the data we have is thin.\n"
+        f"{TURN_2}\n{WRITE_LINE}\n"
+    )
+    proc = _run(tmp_path, trace)
+    assert "FAIL card-quotes-a-decisive-threshold" in proc.stdout, proc.stdout
+
+
+def test_anchors_in_a_markdown_table_are_recognised(tmp_path):
+    """A table is the natural rendering of 15 definitions; it scored zero.
+
+    A false negative is expensive here — `check()` exits non-zero, so one
+    unrecognised format sinks the whole scenario for a correct read-back.
+    """
+    trace = (
+        "[assistant] Here is the policy I propose.\n"
+        "| Level | Meaning |\n"
+        "| 4 | one production service |\n"
+        "| 3 | a substantial side project |\n"
+        "| 2 | coursework only |\n"
+        "Verdict bands: ADVANCE at >= 4.0, HOLD >= 2.5, REJECT below.\n"
+        f"{TURN_2}\n{WRITE_LINE}\n"
+    )
+    proc = _run(tmp_path, trace)
+    assert "PASS card-quotes-intermediate-anchors" in proc.stdout, proc.stdout
+
+
+def test_anchors_with_bold_emphasis_are_recognised(tmp_path):
+    """`**4**` put a `*` between the digit and its separator."""
+    trace = (
+        "[assistant] Proposed anchors:\n"
+        "- **4** - one production service\n"
+        "- **3** - a substantial side project\n"
+        "- **2** - coursework only\n"
+        "Verdict bands: ADVANCE at >= 4.0, HOLD >= 2.5, REJECT below.\n"
+        f"{TURN_2}\n{WRITE_LINE}\n"
+    )
+    proc = _run(tmp_path, trace)
+    assert "PASS card-quotes-intermediate-anchors" in proc.stdout, proc.stdout
+
+
 def test_multiline_tool_result_numerals_are_not_agent_prose(tmp_path):
     """The regression: only a tool result's FIRST line carries its prefix.
 
