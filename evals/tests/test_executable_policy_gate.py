@@ -114,6 +114,57 @@ def test_threshold_only_card_fails_the_anchor_check(tmp_path):
     assert "FAIL card-quotes-intermediate-anchors" in proc.stdout, proc.stdout
 
 
+def test_multiline_tool_result_numerals_are_not_agent_prose(tmp_path):
+    """The regression: only a tool result's FIRST line carries its prefix.
+
+    `_trace_from_stream` writes `[tool_result] <content>` where the content may
+    run to many lines. Matching the marker per line left every continuation line
+    graded as agent prose, so a card promising only to 'pick sensible
+    thresholds' cleared both numeral gates on digits it had merely READ — here
+    the rubric bands in `reference/derived-models.md`. That is the exact
+    promise-not-a-proposal this scenario exists to fail.
+    """
+    trace = (
+        "[assistant] Let me look at the source first.\n"
+        '[tool_use:Read] {"file_path": "reference/derived-models.md"}\n'
+        "[tool_result] Scoring guidance for rubrics:\n"
+        "  2 - weak evidence\n"
+        "  3 - partial evidence\n"
+        "  4 - strong evidence\n"
+        "ADVANCE at >= 4.0 is a common default cut-off\n"
+        "[assistant] I will pick sensible thresholds and anchors, then build "
+        "it.\n"
+        f"{TURN_2}\n{WRITE_LINE}\n"
+    )
+    proc = _run(tmp_path, trace)
+    assert "FAIL card-quotes-a-decisive-threshold" in proc.stdout, proc.stdout
+    # The threshold gate is decisive and the checker stops there, so the anchor
+    # verdict is never printed. What this pins is that neither gate reports PASS
+    # off the tool result's digits.
+    assert "PASS card-quotes-a-decisive-threshold" not in proc.stdout, proc.stdout
+    assert "PASS card-quotes-intermediate-anchors" not in proc.stdout, proc.stdout
+
+
+def test_assistant_continuation_after_tool_result_still_counts(tmp_path):
+    """The fix must not swallow real prose: a block reopens on `[assistant] `.
+
+    Guards the over-correction — dropping every unprefixed line after a tool
+    result would stop grading the multi-line cards this gate is built to read.
+    """
+    trace = (
+        '[tool_use:Read] {"file_path": "applicants.csv"}\n'
+        "[tool_result] full_name,years_experience\n"
+        "  Ada,9\n"
+        "[assistant] Here is the policy I propose.\n"
+        "Intermediate anchors: 4 = 7-9 years, 3 = 4-6 years, 2 = 2-3 years.\n"
+        "Verdict bands: ADVANCE at >= 4.0, HOLD >= 2.5, REJECT below.\n"
+        f"{TURN_2}\n{WRITE_LINE}\n"
+    )
+    proc = _run(tmp_path, trace)
+    assert "PASS card-quotes-a-decisive-threshold" in proc.stdout, proc.stdout
+    assert "PASS card-quotes-intermediate-anchors" in proc.stdout, proc.stdout
+
+
 def test_criterion_labels_are_not_anchors(tmp_path):
     """'C2:' and 'C4 —' name criteria; a letter-prefixed digit is not a level."""
     trace = (

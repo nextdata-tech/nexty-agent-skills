@@ -661,6 +661,25 @@ def test_a_skipped_turn_gets_no_stop_verdict():
     assert "delivered unconditionally" not in block
 
 
+def test_stop_verdict_names_the_last_executed_turn_not_a_skipped_one():
+    """Turn indices are positional and do not renumber around a skip.
+
+    With turn 2 skipped, turn 3's fact must characterise turn 1 — the turn that
+    actually ran and whose ending is under grading — not turn 2, which never
+    happened and has no ending to report on.
+    """
+    run = _load_run_module()
+    block = run.build_scripted_turns_block(
+        {"turns": [
+            {"text": "first", "when": "awaiting_input"},
+            {"text": "second", "when": "always"},
+        ]},
+        {"skipped_turns": [2], "awaited_input_turns": [1]},
+    )
+    assert "before [user_turn 3], the agent ended turn 1" in block, block
+    assert "turn 2 with the" not in block, block
+
+
 def test_the_trace_separator_records_whether_the_agent_had_stopped():
     """A trace-reading checker must be able to tell the two deliveries apart."""
     assert "unprompted" in eb.turn_separator(2, "go ahead", after_await=False)

@@ -1211,7 +1211,13 @@ def build_scripted_turns_block(checks: dict, metrics: dict | None = None) -> str
         index = i + 2
         if index in skipped:
             continue
+        # Walk back to the last turn that actually RAN. Indices are positional,
+        # so they do not renumber around a skip — `index - 1` can name a turn
+        # that was never sent, and the fact would then be stated about a turn
+        # with no ending to grade.
         preceding = index - 1
+        while preceding in skipped:
+            preceding -= 1
         if preceding in awaited:
             lines.append(
                 f"  HARNESS FACT: before [user_turn {index}], the agent ended "
