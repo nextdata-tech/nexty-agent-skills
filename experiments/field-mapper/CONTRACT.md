@@ -1,0 +1,662 @@
+# Field mapper — Layer-1 contract
+
+Status: **contract, pre-implementation.** Normative for everything under
+`experiments/field-mapper/`. Derived from `field-mapper-design.md` v2 (post-Fable,
+post-Sol). Where this file and the design doc disagree, that is a bug in this
+file — report it, do not silently diverge.
+
+Reconciled against upstream `main` at `81848fc`, which includes two commits that
+land on this machinery: **#128** (`nxd_decisions.provenance` — a required second
+axis, vocabulary `user_confirmed` | `agent_authored` | `source_derived` |
+`deferred`; note the merged spelling is `agent_authored`, not the
+`agent_proposed_approved` the PR description debates) and **#127**
+(`evidence_kind`, `fact` / `inference`, on a *deterministic* score-explanation
+row). Neither existed when the design was written. Consequences are carried in
+§2.3 and open question 9: `evidence_kind` and this contract's `verify_status`
+answer different questions and must never be populated from each other.
+
+**Layer-1 is what does not vary between experiments.** Prompt text, field
+grouping, input-adapter shape, and evidence granularity are Layer 2 and are
+deliberately absent here — they live in the landed mapper spec, versioned by
+`mapper_spec_id`.
+
+## Contents
+
+- [1. Module layout](#1-module-layout)
+- [2. Record schemas](#2-record-schemas)
+- [3. `value_status` semantics](#3-value_status-semantics)
+- [4. What blocks the build](#4-what-blocks-the-build)
+- [5. Identifiers and hashing](#5-identifiers-and-hashing)
+- [6. Resolution order](#6-resolution-order)
+- [7. Consistency asserts](#7-consistency-asserts)
+- [8. Transport contract](#8-transport-contract)
+- [9. Ledger contract](#9-ledger-contract)
+- [10. Open questions](#10-open-questions)
+
+---
+
+## 1. Module layout
+
+All under `experiments/field-mapper/field_mapper/`.
+
+```
+field_mapper/
+  __init__.py        version stamp + the only names Layer 2 may import
+  spec.py            mapper spec model, canonicalization, mapper_spec_id
+  identity.py        target_row_key derivation, input_snapshot_id, observation_id
+  records.py         the three record types + long-form <-> CSV serialization
+  schema.py          mapper spec -> Anthropic JSON Schema (+ what it cannot express)
+  validate.py        range/enum/type/evidence checks, retry policy, degrade accounting
+  transport.py       anthropic SDK call, budget, backoff, cancellation, heartbeat
+  ledger.py          append-only run ledger (hashes only)
+  grant.py           consent-grant load + match, refused before any source read
+  resolver.py        proposals + reviews + evidence -> effective wide rows
+  errors.py          the exception taxonomy value_status maps from
+  __main__.py        CLI: preflight | canary | run | resolve | verify
+```
+
+### Why this differs from the suggested decomposition
+
+Four splits were added; none is cosmetic.
+
+**`identity.py` split out of `spec.py`.** Row identity is the axis the original
+design got wrong (§3 of the design), and it is consumed by *four* modules —
+records, resolver, validate, ledger. Leaving `target_row_key` derivation inside
+`spec.py` makes every one of those import the spec module to hash a row key, and
+invites the drift where the resolver derives a key one way and the record writer
+another. Row identity is the contract's load-bearing primitive; it gets its own
+module with its own tests, and `spec.py` imports *it*.
+
+**`schema.py` split out of `transport.py`.** The design's hardest transport fact
+is the negative one: JSON Schema on this API supports neither numeric range
+(`minimum`/`maximum`) nor string length (`minLength`), and is rejected outright
+when combined with citations. That means every constraint the spec declares has
+to be routed to one of two places — into the wire schema, or into
+`validate.py` — and the routing decision is exactly where a "we thought the API
+enforced it" bug lives. Making it a module forces the routing table to be
+explicit and testable offline with no network. It also isolates the one-time
+schema-compilation cost (24h server-side cache, keyed on schema bytes) so
+schema churn is visible as a cost line, not a mystery latency.
+
+**`grant.py` split out of `__main__.py`.** §9 of the design requires the grant
+check to happen **before** source content or credentials are read. If that check
+lives in the CLI, an in-process caller (`nxd-pocket-loop` invoking `map()`
+directly, which is the stated Layer-1 use) bypasses it entirely. It is a library
+gate, not a CLI gate.
+
+**`errors.py` split out.** `value_status` is a projection of an exception
+taxonomy; §4's table is only enforceable if the mapping from raised exception to
+status is in one place. Otherwise `transport.py` decides some statuses,
+`validate.py` decides others, and the "systemic failure blocks, row-level absence
+does not" boundary erodes at the first new error type.
+
+### Public surface
+
+Layer 2 (generated code, skills, pocket-loop closures) may import **only** these:
+
+| Symbol | Module | Purpose |
+|---|---|---|
+| `map_inputs(inputs, *, spec, deps) -> MapResult` | `field_mapper` | the N→M primitive |
+| `MapperSpec.load(path)` / `.mapper_spec_id` | `spec` | landed spec → runtime object |
+| `MapperProposal` / `MapperReview` / `MapperEvidence` | `records` | the three record types |
+| `ValueStatus` | `records` | the enum in §3 |
+| `resolve(proposals, reviews, evidence, spec) -> Resolution` | `resolver` | wide projection + sidecar, one bundle |
+| `Resolution.wide_rows` / `.provenance` / `.assert_bijection()` | `resolver` | §7 |
+| `PreflightEstimate` / `estimate(inputs, spec)` | `transport` | §10 of the design |
+| `Grant.load(path)` / `Grant.check(spec, inputs)` | `grant` | §9 |
+| `FieldMapperError` and subclasses | `errors` | so callers can catch by class, not string |
+
+Everything else is private. `transport.Client` is deliberately **not** public —
+Layer 2 must not be able to make an unbudgeted, unledgered call.
+
+`map_inputs` returns a `MapResult` carrying proposals + evidence + ledger handle
+**in one in-memory bundle** (design §7). There is no API that returns proposals
+without their evidence, because that API is how the orphan-evidence bug gets
+written.
+
+---
+
+## 2. Record schemas
+
+Three landed models. Long-form records are authoritative; the wide model is a
+projection (design §2).
+
+Column type names are the `nxd.spec` types (`string()`, `int64()`, `float64()`,
+`bool()`, `timestamp()`), since these land as base models through the normal dlt
+reader loop.
+
+### 2.1 `mapper_proposals`
+
+One row per `(target_row_key, field)` produced by this execution. **Replace-loaded
+every build** — it is this run's output, not durable state.
+
+| Column | Type | Null? | Key | Description |
+|---|---|---|---|---|
+| `target_row_key` | `string()` | no | PK | Content/source-derived row identity (§5). Never an emission ordinal. |
+| `field` | `string()` | no | PK | Target field name. Must be declared in the spec's target fields. |
+| `value_string` | `string()` | **yes** | | Typed value slot. Exactly one `value_*` column is non-null when `value_status = ok`; **all are null** for every other status. |
+| `value_int` | `int64()` | **yes** | | ditto |
+| `value_float` | `float64()` | **yes** | | ditto |
+| `value_bool` | `bool()` | **yes** | | ditto |
+| `value_timestamp` | `timestamp()` | **yes** | | ditto |
+| `value_type` | `string()` | no | | Which slot is authoritative: `string`\|`int`\|`float`\|`bool`\|`timestamp`. Populated even when the value is null, so the resolver knows the column's type without consulting the spec. |
+| `value_hash` | `string()` | no | | `sha256` over the canonical value encoding (§5). Stable for null: the null-of-type digest, not the empty string. |
+| `value_status` | `string()` | no | | The enum in §3. |
+| `error_code` | `string()` | **yes** | | Non-null iff `value_status = error`. Stable machine token (`credential_missing`, `transport_exhausted`, `refusal`, `schema_reject`, `dependency_missing`). Never free text. |
+| `error_detail` | `string()` | **yes** | | Human-readable, redacted. Never contains input content or credentials. |
+| `attempt_count` | `int64()` | no | | Attempts spent on this cell, including the successful one. `0` when no call was made (e.g. blocked before dispatch). |
+| `attempt_id` | `string()` | **yes** | | Identifies the *final* attempt in the ledger. Null when `attempt_count = 0`. |
+| `needs_review` | `bool()` | no | | See §3 and open question 3. Derived, not model-asserted. |
+| `evidence_count` | `int64()` | no | | Number of `mapper_evidence` rows for this cell. `0` is legal only for statuses where the spec declares evidence optional. |
+| `observation_id` | `string()` | no | | Content hash of key+value+provenance+response (§5). |
+| `input_snapshot_id` | `string()` | no | | Deterministic hash of the inputs this cell was derived from (§5). |
+| `mapper_spec_id` | `string()` | no | | Canonical spec hash (§5). |
+| `execution_id` | `string()` | no | | Nondeterministic, harness-supplied. **Never a business key.** Present for ledger join only. |
+| `emission_ordinal` | `int64()` | no | | Display-only. Explicitly NOT part of any key and NOT stable across runs. |
+
+Uniqueness: `(target_row_key, field)`. A duplicate is a hard build failure, not a
+last-write-wins — duplicate emission means the spec's row identity is
+under-determined, which is the failure mode §3 of the design exists to catch.
+
+> **Why five typed columns rather than one `value` string.** The design's §4 rule
+> is "typed value columns are nullable; never a string sentinel in a
+> numeric/date/boolean column." A single string column satisfies the letter (no
+> sentinel in a numeric column, because there is no numeric column) and defeats
+> the purpose — every consumer casts, and a bad cast becomes a query-time error
+> instead of a build-time one. Five nullable slots keep the type in the schema
+> where a metric can be defined over it.
+
+### 2.2 `mapper_reviews`
+
+Durable human state. **Never replace-loaded away.** One row per review act; rows
+are immutable and append-only (new batch file per review session, per the
+`llm-judgments.md` batch convention — the physical location is open question 5).
+
+| Column | Type | Null? | Key | Description |
+|---|---|---|---|---|
+| `review_id` | `string()` | no | PK | Content hash of the whole review row. Makes the batch file idempotent to re-land. |
+| `target_row_key` | `string()` | no | | Binds to the proposal's row. |
+| `field` | `string()` | no | | Binds to the proposal's field. |
+| `verdict` | `string()` | no | | `confirmed` \| `rejected` \| `overridden`. |
+| `override_value_string` | `string()` | **yes** | | Populated iff `verdict = overridden`. Same five-slot typing as proposals. |
+| `override_value_int` | `int64()` | **yes** | | ditto |
+| `override_value_float` | `float64()` | **yes** | | ditto |
+| `override_value_bool` | `bool()` | **yes** | | ditto |
+| `override_value_timestamp` | `timestamp()` | **yes** | | ditto |
+| `override_value_type` | `string()` | **yes** | | Non-null iff `verdict = overridden`. |
+| `bound_value_hash` | `string()` | **yes** | | The `value_hash` this review examined. Null iff `verdict = overridden` **and** the reviewer is overriding an absent proposal. |
+| `bound_input_snapshot_id` | `string()` | no | | The `input_snapshot_id` in force when reviewed. |
+| `bound_mapper_spec_id` | `string()` | no | | The `mapper_spec_id` in force when reviewed. |
+| `reviewer` | `string()` | no | | Identity. `human` or a named reviewer; never a model name — a model does not review. |
+| `reviewed_at` | `timestamp()` | no | | Supplied by the reviewer's tooling, not by the transform. Not `now()` at build time. |
+| `note` | `string()` | **yes** | | Free text, reviewer-authored. |
+
+Uniqueness: `review_id`. **Not** `(target_row_key, field)` — a later review of the
+same cell is a new row, and the resolver picks the latest *valid* one (§6).
+
+**Binding and auto-invalidation.** A review applies to a proposal only when all
+three bindings match: `bound_value_hash == proposals.value_hash`,
+`bound_input_snapshot_id == proposals.input_snapshot_id`,
+`bound_mapper_spec_id == proposals.mapper_spec_id`. Any mismatch → the review is
+`stale` and does **not** apply. Stale reviews are never deleted and never
+silently reapplied; the resolver surfaces them (§6) so the reviewer can see what
+came unbound and why.
+
+The one asymmetry: an `overridden` review with a null `bound_value_hash` binds on
+input + spec only. That is deliberate — a human overriding a cell the model
+never produced (`evidence_absent`) has no value hash to bind to, and forcing one
+would make the "human fills the gap" case unrepresentable.
+
+### 2.3 `mapper_evidence`
+
+One-to-many per proposal. Replace-loaded with the proposals it belongs to — the
+two are always produced and landed together, from the same in-memory bundle.
+
+| Column | Type | Null? | Key | Description |
+|---|---|---|---|---|
+| `target_row_key` | `string()` | no | PK | FK to the proposal. |
+| `field` | `string()` | no | PK | FK to the proposal. |
+| `evidence_ordinal` | `int64()` | no | PK | 0-based, stable within a cell for a given execution. Ordering is by the model's citation order. |
+| `locator_kind` | `string()` | no | | `landed_text` \| `page_region` \| `source_field`. Determines which locator columns are meaningful. |
+| `source_model` | `string()` | **yes** | | For `landed_text`/`source_field`: which landed model the text came from. |
+| `source_row_key` | `string()` | **yes** | | For `landed_text`/`source_field`: identity of the row within that model. |
+| `source_field_name` | `string()` | **yes** | | For `source_field`: the column read. |
+| `document_hash` | `string()` | **yes** | | For `landed_text`/`page_region`: hash of the source document. |
+| `page` | `int64()` | **yes** | | For `landed_text`/`page_region`: 1-based page number. |
+| `char_start` | `int64()` | **yes** | | For `landed_text`: offset into the *landed normalized text*, not the raw document. |
+| `char_end` | `int64()` | **yes** | | ditto, exclusive. |
+| `quote` | `string()` | no | | Verbatim span as cited. Never paraphrase. |
+| `verify_status` | `string()` | no | | `verified` \| `evidence_unverified` \| `verify_failed`. See below. |
+| `extractor` | `string()` | **yes** | | Name of the text extractor that produced the landed text. Null when `locator_kind = source_field`. |
+| `extractor_version` | `string()` | **yes** | | ditto. |
+| `text_hash` | `string()` | **yes** | | Hash of the landed normalized text the quote was checked against. Null when unverifiable. |
+
+Uniqueness: `(target_row_key, field, evidence_ordinal)`.
+
+`verify_status` semantics:
+
+- `verified` — the whitespace/case-normalized `quote` is a substring of the
+  landed normalized text identified by `text_hash`, at `[char_start, char_end)`.
+  **This is the only value that may claim substring verification.** Matching is
+  normalization-only: collapse runs of whitespace, casefold. Never fuzzy, never
+  edit-distance, never embedding similarity.
+- `evidence_unverified` — no canonical landed text exists for this locator
+  (scanned page with no OCR artifact, `page_region` provenance). The build does
+  **not** claim verification. Legal, surfaced, counted against a per-spec
+  threshold.
+- `verify_failed` — landed text exists and the quote is *not* a substring of it.
+  This is a hallucinated citation. It propagates to the proposal's
+  `value_status` (§3) — it is never silently downgraded to `evidence_unverified`.
+
+**The check is against landed text, never against a document blob and never
+against text the model itself returned in the same response.** Validating a quote
+against model-returned text is circular and proves nothing (design §5).
+
+> **Not `evidence_kind`, and not `nxd_decisions.provenance`.** Upstream #127 put
+> an `evidence_kind` column (`fact` / `inference`) on the *deterministic*
+> score-explanation row, answering **how firmly the source supports one reading**.
+> `verify_status` answers a mechanical question instead — **did a substring check
+> run against landed text, and did it pass**. A hallucinated citation is
+> `verify_failed` regardless of how defensible the reading would have been, and an
+> honest inference over a correctly-quoted span is `verified` even though its
+> `evidence_kind` would be `inference`. Three vocabularies, three grains
+> (per-evidence-atom / per-explanation-row / per-ruling); never populate one from
+> another. If this harness later emits explanation rows, `evidence_kind` is an
+> additional column, not a rename of this one.
+
+---
+
+## 3. `value_status` semantics
+
+Enum, exactly five values. Any other value is a schema violation.
+
+| Value | Precise meaning | Typed value | Evidence | `needs_review` | Build |
+|---|---|---|---|---|---|
+| `ok` | The model returned a value; it passed type, range, and enum validation; every required evidence atom is present and `verified` (or `evidence_unverified` within the spec's allowance). | exactly one non-null slot | ≥ spec minimum | `false` | ok |
+| `evidence_absent` | The model was asked, responded within contract, and reported that the source does not state this field. Not an error. Not a failure. The honest reading of a silent source. | **all null** | 0 required; a "where I looked" atom may be present | `false` by default; `true` if the spec marks the field required | ok |
+| `validation_failed` | A value was returned but did not survive the harness's checks after the retry budget was exhausted — out of declared range, not in the declared enum, uncastable to the declared type, or its evidence came back `verify_failed`. The model's answer is discarded; it is never landed as a value. | **all null** | atoms retained for triage, incl. the failing one | `true` | ok **within threshold** |
+| `error` | The harness could not obtain a well-formed answer for reasons that are not about this row's content: missing credential, missing dependency, transport failure after backoff, API refusal, or a schema the API rejected. `error_code` names which. | **all null** | 0 | `true` | **see §4** |
+| `skipped` | The cell was never dispatched, because the run terminated (budget ceiling, deadline, cancellation, or a blocking `error` elsewhere) before reaching it. Distinguishes "the source is silent" from "we never asked." | **all null** | 0 | `true` | **blocks** |
+
+`skipped` is an addition to the design's four-value list. It is required because
+without it, a run that stops at 60% coverage lands 40% of its cells as
+`evidence_absent` — indistinguishable from a genuinely silent source, which is
+precisely the "100%-sentinel green build" the design forbids. `skipped` makes
+partial coverage visibly partial.
+
+Rules that hold for every non-`ok` status:
+
+- **All five typed value slots are null.** There is no "partial" value. A row
+  that failed validation does not land the value that failed it.
+- **Excluded mechanically from default metrics.** Metric views filter
+  `value_status = 'ok'`; a coverage metric reports the non-`ok` share alongside
+  any headline number, exactly as `needs_review` share is reported for
+  classification (`nxd-pocket-loop/SKILL.md`). A metric that silently averages
+  over non-`ok` rows is a contract violation.
+- **`needs_review` is derived, never model-asserted.** The model has no input to
+  it. It is computed by `validate.py` from status + spec requiredness. See open
+  question 3 for how it surfaces to the reviewer.
+
+---
+
+## 4. What blocks the build
+
+The boundary is **systemic failure blocks; row-level absence does not.** Stated
+as conditions evaluated after mapping completes, before landing:
+
+| Condition | Blocks? | Rationale |
+|---|---|---|
+| Any cell `evidence_absent` | no | The source is silent. That is a finding, not a fault. |
+| Any cell `validation_failed` | no, until threshold | The model got this cell wrong; the harness caught it. Working as designed. |
+| `validation_failed` share > spec's `max_degrade_share` | **yes** | Past some share, "the harness caught it" becomes "the spec doesn't work." Threshold value is open question 1. |
+| `evidence_absent` share > spec's `max_absent_share` (when declared) | **yes** | Guards against a prompt/adapter change that silently stops finding anything. Optional — a genuinely sparse source declares no ceiling. |
+| Any cell `error` with `error_code = credential_missing` | **yes** | Systemic. One missing credential means every cell is unattempted; landing 0% coverage as data is the failure this rule exists to prevent. |
+| Any cell `error` with `error_code = dependency_missing` | **yes** | Systemic — the `anthropic` package absent, extractor absent, landed text model absent. |
+| Any cell `error` with `error_code = schema_reject` | **yes** | The wire schema the spec compiled to was rejected by the API. Systemic: it will reject every cell. |
+| `error` share (transport/refusal) > spec's `max_error_rate` | **yes** | Transport failure above rate is systemic per design §4. |
+| `error` share below that rate | no | An isolated 529 that exhausted its backoff is a row-level fact. |
+| Any cell `skipped` | **yes** | The run did not complete. Landing a partial run as if complete is the coverage lie. |
+| Any evidence `verify_failed` | no directly | It propagates: the owning cell becomes `validation_failed`, and the degrade threshold governs. |
+| `evidence_unverified` share > spec's `max_unverified_share` | **yes** | Past a threshold, "we don't claim verification" describes the whole dataset, and the evidence obligation has silently lapsed. |
+| Bijection assert fails (§7) | **yes** | Structural. |
+| Grant missing or mismatched | **yes**, *before* any source read | Design §9. Refused at the boundary, not after. |
+| Preflight estimate exceeds grant ceiling | **yes**, before the first call | Design §10. |
+| Remaining budget cannot meet required coverage | **yes**, mid-run, deterministically | Better to fail than to land a silently truncated run. |
+
+Blocking is a raised `FieldMapperError` subclass that fails the transform. It is
+never a landed row with a `blocked` status — a blocked build lands nothing,
+because a partially-landed governed model is worse than no model.
+
+---
+
+## 5. Identifiers and hashing
+
+Four identifiers plus two hashes. All digests are `sha256`, lowercase hex,
+truncated to 32 chars for column width, with the full digest in the ledger.
+
+| Id | Determinism | Derivation | Role |
+|---|---|---|---|
+| `execution_id` | **nondeterministic**, harness-supplied | UUIDv4 from the caller | Execution identity. Joins to the ledger. **Never a business key, never part of any uniqueness assert, never a partition key on a landed model.** |
+| `input_snapshot_id` | deterministic | `sha256` over the canonical serialization of every input the spec declares as identity-bearing, in the spec's declared canonical sort order | What was read. Binds reviews. |
+| `mapper_spec_id` | deterministic | `sha256` over the canonicalized spec (§below) | Which instruction/config. Binds reviews. Also the schema-cache key. |
+| `observation_id` | deterministic | `sha256` over `(target_row_key, field, value_hash, evidence digest, response_hash)` | The observation itself. Two runs producing the same value from the same input with the same citations produce the same `observation_id`. |
+| `target_row_key` | deterministic | `sha256` over the spec's declared identity fields + stable source locators, canonicalized | Row identity. §3 of the design. |
+| `value_hash` | deterministic | `sha256` over `(value_type, canonical value encoding)`; null values hash the type-tagged null, not `""` | Review binding. |
+
+**Spec canonicalization** (`spec.py`), in order:
+
+1. Serialize to a plain dict with keys sorted lexicographically at every level.
+2. Normalize instruction text: strip trailing whitespace per line, normalize line
+   endings to `\n`, no other rewriting — the rubric text is the experiment
+   variable and must not be silently altered.
+3. Include: instruction text, target field list with declared types/ranges/enums,
+   grain declaration, cardinality bounds, canonical sort order, duplicate policy,
+   evidence requirements, thresholds, model id, and the wire schema bytes.
+4. Exclude: anything nondeterministic — `execution_id`, timestamps, file paths,
+   the API key, and any comment or description field explicitly marked
+   non-semantic.
+5. UTF-8 encode, `sha256`.
+
+The exclusion list is a contract, not an optimization: if a path leaks into the
+spec hash, `mapper_spec_id` changes when the closure moves directory and every
+human review in the dataset auto-invalidates at once.
+
+**`target_row_key` derivation** requires the spec to declare, and rejects the
+spec if it does not (design §3):
+
+- identity fields (which input fields determine a target row)
+- canonical sort order
+- duplicate-disambiguation policy (`reject` | `ordinal_suffix` | `merge_by_rule`)
+- expected / min / max cardinality
+- stable source locators where identity fields alone are insufficient
+
+`emission_ordinal` participates in `target_row_key` **only** under
+`duplicate_policy = ordinal_suffix`, and only after the identity fields are
+exhausted — and that policy carries an explicit warning that review binding is
+fragile under it, because reordering the source changes the key.
+
+---
+
+## 6. Resolution order
+
+`resolver.resolve()` produces the wide rows and the provenance sidecar from a
+single in-memory bundle. Never two passes, never a re-read of a landed table
+mid-run.
+
+Per `(target_row_key, field)`:
+
+1. Collect all `mapper_reviews` rows for the cell. Partition into **valid**
+   (all bindings match, per §2.2) and **stale**.
+2. Among valid reviews, take the one with the greatest `reviewed_at`; ties break
+   on `review_id` lexicographically (deterministic, arbitrary, documented).
+3. If that review's verdict is `overridden` → the effective value is the
+   override, `effective_source = human_override`, and the model's proposal is
+   retained in provenance but not in the wide row. **Human override has
+   declared precedence over any model proposal.**
+4. If `confirmed` → the effective value is the proposal's value,
+   `effective_source = model_confirmed`.
+5. If `rejected` → the cell is effectively `validation_failed` regardless of the
+   proposal's status, `effective_source = human_rejected`, value null.
+6. If there is no valid review → the effective value is the proposal's,
+   `effective_source = model_proposed`, and `needs_review` carries through.
+7. Stale reviews contribute to neither the value nor the status. They are
+   emitted into the sidecar with `stale_reason` ∈ `value_changed` |
+   `input_changed` | `spec_changed` so the reviewer can see exactly what came
+   unbound.
+
+The provenance sidecar carries `value_hash`, `effective_source`, `value_status`,
+`observation_id`, `evidence_count`, and the stale-review list. It is built in the
+same call as the wide rows, from the same objects — not joined afterwards.
+
+---
+
+## 7. Consistency asserts
+
+Run before landing; any failure blocks (§4).
+
+1. **Bijection.** Every governed wide cell maps to exactly one effective
+   mapped-value record, and every effective record maps to exactly one wide
+   cell. No orphans in either direction.
+2. **Evidence completeness.** Every `ok` cell has ≥ the spec's minimum evidence
+   atoms; every evidence row's `(target_row_key, field)` resolves to an existing
+   proposal.
+3. **Value-hash agreement.** The sidecar's `value_hash` equals the hash
+   recomputed from the wide row's value. Catches the class where the projection
+   and the provenance drift.
+4. **Cardinality.** Emitted row count is within the spec's declared min/max; the
+   per-input cardinality matches the declared shape. **Never** a Tier-1 "output
+   count == source count" assert — that is unsatisfiable for N→M and is the
+   specific assert `derived-models.md` will need amending for.
+5. **Key uniqueness.** `(target_row_key, field)` unique in proposals;
+   `(target_row_key, field, evidence_ordinal)` unique in evidence.
+6. **Status/value coherence.** `value_status = ok` ⟺ exactly one non-null typed
+   slot. Every other status ⟹ all slots null. `error_code` non-null ⟺
+   `value_status = error`.
+7. **Publication atomicity.** Fault-inject between table resources in the
+   acceptance suite to prove the multi-table publication is atomic. **Do not
+   assume one `pipeline.run` gives multi-table atomicity** — the design says so
+   explicitly, and the assert exists to test the assumption rather than restate it.
+
+---
+
+## 8. Transport contract
+
+Model: `claude-opus-5` via the `anthropic` SDK.
+
+**Fixed by this contract:**
+
+- `output_config={"format": {"type": "json_schema", "schema": <compiled>}}`.
+  Schema must set `additionalProperties: false` and list `required`.
+- **No `temperature`, `top_p`, or `top_k`.** Rejected with 400 on this model and
+  rejected by design review independently. Do not add them back "for
+  determinism" — they never guaranteed it.
+- No `budget_tokens`. Depth is `output_config.effort`, declared by the spec.
+- The API key reaches the transform via `.secrets([...])` in `spec.py`. It is
+  read once into the client and **never** written to the ledger, a record, a log
+  line, an error message, or a `repr`.
+
+**Constraints the harness must own, because the API cannot express them:**
+
+JSON Schema here supports `type`, `enum`, `const`, `anyOf`, `$ref`, and string
+`format`. It does **not** support `minimum`, `maximum`, `multipleOf`,
+`minLength`, or `maxLength`. Therefore `schema.py` routes each spec constraint:
+
+| Spec constraint | Enforced by |
+|---|---|
+| field type | wire schema (`type`) |
+| closed value set | wire schema (`enum`) |
+| numeric range | **`validate.py`** — retry on violation |
+| string length | **`validate.py`** — retry on violation |
+| evidence substring | **`validate.py`** — retry on violation |
+| required fields | wire schema (`required`) |
+
+This is where retry earns its place: a range violation is a *recoverable*
+model error that the API cannot catch, so re-asking with the violation named is
+a legitimate and bounded correction. Retry is **not** a way to paper over
+transport failure.
+
+**Retry policy** — two distinct budgets, never conflated:
+
+- *Validation retries*: `max_validation_retries` (spec-declared, default 2). Each
+  retry re-sends with the specific violation named. Exhaustion →
+  `validation_failed`. Every attempt is ledgered.
+- *Transport retries*: for 429 / 500 / 529 / connection errors only, exponential
+  backoff with jitter, honoring `retry-after`. Exhaustion → `error` with
+  `error_code = transport_exhausted`. **Never** retried: 400, 401, 403, 404 —
+  these are systemic and must surface immediately rather than burn budget.
+
+**Four transport outcomes**, not three. The fourth is easy to miss:
+
+1. success → parse, validate
+2. exception (4xx/5xx/network) → `error`
+3. malformed/unparseable content despite structured output → `error`,
+   `error_code = schema_reject`
+4. **`stop_reason == "refusal"`** → HTTP 200 with empty or partial content.
+   `stop_details` may be null; branch on `stop_reason`, never on `stop_details`.
+   → `error` with `error_code = refusal`. Code that reads `content[0]`
+   unconditionally breaks here, and it breaks *silently* on a 200.
+
+**Thinking and `max_tokens`.** On `claude-opus-5` thinking is **on by default**
+(omitting the parameter runs adaptive), and `max_tokens` caps thinking *plus*
+response text together. A `max_tokens` sized snugly around the expected JSON will
+truncate mid-object and surface as a parse failure that looks like a model
+defect. `transport.py` sizes `max_tokens` with explicit headroom over the
+schema's expected output and treats `stop_reason == "max_tokens"` as
+`error`/`schema_reject`, never as a partial answer to salvage.
+
+**Budget and execution** (design §10), all declared by the spec, all enforced
+before the first call and re-checked before each:
+
+- preflight estimate: call count, input tokens, spend, wall time
+- hard ceilings aligned to the grant; exceeding → block
+- bounded canary run before the full population
+- declared concurrency, rate-limit backoff, deadline, cancellation
+- fail when remaining budget cannot meet required coverage — deterministically,
+  not when the money runs out
+- explicit cap on supported input size (checkpointing is prohibited)
+- progress heartbeat so the supervisor readiness gate survives a long run
+
+**Cancellation** leaves undispatched cells as `skipped` (§3), which blocks the
+build. A cancelled run must not be landable as a complete one.
+
+**Untrusted input.** All input text is data, never instruction. It is delivered
+in a user-turn content block, never interpolated into the system prompt, never
+into the schema. Source-identity reconciliation runs *before* mapping; a mismatch
+quarantines the input rather than mapping it. Extraction and rubric-scoring are
+separate contract types even though they share this transport code — sharing
+transport must not become sharing a prompt surface.
+
+---
+
+## 9. Ledger contract
+
+Append-only, JSONL, one line per attempt. Lives under the **ephemeral run
+directory**, never the closure root, never `~`.
+
+Per line: `execution_id`, `attempt_id`, `target_row_key`, `field`,
+`attempt_index`, `mapper_spec_id`, `input_snapshot_id`, prompt hash, wire-schema
+hash, **input content hash** (never content, never base64), exact model snapshot
+from `response.model`, API version, request parameters excluding secrets,
+response hash, `stop_reason`, token usage, latency, outcome, and the resulting
+`value_status`.
+
+Invariants:
+
+- **The API key can never appear.** Asserted by a test that greps the whole
+  written ledger for the key value and for any `sk-ant-` prefix.
+- No input content, no base64, no quotes from source documents — hashes and
+  controlled references only. At 10k × 1MB PDFs, verbatim logging is a second PII
+  store and ~10GB before responses.
+- Retention, encryption, access control, redaction, crash consistency, and
+  export behavior are declared per spec. Crash consistency means: a torn final
+  line is detectable and discardable, and the ledger is never read back as
+  authoritative state.
+
+**Replay is parser/validator replay, and nothing more.** Re-running a stored
+response through the parser and validator tests the parser and the validator. It
+does **not** test a changed prompt — that response was generated under the old
+prompt. Any claim that prompt iteration costs zero API calls is false for
+behavioral comparison, which is the entire Layer-2 loop. `ledger.py` exposes
+`replay_validation(...)` and deliberately exposes no function named or shaped
+like `replay_prompt`.
+
+---
+
+## 10. Open questions
+
+Carried forward from design §15, plus what this contract surfaced. None is
+resolvable from the design doc; each blocks a specific module.
+
+1. **Threshold values.** `max_degrade_share`, `max_error_rate`,
+   `max_unverified_share`, `max_absent_share` are declared per spec, but there is
+   no default and no principled starting point. A too-loose default makes §4
+   decorative; a too-tight one makes every first run block. *Blocks:*
+   `validate.py` defaults. *Needs:* a first real population to calibrate against,
+   or an explicit "no default — spec must declare" stance (my inclination, since
+   a wrong default is worse than an absent one).
+
+2. **Concurrency and rate-limit policy, concretely.** Requests in flight,
+   per-minute ceiling, whether the ceiling is spec-declared or discovered from
+   `x-ratelimit-*` headers, and how concurrency interacts with the deterministic
+   budget check (a concurrent overshoot can exceed a ceiling that a serial check
+   would have caught). *Blocks:* `transport.py`. Also unresolved: whether the
+   Batches API (50% cost, ≤24h) is in scope — it changes the wall-time story for
+   10k rows completely, but its results arrive unordered and it rejects the
+   `fallbacks` parameter.
+
+3. **What `needs_review` actually is.** The design flags that value bucket /
+   sidecar status / `nxd_decisions` status are not interchangeable. The shipped
+   evidence: `needs_review` in `derivation-plan.md` and `derived-models.md` is a
+   **value in a dimension** (an explicit bucket a row lands in), while
+   `nxd_decisions.status` is `proposed`/`confirmed`/`blocked`. This contract
+   models it as a boolean column, which matches *neither*. *Blocks:* `records.py`
+   final schema and the metric view. *Needs:* a decision — most likely that the
+   boolean is internal and the reviewer-facing surface is a dimension whose
+   values are the `value_status` enum, with an `nxd_decisions` row at
+   `status = proposed` / `provenance = agent_authored` for the mapper spec as a
+   whole. Not resolvable unilaterally.
+
+9. **Which `nxd_decisions` axes the mapper spec and its rows carry.** Upstream
+   #128 made `provenance` a required second axis on every `nxd_decisions` row
+   (`user_confirmed` | `agent_authored` | `source_derived` | `deferred`),
+   orthogonal to `status`, and the Phase D self-check fails a ledger missing
+   either. The mapper spec itself is clearly one row — `agent_authored` when the
+   agent wrote the instruction text, `user_confirmed` when the user supplied the
+   rubric verbatim — and **`provenance` never moves when a review lands**;
+   confirmation moves `status`. What is *not* settled: whether the mapper's
+   per-cell proposals also owe an `nxd_decisions` row each (almost certainly not
+   — that is what `mapper_proposals` is for), and whether a `human_override`
+   review flips the spec-level row's `provenance` (it must not, by #128's
+   "provenance never moves" rule, but the override is a genuinely user-authored
+   *value*, which is the case that rule was not written against). Separately,
+   `mapper_evidence.verify_status` is **not** `evidence_kind` from #127: that
+   column answers `fact` vs `inference` for a deterministic band, whereas
+   `verify_status` answers whether a substring check ran and passed. Disjoint
+   vocabularies, and §2.3 must never be populated from the other.
+   *Blocks:* the `nxd_decisions` rows `__main__.py` emits, and Phase D passage.
+
+4. **PDF text extractor.** Stage 1 of §5 requires canonical text with page and
+   character offsets. Nothing in the pinned venv extracts PDF text, and adding
+   `anthropic` does not address it. Options each have a cost: adding `pypdf` /
+   `pdfplumber` to `RUNTIME_DEP_PACKAGES` widens the desktop venv further;
+   sending the PDF to the API and landing the returned text makes the substring
+   check circular (explicitly forbidden); an external extraction step breaks the
+   single-closure story. *Blocks:* `mapper_evidence.locator_kind = landed_text`
+   for any PDF source — which is the design's motivating use case.
+
+5. **Where `mapper_reviews` physically lives.** It must survive
+   `write_disposition="replace"` and be editable by a human. The batch-CSV
+   convention (`data/mapper_reviews/batch-00N.csv`) satisfies both, since dlt
+   replace-loads the full glob and the agent/reviewer adds files rather than
+   editing them — but that puts durable human state inside the closure's `data/`
+   dir alongside agent-generated files, with no protection against a regeneration
+   wiping it. *Blocks:* `resolver.py` input contract and the `__main__.py`
+   `resolve` path. *Needs:* a decision on whether reviews live in the closure at
+   all, and what the reviewer's edit surface is (hand-edited CSV? a query + a
+   write tool? an MCP tool?).
+
+6. **Harness packaging and version stamping.** If Layer 1 is vendored into each
+   closure it drifts, and two closures silently run different bijection asserts.
+   If it is a dependency, it needs a wheel, a version, and a place in
+   `RUNTIME_DEP_PACKAGES`. Either way the version must appear in the ledger and
+   in `mapper_spec_id`'s inputs — otherwise a harness change is invisible in an
+   experiment comparison. *Blocks:* `__init__.py` version stamp and the spec-hash
+   input list.
+
+7. **Does the grant bind the model snapshot?** §9 requires the grant to name
+   provider/model. `response.model` returns an exact snapshot that can change
+   under an alias without any spec change. If the grant binds the alias, a
+   snapshot rollover silently changes the experiment variable; if it binds the
+   snapshot, every rollover invalidates the grant and blocks the build. *Blocks:*
+   `grant.py` match logic. Related: `mapper_spec_id` currently hashes the model
+   *id*, not the snapshot — so two runs with the same `mapper_spec_id` may have
+   run on different snapshots, and reviews bound to the spec would not
+   auto-invalidate.
+
+8. **What happens to a review when only `emission_ordinal` changed.** Under
+   `duplicate_policy = ordinal_suffix`, a source reorder changes `target_row_key`
+   and mass-invalidates reviews with `stale_reason = input_changed` — technically
+   correct, practically a reviewer losing all their work to a no-op source
+   change. *Blocks:* nothing immediately (the policy can be forbidden), but it
+   determines whether `ordinal_suffix` is a supported policy or a documented
+   trap.
