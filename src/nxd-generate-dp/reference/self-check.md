@@ -141,7 +141,7 @@ DTYPES = {
     "time32", "time64", "list", "list_view", "large_list", "large_list_view",
     "map", "dictionary", "struct", "variant",
 }
-AGGS = {"COUNT", "COUNT_DISTINCT", "SUM", "AVG", "MIN", "MAX"}
+AGGS = {"COUNT", "COUNT_DISTINCT", "SUM", "AVG", "MIN", "MAX", "EXPRESSION"}
 KWARGS = {                      # role builder -> allowed keyword names
     "primary_key": set(),
     "dimension": {"name", "pii", "label", "description"},
@@ -261,9 +261,20 @@ def walk_roles(node, where, *, in_view):
     """Validate every role/dtype/Agg reference inside one schema entry."""
     for sub in ast.walk(node):
         if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) \
-                and sub.value.id == "Agg" and sub.attr not in AGGS:
-            bad(f"{where}: Agg.{sub.attr} is not a member "
-                f"(allowed: {sorted(AGGS)})")
+                and sub.value.id == "Agg":
+            if sub.attr not in AGGS:
+                bad(f"{where}: Agg.{sub.attr} is not a member "
+                    f"(allowed: {sorted(AGGS)})")
+            elif sub.attr == "EXPRESSION":
+                # A real API member, but out of scope for this generation path:
+                # its SQL lives in the output PORT model's expressions={...} map,
+                # which the desktop closure does not author. Reaching for it here
+                # is always an attempt to dodge a derivation — the ruling belongs
+                # in the transform as a physical column or row.
+                bad(f"{where}: Agg.EXPRESSION is outside this generation path — "
+                    f"materialize the ruling as a physical column in the "
+                    f"transform and aggregate that column with a normal Agg "
+                    f"(see reference/derivation-plan.md)")
         if not isinstance(sub, ast.Call):
             continue
         n = call_name(sub)

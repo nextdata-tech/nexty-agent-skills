@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.26.0
+  version: 0.26.1
 ---
 
 # nxd-generate-dp skill
@@ -183,15 +183,15 @@ host-side. The dispatch/return contract is in `nxd-pocket-loop`'s
 
 ### Step 1a — Plan the derivation before authoring anything
 
-The semantic layer cannot express derivation — no expression surface on
-dimensions, one aggregate over one column for metrics, no row generation or
-removal. **Every business ruling therefore has to be materialized as a physical
-column or row by the transform**, before the semantic layer sees it. So plan the
-models by backward-chaining from the user's QUESTIONS, not forward from the
-source headers. [reference/derivation-plan.md](reference/derivation-plan.md) has
-the worked method, the base-vs-derived decision test, and the mandatory handling
-of reference data (FX rates, category rulings — see the Invariants), including a
-per-entity **agent** judgement — [reference/llm-judgments.md](reference/llm-judgments.md).
+The semantic layer used here cannot express derivation — no dimension
+expressions, no default filters, no row generation/removal, and no
+`Agg.EXPRESSION` shortcut for business rulings. **Every business ruling
+therefore has to be materialized as a physical column or row by the transform**,
+before the semantic layer sees it. So plan the models by backward-chaining from
+the user's QUESTIONS, not forward from the source headers. [reference/derivation-plan.md](reference/derivation-plan.md)
+has the worked method, base-vs-derived test, `Agg.EXPRESSION` boundary, and
+mandatory reference-data handling, including per-entity **agent** judgements —
+[reference/llm-judgments.md](reference/llm-judgments.md).
 
 ### Gate — validate primary keys before authoring
 

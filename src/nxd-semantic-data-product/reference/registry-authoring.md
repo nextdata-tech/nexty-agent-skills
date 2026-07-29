@@ -154,10 +154,17 @@ the population it covers. `total_revenue` above is the pattern for an
 aggregation the role grammar cannot qualify: the metric is unconditional, so
 the description states that and points at the dimension a caller filters on.
 
-The aggregation vocabulary is closed: `Agg.COUNT`, `Agg.COUNT_DISTINCT`,
-`Agg.SUM`, `Agg.AVG`, `Agg.MIN`, and `Agg.MAX`. Put boolean counts on a `SUM`
-metric over the flag field only when the intended result is a count of truthy
-rows.
+This skill authors metrics with `Agg.COUNT`, `Agg.COUNT_DISTINCT`, `Agg.SUM`,
+`Agg.AVG`, `Agg.MIN`, and `Agg.MAX`. Put boolean counts on a `SUM` metric over
+the flag field only when the intended result is a count of truthy rows.
+
+A seventh member, `Agg.EXPRESSION`, exists on the API. It is a custom SQL
+aggregate slot whose SQL is supplied by the output **port** model's
+`expressions={...}` map, keyed by metric name — so it is only usable on a
+topology whose port carries that map. It is not a derivation surface: it cannot
+define dimensions, generate or remove rows, apply default filters, or add
+unsupported statistical kinds such as median. Prefer the six aggregations above
+and materialize business rulings as physical columns.
 
 ---
 

@@ -72,7 +72,9 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
 - **`metric(agg, of=None, name=None, description="", boolean=False, extra_dimensions=(), column=None)`**
   — `agg` is an `Agg` value. `of` is a `FieldRef` (from `<model>.field("<col>")`)
   pointing at the base column being aggregated; mutually exclusive with the
-  explicit `column=` override — pass one or neither, never both.
+  explicit `column=` override — pass one or neither, never both. Use
+  `column="*"` only for `COUNT(*)`. For `Agg.EXPRESSION`, omit both `of` and
+  `column`; the output port's `expressions={...}` SQL names the fields.
 - **`field(dtype, *role_args, roles=None, description=None, label=None, name="")`**
   — builds a base-model column. `role_args` takes `primary_key()` /
   `dimension()` / `join()` positionally; a `metric()` role here **raises** —
@@ -133,14 +135,17 @@ lazily resolves it). It's a `str` enum; use it by member name
 (`Agg.SUM`, not a bare string). The vocabulary is **closed**:
 
 ```
-Agg.COUNT, Agg.COUNT_DISTINCT, Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX
+Agg.COUNT, Agg.COUNT_DISTINCT, Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX, Agg.EXPRESSION
 ```
 
-An internal `Agg.EXPRESSION` member also exists but is not part of this
-skill pack's documented surface — never use it. **`median` does not exist
-and never will via this path** — if a question needs it, drop it or
-approximate with an existing aggregation and say so; do not invent a metric
-kind.
+`Agg.EXPRESSION` is a custom SQL aggregate slot, not a new metric kind and not
+an escape hatch for missing semantics. It still produces a port-level aggregate
+expression, so it cannot define row-level dimensions, row generation/removal,
+default filters, cross-row transformations, or unsupported statistical
+functions. In particular, **median does not exist and never will via this
+path** — do not invent a `MEDIAN`/`PERCENTILE` metric kind, do not smuggle
+median SQL through `Agg.EXPRESSION`, and do not promise median unless the
+product surface gains a first-class supported aggregation.
 
 ## `SemanticModelSpec` / `semantic_model()` / `semantic_view()`
 
@@ -192,10 +197,18 @@ kind.
   - **`.model(model, is_public=True, expressions=None)`** — registers a model
     (base or view) into the output's global model list without a
     produce-time contract; this is how a `semantic_view` reaches the
-    compiled catalog. `is_public` defaults `True`.
+    compiled catalog. `is_public` defaults `True`. `expressions` is
+    **validated and then discarded** here — only the port-level `.model()`
+    below persists it, so an expression map passed at this level silently
+    does nothing.
 - **`storage(url, alias=None) -> OutputPortSpec`** — `url` is the
   infra-profile service reference for the storage backend (e.g.
   `"/infra-profile/desktop-local#/services/duckdb"`).
+  - **`.model(model, is_public=True, expressions=None)`** — registers the
+    model on this port. This is the **only** surface that persists
+    `expressions` (a `dict[str, str]` keyed by metric name, valued with the
+    SQL for an `Agg.EXPRESSION` metric). Outside this skill's desktop
+    closure pattern — see the `Agg` note above.
 
 ## Version pin and drift
 

@@ -163,10 +163,18 @@ An unsupported `op` raises `CompileError: unsupported filter op '...'`.
 | AVG | `AVG(TRY_CAST(CAST(col AS VARCHAR) AS DOUBLE))` | — |
 | MIN | `MIN(TRY_CAST(CAST(col AS VARCHAR) AS DOUBLE))` | — |
 | MAX | `MAX(TRY_CAST(CAST(col AS VARCHAR) AS DOUBLE))` | — |
+| EXPRESSION | the attached expression, else `col` emitted as raw SQL | — |
 
 The double VARCHAR cast (`TRY_CAST(CAST(col AS VARCHAR) AS DOUBLE)`) tolerates
 `NUMBER`, `FLOAT`, and `VARCHAR` physical column types, and staging text copies.
 `TRY_CAST` returns NULL on parse failure (NULLs are ignored by aggregates).
+
+An attached metric expression short-circuits this table for **any** `Agg`: when
+one is present the dialect emits it verbatim, with no cast wrapping. For
+`Agg.EXPRESSION` with no expression attached, the metric's `column` is emitted
+as already-authored SQL. See the `Agg.EXPRESSION` note in
+[registry-authoring.md](registry-authoring.md) for where that expression map
+lives and why this is not a derivation surface.
 
 ### Fully-qualified name (fqn)
 
