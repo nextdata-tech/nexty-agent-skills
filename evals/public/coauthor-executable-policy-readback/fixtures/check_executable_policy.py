@@ -115,8 +115,14 @@ BASH_MARKER = "[tool_use:Bash]"
 # inside `add ` (so `head -5 …` described as "Add up the criteria columns"
 # registered as a write), and scanning the whole JSON let the `description`
 # field — prose the agent writes about its own intent — decide a hard gate.
+#
+# `>` must be followed by a path-shaped token. A bare `>\s` also matches a
+# numeric comparison inside an awk/jq/python condition — `awk '{if ($5 > 3)}'`
+# over the supplied CSV is a pure read, and failing it penalises the agent that
+# inspected the data most carefully.
 SHELL_MUTATIONS = (
-    r"\bmkdir\b", r"\bcp\s", r"\btouch\s", r"\btee\s", r">\s", r">>",
+    r"\bmkdir\b", r"\bcp\s", r"\btouch\s", r"\btee\s",
+    r">\s*[\"']?(?![0-9.]+(?:\s|\)|$))[\w./~$]", r">>",
     # coreutils `install` copies files into place. `pip install` / `uv pip
     # install` provision the interpreter the agent inspects WITH and write
     # nothing into the closure, so they must not read as materialization.

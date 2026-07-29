@@ -26,6 +26,7 @@ import argparse
 import ast
 import csv
 import hashlib
+import json
 import re
 import sys
 import tempfile
@@ -96,14 +97,30 @@ def literal_strings_and_numbers(src: str) -> set[str]:
 # A write is any action that materializes part of the closure. Reading is not:
 # the agent is explicitly allowed to read the source and its headers before the
 # read-back, and must be, since the read-back describes that data.
-WRITE_MARKERS = (
-    "Write(", "Edit(", "MultiEdit(", "NotebookEdit(",
-)
+#
+# The markers MUST match what the backends actually emit:
+# `_trace_from_stream` writes `[tool_use:Write] {json}`, never `Write(...)`.
+# The older `Write(`/`Bash(` forms could not match any real trace, so
+# `first_write_index` always returned None — and because a None short-circuits
+# main() to "ALL CHECKS PASSED" below, every artifact check was skipped on every
+# run. Keep this tuple in step with the emitter, not with how a trace reads.
+WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+WRITE_MARKERS = tuple(f"[tool_use:{t}]" for t in WRITE_TOOLS)
+BASH_MARKER = "[tool_use:Bash]"
 # Shell is only a write when the command mutates. `head`/`cat`/`wc` on the
 # supplied CSV is exactly the inspection the gate permits.
+#
+# Word-anchored and matched against the PARSED `command`: as bare substrings
+# over the whole tool input, `dd ` matched inside `add `/`Add ` and the sibling
+# `description` field could decide the gate. Interpreter names are deliberately
+# absent — `python -c "import csv; print(...)"` is a read, and penalising it
+# fails the agent that inspected carefully, inverting what the gate rewards.
 SHELL_MUTATIONS = (
-    "mkdir", "cp ", "touch ", "tee ", "> ", ">>", "install -", "rsync",
-    "python -c", "uv run",
+    r"\bmkdir\b", r"\bcp\s", r"\btouch\s", r"\btee\s", r">>",
+    # `>` must target a path, not a number: `awk '{if ($5 > 3)}'` is a read.
+    r">\s*[\"']?(?![0-9.]+(?:\s|\)|$))[\w./~$]",
+    r"(?<!pip )\binstall\s+-[mDdt]", r"\brsync\b", r"\bmv\s", r"\bsed\s+-i",
+    r"\bdd\s",
 )
 
 # Evidence the policy read-back actually happened. Each family is a DISTINCT
@@ -130,13 +147,36 @@ READBACK_SIGNALS = {
 }
 
 
+def bash_command(line: str) -> str:
+    """The `command` a Bash tool_use line ran, or "" if unrecoverable.
+
+    Only the command is graded. The sibling `description` field is prose the
+    agent writes ABOUT its intent, so letting it reach the mutation matchers
+    lets a phrase like "Add up the criteria columns" decide a hard gate.
+    """
+    payload = line.split(BASH_MARKER, 1)[1].strip() if BASH_MARKER in line else ""
+    try:
+        obj = json.loads(payload)
+        if isinstance(obj, dict):
+            return str(obj.get("command", ""))
+    except ValueError:
+        pass
+    # Truncated payload — the trace caps tool inputs, so this is the ordinary
+    # case for a long command. Slice the command value out rather than falling
+    # back to the whole payload, which would re-admit `description`.
+    m = re.search(r'"command"\s*:\s*"((?:[^"\\]|\\.)*)', payload)
+    return m.group(1) if m else ""
+
+
 def first_write_index(trace_lines: list[str]) -> int | None:
     """Index of the first line that materializes something. None if never."""
     for i, line in enumerate(trace_lines):
         if any(m in line for m in WRITE_MARKERS):
             return i
-        if "Bash(" in line and any(m in line for m in SHELL_MUTATIONS):
-            return i
+        if BASH_MARKER in line:
+            cmd = bash_command(line)
+            if any(re.search(p, cmd) for p in SHELL_MUTATIONS):
+                return i
     return None
 
 
