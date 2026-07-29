@@ -7,6 +7,7 @@
 - [The rubric is landed first, as a ruling](#the-rubric-is-landed-first-as-a-ruling)
 - [The judgement model: one row per entity × criterion](#the-judgement-model-one-row-per-entity--criterion)
 - [The evidence-citation obligation](#the-evidence-citation-obligation)
+- [Absence takes no score — it is not a 1](#absence-takes-no-score--it-is-not-a-1)
 - [Batches: many CSV files in one model dir, not table-append](#batches-many-csv-files-in-one-model-dir-not-table-append)
 - [judged_by and human override](#judged_by-and-human-override)
 - [Landing it](#landing-it)
@@ -116,10 +117,11 @@ a re-judge append rows without reshaping a table.
 | `criterion` | part of `primary_key()` | the rubric criterion this row scores — a value from `scoring_rubric.criterion` |
 | `rubric_version` | part of `primary_key()` | the rubric version this judgement was made under |
 | `judged_by` | part of `primary_key()` | model identity (e.g. the judging model's name) or `human` for an override row |
-| `score` | `dimension()` | within `[scale_min, scale_max]` from the rubric row for this criterion |
+| `score` | `dimension()` | within `[scale_min, scale_max]` from the rubric row for this criterion — **empty when the evidence is absent**, never the minimum |
 | `verdict` | `dimension()` | one of the landed verdict enum, or empty when the criterion is not a verdict criterion |
 | `evidence_field` | `dimension()` | which source field the judgement read — a column name on the facts model |
 | `evidence_quote` | `dimension()` | verbatim substring of `facts[entity_key][evidence_field]`, or literal `not stated` — see below |
+| `limitation` | `dimension()` | empty, or the reason `score` is empty — never empty when it is. Absence kinds: `listed_uncaptured` (the source names the thing but its value was not extracted), `not_stated` (the source says nothing). Coverage kind: `no_band_matched` (the evidence was read, but the rubric had no band for it — a gap in the rubric, not in the source) |
 | `flags` | `dimension()` | free-text notes (e.g. `jd-mirror`, `no-repo`). Kept on this model only, never on the derived score sheet. |
 | `status` | `dimension()` | `proposed` by default (agent-produced); `confirmed` once reviewed |
 
@@ -138,9 +140,9 @@ This is the one obligation inference adds over classification. **Every judgement
 row carries an evidence citation into the source**: `evidence_field` names the
 source column read, and `evidence_quote` is a **verbatim substring** of that
 field's value for that entity — normalized on whitespace and case only, never
-fuzzy. When the rubric's lowest score is the honest reading (the evidence is
-absent), the quote is the literal `not stated`, matching the extraction
-convention.
+fuzzy. When the evidence is absent, the quote is the literal `not stated`,
+matching the extraction convention — and the row's `score` is then **empty**, not
+the scale's minimum. See [absence](#absence-takes-no-score--it-is-not-a-1) below.
 
 The value of the citation is that it is **mechanically verifiable**: a build can
 check that `evidence_quote` really is a substring of
@@ -153,6 +155,14 @@ this landing — it belongs to the derived model that consumes the judgements** 
 This file lands the `evidence_field` and `evidence_quote` columns and states the
 truthfulness obligation; it does not add the assert.
 
+**The same citation shape is used transform-side.** A deterministic scoring model
+explains itself with the identical `evidence_field` / `evidence_quote` /
+`not stated` vocabulary — see
+[Score explainability](derived-models.md#score-explainability-one-row-per-scored-criterion),
+which also carries the substring assert this section defers. One vocabulary, two
+producers: a reviewer who has learned to check an agent judgement checks a
+computed score exactly the same way.
+
 > **Normalization is whitespace and case only — never fuzzy.** When the assert is
 > built, fuzzy matching is exactly where the teeth fall out: a substring check
 > that tolerates paraphrase stops catching fabrication. If it fires on an honest
@@ -160,6 +170,39 @@ truthfulness obligation; it does not add the assert.
 > rests on), not a looser matcher. And the assert must special-case the
 > `not stated` sentinel — that literal is almost never a substring of a real
 > source value, so an unguarded check would fail every honest "absent" row.
+
+## Absence takes no score — it is not a 1
+
+A criterion whose evidence the agent could not find is **not assessed**. Its
+`score` is empty and `limitation` names why. It is never the scale's minimum,
+because the minimum is a *rating* — "called an API once" — and the agent did not
+observe that. Landing a 1 for an unread criterion makes an entity nobody could
+assess indistinguishable from one assessed and rated lowest, and it puts the
+score in direct contradiction with the `not stated` citation sitting beside it.
+
+The two absence kinds are not interchangeable. `listed_uncaptured` means the
+source names the thing and its value was not extracted — an **incomplete
+extraction**, fixable by re-reading the source. `not_stated` means the source
+genuinely says nothing. Only the first is recoverable, so collapsing them costs a
+reviewer the one signal that says whether re-extraction would help. Both are
+absent; neither is evidence against the entity.
+
+Downstream, an absent criterion is **excluded from the weighted sum** rather than
+folded in as a zero, and the composite lands beside the fraction of rubric weight
+that actually scored. The full rule, its gate consequence (`UNKNOWN`, never
+`FAIL`) and the worked branch are in
+[Absence is never a score](derived-models.md#absence-is-never-a-score) — it binds
+agent-produced rows exactly as it binds computed ones.
+
+**When the supplied rubric's own bottom band is worded as the absence case** — "no
+referee information at all" as the 1 — this rule does not silently override the
+user's wording, and the wording does not silently override this rule. The band
+applies where the source was read and genuinely says none; absence still scores
+empty where the evidence was never captured; and a criterion no row can reach
+goes to the read-back gate rather than being resolved by the agent. The
+precedence is stated once, in
+[Precedence: when the supplied rubric's bottom band *is* the absence
+case](derived-models.md#precedence-when-the-supplied-rubrics-bottom-band-is-the-absence-case).
 
 ## Batches: many CSV files in one model dir, not table-append
 
@@ -240,7 +283,10 @@ candidate_judgments = (
                     description=(
                         "Agent-assigned score, within [scale_min, scale_max] "
                         "from the scoring_rubric row for this criterion. Not a "
-                        "source value — read it with rubric_version."
+                        "source value — read it with rubric_version. EMPTY "
+                        "when the evidence was absent: see limitation, and "
+                        "read an empty score as not-assessed, never as a low "
+                        "rating."
                     ),
                 ),
             ),
@@ -272,6 +318,24 @@ candidate_judgments = (
                         "Verbatim substring of the cited field's value for "
                         "this entity, or the literal 'not stated' when the "
                         "evidence is absent."
+                    ),
+                ),
+            ),
+            "limitation": field(
+                string(),
+                dimension(
+                    name="judgment_limitation",
+                    description=(
+                        "Empty when the criterion was scored. Otherwise the "
+                        "why 'score' is empty — set whenever it is. "
+                        "'listed_uncaptured' (the source names the thing but "
+                        "its value was not extracted — recoverable by "
+                        "re-extracting), 'not_stated' (the source says "
+                        "nothing), or 'no_band_matched' (the evidence was "
+                        "read, but no band covered it — fix the rubric, not "
+                        "the extraction). Absence is never scored as the "
+                        "scale minimum, so a set limitation means NOT "
+                        "ASSESSED, not a low rating."
                     ),
                 ),
             ),
@@ -321,7 +385,11 @@ candidate_judgments_metrics = semantic_view(
                 description=(
                     "Mean agent-assigned score. Averages across criteria "
                     "unless the selection groups by criterion, and mixes "
-                    "rubric versions unless it filters on one."
+                    "rubric versions unless it filters on one. Skips every "
+                    "row whose score is empty — absent evidence AND evidence "
+                    "no band covered — so group by limitation to see how "
+                    "much of the rubric was assessed, and which gap is the "
+                    "rubric's rather than the source's, before quoting this."
                 ),
             ),
         ),
