@@ -76,6 +76,11 @@ TURN_SEPARATOR_PREFIX = "[user_turn "
 # buffer fills, which would surface as a bogus turn timeout — but only the tail
 # is ever reported, so an unbounded buffer is pure memory growth on a chatty run.
 STDERR_TAIL_CHARS = 8000
+# How long to let a multi-turn CLI drain and exit after stdin closes. Fixed
+# rather than "whatever is left of the run budget": the transcript is complete
+# by then and a CLI that will not exit fails the run regardless, so a longer
+# wait buys nothing and stalls the suite.
+CLOSE_GRACE_S = 30
 
 
 def turn_separator(turn_index: int, text: str, *, after_await: bool = False) -> str:
@@ -662,7 +667,13 @@ class ClaudeBackend:
             proc.stdin.close()  # type: ignore[union-attr]
         killed_on_close = False
         try:
-            returncode = proc.wait(timeout=max(5, int(deadline - time.monotonic())))
+            # A FIXED grace, not the rest of the run budget. The transcript is
+            # already complete here and the outcome decided — a CLI that will
+            # not exit gets killed_on_close, a nonzero returncode and a failed
+            # run either way — so handing it the unspent --agent-timeout only
+            # stalls the suite. A 2-minute conversation inside a 30-minute
+            # budget blocked for the other 28 before killing.
+            returncode = proc.wait(timeout=CLOSE_GRACE_S)
         except subprocess.TimeoutExpired:
             # Hung on stdin close. Kill and reap, but remember that we did: the
             # transcript is complete, yet the process did not shut down cleanly.

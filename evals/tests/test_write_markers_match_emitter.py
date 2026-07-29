@@ -15,6 +15,7 @@ marker contract for both checkers so the two can never drift apart again.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -47,10 +48,11 @@ EDIT_LINE = '[tool_use:Edit] {"file_path": "/ws/models.py"}'
 
 
 def _bash(command: str, description: str = "x") -> str:
-    return (
-        '[tool_use:Bash] {"command": "%s", "description": "%s"}'
-        % (command, description)
-    )
+    # json.dumps, not interpolation: a command containing quotes must be
+    # escaped exactly as the emitter escapes it, or the payload is invalid JSON
+    # and the test exercises the truncation fallback instead of the real path.
+    payload = json.dumps({"command": command, "description": description})
+    return f"[tool_use:Bash] {payload}"
 
 
 def test_the_emitted_write_marker_is_detected(checker):
@@ -85,6 +87,16 @@ def test_a_numeric_comparison_is_not_a_redirect(checker):
     assert checker.first_write_index([_bash(cmd)]) is None
 
 
+def test_a_column_comparison_is_not_a_redirect(checker):
+    """`$5 > $4` compares two fields; the `$` fell through the path class.
+
+    The literal-vs-literal case was already pinned, so this variant slipped
+    through and both checkers hard-failed on it.
+    """
+    cmd = "awk -F, '{if ($5 > $4) print}' data/applicants/applicants.csv"
+    assert checker.first_write_index([_bash(cmd)]) is None
+
+
 def test_description_prose_cannot_trip_the_gate(checker):
     """The description is prose ABOUT intent; only the command is graded."""
     line = _bash("head -5 data/x.csv", "Add up the criteria columns")
@@ -94,3 +106,41 @@ def test_description_prose_cannot_trip_the_gate(checker):
 def test_package_install_is_not_materialization(checker):
     """`pip install` provisions the interpreter; it writes no closure file."""
     assert checker.first_write_index([_bash("pip install -q duckdb")]) is None
+
+
+# --- interpreted-write scoping (executable-policy checker only) -------------
+#
+# `INTERPRETED_WRITES` is meant for a `python -c` body that materializes
+# something. Matched against EVERY Bash command it penalised pure reads, which
+# is the same inversion the checker already rejects for interpreter names.
+
+@pytest.fixture
+def policy_checker():
+    return _load(
+        "coauthor-executable-policy-readback", "check_executable_policy.py"
+    )
+
+
+@pytest.mark.parametrize("cmd", [
+    # Searches for the literal string; writes nothing.
+    'grep -rn "to_csv" .',
+    # Writes to stdout, not to a file.
+    """python3 -c "import sys; sys.stdout.write(open('data/a.csv').read())" """,
+    # `to_csv()` with no path RETURNS the csv as a string.
+    """python3 -c "import pandas as pd; print(pd.read_csv('a').to_csv())" """,
+    # A bare mode literal in a column name is not an `open(..., 'w')`.
+    """python3 -c "print(df['w'])" """,
+])
+def test_reads_are_not_interpreted_writes(policy_checker, cmd):
+    assert policy_checker.first_write_index([_bash(cmd)]) is None, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    """python3 -c "open('f.csv','w').write(1)" """,
+    """python3 -c "import pandas as pd; pd.DataFrame().to_csv('out.csv')" """,
+    """python3 -c "import shutil; shutil.copy('a','b')" """,
+    """uv run python -c "from pathlib import Path; Path('x').write_text('y')" """,
+])
+def test_real_interpreted_writes_are_still_caught(policy_checker, cmd):
+    """Scoping must not open a hole: a body that really writes still counts."""
+    assert policy_checker.first_write_index([_bash(cmd)]) is not None, cmd

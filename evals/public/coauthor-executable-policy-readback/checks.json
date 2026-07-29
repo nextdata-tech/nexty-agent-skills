@@ -42,6 +42,11 @@
       "check": "The card states that C5 reference strength cannot reach its top band from this source, because applicants.csv carries no referee column or referee contact information of any kind. The agent must identify this from the actual schema/data, not merely hedge that 'some criteria may lack data'. Naming a DIFFERENT criterion as unreachable is wrong: C1-C4 all have supporting columns (skills, degree, years_experience)."
     },
     {
+      "id": "flags-unreachable-c5-bottom-band",
+      "turn": 1,
+      "check": "The card states that C5's BOTTOM band is unreachable for the same reason as its top one: applicants.csv carries no referee information for anyone, so absent evidence is not weak evidence. Scoring every candidate 1 on C5 asserts they all HAVE a reference and all of them are poor — the same invention as a fabricated 5, in the other direction, and it lowers every composite uniformly. Credit requires naming BOTH directions as unscoreable, not just the top. Deterministic check `absent-reference-not-floored-at-one` gates the landed data; this grades whether the agent raised it at the read-back, before any row was scored."
+    },
+    {
       "id": "flags-exceptional-override-as-dead",
       "turn": 1,
       "check": "The card draws the consequence: because no candidate can score 5 on C5, the exceptional-resume override keyed on that score can never fire, so the no-portfolio-URL cap has no working escape hatch. It is not enough to flag C5 as unscoreable and then encode the override anyway as if it were live. Credit requires connecting the dead criterion to the dead branch."

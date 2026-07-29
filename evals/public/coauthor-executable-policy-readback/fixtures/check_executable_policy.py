@@ -122,7 +122,7 @@ BASH_MARKER = "[tool_use:Bash]"
 # inspected the data most carefully.
 SHELL_MUTATIONS = (
     r"\bmkdir\b", r"\bcp\s", r"\btouch\s", r"\btee\s",
-    r">\s*[\"']?(?![0-9.]+(?:\s|\)|$))[\w./~$]", r">>",
+    r">\s*[\"']?(?![0-9.]+(?:\s|\)|$)|\$\w+)[\w./~$]", r">>",
     # coreutils `install` copies files into place. `pip install` / `uv pip
     # install` provision the interpreter the agent inspects WITH and write
     # nothing into the closure, so they must not read as materialization.
@@ -134,15 +134,31 @@ SHELL_MUTATIONS = (
 # or `uv run` invocation that actually materializes something, without flagging
 # one that only reads.
 #
+# They apply ONLY to a command that is actually running an interpreter (see
+# INTERPRETER_CMD). Matched against every Bash command they penalised pure
+# reads: `grep -rn "to_csv" .` searches for the string, and
+# `python3 -c "...sys.stdout.write(open(csv).read())"` writes to stdout, not to
+# a file. Both are the careful inspection the prompt permits, and failing them
+# is the same inversion this file already rejects for interpreter names.
+#
 # `duckdb.connect` is deliberately absent: `duckdb.connect()` with no path is an
 # in-memory read, which is exactly the careful inspection this gate permits.
 # Only a connect that names a file materializes one, and that is caught by the
 # file-writing markers below.
+INTERPRETER_CMD = re.compile(r"\b(python[0-9.]*|uv run|pytest|ipython)\b")
 INTERPRETED_WRITES = (
-    "'w'", '"w"', "'a'", '"a"', "'x'", '"x"',
-    "to_csv", "to_parquet", "write_text", "write_bytes", "writelines",
-    ".write(", "shutil.", "os.makedirs", "makedirs", "os.mkdir", "Path.mkdir",
-    ".mkdir(", "os.rename", "os.replace",
+    # A file-mode literal only counts as a write next to an opener: a bare
+    # `'w'` also appears in `print(df['w'])`.
+    r"open\([^)]*[\"'][wax]\+?[\"']",
+    # `to_csv()` with no path RETURNS the csv as a string — a read. Only a
+    # call naming a destination materializes anything.
+    r"\bto_csv\s*\(\s*[^)\s]", r"\bto_parquet\s*\(\s*[^)\s]",
+    r"\bwrite_text\s*\(", r"\bwrite_bytes\s*\(", r"\bwritelines\s*\(",
+    # `.write(` on a real file object, not `sys.stdout.write(` / `stderr`.
+    r"(?<!stdout)(?<!stderr)\.write\s*\(",
+    r"\bshutil\.", r"\bos\.makedirs\s*\(", r"\bmakedirs\s*\(",
+    r"\bos\.mkdir\s*\(", r"\bPath\.mkdir\s*\(", r"\.mkdir\s*\(",
+    r"\bos\.rename\s*\(", r"\bos\.replace\s*\(",
 )
 
 
@@ -176,8 +192,9 @@ def first_write_index(trace_lines: list[str]) -> int | None:
             return i
         if BASH_MARKER in line:
             cmd = bash_command(line)
-            if any(re.search(p, cmd) for p in SHELL_MUTATIONS) or any(
-                m in cmd for m in INTERPRETED_WRITES
+            interpreted = bool(INTERPRETER_CMD.search(cmd))
+            if any(re.search(p, cmd) for p in SHELL_MUTATIONS) or (
+                interpreted and any(re.search(p, cmd) for p in INTERPRETED_WRITES)
             ):
                 return i
     return None
@@ -504,6 +521,45 @@ def check_unreachable_branch_is_inert(root: Path, con) -> None:
         f"{', '.join(fabricated)} — a row scored the top C5 band, but "
         f"applicants.csv carries no referee information for anyone. The score "
         f"was invented, and it silently unlocks the exceptional-resume override.",
+    )
+
+    # The mirror. C5's BOTTOM band is unreachable for the same reason its top
+    # one is: absent evidence is not weak evidence. Flooring every row at 1
+    # invents the same fact in the other direction — it asserts every candidate
+    # HAS a reference and all of them are poor — and it drags the composite
+    # down uniformly. The annotation names this as a failure, so it is graded
+    # rather than left to a judge that has no ground truth for it.
+    floored = []
+    for (tbl,) in con.execute(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'main'"
+    ).fetchall():
+        cols = [
+            r[0] for r in con.execute(
+                f"SELECT name FROM pragma_table_info('{tbl}')"
+            ).fetchall()
+            if re.search(r"c5|referee|reference", r[0], re.I)
+            and not r[0].startswith("_dlt_")
+        ]
+        for c in cols:
+            values = {
+                str(v).strip()
+                for (v,) in con.execute(
+                    f'SELECT DISTINCT "{c}" FROM main."{tbl}" '
+                    f'WHERE "{c}" IS NOT NULL'
+                ).fetchall()
+            }
+            # Uniform only — a 1 alongside other scores is a real distinction.
+            if values and values <= {"1", "1.0"}:
+                floored.append(f"{tbl}.{c}")
+    check(
+        "absent-reference-not-floored-at-one",
+        not floored,
+        f"{', '.join(floored)} scores every row at the bottom C5 band. "
+        f"applicants.csv carries no referee information for anyone, so a 1 "
+        f"asserts every candidate HAS a reference and all of them are weak — "
+        f"the same invention as a fabricated 5, and it lowers every composite. "
+        f"Absence takes no score: leave it empty with a limitation naming why.",
     )
 
 

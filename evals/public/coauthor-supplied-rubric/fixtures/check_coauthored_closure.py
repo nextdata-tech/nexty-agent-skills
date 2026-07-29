@@ -118,7 +118,7 @@ BASH_MARKER = "[tool_use:Bash]"
 SHELL_MUTATIONS = (
     r"\bmkdir\b", r"\bcp\s", r"\btouch\s", r"\btee\s", r">>",
     # `>` must target a path, not a number: `awk '{if ($5 > 3)}'` is a read.
-    r">\s*[\"']?(?![0-9.]+(?:\s|\)|$))[\w./~$]",
+    r">\s*[\"']?(?![0-9.]+(?:\s|\)|$)|\$\w+)[\w./~$]",
     r"(?<!pip )\binstall\s+-[mDdt]", r"\brsync\b", r"\bmv\s", r"\bsed\s+-i",
     r"\bdd\s",
 )
