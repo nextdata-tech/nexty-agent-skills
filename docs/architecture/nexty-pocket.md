@@ -108,12 +108,18 @@ same reference file.
 
 **`nxd_decisions`** (`src/nxd-generate-dp/reference/derivation-plan.md`) is the
 **machine-queryable** ledger for the same rulings — a reserved-name base model
-landed as `data/nxd_decisions/nxd_decisions.csv`, one row per ruling, with a
-`status` column restricted to `confirmed` / `proposed` / `blocked`. It's what
-makes a ruling *editable* and *reviewable* rather than merely documented, and
-it's mechanically enforced by self-check Phase D below (must be a base model,
-not a derived one generated from a Python literal; no policy value may also
-appear as a hardcoded literal in the transform).
+landed as `data/nxd_decisions/nxd_decisions.csv`, one row per ruling, carrying
+two orthogonal classifications: a `status` column restricted to `confirmed` /
+`proposed` / `blocked` (is it settled?) and a `provenance` column restricted to
+`user_confirmed` / `agent_authored` / `source_derived` / `deferred`
+(who authored it?). Neither implies the other — a threshold the agent invented
+and the user then approved is `confirmed` *and* `agent_authored`, which
+is precisely the row a status-only ledger cannot distinguish from a weight the
+user supplied. It's what makes a ruling *editable* and *reviewable* rather than
+merely documented, and it's mechanically enforced by self-check Phase D below
+(must be a base model, not a derived one generated from a Python literal; both
+columns present and in-vocabulary; no policy value may also appear as a
+hardcoded literal in the transform).
 
 The two are meant to describe the **same** rulings from two angles — `CONTEXT.md`
 says "here's the ruling and why," `nxd_decisions` makes it a queryable, editable

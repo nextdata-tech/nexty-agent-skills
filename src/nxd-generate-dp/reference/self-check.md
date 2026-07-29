@@ -37,12 +37,16 @@ The dry-run for Step 7 of nxd-generate-dp, in four phases:
   Step 6a — until the model is authored and promised.)
 - **Phase D — policy-boundary gate.** Checks that rulings are landed data the
   user can edit, not literals in transform code: `nxd_decisions`, if promised, is
-  a **base** model backed by `data/` with a `status` column, and no parameter in
-  a landed policy CSV is duplicated as a literal in `transform/main.py`. A ledger
+  a **base** model backed by `data/` with a `status` column **and a `provenance`
+  column**, each restricted to its fixed vocabulary, and no parameter in a landed
+  policy CSV is duplicated as a literal in `transform/main.py`. A ledger
   generated from a Python literal *describes* the code instead of driving it —
-  editing a row changes nothing, and the two silently diverge. The prose rules
-  this enforces are in [derivation-plan.md](derivation-plan.md); Phase D is what
-  makes them fire.
+  editing a row changes nothing, and the two silently diverge. `status` and
+  `provenance` are checked independently because they answer different questions
+  — *settled?* and *authored by whom?* — and a ledger carrying only the first
+  cannot distinguish a weight the user supplied from a threshold you invented to
+  make an underspecified rubric executable. The prose rules this enforces are in
+  [derivation-plan.md](derivation-plan.md); Phase D is what makes them fire.
 
 After the phases, the script prints a **distribution read-back** over every
 derived model's classification columns. It is not a phase and it never fails the
@@ -609,8 +613,12 @@ print("phase C ok — CONTEXT.md present, no closure-escaping contract reference
 # literal in transform code. Both halves are checked, because complying with
 # either alone leaves the defect intact:
 #   (a) nxd_decisions, if promised, is a BASE model backed by data/ with a
-#       status column — not a derived model generated from a Python literal,
-#       which produces a ledger that DESCRIBES code rather than driving it;
+#       status column AND a provenance column — not a derived model generated
+#       from a Python literal, which produces a ledger that DESCRIBES code
+#       rather than driving it. status and provenance are orthogonal axes
+#       (settled-or-not vs authored-by), so both are required: a ledger with
+#       only status cannot tell a weight the user supplied from a threshold the
+#       agent invented to fill an underspecified rubric;
 #   (b) no value in a landed policy CSV also appears as a literal in
 #       transform/main.py — a duplicated threshold silently diverges from the
 #       row that claims to be editable.
@@ -638,17 +646,33 @@ if "nxd_decisions" in set(PHYSICAL_MODELS):
             import csv as _csv
             with led.open(newline="") as fh:
                 lrows = list(_csv.DictReader(fh))
-            if lrows and "status" not in lrows[0]:
-                derrors.append(
-                    f"nxd_decisions.csv has no 'status' column (found "
-                    f"{sorted(lrows[0])}). status is the whole mechanism: it is "
-                    f"how a user tells a confirmed ruling from one you proposed.")
-            else:
-                okst = {"confirmed", "proposed", "blocked"}
-                badst = {r["status"] for r in lrows} - okst
-                if badst:
-                    derrors.append(f"nxd_decisions.status has {sorted(badst)}; "
-                                   f"allowed values are {sorted(okst)}.")
+            # status and provenance are checked INDEPENDENTLY: they are separate
+            # axes, so a missing provenance column must not skip status
+            # validation (or the reverse). Each column: present, then in-vocab.
+            LEDGER_VOCAB = {
+                "status": ({"confirmed", "proposed", "blocked"},
+                           "status is how a user tells a settled ruling from an "
+                           "open one"),
+                "provenance": ({"user_confirmed", "agent_authored",
+                                "source_derived", "deferred"},
+                               "provenance is how a reviewer tells a value the "
+                               "USER supplied from one the AGENT invented to "
+                               "fill an underspecified rubric — status does not "
+                               "carry that, it is a different axis"),
+            }
+            for lcol, (okvals, why) in LEDGER_VOCAB.items():
+                if lrows and lcol not in lrows[0]:
+                    derrors.append(
+                        f"nxd_decisions.csv has no {lcol!r} column (found "
+                        f"{sorted(lrows[0])}). {why}. Allowed values are "
+                        f"{sorted(okvals)} (reference/derivation-plan.md).")
+                    continue
+                badv = {(r[lcol] or "").strip() for r in lrows} - okvals
+                if badv:
+                    derrors.append(
+                        f"nxd_decisions.{lcol} has {sorted(badv)}; allowed "
+                        f"values are {sorted(okvals)}. The vocabulary is fixed: "
+                        f"a value outside it is not queryable as a class.")
 
 # (b) A policy value that is landed AND hardcoded is a divergence waiting to
 # happen. Only scan CSVs whose model name looks like landed policy, and only
@@ -701,7 +725,8 @@ if derrors:
     for e in dict.fromkeys(derrors):
         print(f"  - {e}")
     sys.exit(1)
-print("phase D ok — rulings land as editable data, not transform literals")
+print("phase D ok — rulings land as editable data with status + provenance, "
+      "not transform literals")
 print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
       "C (context-completeness), D (policy boundary) all passed.")
 
@@ -785,6 +810,16 @@ writing `data/nxd_decisions/nxd_decisions.csv` and reading it like any other bas
 model, never by deleting the model or loosening the check. `value X is landed AND
 appears as a literal` means the same value exists in two places that can
 disagree: delete the literal and read the row.
+
+`nxd_decisions.csv has no 'provenance' column` means the ledger records whether
+each ruling is settled but not who wrote it — so a reviewer cannot separate the
+user's weights from the ones you invented. Add the column and classify **every**
+row from the fixed set; do not backfill them all as `user_confirmed` to clear the
+gate, which is the exact erasure the column exists to prevent. `provenance has
+[...]` means a value outside that set: the vocabulary is closed precisely so the
+class is queryable, so map your value onto one of the four rather than widening
+the set. Which value belongs on which row is in
+[derivation-plan.md](derivation-plan.md).
 
 An **ABSENT** line reports a declared value no derived column ever produced. It
 is mechanical and says only that: on this data, that branch did not fire. Whether

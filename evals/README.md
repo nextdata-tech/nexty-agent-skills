@@ -4,6 +4,71 @@ Use these scenarios to measure how fast and reliably an LLM can complete Nextdat
 
 `evals/` is a measurement harness, not customer-facing skill content. Keep shared scenarios generic. Put customer-specific, commercial-demo, or proprietary artifacts in `evals/private/`, which is ignored by git.
 
+> **New here?** [`GETTING-STARTED.md`](GETTING-STARTED.md) is the setup guide:
+> what to install per harness, how to run against OpenAI or Anthropic, and the
+> full environment-variable reference. The scenario suite this file documents
+> needs **no installs at all** — see "Running the suite" below.
+
+## This file covers one of four harnesses
+
+`evals/` holds four independent harnesses with separate dependencies and
+separate entry points. **This README documents the first one only.**
+
+| Harness | Entry point | Docs |
+|---|---|---|
+| **Scenario suite** (this file) | `evals/run.py` | you are here |
+| **`nxd_eval`** — Inspect-based, deterministic-EX + judged scoring with a Wilson/McNemar/FDR statistics contract | `uv run --project evals/nxd_eval` | [`nxd_eval/README.md`](nxd_eval/README.md), [`METHODOLOGY.md`](nxd_eval/METHODOLOGY.md) |
+| **Semantic MCP server** — makes the semantic tools real for 4 scenarios in *this* suite | started by `run.py` | [`mcp/README.md`](mcp/README.md) |
+| **Query loop** — multi-turn query refinement against a pharma mesh fixture | `evals/query-loop/run_query_loop.py` | — |
+
+A fifth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
+customer-facing form lives under `evals/private/cross-dp-joins/`.
+
+## What runs in CI vs. what only runs locally
+
+Only a narrow slice of the above runs automatically. Everything else is
+local-only, which means **a green PR is not evidence that it passed** —
+it is evidence that it never ran.
+
+| | Runs on every PR | Manual (`workflow_dispatch`) | Local only |
+|---|---|---|---|
+| **Harness** | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
+| **Scenarios** | only those covering changed skills, minus 11 `ci_skip` | any, incl. `ci_skip` | any |
+| **Skill set** | `current_pack` | any | any |
+| **Backend** | `codex` both sides | any | any |
+| **Gate** | fails on regression vs. baseline | reports drift, never fails | — |
+
+The scenario suite's own harness tests (`evals/tests/`) do run on every PR,
+under `ci.yml` — those cover the deterministic checkers and gates, not the
+skills.
+
+The automatic gate narrows on three axes at once, so be explicit about which
+one is responsible when a change ships unmeasured:
+
+- **Scenario selection.** A PR touching `src/**` or `evals/**` runs only the
+  scenarios whose `checks.json` names a changed skill (computed by
+  `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
+  `skill-sets.yaml`, the workflow — select every scenario.
+- **The 11 `ci_skip` scenarios never run automatically**, so the skills they
+  cover are unguarded. `nxd-data-product-query` is covered *only* by skipped
+  scenarios and `nxd-mesh-analyzer` has no scenario at all — for those two, a
+  green eval check means "nothing ran", not "nothing regressed". Run them
+  locally (see [`GETTING-STARTED.md`](GETTING-STARTED.md) tiers 2–3) when you
+  change either.
+- **Only `current_pack` runs.** The `no_skills` baseline and
+  `candidate_pack` comparisons — the numbers that actually show skill lift —
+  are local or manual only.
+
+`nxd_eval` has one manual-only CI job (`nxd-eval-smoke`): a live baseline over
+the stdio MCP transport with a cheap OpenAI model, gated on the
+`OPENAI_API_KEY` secret. It is a substrate smoke test — it proves the harness
+runs, not that any skill is good. The query loop and cross-dp-joins have no CI
+entry point at all.
+
+Detail on selection, the baseline, retry-on-regression, and flakiness markers
+is in [CI](#ci) below; per-harness setup is in
+[`GETTING-STARTED.md`](GETTING-STARTED.md).
+
 The target comparison is:
 
 | Variant | Purpose |
@@ -41,6 +106,100 @@ Record these metrics for every run:
 | `tokens` | Total token usage if the runner exposes it |
 | `success` | Whether the scenario-specific checks pass |
 | `variance_notes` | Differences between repeated runs of the same variant |
+
+## How a scenario is graded
+
+A cell's verdict comes from up to three graders of **descending trust**. The
+design principle: push as much of the verdict as possible onto mechanical
+evidence, and leave the judge only the questions that genuinely need reading
+comprehension.
+
+| Grader | Trust | What it can see | Where it lives |
+|---|---|---|---|
+| **Deterministic checker** | authoritative — overrides the judge | the landed workspace, plus withheld ground truth in `fixtures/` | `deterministic_check` in `checks.json` |
+| **Workspace-file quoting** | ground truth, but only about *content* | files the agent actually wrote | `workspace_files` in `checks.json` |
+| **LLM judge** | fallible; the fallback | the run trace + final answer, with tool results truncated | `checks[]` in `checks.json` |
+
+### 1. Deterministic checks (mechanical, authoritative)
+
+Opt-in per scenario. A checker script under the scenario's `fixtures/` runs
+against the landed workspace after the agent finishes, and its result is both
+**stated to the judge as an authoritative fact** and **enforced mechanically**:
+
+> a failed check fails the cell regardless of how generously the judge read the
+> transcript.
+
+```json
+"deterministic_check": { "script": "check_derived_closure.py", "deps": ["duckdb"] }
+```
+
+The checker gets `--fixtures` pointing at the scenario's own directory — never
+the workspace — because that is where withheld ground truth lives and it must
+stay out of the agent's reach. This is what stops a closure that produces wrong
+numbers from passing on a sympathetic judge read.
+
+Two properties worth knowing:
+
+- **A landed workspace records *what* the agent produced, not the *order* it
+  acted in.** A scenario asserting that a conversational checkpoint preceded
+  the first write cannot be graded from disk alone, so it sets `"wants_trace":
+  true` and receives the trace as a file — placed in its own temp dir, never
+  inside the workspace, since a file there would be visible to the agent and
+  would perturb any workspace-files assertion.
+- **A checker that could not run is an infrastructure error, not a `FAIL`.** It
+  says nothing about the agent, so it is reported separately and never recorded
+  in the ledger as an agent failure.
+
+Only 5 of 29 public scenarios use this today
+(`coauthor-executable-policy-readback`, `coauthor-supplied-rubric`,
+`derive-models-from-questions`, `dp-static-artifact-lifecycle`,
+`treasury-yield-curve`). It is the strongest signal available — prefer it
+whenever a claim can be checked by running something.
+
+### 2. Workspace-file quoting (mechanical facts, judged)
+
+**A check about file content cannot be graded from a transcript.** An agent
+that writes a correct `models.py` without echoing it back is indistinguishable
+from one that wrote nothing, so the check fails for lack of evidence rather
+than for being wrong — and it flips run to run with how chatty the agent
+happened to be.
+
+Declaring `workspace_files` makes the harness read those files out of the
+workspace and quote them to the judge as authoritative. Used by 5 scenarios.
+Full detail, and the two traps that produced confident wrong verdicts before
+being fixed, in [Writing checks that can actually be
+graded](#writing-checks-that-can-actually-be-graded).
+
+### 3. The LLM judge (probabilistic)
+
+Everything else. The judge reads the trace and the final answer against the
+scenario's `checks.json` and returns a per-check verdict. It never sees the
+agent's prompt hints; the agent never sees `checks.json`.
+
+This is the fallible layer, and its failure modes are the reason the other two
+exist. **Tool results in the trace are truncated**, so a judge asked about file
+content is guessing. **One check must test one thing** — a check bundling three
+requirements forces the judge to collapse "two of three" into a single boolean,
+and it lands differently each run. That is not agent nondeterminism; it is an
+unanswerable question.
+
+### Why the verdict is still noisy
+
+Even with mechanical layers, an agent run is nondeterministic end to end. The
+harness treats that as a measurement problem rather than pretending otherwise:
+CI gates on regression rather than absolute pass, re-runs a regressing cell
+before blocking, marks genuinely unstable cells `flaky` so they never gate in
+either direction, and ships `flakiness.py` to *measure* instability instead of
+guessing at it. Read a disagreement asymmetrically — **a flip proves
+instability, but agreement only fails to disprove it.** See [CI](#ci) and
+[Measuring stability](#measuring-stability).
+
+For the statistics contract used by the *other* harness — Wilson lower bounds,
+McNemar paired tests, FDR correction, judge test-retest, and the
+execution-accuracy lineage — see
+[`nxd_eval/METHODOLOGY.md`](nxd_eval/METHODOLOGY.md). That framework grades a
+different question (how reliably an agent answers questions against a data
+product) with a heavier deterministic-EX + judged split.
 
 ## Running the suite (automated)
 
@@ -202,6 +361,68 @@ Each scenario directory holds:
   (`{"name": ..., "checks": [{"id", "check"}]}`). **Judge-only; never shown to
   the agent.** This is where expected reasoning is spelled out.
 
+### Multi-turn scenarios (scripted follow-up turns)
+
+Some behaviours only appear across a conversation: proposing a plan, *stopping*,
+and then applying a correction the user supplies. A single-turn cell cannot
+measure them — an agent told the correction up front never has to stop and ask.
+
+Declare follow-up turns in `checks.json`. Absent or empty, the scenario is
+single-turn and runs on exactly the pre-existing path:
+
+```json
+{
+  "name": "...",
+  "turns": [
+    {"text": "Approved with two corrections: ... go ahead and build it."}
+  ],
+  "checks": [
+    {"id": "applies-supplied-corrections", "check": "...", "turn": 2}
+  ]
+}
+```
+
+- `turns[].text` (required) — the scripted user message, sent verbatim. Turns
+  are static; nothing is model-generated, because a simulated user would add a
+  second stochastic process to the measurement instrument.
+- `turns[].when` — `"always"` (default) or `"awaiting_input"`. Prefer `always`.
+  A conditional turn only fires when the previous turn's final answer *ends*
+  with `[[AWAITING_USER_INPUT]]`; if the agent asks its question in prose
+  instead the turn is skipped and the rest of the rubric would go ungraded, so
+  gate a turn only when sending it to a finished agent would corrupt the
+  measurement. Skipped turns are recorded in `metrics["skipped_turns"]`, and the
+  judge is told to fail their annotated checks as "turn not sent" rather than
+  grade them against a conversation that never happened.
+- `turns[].timeout_s` — optional per-turn cap (positive int; `true` is
+  rejected). Wall-clock from the moment the turn is sent, so a turn that streams
+  continuously does not extend it. The run-level `--agent-timeout` stays a
+  **whole-run** budget regardless of turn count, and whichever budget expires
+  first is named in the error.
+- `checks[].turn` — annotation only. It tells the judge which turn a check is
+  about; it never slices the trace, because "did the agent honour the
+  correction" is unanswerable without turn 1 in view.
+
+`turns[i]` is turn `i+2` — turn 1 is `prompt.md`. The accumulated trace carries
+a `[user_turn N <state>] <text>` separator line before each scripted turn, so a
+`wants_trace` deterministic checker can grade **ordering** (e.g. fail if any
+closure write appears before `[user_turn 2`) instead of leaving
+stopped-and-asked entirely to the stochastic judge.
+
+`<state>` is `after-await` when the previous turn ended with
+`[[AWAITING_USER_INPUT]]` and `unprompted` when it did not. Because turns
+default to `always`, a separator's presence proves only that the harness spoke
+— not that the agent had stopped to be spoken to. A scenario grading "did the
+agent stop and ask" must key on that state rather than on the delivery. The
+same fact reaches the judge as a `HARNESS FACT` line and is recorded in
+`metrics["awaited_input_turns"]`; an unprompted delivery instructs the judge to
+fail any check about the agent pausing for approval, so an agent that never
+stopped cannot inherit credit from a turn the harness sent anyway.
+
+Multi-turn requires a provider that can drive it. `claude` can; `codex` cannot
+(`codex exec` is single-shot with no persistent-stdin or resume protocol), and a
+multi-turn scenario on `--agent-backend codex` fails loudly before a workspace
+is built rather than silently grading a turn-1-only transcript.
+
 ### CI
 
 `.github/workflows/evals.yml` has two entry points.
@@ -228,7 +449,7 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Ten scenarios are currently skipped:
+Eleven scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
@@ -242,6 +463,11 @@ Ten scenarios are currently skipped:
 | `pharma-mesh-query-hard` | same |
 | `pharma-mesh-query-loop` | same |
 | `semantic-intent-validation` | same |
+| `coauthor-executable-policy-readback` | scripts a follow-up turn; the PR gate runs `codex`, which cannot drive multi-turn |
+
+That last one is a *provider* limit rather than an infrastructure one: it runs
+unattended on `--agent-backend claude` and needs the manual entry point only
+because the automatic gate defaults to `codex`.
 
 **Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
 skipped scenarios, so a PR touching it currently gets a green no-op. One more

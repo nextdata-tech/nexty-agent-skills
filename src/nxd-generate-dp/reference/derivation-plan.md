@@ -171,9 +171,11 @@ Handle a proposable ruling this way:
    - **Route every uncovered value to `needs_review`.** Never widen a proposed
      rule to swallow values it does not actually cover.
    - **Record each unconfirmed ruling as a row in the closure's
-     [decisions model](#the-decisions-model)** with `status = proposed`: the
-     ruling, what it applies to, and the evidence you based it on. One row per
-     ruling. A ledger that is itself landed data can be queried and corrected
+     [decisions model](#the-decisions-model)** with `status = proposed` AND
+     `provenance = agent_authored`: the ruling, what it applies to,
+     and the evidence you based it on. One row per ruling. Both axes are
+     required on every row — settled-or-not and authored-by are separate
+     questions, and the self-check fails a ledger missing either. A ledger that is itself landed data can be queried and corrected
      by the same governed path as every other answer — which a file at the
      closure root cannot. Never write a `DECISIONS.md`.
    - **State in the handoff that the rulings are PROPOSED, NOT CONFIRMED**, and
@@ -221,7 +223,8 @@ decisions are still unconfirmed?" is a query.
 | Column | Role | Content |
 |---|---|---|
 | `decision_id` | `primary_key()` | stable snake_case slug — `merchant_categories`, `fx_rates`. Name it after what it rules on, so the same ruling keeps the same id across rebuilds. Never derive it from a timestamp or a random value. |
-| `status` | `dimension()` | exactly one of `confirmed`, `proposed`, `blocked` |
+| `status` | `dimension()` | review state — exactly one of `confirmed`, `proposed`, `blocked` |
+| `provenance` | `dimension()` | who authored it — exactly one of `user_confirmed`, `agent_authored`, `source_derived`, `deferred` |
 | `ruling` | `dimension()` | the ruling in one sentence |
 | `applies_to` | `dimension()` | the models and columns it materializes in — `classified_spend.category, merchant_categories`. Empty for `blocked`, which materializes nothing. |
 | `detail` | `dimension()` | the evidence or basis a reviewer should check. For `blocked`: exactly the missing datum and which questions are limited until it arrives. |
@@ -229,16 +232,67 @@ decisions are still unconfirmed?" is a query.
 There is deliberately **no timestamp column**. The transform must be
 deterministic and rerunnable byte-identically, which forbids `now()`.
 
+> **Not to be confused with an explanation row's `evidence_kind`.**
+> `nxd_decisions.provenance` is per-ruling and answers *who authored the
+> decision*. A scoring model's `evidence_kind` is per-explanation-row and answers
+> *how firmly the source supports one reading* (`fact` / `inference`) — see
+> [reference/derived-models.md](derived-models.md). Different grains, disjoint
+> vocabularies; never populate one from the other.
+
 A **sample-selection rule is a ruling** and gets a row like any other — which
 rows entered the closure, and why, is a judgement the user can disagree with.
 This holds whether the rule came from the user or from you, and whether or not
 any other ruling exists in the closure.
 
-`status` is the whole mechanism. A user confirms a proposed ruling by editing
+### `status` and `provenance` are two different questions
+
+They are **orthogonal**, and a reviewer needs both. `status` answers *is this
+settled?*; `provenance` answers *who authored it?* Neither implies the other,
+which is exactly why one column cannot carry both.
+
+| Value | Question it answers | Use it when |
+|---|---|---|
+| `user_confirmed` | authored-by | the value came **from the user** — a weight, a gate, a verdict enum, a rubric they stated. Encode it verbatim. Ratifying a value *you* offered does NOT make it theirs: that row stays `agent_authored` and moves its `status` instead. |
+| `agent_authored` | authored-by | **you** invented the value to make an underspecified rubric executable — an intermediate anchor, a tie-break, a band boundary the user never stated. The row is the disclosure. |
+| `source_derived` | authored-by | the value is a fact read off the source — an observed row count, an enumerated category set, a captured-URL status. A reviewer checks it against the export, not against a preference. |
+| `deferred` | authored-by | the step was deliberately not taken this session — live verification skipped, a rate not supplied. Nothing was authored; the row records the omission. |
+
+> **Provenance never moves.** Authorship is a fact about how a row came to
+> exist, so it is fixed the moment the row is written: a ruling the agent
+> invented stays `agent_authored` forever, reviewed or not. `status` is the axis
+> that moves as a ruling is accepted. Whether a ruling has been agreed to is
+> read off `status`, never off `provenance`.
+
+The pairing carries the information, and every combination is meaningful:
+
+- `status = confirmed`, `provenance = user_confirmed` — the user's own weight.
+  Settled, and nothing of yours in it.
+- `status = confirmed`, `provenance = agent_authored` — a threshold
+  **you** invented that the user then approved. Settled, but the value is still
+  yours. This is the pair that a `status`-only ledger destroys: it is
+  indistinguishable there from the row above, which is the whole defect.
+- `status = proposed`, `provenance = agent_authored` — invented and not
+  yet reviewed. The narration case: an answer resting on it is provisional.
+- `status = confirmed`, `provenance = source_derived` — an observed fact. No
+  judgement to confirm; it is settled because the source says so.
+- `status = blocked`, `provenance = deferred` — the refused FX rate, or a
+  verification step postponed. Nothing materializes.
+
+Do not collapse the two. Writing `provenance = user_confirmed` on a value you
+chose, because the user approved it afterwards, erases the authorship the column
+exists to record — approval moves `status`, never `provenance`. Both columns are
+required on every row: there is no blank and no fifth value.
+
+`status` is what drives narration. A user confirms a proposed ruling by editing
 that row to `confirmed` and rebuilding the same workflow. There is no approval
 tool, no pending-state machine, and nothing in the supervisor enforces a status
 — the only behaviour it drives is narration: an answer built on a model an
-unconfirmed decision `applies_to` must say so.
+unconfirmed decision `applies_to` must say so. `provenance` never changes on
+approval; it records who wrote the value, which approval does not alter.
+
+Both columns are queryable through the metric view, so "which landed rulings did
+the agent author?" is `decision_count` grouped by `decision_provenance` — a
+`run_semantic_query` call, not a reading of `detail` prose.
 
 ### Emit it only when a ruling exists
 
@@ -265,8 +319,13 @@ model needs a real reason to exist.
 nxd_decisions = (
     semantic_model("nxd_decisions")
     .description(
-        "One row per ruling the closure encodes — confirmed, proposed, or "
-        "blocked. The governed record of every judgement behind the numbers."
+        "One row per ruling the closure encodes, on two independent axes: "
+        "'status' is whether it is settled (confirmed, proposed, blocked) and "
+        "'provenance' is who authored it (user_confirmed, "
+        "agent_authored, source_derived, deferred). A ruling can be confirmed "
+        "and still be one the agent invented, so neither axis implies the "
+        "other. "
+        "The governed record of every judgement behind the numbers."
     )
     .schema(
         {
@@ -279,6 +338,22 @@ nxd_decisions = (
                         "Review state — exactly one of confirmed, proposed, "
                         "blocked. An answer built on a model a 'proposed' "
                         "decision applies_to must be reported as provisional."
+                    ),
+                ),
+            ),
+            "provenance": field(
+                string(),
+                dimension(
+                    name="decision_provenance",
+                    description=(
+                        "Who authored the ruling — exactly one of "
+                        "user_confirmed (the value came from the user), "
+                        "agent_authored (the agent invented "
+                        "it to make an underspecified rubric executable — "
+                        "including one the user later approved), "
+                        "source_derived (read off the source data), deferred "
+                        "(the step was deliberately not taken). Orthogonal to "
+                        "status: approval moves status, never provenance."
                     ),
                 ),
             ),
@@ -375,7 +450,9 @@ one input was missing.
    on the derived model so no aggregate can silently mix units. A per-currency
    answer is honest; a single blended number built on an invented rate is not.
 3. **Surface it as a `blocked` row in the [decisions model](#the-decisions-model)**
-   — a status distinct from `proposed`. Name exactly the datum needed (which
+   — a status distinct from `proposed`, carrying `provenance = deferred`: the
+   ruling is not the agent's to make, so it is not agent-authored either. Name
+   exactly the datum needed (which
    currencies, over what date range, at what precision) and which questions are
    limited until it arrives. This row is the *only* model the refused ruling
    produces: there is no `fx_rates` table, because there are no rates.
@@ -387,13 +464,13 @@ one input was missing.
 
 A worked contrast on the same closure: the merchant→category ruling is
 **PROPOSED** — landed as `merchant_categories`, uncovered merchants routed to
-`needs_review`, carried as an `nxd_decisions` row with `status = proposed`, and
-the derived model carries a `category` dimension. The FX ruling on that same
-closure is **BLOCKED** — no `fx_rates` model, amounts stay in USD/GBP/EUR,
-`currency` is a dimension, and an `nxd_decisions` row with `status = blocked`
-names the missing rates as the reason "total opex" is reported per currency
-rather than as one figure. Both rulings live in the same queryable ledger; only
-their `status` differs.
+`needs_review`, carried as an `nxd_decisions` row with `status = proposed` and
+`provenance = agent_authored`, and the derived model carries a
+`category` dimension. The FX ruling on that same closure is **BLOCKED** — no
+`fx_rates` model, amounts stay in USD/GBP/EUR, `currency` is a dimension, and an
+`nxd_decisions` row with `status = blocked` and `provenance = deferred` names the
+missing rates as the reason "total opex" is reported per currency rather than as
+one figure. Both rulings live in the same queryable ledger.
 
 ## When the user supplies the ruling
 
@@ -404,11 +481,13 @@ When the user supplies the ruling — a rubric, gates, weights, thresholds, a
 verdict vocabulary, a selection rule — it is the spec, not raw material. Encode
 it verbatim, value-for-value; do not improve, reorder, or fill a missing case
 with a default. It lands by the same flow as any confirmed ruling: as its own
-model, with an `nxd_decisions` row at `status = confirmed` whose `detail` names
-it user-supplied. A gap in a supplied procedure (an unhandled case, an undefined
-tie-break, an unstated scale endpoint) is a question back to the user; with no
-user available it lands `blocked` naming the missing datum — never an agent
-default.
+model, with an `nxd_decisions` row at `status = confirmed` and
+`provenance = user_confirmed`. A gap in a supplied procedure (an unhandled case,
+an undefined tie-break, an unstated scale endpoint) is a question back to the
+user; with no user available it lands `blocked` / `deferred` naming the missing
+datum — never an agent default. If the user answers the gap by ratifying a value
+**you** offered, that row is `agent_authored`, not `user_confirmed` —
+the value is still yours, and the ledger must keep saying so.
 
 ### The data/code boundary, worked
 

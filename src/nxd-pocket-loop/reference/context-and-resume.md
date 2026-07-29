@@ -27,7 +27,10 @@ Draw the line clearly, because the recovery path depends on it:
   published on this machine, queryable without booting anything via
   `list_data_products`.
 - **`CONTEXT.md`** and **`nxd_decisions`** inside the closure — the prose record
-  and the machine-queryable ruling ledger.
+  and the machine-queryable ruling ledger. The ledger classifies every ruling on
+  two axes, `status` (settled?) and `provenance` (authored by whom?), so a
+  resuming session can query which rulings a *previous* session authored instead
+  of inheriting them as though the user had supplied them.
 
 **Ephemeral (dies with the session):**
 

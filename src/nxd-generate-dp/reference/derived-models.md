@@ -9,6 +9,9 @@ clauses live in SKILL.md; this file is the shape they produce.
 - [`models.py`: base and derived side by side](#modelspy-base-and-derived-side-by-side)
 - [Classifying free text: two defects that ship silently](#classifying-free-text-two-defects-that-ship-silently)
 - [Naming the ruling on the dimension it created](#naming-the-ruling-on-the-dimension-it-created)
+- [Absence is never a score](#absence-is-never-a-score)
+  - [Precedence: when the supplied rubric's bottom band *is* the absence case](#precedence-when-the-supplied-rubrics-bottom-band-is-the-absence-case)
+- [Score explainability: one row per scored criterion](#score-explainability-one-row-per-scored-criterion)
 - [The resource template](#the-resource-template)
 - [Reading the sources yourself](#reading-the-sources-yourself)
 - [Flat dicts, and why](#flat-dicts-and-why)
@@ -248,19 +251,30 @@ if "utc-8" in c: return 4, "US West"
 if "usa"   in c: return 3, "US East/Central"
 return 3, "US East/Central"          # an AU row scores 3, labelled "US"
 
-# RIGHT — every declared band has a branch, and no match says so.
-if "spain" in c: return 5, "SF/Spain"
-if "utc-8" in c: return 4, "US West"
-if "usa"   in c: return 3, "US East/Central"
-if words & {"brazil", "australia", "chile"}: return 2, "LatAm/AU/NZ"
-return 1, "unclassified"             # honest, and visible in the read-back
+# RIGHT — every declared band has a branch; absence and no-match are
+# separated, and neither is scored. Returns (score, band_label, limitation):
+# the label and the limitation are DIFFERENT columns, so a no-match sets the
+# limitation and leaves the label empty rather than inventing a band name.
+if not c.strip() or c.strip() == "not stated":
+    return None, "", "not_stated"    # nothing was read — no score at all
+if "spain" in c: return 5, "SF/Spain", ""
+if "utc-8" in c: return 4, "US West", ""
+if "usa"   in c: return 3, "US East/Central", ""
+if words & {"brazil", "australia", "chile"}: return 2, "LatAm/AU/NZ", ""
+return None, "", "no_band_matched"   # read, matched nothing — still not a 1
 ```
 
 The self-check's **ABSENT** line catches half of this — a band declared in landed
 policy that no row ever received. It cannot catch a mislabelled fall-through,
 because that row *did* get a value. Read your own ladder: if a band appears in the
 ruling you landed it needs a branch that can return it, and an unmatched row gets
-an unmatched label.
+no band label and a `limitation` saying why.
+
+**Absence is not the bottom band.** The fall-through above returns `None`, not
+`1`. Returning the scale's minimum for a row the ladder could not read is the
+defect [Absence is never a score](#absence-is-never-a-score) exists to stop: it
+is indistinguishable, in the landed column and in every metric over it, from a
+row that was read in full and genuinely earned a 1.
 
 ## Naming the ruling on the dimension it created
 
@@ -350,6 +364,305 @@ Two rules the example encodes:
 The same applies to a dimension whose values were **narrowed** by a ruling
 (rows reclassified or excluded upstream): say what was excluded and why, since
 the default read of the measure now silently reflects that decision.
+
+## Absence is never a score
+
+A field the derivation could not read is **absent**. Absence is a statement about
+the *evidence*, never about the *entity* — so it never becomes a score, a gate
+failure, or a cap. The defect this rule exists to stop has shipped: a screening
+closure read `portfolio_url` as `LISTED - URL NOT CAPTURED`, treated it as "no
+portfolio", and capped the candidate. The source said the portfolio exists and
+the URL was not captured; the closure scored it as though the candidate had
+none. That is an extraction gap converted into negative evidence about a person.
+
+Two absence kinds, and they are not interchangeable —
+[context-doc.md](context-doc.md) already names the distinction as
+**required-capture**, this is the scoring-side consequence:
+
+| Kind | Source says | Meaning | Recoverable |
+|---|---|---|---|
+| `listed_uncaptured` | the thing exists, its value was not extracted | **incomplete extraction** — a defect in the capture step | yes, by re-extracting |
+| `not_stated` | the source was asked and says nothing | genuinely absent from the source | no, without a new source |
+
+Both are absent. Neither is evidence *against* the entity. The scored column
+holds `None` for both, and the reason is carried in its own column so a reviewer
+can tell an extraction bug from a real gap — and so re-extraction is targetable.
+
+```python
+# WRONG — absence collapses into the bottom band. A candidate whose URL was
+# merely not captured is now indistinguishable from one with no portfolio,
+# and every avg/min metric over c1_score is dragged down by a capture bug.
+score = 5 if row["portfolio_url"].startswith("http") else 1
+
+# WRONG in a different way — absence collapses into the FAIL side of a gate.
+g1_pass = row["portfolio_url"].startswith("http")   # uncaptured => False
+
+# RIGHT — read the absence kind first; it short-circuits both score and gate.
+raw = row["portfolio_url"].strip()
+if raw == "LISTED - URL NOT CAPTURED":
+    return {"score": None, "limitation": "listed_uncaptured", "gate": "UNKNOWN"}
+if raw == "not stated" or not raw:
+    return {"score": None, "limitation": "not_stated", "gate": "UNKNOWN"}
+return {"score": _band(raw), "limitation": "", "gate": "PASS" if ... else "FAIL"}
+```
+
+Three consequences that must hold together, or absence leaks back in:
+
+- **A gate whose input is absent is `UNKNOWN`, never `FAIL`.** `UNKNOWN` is a
+  third outcome the gate vocabulary must declare and land, alongside `PASS` and
+  `FAIL`. A two-valued gate has nowhere to put absence and will always fold it
+  into one side — in practice always `FAIL`, because the pass test is written as
+  a positive match. This is the same shape as the supplied-rubric case where a
+  gate the form never asks is `UNKNOWN` for every row.
+- **An absent criterion is excluded from the weighted sum, not scored zero.**
+  Re-normalize over the weights that actually scored, and land the covered-weight
+  fraction beside the composite so a composite computed from half the rubric is
+  visible as such. Scoring absence as `0` or as the scale minimum silently
+  penalizes the entity for the capture gap, and no assert can see it afterwards.
+- **A cap keyed on absence is a cap on the closure's knowledge, not the entity.**
+  "No captured URL caps at `NEEDS_MORE_INFO`" is legitimate *because that verdict
+  names the uncertainty*. The same cap landing `REJECT` would be absence scored
+  as a fail. Read a supplied cap for which of the two it does, and raise it at the
+  read-back gate when the supplied verdict is a judgement rather than a
+  hold-for-information.
+
+The composite's own description must say that absent criteria were excluded and
+name the covered-weight column — otherwise a consumer reads a re-normalized
+composite as if the whole rubric had been applied.
+
+### Precedence: when the supplied rubric's bottom band *is* the absence case
+
+A supplied rubric will sometimes define its minimum as an absence: `| C5
+reference strength | 10 | two named referees with contact details | no referee
+information at all |`. That reads as a direct instruction to score absence as a
+1, and it collides with this section. Encode-verbatim and the absence rule are
+both binding, so neither may be applied silently over the other.
+
+**They are not actually in conflict, because they answer different questions.**
+Encode-verbatim governs *what the rule says*; the absence rule governs *which
+rows are eligible for it*. A band worded "no referee information at all" is a
+claim about an entity the source **describes as having none** — it cannot be a
+claim about a row the extraction never read, because the rubric's author was
+describing candidates, not describing a gap in your capture step. So:
+
+- **The user's wording wins wherever the source actually speaks.** A row whose
+  referee field was read and is genuinely empty earns the band's 1 verbatim.
+  That is the case the author had in mind, and re-deriving it as `None` would be
+  overriding a rubric the user is entitled to have encoded as written.
+- **The absence rule wins wherever the source is silent or uncaptured.** A row
+  whose evidence is `listed_uncaptured` or `not_stated` scores `None` with a
+  `limitation`, whatever the bottom band's prose says. The band's 1 is a
+  *rating*; that row was never rated.
+
+**Neither branch is taken on your own authority when the whole criterion is
+absent.** When the source cannot distinguish the two — no referee column exists,
+so every row is uncaptured and *nothing* can reach the band as worded — the
+distinction above has no data to bite on, and scoring the fall-through as a 1
+would land a fabricated 1 for every entity. That is the read-back gate's
+**"Fires when"** condition (`evidence with no provenance or missing-evidence
+rule`; a band no row can reach) — so **raise it**, do not resolve it. Say which
+criterion is unreachable, that its bottom band cannot be told apart from a
+capture gap, and offer the two readings — score the absence a 1 as written, or
+land `None` + `limitation` and re-normalize. Encode whichever the user picks,
+verbatim.
+
+The gate is the resolution, not a third option: a rubric whose minimum is an
+absence is precisely a missing-evidence rule the user has not yet stated, and
+this file never licenses inventing one. What is **never** correct is the silent
+path — folding uncaptured rows into the bottom band because the prose seemed to
+allow it, which is the shipped defect this section opens with.
+
+## Score explainability: one row per scored criterion
+
+A scoring model that lands only the final numbers — the per-criterion scores, the
+composite, the verdict — cannot answer *why*. A reviewer who wants to check one
+cell has to re-read the transform and re-derive it by hand, which is exactly the
+review the landed-data discipline is supposed to make unnecessary. The scores are
+governed; their basis is not.
+
+So a derived model that **scores** carries an explanation row per scored
+criterion, keyed `(entity_key, criterion)`. This is the deterministic
+transform-side twin of the agent-side judgement row in
+[llm-judgments.md](llm-judgments.md), and it **reuses that file's evidence
+vocabulary unchanged** — `evidence_field` names the source column read,
+`evidence_quote` is a verbatim substring of that column's value for that entity,
+or the literal `not stated` when nothing was read. Do not invent a second
+citation vocabulary: a reviewer who has learned to check one must be able to
+check the other the same way.
+
+Prefer a **child explanation model** over widening the score sheet. Nine criteria
+× five explanation columns is forty-five columns on the score model, most empty
+per row; long-form keeps the score sheet readable, keeps each explanation
+individually addressable, and lets a new criterion append rows rather than
+reshape a table. It is the same long-form argument judgement rows make.
+
+| Column | Role | Content |
+|---|---|---|
+| `entity_key` | `primary_key()` | joins back to the score model |
+| `criterion` | `primary_key()` | the criterion this row explains — a value from the landed rubric |
+| `score` | `dimension()` | the score this criterion received, or empty when absent |
+| `band_id` | `dimension()` | the landed rule/band that fired — the addressable identity of the branch, not its prose |
+| `evidence_field` | `dimension()` | which source column the band read |
+| `evidence_quote` | `dimension()` | verbatim substring of that column's value, or `not stated` |
+| `evidence_kind` | `dimension()` | `fact` when the band matched a source value directly; `inference` when it rests on a heuristic over the value |
+| `limitation` | `dimension()` | empty when `score` is set; otherwise the reason it is empty. Absence kinds: `listed_uncaptured`, `not_stated` (the absence kind above). Coverage kind: `no_band_matched` — the evidence was read, but no band covered it |
+
+> **Not to be confused with `nxd_decisions.provenance`.** `evidence_kind` is
+> per-explanation-row and answers *how firmly the source supports this one
+> reading* (`fact` / `inference`). `nxd_decisions.provenance` is per-ruling and
+> answers *who authored the decision* (`user_confirmed`, `agent_authored`,
+> `source_derived`, `deferred`) — see
+> [reference/derivation-plan.md](derivation-plan.md). Different grains, disjoint
+> vocabularies; never populate one from the other.
+
+`band_id` is what makes the row queryable rather than merely readable. A prose
+justification string cannot be grouped, counted, or diffed across runs; a band id
+can — "how many rows did band `c1_multi_service` fire for?" is a
+`run_semantic_query` away, and a band that fired for every row is the same
+`UNIFORM` defect the self-check read-back reports. The ids come from the landed
+rubric, never from a transform literal, for the same reason weights do.
+
+`evidence_kind` is the honesty column. A band that matched `degree` containing
+`"BSc Computer Science"` is a **fact** — the source says it. A band that inferred
+"multi-service backend systems" from a skills list mentioning three technologies
+is an **inference** — defensible, but the source never said it. Both are
+legitimate; conflating them is not, because a reviewer triaging a disputed score
+needs to know whether to argue with the reading or with the rule.
+
+The scoring function returns the explanation alongside the score, so the two
+cannot drift:
+
+```python
+def _score_c1(row: dict[str, str], bands: list[dict[str, str]]) -> dict[str, Any]:
+    """One criterion's score plus the explanation that produced it."""
+    raw = row["skills"].strip()
+    base = {"entity_key": row["applicant_id"], "criterion": "c1_backend_depth",
+            "evidence_field": "skills"}
+    if raw == "not stated" or not raw:
+        # Absent: no score, no band fired, and the quote takes the sentinel.
+        return {**base, "score": None, "band_id": "", "evidence_quote": "not stated",
+                "evidence_kind": "", "limitation": "not_stated"}
+    words = set(re.findall(r"[a-z0-9+#.]+", raw.lower()))
+    for band in bands:                      # landed rows, ordered by the rubric
+        matched = words & set(band["tokens"].split())
+        if matched:
+            return {**base,
+                    "score": int(band["score"]),
+                    "band_id": band["band_id"],
+                    # Verbatim: the span of `skills` the band actually matched,
+                    # never a paraphrase and never the band's own prose.
+                    "evidence_quote": next(t for t in raw.split("; ")
+                                           if set(t.lower().split()) & matched),
+                    "evidence_kind": band["evidence_kind"],  # 'fact' or 'inference'
+                    "limitation": ""}
+    # Read, matched no band. `score` is empty, so `limitation` MUST name why:
+    # an empty one lands this row in the "assessed" bucket when consumers group
+    # by `limitation`, counting a rubric gap as a completed assessment.
+    # `no_band_matched` stays distinct from `not_stated` — the evidence WAS
+    # present and readable, the rubric simply had no band for it. That is a
+    # defect in the rubric, not in the source, and the two want different fixes.
+    return {**base, "score": None, "band_id": "", "evidence_quote": raw,
+            "evidence_kind": "", "limitation": "no_band_matched"}
+```
+
+Four asserts, on top of the Tier-1 pair, and each is falsifiable — coverage,
+absence, unexplained gap, and anchoring. They are separate because each is blind
+to the others' defect: coverage cannot see a row that scored an absence, the
+absence assert fires only when a score and a limitation appear TOGETHER so it
+cannot see a row carrying neither, and anchoring skips both because their quotes
+are the exempt sentinel.
+
+```python
+def _assert_explanations(
+    scores: list[dict[str, Any]], expl: list[dict[str, Any]],
+    source: list[dict[str, str]]
+) -> None:
+    """Every scored cell is explained, and every citation is real."""
+    # Coverage: read the scored cells off the SCORE SHEET, never off `expl`.
+    # Deriving both sides from `expl` makes the check self-referential — a
+    # criterion that scored but emitted no explanation row AT ALL is missing
+    # from both sets, subtracts to nothing, and ships green. That vanished row
+    # is precisely the defect this assert exists to catch.
+    scored = {
+        (r["entity_key"], crit)
+        for r in scores
+        for crit in CRITERIA               # the landed rubric's criterion ids
+        if r.get(f"{crit}_score") is not None
+    }
+    explained = {(r["entity_key"], r["criterion"]) for r in expl if r["band_id"]}
+    if scored - explained:
+        missing = sorted(scored - explained)
+        raise RuntimeError(
+            f"{len(missing)} scored cells have no explanation row carrying a "
+            f"band_id, e.g. {missing[:3]}"
+        )
+    # Absence: no explanation row may carry BOTH a score and a limitation.
+    # That pair is the silent path this file's absence section forbids — an
+    # uncaptured row folded into the bottom band — and neither check above can
+    # see it: the row has a band_id, so coverage is satisfied, and its quote is
+    # the exempt sentinel, so anchoring skips it. It needs its own assert.
+    scored_absences = [
+        (r["entity_key"], r["criterion"], r["limitation"])
+        for r in expl
+        if r["limitation"] and r["score"] is not None
+    ]
+    if scored_absences:
+        raise RuntimeError(
+            f"{len(scored_absences)} cells scored despite an absence limitation, "
+            f"e.g. {scored_absences[:3]} — absence takes no score"
+        )
+    # The inverse, and just as silent: unscored with NO limitation saying why.
+    # Such a row is skipped by every average (no score) yet groups under the
+    # empty limitation, so a consumer counting assessed coverage reads it as
+    # assessed. The unmatched-band fall-through is the path that produces it.
+    unexplained_gaps = [
+        (r["entity_key"], r["criterion"])
+        for r in expl
+        if r["score"] is None and not r["limitation"]
+    ]
+    if unexplained_gaps:
+        raise RuntimeError(
+            f"{len(unexplained_gaps)} cells are unscored with no limitation "
+            f"naming why, e.g. {unexplained_gaps[:3]} — an empty score must "
+            f"always say what stopped it"
+        )
+    # Anchoring: the quote really is a substring of the field it cites. This is
+    # the substring assert llm-judgments.md defers to the consuming model — it
+    # lands here. Normalize on whitespace and case ONLY; a fuzzy match that
+    # tolerates paraphrase stops catching a fabricated citation.
+    by_key = {r["applicant_id"]: r for r in source}
+    for r in expl:
+        if r["evidence_quote"] == "not stated" or not r["evidence_field"]:
+            continue                      # the absence sentinel, correctly exempt
+        haystack = " ".join(by_key[r["entity_key"]][r["evidence_field"]].lower().split())
+        needle = " ".join(r["evidence_quote"].lower().split())
+        if needle not in haystack:
+            raise RuntimeError(
+                f"{r['entity_key']}/{r['criterion']} cites {r['evidence_field']} "
+                f"with a quote that is not a substring of it: {r['evidence_quote']!r}"
+            )
+```
+
+**Both sides of the coverage assert must not come from the same list.** Reading
+`scored` and `explained` off `expl` is the tempting one-liner and it is inert:
+the only cells it can compare are ones that already have an explanation row, so
+a criterion whose row was never emitted is invisible to it. The score sheet is
+the independent witness — take the scored set from there, and the assert can
+actually fail. Test it by deleting one explanation row and confirming the build
+goes red; an assert that stays green under that edit is decoration.
+
+The substring assert is what turns the citation from a claim into a check —
+without it a fabricated quote ships green, and the explainability model becomes
+decoration that is *more* dangerous than no explanation, because it invites trust
+it has not earned. Exempt the `not stated` sentinel explicitly: that literal is
+almost never a substring of a real source value, so an unguarded check fails
+every honest absent row.
+
+Note what a row with `score: None` and `limitation: "not_stated"` gives a
+reviewer that a bare `1` never could: the criterion was not assessed, the reason
+is an absent source field, and re-extracting that field is the fix. The
+explainability model and the absence rule are the same discipline read from two
+sides.
 
 ## The resource template
 
@@ -507,6 +820,7 @@ cannot test the thing it actually does.
 | **Removal** (dedupe, pair cancel) | the dropped count matches the removal rule's arity (pairs drop an even count); a net-zero removal leaves the source total unchanged; no row the rule should have removed survives |
 | **Collapse** (regrain) | every source row is accounted for in exactly one output group; the measure total is preserved across the regrain |
 | **Classification** | every source row lands in exactly one bucket, `needs_review` included; the per-bucket counts sum to the source count. **Never sufficient on its own** — pair it with the Tier-2 measure reconciliation |
+| **Scoring** | every scored cell has an explanation row carrying a `band_id`, and every `evidence_quote` is a verbatim substring of the field it cites — see [Score explainability](#score-explainability-one-row-per-scored-criterion). Additionally: no scored cell whose `limitation` is set, since [absence is never a score](#absence-is-never-a-score) |
 
 ## Chained derivations stay in memory
 

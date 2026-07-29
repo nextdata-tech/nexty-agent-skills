@@ -454,7 +454,84 @@ entries above.
   `driver_impls/drivers/nxd-snowflake/src/storage/mod.rs` (absent `schema` falls
   back to the data-product name rather than erroring).
 
-## 2026-07-29 — v0.25.4 — semantic roles + the `Agg.EXPRESSION` boundary (#130)
+## 2026-07-29 — v0.25.4 — nxd-generate-dp: per-criterion score explainability and absence semantics
+
+**Change:** reference-doc rules for `nxd-generate-dp`. `derived-models.md` gains the
+explanation-row contract (a scored row carries per-criterion rows saying WHY it scored
+what it did) and a precedence section for the case where a supplied rubric's bottom
+band is the absence case — the band that decides whether "no evidence" scores the
+minimum or is held out of the score entirely. `llm-judgments.md` picks up the matching
+vocabulary so the two documents describe one model rather than two.
+
+The explanation row's authored-by column is named `evidence_kind` (`fact` /
+`inference`), deliberately NOT `provenance`: `nxd_decisions.provenance` (v0.25.5)
+classifies who authored a RULING, while this classifies what a per-criterion
+explanation is standing on. Two different questions; giving them one name would make
+the ledger unreadable at the exact point a reviewer needs to tell them apart.
+
+**No before/after run table — no scenario observes these rules.** Nothing in
+`evals/public/` asserts on explanation rows, `evidence_kind`, or bottom-band absence
+precedence; a grep across every `checks.json` and every deterministic checker returns
+nothing. The harness therefore cannot distinguish a run that follows the new
+precedence from one that does not — the failure these rules prevent is a scored
+absence silently reading as a genuine low score, which no current check inspects.
+Reporting a table from scenarios blind to the change would be noise presented as
+signal. Same posture as the v0.25.3 and v0.22.0 entries above.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py` passes; version surfaces agree at 0.25.4 across
+  `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+- `./build-skills.sh` packages every skill `ok`; `nxd-generate-dp` is 18 entries and
+  `nxd-data-product-builder` 159, both under the 200-entry cap.
+- Both touched reference files added their new sections to the existing `## Contents`
+  list, so progressive disclosure still resolves them.
+- `src/nxd-generate-dp/SKILL.md` is at exactly 500 lines, the cap, after restoring the
+  Step 6b dispatch that a rebase had dropped.
+- The three asserts the rules require are separately falsifiable: coverage is read off
+  the score sheet rather than off the explanation rows (so a missing explanation
+  cannot hide as a missing score), the scored-absence pair, and a substring anchor
+  that survives whitespace and case differences.
+
+**Follow-up worth doing:** these rules are unmeasurable only because no scenario
+exercises them. A scenario asserting on explanation rows and bottom-band precedence
+would convert every future change here from evidence-prose into a real table.
+
+## 2026-07-29 — v0.26.0 — nxd-generate-dp: ruling provenance classes in `nxd_decisions`
+
+**Change:** `nxd_decisions` gains a mandatory `provenance` column alongside `status`.
+Settled-or-not and authored-by are separate axes: a ruling the agent invented to fill
+a gap and a ruling the user supplied can both be `confirmed`, and only `provenance`
+tells the reader which one they are ratifying. Phase D fails a closure whose ledger
+lacks the column or carries an out-of-vocabulary value, and four new deterministic
+checks land in `check_coauthored_closure.py`.
+
+**No before/after run table — the change is not measurable on a shared denominator.**
+The four new checks (`provenance-column-present`, `provenance-vocabulary-valid`,
+`agent-authored-ruling-classified`, `user-supplied-ruling-classified`) did not exist
+before this PR, so a "before" run cannot be scored against them: every prior closure
+fails a column that was not required of it. Scoring the after-run against the larger
+check set and calling the difference an improvement would measure the denominator
+change, not the skill. Same posture as the 2026-07-23 Phase D entry, which recorded
+the same situation rather than inventing a comparison.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py` passes; version surfaces agree at 0.26.0 across
+  `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+- `./build-skills.sh` packages every skill `ok`; `nxd-data-product-builder` is 159
+  entries, under the 200-entry cap.
+- Phase D gate tests: 26 passed across `test_policy_boundary_phase_d.py` and
+  `test_deterministic_check.py`, including the pair that pins the two axes as
+  independently checked — `test_status_and_provenance_are_checked_independently`
+  and `test_missing_provenance_still_reports_bad_status`. Without that pair a
+  nested check would report only the first failing axis and leave half the ledger
+  ungraded.
+- Vocabulary is closed and case-sensitive: `Confirmed` / `User_Confirmed` are
+  rejected, and a short row or empty cell is caught as `''` rather than passing.
+- Known inherited limit, not introduced here: a header-only CSV with zero data rows
+  skips both column checks. The gate is row-driven, so an empty ledger is not a
+  failure on either axis.
+
+## 2026-07-29 — v0.26.1 — semantic roles + the `Agg.EXPRESSION` boundary (#130)
 
 **Change:** two things, both doc-only but both behavior-bearing. (1) A new
 **Semantic roles** section in `nxd-data-product-builder`'s
@@ -484,7 +561,7 @@ Same posture as the v0.25.3 / v0.22.0 / v0.21.0 entries above.
 
 **Evidence instead of a table:**
 - `scripts/validate_skills.py --root .` passes; version surfaces agree at
-  0.25.4 across `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+  0.26.1 across `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
 - `./build-skills.sh` packages all 17 skills `ok`; largest is
   `nxd-mesh-analyzer` at 32 entries, far under the 200-entry cap.
 - Signatures verified against upstream `nxd` source, not inferred:

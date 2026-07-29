@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import csv
 import hashlib
+import json
 import re
 import sys
 import tempfile
@@ -95,14 +97,59 @@ def literal_strings_and_numbers(src: str) -> set[str]:
 # A write is any action that materializes part of the closure. Reading is not:
 # the agent is explicitly allowed to read the source and its headers before the
 # read-back, and must be, since the read-back describes that data.
-WRITE_MARKERS = (
-    "Write(", "Edit(", "MultiEdit(", "NotebookEdit(",
+#
+# The markers MUST match what the backends actually emit:
+# `_trace_from_stream` writes `[tool_use:Write] {json}`, never `Write(...)`.
+# The older `Write(`/`Bash(` forms could not match any real trace, so
+# `first_write_index` always returned None — and because a None short-circuits
+# main() to "ALL CHECKS PASSED" below, every artifact check was skipped on every
+# run. Keep this tuple in step with the emitter, not with how a trace reads.
+# BOTH backends' emissions. This scenario is NOT ci_skip, and the PR gate runs
+# codex — which has no Write/Edit tools at all: it materializes through
+# `file_change` / `patch` / `apply_patch` items emitted under the same
+# `[tool_use:<type>]` prefix. Listing only the Claude names left this gate blind
+# on the exact backend CI uses.
+WRITE_TOOLS = (
+    "Write", "Edit", "MultiEdit", "NotebookEdit",     # ClaudeBackend
+    "file_change", "patch", "apply_patch",            # CodexBackend
 )
+WRITE_MARKERS = tuple(f"[tool_use:{t}]" for t in WRITE_TOOLS)
+BASH_MARKER = "[tool_use:Bash]"
 # Shell is only a write when the command mutates. `head`/`cat`/`wc` on the
 # supplied CSV is exactly the inspection the gate permits.
+#
+# Word-anchored and matched against the PARSED `command`: as bare substrings
+# over the whole tool input, `dd ` matched inside `add `/`Add ` and the sibling
+# `description` field could decide the gate. Interpreter names are deliberately
+# absent — `python -c "import csv; print(...)"` is a read, and penalising it
+# fails the agent that inspected carefully, inverting what the gate rewards.
 SHELL_MUTATIONS = (
-    "mkdir", "cp ", "touch ", "tee ", "> ", ">>", "install -", "rsync",
-    "python -c", "uv run",
+    r"\bmkdir\b", r"\bcp\s", r"\btouch\s", r"\btee\s", r">>",
+    # `>` must target a path, not a number: `awk '{if ($5 > 3)}'` is a read.
+    r">\s*[\"']?(?![0-9.]+(?:\s|\)|$)|\$\w+)[\w./~$]",
+    r"(?<!pip )\binstall\s+-[mDdt]", r"\brsync\b", r"\bmv\s", r"\bsed\s+-i",
+    r"\bdd\s",
+)
+
+# Write operations inside an interpreted command body. Dropping the interpreter
+# NAMES from SHELL_MUTATIONS was right — `python -c "import csv; print(...)"` is
+# a read — but it left this checker unable to see an interpreted command that
+# really does materialize something, which is how a closure gets built in one
+# line. These restore that, scoped to a command actually running an interpreter
+# and anchored so they cannot match inside a `grep` pattern or a `print(...)`.
+# Kept byte-aligned with the sibling checker in
+# `coauthor-executable-policy-readback` so the two agree on what a write is.
+INTERPRETER_CMD = re.compile(r"\b(python[0-9.]*|uv run|pytest|ipython)\b")
+INTERPRETED_WRITES = (
+    r"open\([^)]*[\"'][wax]\+?[\"']",
+    # `to_csv()` with no path RETURNS the csv as a string — a read.
+    r"\bto_csv\s*\(\s*[^)\s]", r"\bto_parquet\s*\(\s*[^)\s]",
+    r"\bwrite_text\s*\(", r"\bwrite_bytes\s*\(", r"\bwritelines\s*\(",
+    # A real file object, not `sys.stdout.write(` / `stderr`.
+    r"(?<!stdout)(?<!stderr)\.write\s*\(",
+    r"\bshutil\.", r"\bos\.makedirs\s*\(", r"\bmakedirs\s*\(",
+    r"\bos\.mkdir\s*\(", r"\bPath\.mkdir\s*\(", r"\.mkdir\s*\(",
+    r"\bos\.rename\s*\(", r"\bos\.replace\s*\(",
 )
 
 # Evidence the policy read-back actually happened. Each family is a DISTINCT
@@ -129,13 +176,45 @@ READBACK_SIGNALS = {
 }
 
 
+def bash_command(line: str) -> str:
+    """The `command` a Bash tool_use line ran, or "" if unrecoverable.
+
+    Only the command is graded. The sibling `description` field is prose the
+    agent writes ABOUT its intent, so letting it reach the mutation matchers
+    lets a phrase like "Add up the criteria columns" decide a hard gate.
+    """
+    payload = line.split(BASH_MARKER, 1)[1].strip() if BASH_MARKER in line else ""
+    try:
+        obj = json.loads(payload)
+        if isinstance(obj, dict):
+            return str(obj.get("command", ""))
+    except ValueError:
+        pass
+    # Truncated payload — the trace caps tool inputs, so this is the ordinary
+    # case for a long command. Slice the command value out rather than falling
+    # back to the whole payload, which would re-admit `description`.
+    m = re.search(r'"command"\s*:\s*"((?:[^"\\]|\\.)*)', payload)
+    if m:
+        return m.group(1)
+    # CodexBackend emits the RAW command after the marker, no JSON at all
+    # (`[tool_use:Bash] mkdir -p ws/data`). Returning "" for that shape made
+    # every shell mutation invisible on the backend the PR gate actually runs.
+    # There is no `description` field here, so the payload IS the command.
+    return "" if payload.startswith("{") else payload
+
+
 def first_write_index(trace_lines: list[str]) -> int | None:
     """Index of the first line that materializes something. None if never."""
     for i, line in enumerate(trace_lines):
         if any(m in line for m in WRITE_MARKERS):
             return i
-        if "Bash(" in line and any(m in line for m in SHELL_MUTATIONS):
-            return i
+        if BASH_MARKER in line:
+            cmd = bash_command(line)
+            interpreted = bool(INTERPRETER_CMD.search(cmd))
+            if any(re.search(p, cmd) for p in SHELL_MUTATIONS) or (
+                interpreted and any(re.search(p, cmd) for p in INTERPRETED_WRITES)
+            ):
+                return i
     return None
 
 
@@ -358,13 +437,54 @@ def main(root: Path, trace_path: Path | None = None) -> None:
         "every agent-authored ruling (anchors, bands, exceptional-resume rule) "
         "is a decision; data/nxd_decisions/nxd_decisions.csv is missing",
     )
-    ledger_text = ledger.read_text().lower()
+    ledger_text = ledger.read_text().lower() if ledger.is_file() else ""
     check(
         "gap-attributed",
         ("anchor" in ledger_text or "scale" in ledger_text
          or "intermediate" in ledger_text),
         "no nxd_decisions row records that the intermediate anchors were "
         "agent-authored rather than user-supplied",
+    )
+    # The prose above can say "agent-authored" anywhere in the row. Provenance
+    # is the queryable form of the same claim, and this scenario is the exact
+    # case it exists for: the user supplied the rubric, the agent filled the
+    # intermediate anchors. Both classes must therefore appear.
+    if ledger.is_file():
+        with ledger.open(newline="") as fh:
+            ledger_rows = list(csv.DictReader(fh))
+    else:
+        ledger_rows = []
+    provs = {(r.get("provenance") or "").strip() for r in ledger_rows}
+    has_prov = bool(ledger_rows) and "provenance" in ledger_rows[0]
+    check(
+        "provenance-column-present",
+        has_prov,
+        "nxd_decisions has no provenance column, so a reviewer cannot query "
+        "which rulings the agent authored and which the user supplied",
+    )
+    # Gate the value check on the column existing. Without the column every row
+    # reads as '', so this would fire a SECOND failure blaming an
+    # out-of-vocabulary value — pointing at a value problem that does not exist
+    # and burying the real diagnosis the check above already gave.
+    check(
+        "provenance-vocabulary-valid",
+        not has_prov or provs <= {"user_confirmed", "agent_authored",
+                                  "source_derived", "deferred"},
+        f"nxd_decisions.provenance carries values outside the fixed vocabulary: "
+        f"{sorted(provs - {'user_confirmed', 'agent_authored', 'source_derived', 'deferred'})}",
+    )
+    check(
+        "agent-authored-ruling-classified",
+        "agent_authored" in provs,
+        "no nxd_decisions row is classified agent_authored, yet the "
+        "agent authored the intermediate anchors — the ledger reads as if the "
+        "user supplied every value",
+    )
+    check(
+        "user-supplied-ruling-classified",
+        "user_confirmed" in provs,
+        "no nxd_decisions row is classified user_confirmed, yet the rubric "
+        "criteria and weights came from the user",
     )
 
     # ---- 3. self-check provenance -------------------------------------------

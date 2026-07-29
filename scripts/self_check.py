@@ -487,8 +487,12 @@ print("phase C ok — CONTEXT.md present, no closure-escaping contract reference
 # literal in transform code. Both halves are checked, because complying with
 # either alone leaves the defect intact:
 #   (a) nxd_decisions, if promised, is a BASE model backed by data/ with a
-#       status column — not a derived model generated from a Python literal,
-#       which produces a ledger that DESCRIBES code rather than driving it;
+#       status column AND a provenance column — not a derived model generated
+#       from a Python literal, which produces a ledger that DESCRIBES code
+#       rather than driving it. status and provenance are orthogonal axes
+#       (settled-or-not vs authored-by), so both are required: a ledger with
+#       only status cannot tell a weight the user supplied from a threshold the
+#       agent invented to fill an underspecified rubric;
 #   (b) no value in a landed policy CSV also appears as a literal in
 #       transform/main.py — a duplicated threshold silently diverges from the
 #       row that claims to be editable.
@@ -516,17 +520,33 @@ if "nxd_decisions" in set(PHYSICAL_MODELS):
             import csv as _csv
             with led.open(newline="") as fh:
                 lrows = list(_csv.DictReader(fh))
-            if lrows and "status" not in lrows[0]:
-                derrors.append(
-                    f"nxd_decisions.csv has no 'status' column (found "
-                    f"{sorted(lrows[0])}). status is the whole mechanism: it is "
-                    f"how a user tells a confirmed ruling from one you proposed.")
-            else:
-                okst = {"confirmed", "proposed", "blocked"}
-                badst = {r["status"] for r in lrows} - okst
-                if badst:
-                    derrors.append(f"nxd_decisions.status has {sorted(badst)}; "
-                                   f"allowed values are {sorted(okst)}.")
+            # status and provenance are checked INDEPENDENTLY: they are separate
+            # axes, so a missing provenance column must not skip status
+            # validation (or the reverse). Each column: present, then in-vocab.
+            LEDGER_VOCAB = {
+                "status": ({"confirmed", "proposed", "blocked"},
+                           "status is how a user tells a settled ruling from an "
+                           "open one"),
+                "provenance": ({"user_confirmed", "agent_authored",
+                                "source_derived", "deferred"},
+                               "provenance is how a reviewer tells a value the "
+                               "USER supplied from one the AGENT invented to "
+                               "fill an underspecified rubric — status does not "
+                               "carry that, it is a different axis"),
+            }
+            for lcol, (okvals, why) in LEDGER_VOCAB.items():
+                if lrows and lcol not in lrows[0]:
+                    derrors.append(
+                        f"nxd_decisions.csv has no {lcol!r} column (found "
+                        f"{sorted(lrows[0])}). {why}. Allowed values are "
+                        f"{sorted(okvals)} (reference/derivation-plan.md).")
+                    continue
+                badv = {(r[lcol] or "").strip() for r in lrows} - okvals
+                if badv:
+                    derrors.append(
+                        f"nxd_decisions.{lcol} has {sorted(badv)}; allowed "
+                        f"values are {sorted(okvals)}. The vocabulary is fixed: "
+                        f"a value outside it is not queryable as a class.")
 
 # (b) A policy value that is landed AND hardcoded is a divergence waiting to
 # happen. Only scan CSVs whose model name looks like landed policy, and only
@@ -579,7 +599,8 @@ if derrors:
     for e in dict.fromkeys(derrors):
         print(f"  - {e}")
     sys.exit(1)
-print("phase D ok — rulings land as editable data, not transform literals")
+print("phase D ok — rulings land as editable data with status + provenance, "
+      "not transform literals")
 print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
       "C (context-completeness), D (policy boundary) all passed.")
 
