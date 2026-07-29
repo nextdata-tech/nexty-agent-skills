@@ -337,9 +337,10 @@ Contract facts baked into that shape — keep every one:
 ### Step 4a — Declare the contracts the product guarantees
 
 A stated constraint, or a discovered one the user confirmed, becomes a **declared contract**:
-`.constraints(nullable=/min=/max=)` on a promised model's fields, checked against the landed table. The
-publish is NOT yet gated on that verdict, so never tell a user a violating run will be stopped — Step-3b
-asserts remain the check that fails a build. **Never author `custom(...).verify(code(...))` locally**: both
+`.constraints(nullable=/min=/max=)` on a promised model's fields, checked against the landed table. A
+violation **stops the publish** — the run does not become the served version and the previous one, if any,
+keeps serving. Step-3b asserts still matter: they run earlier, see the closure's own Python, and catch what
+a field-level contract cannot express. **Never author `custom(...).verify(code(...))` locally**: both
 shapes fail at boot (`Driver nxd:local/python/compute:0.1.0 not found` on a live run); procedural checks go
 in Step 3b. Discovered invariants are confirmed before being
 declared, in their own turn — [reference/contracts.md](reference/contracts.md).

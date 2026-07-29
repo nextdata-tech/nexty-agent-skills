@@ -88,8 +88,8 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
 
   On a local closure these are **checked against the landed table** when the
   model is promised — a non-nullable field holding nulls, or a numeric value
-  outside its bounds, produces a failed verdict. The publish is not yet gated
-  on it. Non-numeric bounds are not checked. See [contracts.md](contracts.md).
+  outside its bounds, produces a failed verdict, and that **stops the publish**.
+  Non-numeric bounds are not checked. See [contracts.md](contracts.md).
 
 A field may also be written as a bare `dtype` (no role) or a
 `(dtype, *rest)` tuple inside `.schema({...})` — see `SemanticModelSpec`

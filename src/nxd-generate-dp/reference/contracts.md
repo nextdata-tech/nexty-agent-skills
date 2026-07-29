@@ -27,7 +27,7 @@ a consumer as a guarantee. Only the first row below is available today:
 
 | Shape | Local runtime | Use it? |
 |---|---|---|
-| **Model contract** — a `semantic_model` passed to `.promise(...)` | The storage driver checks the landed table: every declared column present, declared non-nullable columns hold no nulls, declared numeric ranges hold. It reports a real verdict rather than the empty result it used to return. **The publish is not yet gated on that verdict** — see below. | **Yes** — this is the sanctioned shape. |
+| **Model contract** — a `semantic_model` passed to `.promise(...)` | The storage driver checks the landed table: every declared column present, declared non-nullable columns hold no nulls, declared numeric ranges hold. **A failed verdict stops the publish** — see below. | **Yes** — this is the sanctioned shape. |
 | **Custom verify** — `custom("name").verify(code(fn))` | **Never author one.** Both shapes fail at boot: without compute routing the spec resolves to a contract executor the local profile does not declare, and routed to local compute the run dies with `Driver nxd:local/python/compute:0.1.0 not found` — confirmed on a live run, not inferred. | **No** — see "Custom checks" below. |
 | **Input expectation** — `.expectation(...)` on an input | Base models land in the same database as outputs, so a base model's contract is checked when it is promised on the output port. There is no separate source-side check. | Express it as a **promise** on the landed model. |
 
@@ -54,17 +54,19 @@ Declare a field non-nullable because the data must never omit it — not because
 it *looks* required. The declaration is the product's stated guarantee, and it
 is what a consumer reads.
 
-**What it does NOT yet do: block the publish.** The driver computes and reports
-the verdict, but the local runtime tears the kernel down as soon as the
-transform's output lands — before the phase that would act on it — so a run
-whose data violates a declared contract still publishes today. This is a known
-runtime gap, established by a live run rather than assumed.
+**A failed verdict stops the publish.** The run does not become the served
+version; the previously published version, if any, keeps serving. So a declared
+contract is an enforced guarantee, not documentation — declare a field
+non-nullable because a run whose data omits it *should* be refused.
 
-So: declare contracts, because they are the durable statement of what the
-product guarantees and they become enforcing the moment that gap closes. But do
-not tell a user a violating run will be stopped — say the contract is declared
-and checked, and keep the **Step-3b transform asserts** as the check that
-actually fails a build today.
+This holds only for a **promised** model. A model registered with `.model(...)`
+alone — a `semantic_view` — has no table and is never checked, so a constraint
+declared there is inert. Promising is what puts a contract in force.
+
+Keep the **Step-3b transform asserts** regardless: they run earlier, see the
+closure's own Python, and catch what a field-level contract cannot express —
+key uniqueness, cross-row reconciliation, a derivation's arithmetic. The two
+check different things at different moments.
 
 ---
 

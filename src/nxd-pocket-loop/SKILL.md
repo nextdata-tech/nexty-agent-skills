@@ -246,13 +246,12 @@ local database** — a successful build is the only proof the product is ready t
 CLI is used only under the confirmed host-local Darwin conditions in "Choose the execution
 surface," kept equivalent: same closure served, same stop-on-failure.
 
-**A declared contract can be violated without failing the build.** The local runtime checks a
-promised model against its landed table but does not yet block the publish on the verdict, so a
-run whose data breaks a stated constraint still publishes. Never tell a user their contracts
-stopped a bad run — they did not. What DOES fail a build is a Step-3b transform assert. If a
-contract violation surfaces, report **which constraint and column**, say the data published
-anyway, and offer the two choices — correct the data, or amend the constraint. **Never drop one
-for a green build.**
+**A build can fail because the DATA broke a declared contract.** The transform ran, but a promised
+model violated a stated or confirmed constraint, so nothing published and any previous version is
+still served — a different failure from a broken closure, and it must be reported as one. Say
+**which constraint and column**, that nothing published, and offer the two choices — correct the
+data, or amend the constraint. A Step-3b transform assert is the other way a build fails, earlier
+and over the closure's own logic. **Never drop a contract for a green build.**
 
 ### Step 4a — Render the pinned static artifact
 
