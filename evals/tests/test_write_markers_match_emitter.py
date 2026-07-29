@@ -87,6 +87,38 @@ def test_a_numeric_comparison_is_not_a_redirect(checker):
     assert checker.first_write_index([_bash(cmd)]) is None
 
 
+# --- CodexBackend's shape -----------------------------------------------------
+#
+# The PR gate runs `codex` on both sides (evals/README.md, CI-vs-local matrix),
+# and `CodexBackend._trace_from_stream` emits a DIFFERENT shape than Claude's:
+# the Bash payload is the raw command with no JSON, and there are no Write/Edit
+# tools at all — files are materialized through `file_change` / `patch` /
+# `apply_patch` items. Markers covering only the Claude names left both gates
+# blind on the exact backend CI uses.
+
+def test_codex_file_change_is_a_write(checker):
+    line = '[tool_use:file_change] {"changes":[{"path":"ws/models.py"}]}'
+    assert checker.first_write_index([line]) == 0
+
+
+def test_codex_apply_patch_is_a_write(checker):
+    assert checker.first_write_index(['[tool_use:apply_patch] {"path":"x"}']) == 0
+
+
+def test_codex_raw_bash_payload_is_parsed(checker):
+    """Codex writes the command straight after the marker, unquoted."""
+    assert checker.first_write_index(
+        ["[tool_use:Bash] mkdir -p ws/data/applicants"]
+    ) == 0
+
+
+def test_codex_raw_bash_read_is_not_a_write(checker):
+    """The raw shape must not become a blanket write either."""
+    assert checker.first_write_index(
+        ["[tool_use:Bash] head -5 data/applicants/applicants.csv"]
+    ) is None
+
+
 def test_a_column_comparison_is_not_a_redirect(checker):
     """`$5 > $4` compares two fields; the `$` fell through the path class.
 

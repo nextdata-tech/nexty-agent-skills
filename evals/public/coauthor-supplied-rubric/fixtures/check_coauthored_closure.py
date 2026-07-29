@@ -104,7 +104,15 @@ def literal_strings_and_numbers(src: str) -> set[str]:
 # `first_write_index` always returned None — and because a None short-circuits
 # main() to "ALL CHECKS PASSED" below, every artifact check was skipped on every
 # run. Keep this tuple in step with the emitter, not with how a trace reads.
-WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+# BOTH backends' emissions. This scenario is NOT ci_skip, and the PR gate runs
+# codex — which has no Write/Edit tools at all: it materializes through
+# `file_change` / `patch` / `apply_patch` items emitted under the same
+# `[tool_use:<type>]` prefix. Listing only the Claude names left this gate blind
+# on the exact backend CI uses.
+WRITE_TOOLS = (
+    "Write", "Edit", "MultiEdit", "NotebookEdit",     # ClaudeBackend
+    "file_change", "patch", "apply_patch",            # CodexBackend
+)
 WRITE_MARKERS = tuple(f"[tool_use:{t}]" for t in WRITE_TOOLS)
 BASH_MARKER = "[tool_use:Bash]"
 # Shell is only a write when the command mutates. `head`/`cat`/`wc` on the
@@ -165,7 +173,13 @@ def bash_command(line: str) -> str:
     # case for a long command. Slice the command value out rather than falling
     # back to the whole payload, which would re-admit `description`.
     m = re.search(r'"command"\s*:\s*"((?:[^"\\]|\\.)*)', payload)
-    return m.group(1) if m else ""
+    if m:
+        return m.group(1)
+    # CodexBackend emits the RAW command after the marker, no JSON at all
+    # (`[tool_use:Bash] mkdir -p ws/data`). Returning "" for that shape made
+    # every shell mutation invisible on the backend the PR gate actually runs.
+    # There is no `description` field here, so the payload IS the command.
+    return "" if payload.startswith("{") else payload
 
 
 def first_write_index(trace_lines: list[str]) -> int | None:

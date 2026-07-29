@@ -97,7 +97,15 @@ class DuckDbOutput:
 # ``[tool_use:<Name>] <input>`` (see eval_backends._trace_from_stream) — NOT
 # ``Write(...)``. A marker set that never matches makes first_write_index always
 # return None, and an ordering gate that can only pass is not a gate.
-WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Update")
+# BOTH backends' emissions, because either may run this scenario and the PR
+# gate runs codex. ClaudeBackend names the tool (`Write`/`Edit`/…); codex has no
+# such tools — it materializes through `file_change` / `patch` / `apply_patch`
+# items, which it emits under the same `[tool_use:<type>]` prefix. Omitting the
+# codex names left the gate blind on the backend CI actually uses.
+WRITE_TOOLS = (
+    "Write", "Edit", "MultiEdit", "NotebookEdit",     # ClaudeBackend
+    "file_change", "patch", "apply_patch",            # CodexBackend
+)
 WRITE_MARKERS = tuple(f"[tool_use:{t}]" for t in WRITE_TOOLS)
 BASH_MARKER = "[tool_use:Bash]"
 # Shell is only a write when the command mutates. `head`/`cat`/`wc` on the
@@ -182,7 +190,13 @@ def bash_command(line: str) -> str:
     # the failure this function exists to prevent. Slice out the command value
     # instead, and grade nothing only when even that is unrecoverable.
     m = re.search(r'"command"\s*:\s*"((?:[^"\\]|\\.)*)', payload)
-    return m.group(1) if m else ""
+    if m:
+        return m.group(1)
+    # CodexBackend emits the RAW command after the marker, no JSON at all
+    # (`[tool_use:Bash] mkdir -p ws/data`). Returning "" for that shape made
+    # every shell mutation invisible on the backend the PR gate actually runs.
+    # There is no `description` field here, so the payload IS the command.
+    return "" if payload.startswith("{") else payload
 
 
 def first_write_index(trace_lines: list[str]) -> int | None:
