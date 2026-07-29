@@ -137,7 +137,7 @@ DTYPES = {
     "time32", "time64", "list", "list_view", "large_list", "large_list_view",
     "map", "dictionary", "struct", "variant",
 }
-AGGS = {"COUNT", "COUNT_DISTINCT", "SUM", "AVG", "MIN", "MAX"}
+AGGS = {"COUNT", "COUNT_DISTINCT", "SUM", "AVG", "MIN", "MAX", "EXPRESSION"}
 KWARGS = {                      # role builder -> allowed keyword names
     "primary_key": set(),
     "dimension": {"name", "pii", "label", "description"},

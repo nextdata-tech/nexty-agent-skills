@@ -182,6 +182,16 @@ Register a view with `.model(view)` on the output; do not promise it as a
 physical table. Custom SQL metrics use `Agg.EXPRESSION`; the SQL expression is
 defined on the output port model with `expressions={...}`.
 
+`Agg.EXPRESSION` is only a port-level custom aggregate expression. It is useful
+when you are deliberately authoring a model registration for a topology whose
+port supports `expressions={...}`. It is not the desktop generator's derivation
+surface: do not use it to avoid materializing row-level business rulings,
+classifications, date buckets, normalized values, filtered defaults, row
+generation/removal, or reusable ratio inputs. In the `nxd-generate-dp` flow,
+those still belong in the transform as physical columns or rows. Also, it is not
+a back door for unsupported metric kinds: median/percentile-style metrics remain
+unsupported unless the product gains a first-class aggregation for them.
+
 ```python
 from nxd.spec import Agg, data_product_output, metric, metric_field, semantic_view, storage
 from nxd.spec.data_types import float64, int64
@@ -249,7 +259,11 @@ reachable through validated many-to-one joins.
 For `Agg.EXPRESSION`, the expression map key is the metric name. Attach the map
 to the output model that declares the expression metric. In the example above,
 `net_revenue` is authored on `order_metrics`, so the expression is attached to
-the `order_metrics` output port model.
+the `order_metrics` output port model. Keep this boundary visible when sharing
+guidance across skills: `SUM(amount_usd - discount_usd)` is valid here only as
+an explicitly registered port SQL metric; a generated desktop closure that
+needs net revenue as a reusable governed concept should derive a physical
+`net_revenue` column and aggregate that column normally.
 
 ## Primitive types
 

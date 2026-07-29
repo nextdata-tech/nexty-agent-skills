@@ -136,6 +136,15 @@ lazily resolves it). It's a `str` enum; use it by member name
 Agg.COUNT, Agg.COUNT_DISTINCT, Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX, Agg.EXPRESSION
 ```
 
+`Agg.EXPRESSION` is a custom SQL aggregate slot, not a new metric kind and not
+an escape hatch for missing semantics. It still produces a port-level aggregate
+expression, so it cannot define row-level dimensions, row generation/removal,
+default filters, cross-row transformations, or unsupported statistical
+functions. In particular, **median does not exist and never will via this
+path** — do not invent a `MEDIAN`/`PERCENTILE` metric kind, do not smuggle
+median SQL through `Agg.EXPRESSION`, and do not promise median unless the
+product surface gains a first-class supported aggregation.
+
 ## `SemanticModelSpec` / `semantic_model()` / `semantic_view()`
 
 - **`semantic_model(name, attributes=None, description=None, sampling=None)`**
