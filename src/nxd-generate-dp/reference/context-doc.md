@@ -52,8 +52,13 @@ A closure `CONTEXT.md` at the closure root, with these sections:
    derived from, and that it is the field most likely to **drift on a rerun**.
    This mirrors the dimension `description=` in `models.py` but states the
    *ruling*, not just the flag. Where a ruling was **supplied by the user**, say
-   so and name it — a landed rubric row the user wrote and one you authored are
-   indistinguishable in the table, and only this line tells them apart.
+   so and name it. The `nxd_decisions` row is the machine-queryable half of this
+   — its `provenance` column carries the same authorship as a filterable class
+   (`user_confirmed` / `agent_authored` / `source_derived` /
+   `deferred`), so a reviewer can *query* which rulings you authored instead of
+   reading prose for it. Keep the two consistent: this line explains the
+   authorship the row classifies, and must never claim user authorship for a row
+   landed `agent_authored`.
 4. **Required-capture fields** — any source field a downstream model, gate, or
    verdict **depends on**, identified by reading backward from every promised
    derived model and any gating/verdict logic to the source fields it consumes.

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import csv
 import hashlib
 import re
 import sys
@@ -358,13 +359,54 @@ def main(root: Path, trace_path: Path | None = None) -> None:
         "every agent-authored ruling (anchors, bands, exceptional-resume rule) "
         "is a decision; data/nxd_decisions/nxd_decisions.csv is missing",
     )
-    ledger_text = ledger.read_text().lower()
+    ledger_text = ledger.read_text().lower() if ledger.is_file() else ""
     check(
         "gap-attributed",
         ("anchor" in ledger_text or "scale" in ledger_text
          or "intermediate" in ledger_text),
         "no nxd_decisions row records that the intermediate anchors were "
         "agent-authored rather than user-supplied",
+    )
+    # The prose above can say "agent-authored" anywhere in the row. Provenance
+    # is the queryable form of the same claim, and this scenario is the exact
+    # case it exists for: the user supplied the rubric, the agent filled the
+    # intermediate anchors. Both classes must therefore appear.
+    if ledger.is_file():
+        with ledger.open(newline="") as fh:
+            ledger_rows = list(csv.DictReader(fh))
+    else:
+        ledger_rows = []
+    provs = {(r.get("provenance") or "").strip() for r in ledger_rows}
+    has_prov = bool(ledger_rows) and "provenance" in ledger_rows[0]
+    check(
+        "provenance-column-present",
+        has_prov,
+        "nxd_decisions has no provenance column, so a reviewer cannot query "
+        "which rulings the agent authored and which the user supplied",
+    )
+    # Gate the value check on the column existing. Without the column every row
+    # reads as '', so this would fire a SECOND failure blaming an
+    # out-of-vocabulary value — pointing at a value problem that does not exist
+    # and burying the real diagnosis the check above already gave.
+    check(
+        "provenance-vocabulary-valid",
+        not has_prov or provs <= {"user_confirmed", "agent_authored",
+                                  "source_derived", "deferred"},
+        f"nxd_decisions.provenance carries values outside the fixed vocabulary: "
+        f"{sorted(provs - {'user_confirmed', 'agent_authored', 'source_derived', 'deferred'})}",
+    )
+    check(
+        "agent-authored-ruling-classified",
+        "agent_authored" in provs,
+        "no nxd_decisions row is classified agent_authored, yet the "
+        "agent authored the intermediate anchors — the ledger reads as if the "
+        "user supplied every value",
+    )
+    check(
+        "user-supplied-ruling-classified",
+        "user_confirmed" in provs,
+        "no nxd_decisions row is classified user_confirmed, yet the rubric "
+        "criteria and weights came from the user",
     )
 
     # ---- 3. self-check provenance -------------------------------------------

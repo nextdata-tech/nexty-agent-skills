@@ -495,3 +495,38 @@ signal. Same posture as the v0.25.3 and v0.22.0 entries above.
 **Follow-up worth doing:** these rules are unmeasurable only because no scenario
 exercises them. A scenario asserting on explanation rows and bottom-band precedence
 would convert every future change here from evidence-prose into a real table.
+
+## 2026-07-29 — v0.26.0 — nxd-generate-dp: ruling provenance classes in `nxd_decisions`
+
+**Change:** `nxd_decisions` gains a mandatory `provenance` column alongside `status`.
+Settled-or-not and authored-by are separate axes: a ruling the agent invented to fill
+a gap and a ruling the user supplied can both be `confirmed`, and only `provenance`
+tells the reader which one they are ratifying. Phase D fails a closure whose ledger
+lacks the column or carries an out-of-vocabulary value, and four new deterministic
+checks land in `check_coauthored_closure.py`.
+
+**No before/after run table — the change is not measurable on a shared denominator.**
+The four new checks (`provenance-column-present`, `provenance-vocabulary-valid`,
+`agent-authored-ruling-classified`, `user-supplied-ruling-classified`) did not exist
+before this PR, so a "before" run cannot be scored against them: every prior closure
+fails a column that was not required of it. Scoring the after-run against the larger
+check set and calling the difference an improvement would measure the denominator
+change, not the skill. Same posture as the 2026-07-23 Phase D entry, which recorded
+the same situation rather than inventing a comparison.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py` passes; version surfaces agree at 0.26.0 across
+  `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+- `./build-skills.sh` packages every skill `ok`; `nxd-data-product-builder` is 159
+  entries, under the 200-entry cap.
+- Phase D gate tests: 26 passed across `test_policy_boundary_phase_d.py` and
+  `test_deterministic_check.py`, including the pair that pins the two axes as
+  independently checked — `test_status_and_provenance_are_checked_independently`
+  and `test_missing_provenance_still_reports_bad_status`. Without that pair a
+  nested check would report only the first failing axis and leave half the ledger
+  ungraded.
+- Vocabulary is closed and case-sensitive: `Confirmed` / `User_Confirmed` are
+  rejected, and a short row or empty cell is caught as `''` rather than passing.
+- Known inherited limit, not introduced here: a header-only CSV with zero data rows
+  skips both column checks. The gate is row-driven, so an empty ledger is not a
+  failure on either axis.

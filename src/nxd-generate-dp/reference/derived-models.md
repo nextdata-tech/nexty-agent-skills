@@ -252,21 +252,23 @@ if "usa"   in c: return 3, "US East/Central"
 return 3, "US East/Central"          # an AU row scores 3, labelled "US"
 
 # RIGHT — every declared band has a branch; absence and no-match are
-# separated, and neither is scored.
+# separated, and neither is scored. Returns (score, band_label, limitation):
+# the label and the limitation are DIFFERENT columns, so a no-match sets the
+# limitation and leaves the label empty rather than inventing a band name.
 if not c.strip() or c.strip() == "not stated":
-    return None, "not_stated"        # nothing was read — no score at all
-if "spain" in c: return 5, "SF/Spain"
-if "utc-8" in c: return 4, "US West"
-if "usa"   in c: return 3, "US East/Central"
-if words & {"brazil", "australia", "chile"}: return 2, "LatAm/AU/NZ"
-return None, "unclassified"          # read, matched nothing — still not a 1
+    return None, "", "not_stated"    # nothing was read — no score at all
+if "spain" in c: return 5, "SF/Spain", ""
+if "utc-8" in c: return 4, "US West", ""
+if "usa"   in c: return 3, "US East/Central", ""
+if words & {"brazil", "australia", "chile"}: return 2, "LatAm/AU/NZ", ""
+return None, "", "no_band_matched"   # read, matched nothing — still not a 1
 ```
 
 The self-check's **ABSENT** line catches half of this — a band declared in landed
 policy that no row ever received. It cannot catch a mislabelled fall-through,
 because that row *did* get a value. Read your own ladder: if a band appears in the
 ruling you landed it needs a branch that can return it, and an unmatched row gets
-an unmatched label.
+no band label and a `limitation` saying why.
 
 **Absence is not the bottom band.** The fall-through above returns `None`, not
 `1`. Returning the scale's minimum for a row the ladder could not read is the
@@ -503,12 +505,12 @@ reshape a table. It is the same long-form argument judgement rows make.
 | `evidence_field` | `dimension()` | which source column the band read |
 | `evidence_quote` | `dimension()` | verbatim substring of that column's value, or `not stated` |
 | `evidence_kind` | `dimension()` | `fact` when the band matched a source value directly; `inference` when it rests on a heuristic over the value |
-| `limitation` | `dimension()` | empty, `listed_uncaptured`, or `not_stated` — the absence kind above |
+| `limitation` | `dimension()` | empty when `score` is set; otherwise the reason it is empty. Absence kinds: `listed_uncaptured`, `not_stated` (the absence kind above). Coverage kind: `no_band_matched` — the evidence was read, but no band covered it |
 
 > **Not to be confused with `nxd_decisions.provenance`.** `evidence_kind` is
 > per-explanation-row and answers *how firmly the source supports this one
 > reading* (`fact` / `inference`). `nxd_decisions.provenance` is per-ruling and
-> answers *who authored the decision* (`user_confirmed`, `agent_proposed_approved`,
+> answers *who authored the decision* (`user_confirmed`, `agent_authored`,
 > `source_derived`, `deferred`) — see
 > [reference/derivation-plan.md](derivation-plan.md). Different grains, disjoint
 > vocabularies; never populate one from the other.

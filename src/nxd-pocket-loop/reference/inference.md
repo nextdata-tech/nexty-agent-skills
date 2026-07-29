@@ -27,8 +27,10 @@ build.** nxd-generate-dp's `reference/llm-judgments.md` has the row schema.
 A judgement is only checkable against a rubric that already exists as data. A
 score of "4" means nothing until "out of the landed 1–5" is landed. Elicit or
 confirm the rubric — criteria, weights, scale, verdict enum, gates — and have
-nxd-generate-dp land it (and an `nxd_decisions` row) FIRST, before any entity is
-judged.
+nxd-generate-dp land it (and an `nxd_decisions` row, classified
+`provenance = user_confirmed` where the user supplied the rubric and
+`agent_authored` for any anchor or band you filled in yourself) FIRST,
+before any entity is judged.
 
 ## Judge agent-side, never in a query answer
 

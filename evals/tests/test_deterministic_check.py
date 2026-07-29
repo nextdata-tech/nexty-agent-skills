@@ -146,12 +146,15 @@ def _write_closure(root: Path) -> None:
 
     # The ruling ledger is a landed model, and it must disclose the currency
     # stance: this closure declines to convert, so it records the missing rates.
+    # Each row is classified on both axes — settled-or-not (status) and
+    # authored-by (provenance) — because they are independent questions.
     (root / "data" / "nxd_decisions").mkdir(parents=True, exist_ok=True)
     (root / "data" / "nxd_decisions" / "nxd_decisions.csv").write_text(
-        "decision_id,status,ruling,applies_to,detail\n"
-        "d1,proposed,merchant-to-category mapping,merchant_category,"
-        "classification over observed merchants\n"
-        "d2,blocked,no exchange rate exists in the export,classified_spend,"
+        "decision_id,status,provenance,ruling,applies_to,detail\n"
+        "d1,proposed,agent_authored,merchant-to-category mapping,"
+        "merchant_category,classification over observed merchants\n"
+        "d2,blocked,deferred,no exchange rate exists in the export,"
+        "classified_spend,"
         "amounts stay in source currency; cross-currency totals are blocked "
         "until FX rates arrive\n",
         encoding="utf-8",
