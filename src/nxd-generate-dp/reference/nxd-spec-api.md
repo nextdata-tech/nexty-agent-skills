@@ -72,7 +72,9 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
 - **`metric(agg, of=None, name=None, description="", boolean=False, extra_dimensions=(), column=None)`**
   — `agg` is an `Agg` value. `of` is a `FieldRef` (from `<model>.field("<col>")`)
   pointing at the base column being aggregated; mutually exclusive with the
-  explicit `column=` override — pass one or neither, never both.
+  explicit `column=` override — pass one or neither, never both. Use
+  `column="*"` only for `COUNT(*)`. For `Agg.EXPRESSION`, omit both `of` and
+  `column`; the output port's `expressions={...}` SQL names the fields.
 - **`field(dtype, *role_args, roles=None, description=None, label=None, name="")`**
   — builds a base-model column. `role_args` takes `primary_key()` /
   `dimension()` / `join()` positionally; a `metric()` role here **raises** —

@@ -251,7 +251,7 @@ output = (
 | `description` | Agent-visible metric description |
 | `boolean` | Marks a boolean metric |
 | `extra_dimensions` | Explicit additional dimensions that may slice the metric |
-| `column` | Explicit aggregation column. Use `"*"` for `COUNT(*)` or expression metrics with an output expression; mutually exclusive with `of` |
+| `column` | Optional explicit aggregation column; mutually exclusive with `of`. Use `"*"` only for `COUNT(*)`. For `Agg.EXPRESSION`, omit both `of` and `column`; the SQL expression names the fields. |
 
 A metric can be sliced by dimensions on its base model and by non-PII dimensions
 reachable through validated many-to-one joins.
@@ -316,5 +316,5 @@ trending_sales = (
     .schema({"revenue": float64(), "currency_code": string()})
     .verify_field("revenue", greater_than(0))
     .verify_field("currency_code", match_regex(r"^[A-Z]{3}$"))
-) 
+)
 ```
