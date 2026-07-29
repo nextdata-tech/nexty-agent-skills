@@ -33,7 +33,7 @@ it is evidence that it never ran.
 | | Runs on every PR | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 6 `ci_skip` | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 11 `ci_skip` | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | any | any |
 | **Backend** | `codex` both sides | any | any |
 | **Gate** | fails on regression vs. baseline | reports drift, never fails | — |
@@ -49,7 +49,7 @@ one is responsible when a change ships unmeasured:
   scenarios whose `checks.json` names a changed skill (computed by
   `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
   `skill-sets.yaml`, the workflow — select every scenario.
-- **The 6 `ci_skip` scenarios never run automatically**, so the skills they
+- **The 11 `ci_skip` scenarios never run automatically**, so the skills they
   cover are unguarded. `nxd-data-product-query` is covered *only* by skipped
   scenarios and `nxd-mesh-analyzer` has no scenario at all — for those two, a
   green eval check means "nothing ran", not "nothing regressed". Run them
@@ -150,8 +150,10 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 2 of 23 public scenarios use this today (`derive-models-from-questions`,
-`coauthor-supplied-rubric`). It is the strongest signal available — prefer it
+Only 5 of 29 public scenarios use this today
+(`coauthor-executable-policy-readback`, `coauthor-supplied-rubric`,
+`derive-models-from-questions`, `dp-static-artifact-lifecycle`,
+`treasury-yield-curve`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)
@@ -359,6 +361,68 @@ Each scenario directory holds:
   (`{"name": ..., "checks": [{"id", "check"}]}`). **Judge-only; never shown to
   the agent.** This is where expected reasoning is spelled out.
 
+### Multi-turn scenarios (scripted follow-up turns)
+
+Some behaviours only appear across a conversation: proposing a plan, *stopping*,
+and then applying a correction the user supplies. A single-turn cell cannot
+measure them — an agent told the correction up front never has to stop and ask.
+
+Declare follow-up turns in `checks.json`. Absent or empty, the scenario is
+single-turn and runs on exactly the pre-existing path:
+
+```json
+{
+  "name": "...",
+  "turns": [
+    {"text": "Approved with two corrections: ... go ahead and build it."}
+  ],
+  "checks": [
+    {"id": "applies-supplied-corrections", "check": "...", "turn": 2}
+  ]
+}
+```
+
+- `turns[].text` (required) — the scripted user message, sent verbatim. Turns
+  are static; nothing is model-generated, because a simulated user would add a
+  second stochastic process to the measurement instrument.
+- `turns[].when` — `"always"` (default) or `"awaiting_input"`. Prefer `always`.
+  A conditional turn only fires when the previous turn's final answer *ends*
+  with `[[AWAITING_USER_INPUT]]`; if the agent asks its question in prose
+  instead the turn is skipped and the rest of the rubric would go ungraded, so
+  gate a turn only when sending it to a finished agent would corrupt the
+  measurement. Skipped turns are recorded in `metrics["skipped_turns"]`, and the
+  judge is told to fail their annotated checks as "turn not sent" rather than
+  grade them against a conversation that never happened.
+- `turns[].timeout_s` — optional per-turn cap (positive int; `true` is
+  rejected). Wall-clock from the moment the turn is sent, so a turn that streams
+  continuously does not extend it. The run-level `--agent-timeout` stays a
+  **whole-run** budget regardless of turn count, and whichever budget expires
+  first is named in the error.
+- `checks[].turn` — annotation only. It tells the judge which turn a check is
+  about; it never slices the trace, because "did the agent honour the
+  correction" is unanswerable without turn 1 in view.
+
+`turns[i]` is turn `i+2` — turn 1 is `prompt.md`. The accumulated trace carries
+a `[user_turn N <state>] <text>` separator line before each scripted turn, so a
+`wants_trace` deterministic checker can grade **ordering** (e.g. fail if any
+closure write appears before `[user_turn 2`) instead of leaving
+stopped-and-asked entirely to the stochastic judge.
+
+`<state>` is `after-await` when the previous turn ended with
+`[[AWAITING_USER_INPUT]]` and `unprompted` when it did not. Because turns
+default to `always`, a separator's presence proves only that the harness spoke
+— not that the agent had stopped to be spoken to. A scenario grading "did the
+agent stop and ask" must key on that state rather than on the delivery. The
+same fact reaches the judge as a `HARNESS FACT` line and is recorded in
+`metrics["awaited_input_turns"]`; an unprompted delivery instructs the judge to
+fail any check about the agent pausing for approval, so an agent that never
+stopped cannot inherit credit from a turn the harness sent anyway.
+
+Multi-turn requires a provider that can drive it. `claude` can; `codex` cannot
+(`codex exec` is single-shot with no persistent-stdin or resume protocol), and a
+multi-turn scenario on `--agent-backend codex` fails loudly before a workspace
+is built rather than silently grading a turn-1-only transcript.
+
 ### CI
 
 `.github/workflows/evals.yml` has two entry points.
@@ -385,7 +449,7 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Ten scenarios are currently skipped:
+Eleven scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
@@ -399,6 +463,11 @@ Ten scenarios are currently skipped:
 | `pharma-mesh-query-hard` | same |
 | `pharma-mesh-query-loop` | same |
 | `semantic-intent-validation` | same |
+| `coauthor-executable-policy-readback` | scripts a follow-up turn; the PR gate runs `codex`, which cannot drive multi-turn |
+
+That last one is a *provider* limit rather than an infrastructure one: it runs
+unattended on `--agent-backend claude` and needs the manual entry point only
+because the automatic gate defaults to `codex`.
 
 **Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
 skipped scenarios, so a PR touching it currently gets a green no-op. One more

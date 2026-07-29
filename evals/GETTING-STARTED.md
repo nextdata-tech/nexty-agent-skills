@@ -110,8 +110,9 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-17 of 23 public scenarios. The remaining 6 declare `ci_skip` in their
-`checks.json` and need a Tier 2 or Tier 3 install:
+18 of 29 public scenarios. The remaining 11 declare `ci_skip` in their
+`checks.json`. Ten need a Tier 2 or Tier 3 install; one is gated on the agent
+backend rather than on anything you install:
 
 | Scenario | Needs |
 |---|---|
@@ -121,6 +122,11 @@ you were trying to re-measure.
 | `semantic-intent-validation` | semantic MCP server (Tier 2) |
 | `pocket-loop-serve-query-refine` | live desktop supervisor (Tier 3) |
 | `pocket-loop-export-handoff` | live desktop supervisor (Tier 3) |
+| `country-income-trajectory` | live desktop supervisor (Tier 3) |
+| `incremental-multi-model` | live desktop supervisor (Tier 3) |
+| `treasury-yield-curve` | live desktop supervisor (Tier 3) |
+| `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
+| `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 
 Full detail on scenarios, authoring, the baseline, and CI gating:
 [`evals/README.md`](README.md).
