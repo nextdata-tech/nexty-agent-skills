@@ -510,9 +510,24 @@ Same posture as the v0.25.3 / v0.22.0 / v0.21.0 entries above.
     (`nxd/core/yaml_schemas.pyi:1553-1556`), correcting the one table row that
     said `RANDOM`. A second SCREAMING_CASE enum of the same name exists at
     `nxd/core/_bindings.pyi:780-783` but is not what `nxd.spec` re-exports.
-- Phase A gate: `scripts/self_check.py` and its mirror in
-  `nxd-generate-dp/reference/self-check.md` both accept `EXPRESSION`, so a spec
-  following the new guidance no longer fails the structural check. The gate
-  stays structural — the "do not use it as a derivation substitute" ruling is
-  enforced in prose in `nxd-spec-api.md`, `derivation-plan.md` and
-  `nxd-generate-dp/SKILL.md`, not mechanically.
+- Phase A gate: `Agg.EXPRESSION` parses as a known member but `walk_roles`
+  emits a targeted `bad()` naming the derivation-plan boundary, so the gate now
+  AGREES with the prose in `nxd-spec-api.md`, `derivation-plan.md` and
+  `nxd-generate-dp/SKILL.md` instead of silently passing the construct they
+  forbid. This also removes a gate/grader split: the vendored grader
+  `evals/public/generate-semantic-layer-from-live-source-and-questions/fixtures/check_semantic_model.py:46`
+  keeps `AGGS` at the six lowercase names and fails an `expression` metric at
+  its `role-grammar` check, so a closure reaching for it would previously have
+  passed its own self-check and then failed the eval.
+  Verified on a two-closure fixture: an `Agg.EXPRESSION` metric yields
+  `models.py:order_metrics.net_revenue: Agg.EXPRESSION is outside this
+  generation path ...`, while the same closure using `Agg.SUM` produces no
+  `Agg` diagnostic. `scripts/self_check.py` and the fenced mirror in
+  `reference/self-check.md` were diffed programmatically and are byte-identical.
+- Builder port surface corrected: `data_product_spec.md:357` documented the
+  port method as `.model(model)` with no `expressions`, which is what made the
+  new example look like a `TypeError`. The real signature is
+  `.model(model, is_public=True, expressions=None)` (`_spec.py:3166-3173`).
+  The worked example now also puts `.promise()` at port level, per
+  `troubleshooting.md:102` (output-level promises are silently ineffective),
+  while keeping a model registered at output level as validation requires.

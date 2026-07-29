@@ -354,7 +354,7 @@ port = (
 | Method | Description |
 | --- | --- |
 | `.config(storage_config)` | Set storage driver configuration |
-| `.model(model)` | Associate a model with this specific port |
+| `.model(model, is_public=True, expressions=None)` | Associate a model with this specific port. `expressions` is a `dict[str, str]` keyed by metric name supplying the SQL for `Agg.EXPRESSION` metrics — this is the **only** surface that persists it (the output-level `.model()` validates and discards it) |
 | `.promise(model_or_contract)` | Add a port-level data contract |
 | `.managed_access()` | Enable platform-managed access |
 | `.access_approval(access_approval_spec)` | Set port-level access approval |

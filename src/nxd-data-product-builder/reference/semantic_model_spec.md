@@ -179,19 +179,19 @@ sales_model = (
 
 Metrics live on `semantic_view(...)`, not on base `semantic_model(...)` fields.
 Register a view with `.model(view)` on the output; do not promise it as a
-physical table. Custom SQL metrics use `Agg.EXPRESSION`; the SQL expression is
-defined on the output port model with `expressions={...}`.
+physical table. Custom SQL metrics use `Agg.EXPRESSION`, whose SQL is supplied
+by the **port-level** `.model(view, expressions={...})` call.
 
-`Agg.EXPRESSION` is only for a topology whose output port supports
-`expressions={...}` (for example, a warehouse-backed port registered by this
-builder skill). It is not available in the desktop `nxd-generate-dp` closure
-pattern and is not the semantic-tools derivation surface: do not use it to avoid
-materializing row-level business rulings, classifications, date buckets,
-normalized values, filtered defaults, row generation/removal, reusable ratio
-inputs, or column arithmetic such as net revenue. In the `nxd-generate-dp` flow,
-those still belong in the transform as physical columns or rows. Also, it is not
-a back door for unsupported metric kinds: median/percentile-style metrics remain
-unsupported unless the product gains a first-class aggregation for them.
+`Agg.EXPRESSION` is only for a topology whose output **port** carries the
+`expressions={...}` map — for example a warehouse-backed port registered by this
+skill. It is not a derivation surface: do not use it to avoid materializing
+row-level business rulings, classifications, date buckets, normalized values,
+filtered defaults, row generation/removal, reusable ratio inputs, or column
+arithmetic such as net revenue. Those belong in the transform as physical
+columns or rows. It is also not a back door for unsupported metric kinds:
+median/percentile-style metrics remain unsupported unless the product gains a
+first-class aggregation for them. Generation paths that author a local closure
+without a warehouse-backed port do not have this slot at all.
 
 ```python
 from nxd.spec import Agg, data_product_output, metric, metric_field, semantic_view, storage
@@ -230,14 +230,19 @@ order_metrics = semantic_view("order_metrics", orders).schema(
 
 output = (
     data_product_output()
-    .promise(orders)
+    # Validation requires at least one model at the output level.
     .model(order_metrics)
     .port(
         "warehouse",
-        storage("/infra-profile/demo#/services/warehouse").model(
+        storage("/infra-profile/demo#/services/warehouse")
+        # The expression map only persists here, on the PORT model.
+        .model(
             order_metrics,
             expressions={"warehouse_revenue_sql": "SUM(amount_usd)"},
-        ),
+        )
+        # Promises must be port-level; the storage driver never sees
+        # output-level ones.
+        .promise(orders),
     )
 )
 ```
@@ -257,13 +262,16 @@ output = (
 A metric can be sliced by dimensions on its base model and by non-PII dimensions
 reachable through validated many-to-one joins.
 
-For `Agg.EXPRESSION`, the expression map key is the metric name. Attach the map
-to the output model that declares the expression metric. In the example above,
-`warehouse_revenue_sql` is authored on `order_metrics`, so the expression is attached to
-the `order_metrics` output port model. Keep this boundary visible when sharing
-guidance across skills: a generated desktop closure that needs net revenue
-(`amount_usd - discount_usd`) as a reusable governed concept must derive a
-physical `net_revenue` column and aggregate that column normally.
+For `Agg.EXPRESSION`, the expression map key is the metric name, and the map
+goes on the **port-level** `.model(...)` call — `storage(...).model(view,
+expressions={...})`. Passing it to the output-level `.model(...)` is validated
+and then discarded, so the metric compiles with no SQL behind it. In the example
+above, `warehouse_revenue_sql` is authored on `order_metrics`, so the map rides
+the `order_metrics` registration on the `warehouse` port.
+
+A closure that needs net revenue (`amount_usd - discount_usd`) as a reusable
+governed concept must instead derive a physical `net_revenue` column in the
+transform and aggregate that column normally.
 
 ## Primitive types
 
