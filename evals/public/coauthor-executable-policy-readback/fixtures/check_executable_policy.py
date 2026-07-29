@@ -149,11 +149,18 @@ def bash_command(line: str) -> str:
     """
     payload = line.split(BASH_MARKER, 1)[1].strip() if BASH_MARKER in line else ""
     try:
-        return str(json.loads(payload).get("command", ""))
-    except (ValueError, AttributeError):
-        # Truncated or non-JSON payload: fall back to the whole thing rather
-        # than silently grading nothing, which would open the gate entirely.
-        return payload
+        obj = json.loads(payload)
+        if isinstance(obj, dict):
+            return str(obj.get("command", ""))
+    except ValueError:
+        pass
+    # Truncated payload — the trace caps tool inputs, so this is the ordinary
+    # case for a long command, not an edge case. Returning the whole payload
+    # would re-admit the `description` field to the mutation matchers, which is
+    # the failure this function exists to prevent. Slice out the command value
+    # instead, and grade nothing only when even that is unrecoverable.
+    m = re.search(r'"command"\s*:\s*"((?:[^"\\]|\\.)*)', payload)
+    return m.group(1) if m else ""
 
 
 def first_write_index(trace_lines: list[str]) -> int | None:

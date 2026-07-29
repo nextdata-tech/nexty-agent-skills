@@ -185,6 +185,18 @@ def awaiting_input(final_answer: str) -> bool:
 # Metrics the stream parser reports per turn that describe a QUANTITY of work,
 # so the run-level number is their sum. Anything not listed here is not summable
 # and is handled explicitly by _merge_turn_metrics.
+# UNVERIFIED against a live CLI: this assumes each turn's `result` event reports
+# that TURN's quantity, not a session-running total. If the CLI reports any of
+# these cumulatively in `--input-format stream-json` mode, summing them
+# triangular-over-counts — a 3-turn run would report roughly 2x the true figure,
+# and `num_turns` / `output_tokens` are what the ledger records as the efficiency
+# signal, so the inflated number would be written down as evidence.
+#
+# The fake CLI emits per-turn values by construction, so the tests pass under
+# either semantics and CANNOT settle this. Settle it with one real multi-turn run
+# with the per-turn `result` events dumped; if any is cumulative, move it out of
+# this tuple and take the last value instead. `tool_calls` is counted locally per
+# segment, so it stays summed regardless.
 _SUMMED_TURN_METRICS = (
     "num_turns",
     "duration_ms",
@@ -626,10 +638,17 @@ class ClaudeBackend:
                 if not stripped:
                     continue
                 try:
-                    if json.loads(stripped).get("type") == "result":
-                        saw_result = True
+                    obj = json.loads(stripped)
                 except json.JSONDecodeError:
                     continue
+                # `json.loads` succeeds on any valid JSON scalar, so a bare
+                # `null`, `5` or `"..."` parses and then `.get` raises
+                # AttributeError. That escapes run_agent entirely — it takes the
+                # scenario down instead of erroring it, and skips _abort, so the
+                # CLI is left alive with its reader threads attached and can
+                # re-write a pid file after the caller's guard has swept.
+                if isinstance(obj, dict) and obj.get("type") == "result":
+                    saw_result = True
                 if saw_result:
                     break
 
@@ -706,6 +725,11 @@ class ClaudeBackend:
             try:
                 d = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            # A valid JSON scalar (`null`, `5`, `"..."`) parses fine, so `.get`
+            # on it raises AttributeError — not a JSONDecodeError, so it escapes
+            # every handler above and kills the run rather than erroring it.
+            if not isinstance(d, dict):
                 continue
             typ = d.get("type")
             if typ == "assistant":
@@ -975,6 +999,11 @@ class CodexBackend:
                 d = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # A valid JSON scalar (`null`, `5`, `"..."`) parses fine, so `.get`
+            # on it raises AttributeError — not a JSONDecodeError, so it escapes
+            # every handler above and kills the run rather than erroring it.
+            if not isinstance(d, dict):
+                continue
             typ = d.get("type")
             if typ == "item.completed":
                 item = d.get("item", {}) or {}
@@ -1155,6 +1184,8 @@ def _last_agent_message(stdout: str) -> str:
         try:
             d = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict):
             continue
         if d.get("type") == "item.completed":
             item = d.get("item", {}) or {}

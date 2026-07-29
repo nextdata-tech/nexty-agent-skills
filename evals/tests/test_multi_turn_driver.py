@@ -274,6 +274,16 @@ for line in sys.stdin:
             time.sleep(0.2)
     if mode == "die" and turn == 2:
         sys.exit(3)              # dies mid-conversation
+    if mode == "scalar_line" and turn == 1:
+        # A valid JSON SCALAR, not an object. `json.loads` succeeds, so a
+        # `.get` on the result raises AttributeError rather than being caught
+        # as a decode error.
+        print("null", flush=True)
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": f"saw: {text}"}]}}), flush=True)
+        print(json.dumps({"type": "result", "result": "answer 1",
+                          "is_error": False, "num_turns": 1}), flush=True)
+        continue
     if mode == "stdout_fatal" and turn == 1:
         # The real CLI reports an expired OAuth session on STDOUT, not stderr,
         # and exits without a result event. Reporting stderr alone renders this
@@ -410,6 +420,24 @@ def test_a_wedged_turn_times_out_and_kills_the_process(fake_cli, tmp_path):
     # Names the turn: "timed out" alone on a multi-turn run is undiagnosable.
     assert "during turn 2" in metrics["error"]
     # Nothing of ours is still running: no `claude` child survived the abort.
+    assert not _surviving_fake_cli_pids(fake_cli)
+
+
+def test_a_bare_json_scalar_line_does_not_crash_the_run(fake_cli, tmp_path):
+    """`json.loads` succeeds on `null`/`5`/`"..."`, so `.get` would raise.
+
+    AttributeError is not JSONDecodeError, so it escapes `run_agent` entirely:
+    it takes the whole scenario down instead of erroring it, and skips `_abort`,
+    leaving the CLI alive with its reader threads attached.
+    """
+    ok, trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 30,
+        env_overrides={"FAKE_MODE": "scalar_line"},
+        followup_turns=[eb.FollowupTurn(text="second")],
+    )
+    assert ok, metrics.get("error")
+    assert "saw: first" in trace
+    assert "saw: second" in trace
     assert not _surviving_fake_cli_pids(fake_cli)
 
 

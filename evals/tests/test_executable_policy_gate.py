@@ -114,6 +114,22 @@ def test_threshold_only_card_fails_the_anchor_check(tmp_path):
     assert "FAIL card-quotes-intermediate-anchors" in proc.stdout, proc.stdout
 
 
+def test_a_truncated_bash_payload_still_excludes_the_description(tmp_path):
+    """The trace caps tool inputs, so a truncated payload is the ordinary case.
+
+    Falling back to the raw payload on a JSON parse failure would re-admit the
+    `description` field to the mutation matchers — the exact failure the command
+    extraction exists to prevent, made reachable rather than theoretical by the
+    truncation itself.
+    """
+    truncated = (
+        '[tool_use:Bash] {"command": "head -100 data/applicants/applicants.csv'
+        ' | wc -l", "description": "Add up the criteria columns and mv the'
+    )
+    proc = _run(tmp_path, f"{truncated}\n{GOOD_CARD}{TURN_2}\n{WRITE_LINE}\n")
+    assert "PASS card-before-materialization" in proc.stdout, proc.stdout
+
+
 def test_bash_description_prose_cannot_trip_the_write_gate(tmp_path):
     """The mutation markers grade the COMMAND, never the sibling description.
 
