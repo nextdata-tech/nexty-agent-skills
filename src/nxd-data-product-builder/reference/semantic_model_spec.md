@@ -182,12 +182,13 @@ Register a view with `.model(view)` on the output; do not promise it as a
 physical table. Custom SQL metrics use `Agg.EXPRESSION`; the SQL expression is
 defined on the output port model with `expressions={...}`.
 
-`Agg.EXPRESSION` is only a port-level custom aggregate expression. It is useful
-when you are deliberately authoring a model registration for a topology whose
-port supports `expressions={...}`. It is not the desktop generator's derivation
-surface: do not use it to avoid materializing row-level business rulings,
-classifications, date buckets, normalized values, filtered defaults, row
-generation/removal, or reusable ratio inputs. In the `nxd-generate-dp` flow,
+`Agg.EXPRESSION` is only for a topology whose output port supports
+`expressions={...}` (for example, a warehouse-backed port registered by this
+builder skill). It is not available in the desktop `nxd-generate-dp` closure
+pattern and is not the semantic-tools derivation surface: do not use it to avoid
+materializing row-level business rulings, classifications, date buckets,
+normalized values, filtered defaults, row generation/removal, reusable ratio
+inputs, or column arithmetic such as net revenue. In the `nxd-generate-dp` flow,
 those still belong in the transform as physical columns or rows. Also, it is not
 a back door for unsupported metric kinds: median/percentile-style metrics remain
 unsupported unless the product gains a first-class aggregation for them.
@@ -216,12 +217,12 @@ order_metrics = semantic_view("order_metrics", orders).schema(
                 description="Total order revenue.",
             ),
         ),
-        "net_revenue": metric_field(
+        "warehouse_revenue_sql": metric_field(
             float64(),
             metric(
                 Agg.EXPRESSION,
-                name="net_revenue",
-                description="Revenue after discounts.",
+                name="warehouse_revenue_sql",
+                description="Warehouse-registered SQL SUM over order amount.",
             ),
         ),
     }
@@ -235,7 +236,7 @@ output = (
         "warehouse",
         storage("/infra-profile/demo#/services/warehouse").model(
             order_metrics,
-            expressions={"net_revenue": "SUM(amount_usd - discount_usd)"},
+            expressions={"warehouse_revenue_sql": "SUM(amount_usd)"},
         ),
     )
 )
@@ -258,12 +259,11 @@ reachable through validated many-to-one joins.
 
 For `Agg.EXPRESSION`, the expression map key is the metric name. Attach the map
 to the output model that declares the expression metric. In the example above,
-`net_revenue` is authored on `order_metrics`, so the expression is attached to
+`warehouse_revenue_sql` is authored on `order_metrics`, so the expression is attached to
 the `order_metrics` output port model. Keep this boundary visible when sharing
-guidance across skills: `SUM(amount_usd - discount_usd)` is valid here only as
-an explicitly registered port SQL metric; a generated desktop closure that
-needs net revenue as a reusable governed concept should derive a physical
-`net_revenue` column and aggregate that column normally.
+guidance across skills: a generated desktop closure that needs net revenue
+(`amount_usd - discount_usd`) as a reusable governed concept must derive a
+physical `net_revenue` column and aggregate that column normally.
 
 ## Primitive types
 

@@ -17,12 +17,13 @@
 The semantic layer used by this desktop generation path is deliberately narrow.
 A dimension is a pointer at a physical column — there is no dimension expression
 surface, so no `CASE WHEN`, no `DATE_TRUNC`, no concatenation. A normal metric
-is one aggregate over one column; the broader port DSL also has
-`Agg.EXPRESSION`, but this skill does not use it as a derivation substitute.
-That expression slot is a port-level aggregate SQL expression, not a row-level
-surface and not a default filter, so it cannot create dimensions, generate or
-remove rows, classify records, normalize values for reuse, or express ratios the
-agent can slice safely. Nothing in the layer generates a row or removes one.
+is one aggregate over one column; the broader warehouse-backed builder DSL also
+has `Agg.EXPRESSION`, but that is outside this desktop closure pattern and this
+skill does not use it as a derivation substitute. That expression slot is a
+port-level aggregate SQL expression, not a row-level surface and not a default
+filter, so it cannot create dimensions, generate or remove rows, classify
+records, normalize values for reuse, express ratios, or hide column arithmetic
+such as net revenue. Nothing in the layer generates a row or removes one.
 
 Every one of these is therefore **not** a query-time concern:
 
@@ -52,9 +53,9 @@ materialized. For each question:
    more. Ask which single physical column it sums or averages.
    - "…minus…" or "…divided by…" **always** forces a derived column in this
      generation path: the closure needs a physical, reusable column or
-     reporting-grain row, not a one-off port expression. `Agg.EXPRESSION` in the
-     builder surface is reserved for explicit port-level custom aggregate SQL
-     and does not replace this derivation step.
+     reporting-grain row, not a one-off port expression. `Agg.EXPRESSION` in
+     the warehouse-backed builder surface is outside this desktop path and does
+     not replace this derivation step.
    - "…where…" or "…but only…" no longer settles it by itself — the query
      grammar ships ANDed `filters[]`, so a scoping clause may be a query-time
      filter. Route it through the **Omission Test** (stated canonically in the
