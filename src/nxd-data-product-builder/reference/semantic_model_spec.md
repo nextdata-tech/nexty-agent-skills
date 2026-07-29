@@ -26,22 +26,19 @@ trending_sales = (
             "sale_id": field(
                 int64(),
                 primary_key(),
-                description="Unique sale event identifier.",
             ),
             "product_id": field(
                 string(),
                 join(to="products", to_column="product_id"),
-                description="Identifier for the sold product.",
             ),
             "sales_channel": field(
                 string(),
-                dimension(name="sales_channel"),
-                description="Sales channel from which transaction data was aggregated.",
+                dimension(
+                    name="sales_channel",
+                    description="Sales channel from which transaction data was aggregated.",
+                ),
             ),
-            "amount_usd": (
-                float64(),
-                "Sale amount in USD.",
-            ),
+            "amount_usd": float64(),
         }
     )
     .link(
@@ -58,11 +55,21 @@ trending_sales_metrics = semantic_view("trending_sales_metrics", trending_sales)
     {
         "sale_count": metric_field(
             int64(),
-            metric(Agg.COUNT, of=trending_sales.field("sale_id"), name="sale_count"),
+            metric(
+                Agg.COUNT,
+                of=trending_sales.field("sale_id"),
+                name="sale_count",
+                description="Number of sale events.",
+            ),
         ),
         "total_sales_usd": metric_field(
             float64(),
-            metric(Agg.SUM, of=trending_sales.field("amount_usd"), name="total_sales_usd"),
+            metric(
+                Agg.SUM,
+                of=trending_sales.field("amount_usd"),
+                name="total_sales_usd",
+                description="Total sales amount in USD.",
+            ),
         ),
     }
 )
@@ -95,7 +102,13 @@ from nxd.spec.data_types import int64, string
 orders = semantic_model("orders").schema(
     {
         "order_id": field(int64(), primary_key()),
-        "status": field(string(), dimension(name="order_status")),
+        "status": field(
+            string(),
+            dimension(
+                name="order_status",
+                description="Order lifecycle state.",
+            ),
+        ),
         "customer_id": field(
             string(),
             join(to="customers", to_column="customer_id"),
@@ -107,7 +120,7 @@ orders = semantic_model("orders").schema(
 | Role | Meaning | Where to use it |
 | --- | --- | --- |
 | `primary_key()` | Entity key for one physical model row. Use multiple key fields for a composite key. | Physical `semantic_model` field |
-| `dimension(name=None, pii=False, label=None, description="")` | Query concept that can be used for grouping and filtering. `pii=True` marks governed personal data. | Physical `semantic_model` field |
+| `dimension(name=None, pii=False, label=None, description="")` | Query concept that can be used for grouping and filtering. Put agent-visible dimension descriptions here. `pii=True` marks governed personal data. | Physical `semantic_model` field |
 | `join(to, to_column=None, cardinality=None, to_data_product=None)` | Validated foreign-key edge to another semantic model. Declare it on the many-side field. | Physical `semantic_model` field |
 
 `join(...)` defaults to many-to-one cardinality. Import `Cardinality` from
@@ -119,14 +132,25 @@ The `.schema()` dictionary accepts three equivalent field shapes:
 orders = semantic_model("orders").schema(
     {
         "order_id": field(int64(), primary_key()),
-        "status": (string(), dimension(name="order_status"), "Order lifecycle state."),
-        "amount_usd": (float64(), "Sale amount in USD."),
+        "status": (
+            string(),
+            dimension(
+                name="order_status",
+                description="Order lifecycle state.",
+            ),
+        ),
+        "amount_usd": float64(),
     }
 )
 ```
 
 Use source column names for schema keys. The logical `dimension(name=...)` is the
 stable name used in semantic queries.
+
+Put agent-visible descriptions on the semantic role: `dimension(description=...)`
+or `metric(description=...)`. `field(description=...)`, `metric_field(description=...)`,
+and tuple string descriptions become the physical `AttributeSpec` description;
+they do not reach `describe_model`.
 
 ## Linking models
 
@@ -166,15 +190,29 @@ order_metrics = semantic_view("order_metrics", orders).schema(
     {
         "order_count": metric_field(
             int64(),
-            metric(Agg.COUNT, of=orders.field("order_id"), name="order_count"),
+            metric(
+                Agg.COUNT,
+                of=orders.field("order_id"),
+                name="order_count",
+                description="Number of orders.",
+            ),
         ),
         "total_revenue": metric_field(
             float64(),
-            metric(Agg.SUM, of=orders.field("amount_usd"), name="total_revenue"),
+            metric(
+                Agg.SUM,
+                of=orders.field("amount_usd"),
+                name="total_revenue",
+                description="Total order revenue.",
+            ),
         ),
         "net_revenue": metric_field(
             float64(),
-            metric(Agg.EXPRESSION, name="net_revenue"),
+            metric(
+                Agg.EXPRESSION,
+                name="net_revenue",
+                description="Revenue after discounts.",
+            ),
         ),
     }
 )
@@ -200,7 +238,7 @@ output = (
 | `agg` | Aggregation from `Agg`: `COUNT`, `COUNT_DISTINCT`, `SUM`, `AVG`, `MIN`, `MAX`, `EXPRESSION` |
 | `of` | Optional base field reference, usually `base_model.field("column")`. Omit it for `Agg.EXPRESSION`; the SQL expression names the fields. |
 | `name` | Stable metric name used in semantic queries |
-| `description` | Human description |
+| `description` | Agent-visible metric description |
 | `boolean` | Marks a boolean metric |
 | `extra_dimensions` | Explicit additional dimensions that may slice the metric |
 | `column` | Explicit aggregation column. Use `"*"` for `COUNT(*)` or expression metrics with an output expression; mutually exclusive with `of` |
@@ -264,5 +302,5 @@ trending_sales = (
     .schema({"revenue": float64(), "currency_code": string()})
     .verify_field("revenue", greater_than(0))
     .verify_field("currency_code", match_regex(r"^[A-Z]{3}$"))
-)
+) 
 ```

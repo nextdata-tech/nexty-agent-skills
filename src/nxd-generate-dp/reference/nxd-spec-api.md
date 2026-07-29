@@ -133,14 +133,8 @@ lazily resolves it). It's a `str` enum; use it by member name
 (`Agg.SUM`, not a bare string). The vocabulary is **closed**:
 
 ```
-Agg.COUNT, Agg.COUNT_DISTINCT, Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX
+Agg.COUNT, Agg.COUNT_DISTINCT, Agg.SUM, Agg.AVG, Agg.MIN, Agg.MAX, Agg.EXPRESSION
 ```
-
-An internal `Agg.EXPRESSION` member also exists but is not part of this
-skill pack's documented surface — never use it. **`median` does not exist
-and never will via this path** — if a question needs it, drop it or
-approximate with an existing aggregation and say so; do not invent a metric
-kind.
 
 ## `SemanticModelSpec` / `semantic_model()` / `semantic_view()`
 
