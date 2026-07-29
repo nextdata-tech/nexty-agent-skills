@@ -85,7 +85,7 @@ trending_sales_metrics = semantic_view("trending_sales_metrics", trending_sales)
 | `.link(Predicate, url)` | Link the whole model to a term |
 | `.verify(verification_spec)` | Data quality rules at the model level |
 | `.verify_field(field, check)` | Data quality rules at the field-level check (e.g. `greater_than(0)`) |
-| `.sampling(method, limit)` | Define sampling method (`SamplingMethod.RANDOM`, `.HEAD`, `.DISABLED`) |
+| `.sampling(method, limit)` | Define sampling method (`SamplingMethod.Random`, `.Head`, `.Disabled` — PascalCase members) |
 | `.deprecated()` | Mark as deprecated |
 | `.when(dependency)` | Define model dependencies for parallel execution |
 | `.field(name)` | Return a field reference for `metric(of=model.field("column"))` |

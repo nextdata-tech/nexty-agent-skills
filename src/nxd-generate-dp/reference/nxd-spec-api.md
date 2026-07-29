@@ -197,10 +197,18 @@ product surface gains a first-class supported aggregation.
   - **`.model(model, is_public=True, expressions=None)`** — registers a model
     (base or view) into the output's global model list without a
     produce-time contract; this is how a `semantic_view` reaches the
-    compiled catalog. `is_public` defaults `True`.
+    compiled catalog. `is_public` defaults `True`. `expressions` is
+    **validated and then discarded** here — only the port-level `.model()`
+    below persists it, so an expression map passed at this level silently
+    does nothing.
 - **`storage(url, alias=None) -> OutputPortSpec`** — `url` is the
   infra-profile service reference for the storage backend (e.g.
   `"/infra-profile/desktop-local#/services/duckdb"`).
+  - **`.model(model, is_public=True, expressions=None)`** — registers the
+    model on this port. This is the **only** surface that persists
+    `expressions` (a `dict[str, str]` keyed by metric name, valued with the
+    SQL for an `Agg.EXPRESSION` metric). Outside this skill's desktop
+    closure pattern — see the `Agg` note above.
 
 ## Version pin and drift
 

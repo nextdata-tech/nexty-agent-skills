@@ -453,3 +453,66 @@ entries above.
   with the driver-side fallback that makes the mistake silent in
   `driver_impls/drivers/nxd-snowflake/src/storage/mod.rs` (absent `schema` falls
   back to the data-product name rather than erroring).
+
+## 2026-07-29 — v0.25.4 — semantic roles + the `Agg.EXPRESSION` boundary (#130)
+
+**Change:** two things, both doc-only but both behavior-bearing. (1) A new
+**Semantic roles** section in `nxd-data-product-builder`'s
+`semantic_model_spec.md` — the role table (`primary_key` / `dimension` / `join`),
+the three accepted `.schema()` field shapes, and the rule that agent-visible
+descriptions belong on `dimension(description=…)` / `metric(description=…)`, not
+on `field(description=…)`. (2) `Agg.EXPRESSION` promoted from "never use it" to a
+documented member with an explicit boundary, which required reconciling four
+files that disagreed about it.
+
+The pack previously contradicted itself in three places once EXPRESSION was
+documented, all fixed here: `nxd-generate-dp/reference/nxd-spec-api.md` wrongly
+documented `expressions=` on `data_product_output().model(...)`;
+`nxd-semantic-data-product/reference/registry-authoring.md` asserted a closed
+six-member vocabulary as an API fact; and that skill's
+`compiler-and-routing.md` Snowflake table had no EXPRESSION row. The
+`median` prohibition is retained and strengthened — `Agg.EXPRESSION` is
+explicitly ruled out as a smuggling route for it.
+
+**No before/after run table — not measurable by the current harness.** No eval
+scenario authors an `Agg.EXPRESSION` metric or asserts on description placement,
+so the harness cannot distinguish the corrected guidance from the old text. The
+failures these edits prevent land at author time (an expression map silently
+dropped, so the metric compiles and then emits wrong SQL) or at agent-read time
+(two loaded skills giving opposite rulings) — neither is observable offline.
+Same posture as the v0.25.3 / v0.22.0 / v0.21.0 entries above.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py --root .` passes; version surfaces agree at
+  0.25.4 across `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+- `./build-skills.sh` packages all 17 skills `ok`; largest is
+  `nxd-mesh-analyzer` at 32 entries, far under the 200-entry cap.
+- Signatures verified against upstream `nxd` source, not inferred:
+  - `Agg.EXPRESSION` is a real member —
+    `components/nxd_py/data_product/nxd/experimental/semantic/registry.py:22-31`,
+    mirrored in Rust at `components/shared/semantic_registry/src/types.rs:43-58`.
+  - `expressions=` persists **only** on the port model
+    (`nxd/spec/_spec.py:3166-3173`); `data_product_output().model(...)`
+    validates and discards it (`_spec.py:4661-4667`), pinned upstream by
+    `test_output_models.py:96`
+    (`test_output_model_expressions_are_not_written_to_top_level_metadata`).
+    This is why the old `nxd-spec-api.md` guidance would have silently no-opped.
+  - Expression SQL resolution and the EXPRESSION dialect row —
+    `nxd/experimental/semantic/dialect.py:144-173` (an attached expression wins
+    for any `Agg`; bare `Agg.EXPRESSION` emits `column` as raw SQL). Build-time
+    guard at `registry.py:1067-1078`.
+  - Description routing — `dimension(description=…)` lands in the role blob and
+    is what `describe_model` surfaces (`registry.py:334-344`,
+    `_manifest_compile.py:440`); `field(description=…)` lands on
+    `AttributeSpec._description` (`nxd/spec/_semantic.py:314-357`) and never
+    reaches the querying agent.
+  - `SamplingMethod` members are PascalCase on the `nxd.spec` surface
+    (`nxd/core/yaml_schemas.pyi:1553-1556`), correcting the one table row that
+    said `RANDOM`. A second SCREAMING_CASE enum of the same name exists at
+    `nxd/core/_bindings.pyi:780-783` but is not what `nxd.spec` re-exports.
+- Phase A gate: `scripts/self_check.py` and its mirror in
+  `nxd-generate-dp/reference/self-check.md` both accept `EXPRESSION`, so a spec
+  following the new guidance no longer fails the structural check. The gate
+  stays structural — the "do not use it as a derivation substitute" ruling is
+  enforced in prose in `nxd-spec-api.md`, `derivation-plan.md` and
+  `nxd-generate-dp/SKILL.md`, not mechanically.
