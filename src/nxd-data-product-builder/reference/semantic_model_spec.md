@@ -273,12 +273,12 @@ Import from `nxd.spec.data_types`. Used in `.schema()` definitions.
 | `timestamp(unit, timezone)` | `unit`: `DurationUnit.Milliseconds`, `.Seconds`, `.Microseconds`, `.Nanoseconds` | Timestamp |
 | `decimal(precision, scale)` | e.g. `decimal(10, 2)` | Decimal128 |
 | `binary(length)` | Optional fixed length | Binary |
-| `vector()` | No parameters | Vector |
+| `vector()` | - | Vector |
 | `vector_embeddings(dimensions)` | e.g. `vector_embeddings(1536)` | Embedding vector |
 | `list(value_type)` | e.g. `list(string())` | List |
 | `struct(fields)` | List of fields | Struct |
 | `map(key_type, value_type)` | e.g. `map(string(), int64())` | Map |
-| `dictionary(key_type, value_type)` | No parameters | Dictionary encoded |
+| `dictionary(key_type, value_type)` | - | Dictionary encoded |
 | `duration(unit)` | `DurationUnit` | Duration |
 | `time32(unit)`, `time64(unit)` | `DurationUnit` | Time |
 
