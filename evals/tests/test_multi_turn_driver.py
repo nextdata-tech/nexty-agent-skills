@@ -423,6 +423,37 @@ def test_a_wedged_turn_times_out_and_kills_the_process(fake_cli, tmp_path):
     assert not _surviving_fake_cli_pids(fake_cli)
 
 
+def test_the_checker_never_reaches_the_agent_workspace(tmp_path):
+    """The checker names the value scripted turn 2 introduces.
+
+    `EDITED_ADVANCE_THRESHOLD = "4.25"` is the user's correction. Staging the
+    checker hands the agent that number BEFORE the user says it, so an agent
+    reading its own workspace could pre-empt the edit and the round-trip half of
+    the rubric would measure nothing. It also enumerates the card gates, turning
+    "propose an executable policy" into "satisfy this file".
+    """
+    run = _load_run_module()
+    scenario = (
+        Path(run.__file__).resolve().parent
+        / "public" / "coauthor-executable-policy-readback"
+    )
+    skill_set = run.SkillSet(name="no_skills", description="", skills=[])
+    ws, _ = run.build_workspace(tmp_path, skill_set, scenario)
+
+    staged = {p.name for p in ws.rglob("*") if p.is_file()}
+    assert "check_executable_policy.py" not in staged, sorted(staged)
+
+    # Belt and braces: the literal must not appear anywhere the agent can read,
+    # whatever the filename. A future fixture reintroducing it fails here.
+    for path in ws.rglob("*"):
+        if not path.is_file():
+            continue
+        assert "4.25" not in path.read_text(errors="ignore"), path
+
+    # The source data MUST still be staged — the agent has to read it.
+    assert (ws / "data" / "applicants" / "applicants.csv").is_file()
+
+
 def test_a_bare_json_scalar_line_does_not_crash_the_run(fake_cli, tmp_path):
     """`json.loads` succeeds on `null`/`5`/`"..."`, so `.get` would raise.
 
@@ -455,6 +486,29 @@ def test_a_stdout_only_fatal_error_reaches_the_caller(fake_cli, tmp_path):
     )
     assert not ok
     assert "Invalid API key" in metrics["error"], metrics["error"]
+
+
+def test_an_abort_keeps_the_completed_turns_for_diagnosis(fake_cli, tmp_path):
+    """A late-turn timeout otherwise discards everything that DID happen.
+
+    The graded trace stays empty — a partial transcript must never be scored
+    against the full rubric — but the completed turns travel in metrics, where
+    the judge never sees them and a human can read what the agent had done
+    before it wedged.
+    """
+    ok, trace, metrics = eb.ClaudeBackend().run_agent(
+        tmp_path, "first", "m", 5,
+        env_overrides={"FAKE_MODE": "wedge"},
+        followup_turns=[eb.FollowupTurn(text="second")],
+    )
+    assert not ok
+    assert trace == ""          # never grade a partial conversation
+    partial = metrics.get("partial_trace", "")
+    assert "saw: first" in partial, metrics          # turn 1's answer survives
+    assert "[user_turn 2" in partial, metrics        # and where it wedged
+    # Segment count, not answered turns: separator entries are segments too.
+    # segments recorded, not a count of answered turns.
+    assert metrics.get("partial_segments", 0) >= 1, metrics
 
 
 def test_a_process_death_mid_conversation_is_not_graded_as_success(

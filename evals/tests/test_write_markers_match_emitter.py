@@ -140,18 +140,14 @@ def test_package_install_is_not_materialization(checker):
     assert checker.first_write_index([_bash("pip install -q duckdb")]) is None
 
 
-# --- interpreted-write scoping (executable-policy checker only) -------------
+# --- interpreted writes -------------------------------------------------------
 #
 # `INTERPRETED_WRITES` is meant for a `python -c` body that materializes
 # something. Matched against EVERY Bash command it penalised pure reads, which
-# is the same inversion the checker already rejects for interpreter names.
-
-@pytest.fixture
-def policy_checker():
-    return _load(
-        "coauthor-executable-policy-readback", "check_executable_policy.py"
-    )
-
+# is the same inversion the checkers already reject for interpreter names.
+# BOTH checkers are held to this: dropping the interpreter names from
+# SHELL_MUTATIONS without adding body scanning left one of them unable to see a
+# closure built in a single `python -c` line.
 
 @pytest.mark.parametrize("cmd", [
     # Searches for the literal string; writes nothing.
@@ -163,8 +159,8 @@ def policy_checker():
     # A bare mode literal in a column name is not an `open(..., 'w')`.
     """python3 -c "print(df['w'])" """,
 ])
-def test_reads_are_not_interpreted_writes(policy_checker, cmd):
-    assert policy_checker.first_write_index([_bash(cmd)]) is None, cmd
+def test_reads_are_not_interpreted_writes(checker, cmd):
+    assert checker.first_write_index([_bash(cmd)]) is None, cmd
 
 
 @pytest.mark.parametrize("cmd", [
@@ -173,6 +169,6 @@ def test_reads_are_not_interpreted_writes(policy_checker, cmd):
     """python3 -c "import shutil; shutil.copy('a','b')" """,
     """uv run python -c "from pathlib import Path; Path('x').write_text('y')" """,
 ])
-def test_real_interpreted_writes_are_still_caught(policy_checker, cmd):
+def test_real_interpreted_writes_are_still_caught(checker, cmd):
     """Scoping must not open a hole: a body that really writes still counts."""
-    assert policy_checker.first_write_index([_bash(cmd)]) is not None, cmd
+    assert checker.first_write_index([_bash(cmd)]) is not None, cmd

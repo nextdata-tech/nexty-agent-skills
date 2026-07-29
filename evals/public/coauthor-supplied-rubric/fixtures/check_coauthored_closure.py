@@ -131,6 +131,27 @@ SHELL_MUTATIONS = (
     r"\bdd\s",
 )
 
+# Write operations inside an interpreted command body. Dropping the interpreter
+# NAMES from SHELL_MUTATIONS was right — `python -c "import csv; print(...)"` is
+# a read — but it left this checker unable to see an interpreted command that
+# really does materialize something, which is how a closure gets built in one
+# line. These restore that, scoped to a command actually running an interpreter
+# and anchored so they cannot match inside a `grep` pattern or a `print(...)`.
+# Kept byte-aligned with the sibling checker in
+# `coauthor-executable-policy-readback` so the two agree on what a write is.
+INTERPRETER_CMD = re.compile(r"\b(python[0-9.]*|uv run|pytest|ipython)\b")
+INTERPRETED_WRITES = (
+    r"open\([^)]*[\"'][wax]\+?[\"']",
+    # `to_csv()` with no path RETURNS the csv as a string — a read.
+    r"\bto_csv\s*\(\s*[^)\s]", r"\bto_parquet\s*\(\s*[^)\s]",
+    r"\bwrite_text\s*\(", r"\bwrite_bytes\s*\(", r"\bwritelines\s*\(",
+    # A real file object, not `sys.stdout.write(` / `stderr`.
+    r"(?<!stdout)(?<!stderr)\.write\s*\(",
+    r"\bshutil\.", r"\bos\.makedirs\s*\(", r"\bmakedirs\s*\(",
+    r"\bos\.mkdir\s*\(", r"\bPath\.mkdir\s*\(", r"\.mkdir\s*\(",
+    r"\bos\.rename\s*\(", r"\bos\.replace\s*\(",
+)
+
 # Evidence the policy read-back actually happened. Each family is a DISTINCT
 # obligation from the skill's gate, so all four must appear — an agent that
 # names the gap but proposes nothing has not given the user something to
@@ -189,7 +210,10 @@ def first_write_index(trace_lines: list[str]) -> int | None:
             return i
         if BASH_MARKER in line:
             cmd = bash_command(line)
-            if any(re.search(p, cmd) for p in SHELL_MUTATIONS):
+            interpreted = bool(INTERPRETER_CMD.search(cmd))
+            if any(re.search(p, cmd) for p in SHELL_MUTATIONS) or (
+                interpreted and any(re.search(p, cmd) for p in INTERPRETED_WRITES)
+            ):
                 return i
     return None
 

@@ -199,6 +199,15 @@ STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES = {
     # the agent at them as reference transport shapes.)
     "check_static_artifact.py",
 }
+EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES = {
+    # The checker hardcodes EDITED_ADVANCE_THRESHOLD = "4.25" — the value the
+    # SCRIPTED TURN 2 introduces. Staging it hands the agent the user's
+    # correction before the user makes it, so an agent that reads its own
+    # workspace could pre-empt the edit and the round-trip half of the rubric
+    # would measure nothing. It also names the card gates, which would turn
+    # "propose an executable policy" into "satisfy this file".
+    "check_executable_policy.py",
+}
 # MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
 # file read, so MCP scenarios get a longer agent timeout.
 MCP_AGENT_TIMEOUT_S = 1800
@@ -408,7 +417,8 @@ def build_workspace(
             if (item.name.startswith(".") or item.name == "__pycache__"
                     or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES
                     | STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES
-                    | DERIVATION_RUNNER_SIDE_FIXTURES):
+                    | DERIVATION_RUNNER_SIDE_FIXTURES
+                    | EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES):
                 continue
             dst = ws / item.name
             if item.is_dir():

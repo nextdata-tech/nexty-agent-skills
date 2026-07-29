@@ -76,6 +76,10 @@ TURN_SEPARATOR_PREFIX = "[user_turn "
 # buffer fills, which would surface as a bogus turn timeout — but only the tail
 # is ever reported, so an unbounded buffer is pure memory growth on a chatty run.
 STDERR_TAIL_CHARS = 8000
+# Cap on the partial transcript carried in metrics when a multi-turn run aborts.
+# Diagnosis only — it never reaches the judge, so it just has to stay small
+# enough to keep a report readable.
+PARTIAL_TRACE_CHARS = 20_000
 # How long to let a multi-turn CLI drain and exit after stdin closes. Fixed
 # rather than "whatever is left of the run budget": the transcript is complete
 # by then and a CLI that will not exit fails the run regardless, so a longer
@@ -562,7 +566,17 @@ class ClaudeBackend:
             for reader in readers:
                 reader.join(timeout=5)
             detail = _failure_detail()
-            return False, "", {"error": f"{error}: {detail[-2000:]}" if detail else error}
+            # The trace stays "" — a partial transcript must never be graded, and
+            # returning one here would let a run that died mid-conversation be
+            # scored against the full rubric as an agent failure. But the turns
+            # that DID complete are the diagnosis for a late-turn timeout, so
+            # they travel in metrics where the judge never sees them.
+            partial = "\n".join(t for t, _ in segments).strip()
+            meta: dict = {"error": f"{error}: {detail[-2000:]}" if detail else error}
+            if partial:
+                meta["partial_trace"] = partial[-PARTIAL_TRACE_CHARS:]
+                meta["partial_segments"] = len(segments)
+            return False, "", meta
 
         segments: list[tuple[str, dict]] = []
         turns_sent = 1
