@@ -80,5 +80,8 @@ supplied data describes that data, not the domain it was drawn from.
 The cost of getting this wrong is asymmetric. A declared constraint that the
 domain does not actually guarantee will one day stop a legitimate run from
 publishing, on data the user considers fine — and the user never agreed to it.
-So the user confirms before anything is declared, and the generator owns that
-turn. See `nxd-generate-dp`'s `reference/contracts.md`.
+So the user confirms before anything is declared, and the confirming turn
+belongs to whichever thread faces the user — the generator when it is invoked
+directly, the orchestrator when profiling and generation run as subagents. As a
+subagent you never open it: return the candidates and let the caller decide.
+See `nxd-generate-dp`'s `reference/contracts.md`.

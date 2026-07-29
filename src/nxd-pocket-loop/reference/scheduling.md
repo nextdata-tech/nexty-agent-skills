@@ -149,8 +149,10 @@ expensive profiling on every bounce:
    inference: profiles each source into `schema.json`, derives the semantic
    model, and — crucially — surfaces any way the source data makes the user's
    supplied procedure ambiguous or under-determined. It returns the inferred
-   model, the per-source schemas (each with its label), and a `gap_found` field
-   naming any policy gap the profile exposed. It writes no closure and asks the
+   model, the per-source schemas (each with its label), a `gap_found` field
+   naming any policy gap the profile exposed, and `candidate_invariants` — the
+   rule-filtered constraints the profile observed, each with its evidence, as
+   CANDIDATES only. It writes no closure and asks the
    user nothing. A **file** source (CSV/JSON/JSONL/Parquet) profiles freely here;
    a **live database/API** source is profiled on the main thread or from the
    user's description only (table/endpoint list, sample shape) — never fan out a
@@ -160,9 +162,15 @@ expensive profiling on every bounce:
    Step 1a read-back for any result-changing gap — including one the profile
    surfaced — and wait for the user's approval. This user turn is the
    orchestrator's; it never happens inside a subagent.
-3. **Generate subagent (Step 3).** Receives the already-computed model and the
-   **verbatim approved policy** — never re-profiles, never re-opens the gate as a
-   user turn. It authors the closure and runs the self-check. If it finds a
+2b. **Main thread: confirm discovered invariants.** If the profile returned
+   `candidate_invariants`, propose them in ONE batched turn and carry only what
+   the user confirms — **a separate reply from the policy read-back**, never
+   folded into it, or a single "yes" retroactively approves two different gates.
+   Declining is recorded, not enforced. Both turns are the orchestrator's; a
+   subagent opens neither.
+3. **Generate subagent (Step 3).** Receives the already-computed model, the
+   **verbatim approved policy**, and the **confirmed invariants only** — never
+   re-profiles, never re-opens either gate as a user turn. It authors the closure and runs the self-check. If it finds a
    result-changing gap the approved policy does not resolve — either a policy
    element the enumeration never covered, or a profiling finding that makes an
    approved element ambiguous or conditional — it stops and returns `gap_found`
@@ -190,6 +198,10 @@ would re-inflate the context this split exists to save). Its return is
   without opening `spec.py`;
 - `policy_fingerprint` — the bands / anchors / precedence **as encoded** — so the
   main thread can confirm what shipped matches what the user approved;
+- `declared_constraints` — every `.constraints(...)` **as encoded**, by model and
+  field, so the main thread can confirm the closure declares what was stated or
+  confirmed and nothing more. A constraint here that no one stated or confirmed
+  is the same failure as an unapproved policy element;
 - `self_check` as fields, not prose: Phase-C / Phase-D pass·fail, the transform
   dry-run result, and the `distributions` / `unverified` / `absent` read-back
   arrays verbatim (relay them unchanged — do not re-summarize; `UNIFORM` still

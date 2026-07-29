@@ -287,20 +287,39 @@ def main() -> None:
     orders = models.get("orders")
     assert orders is not None
 
+    # Track WHICH constraint rejected, not merely that something did. An
+    # aggregate "any rejection" check stays green while a whole class of
+    # constraint is inert — the violating fixture breaks nullability AND the
+    # lower bound, so each is asserted on its own.
     rejections: list[str] = []
+    rejected_columns: set[str] = set()
     for index, row in enumerate(rows, start=2):
         for column, declared in orders.constraints.items():
             reason = violates(row, column, declared)
             if reason is not None:
                 rejections.append(f"row {index}: {reason}")
+                rejected_columns.add(column)
 
     check(
         "declared-constraints-reject-bad-data",
         bool(rejections),
-        "the declared constraints accept a source containing a negative amount — "
+        "the declared constraints accept a source that violates them — "
         "a constraint that admits the data it exists to exclude is not enforcing anything",
     )
-    print(f"     rejected: {rejections[0]}")
+    check(
+        "not-null-constraint-rejects-a-missing-key",
+        "order_id" in rejected_columns,
+        "the violating fixture carries a row with an empty order_id, and the declared "
+        "nullable=False did not reject it — the nullability constraint is inert",
+    )
+    check(
+        "min-constraint-rejects-a-negative-amount",
+        "amount_usd" in rejected_columns,
+        "the violating fixture carries a negative amount_usd, and the declared "
+        "min did not reject it — the lower bound is inert",
+    )
+    for rejection in rejections:
+        print(f"     rejected: {rejection}")
 
     # 4. The clean fixture must still pass. A constraint so tight it rejects
     #    valid data would break every legitimate run.

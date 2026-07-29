@@ -398,13 +398,14 @@ degrade); the row schema is nxd-generate-dp's `reference/llm-judgments.md`.
   precedence rule and replied. A technical delivery question is not approval;
   "use your judgement" licenses authoring the proposal, not skipping the turn.
 - **A stated constraint becomes a declared contract; a failed one is reported,
-  never removed.** Gathered verbatim in Step 1. A violation is reported by
-  constraint and column — but the local runtime does NOT yet block the publish
-  on it, so never claim the contract stopped a bad run; the check that fails a
-  build is the transform assert. Correct the data or amend the constraint;
-  dropping it for a green build is worse than never declaring it. Constraints
-  the user did NOT state are proposed from evidence and confirmed in their own
-  turn, never folded into the policy read-back's reply.
+  never removed.** Gathered verbatim in Step 1. A violation on a promised model
+  stops the publish: nothing is served from that run and the previous version,
+  if any, keeps serving. Report which constraint and column, say nothing
+  published, then correct the data or amend the constraint — dropping it for a
+  green build is worse than never declaring it. A transform assert is the other
+  way a build fails, earlier and over the closure's own logic. Constraints the
+  user did NOT state are proposed from evidence and confirmed in their own turn,
+  never folded into the policy read-back's reply.
 - **A ruling behind a number is stated with the number.** When a dimension's
   catalog description names the ruling that created it, the answer says so, and
   a classified total reports its review-bucket share whenever nonzero —

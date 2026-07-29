@@ -284,7 +284,7 @@ below is mandatory:
 ### Step 3b — In-memory asserts: proving the derivation is right
 
 **This is the only place a derivation can be checked against its sources.** A declared contract (Step 4a)
-checks the landed table but does not yet block the publish, and cannot see the closure's Python — so key
+runs after the transform, sees only the landed table, and cannot see the closure's Python — so key
 uniqueness, a grain-derived row count and a measure total reconciled against independently-read source rows
 live HERE. Complementary, not alternatives; neither may be weakened because the other exists. Running over
 the complete derived set before the rows are yielded. One helper per derived model, invoked between deriving

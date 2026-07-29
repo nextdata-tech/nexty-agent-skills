@@ -156,9 +156,11 @@ transform's arithmetic as its own proof is called out by name as the usual way
 this gets violated.
 
 Underneath Step 3b (inside the transform itself, not the self-check script),
-every derived model carries **mandatory in-transform asserts** that are the
-only durable data-quality gate on desktop (the local driver's verify is a
-no-op and platform-side contract verification doesn't run locally): Tier 1
+every derived model carries **mandatory in-transform asserts**. They are the
+gate over the closure's own logic: a declared contract on a promised model does
+now stop the publish, but it runs after the transform and sees only the landed
+table, so a derivation's correctness can be proven only here (platform-side
+custom contract verification still does not run locally): Tier 1
 (declared-key uniqueness + grain-derived row count vs. independently-read
 source) always, Tier 2 (signed measure total reconciled per-currency in
 `Decimal`, every intentional divergence itemized) whenever a measure column is
