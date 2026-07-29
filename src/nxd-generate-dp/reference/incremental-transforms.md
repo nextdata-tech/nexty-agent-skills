@@ -1,10 +1,17 @@
-# Incremental transforms: `transform_state` on Pocket
+# Incremental transforms on Pocket
 
-The sanctioned route to incrementality on desktop. The default Step 3 ingest is a
-**full replace** every run — that is what makes reruns idempotent, and it is the
-right answer for almost every closure. Read this only when the source is
-genuinely append-only, every output model is append-safe, and re-reading the
-source whole is not acceptable.
+The default Step 3 ingest is a **full replace** every run — that is what makes
+reruns idempotent, and it is the right answer for almost every closure. Read this
+only when the source is genuinely append-only, every output model is append-safe,
+and re-reading the source whole is not acceptable.
+
+> **`transform_state` is the durable cursor on desktop.** Writes persist and the
+> previous run's bag is replayed. It is the only sanctioned mechanism: never
+> hand-roll persistence — not a sidecar file, not a marker table, not a
+> watermark read back out of the output table. Address the bag through
+> `for_model()`; flat indexing is silently dropped. A committed cursor does not
+> mean the rows are safe — the two do not share fate, so read
+> [Durability](#durability-rows-and-cursor-do-not-share-fate) before you write.
 
 ## Contents
 
@@ -66,11 +73,11 @@ keys or stale arithmetic, on a green run, with no error.
 An incremental closure runs **two separate state mechanisms**. They are not layers
 of one thing, and wiring one into the other silently corrupts the output.
 
-| | dlt pipeline state | `transform_state` |
+| | dlt pipeline state | your watermark |
 |---|---|---|
-| Holds | dlt's own bookkeeping (load ids, schema) | your watermark / cursor / offset |
-| Lives in | `pipelines_dir` under the run dir | kernel KV, per-workflow SQLite |
-| Lifetime | **ephemeral** — one run, thrown away | **durable** — replayed into the next run |
+| Holds | dlt's own bookkeeping (load ids, schema) | your cursor / offset |
+| Lives in | `pipelines_dir` under the run dir | the kernel's per-workflow SQLite via `transform_state` |
+| Lifetime | **ephemeral** — one run, thrown away | **durable** — survives into the next run |
 | You read it | never | every run |
 
 **The run-local dlt invariant does not change.** `pipelines_dir` still sits under
@@ -121,24 +128,55 @@ Two rules on what the bag may hold:
 ## Addressing the bag: `for_model()` always
 
 **Use `transform_state.for_model("<name>")` in every closure you write, even a
-single-model one.** Flat indexing (`transform_state["max_event_id"] = ...`) works
-only when the data product promises **exactly one** model, and when it does not
-work it fails **silently** — no exception, no warning, a green run that persists
-nothing.
+single-model one.** Never index the bag flat.
 
-The mechanism: the kernel binds the handle to the sole model only when exactly
-one model is declared. With two or more declared models the handle is unbound,
-nothing is registered for draining, and every flat write is dropped on the floor
-when the transform returns. The next run reads an empty bag, defaults the cursor
-to "take everything", re-yields the entire source into an `"append"` table, and
-duplicates every row — the exact bug this whole document exists to prevent.
+The mechanism is a two-way split on the **declared-model list the kernel seeded
+into the handle** — not on how many models the closure promises:
 
-The trap is that **the model count is easy to cross without noticing**. The
-Step 3 contract's `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` means a
-closure with one base model plus one derived model already declares two. Adding a
-single derived model in a refine cycle silently converts a working flat-indexed
-cursor into a dropped one. `for_model()` is correct at every model count and
-raises `KeyError` listing the valid names on a typo, so it cannot fail silently.
+- **Empty list** → the runtime hands back a bare `TransformState`: a plain
+  `dict`, flat-indexable, with **no** `for_model()` and **no** `generic()`, and
+  **not registered for draining**. Every write to it is dropped on the floor
+  when the transform returns.
+- **Any non-empty list** — one declared model or twenty — → a
+  `MultiModelTransformState`, addressed through `for_model()` / `generic()`.
+  With exactly one declared model it is additionally pre-bound to that model, so
+  flat indexing happens to reach the right bag; with two or more it is unbound
+  and flat writes go nowhere.
+
+So flat indexing is not "the single-model form". It is the shape you get when
+the runtime could not tell the transform which models exist — and in exactly
+that case it does nothing. A bare `TransformState` is the tell that the runtime
+never learned the model names: `for_model()` is absent, so it raises
+`AttributeError`, and every flat write is silently discarded.
+
+**The empty-list shape does not arise on desktop.** The local compute path seeds
+the declared models (see [Desktop specifics](#desktop-specifics)), so
+`for_model()` is there and this split is background on *why* the bag is addressed
+that way — not a branch to code against. If `for_model()` ever does raise
+`AttributeError`, the response is **not** to reach for another store: flat
+indexing persists nothing, and every hand-rolled alternative is banned in
+[Do NOT](#do-not) for reasons that do not stop applying at the moment the bag
+breaks. Stop, tell the author the runtime does not support durable transform
+state, and keep the closure on full replace — which needs no cursor at all and
+stays correct on every rerun. A closure that cannot hold a cursor is not
+eligible for incrementality.
+
+**This is the failure mode to fear, and it is silent in both directions.** A
+flat write is accepted — `transform_state["max_event_id"] = 12345` raises
+nothing, the run stays green, every assert passes, the build succeeds — and then
+persists nothing. The next run reads an empty bag, defaults the cursor to "take
+everything", re-yields the entire source into an `"append"` table, and
+duplicates every row. Nothing anywhere reports a problem; the only symptom is a
+row count that grows by the full source size on every run. Never index flat, at
+any model count.
+
+The trap compounds because **the declared-model count is easy to cross without
+noticing**. The Step 3 contract's `PHYSICAL_MODELS = BASE_MODELS +
+DERIVED_MODELS` means a closure with one base model plus one derived model
+already declares two, so a pre-bound flat cursor that worked becomes a dropped
+one the moment a refine cycle adds a derived model. `for_model()` is correct at
+every non-empty model count and raises `KeyError` listing the valid names on a
+typo, so it cannot fail silently — which is why it is the only form to write.
 
 ```python
 events = transform_state.for_model("events")
@@ -318,12 +356,18 @@ catches the skipped-model case the table-name assert cannot see.
 
 ## Desktop specifics
 
+- **`transform_state` round-trips.** The kernel routes the local Python compute
+  driver through its batch module — the module that seeds and folds incremental
+  state — and the per-model seeding is wired, so the transform receives a
+  `MultiModelTransformState` with `for_model()` available and the previous run's
+  bag replayed. Write the bag and read it back; there is nothing to enable and
+  nothing to check first.
 - **Persistence is on by default.** The supervisor always hands the kernel a
   per-workflow database path; there is no flag to set and nothing to enable.
 - **One `<workflow_key>.sqlite3` per workflow.** State is scoped to the workflow,
   so it survives refine cycles that reuse the same workflow id — a rebuild of the
-  same workflow reads back the previous run's cursor. A *different* workflow id
-  starts from an empty bag.
+  same workflow reads back the previous run's committed state. A *different*
+  workflow id starts from an empty bag.
 - **There is no cron on Pocket.** Runs happen because the user asks for one. Do
   not write guidance or comments in terms of "each scheduled run" or "nightly" —
   the correct framing is "the next run", whenever that is. A refine cycle is a
@@ -341,8 +385,9 @@ catches the skipped-model case the table-name assert cannot see.
 
 `DuckDbOutput` exposes `path`, `schema`, `model_tables` and `full_table_name` —
 it has **no** query or execute method. To read what previous runs landed (to
-count rows for the verification above, derive a watermark from the table itself,
-or check for overlap), open the file directly.
+count rows for the verification above, or to check for overlap), open the file
+directly. This is a read, for verification — **not** a place to keep the cursor;
+the cursor lives in `transform_state`.
 
 **Import the module under an alias.** The output port parameter must be named
 exactly `duckdb` (the local DuckDB driver requires that name and it cannot be
@@ -391,10 +436,12 @@ insert or update, no `CREATE TABLE` / `CREATE VIEW` DDL, no direct file write in
 staging. All writes still go through dlt with
 `dlt.destinations.duckdb(credentials=duckdb.path)`.
 
-Prefer the `transform_state` cursor over a read-back watermark: the cursor is
-cheap, explicit, and cannot disagree with what was committed. Reach for the
-read-back only when the source gives you no usable cursor column — but do use it
-for the row-count verification, which the cursor cannot substitute for.
+Use the read-back for the row-count verification, which the cursor cannot
+substitute for. Do **not** use it to reconstruct the cursor — a
+`SELECT max(<cursor>)` off the output table is a hand-rolled persistence
+mechanism, and the closure contract forbids it. If the source has no usable
+cursor column at all, the closure is not eligible for incrementality: keep it on
+full replace and say so.
 
 ## Do NOT
 
@@ -416,9 +463,16 @@ for the row-count verification, which the cursor cannot substitute for.
 - **Do NOT append to an aggregate, a regrain, or a dedupe.** Only models that
   pass the [eligibility gate](#before-you-start-the-eligibility-gate) may be
   appended; rebuild the rest with `"replace"` in the same run.
-- **Do NOT index the bag flat.** Use `for_model("<name>")` at every model count —
-  flat indexing is dropped silently the moment the closure declares a second
-  model, and adding one derived model is enough.
+- **Do NOT hand-roll durable state.** No JSON sidecar file, no marker table, no
+  `SELECT max(<cursor>)` watermark off the output table, no durable
+  `pipelines_dir`, no environment variable. `transform_state` is the mechanism;
+  the read-back out of DuckDB is for row-count verification only.
+- **Do NOT index the bag flat.** Flat writes on an unbound handle are accepted
+  and dropped on the floor — no exception, no warning, a green run that persists
+  nothing, and an append-only load that duplicates every row on every run. Use
+  `for_model("<name>")` at every non-empty model count — a handle that happens to
+  be pre-bound to a sole model stops being bound the moment the closure declares
+  a second, and adding one derived model is enough.
 - **Do NOT drop a model from the resource list because it has no new rows.**
   Yield every promised model every run, and advance a cursor only in the branch
   that wrote that model's rows.
