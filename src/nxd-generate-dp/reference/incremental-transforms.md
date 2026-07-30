@@ -64,7 +64,8 @@ If any promised model fails the gate, the correct answer is one of:
   to see this run's appended rows; read it before the append lands and the derived
   model trails the base table by one run's delta forever, on a green run. This is
   the one place where the
-  [read-before-write advice](#write-first-advance-the-cursor-second) does not
+  [check-before-you-write advice](#durability-rows-and-cursor-do-not-share-fate)
+  does not
   apply — `prior_counts` is still read before the write, but the rebuild's own read
   is not. Only the base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
   `run()` on it twice, each call with its own disposition and its own resource
@@ -75,11 +76,13 @@ If any promised model fails the gate, the correct answer is one of:
 Never append to an aggregate or a regrain. The output is duplicate declared-grain
 keys or stale arithmetic, on a green run, with no error.
 
-**Do not escape the gate by demoting a promised model to a query-time view.**
-Turning the failing aggregate into a `semantic_view` and dropping it from
-`PHYSICAL_MODELS` makes the gate pass and silently removes a model the closure
-promised: nothing lands it, the row-count check cannot see it, and the naming
-assert never covers it. If a promised model is not append-safe, use one of the two
+**Do not escape the gate by leaving a promised model out of the landed set.**
+Delivering the failing aggregate as a consume-time `semantic_view` — whether you
+drop it from `PHYSICAL_MODELS` or simply never add it — makes the gate pass while
+the model the closure promised is never landed: nothing writes it, the row-count
+check cannot see it, and the naming assert never covers it. `PHYSICAL_MODELS` and
+`DERIVED_MODELS` must name every promised landed model, including a new one added
+in a refine cycle. If a promised model is not append-safe, use one of the two
 remedies above — it stays a landed model either way.
 
 ## Two mechanisms, never composed
@@ -138,8 +141,8 @@ Two rules on what the bag may hold:
   access happens to reach the right bag; with two or more the handle is unbound and
   both directions fail silently — a flat write is dropped, and a flat **read**
   returns your default rather than raising, so the cursor looks like a first run
-  and the whole source is re-yielded into an `"append"` table. Wrong at every
-  model count and on every run, not just run one;
+  and the whole source is re-yielded into an `"append"` table. So never write it —
+  at any model count, on any run, not just run one — even where it happens to work;
   [Addressing the bag](#addressing-the-bag-for_model-always) has the mechanism.
 - **JSON-serializable values only.** The kernel serializes the bag; it does not
   inspect or coerce it. A `numpy.int64` row count or a `pandas.Timestamp`
