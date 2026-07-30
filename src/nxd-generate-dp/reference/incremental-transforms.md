@@ -140,16 +140,10 @@ exactly one declared model that handle is also pre-bound, so flat indexing
 go nowhere. That is why `for_model()` is the only form worth writing: it is
 correct at every count, and the count crosses without warning.
 
-If `for_model()` ever raises `AttributeError`, the runtime handed over an empty
-list and nothing durable is available. **Do not code against this** — it cannot
-happen on desktop, so a `try`/`except AttributeError` wrapper in your transform is
-dead code the contract does not want. It is stated here for the author who hits it
-on some other runtime, and the answer then is a decision, not a fallback path: the
-response is **not** another store —
-flat indexing persists nothing and every hand-rolled alternative is banned in
-[Do NOT](#do-not). Stop, tell the author the runtime does not support durable
-transform state, and keep the closure on full replace: no cursor, correct on
-every rerun.
+`for_model()` is always available on desktop. Do **not** guard it with
+`try`/`except AttributeError` — that branch is unreachable here, and there is no
+fallback store to reach for if it were ([Do NOT](#do-not)); a runtime that cannot
+hold a cursor keeps the closure on full replace.
 
 **This is the failure mode to fear, and it is silent in both directions.** A
 flat write is accepted whether or not it lands —
@@ -408,15 +402,14 @@ count rows for the verification above, or to check for overlap), open the file
 directly. **Never reconstruct the cursor from the table.** The ban is on one SQL
 shape, not on touching the column: `SELECT max(<cursor>)` off the output table is
 out even as a post-write assertion. Reads that legitimately see the cursor column
-are fine — an overlap check, and the full-table read the
-[eligibility gate](#before-you-start-the-eligibility-gate) requires when you
-rebuild a non-append-safe derived model with `"replace"`. The shape ban is
-deliberately broader than the hazard — a `max()` you only assert against never
-becomes a cursor — but a value that exists in the transform is one refactor away
-from being read, the row-count check already proves the write landed, and one rule
-you can apply without judging your own intent
-beats two you have to keep apart. The cursor lives in `transform_state`, and
-nowhere else.
+are fine — an overlap check, and the full-table read the [eligibility
+gate](#before-you-start-the-eligibility-gate) requires when you rebuild a
+non-append-safe derived model with `"replace"`. The shape ban is deliberately
+broader than the hazard — a `max()` you only assert against never becomes a
+cursor — but a value that exists in the transform is one refactor away from being
+read, the row-count check already proves the write landed, and one rule you can
+apply without judging your own intent beats two you have to keep apart. The cursor
+lives in `transform_state`, and nowhere else.
 
 **Import the module under an alias.** The output port parameter must be named
 exactly `duckdb` (the local DuckDB driver requires that name and it cannot be
@@ -465,18 +458,12 @@ insert or update, no `CREATE TABLE` / `CREATE VIEW` DDL, no direct file write in
 staging. All writes still go through dlt with
 `dlt.destinations.duckdb(credentials=duckdb.path)`.
 
-Use the read-back for the row-count verification, which the cursor cannot
-substitute for. Do **not** use it to reconstruct the cursor. The tradeoff is real
-and worth stating, because this document argues both sides: a watermark derived
-from the landed rows cannot disagree with what was committed, so it is immune to
-the [torn state](#durability-rows-and-cursor-do-not-share-fate) above — whereas
-`transform_state` is cheap, explicit, and one mechanism instead of two, but its
-cursor and the rows do not share fate. `transform_state` wins anyway because the
-watermark's immunity holds only if a failed load leaves a *prefix* in cursor
-order; a partial load that is not a prefix advances the watermark past rows that
-never landed and skips them permanently — a silent gap, where the cursor's failure
-mode is a visible duplicate. So the cursor is the sanctioned mechanism and a
-`SELECT max(<cursor>)` read-back is hand-rolled persistence the contract forbids.
+Why the cursor rather than a landed-rows watermark, given that a watermark cannot
+disagree with what was committed and so is immune to the
+[torn state](#durability-rows-and-cursor-do-not-share-fate) above: that immunity
+holds only if a failed load leaves a *prefix* in cursor order. A partial load that
+is not a prefix advances the watermark past rows that never landed and skips them
+permanently — a silent gap, where the cursor's failure mode is a visible duplicate.
 If the source has no usable cursor column at all, the closure is not eligible for
 incrementality: keep it on full replace and say so.
 
