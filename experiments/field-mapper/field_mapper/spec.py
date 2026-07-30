@@ -306,6 +306,30 @@ class Thresholds:
 
     `max_absent_share` is genuinely optional — a sparse source legitimately
     declares no ceiling — and is the only one that may be `None`.
+
+    **What each one measures** (CONTRACT.md §4 gives the rationale; this is the
+    arithmetic, which was previously stated nowhere):
+
+    | Field | Numerator | Denominator |
+    |---|---|---|
+    | `max_degrade_share` | cells with `validation_failed` | all cells |
+    | `max_absent_share` | cells with `evidence_absent` | all cells |
+    | `max_error_rate` | cells with `error` **from a non-systemic code** | all cells |
+    | `max_unverified_share` | evidence atoms with `evidence_unverified` | all **evidence atoms** |
+
+    Note the last row: it is the only one denominated in *atoms*, not cells. A
+    spec with three fields and two atoms per field has six atoms over three
+    cells, so `0.5` means something different for that threshold than for the
+    other three. Getting this wrong sets a ceiling that never fires.
+
+    `max_error_rate` counts only non-systemic errors on purpose. Systemic ones
+    (missing credential, exhausted budget) block unconditionally before any
+    ceiling is consulted, and counting them twice would let a loose rate wave
+    through a failure that already blocked.
+
+    Three conditions ignore all four thresholds and block regardless: zero `ok`
+    cells, any `skipped` cell, and any systemic error code. A spec cannot declare
+    its way past them.
     """
 
     max_degrade_share: float
