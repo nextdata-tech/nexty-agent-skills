@@ -10,7 +10,7 @@
     },
     {
       "id": "uses-transform-state-kwarg",
-      "check": "The agent declares a parameter named transform_state on the @data_product.on_transform() function and uses it to hold the watermark, rather than inventing its own persistence (a JSON sidecar file, a marker table, or a durable dlt pipelines_dir)."
+      "check": "The agent declares a parameter named transform_state on the @data_product.on_transform() function and uses it to hold the watermark, rather than inventing its own persistence (a JSON sidecar file, a marker table, a SELECT max(<cursor>) watermark read back off the output table, or a durable dlt pipelines_dir)."
     },
     {
       "id": "dlt-state-stays-run-local",
@@ -54,7 +54,7 @@
     },
     {
       "id": "readback-avoids-module-shadowing-and-first-run-io",
-      "check": "IF the solution reads back from DuckDB directly (for a row count — a watermark read-back is banned, see the state-bag check), it must work: the module is imported under an alias (e.g. `import duckdb as duckdb_lib`) because the port parameter is named `duckdb` and shadows it — a bare duckdb.connect(...) inside the transform raises AttributeError on the DuckDbOutput dataclass; and the missing-file case is handled, since connect(path, read_only=True) on a first run raises duckdb.IOException, not CatalogException (catching only CatalogException leaves the first run crashing). If the solution does no direct read-back at all, mark this check not applicable and do not penalize."
+      "check": "IF the solution reads back from DuckDB directly (for a row count — a watermark read-back is banned, see uses-transform-state-kwarg), it must work: the module is imported under an alias (e.g. `import duckdb as duckdb_lib`) because the port parameter is named `duckdb` and shadows it — a bare duckdb.connect(...) inside the transform raises AttributeError on the DuckDbOutput dataclass; and the missing-file case is handled, since connect(path, read_only=True) on a first run raises duckdb.IOException, not CatalogException (catching only CatalogException leaves the first run crashing). If the solution does no direct read-back at all, mark this check not applicable and do not penalize."
     },
     {
       "id": "no-when-dag-no-databricks-sidecar",
