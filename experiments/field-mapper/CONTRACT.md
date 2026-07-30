@@ -441,7 +441,36 @@ Run before landing; any failure blocks (§4).
 
 ## 8. Transport contract
 
-Model: `claude-opus-5` via the `anthropic` SDK.
+Transport is the `anthropic` SDK. **The model is declared by the spec**, and its
+capabilities are NOT universal — this section originally read "Model:
+`claude-opus-5`", which silently made one model's dialect the contract.
+
+**Model capability gating.** Reasoning controls — adaptive `thinking` and
+`output_config.effort` — exist only on the 4.6 generation and later.
+`transport.supports_reasoning_controls(model)` prefix-matches
+`_REASONING_CONTROL_MODELS` and gates **both** thinking branches plus `effort`.
+Sending any of them to an older model is a 400 that blocks the whole run: the API
+refuses before executing, so the same request fails on every cell.
+
+Two things this gate is known to get wrong, both recorded rather than fixed:
+
+- **Unknown means no.** A model family the table does not name is degraded to no
+  reasoning controls, silently and forever. Conservative, but it fails quiet: the
+  run succeeds at lower quality with nothing in the ledger saying so. The fix is
+  a live probe of the Models API (`capabilities.thinking.types.adaptive.supported`,
+  `capabilities.effort.supported`) preferred over the table, with the table kept
+  as the no-network fallback — `preflight` and dry runs must work with no SDK.
+- **Two bits, one boolean.** Adaptive thinking and `effort` are separate
+  capability leaves that happened to ship together. Models exist where they
+  diverge (Opus 4.5 has `effort` but not adaptive thinking), and one boolean
+  cannot represent that.
+
+`_validate_thinking_effort_pairing` encodes an Opus-specific rule (disabled
+above `high` effort) and applies it to every model. Harmless today because it
+only refuses, but it should be scoped to models that actually emit the controls.
+
+Verified live: a haiku spec 400'd on the ungated path and succeeds through the
+gate. The `claude-haiku-4-5` E2E run in `examples/e2e/` exercises it.
 
 **Fixed by this contract:**
 
@@ -496,13 +525,25 @@ transport failure.
    → `error` with `error_code = refusal`. Code that reads `content[0]`
    unconditionally breaks here, and it breaks *silently* on a 200.
 
-**Thinking and `max_tokens`.** On `claude-opus-5` thinking is **on by default**
-(omitting the parameter runs adaptive), and `max_tokens` caps thinking *plus*
-response text together. A `max_tokens` sized snugly around the expected JSON will
-truncate mid-object and surface as a parse failure that looks like a model
-defect. `transport.py` sizes `max_tokens` with explicit headroom over the
-schema's expected output and treats `stop_reason == "max_tokens"` as
-`error`/`schema_reject`, never as a partial answer to salvage.
+**Thinking and `max_tokens`.** On a reasoning-capable model (`claude-opus-5` and
+its generation) thinking is **on by default** — omitting the parameter runs
+adaptive — and `max_tokens` caps thinking *plus* response text together. On a
+model without reasoning controls the `thinking` parameter is not merely
+defaulted, it is **unknown**, so the harness omits it entirely rather than
+sending `{"type": "disabled"}`; sending the disabled form was itself a 400, the
+same one the adaptive gate exists to prevent.
+
+A `max_tokens` sized snugly around the expected JSON will truncate mid-object and
+surface as a parse failure that looks like a model defect. `transport.py` sizes
+`max_tokens` with explicit headroom over the schema's expected output and treats
+`stop_reason == "max_tokens"` as `error`/`schema_reject`, never as a partial
+answer to salvage.
+
+The default `max_tokens=16_000` is sized for a thinking-on model. On a
+non-reasoning model it is a harmless overshoot in the request — but **not** in
+the cost estimate, where `per_call_output = max_tokens × retries` makes it the
+single largest error term: the live haiku run estimated 16,000 output tokens
+against 127 actual. The printed figure is a worst-case bound, not a forecast.
 
 **Budget and execution** (design §10), all declared by the spec, all enforced
 before the first call and re-checked before each:
