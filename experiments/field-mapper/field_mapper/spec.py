@@ -460,6 +460,22 @@ class MapperSpec:
                 f"{len(self.target_fields)} field(s): {', '.join(bearing)}"
             )
             lines.append("every evidence atom will land 'evidence_unverified'")
+            # Observed live, not theoretical: claude-haiku-4-5 read $30.00 off a
+            # fixture image whose total is $90.00, cited "$30.00", and landed the
+            # cell `ok` on four consecutive runs. Type, range, and evidence-count
+            # checks all passed; nothing else could run. `evidence_unverified`
+            # reads like "we could not check this one", which badly understates
+            # it — so the preflight says the sharper thing outright.
+            lines.append(
+                "there is NO mechanism linking a value to its source on this "
+                "path: the quote is a string the model chose about an artifact "
+                "the harness cannot read, so a wrong value is indistinguishable "
+                "from a right one"
+            )
+            lines.append(
+                "model choice is therefore a CORRECTNESS decision here, not a "
+                "cost one — a smaller model has no safety net on this path"
+            )
         if self.thresholds.max_unverified_share < 1.0:
             lines.append(
                 f"max_unverified_share is {self.thresholds.max_unverified_share} "

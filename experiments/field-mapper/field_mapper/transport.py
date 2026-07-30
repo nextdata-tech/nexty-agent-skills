@@ -86,6 +86,43 @@ DEFAULT_MODEL_ID: Final = "claude-opus-5"
 _EFFORT_ORDER: Final = ("low", "medium", "high", "xhigh", "max")
 _MAX_EFFORT_WITH_THINKING_DISABLED: Final = "high"
 
+#: Model-id prefixes supporting the 4.6-generation reasoning controls:
+#: `thinking: {"type": "adaptive"}` AND `output_config.effort`. Both arrived
+#: together and both are a 400 on earlier models:
+#:
+#:   "adaptive thinking is not supported on this model"
+#:   "This model does not support the effort parameter"
+#:
+#: Verified against the live API on `claude-haiku-4-5`, one knob at a time.
+#: `output_config.format` (structured output) is NOT gated — it works on 4.5.
+#:
+#: Found the hard way: a live run on haiku failed every cell with schema_reject,
+#: and the harness's own hint blamed JSON Schema keywords. The request never
+#: reached the schema — it was refused on `thinking`, and then on `effort`.
+#: Treating one model family's capabilities as universal is the defect; this
+#: table makes the assumption explicit and checkable.
+_REASONING_CONTROL_MODELS: Final = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+
+def supports_reasoning_controls(model: str) -> bool:
+    """Whether `model` accepts adaptive thinking and `output_config.effort`.
+
+    Prefix match so dated snapshots (`claude-opus-5-20260114`) resolve to their
+    family. An unknown model is assumed NOT to support them: a needless omission
+    costs some reasoning depth, while a wrong inclusion costs a 400 on every
+    single cell — which is the failure this exists to prevent.
+    """
+    return any(model.startswith(prefix) for prefix in _REASONING_CONTROL_MODELS)
+
 #: Retried with backoff. Everything else surfaces immediately rather than
 #: burning budget: 400/401/403/404 are systemic and retrying cannot fix them.
 _RETRYABLE_STATUS: Final = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
@@ -991,10 +1028,13 @@ class Client:
         media_inputs: Sequence[MediaInput],
     ) -> dict[str, Any]:
         cfg = self._config
+        # `format` is ungated — structured output works on 4.5-generation models.
+        # `effort` is not: it is a 400 there, so it is added only where supported.
         output_config: dict[str, Any] = {
-            "effort": cfg.effort,
             "format": {"type": "json_schema", "schema": dict(wire_schema)},
         }
+        if supports_reasoning_controls(cfg.model):
+            output_config["effort"] = cfg.effort
         request: dict[str, Any] = {
             "model": cfg.model,
             "max_tokens": cfg.max_tokens,
@@ -1016,11 +1056,17 @@ class Client:
         # No temperature / top_p / top_k: rejected with 400 on this model, and
         # rejected by design review independently. They never guaranteed
         # determinism. Do not add them back.
-        if cfg.thinking_enabled:
+        if cfg.thinking_enabled and supports_reasoning_controls(cfg.model):
             request["thinking"] = {
                 "type": "adaptive",
                 "display": cfg.thinking_display,
             }
+        elif cfg.thinking_enabled:
+            # Pre-4.6 model: adaptive is a 400 here. Omitting `thinking`
+            # entirely is the correct pre-4.6 default — the alternative,
+            # `budget_tokens`, would need a budget this layer has no basis to
+            # choose, and a wrong one truncates mid-object.
+            pass
         else:
             # Legal only at effort <= high; enforced in TransportConfig.
             request["thinking"] = {"type": "disabled"}

@@ -663,3 +663,99 @@ The residual blockers are narrower than stated:
 tokens per page. Today a media-heavy preflight is confidently wrong. The 32 MB
 request ceiling should also be a preflight refusal rather than a 413 discovered
 mid-population.
+
+---
+
+# First live Anthropic API run (2026-07-30)
+
+Throwaway key, `claude-haiku-4-5`, fixture 07's media-direct spec. The API path had
+never run before this. Three findings, in ascending order of importance.
+
+## 1. The consent gate fired for real
+
+Changing the spec's model to haiku made the grant refuse **before any source read
+or credential use**:
+
+```
+GRANT REFUSED (before any source read):
+  - model mismatch: grant authorizes 'claude-opus-5', spec names 'claude-haiku-4-5'
+```
+
+Design §9 working as written, against a real credential for the first time.
+
+## 2. Two model-capability defects, both silent until live
+
+The harness assumed one model family's capabilities were universal. On haiku:
+
+| Knob | Result |
+|---|---|
+| `thinking: {"type": "adaptive"}` | **400** — "adaptive thinking is not supported on this model" |
+| `output_config.effort` | **400** — "This model does not support the effort parameter" |
+| `output_config.format` (structured output) | **works** — not gated |
+
+Both arrived with the 4.6 generation. Verified live, one knob at a time, because
+guessing which one caused the 400 is how the wrong fix ships.
+
+Worse than the defect: the harness's own error hint **blamed the wrong thing** —
+it suggested unsupported JSON Schema keywords, when the request never reached the
+schema. A confident wrong diagnosis costs more than no diagnosis.
+
+Fixed with `supports_reasoning_controls(model)`, a prefix-matched capability table.
+Unknown models are assumed NOT to support the controls: a needless omission costs
+some reasoning depth, a wrong inclusion costs a 400 on every cell.
+
+## 3. Haiku reads the invoice wrong — consistently — and it lands `ok`
+
+The fixture image reads **`TOTAL $90.00`**. Haiku returned:
+
+```
+total_usd = 30.0    evidence: '$30.00'    value_status = ok
+```
+
+**Four consecutive runs, identical wrong answer.** Not a flake — a stable misread.
+Sonnet (via the CLI provider) and a direct read both get $90.00 right.
+
+Every layer of the harness passed it:
+
+- type check — a float, fine
+- range check — 0 to 1,000,000, fine
+- evidence present — one atom, satisfies `min_evidence: 1`
+- substring check — **cannot run**, media-direct, so `evidence_unverified`
+- coverage gate — 100% `ok`, no §4 condition tripped
+
+So a wrong number landed in the wide table with no signal anywhere.
+
+**This is fixture 03's lesson in a new place.** Fixture 03 shows a *quote* proving
+occurrence rather than support. This shows something sharper: with no substring
+surface at all, **nothing** connects the value to the source. Evidence is a string
+the model chose, and `'$30.00'` is a fabricated quote about an image — unfalsifiable
+by construction.
+
+Three consequences worth stating plainly:
+
+1. **`evidence_unverified` is doing more damage than its name suggests.** It reads
+   like "we could not check this one." It actually means "this cell has no
+   verification mechanism whatsoever, and a wrong value is indistinguishable from a
+   right one." The media-direct preflight warning should say that in those terms.
+2. **Consistency is worse than flakiness here.** A flaky wrong answer surfaces via
+   `value_changed` staleness on rebuild. A *stable* wrong answer confirms cleanly,
+   binds to a human approval, and never lapses. The review system's whole detection
+   mechanism is blind to it.
+3. **Model choice is a correctness decision on media-direct specs, not a cost
+   decision.** The spec pins a model and hashes it into `mapper_spec_id`, which is
+   right — but nothing warns that a cheaper model on an evidence-blind path has no
+   safety net at all.
+
+### What this does NOT show
+
+Haiku is the smallest model and this is a low-resolution 240x96 synthetic PNG with
+a 5x7 bitmap font — adversarial for OCR in a way real invoices are not. The finding
+is not "haiku cannot read images." It is that **the harness cannot tell the
+difference**, and would have landed the wrong number just as confidently from any
+model on any image.
+
+## Estimator note
+
+Preflight quoted **$1.21** for this haiku run at Opus rates (`_USD_PER_MTOK_*` are
+Opus figures). `pricing_is_approximate` flags it, but the printed figure is ~20x
+the real cost. Actual usage: 1,140 input / 75 output tokens.

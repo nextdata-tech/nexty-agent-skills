@@ -3,3 +3,11 @@
 runs/
 __pycache__/
 *.pyc
+
+# Local credentials for live-provider runs. NEVER commit — the anthropic
+# provider reads ANTHROPIC_API_KEY from here via `set -a; . ./.env`.
+.env
+.env.*
+
+# Isolated venv for live-API runs; the pinned desktop venv has no `anthropic`.
+.venv-live/
