@@ -558,8 +558,10 @@ def ingest(
 ) -> None:
     """Land only events newer than the previous run's committed cursor."""
     source_root = Path(secrets["csv_source"])
-    # for_model(), never flat indexing: flat writes are dropped SILENTLY as soon
-    # as the closure promises a second model (one derived model is enough).
+    # for_model(), never flat indexing. Flat writes are dropped SILENTLY when the
+    # runtime hands over an empty declared-model list, and whenever the closure
+    # declares 2+ models (one derived model is enough). With exactly one declared
+    # model flat indexing only HAPPENS to reach the right bag — never rely on it.
     events_state = transform_state.for_model("events")
     # First run has no prior state: 0 means "take everything".
     last_seen = int(events_state.get("max_event_id", 0))
