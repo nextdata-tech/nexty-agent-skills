@@ -273,7 +273,10 @@ from what was written: set it from the max value actually yielded into
 
 **Build the resource list from `PHYSICAL_MODELS`, not from the models that happen
 to have new rows.** A model with an empty delta yields an empty resource; it does
-not get dropped from the list.
+not get dropped from the list. In a split-disposition closure each lane carries its
+own list — the append lane is a strict subset of `PHYSICAL_MODELS` by design — and
+the invariant is on their **union**: every promised model appears in exactly one
+lane, every run. "The resource list" below means the lane a model belongs to.
 
 This looks like pointless work and it is the single most important structural
 rule in a multi-model incremental transform. Skipping a model with no delta —
@@ -355,7 +358,7 @@ for model in PHYSICAL_MODELS:
     # eligibility gate sent back to "replace") is rewritten from this run alone,
     # so prior rows are gone by design and adding them here would raise on a
     # correct run.
-    expected_rows = prior_counts[model] + yielded if model in APPEND_MODELS else yielded
+    expected_rows = (prior_counts[model] + yielded) if model in APPEND_MODELS else yielded
     if landed != expected_rows:
         raise RuntimeError(
             f"{model}: expected {expected_rows} rows after "
