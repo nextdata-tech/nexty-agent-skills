@@ -303,6 +303,57 @@ def check_enum(constraint: FieldConstraint, value: Any) -> Violation | None:
     )
 
 
+def check_cross_field(check: Any, values: Mapping[str, Any]) -> Violation | None:
+    """Evaluate one arithmetic relation across already-typed cell values.
+
+    Returns None — not a violation — when any operand is missing or non-numeric.
+    An absent field means the relation is UNTESTED, not satisfied and not
+    failed; reporting a violation there would blame the model for a value the
+    source genuinely did not state, which `evidence_absent` already records
+    honestly.
+
+    The message names both sides so the retry turn is actionable: the model
+    sees "quantity=2 x unit_price=45 = 90, but total_usd=30" and can re-read,
+    rather than being told only that something is wrong.
+    """
+    operand_values: list[float] = []
+    for name in check.operands:
+        raw = values.get(name)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        operand_values.append(float(raw))
+
+    target_raw = values.get(check.target)
+    if isinstance(target_raw, bool) or not isinstance(target_raw, (int, float)):
+        return None
+    target = float(target_raw)
+
+    if check.kind == "product_equals":
+        expected = 1.0
+        for v in operand_values:
+            expected *= v
+        symbol = " x "
+    elif check.kind == "sum_equals":
+        expected = float(sum(operand_values))
+        symbol = " + "
+    else:  # unreachable: CrossFieldCheck validates `kind` at construction
+        return None
+
+    if abs(expected - target) <= check.tolerance:
+        return None
+
+    shown = symbol.join(f"{n}={v:g}" for n, v in zip(check.operands, operand_values))
+    return Violation(
+        field=check.target,
+        kind="cross_field",
+        message=(
+            f"{shown} = {expected:g}, but {check.target}={target:g}. These must "
+            f"agree within {check.tolerance:g}. At least one of these values was "
+            f"read incorrectly — re-read them from the source."
+        ),
+    )
+
+
 def check_range(constraint: FieldConstraint, value: Any) -> Violation | None:
     """Numeric range. JSON Schema on this API cannot express it (§8)."""
     if value is None:

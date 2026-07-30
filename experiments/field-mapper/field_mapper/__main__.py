@@ -65,7 +65,7 @@ from .records import (
 )
 from .resolver import BijectionError, resolve
 from .schema import compile_schema, describe_unenforceable, routing_table
-from .spec import MapperSpec
+from .spec import CrossFieldCheck, MapperSpec
 from .transport import (
     RunBudget,
     TransportConfig,
@@ -935,6 +935,14 @@ _SPEC_ID_PINS: dict[str, str] = {
     # coincidence: 09 is 07 with min_evidence back at 1, so if the two did not
     # collide here the hash would not be tracking the semantics it claims to.
     "09-unfalsifiable-evidence": "48932690b7a1a73c1021a1d16625c6b1",
+    # 10 and 11 share a hash on purpose: they are the SAME spec, differing only
+    # in `description` (excluded from the hash) and in the recorded model
+    # answer, which is not part of the spec at all. One shows the cross-field
+    # check catching an inconsistent misread; the other shows a consistent
+    # misread defeating it. Identical rubric, different model behaviour — which
+    # is precisely what a spec hash should treat as the same question.
+    "10-cross-field-check": "0a7a05262303d4db6646bfe57ba1aeee",
+    "11-consistent-misread": "0a7a05262303d4db6646bfe57ba1aeee",
 }
 
 #: `MapperSpec` fields deliberately absent from `to_canonical()`. Anything listed
@@ -964,8 +972,48 @@ def _check_canonical_coverage() -> list[str]:
     serialization — which optional fields added later must use, to avoid moving
     every pin — cannot hide a field from this check.
     """
-    probe = MapperSpec.load(
-        Path(__file__).parent.parent / "samples" / "08-pdf-document" / SPEC_FILE
+    # MAXIMALLY POPULATED, and built here rather than loaded from a fixture.
+    #
+    # Optional fields serialize omit-when-default so that adding one does not
+    # move every existing spec hash — which means a probe that leaves them empty
+    # makes a correctly-handled optional field look like a forgotten one. A
+    # fixture cannot be relied on to populate them: the first attempt probed
+    # fixture 08, which has only two numeric fields, so the cross-field check it
+    # was meant to exercise was silently skipped and the check failed anyway.
+    #
+    # This spec's job is to have EVERY optional field set. When a new one is
+    # added, set it here too; the check failing is the reminder.
+    probe = MapperSpec.from_dict(
+        {
+            "instruction": "probe",
+            "target_fields": [
+                {"name": "a", "value_type": "float", "required": True},
+                {"name": "b", "value_type": "float", "required": True},
+                {"name": "c", "value_type": "float", "required": True},
+            ],
+            "grain": {
+                "identity_fields": ["k"],
+                "canonical_sort": ["k"],
+                "duplicate_policy": "reject",
+                "source_locators": [],
+                "identity_bearing_inputs": ["k"],
+            },
+            "cardinality": {"min_rows": 1, "max_rows": 1, "expected_per_input": 1},
+            "thresholds": {
+                "max_degrade_share": 0.0,
+                "max_error_rate": 0.0,
+                "max_unverified_share": 0.0,
+                "max_absent_share": 0.0,
+                "max_validation_retries": 2,
+            },
+            "input_adapter": "landed_text",
+            "model": "claude-opus-5",
+            "effort": "medium",
+            "accepts_media": ["application/pdf"],
+            "cross_field_checks": [
+                {"kind": "product_equals", "target": "a", "operands": ["b", "c"]}
+            ],
+        }
     )
     probe = _stamp_harness_version(probe.with_wire_schema(compile_schema(probe)))
     canonical_keys = set(probe.to_canonical())

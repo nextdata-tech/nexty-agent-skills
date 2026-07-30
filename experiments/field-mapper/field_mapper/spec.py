@@ -29,7 +29,7 @@ Pure stdlib. No network.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass, field as dc_field, replace as dc_replace
 from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
@@ -368,6 +368,79 @@ class Thresholds:
         }
 
 
+#: The closed vocabulary of cross-field relations. Deliberately NOT an
+#: expression language: a spec is consent-bearing data a human reads and
+#: approves, and an eval-able expression in it is both a review burden and an
+#: injection surface. Two kinds cover the redundancy real documents carry.
+CROSS_FIELD_KINDS: tuple[str, ...] = ("product_equals", "sum_equals")
+
+
+@dataclass(frozen=True)
+class CrossFieldCheck:
+    """An arithmetic relation between target fields that must hold.
+
+    WHY THIS EXISTS. On a media-direct input the harness has NO mechanical
+    connection between a value and its source: `verify_quote` has no haystack,
+    so every check that runs is a check on the value's *form* (type, range, atom
+    count) rather than its *relation to the source*. A live model misread a
+    total, cited a verbatim-shaped quote of the number it had misread, and the
+    cell landed `ok` — stably, across four runs, so the review system's
+    staleness detection never fired either.
+
+    This rebuilds the one redundancy such an artifact still has: its own
+    internal arithmetic. If the model reads quantity 2, unit price 45.00 and
+    total 30.00, the arithmetic exposes that at least one of them is wrong even
+    though nothing can check any of them against the image.
+
+    WHAT IT DOES NOT CATCH, kept here because overclaiming this is worse than
+    not having it: a *consistent* misread (quantity read as 1 alongside a total
+    of 45.00 is wrong and self-consistent); an artifact with no internal
+    redundancy; any non-numeric field. The authorial cost is real — the spec
+    must actually extract the redundant fields for the check to bite.
+    """
+
+    kind: str
+    target: str
+    #: `product_equals`: factors multiplied. `sum_equals`: terms added.
+    operands: tuple[str, ...]
+    #: Float-representation slack ONLY, never a fuzzy match. 0.005 accommodates
+    #: penny rounding; anything larger starts accepting genuinely wrong values.
+    tolerance: float = 0.005
+
+    def __post_init__(self) -> None:
+        if self.kind not in CROSS_FIELD_KINDS:
+            raise SpecError(
+                f"cross_field_check kind {self.kind!r} is not one of "
+                f"{CROSS_FIELD_KINDS}"
+            )
+        if not self.target:
+            raise SpecError("cross_field_check requires a target field")
+        if len(self.operands) < 2:
+            raise SpecError(
+                f"cross_field_check on {self.target!r} needs at least 2 "
+                f"operands, got {len(self.operands)}"
+            )
+        if self.target in self.operands:
+            raise SpecError(
+                f"cross_field_check target {self.target!r} cannot also be an "
+                "operand — the relation would be trivially satisfiable"
+            )
+        if self.tolerance < 0:
+            raise SpecError("cross_field_check tolerance cannot be negative")
+
+    def to_canonical(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "target": self.target,
+            "operands": list(self.operands),
+            "tolerance": self.tolerance,
+        }
+
+    def describe(self) -> str:
+        op = " x " if self.kind == "product_equals" else " + "
+        return f"{op.join(self.operands)} == {self.target}"
+
+
 @dataclass(frozen=True)
 class MapperSpec:
     """A complete, validated mapper spec. `mapper_spec_id` versions it.
@@ -399,6 +472,12 @@ class MapperSpec:
     #: starts accepting images is reading different sources and every review bound
     #: to the text-only spec should come unbound.
     accepts_media: tuple[str, ...] = ()
+    #: Arithmetic relations between fields that must hold. See
+    #: `CrossFieldCheck` — this is the only mechanical check available on a
+    #: media-direct path, where the substring check is structurally
+    #: inapplicable. Empty by default and OMITTED from the canonical form when
+    #: empty, so adding this field moved no existing spec hash.
+    cross_field_checks: tuple["CrossFieldCheck", ...] = ()
     spec_version: str = "1"
     #: Compiled wire-schema bytes, hashed into the spec id per §5 step 3. Set by
     #: `schema.py` after compilation; `None` until then.
@@ -430,6 +509,27 @@ class MapperSpec:
                 f"unknown input_adapter {self.input_adapter!r}; "
                 f"expected one of {sorted(INPUT_ADAPTER_KINDS)}"
             )
+        # A cross-field check naming a field that does not exist, or one the
+        # arithmetic cannot apply to, can never fire. It would sit in the spec
+        # looking like a safeguard while checking nothing — the same failure
+        # mode as a constant that looks like a guard. Refuse at construction.
+        numeric = {f.name for f in self.target_fields if f.value_type in ("int", "float")}
+        declared = set(names)
+        for check in self.cross_field_checks:
+            referenced = (check.target, *check.operands)
+            missing = [n for n in referenced if n not in declared]
+            if missing:
+                raise SpecError(
+                    f"cross_field_check {check.describe()} references "
+                    f"undeclared field(s) {missing!r}"
+                )
+            non_numeric = [n for n in referenced if n not in numeric]
+            if non_numeric:
+                raise SpecError(
+                    f"cross_field_check {check.describe()} references "
+                    f"non-numeric field(s) {non_numeric!r}; arithmetic checks "
+                    "apply only to int and float fields"
+                )
         if not self.model or not self.model.strip():
             raise SpecError("mapper spec must name a model")
         unsupported = [m for m in self.accepts_media if m not in SUPPORTED_MEDIA_TYPES]
@@ -560,7 +660,7 @@ class MapperSpec:
         `mapper_spec_id` changes when the closure moves directory, and every
         human review in the dataset auto-invalidates at once.
         """
-        return {
+        canonical: dict[str, Any] = {
             "instruction": self.normalize_instruction(self.instruction),
             "target_fields": [f.to_canonical() for f in self.target_fields],
             "grain": self.grain.to_canonical(),
@@ -574,6 +674,18 @@ class MapperSpec:
             "wire_schema": self.wire_schema if self.wire_schema is not None else None,
             "harness_version": self.harness_version,
         }
+        # OMIT-WHEN-DEFAULT. A new optional key emitted unconditionally would
+        # move EVERY existing spec hash, unbinding every grant and review in the
+        # dataset for a feature none of those specs use. Present only when
+        # declared, so it is hashed for the specs it changes and invisible to
+        # the rest. Any future optional field must follow this rule; the
+        # `pins` coverage check probes a maximally-populated spec so an omitted
+        # key still cannot hide from it.
+        if self.cross_field_checks:
+            canonical["cross_field_checks"] = [
+                c.to_canonical() for c in self.cross_field_checks
+            ]
+        return canonical
 
     def canonical_bytes(self) -> bytes:
         """UTF-8 canonical serialization — §5 step 5's hash input."""
@@ -615,6 +727,7 @@ class MapperSpec:
             "model",
             "effort",
             "accepts_media",
+            "cross_field_checks",
             "spec_version",
             "wire_schema",
             "harness_version",
@@ -682,6 +795,15 @@ class MapperSpec:
             model=raw.get("model", "claude-opus-5"),
             effort=raw.get("effort", "medium"),
             accepts_media=tuple(raw.get("accepts_media", ())),
+            cross_field_checks=tuple(
+                CrossFieldCheck(
+                    kind=str(c.get("kind", "")),
+                    target=str(c.get("target", "")),
+                    operands=tuple(c.get("operands", ())),
+                    tolerance=float(c.get("tolerance", 0.005)),
+                )
+                for c in raw.get("cross_field_checks", ())
+            ),
             spec_version=str(raw.get("spec_version", "1")),
             wire_schema=raw.get("wire_schema"),
             harness_version=raw.get("harness_version", ""),
@@ -716,23 +838,20 @@ class MapperSpec:
         when the wire schema does — §5 step 3 includes the schema bytes. Mutating
         in place would let an object's id change under a caller that had already
         read it, which is the drift the frozen dataclass exists to prevent.
+
+        Uses `dataclasses.replace`, NOT a field-by-field rebuild. The explicit
+        form was the third site of the same bug: it silently dropped any field
+        added to `MapperSpec` later, so a spec carrying that field and one
+        without it hashed identically, the grant matched a spec the user never
+        approved, and reviews bound across the two. The first two sites were
+        `_stamp_harness_version` and `map_inputs`; this one was found
+        automatically by the canonical-coverage check rather than by reading.
+
+        It also passed `accepts_media=list(...)`, giving a frozen dataclass a
+        mutable field and breaking equality between otherwise-identical specs
+        (tuple vs list). `replace` preserves the tuple.
         """
-        return MapperSpec(
-            instruction=self.instruction,
-            target_fields=self.target_fields,
-            grain=self.grain,
-            cardinality=self.cardinality,
-            thresholds=self.thresholds,
-            input_adapter=self.input_adapter,
-            model=self.model,
-            effort=self.effort,
-            accepts_media=list(self.accepts_media),
-            spec_version=self.spec_version,
-            wire_schema=dict(wire_schema),
-            harness_version=self.harness_version,
-            description=self.description,
-            source_path=self.source_path,
-        )
+        return dc_replace(self, wire_schema=dict(wire_schema))
 
     def __repr__(self) -> str:
         """Compact repr. Deliberately omits the instruction text.

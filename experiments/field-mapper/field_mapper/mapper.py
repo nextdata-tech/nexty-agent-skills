@@ -57,6 +57,7 @@ from .validate import (
     FieldConstraint,
     ValidatedCell,
     Violation,
+    check_cross_field,
     validate_value,
     verify_quote,
 )
@@ -711,6 +712,7 @@ def _map_one(
             row_key=row_key,
             constraints=constraints,
             allow_unverified=allow_unverified,
+            cross_field_checks=spec.cross_field_checks,
         )
         _record_attempt(
             ledger,
@@ -844,6 +846,7 @@ def _validate_response(
     row_key: str,
     constraints: Mapping[str, FieldConstraint],
     allow_unverified: bool,
+    cross_field_checks: Sequence[Any] = (),
 ) -> dict[str, ValidatedCell]:
     """Type/range/enum/evidence-check one response. No I/O, no model call."""
     out: dict[str, ValidatedCell] = {}
@@ -908,6 +911,33 @@ def _validate_response(
             violations=tuple(violations),
             evidence_statuses=tuple(statuses),
         )
+
+    # -- cross-field pass, after every field has a typed value ---------------
+    # Runs last because it needs the whole row. A failure attaches to the check's
+    # TARGET field, so it flows into the existing retry loop and the correction
+    # turn names the arithmetic. On exhaustion the target lands
+    # `validation_failed` and its value is discarded, exactly like a range
+    # violation — the harness knows one of the operands is wrong but not which,
+    # and landing a value it cannot trust is what this whole design refuses.
+    if cross_field_checks:
+        typed_values = {
+            name: cell.value
+            for name, cell in out.items()
+            if cell.value_status == ValueStatus.OK.value
+        }
+        for check in cross_field_checks:
+            violation = check_cross_field(check, typed_values)
+            if violation is None:
+                continue
+            target_cell = out.get(check.target)
+            if target_cell is None:
+                continue
+            out[check.target] = dc_replace(
+                target_cell,
+                value_status=ValueStatus.VALIDATION_FAILED.value,
+                needs_review=True,
+                violations=target_cell.violations + (violation,),
+            )
     return out
 
 
