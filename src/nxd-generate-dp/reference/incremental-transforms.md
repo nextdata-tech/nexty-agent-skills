@@ -60,8 +60,11 @@ If any promised model fails the gate, the correct answer is one of:
   `write_disposition="append"` and rebuild the non-append-safe derived models
   with `write_disposition="replace"` in the same run, from the full table read
   back out of DuckDB. The derived model is then always correct, and only the
-  base scan is incremental. Two `pipeline.run(...)` calls, each with its own
-  disposition and its own resource list; the cursor covers only the base models.
+  base scan is incremental. **One** `dlt.pipeline(...)` object, two `run(...)`
+  calls on it — each with its own disposition and its own resource list; the cursor
+  covers only the base models. Keeping a single pipeline matters for the
+  verification below: `pipeline.default_schema` must see every table the run wrote,
+  and two pipeline objects would each report only their own half.
 
 Never append to an aggregate or a regrain. The output is duplicate declared-grain
 keys or stale arithmetic, on a green run, with no error.
@@ -464,8 +467,7 @@ permanently — a silent gap, where the cursor's failure mode is a visible dupli
 The ban covers the assertion case too because a `max()` that exists in the
 transform is one refactor from being read, and the row-count check already proves
 the write landed. If the source has no usable cursor column at all, the closure is
-not eligible for
-incrementality: keep it on full replace and say so.
+not eligible for incrementality: keep it on full replace and say so.
 
 ## Do NOT
 
@@ -488,8 +490,8 @@ incrementality: keep it on full replace and say so.
   pass the [eligibility gate](#before-you-start-the-eligibility-gate) may be
   appended; rebuild the rest with `"replace"` in the same run.
 - **Do NOT hand-roll durable state.** No JSON sidecar file, no marker table, no
-  `SELECT max(<cursor>)` watermark off the output table, no durable
-  `pipelines_dir`, no environment variable. `transform_state` is the mechanism;
+  `SELECT max(<cursor>)` watermark off the output table, no environment variable
+  (dlt's own state has its own bullet below). `transform_state` is the mechanism;
   the DuckDB read-back never holds the cursor — see
   [Reading prior data back out of DuckDB](#reading-prior-data-back-out-of-duckdb)
   for the reads it is for.
