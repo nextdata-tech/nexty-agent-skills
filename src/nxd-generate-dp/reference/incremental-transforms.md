@@ -69,6 +69,14 @@ If any promised model fails the gate, the correct answer is one of:
 Never append to an aggregate or a regrain. The output is duplicate declared-grain
 keys or stale arithmetic, on a green run, with no error.
 
+**Do not escape the gate by demoting a promised model to a query-time view.**
+Turning the failing aggregate into a `semantic_view` and dropping it from
+`PHYSICAL_MODELS` makes the gate pass and silently removes a model the closure
+promised: nothing lands it, the row-count check cannot see it, and the naming
+assert never covers it. If a promised model is not append-safe, use one of the two
+remedies above — it stays a landed model either way. (An eval agent took exactly
+this shortcut, which is what put this paragraph here.)
+
 ## Two mechanisms, never composed
 
 An incremental closure runs **two separate state mechanisms**. They are not layers
