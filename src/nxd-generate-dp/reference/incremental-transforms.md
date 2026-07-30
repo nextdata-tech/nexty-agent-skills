@@ -62,9 +62,11 @@ If any promised model fails the gate, the correct answer is one of:
   back out of DuckDB. The derived model is then always correct, and only the
   base scan is incremental. **One** `dlt.pipeline(...)` object, two `run(...)`
   calls on it — each with its own disposition and its own resource list; the cursor
-  covers only the base models. Keeping a single pipeline matters for the
-  verification below: `pipeline.default_schema` must see every table the run wrote,
-  and two pipeline objects would each report only their own half.
+  covers only the base models. Use one pipeline, not two: a pipeline name is what
+  dlt rehydrates its schema and load history from, so two of them give the closure
+  two independent lineages over one DuckDB file — and the rehydration behaviour
+  [Verifying the write](#verifying-the-write-count-rows-not-table-names) reasons
+  about is a property of a single lineage.
 
 Never append to an aggregate or a regrain. The output is duplicate declared-grain
 keys or stale arithmetic, on a green run, with no error.
@@ -74,8 +76,7 @@ Turning the failing aggregate into a `semantic_view` and dropping it from
 `PHYSICAL_MODELS` makes the gate pass and silently removes a model the closure
 promised: nothing lands it, the row-count check cannot see it, and the naming
 assert never covers it. If a promised model is not append-safe, use one of the two
-remedies above — it stays a landed model either way. (An eval agent took exactly
-this shortcut, which is what put this paragraph here.)
+remedies above — it stays a landed model either way.
 
 ## Two mechanisms, never composed
 
@@ -129,9 +130,11 @@ Two rules on what the bag may hold:
   `.get(key, default)` **on the bag `for_model(...)` returns**, never on
   `transform_state` itself, and pick a default that means "take everything from
   the beginning". `transform_state` is the handle, not a bag: never subscript or
-  `.get()` it directly. With one declared model that happens to reach the right bag
-  and with two or more the write is silently dropped — so it is wrong at every model
-  count and on every run, not just run one, and
+  `.get()` it directly. With one declared model that happens to reach the right bag;
+  with two or more it is unbound, and both directions fail silently — a flat write
+  is dropped, and a flat **read** returns your default rather than raising, so the
+  cursor looks like a first run and the whole source is re-yielded into an
+  `"append"` table. Wrong at every model count and on every run, not just run one;
   [Addressing the bag](#addressing-the-bag-for_model-always) has the mechanism.
 - **JSON-serializable values only.** The kernel serializes the bag; it does not
   inspect or coerce it. A `numpy.int64` row count or a `pandas.Timestamp`
@@ -511,12 +514,11 @@ not eligible for incrementality: keep it on full replace and say so.
   the DuckDB read-back never holds the cursor — see
   [Reading prior data back out of DuckDB](#reading-prior-data-back-out-of-duckdb)
   for the reads it is for.
-- **Do NOT index the bag flat.** Flat writes on an unbound handle are accepted
-  and dropped on the floor — no exception, no warning, a green run that persists
-  nothing, and an append-only load that duplicates every row on every run. Use
-  `for_model("<name>")` at every non-empty model count — a handle that happens to
-  be pre-bound to a sole model stops being bound the moment the closure declares
-  a second, and adding one derived model is enough.
+- **Do NOT index the bag flat.** Use `for_model("<name>")` at every model count —
+  a handle pre-bound to a sole model stops being bound the moment the closure
+  declares a second, and one derived model is enough. Both directions fail
+  silently; see
+  [Addressing the bag](#addressing-the-bag-for_model-always).
 - **Do NOT drop a model from the resource list because it has no new rows.**
   Yield every promised model every run, and advance a cursor only in the branch
   that wrote that model's rows.
