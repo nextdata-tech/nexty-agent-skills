@@ -499,7 +499,9 @@ incrementality: keep it on full replace and say so.
 - **Do NOT hand-roll durable state.** No JSON sidecar file, no marker table, no
   `SELECT max(<cursor>)` watermark off the output table, no durable
   `pipelines_dir`, no environment variable. `transform_state` is the mechanism;
-  the read-back out of DuckDB is for row-count verification only.
+  the DuckDB read-back never holds the cursor — see
+  [Reading prior data back out of DuckDB](#reading-prior-data-back-out-of-duckdb)
+  for the reads it is for.
 - **Do NOT index the bag flat.** Flat writes on an unbound handle are accepted
   and dropped on the floor — no exception, no warning, a green run that persists
   nothing, and an append-only load that duplicates every row on every run. Use
