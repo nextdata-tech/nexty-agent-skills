@@ -11,3 +11,6 @@ __pycache__/
 
 # Isolated venv for live-API runs; the pinned desktop venv has no `anthropic`.
 .venv-live/
+
+# E2E scratch: duckdb file, dlt state, and a run ledger. Same reason as runs/.
+examples/e2e/_run/

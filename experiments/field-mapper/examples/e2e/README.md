@@ -5,8 +5,17 @@ transform and **does not run**. This one does.
 
 ```bash
 python3 examples/e2e/run_e2e.py            # replay, no API calls, no key
-python3 examples/e2e/run_e2e.py --live     # real Anthropic calls
 python3 examples/e2e/run_e2e.py --keep     # keep the duckdb file to poke at
+```
+
+`--live` needs one interpreter that can see all four packages, and by default
+none can: the system interpreter has `dlt`/`duckdb`/`nxd` but not `anthropic`,
+while `.venv-live` has only `anthropic`. `.venv-live` is bridged to the system
+site-packages with a `_system_sitepackages.pth` file, so:
+
+```bash
+set -a && . ./.env && set +a          # ANTHROPIC_API_KEY
+.venv-live/bin/python examples/e2e/run_e2e.py --live
 ```
 
 Exit `0` = the chain worked and the landed schema matches the record contract.
@@ -48,6 +57,19 @@ Four bugs, none of which reading had caught:
    went wrong, so the schema is least stable exactly when the pipeline looks
    healthiest. Fixed with explicit `columns=` hints and a conformance check
    that exits non-zero, verified to fail when a hint is removed.
+
+## Proven live
+
+`--live` run against the real API, 3 haiku calls, ledger showing
+`provider: anthropic` with real token counts (1378/127, 1361/119, 1351/100) and
+three successes. Same result as replay: 8 cells `ok` and `verified`, 1
+`evidence_absent`, 37/37 contract columns, exit 0.
+
+One difference worth keeping: the live model quoted
+`"Payment terms: net 45 days"` where the replay fixture has the trailing period.
+The model picked a slightly different span and the substring check verified it
+anyway — the checker working against genuine output rather than a curated
+fixture.
 
 ## What it does NOT prove
 
