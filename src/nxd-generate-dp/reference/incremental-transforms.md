@@ -62,11 +62,10 @@ If any promised model fails the gate, the correct answer is one of:
   back out of DuckDB. The derived model is then always correct, and only the
   base scan is incremental. **One** `dlt.pipeline(...)` object, two `run(...)`
   calls on it — each with its own disposition and its own resource list; the cursor
-  covers only the base models. Use one pipeline, not two: a pipeline name is what
-  dlt rehydrates its schema and load history from, so two of them give the closure
-  two independent lineages over one DuckDB file — and the rehydration behaviour
-  [Verifying the write](#verifying-the-write-count-rows-not-table-names) reasons
-  about is a property of a single lineage.
+  covers only the base models. Build **one** `dlt.pipeline(...)` and call `run()`
+  on it twice — the snippets in this file are written against a single pipeline
+  object, so a second one puts you outside what any of them has been checked
+  against.
 
 Never append to an aggregate or a regrain. The output is duplicate declared-grain
 keys or stale arithmetic, on a green run, with no error.
@@ -161,24 +160,18 @@ correct at every count, and the count crosses without warning.
 fallback store to reach for if it were ([Do NOT](#do-not)); a runtime that cannot
 hold a cursor keeps the closure on full replace.
 
-**This is the failure mode to fear, and it is silent in both directions.** A
-flat write is accepted whether or not it lands —
-`transform_state["max_event_id"] = 12345` raises nothing, the run stays green,
-every assert passes, the build succeeds. On a pre-bound handle it happens to
-persist; on an unbound one it persists **nothing**, and that is the case you
-cannot see. Then the next run reads an empty bag, defaults the cursor to "take
-everything", re-yields the entire source into an `"append"` table, and
-duplicates every row. Nothing anywhere reports a problem; the only symptom is a
-row count that grows by the full source size on every run. Never index flat, at
-any model count.
-
-The trap compounds because **the declared-model count is easy to cross without
-noticing**. The Step 3 contract's `PHYSICAL_MODELS = BASE_MODELS +
-DERIVED_MODELS` means a closure with one base model plus one derived model
-already declares two, so a pre-bound flat cursor that worked becomes a dropped
-one the moment a refine cycle adds a derived model. `for_model()` is correct at
-every non-empty model count and raises `KeyError` listing the valid names on a
-typo, so it cannot fail silently — which is why it is the only form to write.
+**The failure is silent in both directions**, which is why the rule is absolute.
+`transform_state["max_event_id"] = 12345` raises nothing either way: on a
+pre-bound handle it happens to persist, on an unbound one it persists **nothing**
+while the run stays green and every assert passes. The next run then reads an
+empty bag, defaults the cursor to "take everything", and re-yields the whole
+source into an `"append"` table — the only symptom is a row count growing by the
+full source size every run. And the count is easy to cross without noticing:
+`PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` means one base plus one derived
+already declares two, so a flat cursor that worked becomes a dropped one the
+moment a refine cycle adds a derived model. `for_model()` raises `KeyError`
+listing the valid names on a typo, so it cannot fail silently — which is why it is
+the only form to write.
 
 ```python
 events = transform_state.for_model("events")
