@@ -141,7 +141,11 @@ go nowhere. That is why `for_model()` is the only form worth writing: it is
 correct at every count, and the count crosses without warning.
 
 If `for_model()` ever raises `AttributeError`, the runtime handed over an empty
-list and nothing durable is available. The response is **not** another store —
+list and nothing durable is available. **Do not code against this** — it cannot
+happen on desktop, so a `try`/`except AttributeError` wrapper in your transform is
+dead code the contract does not want. It is stated here for the author who hits it
+on some other runtime, and the answer then is a decision, not a fallback path: the
+response is **not** another store —
 flat indexing persists nothing and every hand-rolled alternative is banned in
 [Do NOT](#do-not). Stop, tell the author the runtime does not support durable
 transform state, and keep the closure on full replace: no cursor, correct on
@@ -438,11 +442,19 @@ staging. All writes still go through dlt with
 `dlt.destinations.duckdb(credentials=duckdb.path)`.
 
 Use the read-back for the row-count verification, which the cursor cannot
-substitute for. Do **not** use it to reconstruct the cursor — a
-`SELECT max(<cursor>)` off the output table is a hand-rolled persistence
-mechanism, and the closure contract forbids it. If the source has no usable
-cursor column at all, the closure is not eligible for incrementality: keep it on
-full replace and say so.
+substitute for. Do **not** use it to reconstruct the cursor. The tradeoff is real
+and worth stating, because this document argues both sides: a watermark derived
+from the landed rows cannot disagree with what was committed, so it is immune to
+the [torn state](#durability-rows-and-cursor-do-not-share-fate) above — whereas
+`transform_state` is cheap, explicit, and one mechanism instead of two, but its
+cursor and the rows do not share fate. `transform_state` wins anyway because the
+watermark's immunity holds only if a failed load leaves a *prefix* in cursor
+order; a partial load that is not a prefix advances the watermark past rows that
+never landed and skips them permanently — a silent gap, where the cursor's failure
+mode is a visible duplicate. So the cursor is the sanctioned mechanism and a
+`SELECT max(<cursor>)` read-back is hand-rolled persistence the contract forbids.
+If the source has no usable cursor column at all, the closure is not eligible for
+incrementality: keep it on full replace and say so.
 
 ## Do NOT
 
@@ -620,11 +632,15 @@ def ingest(
     # Verify the write by ROW COUNT. The table-name assert above cannot detect a
     # model that was silently not written: dlt rehydrates its schema from the
     # destination, so a table landed by an earlier run is reported either way.
+    # Expectation depends on the model's own disposition: an appended model adds
+    # to what was there, a replaced one is rewritten from this run alone. "events"
+    # is in APPEND_MODELS here; keep this shape so adding a replaced derived model
+    # later does not silently make the check wrong.
     landed = _table_row_count(duckdb, "events")
-    if landed != prior_count + len(rows):
+    expected_rows = prior_count + len(rows) if "events" in APPEND_MODELS else len(rows)
+    if landed != expected_rows:
         raise RuntimeError(
-            f"events: expected {prior_count + len(rows)} rows after append, "
-            f"found {landed}"
+            f"events: expected {expected_rows} rows after append, found {landed}"
         )
 
     # Produce-verification marker: the supervisor's readiness gate waits for it.
