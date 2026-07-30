@@ -152,9 +152,11 @@ transform state, and keep the closure on full replace: no cursor, correct on
 every rerun.
 
 **This is the failure mode to fear, and it is silent in both directions.** A
-flat write is accepted — `transform_state["max_event_id"] = 12345` raises
-nothing, the run stays green, every assert passes, the build succeeds — and then
-persists nothing. The next run reads an empty bag, defaults the cursor to "take
+flat write is accepted whether or not it lands —
+`transform_state["max_event_id"] = 12345` raises nothing, the run stays green,
+every assert passes, the build succeeds. On a pre-bound handle it happens to
+persist; on an unbound one it persists **nothing**, and that is the case you
+cannot see. Then the next run reads an empty bag, defaults the cursor to "take
 everything", re-yields the entire source into an `"append"` table, and
 duplicates every row. Nothing anywhere reports a problem; the only symptom is a
 row count that grows by the full source size on every run. Never index flat, at
@@ -396,12 +398,14 @@ cannot see.
 `DuckDbOutput` exposes `path`, `schema`, `model_tables` and `full_table_name` —
 it has **no** query or execute method. To read what previous runs landed (to
 count rows for the verification above, or to check for overlap), open the file
-directly. What separates this from the banned watermark is **use, not SQL shape**:
-the same `SELECT max(<cursor>)` is fine as a post-write assertion and forbidden as
-the thing your next run reads its cursor from. If the value survives the transform
-— held in a variable the cursor is derived from, or compared against to decide what
-to yield — it has become hand-rolled persistence. The cursor lives in
-`transform_state`, and nowhere else.
+directly. **Count rows; do not read the cursor column back at all.** The ban is on
+the SQL shape, not just the intent: `SELECT max(<cursor>)` off the output table is
+out even as a post-write assertion. That is stricter than it strictly needs to be —
+a `max()` you only assert against never becomes a cursor — but a value that exists
+in the transform is one refactor away from being read, the row-count check already
+proves the write landed, and one rule you can apply without judging your own intent
+beats two you have to keep apart. The cursor lives in `transform_state`, and
+nowhere else.
 
 **Import the module under an alias.** The output port parameter must be named
 exactly `duckdb` (the local DuckDB driver requires that name and it cannot be
