@@ -38,7 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -53,6 +53,7 @@ from .errors import (
 from .grant import Grant
 from .ledger import read_attempts
 from .mapper import MapperInput, MapResult, SYSTEM_PROMPT, map_inputs
+from .media import MediaInput
 from .records import (
     EVIDENCE_COLUMNS,
     PROPOSAL_COLUMNS,
@@ -181,22 +182,13 @@ def _stamp_harness_version(spec: MapperSpec) -> MapperSpec:
     CONTRACT.md open question 6: without the harness version in the hash, a
     harness change (a tightened assert, a changed normalizer) is invisible when
     comparing two Layer-2 experiments.
+
+    Uses `dataclasses.replace` rather than reconstructing field-by-field. The
+    explicit form silently dropped any field added to `MapperSpec` later — a new
+    semantic field would vanish here, change `mapper_spec_id`, and invalidate
+    every review in the dataset with no visible cause.
     """
-    return MapperSpec(
-        instruction=spec.instruction,
-        target_fields=spec.target_fields,
-        grain=spec.grain,
-        cardinality=spec.cardinality,
-        thresholds=spec.thresholds,
-        input_adapter=spec.input_adapter,
-        model=spec.model,
-        effort=spec.effort,
-        spec_version=spec.spec_version,
-        wire_schema=spec.wire_schema,
-        harness_version=__version__,
-        description=spec.description,
-        source_path=spec.source_path,
-    )
+    return dc_replace(spec, harness_version=__version__)
 
 
 def bind_reviews(
@@ -258,6 +250,32 @@ def bind_reviews(
     return bound
 
 
+def _media_from_dicts(
+    raws: Sequence[Mapping[str, Any]], base: Path
+) -> tuple[MediaInput, ...]:
+    """Build `MediaInput`s, resolving `file` against the fixture directory.
+
+    A fixture declares `{"file": "invoice.png", "media_type": "image/png"}` and
+    the bytes are read from disk — never inlined as base64 in the JSON, which
+    would make the fixture unreadable and unreviewable. `url` and `file_id`
+    artifacts pass through as references.
+    """
+    built: list[MediaInput] = []
+    for raw in raws:
+        path = raw.get("file")
+        data = (base / str(path)).read_bytes() if path else None
+        built.append(
+            MediaInput(
+                media_type=str(raw["media_type"]),
+                data=data,
+                url=raw.get("url"),
+                file_id=raw.get("file_id"),
+                label=raw.get("label"),
+            )
+        )
+    return tuple(built)
+
+
 def _input_from_dict(raw: Mapping[str, Any], base: Path) -> MapperInput:
     """Build one `MapperInput`, resolving `landed_text_file` against the fixture.
 
@@ -275,6 +293,7 @@ def _input_from_dict(raw: Mapping[str, Any], base: Path) -> MapperInput:
         identity=dict(raw.get("identity", {})),
         fields=dict(raw.get("fields", {})),
         landed_text=landed_text,
+        media=_media_from_dicts(raw.get("media", ()), base),
         landed_text_model=raw.get("landed_text_model"),
         extractor=raw.get("extractor"),
         extractor_version=raw.get("extractor_version"),
@@ -413,6 +432,7 @@ def _live_caller(fixture: Fixture, budget: RunBudget) -> Any:
             instruction=instruction,
             wire_schema=wire_schema,
             text_inputs=[item.landed_text] if item.landed_text else [],
+            media_inputs=item.media,
             input_hash=item.input_id,
         )
 
@@ -619,11 +639,38 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
         for line in unenforceable:
             print(f"    {line}")
 
+    media = [m for i in fixture.inputs for m in i.media]
+    if media:
+        _print_header("Media inputs")
+        for m in media:
+            size = m.size_bytes()
+            sized = f"{size:,} bytes" if size is not None else "size unknown"
+            label = f" [{m.label}]" if m.label else ""
+            print(
+                f"  {m.media_type:<20} {m.kind:<9} via {m.source_form:<8} "
+                f"{sized}{label}"
+            )
+
+    # Derived from the declared fields, never from a declaration the spec could
+    # quietly set to 1.0. A media-direct run has no substring haystack, so saying
+    # so here is the difference between an accepted trade-off and a surprise.
+    warnings = spec.media_direct_report()
+    direct_inputs = [i.input_id for i in fixture.inputs if i.is_media_direct]
+    if warnings:
+        _print_header("WARNING - evidence verification")
+        for line in warnings:
+            print(f"  {line}")
+        if direct_inputs:
+            shown = ", ".join(direct_inputs[:5])
+            more = f" (+{len(direct_inputs) - 5} more)" if len(direct_inputs) > 5 else ""
+            print(f"\n  media-direct input(s): {shown}{more}")
+
     cells = len(fixture.inputs) * len(spec.target_fields)
     est = estimate(
         cell_count=len(fixture.inputs),
         instruction=spec.instruction,
         text_inputs=[i.landed_text for i in fixture.inputs if i.landed_text],
+        media_sizes_bytes=[m.size_bytes() for m in media],
         calls_per_cell=1 + spec.thresholds.max_validation_retries,
         config=TransportConfig(effort=spec.effort),
     )
@@ -635,6 +682,12 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
     print(f"  spend                ${est.estimated_usd:.4f}")
     print(f"  wall time            {est.estimated_wall_seconds:.0f}s")
     print(f"  measured token counts {est.token_counts_measured}")
+    if est.unsized_media:
+        print(
+            f"  NOTE {est.unsized_media} media artifact(s) could not be sized "
+            "locally (url/file_id), so\n       their token cost is EXCLUDED. The "
+            "figures above are a floor, not an estimate."
+        )
 
     budget = _budget_from(fixture, None)
     breaches = est.fits_within(budget)

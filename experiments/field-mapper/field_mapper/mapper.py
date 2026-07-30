@@ -41,6 +41,7 @@ from .identity import (
     target_row_key as derive_target_row_key,
 )
 from .ledger import AttemptRecord, RunLedger, hash_text
+from .media import MediaInput, media_digest
 from .records import (
     LocatorKind,
     MapperEvidence,
@@ -114,6 +115,19 @@ class MapperInput:
     asserted entity disagrees with the row it is attached to is quarantined
     before mapping, because every quote in it would substring-verify perfectly
     against the wrong source.
+
+    `media` and `landed_text` are separate fields with separate roles, and
+    conflating them would reintroduce the circularity the two-stage design exists
+    to prevent. `media` is sent to the model; `landed_text` is the haystack the
+    response is checked against. An input may carry both (a PDF plus its
+    previously-landed text), either alone, or neither.
+
+    An input carrying media but no landed text is **media-direct**: there is no
+    substring surface, so every evidence atom lands `evidence_unverified` and
+    `verified` is unreachable for that input. That is allowed — a caller asking
+    "read this screenshot" is asking for exactly it — but it must be stated at
+    preflight rather than discovered in the results, which is what
+    `MapperSpec.media_direct_report()` is for.
     """
 
     input_id: str
@@ -121,12 +135,18 @@ class MapperInput:
     fields: Mapping[str, Any] = dc_field(default_factory=dict)
     landed_text: str | None = None
     landed_text_model: str | None = None
+    media: Sequence[MediaInput] = ()
     extractor: str | None = None
     extractor_version: str | None = None
     document_hash: str | None = None
     page: int | None = None
     asserted_entity: Mapping[str, Any] | None = None
     document_class: str | None = None
+
+    @property
+    def is_media_direct(self) -> bool:
+        """Media present with no landed text, so no substring surface exists."""
+        return bool(self.media) and self.landed_text is None
 
     def snapshot_projection(self, bearing: Sequence[str]) -> dict[str, Any]:
         """The identity-bearing projection hashed into `input_snapshot_id`.
@@ -135,6 +155,15 @@ class MapperInput:
         not read must NOT throw away the reviewer's work. Landed text IS
         included when present, because a re-extraction genuinely changes what
         was read and every review bound to the old text should come unbound.
+
+        Media digests are included for the same reason: swapping the image behind
+        a row changes what was read, so that row's confirmations must come
+        unbound. Omitting them would let a replaced artifact silently inherit a
+        human approval. Digests, never bytes — the snapshot is a fingerprint, not
+        a second copy of the source.
+
+        Order is preserved rather than sorted: media order is what the model saw,
+        and reordering two pages is a genuine change in what was read.
         """
         payload: dict[str, Any] = {"input_id": self.input_id}
         merged = {**dict(self.fields), **dict(self.identity)}
@@ -143,6 +172,8 @@ class MapperInput:
                 payload[name] = merged[name]
         if self.landed_text is not None:
             payload["landed_text"] = normalize_text(self.landed_text)
+        if self.media:
+            payload["media"] = [media_digest(m) for m in self.media]
         return payload
 
 

@@ -53,6 +53,7 @@ from .errors import (
     SystemicError,
     TransportExhaustedError,
 )
+from .media import MediaInput, build_media_content_block
 
 __all__ = [
     "DEFAULT_MODEL_ID",
@@ -374,6 +375,11 @@ class PreflightEstimate:
     #: `estimated_usd` is indicative rather than costed. A budget refusal says
     #: so instead of implying an exact figure.
     pricing_is_approximate: bool = False
+    #: Media artifacts whose byte size this process could not read (url/file_id),
+    #: so their token cost is excluded from the estimate entirely. Non-zero means
+    #: `estimated_input_tokens` is a floor, not an estimate — a preflight report
+    #: must say so rather than presenting a confident number.
+    unsized_media: int = 0
 
     def fits_within(self, budget: RunBudget) -> list[str]:
         """Return the ceilings this estimate breaches. Empty means it fits."""
@@ -578,27 +584,20 @@ class CallResult:
 def build_pdf_content_block(pdf_bytes: bytes) -> dict[str, Any]:
     """A base64 PDF document block.
 
-    Placed in a USER turn by `build_user_content`, never interpolated into the
-    system prompt: source documents are untrusted data, never instruction.
+    Thin constructor over `build_media_content_block`; kept because a PDF is the
+    common case and `MediaInput(media_type="application/pdf", data=...)` reads
+    worse at a call site that only ever has PDFs.
     """
-    import base64  # noqa: PLC0415
-
-    return {
-        "type": "document",
-        "source": {
-            "type": "base64",
-            "media_type": "application/pdf",
-            # No newlines: the API rejects a wrapped base64 payload.
-            "data": base64.standard_b64encode(pdf_bytes).decode("ascii"),
-        },
-    }
+    return build_media_content_block(
+        MediaInput(media_type="application/pdf", data=pdf_bytes)
+    )
 
 
 def build_user_content(
     *,
     instruction: str,
     text_inputs: Sequence[str] = (),
-    pdf_inputs: Sequence[bytes] = (),
+    media_inputs: Sequence[MediaInput] = (),
 ) -> list[dict[str, Any]]:
     """Assemble the user turn.
 
@@ -611,8 +610,19 @@ def build_user_content(
     to approved extracted fields.
     """
     blocks: list[dict[str, Any]] = []
-    # Documents before text, per the PDF-input convention.
-    blocks.extend(build_pdf_content_block(b) for b in pdf_inputs)
+    # Media before text, per the document-input convention.
+    for media in media_inputs:
+        blocks.append(build_media_content_block(media))
+        # A labelled marker after the block, so a model reading several artifacts
+        # can attribute evidence to one of them. Text, not trusted identity —
+        # `reconcile_identity` is what defends against a wrong-filed document.
+        if media.label:
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": f"<source_media label=\"{media.label}\" />",
+                }
+            )
     for source_text in text_inputs:
         blocks.append(
             {
@@ -638,7 +648,7 @@ def estimate(
     cell_count: int,
     instruction: str,
     text_inputs: Sequence[str] = (),
-    pdf_sizes_bytes: Sequence[int] = (),
+    media_sizes_bytes: Sequence[int | None] = (),
     config: TransportConfig | None = None,
     calls_per_cell: int = 1,
     expected_output_tokens: int | None = None,
@@ -686,10 +696,20 @@ def estimate(
     else:
         per_call_input = _offline_token_estimate(instruction, text_inputs)
 
-    # PDFs are not visible to count_tokens without uploading them, so their cost
-    # is always the heuristic. Additive to whichever text estimate we used.
+    # Media is not visible to count_tokens without uploading it, so its cost is
+    # always the heuristic. Additive to whichever text estimate we used.
+    #
+    # A `None` size is a url/file_id artifact this process cannot read, so its
+    # token cost is genuinely unknown. Counting it as zero would produce a
+    # confident underestimate, and an underestimate that lets a run start and
+    # then blows the ceiling at 60% is strictly worse than a refusal. The count
+    # is surfaced on the estimate so the caller reports "N artifact(s) unsized"
+    # instead of implying full coverage.
+    unsized_media = sum(1 for size in media_sizes_bytes if size is None)
     per_call_input += sum(
-        int(size / 1024 * _PDF_TOKENS_PER_KB) for size in pdf_sizes_bytes
+        int(size / 1024 * _PDF_TOKENS_PER_KB)
+        for size in media_sizes_bytes
+        if size is not None
     )
 
     # Thinking is on by default and is billed as output. Sizing the output
@@ -709,9 +729,13 @@ def estimate(
         estimated_output_tokens=total_output,
         estimated_usd=_usd_for(total_input, total_output),
         estimated_wall_seconds=wall,
-        token_counts_measured=measured,
+        # An unsized artifact means part of the input was never counted at all,
+        # so the total is not "measured" even when count_tokens answered for the
+        # text half. Claiming measurement here would present a floor as a figure.
+        token_counts_measured=measured and not unsized_media,
         model=cfg.model,
         pricing_is_approximate=cfg.model != DEFAULT_MODEL_ID,
+        unsized_media=unsized_media,
     )
 
 
@@ -802,7 +826,7 @@ class Client:
         instruction: str,
         wire_schema: Mapping[str, Any],
         text_inputs: Sequence[str] = (),
-        pdf_inputs: Sequence[bytes] = (),
+        media_inputs: Sequence[MediaInput] = (),
         input_hash: str,
         cells_remaining: int = 0,
     ) -> CallResult:
@@ -828,7 +852,7 @@ class Client:
             instruction=instruction,
             wire_schema=wire_schema,
             text_inputs=text_inputs,
-            pdf_inputs=pdf_inputs,
+            media_inputs=media_inputs,
         )
 
         last_transport_detail = "no attempt completed"
@@ -905,7 +929,7 @@ class Client:
         instruction: str,
         wire_schema: Mapping[str, Any],
         text_inputs: Sequence[str],
-        pdf_inputs: Sequence[bytes],
+        media_inputs: Sequence[MediaInput],
     ) -> dict[str, Any]:
         cfg = self._config
         output_config: dict[str, Any] = {
@@ -924,7 +948,7 @@ class Client:
                     "content": build_user_content(
                         instruction=instruction,
                         text_inputs=text_inputs,
-                        pdf_inputs=pdf_inputs,
+                        media_inputs=media_inputs,
                     ),
                 }
             ],

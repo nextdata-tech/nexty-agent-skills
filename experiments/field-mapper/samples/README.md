@@ -1,6 +1,6 @@
 # Field-mapper acceptance fixtures
 
-Six fixtures. Together they are the acceptance suite for the Layer-1 contract in
+Seven fixtures. Together they are the acceptance suite for the Layer-1 contract in
 [`../CONTRACT.md`](../CONTRACT.md) — not a demo directory. Each one declares, in
 `expect.json`, the outcome it proves; `verify` runs them all and fails when
 reality diverges.
@@ -53,6 +53,7 @@ a different and stronger claim than "the status is `validation_failed`".
 | 04 | `04-wrong-document` | **Adversarial** — wrong-entity evidence, quarantined pre-mapping | **yes** |
 | 05 | `05-evidence-absent` | A silent source is a finding, not a low score | no |
 | 06 | `06-validation-failure` | Range enforcement, value discard, review precedence | no |
+| 07 | `07-media-direct` | An image has no substring surface, and the harness says so up front | no |
 
 ### 01 — `01-row-scores`: the normal row-input case
 
@@ -316,3 +317,38 @@ Being precise about the boundary, because a green suite invites over-reading:
   The suite checks coverage, evidence anchoring, range and enum validity, key
   uniqueness, and review binding. Whether a 5 is the right answer is a human
   review question, and 03 is the standing reminder of why.
+
+### 07 — `07-media-direct`: an image, and the honest limit of the evidence check
+
+A real 240x96 PNG of an invoice summary line (`invoice.png`, 617 bytes, generated
+with stdlib `zlib`+`struct` — there is no image library in the pinned venv). The
+model reads `invoice_ref` and `total_usd` off the pixels. There is **no landed
+text behind it**, which is the point.
+
+Both cells land `ok` with correct values, and both evidence atoms land
+`evidence_unverified` — never `verified`. The substring check is not weakened
+here, it is **inapplicable**: there is no text layer to quote from, so
+`validate.py` returns `UNVERIFIED` the moment it sees `landed_text is None`.
+That is a code path, not a fixture assertion, which is why this fixture needed no
+validator change to write.
+
+`preflight` on this fixture is the part worth reading. It reports:
+
+```
+WARNING - evidence verification
+  media-direct spec: accepts image/png with no landed-text surface, so the
+  evidence substring check cannot run
+  'verified' is UNREACHABLE for 2 of 2 field(s): invoice_ref, total_usd
+  every evidence atom will land 'evidence_unverified'
+```
+
+Derived from the declared fields, not from `max_unverified_share`. A spec that
+sets the unverified ceiling to 1.0 to make a media-direct run pass is making a
+real trade, and the report names it rather than letting a green run imply
+verification happened.
+
+**Two things this fixture does not prove.** Like every fixture here it is
+`--dry-run` against a hand-authored response, so it says nothing about whether a
+real model asked to *describe an image region* will comply rather than fabricating
+a verbatim quote — that needs a live call. And only the `base64` source form is
+covered; `url` and `file_id` have no fixture.

@@ -3,14 +3,16 @@
 Four extensions, derived from [GENERALITY.md](GENERALITY.md)'s 13-scenario stress
 test. Ordered by what unblocks the most with the least machinery.
 
-Nothing here is implemented. Each section states the change, the mechanism, what
-it unlocks, and what it costs. Where an extension depends on a
-[REVIEW.md](REVIEW.md) defect being fixed first, that is called out — two of them
-promote an existing "high" finding to a blocker.
+Each section states the change, the mechanism, what it unlocks, and what it costs.
+Where an extension depends on a [REVIEW.md](REVIEW.md) defect being fixed first,
+that is called out — two of them promote an existing "high" finding to a blocker.
+
+**Extension 1 is implemented** (see [Implementation status](#implementation-status)
+at the bottom). Extensions 2–4 are proposals.
 
 | # | Extension | Unlocks | Depends on |
 |---|---|---|---|
-| 1 | Media inputs (any modality) | Image/PDF/audio-blob specs; kills the `pdf`-shaped API | — |
+| 1 | Media inputs (any modality) — **LANDED** | Image/PDF/audio-blob specs; kills the `pdf`-shaped API | — |
 | 2 | Row-array output + `identity_source: output` | Multi-row extraction from any medium | REVIEW H-2 |
 | 3 | Pinned landing | Any staged extraction | Extension 1 |
 | 4 | `snapshot_scope: row \| population` | Append-stable reviews; partitioned runs | — |
@@ -63,12 +65,17 @@ class MediaInput:
 
     NEVER the evidence substring surface — see MapperInput.media below.
     """
-    kind: Literal["document", "image"]   # the API content-block type
     media_type: str                      # "application/pdf", "image/png", ...
     data: bytes | None = None            # base64 path
     url: str | None = None               # url path
     file_id: str | None = None           # Files API path
+    label: str | None = None             # attribution when several are supplied
 ```
+
+As built, `kind` is a **derived property** rather than a declared field, read from
+the `SUPPORTED_MEDIA_TYPES` table. Declaring it separately would have permitted
+`kind="document"` with `media_type="image/png"`, a disagreement needing its own
+validation; deriving it makes the disagreement unrepresentable.
 
 `build_media_content_block(m)` dispatches on `kind` and on which of
 `data`/`url`/`file_id` is set. `build_user_content(media_inputs=...)` replaces
@@ -122,9 +129,14 @@ GENERALITY.md S6 caught the trap: a screenshot spec must set
 `max_unverified_share: 1.0`, which makes §4's strongest ceiling decorative. So
 the harness must **derive** this rather than trust a declaration — at preflight,
 a media-direct spec reports "this mapper runs evidence-blind; `verified` is
-unreachable for N of M fields." A spec that declares
-`max_unverified_share < 1.0` while being media-direct is a spec error, not a
-runtime surprise.
+unreachable for N of M fields."
+
+As built, a media-direct spec declaring `max_unverified_share < 1.0` is **not** a
+construction-time `SpecError` (as this section originally proposed) but a preflight
+warning naming the exact consequence: the run will block on the unverified
+ceiling. Rejecting at construction would make the spec object unbuildable, which
+also makes it un-inspectable — the author could not run `preflight` to see *why*.
+The blocking still happens, at the gate, where the other §4 ceilings block.
 
 ### What it unlocks
 
@@ -375,3 +387,58 @@ how the defects become load-bearing.
   Partitioning achieves the operational goal without it.
 - **Free-prose output fields** — substring evidence is category-inapplicable to
   synthesized text; see ARCHITECTURE's out-of-scope section.
+
+---
+
+# Implementation status
+
+## Extension 1 — LANDED (docs + code + fixture)
+
+`media.py` (new), plus changes to `transport.py`, `mapper.py`, `spec.py`,
+`__main__.py`, and `samples/07-media-direct/`. Acceptance suite 7/7.
+
+Decision taken: **permissive with a loud preflight.** A media-direct spec runs;
+`spec.media_direct_report()` states at preflight that `verified` is unreachable,
+for which fields, and how many. Derived from the declared fields rather than
+trusting `max_unverified_share`.
+
+What the implementation confirmed, beyond what was specced:
+
+- **The validator needed no change at all.** `validate.py:387` returns
+  `UNVERIFIED` whenever `landed_text is None`, so media-direct atoms cannot be
+  marked `verified` regardless of what a model returns. This is a code path, not
+  a fixture assertion — it is the strongest evidence in this document that
+  "modality is a landing concern, not an evidence concern" (GENERALITY.md S5) is
+  structurally true and not merely observed.
+- **`_stamp_harness_version` was silently dropping spec fields.** It
+  reconstructed `MapperSpec` field-by-field, so `accepts_media` vanished from
+  every fixture's spec — and would have changed `mapper_spec_id` invisibly,
+  invalidating every review with no visible cause. Now `dataclasses.replace`.
+  Any future spec field would have hit the same trap.
+- **The spec loader's strict key whitelist caught the omission** when
+  `accepts_media` was missing from it. The guard works; worth keeping in mind
+  that every new spec field needs two edits, not one.
+
+### Known inconsistency, not fixed
+
+`routing_table()` still reports `<field>.evidence_substring -> validate.py` for a
+media-direct spec, where the substring check cannot run. The preflight warning
+immediately below it says the opposite. Both lines are true in isolation —
+the constraint *is* routed to the harness, and the harness *cannot* satisfy it
+without a haystack — but printed together they read as a contradiction.
+
+Fixing it means `routing_table` growing awareness of whether a haystack will
+exist, which is input state rather than spec state. Left as-is deliberately: a
+visible inconsistency in a preflight report is better than a routing table that
+silently omits a constraint it does own.
+
+### Not covered by the fixture
+
+The fixture is `--dry-run`, like all seven. It replays a hand-authored response.
+**No fixture in this suite has ever called the live API.** So fixture 07 proves
+the harness treats media-direct evidence correctly; it proves nothing about
+whether a model asked to describe an image region will comply rather than
+fabricating a verbatim quote. That question needs a live call.
+
+Also untested: `url` and `file_id` source forms (only `base64` has a fixture),
+and multi-artifact inputs (one image per input only).

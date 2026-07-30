@@ -35,6 +35,7 @@ from typing import Any, Final, Mapping, Sequence
 
 from .errors import SpecError
 from .identity import canonical_json, digest, full_digest
+from .media import SUPPORTED_MEDIA_TYPES
 
 __all__ = [
     "VALUE_TYPES",
@@ -368,6 +369,12 @@ class MapperSpec:
     #: review independently. Do not add them back "for determinism"; they never
     #: guaranteed it.
     effort: str = "medium"
+    #: Media types this mapper accepts as non-text input, e.g.
+    #: `("application/pdf",)` or `("image/png", "image/jpeg")`. Empty means
+    #: text-only. Semantic, so it is hashed into `mapper_spec_id`: a mapper that
+    #: starts accepting images is reading different sources and every review bound
+    #: to the text-only spec should come unbound.
+    accepts_media: tuple[str, ...] = ()
     spec_version: str = "1"
     #: Compiled wire-schema bytes, hashed into the spec id per §5 step 3. Set by
     #: `schema.py` after compilation; `None` until then.
@@ -401,6 +408,67 @@ class MapperSpec:
             )
         if not self.model or not self.model.strip():
             raise SpecError("mapper spec must name a model")
+        unsupported = [m for m in self.accepts_media if m not in SUPPORTED_MEDIA_TYPES]
+        if unsupported:
+            supported = ", ".join(sorted(SUPPORTED_MEDIA_TYPES))
+            raise SpecError(
+                f"accepts_media names unsupported media type(s) {unsupported!r}; "
+                f"the API accepts {supported}. Declaring one the API rejects "
+                "costs a call and returns a schema reject, so it is refused here."
+            )
+
+    # -- media -------------------------------------------------------------
+
+    @property
+    def accepts_media_input(self) -> bool:
+        return bool(self.accepts_media)
+
+    @property
+    def evidence_bearing_fields(self) -> tuple[str, ...]:
+        """Fields that require at least one evidence atom."""
+        return tuple(f.name for f in self.target_fields if f.min_evidence > 0)
+
+    def media_direct_report(self) -> list[str]:
+        """What a media-direct run cannot verify, stated before the first call.
+
+        A media-direct mapper — media in, no landed text — has no substring
+        haystack, so `verified` is unreachable and every atom lands
+        `evidence_unverified`. That is permitted: a caller asking "read this
+        screenshot" is asking for exactly it, and refusing would block the case
+        outright until staged extraction exists.
+
+        What is NOT permitted is discovering it in the results. This returns the
+        lines a preflight report must print. It is DERIVED from the declared
+        fields rather than trusting a declaration, because the failure mode here
+        is a spec that quietly sets `max_unverified_share: 1.0` and thereby makes
+        §4's strongest ceiling decorative without anyone noticing.
+
+        Empty list means nothing to warn about. Callers that hold actual inputs
+        should prefer `media_direct_report_for_inputs`, which knows whether landed
+        text is present rather than inferring from the spec alone.
+        """
+        if not self.accepts_media_input:
+            return []
+        bearing = self.evidence_bearing_fields
+        lines = [
+            f"media-direct spec: accepts {', '.join(self.accepts_media)} with no "
+            "landed-text surface, so the evidence substring check cannot run"
+        ]
+        if bearing:
+            lines.append(
+                f"'verified' is UNREACHABLE for {len(bearing)} of "
+                f"{len(self.target_fields)} field(s): {', '.join(bearing)}"
+            )
+            lines.append("every evidence atom will land 'evidence_unverified'")
+        if self.thresholds.max_unverified_share < 1.0:
+            lines.append(
+                f"max_unverified_share is {self.thresholds.max_unverified_share} "
+                "but a media-direct run produces 100% unverified atoms, so this "
+                "run will BLOCK on the unverified ceiling. Either declare 1.0 and "
+                "accept an evidence-blind mapper, or stage extraction so landed "
+                "text exists to verify against."
+            )
+        return lines
 
     # -- lookup ------------------------------------------------------------
 
@@ -461,6 +529,7 @@ class MapperSpec:
             "input_adapter": self.input_adapter,
             "model": self.model,
             "effort": self.effort,
+            "accepts_media": list(self.accepts_media),
             "spec_version": self.spec_version,
             "wire_schema": self.wire_schema if self.wire_schema is not None else None,
             "harness_version": self.harness_version,
@@ -505,6 +574,7 @@ class MapperSpec:
             "input_adapter",
             "model",
             "effort",
+            "accepts_media",
             "spec_version",
             "wire_schema",
             "harness_version",
@@ -571,6 +641,7 @@ class MapperSpec:
             input_adapter=raw["input_adapter"],
             model=raw.get("model", "claude-opus-5"),
             effort=raw.get("effort", "medium"),
+            accepts_media=tuple(raw.get("accepts_media", ())),
             spec_version=str(raw.get("spec_version", "1")),
             wire_schema=raw.get("wire_schema"),
             harness_version=raw.get("harness_version", ""),
@@ -615,6 +686,7 @@ class MapperSpec:
             input_adapter=self.input_adapter,
             model=self.model,
             effort=self.effort,
+            accepts_media=list(self.accepts_media),
             spec_version=self.spec_version,
             wire_schema=dict(wire_schema),
             harness_version=self.harness_version,
