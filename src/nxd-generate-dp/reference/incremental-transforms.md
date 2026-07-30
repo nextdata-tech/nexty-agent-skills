@@ -64,9 +64,11 @@ If any promised model fails the gate, the correct answer is one of:
   to see this run's appended rows; read it before the append lands and the derived
   model trails the base table by one run's delta forever, on a green run. Note what
   that forces: `prior_counts` is still read **before** the append lane runs, while
-  the rebuild's full-table read comes **after** it. That is a read, not a check —
-  every check that can raise still goes before its own lane's write, exactly as
-  [Durability](#durability-rows-and-cursor-do-not-share-fate) requires. Only the
+  the rebuild's full-table read comes **after** it. That read is not a validation,
+  so it does not weaken the rule in
+  [Durability](#durability-rows-and-cursor-do-not-share-fate): validation you *can*
+  do before a write still goes before it, and the post-write row-count check still
+  runs after, as it must. Only the
   base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
   `run()` on it twice, each call with its own disposition and its own resource
   list; the cursor covers only the base models. Every snippet in this file is
@@ -80,10 +82,11 @@ keys or stale arithmetic, on a green run, with no error.
 Delivering the failing aggregate as a consume-time `semantic_view` — whether you
 drop it from `PHYSICAL_MODELS` or simply never add it — makes the gate pass while
 the model the closure promised is never landed: nothing writes it, the row-count
-check cannot see it, and the naming assert never covers it. `PHYSICAL_MODELS` and
-`DERIVED_MODELS` must name every promised landed model, including a new one added
-in a refine cycle. If a promised model is not append-safe, use one of the two
-remedies above — it stays a landed model either way.
+check cannot see it, and the naming assert never covers it. A promised aggregate
+belongs in `DERIVED_MODELS` — and so in `PHYSICAL_MODELS`, which is
+`BASE_MODELS + DERIVED_MODELS` — including when a refine cycle is what adds it. If
+a promised model is not append-safe, use one of the two remedies above; it stays a
+landed model either way.
 
 ## Two mechanisms, never composed
 
@@ -429,8 +432,11 @@ cannot see.
 it has **no** query or execute method. To read what previous runs landed (to
 count rows for the verification above, or to check for overlap), open the file
 directly. **One rule: no `SELECT max(<cursor>)` off the output table, not even as
-a post-write assertion.** Reads that merely see the cursor column are fine — an
-overlap check, and the full-table read the [eligibility
+a post-write assertion.** Reads that merely see the cursor column are fine, but
+write the overlap check so it cannot be mistaken for a watermark: ask whether the
+delta's keys are *already present* (`SELECT count(*) … WHERE <cursor> IN (…)`, or
+`>= :delta_min`), not what the table's maximum is. The full-table read the
+[eligibility
 gate](#before-you-start-the-eligibility-gate) requires when you rebuild a
 non-append-safe derived model with `"replace"`. The cursor lives in
 `transform_state`, and nowhere else.
