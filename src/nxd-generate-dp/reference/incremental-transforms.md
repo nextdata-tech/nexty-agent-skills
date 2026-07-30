@@ -131,36 +131,21 @@ Two rules on what the bag may hold:
 **Use `transform_state.for_model("<name>")` in every closure you write, even a
 single-model one.** Never index the bag flat.
 
-The mechanism is a two-way split on the **declared-model list the kernel seeded
-into the handle** — not on how many models the closure promises:
+Addressing is a property of the **declared-model list the kernel seeded into the
+handle**, not of how many models the closure promises. Desktop always seeds it
+(see [Desktop specifics](#desktop-specifics)), so you get a
+`MultiModelTransformState` and `for_model()` / `generic()` are there. With
+exactly one declared model that handle is also pre-bound, so flat indexing
+*happens* to reach the right bag — with two or more it is unbound and flat writes
+go nowhere. That is why `for_model()` is the only form worth writing: it is
+correct at every count, and the count crosses without warning.
 
-- **Empty list** → the runtime hands back a bare `TransformState`: a plain
-  `dict`, flat-indexable, with **no** `for_model()` and **no** `generic()`, and
-  **not registered for draining**. Every write to it is dropped on the floor
-  when the transform returns.
-- **Any non-empty list** — one declared model or twenty — → a
-  `MultiModelTransformState`, addressed through `for_model()` / `generic()`.
-  With exactly one declared model it is additionally pre-bound to that model, so
-  flat indexing happens to reach the right bag; with two or more it is unbound
-  and flat writes go nowhere.
-
-So flat indexing is not "the single-model form". It is the shape you get when
-the runtime could not tell the transform which models exist — and in exactly
-that case it does nothing. A bare `TransformState` is the tell that the runtime
-never learned the model names: `for_model()` is absent, so it raises
-`AttributeError`, and every flat write is silently discarded.
-
-**The empty-list shape does not arise on desktop.** The local compute path seeds
-the declared models (see [Desktop specifics](#desktop-specifics)), so
-`for_model()` is there and this split is background on *why* the bag is addressed
-that way — not a branch to code against. If `for_model()` ever does raise
-`AttributeError`, the response is **not** to reach for another store: flat
-indexing persists nothing, and every hand-rolled alternative is banned in
-[Do NOT](#do-not) for reasons that do not stop applying at the moment the bag
-breaks. Stop, tell the author the runtime does not support durable transform
-state, and keep the closure on full replace — which needs no cursor at all and
-stays correct on every rerun. A closure that cannot hold a cursor is not
-eligible for incrementality.
+If `for_model()` ever raises `AttributeError`, the runtime handed over an empty
+list and nothing durable is available. The response is **not** another store —
+flat indexing persists nothing and every hand-rolled alternative is banned in
+[Do NOT](#do-not). Stop, tell the author the runtime does not support durable
+transform state, and keep the closure on full replace: no cursor, correct on
+every rerun.
 
 **This is the failure mode to fear, and it is silent in both directions.** A
 flat write is accepted — `transform_state["max_event_id"] = 12345` raises
