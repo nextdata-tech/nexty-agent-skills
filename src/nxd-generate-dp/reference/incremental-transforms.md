@@ -396,8 +396,12 @@ cannot see.
 `DuckDbOutput` exposes `path`, `schema`, `model_tables` and `full_table_name` —
 it has **no** query or execute method. To read what previous runs landed (to
 count rows for the verification above, or to check for overlap), open the file
-directly. This is a read, for verification — **not** a place to keep the cursor;
-the cursor lives in `transform_state`.
+directly. What separates this from the banned watermark is **use, not SQL shape**:
+the same `SELECT max(<cursor>)` is fine as a post-write assertion and forbidden as
+the thing your next run reads its cursor from. If the value survives the transform
+— held in a variable the cursor is derived from, or compared against to decide what
+to yield — it has become hand-rolled persistence. The cursor lives in
+`transform_state`, and nowhere else.
 
 **Import the module under an alias.** The output port parameter must be named
 exactly `duckdb` (the local DuckDB driver requires that name and it cannot be
