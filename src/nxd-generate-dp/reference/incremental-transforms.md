@@ -331,17 +331,27 @@ if actual - expected:
 # "silently wrote nothing".
 for model in PHYSICAL_MODELS:
     landed = _table_row_count(duckdb, model)   # 0 when the table does not exist
-    if landed != prior_counts[model] + len(new_rows_by_model[model]):
+    yielded = len(new_rows_by_model[model])
+    # The expectation depends on THIS model's disposition. An appended model adds
+    # to what was already there; a replaced model (a derived model the
+    # eligibility gate sent back to "replace") is rewritten from this run alone,
+    # so prior rows are gone by design and adding them here would raise on a
+    # correct run.
+    expected_rows = prior_counts[model] + yielded if model in APPEND_MODELS else yielded
+    if landed != expected_rows:
         raise RuntimeError(
-            f"{model}: expected {prior_counts[model] + len(new_rows_by_model[model])} "
-            f"rows after append, found {landed}"
+            f"{model}: expected {expected_rows} rows after "
+            f"{'append' if model in APPEND_MODELS else 'replace'}, found {landed}"
         )
 ```
 
 Read `prior_counts` from the table **before** the write, with the same read-back
-helper as below, defaulting to `0` when the table does not exist yet. The check
-then holds on the first run (`0 + n == n`), on an empty delta (`n + 0 == n`), and
-catches the skipped-model case the table-name assert cannot see.
+helper as below, defaulting to `0` when the table does not exist yet. `APPEND_MODELS`
+is the subset you land with `write_disposition="append"` — for a single-disposition
+closure that is all of `PHYSICAL_MODELS`. The check then holds on the first run
+(`0 + n == n`), on an empty delta (`n + 0 == n`), on a replaced derived model
+(`landed == n`), and still catches the skipped-model case the table-name assert
+cannot see.
 
 ## Desktop specifics
 
@@ -350,10 +360,9 @@ catches the skipped-model case the table-name assert cannot see.
   state — and the per-model seeding is wired, so the transform receives a
   `MultiModelTransformState` with `for_model()` available and the previous run's
   bag replayed. Write the bag and read it back; there is nothing to enable and
-  nothing to check first. A platform acceptance test pins this end-to-end across
-  two builds of one workflow — run 1 commits a cursor, run 2 must observe it — so
-  a build that regressed the round-trip would fail that test rather than let
-  transforms silently duplicate rows.
+  nothing to check first. A platform acceptance test covers this end-to-end
+  across two builds of one workflow — run 1 commits a cursor, run 2 must observe
+  it.
 - **Persistence is on by default.** The supervisor always hands the kernel a
   per-workflow database path; there is no flag to set and nothing to enable.
 - **One `<workflow_key>.sqlite3` per workflow.** State is scoped to the workflow,
