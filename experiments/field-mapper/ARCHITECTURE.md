@@ -19,9 +19,31 @@ map(inputs: list) -> rows: list
 N inputs → M output rows. Cardinality (1:1, 1:N, N:1, N:M) is declared by the
 mapper spec, never inferred from input count.
 
-One harness serves both whiteboard cases — extraction (PDF → structured columns)
-and judgement (raw fields → scores). They are the same function with different
-inputs and target fields.
+**As built, M is fixed pre-call.** `map_inputs` derives `target_row_key` from
+`item.identity` before dispatch (`mapper.py:401`) and emits exactly one row per
+surviving input; `compile_schema` produces a single fixed-property object with
+`additionalProperties: false` (`schema.py:280`). There is no array-of-rows
+response shape, so **the model can never mint a row**. N→M today means the input
+adapter fans deterministically, pre-call — which covers N:1 (fan-in) fully but
+covers 1:N only when the row count is knowable without reading the source.
+
+Consequence for the whiteboard: the harness serves the **judgement** case
+(raw fields → scores) and *degenerate* extraction — K known scalar facts about one
+pre-keyed entity, which is fixture 02. It does **not** serve extraction where the
+model discovers the rows (invoice line items, résumé employment stints). `spec.py`
+already carries vocabulary for that case — `source_locators` (`spec.py:207`),
+`ordinal_suffix`, duplicate policies — which the dispatch loop and wire schema
+cannot execute. The spec language is more general than the implementation.
+
+See [GENERALITY.md](GENERALITY.md) for the 13-scenario stress test and
+[SPEC-CHANGES.md](SPEC-CHANGES.md) for the four proposed extensions — the one
+that closes this gap is `identity_source: output` + row-array output mode.
+
+**Media inputs are `pdf`-shaped and orphaned.** `build_pdf_content_block`
+(`transport.py:578`) hardcodes `application/pdf` and is unreachable from
+`map_inputs` — `mapper.py` has zero `pdf` occurrences and `MapperInput` has no
+media field, so the dispatch loop passes only `text_inputs`. No fixture exercises
+it. Generalizing to any modality is SPEC-CHANGES extension 1.
 
 ## What it relaxes
 
@@ -138,6 +160,24 @@ Each component produces a **distinct** `StaleReason`, so a reviewer can tell
 **No-cache survives intact.** Unreviewed cells re-infer on every rebuild. What
 survives is *review state*, which is not what no-cache protected.
 
+### The snapshot is population-granular
+
+`input_snapshot_id` is derived **once** over the ordered projections of *all*
+survivors (`mapper.py:383`) and stamped on every proposal (`:680`, `:870`); the
+resolver compares against exactly that (`resolver.py:383`). The grain machinery
+scopes which *fields* are identity-bearing, never which *inputs* a given row's
+snapshot covers.
+
+So **appending one input stales every review in the population** as
+`input_changed`, even for rows whose own inputs are byte-identical. The design
+anticipated this for *reordering* — `canonical_sort` exists so a reorder is a
+no-op — and not for *append*, which is the more common per-row no-op.
+
+This is not a bug: population scope is exactly right for cross-row specs, where a
+new input legitimately invalidates every verdict. It is a semantics the spec
+should declare and currently cannot. See GENERALITY.md extension 2
+(`snapshot_scope: row | population`).
+
 ---
 
 ## Failure policy
@@ -199,6 +239,15 @@ graph LR
 | `verified` | quote is a verbatim substring of landed text (whitespace/case normalized only, never fuzzy) |
 | `evidence_unverified` | no canonical text exists — page-region provenance only. **Not a verification claim.** |
 | `verify_failed` | quote did not match; retry names the failure |
+
+**Modality is irrelevant to this contract; only the landing step is
+codec-specific.** Once text is landed, an ASR transcript verifies exactly as
+mechanically as extracted PDF text — quotes substring-check against
+`landed_text`, `extractor`/`extractor_version` carry the producer identity, and
+`page` serves as an utterance index. Transcript fidelity is model-asserted, but
+the harness never claimed otherwise: `verified` is scoped to the landed-text
+boundary by design. Stage 2 is modality-blind, so **the codec problem lives
+entirely in stage 1.**
 
 ---
 
@@ -275,10 +324,23 @@ Not integrated into a transform. Two open items gate that:
 
 1. **PDF text extractor.** Stage 1 needs canonical text with page and character
    offsets. Nothing in the pinned venv extracts PDF text, and adding `anthropic`
-   does not solve it. Every option costs something: `pypdf`/`pdfplumber` widens
-   the venv; sending the PDF to the API and landing the returned text makes the
-   substring check circular (forbidden); an external step breaks the
-   single-closure story.
+   does not solve it.
+
+   "Make stage 1 just another mapper spec" was proposed to avoid the dependency
+   and **rejected** (GENERALITY.md S4). The non-circularity claim is formally
+   correct — stage 2 sees only landed text — but three mechanisms defeat it:
+   stage 1 is exactly the model-discovered-cardinality 1:N case the wire schema
+   forbids, and pre-splitting pages to fix that needs the PDF library the idea
+   existed to avoid; nondeterministic transcription is replace-loaded into
+   stage 2's snapshot, so one token of drift stales every downstream review;
+   and an *instructed omission* attacks the canonical text itself, leaving
+   nothing for a human to inspect (unlike fixture 03, where the attack survives
+   verbatim in landed text).
+
+   Defensible form: `pypdf` scoped to page splitting and counting **only** +
+   per-page model transcription as a mapper + pinned write-once landing. Confines
+   the model-asserted surface to per-page fidelity and bounds each call under
+   `max_tokens`.
 
 2. **Where `mapper_reviews` physically lives.** It must survive
    `write_disposition="replace"` and be human-editable. The batch-CSV convention
@@ -291,6 +353,40 @@ Also unresolved: threshold defaults, concurrency/rate-limit policy, what
 `nxd_decisions`, a boolean here — three incompatible models), harness packaging
 and version stamping, and whether the grant binds the model alias or the exact
 snapshot.
+
+---
+
+## Out of scope
+
+Stated so the design declines these rather than appearing to cover them.
+Derived in GENERALITY.md.
+
+- **Ungrounded enrichment** — any field whose truth is not a function of the
+  landed inputs ("is this vendor still in business?"). Every load-bearing
+  mechanism goes vacuous: the substring check has no haystack, injection's named
+  defence has no quote to read, and the answer legitimately varies across runs,
+  so unreviewed cells flip between rebuilds and value-bound confirmations stale
+  on every flip. Human review state can never converge. Route to the agent-side
+  channel in `reference/llm-judgments.md`, where a human is in the loop at ask
+  time.
+- **Unbounded / streaming populations** — no closed input set means no
+  `input_snapshot_id`, no coverage denominator, and no replace-load unit. The
+  guarantees are batch-shaped; window into closed populations upstream.
+- **Single inputs beyond the context/output window without a mechanical
+  splitter** — chunked extraction with stitched evidence offsets is a different
+  machine. Bound document size, or take the splitter.
+- **Free-prose outputs** (summaries, narratives) — substring evidence is
+  category-inapplicable to synthesized text. Such fields would be permanently
+  unverifiable, and the harness would be certifying nothing.
+
+## Partial progress is not landable
+
+`validate.py:711` blocks on any `skipped` cell **unconditionally** — no
+threshold. Under a budget ceiling too small for the population, there is
+therefore no honest way to land what did complete: the unit of landing is the
+whole population. Partitioning (each partition a complete population with its own
+snapshot, gate, and landing) is the only path. A resume-from-ledger cache would
+be the no-cache violation the design correctly refuses.
 
 ## Upstream reconciliation
 
