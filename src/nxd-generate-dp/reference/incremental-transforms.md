@@ -62,12 +62,12 @@ If any promised model fails the gate, the correct answer is one of:
   back out of DuckDB. **Order matters and getting it wrong is silent: run the
   append lane first, then read the table for the rebuild.** The derived model has
   to see this run's appended rows; read it before the append lands and the derived
-  model trails the base table by one run's delta forever, on a green run. This is
-  the one place where the
-  [check-before-you-write advice](#durability-rows-and-cursor-do-not-share-fate)
-  does not
-  apply — `prior_counts` is still read before the write, but the rebuild's own read
-  is not. Only the base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
+  model trails the base table by one run's delta forever, on a green run. Note what
+  that forces: `prior_counts` is still read **before** the append lane runs, while
+  the rebuild's full-table read comes **after** it. That is a read, not a check —
+  every check that can raise still goes before its own lane's write, exactly as
+  [Durability](#durability-rows-and-cursor-do-not-share-fate) requires. Only the
+  base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
   `run()` on it twice, each call with its own disposition and its own resource
   list; the cursor covers only the base models. Every snippet in this file is
   written against a single pipeline object, so a second one puts you outside what
