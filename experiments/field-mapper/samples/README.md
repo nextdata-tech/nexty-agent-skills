@@ -313,7 +313,9 @@ Being precise about the boundary, because a green suite invites over-reading:
 - **It does not test PDF extraction.** Every fixture supplies landed text
   directly. Stage 1 of design §5 — extracting canonical text with page and
   character offsets — has no implementation, and `evidence_unverified` therefore
-  never occurs in this suite (CONTRACT.md open question 4).
+  occurs ONLY on the media-direct paths (fixtures 07 and 08), where no landed
+  text exists to check against. It never occurs on a landed-text fixture,
+  which is the distinction that matters (CONTRACT.md open question 4).
 - **It does not judge quality.** No fixture asserts that a score is *correct*.
   The suite checks coverage, evidence anchoring, range and enum validity, key
   uniqueness, and review binding. Whether a 5 is the right answer is a human

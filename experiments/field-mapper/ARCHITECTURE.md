@@ -2,7 +2,7 @@
 
 Layer-1 harness for LLM inference from inside a data-product transform.
 
-Status: **prototype**. Acceptance suite passes 6/6. Not integrated into a
+Status: **prototype**. Acceptance suite passes 8/8. Not integrated into a
 transform; see [Blocked](#blocked-on) below.
 
 Design of record: vault note `designs/ai-dp-gen/19 - Data field mapper harness
@@ -39,11 +39,15 @@ See [GENERALITY.md](GENERALITY.md) for the 13-scenario stress test and
 [SPEC-CHANGES.md](SPEC-CHANGES.md) for the four proposed extensions — the one
 that closes this gap is `identity_source: output` + row-array output mode.
 
-**Media inputs are `pdf`-shaped and orphaned.** `build_pdf_content_block`
-(`transport.py:578`) hardcodes `application/pdf` and is unreachable from
-`map_inputs` — `mapper.py` has zero `pdf` occurrences and `MapperInput` has no
-media field, so the dispatch loop passes only `text_inputs`. No fixture exercises
-it. Generalizing to any modality is SPEC-CHANGES extension 1.
+**Media inputs work for any modality** (SPEC-CHANGES extension 1, landed). Was
+`pdf`-shaped and orphaned; now `media.py` owns `MediaInput` and `MapperInput.media`
+carries it. Exercised live: fixture 07 (PNG) and fixture 08 (a real 2-page PDF whose
+`recorded.json` is a genuine model response).
+
+Both are **media-direct** — media with no landed text — so every citation lands
+`evidence_unverified` and `verified` is unreachable. That is structural, not a gap
+in coverage: `validate.py` returns `UNVERIFIED` whenever `landed_text is None`, so
+no model output can change it.
 
 ## What it relaxes
 
@@ -295,7 +299,7 @@ reviews re-attach to the wrong entity while the uniqueness assert still passes.
 
 ## Acceptance suite
 
-`python -m field_mapper verify samples` — 6/6 pass.
+`python -m field_mapper verify samples` — 8/8 pass.
 
 | fixture | proves |
 |---|---|

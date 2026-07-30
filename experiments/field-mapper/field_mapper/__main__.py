@@ -692,7 +692,10 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
         text_inputs=[i.landed_text for i in fixture.inputs if i.landed_text],
         media_sizes_bytes=[m.size_bytes() for m in media],
         calls_per_cell=1 + spec.thresholds.max_validation_retries,
-        config=TransportConfig(effort=spec.effort),
+        # from_spec, not TransportConfig(effort=...): the latter drops spec.model,
+        # so preflight priced a haiku run at Opus rates AND reported
+        # pricing_is_approximate=False. CV-5's shape at a second call site.
+        config=TransportConfig.from_spec(spec),
     )
     _print_header("Cost estimate (offline heuristic)")
     print(f"  cells                {cells}")

@@ -26,7 +26,7 @@ what makes the adversarial fixtures inspectable rather than just fatal.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass, field as dc_field, replace as dc_replace
 from typing import Any, Callable, Mapping, Sequence
 
 from . import __version__
@@ -357,21 +357,12 @@ def map_inputs(
     wire_schema = compile_schema(spec)
     bound_spec = spec.with_wire_schema(wire_schema)
     if not bound_spec.harness_version:
-        bound_spec = MapperSpec(
-            instruction=bound_spec.instruction,
-            target_fields=bound_spec.target_fields,
-            grain=bound_spec.grain,
-            cardinality=bound_spec.cardinality,
-            thresholds=bound_spec.thresholds,
-            input_adapter=bound_spec.input_adapter,
-            model=bound_spec.model,
-            effort=bound_spec.effort,
-            spec_version=bound_spec.spec_version,
-            wire_schema=bound_spec.wire_schema,
-            harness_version=__version__,
-            description=bound_spec.description,
-            source_path=bound_spec.source_path,
-        )
+        # `dataclasses.replace`, never a field-by-field rebuild. The explicit form
+        # silently drops any field added to MapperSpec later: `accepts_media` was
+        # dropped here, so a media-accepting spec and its text-only twin hashed to
+        # the SAME `mapper_spec_id` — two genuinely different specs, one id, and
+        # every review bound to one silently applying to the other.
+        bound_spec = dc_replace(bound_spec, harness_version=__version__)
 
     declared_fields = sorted(
         {k for item in inputs for k in item.fields}

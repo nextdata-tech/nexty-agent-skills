@@ -620,7 +620,11 @@ resolvable from the design doc; each blocks a specific module.
    `anthropic` does not address it. Options each have a cost: adding `pypdf` /
    `pdfplumber` to `RUNTIME_DEP_PACKAGES` widens the desktop venv further;
    sending the PDF to the API and landing the returned text makes the substring
-   check circular (explicitly forbidden); an external extraction step breaks the
+   check circular when the SAME call both reads the document and returns the
+   quote — though see the 2026-07-30 correction in ARCHITECTURE.md: the API's
+   citations feature extracts `cited_text` server-side from the document, so
+   that path is not circular at all, at the cost of structured output;
+   an external extraction step breaks the
    single-closure story. *Blocks:* `mapper_evidence.locator_kind = landed_text`
    for any PDF source — which is the design's motivating use case.
 

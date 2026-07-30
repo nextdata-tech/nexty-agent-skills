@@ -152,8 +152,13 @@ _CHARS_PER_TOKEN: Final = 3.5
 #: API's PDF constraints".
 _PDF_TOKENS_PER_KB: Final = 4.0
 
-#: Hard API ceilings, for preflight refusal rather than a 413 discovered
-#: mid-population. Both apply to the WHOLE request, not per document.
+#: Hard API ceilings. NOT YET ENFORCED — declared here so the numbers live in one
+#: place, but no call site reads them, so an oversized request still discovers its
+#: 413 mid-population. Enforcing the page limit needs a page count, which needs a
+#: PDF library the venv does not have; enforcing the byte limit is straightforward
+#: and simply is not wired up. Stated plainly because a constant that looks like a
+#: guard and is not one is worse than an absent guard.
+#: Both apply to the WHOLE request, not per document.
 #:
 #: PROVIDER-SPECIFIC. 32 MB is the first-party Claude API and Claude Platform on
 #: AWS figure; Bedrock allows 20 MB and Google Cloud 30 MB. A payload sized against
@@ -1067,9 +1072,12 @@ class Client:
             # `budget_tokens`, would need a budget this layer has no basis to
             # choose, and a wrong one truncates mid-object.
             pass
-        else:
+        elif supports_reasoning_controls(cfg.model):
             # Legal only at effort <= high; enforced in TransportConfig.
             request["thinking"] = {"type": "disabled"}
+        # else: a pre-4.6 model has no `thinking` block at all. Sending
+        # {"type": "disabled"} there is the same 400 as sending "adaptive" —
+        # the parameter itself is unknown, not just that one value.
         return request
 
     def _dispatch(self, request: Mapping[str, Any]) -> Any:
