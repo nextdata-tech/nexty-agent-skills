@@ -364,10 +364,12 @@ catches the skipped-model case the table-name assert cannot see.
   state — and the per-model seeding is wired, so the transform receives a
   `MultiModelTransformState` with `for_model()` available and the previous run's
   bag replayed. Write the bag and read it back; there is nothing to enable and
-  nothing to check first. This is pinned end-to-end by a two-build acceptance
-  test — run 1 commits a counter, run 2 is seeded with it — so if a future build
-  regresses the round-trip, that test fails rather than transforms silently
-  duplicating rows.
+  nothing to check first. This is pinned end-to-end by
+  `transform_state_round_trips_across_two_builds_of_one_workflow` in the nxd
+  repo's `components/desktop/supervisor/tests/acceptance.rs` — run 1 commits a
+  counter, run 2 must observe it — so a build that regresses the round-trip
+  fails that test instead of letting transforms silently duplicate rows. It is
+  Python-gated, so it runs locally rather than in CI.
 - **Persistence is on by default.** The supervisor always hands the kernel a
   per-workflow database path; there is no flag to set and nothing to enable.
 - **One `<workflow_key>.sqlite3` per workflow.** State is scoped to the workflow,
