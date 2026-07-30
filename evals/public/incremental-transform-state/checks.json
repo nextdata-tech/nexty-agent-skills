@@ -50,7 +50,7 @@
     },
     {
       "id": "state-bag-addressed-via-for-model",
-      "check": "The agent addresses the state bag through transform_state.for_model(\"events\") rather than indexing the handle flat (transform_state[\"max_event_id\"] = ...). Flat indexing only works while the closure declares exactly one model and is dropped SILENTLY once a second model is promised — adding one derived model is enough — so the cursor would never persist and every rerun would re-append the whole export. Credit an agent that uses for_model(); an agent that indexes flat fails even though this fixture currently promises one model."
+      "check": "The agent addresses the state bag through transform_state.for_model(\"events\") rather than indexing the handle flat (transform_state[\"max_event_id\"] = ...). Flat indexing is dropped SILENTLY in two shapes: when the runtime hands over an empty declared-model list (a bare TransformState, not registered for draining) and whenever the closure declares 2+ models — adding one derived model is enough. With exactly one declared model it merely HAPPENS to reach the right bag, which is not a guarantee to rely on. In the dropped shapes the cursor never persists and every rerun re-appends the whole export. Credit an agent that uses for_model(); an agent that indexes flat fails even though this fixture currently promises one model."
     },
     {
       "id": "readback-avoids-module-shadowing-and-first-run-io",

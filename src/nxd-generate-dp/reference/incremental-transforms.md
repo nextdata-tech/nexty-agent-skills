@@ -364,7 +364,10 @@ catches the skipped-model case the table-name assert cannot see.
   state — and the per-model seeding is wired, so the transform receives a
   `MultiModelTransformState` with `for_model()` available and the previous run's
   bag replayed. Write the bag and read it back; there is nothing to enable and
-  nothing to check first.
+  nothing to check first. This is pinned end-to-end by a two-build acceptance
+  test — run 1 commits a counter, run 2 is seeded with it — so if a future build
+  regresses the round-trip, that test fails rather than transforms silently
+  duplicating rows.
 - **Persistence is on by default.** The supervisor always hands the kernel a
   per-workflow database path; there is no flag to set and nothing to enable.
 - **One `<workflow_key>.sqlite3` per workflow.** State is scoped to the workflow,
