@@ -5,14 +5,6 @@ reruns idempotent, and it is the right answer for almost every closure. Read thi
 only when the source is genuinely append-only, every output model is append-safe,
 and re-reading the source whole is not acceptable.
 
-> **`transform_state` is the durable cursor on desktop.** Writes persist and the
-> previous run's bag is replayed. It is the only sanctioned mechanism: never
-> hand-roll persistence — not a sidecar file, not a marker table, not a
-> watermark read back out of the output table. Address the bag through
-> `for_model()`; flat indexing is silently dropped. A committed cursor does not
-> mean the rows are safe — the two do not share fate, so read
-> [Durability](#durability-rows-and-cursor-do-not-share-fate) before you write.
-
 ## Contents
 
 - [Before you start: the eligibility gate](#before-you-start-the-eligibility-gate)
@@ -27,6 +19,14 @@ and re-reading the source whole is not acceptable.
 - [Reading prior data back out of DuckDB](#reading-prior-data-back-out-of-duckdb)
 - [Do NOT](#do-not)
 - [Worked transform: append-only source](#worked-transform-append-only-source)
+
+> **`transform_state` is the durable cursor on desktop.** Writes persist and the
+> previous run's bag is replayed. It is the only sanctioned mechanism: never
+> hand-roll persistence — not a sidecar file, not a marker table, not a
+> watermark read back out of the output table. Address the bag through
+> `for_model()`; flat indexing is silently dropped. A committed cursor does not
+> mean the rows are safe — the two do not share fate, so read
+> [Durability](#durability-rows-and-cursor-do-not-share-fate) before you write.
 
 ## Before you start: the eligibility gate
 
