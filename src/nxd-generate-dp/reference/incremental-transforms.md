@@ -20,14 +20,11 @@ and re-reading the source whole is not acceptable.
 - [Do NOT](#do-not)
 - [Worked transform: append-only source](#worked-transform-append-only-source)
 
-> **`transform_state` is the durable cursor on desktop.** Writes persist and the
-> previous run's bag is replayed. It is the only sanctioned mechanism: never
-> hand-roll persistence — not a sidecar file, not a marker table, not a
-> watermark read back out of the output table. Address the bag through
-> `for_model()`; flat indexing is dropped whenever the handle is unbound, so
-> never rely on it. A raise does not roll back the rows, and the cursor does not
-> advance with them: the two do not share fate, so read
-> [Durability](#durability-rows-and-cursor-do-not-share-fate) before you write.
+> **`transform_state` round-trips on desktop: writes persist and the previous
+> run's bag is replayed.** It is the only sanctioned durable store — every
+> hand-rolled alternative is banned in [Do NOT](#do-not) — and a raise does not
+> roll the rows back with the cursor
+> ([Durability](#durability-rows-and-cursor-do-not-share-fate)).
 
 ## Before you start: the eligibility gate
 
@@ -132,11 +129,9 @@ Two rules on what the bag may hold:
 single-model one.** Never index the bag flat.
 
 Addressing is a property of the **declared-model list the kernel seeded into the
-handle**, not of how many models the closure promises. An **empty** list yields a
-bare `TransformState` — flat-indexable, no `for_model()`, and every write dropped
-when the transform returns. Desktop never hands one over: it always seeds the list
-(see [Desktop specifics](#desktop-specifics)), so you get a
-`MultiModelTransformState` and `for_model()` / `generic()` are there. With
+handle**, not of how many models the closure promises. Desktop always seeds that
+list (see [Desktop specifics](#desktop-specifics)), so you get a
+`MultiModelTransformState` with `for_model()` / `generic()` available. With
 exactly one declared model that handle is also pre-bound, so flat indexing
 *happens* to reach the right bag — with two or more it is unbound and flat writes
 go nowhere. That is why `for_model()` is the only form worth writing: it is
@@ -406,17 +401,12 @@ cannot see.
 `DuckDbOutput` exposes `path`, `schema`, `model_tables` and `full_table_name` —
 it has **no** query or execute method. To read what previous runs landed (to
 count rows for the verification above, or to check for overlap), open the file
-directly. **Never reconstruct the cursor from the table.** The ban is on one SQL
-shape, not on touching the column: `SELECT max(<cursor>)` off the output table is
-out even as a post-write assertion. Reads that legitimately see the cursor column
-are fine — an overlap check, and the full-table read the [eligibility
+directly. **One rule: no `SELECT max(<cursor>)` off the output table, not even as
+a post-write assertion.** Reads that merely see the cursor column are fine — an
+overlap check, and the full-table read the [eligibility
 gate](#before-you-start-the-eligibility-gate) requires when you rebuild a
-non-append-safe derived model with `"replace"`. The shape ban is deliberately
-broader than the hazard — a `max()` you only assert against never becomes a
-cursor — but a value that exists in the transform is one refactor away from being
-read, the row-count check already proves the write landed, and one rule you can
-apply without judging your own intent beats two you have to keep apart. The cursor
-lives in `transform_state`, and nowhere else.
+non-append-safe derived model with `"replace"`. The cursor lives in
+`transform_state`, and nowhere else.
 
 **Import the module under an alias.** The output port parameter must be named
 exactly `duckdb` (the local DuckDB driver requires that name and it cannot be
@@ -471,7 +461,10 @@ disagree with what was committed and so is immune to the
 holds only if a failed load leaves a *prefix* in cursor order. A partial load that
 is not a prefix advances the watermark past rows that never landed and skips them
 permanently — a silent gap, where the cursor's failure mode is a visible duplicate.
-If the source has no usable cursor column at all, the closure is not eligible for
+The ban covers the assertion case too because a `max()` that exists in the
+transform is one refactor from being read, and the row-count check already proves
+the write landed. If the source has no usable cursor column at all, the closure is
+not eligible for
 incrementality: keep it on full replace and say so.
 
 ## Do NOT
@@ -585,10 +578,9 @@ def ingest(
 ) -> None:
     """Land only events newer than the previous run's committed cursor."""
     source_root = Path(secrets["csv_source"])
-    # for_model(), never flat indexing. Flat writes are dropped SILENTLY when the
-    # runtime hands over an empty declared-model list, and whenever the closure
-    # declares 2+ models (one derived model is enough). With exactly one declared
-    # model flat indexing only HAPPENS to reach the right bag — never rely on it.
+    # for_model() always. With one declared model a flat cursor only HAPPENS to
+    # reach the right bag; it is dropped SILENTLY the moment the closure declares a
+    # second, and one derived model added in a refine cycle is enough.
     events_state = transform_state.for_model("events")
     # First run has no prior state: 0 means "take everything".
     last_seen = int(events_state.get("max_event_id", 0))
