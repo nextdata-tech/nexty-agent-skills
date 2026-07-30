@@ -360,9 +360,12 @@ for model in PHYSICAL_MODELS:
         )
 ```
 
-Read `prior_counts` from the table **before** the write, with the same read-back
-helper as below, defaulting to `0` when the table does not exist yet. `APPEND_MODELS`
-is the subset you land with `write_disposition="append"` — for a single-disposition
+Three names the snippet expects you to have built. `prior_counts` is read from the
+table **before** the write, with the same read-back helper as below, defaulting to
+`0` when the table does not exist yet. `yielded_by_model` is the per-model row
+lists you handed to `pipeline.run(...)` this run — build it as you assemble the
+resources, so the count and the write cannot drift apart. `APPEND_MODELS` is the
+subset you land with `write_disposition="append"` — for a single-disposition
 closure that is all of `PHYSICAL_MODELS`. The check then holds on the first run
 (`0 + n == n`), on an empty delta (`n + 0 == n`), on a replaced derived model
 (`landed == n`), and still catches the skipped-model case the table-name assert
@@ -407,10 +410,11 @@ shape, not on touching the column: `SELECT max(<cursor>)` off the output table i
 out even as a post-write assertion. Reads that legitimately see the cursor column
 are fine — an overlap check, and the full-table read the
 [eligibility gate](#before-you-start-the-eligibility-gate) requires when you
-rebuild a non-append-safe derived model with `"replace"`. That is stricter than it strictly needs to be —
-a `max()` you only assert against never becomes a cursor — but a value that exists
-in the transform is one refactor away from being read, the row-count check already
-proves the write landed, and one rule you can apply without judging your own intent
+rebuild a non-append-safe derived model with `"replace"`. The shape ban is
+deliberately broader than the hazard — a `max()` you only assert against never
+becomes a cursor — but a value that exists in the transform is one refactor away
+from being read, the row-count check already proves the write landed, and one rule
+you can apply without judging your own intent
 beats two you have to keep apart. The cursor lives in `transform_state`, and
 nowhere else.
 
@@ -564,10 +568,6 @@ from nxd.core.context import DuckDbOutput
 BASE_MODELS = ("events",)
 DERIVED_MODELS = ()
 PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS
-# Which models this run APPENDS to. Here that is all of them; a closure that sent
-# a non-append-safe derived model back to "replace" lists only the appended ones,
-# and the row-count check reads this to pick the right expectation per model.
-APPEND_MODELS = PHYSICAL_MODELS
 
 
 def _table_row_count(duckdb: DuckDbOutput, model: str) -> int:
@@ -654,17 +654,16 @@ def ingest(
     # Verify the write by ROW COUNT. The table-name assert above cannot detect a
     # model that was silently not written: dlt rehydrates its schema from the
     # destination, so a table landed by an earlier run is reported either way.
-    # Expectation depends on the model's own disposition: an appended model adds
-    # to what was there, a replaced one is rewritten from this run alone. "events"
-    # is in APPEND_MODELS here; keep this shape so adding a replaced derived model
-    # later does not silently make the check wrong.
+    # "events" is appended, so the expectation is prior + this run's rows. If you
+    # later add a derived model the gate sends back to "replace", that model's
+    # expectation is this run's rows ALONE — switch to the disposition-aware form
+    # in the Verifying-the-write section rather than extending this line, or the
+    # check raises on a correct run.
     landed = _table_row_count(duckdb, "events")
-    appended = "events" in APPEND_MODELS
-    expected_rows = prior_count + len(rows) if appended else len(rows)
+    expected_rows = prior_count + len(rows)
     if landed != expected_rows:
         raise RuntimeError(
-            f"events: expected {expected_rows} rows after "
-            f"{'append' if appended else 'replace'}, found {landed}"
+            f"events: expected {expected_rows} rows after append, found {landed}"
         )
 
     # Produce-verification marker: the supervisor's readiness gate waits for it.
