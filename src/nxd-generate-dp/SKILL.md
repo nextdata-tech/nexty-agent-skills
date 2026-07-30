@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.26.2
+  version: 0.27.0
 ---
 
 # nxd-generate-dp skill
@@ -193,6 +193,7 @@ has the worked method, base-vs-derived test, `Agg.EXPRESSION` boundary, and
 mandatory reference-data handling, including per-entity **agent** judgements —
 [reference/llm-judgments.md](reference/llm-judgments.md).
 
+
 ### Gate — validate primary keys before authoring
 
 Every promised physical model, base **and** derived, needs one or more
@@ -260,7 +261,6 @@ string → `string()`; int/number/double/float → `number()`; bool → `boolean
 date → `date32()`.
 
 ### Step 3 — `transform/main.py`: the dlt-through-port ingest
-
 The transform receives the typed **output port handle** (`DuckDbOutput`: `path`,
 `schema`, `model_tables`) and connector secrets, streams each **base model's**
 CSV directory through dlt, yields each **derived model's** computed rows into the
@@ -284,7 +284,7 @@ Contract facts baked into that template — keep every one:
   and derived. Do **not** iterate `duckdb.model_tables`: it can include
   `.model(...)` views with neither `data/<view>/` nor a physical table.
 - The connector config arrives in `secrets["csv_source"]` (delivered by the
-  `csv-source` generic-secrets service). Never hard-code an absolute path.
+  `csv-source` local-file service). Never hard-code an absolute path.
 - Writes go **through the port**: `dlt.destinations.duckdb(credentials=duckdb.path)`
   + `dataset_name=duckdb.schema`. NEVER a raw `duckdb.connect(...)` write, never
   `CREATE TABLE` / `CREATE VIEW` DDL, never a hardcoded staging path.
@@ -324,10 +324,10 @@ clause below is mandatory:
 
 ### Step 3b — In-memory asserts: the only durable data-quality check
 
-**Desktop has no other execution point for data quality.** The local driver's
-verify is a no-op and contract verification runs only platform-side, so an assert
-inside the transform is the whole quality story — running over the complete
-derived set before the rows are yielded. One helper per derived model, invoked
+**Transform asserts remain the durable check for derived-row relationships.**
+Custom input expectations and output promises are separate executable contracts
+when explicitly requested; they do not replace a derived model's in-transform
+reconciliation before rows are yielded. One helper per derived model, invoked
 between deriving and yielding, each an **invariant over the source-vs-derived
 relationship**: a claim that could be false if the derivation were wrong.
 Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
@@ -354,7 +354,6 @@ and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 `database-source.md`, `api-source.md`). Steps 3a/3b are connector-independent.
 
 ### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
-
 `spec.py` is the author-facing source of truth the supervisor compiles into the
 deployment YAML: it declares the infra profile, wires the transform to compute,
 promises every physical model — base and derived — on the DuckDB port, and
@@ -390,7 +389,7 @@ The desktop closure ships its own infra profile declaring the three local
 services the spec references (`duckdb`, `python-compute`, `csv-source`). Emit it
 **verbatim** from [reference/infra-profile.md](reference/infra-profile.md);
 `metadata.name` is `desktop-local` and MUST match `infra_profile=` in `spec.py`.
-The `generic-secrets` `csv-source` service delivers the **relative**
+The `nxd:local/file/storage:0.1.0` `csv-source` service delivers the **relative**
 `csv-source-path` into `secrets[...]` (an absolute path escapes the pinned
 snapshot and fails).
 
@@ -475,7 +474,8 @@ an exact fixture count. Without credentials, report it **not run**.
 
 ## Invariants — NEVER violate these
 
-- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + `CONTEXT.md` + the connector-type-specific companion artifact (see the connector-types table in Overview), plus `.gitignore` and `SENSITIVE` when a source carries live credentials (they are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
+- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + `CONTEXT.md` + the connector-type-specific companion artifact (see the connector-types table in Overview), plus one `contracts/expectations/<name>.py` or `contracts/promises/<name>.py` script per inventoryed explicit custom contract, plus `.gitignore` and `SENSITIVE` when a source carries live credentials (they are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
+- **Explicit custom contracts are executable, not decorative**: preserve user-stated guarantees separately from inferred schema constraints; name each once; attach custom expectations to declared source-aligned CSV inputs before the transform and custom promises to the DuckDB output after it while retaining ordinary `.promise(model)`. Use the exact `custom(...).verify(script(...).compute(_compute))` nesting. Every script registers exactly one `@data_product.on_verify()` function and invokes `data_product.verify()` in its `__main__` guard; no escaping script paths, secrets, or unwired contract file — [reference/custom-contracts.md](reference/custom-contracts.md).
 - **Self-contained closure — no cross-boundary contract pointers** (Step 6a): `CONTEXT.md` is emitted at the closure root, and everything a later session needs to continue the work lives INSIDE the closure. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in `CONTEXT.md` / `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure. Phase C fails a missing `CONTEXT.md` or any closure-escaping contract reference.
 - **Sample-selection is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in `CONTEXT.md`, reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends. A deterministic-but-arbitrary sample (e.g. "the oldest N") that silently excludes the rows a later step needs is a defect even though it reruns identically. A source field a downstream model or step depends on (a URL a later evaluation needs, a key a later join needs) is a **required-capture** field: record every row where it is missing, because a missing required field disables the downstream step without erroring.
 - **The naming invariant**: each physical model name == `models.py` `semantic_model` arg == `spec.py` `.promise` == `PHYSICAL_MODELS` == `main.<name>`, unquoted lowercase snake_case; additionally `==` the connector's per-model reference (`data/<name>/`, see "THE NAMING INVARIANT" table) for base models only. `PHYSICAL_MODELS` is landed tables (base + derived), NOT the `data/` listing. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.
@@ -487,7 +487,7 @@ an exact fixture count. Without credentials, report it **not run**.
 - **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.
 - **Public semantic DSL only**: base models carry `primary_key` / `dimension` / `join`; metrics are `metric_field(metric(...))` on `semantic_view(...)`. Never import private modules or write metadata directly.
 - **Validated keys, by kind**: every promised physical model has one or more `primary_key()` fields. A **base** model's key is one or more EXISTING source columns whose tuple is non-null and unique across the supplied export — never synthesize one; stop and ask for the source key when that evidence is absent. A **derived** model's key is defined by the derivation's grain, constructed deterministically from source values plus the grain's ordinal, and proven unique by an in-transform assert. A dedupe keeps its source key; only a regrain declares a new composite.
-- **Connector via secrets, `infra-profile.yaml` shape**: source config only from `secrets[...]`, keyed per connector type per the connector-types table in Overview, one entry per source instance (labeled when 2+ of a type — `reference/multi-source.md`) — always delivered via `.secrets([...])` on the transform. The profile is `metadata.name: desktop-local` with at least three services (`duckdb`, `python-compute`, one connector service per source instance). `duckdb`, `python-compute`, `csv-source`, and `file-source` keep `attributes: []` (their companion path file is relative); `db-source`/`api-source` (and their labeled variants) carry one `{"key": ..., "value": ..., "public": <bool>}` attribute per connection field instead, marked `public:` by sensitivity — secrets/identity (password, user, tokens/keys) `false`, non-secret topology/config (host, port, database, schema, base_url, auth_type, region) `true` so it survives an export — see `reference/database-source.md` / `reference/api-source.md`. Never fabricate a credential, never narrate one in chat, never write a raw database password or API token into a committed closure file, and never let two same-type instances share a name. Any source instance carrying a populated `attributes:` list also emits `.gitignore` (naming `infra-profile.yaml`, never `*`) and `SENSITIVE` in the same step that writes the credential, plus `chmod 0600 infra-profile.yaml` where a shell can reach the closure — Phase C fails the closure without the two files.
+- **Connector via secrets, `infra-profile.yaml` shape**: source config only from `secrets[...]`, keyed per connector type per the connector-types table in Overview, one entry per source instance (labeled when 2+ of a type — `reference/multi-source.md`) — always delivered via `.secrets([...])` on the transform. The profile is `metadata.name: desktop-local` with at least three services (`duckdb`, `python-compute`, one connector service per source instance). `duckdb`, `python-compute`, `csv-source` (`nxd:local/file/storage:0.1.0`), and `file-source` keep `attributes: []` (their companion path file is relative); `db-source`/`api-source` (and their labeled variants) carry one `{"key": ..., "value": ..., "public": <bool>}` attribute per connection field instead, marked `public:` by sensitivity — secrets/identity (password, user, tokens/keys) `false`, non-secret topology/config (host, port, database, schema, base_url, auth_type, region) `true` so it survives an export — see `reference/database-source.md` / `reference/api-source.md`. Never fabricate a credential, never narrate one in chat, never write a raw database password or API token into a committed closure file, and never let two same-type instances share a name. Any source instance carrying a populated `attributes:` list also emits `.gitignore` (naming `infra-profile.yaml`, never `*`) and `SENSITIVE` in the same step that writes the credential, plus `chmod 0600 infra-profile.yaml` where a shell can reach the closure — Phase C fails the closure without the two files.
 - **Run-local dlt state** (`pipelines_dir` under the run dir + `DLT_DATA_DIR` set; never `~/.dlt`); **`write_disposition="replace"`**; **`.transform-complete` touch** after the assert. **Incrementality never relaxes the run-local half**: dlt's own state stays ephemeral under the run dir, and the durable watermark lives in the kernel's `transform_state` bag — two separate mechanisms, never composed. `transform_state` round-trips on desktop and is the only sanctioned durable store: never hand-roll one (sidecar file, marker table, `SELECT max(<cursor>)` off the output table, durable `pipelines_dir`). The one sanctioned incremental route is [reference/incremental-transforms.md](reference/incremental-transforms.md); read it before switching any disposition, because every failure mode here is silent. It gates on **every promised model being append-safe** (never an aggregate, regrain, or dedupe), addresses the bag through **`for_model()`**, never flat indexing at any model count, yields every promised model every run, and verifies the write by **row count** — the table-name assert cannot see a missing write under `"append"` — and moves the `.transform-complete` touch after **both** checks (leave it after the naming assert and the readiness gate can report the build ready before the row-count check raises). `"replace"` while yielding only a delta shrinks the table to the delta; `"append"` without a cursor is the duplicate-rows bug.
 - **Place, don't redesign**: semantic roles come from nxd-semantic-data-product. Preserve a file connector's supplied export exactly, and treat a database or API connector as read-only — cleaning, dedupe, reclassification and regrain happen ONLY in derived models downstream of pristine sources, never by editing the source export. Use an existing validated key for base models or surface the missing-key problem. Promise base and derived models, register metric views with `.model(...)`, and add no marker model on desktop.
 - **Reference data is landed, never hardcoded**: FX rates, merchant→category rulings, account mappings and similar judgements that exist in no source data are user-confirmed and landed as their own model, so they stay queryable and reviewable. **This includes any agent- or LLM-inferred score, verdict, or classification** — landed as data (`status = proposed`, `provenance = agent_authored`); a per-entity judgement literal in transform code is hardcoded even when the downstream arithmetic is computed. Never bake reference data into transform code as a constant dict or `if` ladder. With no user available to confirm, land the mapping anyway as PROPOSED, recorded as a row in the closure's landed `nxd_decisions` model — never a `DECISIONS.md` file — see [reference/derivation-plan.md](reference/derivation-plan.md) and, for agent judgement, [reference/llm-judgments.md](reference/llm-judgments.md). **The transform never calls a model**: judging is agent-side and lands as CSV before the build; no model call, API key, or network in `transform/main.py` — inferring from inside the transform is nondeterministic and re-judges every rerun.

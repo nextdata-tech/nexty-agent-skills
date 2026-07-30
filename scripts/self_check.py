@@ -70,6 +70,23 @@ def desc_str(node):
         return ast.unparse(node)
     return None
 
+def is_data_product_verify_call(node):
+    return (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and
+            isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "verify" and
+            isinstance(node.value.func.value, ast.Name) and node.value.func.value.id == "data_product")
+
+def has_main_guard(tree):
+    """Require a module-level `if __name__ == "__main__"` direct verify call."""
+    for node in tree.body:
+        if not (isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and
+                isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__" and
+                len(node.test.ops) == len(node.test.comparators) == 1 and
+                isinstance(node.test.ops[0], ast.Eq) and literal_str(node.test.comparators[0]) == "__main__"):
+            continue
+        if any(is_data_product_verify_call(statement) for statement in node.body):
+            return True
+    return False
+
 def check_kwargs(call, name, where):
     allowed = KWARGS[name]
     for kw in call.keywords:
@@ -267,6 +284,19 @@ def parse_spec(src, path, var_name, var_kind):
                                              "secrets": False, "port": False}
     if ".semantic_tools(" in src:
         bad(f"{path}: .semantic_tools(...) is forbidden on desktop")
+    # A script() is either the sole transform executor or nested inside a
+    # custom verifier. Both are valid, but only the former is pinned to the
+    # desktop transform entrypoint.
+    verifier_scripts = set()
+    for outer in ast.walk(tree):
+        if not isinstance(outer, ast.Call) or call_name(outer) not in ("expectation", "promise") or not outer.args:
+            continue
+        chain = spine(outer.args[0])
+        if not any(call_name(c) == "custom" for c in chain):
+            continue
+        for verify in (c for c in chain if call_name(c) == "verify" and c.args):
+            verifier_scripts.update(id(c) for c in spine(verify.args[0]) if call_name(c) == "script")
+    transform_scripts = {id(n) for n in ast.walk(tree) if call_name(n) == "script" and id(n) not in verifier_scripts}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -279,11 +309,14 @@ def parse_spec(src, path, var_name, var_kind):
                 bad(f"{path}: data_product(infra_profile=...) must be the "
                     f"literal \"desktop-local\", got {ip!r}")
         elif n == "script":
+            if id(node) in verifier_scripts:
+                continue
             saw["script"] = True
             if literal_str(node.args[0] if node.args else None) != "transform/main.py":
                 bad(f"{path}: script() must point at \"transform/main.py\"")
         elif n in ("compute", "secrets"):
-            saw[n] = True
+            if any(id(c) in transform_scripts for c in spine(node)):
+                saw[n] = True
         elif n == "port":
             saw["port"] = True
             if literal_str(node.args[0] if node.args else None) != "duckdb":
@@ -299,6 +332,9 @@ def parse_spec(src, path, var_name, var_kind):
                     bad(f"{path}: .promise({arg.id}) — {var_name[arg.id]} is a "
                         f"semantic_view; views are registered with .model(), "
                         f"never promised")
+            elif n == "promise" and isinstance(arg, ast.Call) and any(
+                    call_name(c) == "custom" for c in spine(arg)):
+                pass  # validated as a custom promise by Phase C
             else:
                 unverified.append(f"{path}: .{n}() argument "
                                   f"{ast.unparse(arg)} is not a models.py name")
@@ -429,13 +465,180 @@ scan = ["CONTEXT.md", "README.md", "spec.py", "models.py", "transform/main.py"]
 scan += [str(p) for p in Path(".").glob("contracts/*")]
 for rel in scan:
     p = Path(rel)
-    if not p.exists():
+    if not p.is_file():
         continue
     for m in ESCAPE.findall(p.read_text()):
         cerrors.append(f"{rel}: references '{m}' — a contract/design path that "
                        f"escapes the closure. Materialize it inside the closure "
                        f"(CONTEXT.md / contracts/<name>.md / inert derived model), "
                        f"never a ../ pointer.")
+
+# Explicit custom-contract gate. `script()` executes a whole file: every
+# named contract therefore owns one verifier script, never a decorative shared
+# module. This is deliberately static/offline; the Desktop runtime remains the
+# authority for actually executing a verifier against its context.
+spec_tree = ast.parse(spec_src, "spec.py")
+custom_names, custom_scripts, custom_script_refs, input_custom, output_custom = [], set(), [], 0, 0
+for node in ast.walk(spec_tree):
+    if not isinstance(node, ast.Call):
+        continue
+    if call_name(node) == "custom":
+        name = literal_str(node.args[0] if node.args else None)
+        if not name:
+            cerrors.append("spec.py: custom() name must be a string literal")
+        else:
+            custom_names.append(name)
+    if call_name(node) in ("expectation", "promise") and node.args:
+        chain = spine(node.args[0])
+        if any(call_name(c) == "custom" for c in chain):
+            if call_name(node) == "expectation":
+                input_custom += 1
+            else:
+                output_custom += 1
+            verify_calls = [c for c in chain if call_name(c) == "verify" and c.args]
+            scripts = [c for verify in verify_calls for c in spine(verify.args[0])
+                       if call_name(c) == "script"]
+            if len(scripts) != 1:
+                cerrors.append(f"spec.py: custom {call_name(node)} needs one script(...)")
+            else:
+                script_path = literal_str(scripts[0].args[0] if scripts[0].args else None)
+                if not script_path or not script_path.startswith("contracts/") or ".." in script_path or Path(script_path).is_absolute():
+                    cerrors.append(f"spec.py: custom verifier path must stay under contracts/, got {script_path!r}")
+                else:
+                    custom_scripts.add(script_path)
+                    custom_script_refs.append(script_path)
+            if not any(call_name(c) == "compute" for verify in verify_calls
+                       for c in spine(verify.args[0])):
+                cerrors.append(f"spec.py: custom {call_name(node)} verifier needs script(...).compute(_compute)")
+            elif not all(call_name(verify.args[0]) == "compute" and verify.args[0].args and
+                         isinstance(verify.args[0].args[0], ast.Name) and
+                         verify.args[0].args[0].id == "_compute" for verify in verify_calls):
+                cerrors.append(f"spec.py: custom {call_name(node)} must use exact script(...).compute(_compute) nesting")
+            if not any(call_name(c) == "description" and c.args and desc_str(c.args[0]) for c in chain):
+                cerrors.append(f"spec.py: custom {call_name(node)} needs a non-empty description")
+            if not any(call_name(c) == "model" and c.args and isinstance(c.args[0], ast.Name) and
+                       c.args[0].id in var_name for c in chain):
+                cerrors.append(f"spec.py: custom {call_name(node)} needs one resolved models.py model")
+if len(custom_names) != len(set(custom_names)):
+    cerrors.append(f"spec.py: custom contract names are not unique: {custom_names}")
+if len(custom_script_refs) != len(set(custom_script_refs)):
+    cerrors.append("spec.py: each named custom contract needs its own verifier script")
+csv_root = Path("data")
+if input_custom:
+    csv_source_path = Path("csv-source-path")
+    csv_root_text = csv_source_path.read_text().strip() if csv_source_path.is_file() else ""
+    csv_root_parts = csv_root_text.replace("\\", "/").split("/") if csv_root_text else []
+    if (not csv_root_text or Path(csv_root_text).is_absolute() or
+            any(part in ("", ".", "..") for part in csv_root_parts) or
+            not Path(csv_root_text).is_dir()):
+        cerrors.append("csv-source-path: custom CSV input requires an existing contained relative export root")
+    else:
+        csv_root = Path(csv_root_text)
+# Check each custom at its enclosing declaration, rather than accepting an
+# unrelated source_aligned_input()/duckdb port elsewhere in the spec.
+for node in ast.walk(spec_tree):
+    if call_name(node) == "input" and len(node.args) >= 2:
+        config = node.args[1]
+        has_custom = any(call_name(n) == "expectation" and n.args and
+                         any(call_name(c) == "custom" for c in spine(n.args[0]))
+                         for n in ast.walk(config) if isinstance(n, ast.Call))
+        if has_custom:
+            custom_models = [c.args[0].id for n in ast.walk(config)
+                             if isinstance(n, ast.Call) and call_name(n) == "expectation" and n.args and
+                             any(call_name(part) == "custom" for part in spine(n.args[0]))
+                             for c in spine(n.args[0]) if call_name(c) == "model" and c.args and
+                             isinstance(c.args[0], ast.Name)]
+            chain = spine(config)
+            source_calls = [c for c in chain if call_name(c) == "source" and c.args]
+            model_path_calls = [c for c in chain if call_name(c) == "config" and c.args and
+                                isinstance(c.args[0], ast.Dict) and any(
+                                    literal_str(k) == "model_paths" for k in c.args[0].keys)]
+            if not any(call_name(c) == "source_aligned_input" for c in chain) or not source_calls:
+                cerrors.append("spec.py: custom input expectation must be on its source_aligned_input declaration")
+            elif not isinstance(source_calls[0].args[0], ast.Name) or source_calls[0].args[0].id != "_csv":
+                cerrors.append("spec.py: custom CSV input expectation must use .source(_csv)")
+            if not model_path_calls:
+                cerrors.append("spec.py: custom CSV input expectation needs .config({model_paths: ...})")
+            else:
+                model_paths, found_mapping = {}, False
+                for call in model_path_calls:
+                    for key, value in zip(call.args[0].keys, call.args[0].values):
+                        if literal_str(key) != "model_paths":
+                            continue
+                        found_mapping = True
+                        if not isinstance(value, ast.Dict) or not value.keys:
+                            cerrors.append("spec.py: custom CSV input model_paths must be a non-empty literal mapping")
+                            continue
+                        for model_key, path_value in zip(value.keys, value.values):
+                            model_key, path = literal_str(model_key), literal_str(path_value)
+                            components = path.replace("\\", "/").split("/") if path else []
+                            if (not model_key or not model_key.strip() or not path or Path(path).is_absolute() or
+                                    path.endswith("/") or not path.endswith(".csv") or
+                                    any(part in ("", ".", "..") for part in components)):
+                                cerrors.append("spec.py: custom CSV input model_paths must use non-empty model keys and contained relative .csv paths")
+                                continue
+                            model_paths[model_key] = path
+                if not found_mapping:
+                    cerrors.append("spec.py: custom CSV input model_paths must be a non-empty literal mapping")
+                for model_name in custom_models:
+                    path = model_paths.get(model_name)
+                    if not path:
+                        cerrors.append(f"spec.py: custom CSV input model_paths[{model_name!r}] must be a safe relative path")
+                    elif not (csv_root / path).is_file():
+                        cerrors.append(f"spec.py: custom CSV input model_paths[{model_name!r}] must resolve to an existing csv-source-path/*.csv file")
+    if call_name(node) == "output" and node.args:
+        config = node.args[0]
+        has_custom = any(call_name(n) == "promise" and n.args and
+                         any(call_name(c) == "custom" for c in spine(n.args[0]))
+                         for n in ast.walk(config) if isinstance(n, ast.Call))
+        if has_custom:
+            chain = spine(config)
+            ordinary = any(call_name(n) == "promise" and n.args and isinstance(n.args[0], ast.Name)
+                           and n.args[0].id in var_name for n in chain)
+            port = next((c for c in chain if call_name(c) == "port"), None)
+            if not ordinary:
+                cerrors.append("spec.py: custom output promise must retain ordinary .promise(model)")
+            valid_duckdb_port = (port and literal_str(port.args[0] if port.args else None) == "duckdb" and
+                                 len(port.args) >= 2 and call_name(port.args[1]) == "storage" and
+                                 port.args[1].args and isinstance(port.args[1].args[0], ast.Name) and
+                                 port.args[1].args[0].id == "_duckdb")
+            if not valid_duckdb_port:
+                cerrors.append("spec.py: custom output promise must be on its DuckDB output declaration")
+for script_path in custom_scripts:
+    p = Path(script_path)
+    if not p.is_file():
+        cerrors.append(f"{script_path}: referenced custom verifier is missing")
+        continue
+    try:
+        tree = ast.parse(p.read_text(), script_path)
+    except SyntaxError as exc:
+        cerrors.append(f"{script_path}: verifier cannot be imported (syntax error: {exc.msg})")
+        continue
+    registered = sum(any(call_name(d) == "on_verify" for d in n.decorator_list)
+                     for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    main_calls_verify = has_main_guard(tree)
+    if registered != 1 or not main_calls_verify:
+        cerrors.append(f"{script_path}: needs exactly one @data_product.on_verify() and data_product.verify() main guard")
+    verifier = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and any(call_name(d) == "on_verify" for d in n.decorator_list)), None)
+    verifier_src = ast.unparse(verifier) if verifier else ""
+    conditional_failed = verifier and any(
+        not isinstance(branch.test, ast.Constant) and any(
+            isinstance(result, ast.Return) and result.value is not None and
+            "VerifyResultEnum.FAILED" in ast.unparse(result.value)
+            for result in ast.walk(branch))
+        for branch in ast.walk(verifier) if isinstance(branch, ast.If))
+    inert = (not verifier or any(isinstance(n, ast.Pass) or
+             (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and n.value.value is Ellipsis)
+             for n in ast.walk(verifier)) or "VerifyResultEnum.FAILED" not in verifier_src or
+             "VerifyResultEnum.PASS" not in verifier_src or not conditional_failed)
+    if inert:
+        cerrors.append(f"{script_path}: verifier is inert — require FAILED behind a non-literal condition and a PASS result, never pass/ellipsis/dead branches")
+    if re.search(r'(?i)(api[_-]?key|password|token|secret)\s*=\s*["\']', p.read_text()):
+        cerrors.append(f"{script_path}: contains a literal secret-like assignment")
+for p in Path("contracts").rglob("*.py") if Path("contracts").exists() else []:
+    if str(p) not in custom_scripts:
+        cerrors.append(f"{p}: decorative custom verifier is not referenced by spec.py")
 
 # Sensitivity artifacts. The trigger is STRUCTURAL: a *-source service carrying
 # a populated `attributes:` list holds a live credential in plaintext. A CSV or
@@ -446,6 +649,19 @@ for rel in scan:
 profile = Path("infra-profile.yaml")
 if profile.exists():
     text = profile.read_text()
+    if not re.search(r"(?m)^metadata:\s*\n\s+name:\s*desktop-local\s*$", text):
+        cerrors.append("infra-profile.yaml: metadata.name must be desktop-local to match spec.py infra_profile")
+    def has_service_driver(service, driver):
+        block = re.search(rf"(?ms)^\s*-\s*name:\s*{re.escape(service)}\s*$((?:(?!^\s*-\s*name:).)*)", text)
+        return bool(block and re.search(rf"^\s*driver:\s*{re.escape(driver)}\s*$", block.group(1), re.MULTILINE))
+    required_services = {
+        "duckdb": "nxd:local/duckdb/storage:0.1.0",
+        "python-compute": "nxd:local/python/compute:0.1.0",
+        "csv-source": "nxd:local/file/storage:0.1.0",
+    }
+    for service, driver in required_services.items():
+        if not has_service_driver(service, driver):
+            cerrors.append(f"infra-profile.yaml: {service} must use {driver}")
     # A populated attributes list = `attributes:` followed by a `- ` item before
     # the next key at the same or shallower indent. `attributes: []` never matches.
     # Match every YAML spelling of a populated list, because a gate that only
@@ -480,7 +696,7 @@ if cerrors:
     for e in cerrors:
         print(f"  - {e}")
     sys.exit(1)
-print("phase C ok — CONTEXT.md present, no closure-escaping contract references")
+print("phase C ok — CONTEXT.md present, custom contracts are wired, and no closure-escaping contract references")
 
 # ---------------------------------------------------------------- Phase D ---
 # Policy-boundary gate. A ruling is landed data the user can edit, never a

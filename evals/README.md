@@ -150,10 +150,10 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 5 of 29 public scenarios use this today
+Only 6 of 30 public scenarios use this today
 (`coauthor-executable-policy-readback`, `coauthor-supplied-rubric`,
 `derive-models-from-questions`, `dp-static-artifact-lifecycle`,
-`treasury-yield-curve`). It is the strongest signal available — prefer it
+`pocket-custom-contracts`, `treasury-yield-curve`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)

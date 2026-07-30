@@ -1,0 +1,4 @@
+line_id,order_id,currency,order_total,line_total
+o-1-1,o-1,EUR,20.00,10.00
+o-1-2,o-1,EUR,20.00,10.00
+o-2-1,o-2,USD,12.50,12.50

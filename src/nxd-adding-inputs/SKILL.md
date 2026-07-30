@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.26.2
+  version: 0.27.0
 ---
 
 # NXD Adding Inputs
@@ -43,7 +43,7 @@ Add inputs to an existing Nextdata OS Python data product without disturbing unr
 4. Add or update the semantic model. Prefer one semantic model per unique schema; avoid complex types when a string representation is safer for the platform.
 5. Add the input declaration in `spec.py`. Use the real active mesh app host in service URLs; examples from public repos are templates, not values to copy.
 6. Update `transform.py`. The transform parameter name must match the input name after Python normalization: hyphens become underscores.
-7. If the input needs a contract, add an input expectation, not an output promise. Schema or custom expectations belong on the input side; use `nxd-adding-expectations-promises` for the custom verify template and `VerifyResultEnum` values.
+7. If the input needs a contract, add an input expectation, not an output promise. Schema or custom expectations belong on the input side; use `nxd-adding-expectations-promises` and select its Pocket/Desktop `script(...)` branch only for a local CSV closure, or its platform/API `code(...)` branch for a connected runtime.
 8. Update local validation so it exercises fetch, parse, and shape logic. Do not stop at "the source is reachable."
 9. Run validation:
 

@@ -48,7 +48,8 @@ must be mirrored here.
 | One CSV (unchanged) | `csv-source` | `csv_source` | `csv-source-path` | `_csv` |
 | 2+ CSVs, labeled | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
 
-The driver id (`nxd:generic-secrets:1.0.0`) never changes — only the name.
+For CSV instances the driver is `nxd:local/file/storage:0.1.0`; only the
+service name changes. Other connector types retain their documented drivers.
 `attributes` follows the single-instance rule per type: `[]` for
 `csv-source-<label>` / `file-source-<label>` (nothing secret to carry — see
 `reference/file-source.md`); for `db-source-<label>` / `api-source-<label>`,

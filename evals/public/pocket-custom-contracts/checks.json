@@ -1,0 +1,25 @@
+{
+  "name": "Generate executable Pocket custom contracts",
+  "skills": ["nxd-pocket-loop", "nxd-generate-dp"],
+  "workspace_files": [
+    "CONTEXT.md",
+    "spec.py",
+    "infra-profile.yaml",
+    "contracts/**/*.py",
+    "**/CONTEXT.md",
+    "**/spec.py",
+    "**/infra-profile.yaml",
+    "**/contracts/**/*.py"
+  ],
+  "deterministic_check": {
+    "script": "check_custom_contracts.py",
+    "deps": []
+  },
+  "checks": [
+    {"id": "contract-inventory", "check": "Collect the two user-stated guarantees separately from inferred schema constraints and record them in CONTEXT.md."},
+    {"id": "csv-input-expectation", "check": "Attach a named custom expectation to a declared source-aligned CSV input with relative model_paths, local-file csv-source, and a per-contract verifier script."},
+    {"id": "duckdb-output-promise", "check": "Attach a distinct named custom promise to the DuckDB output while retaining the ordinary schema promise."},
+    {"id": "verifier-script-shape", "check": "Each referenced verifier has exactly one on_verify registration and an exact data_product.verify() __main__ guard; every custom contract owns one safe relative script path; no decorative contract scripts or secrets."},
+    {"id": "deterministic-check", "check": "The structural custom-contract fixture checker must report ALL CHECKS PASSED."}
+  ]
+}

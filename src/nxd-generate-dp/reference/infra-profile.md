@@ -19,7 +19,7 @@ spec:
       driver: nxd:local/python/compute:0.1.0
       attributes: []
     - name: csv-source
-      driver: nxd:generic-secrets:1.0.0
+      driver: nxd:local/file/storage:0.1.0
       attributes: []
 ```
 
@@ -27,7 +27,8 @@ spec:
   `spec.py` and the `/infra-profile/desktop-local#/...` service refs.
 - Three services, each with `attributes: []`: `duckdb` (local DuckDB storage,
   the output port backend), `python-compute` (local Python compute, runs the
-  transform), `csv-source` (generic-secrets, delivers the CSV export root).
+  transform), `csv-source` (local file storage, both the source-aligned input
+  service and transform secret delivering the CSV export root).
 
 Derived models add nothing here. They are computed inside the transform that
 `python-compute` already runs and land through the `duckdb` port that already

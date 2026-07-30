@@ -657,3 +657,14 @@ ROUND-TRIP PROVENANCE (moved here out of the shipped doc, which should not carry
 RUBRIC DRIFT, disclosed in full: three checks in incremental-transform-state/checks.json were reworded across this branch -- state-bag-addressed-via-for-model, verification-can-detect-a-missing-write, readback-avoids-module-shadowing-and-first-run-io -- plus uses-transform-state-kwarg, so the before arm ran against pre-rewrite text for all four. TWO of the four pass conditions tightened, not one: uses-transform-state-kwarg and verification-can-detect-a-missing-write both gained the SELECT max(<cursor>) read-back as a banned alternative. A FIFTH rewording is in a DIFFERENT file this paragraph previously omitted -- incremental-multi-model/checks.json's own uses-transform-state-kwarg, tightened the same way in 6bdb3b0 so the sibling scenario stops grading the rule more loosely. No previously-passing solution changes verdict, since no run in either arm reconstructed its cursor that way, and none of the four checks ever REQUIRED the banned shape. But the arms were not judged against byte-identical check text, and one condition is narrower on the after side.
 
 Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json`](records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json)
+
+## 2026-07-30 — nxd-generate-dp: executable Pocket custom contracts (plugin v0.27.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.26.2 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 17 | 10382 | — | gpt-5.6-terra |
+| after-v0.27.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 16 | 8271 | — | gpt-5.6-terra |
+
+Notes: Both uncached Codex runs passed all 5 checks and the authoritative deterministic checker. The revised skill used 16 vs 17 tool calls and 8,271 vs 10,382 output tokens while generating executable CSV-input and DuckDB-output custom contracts.
+
+Record: [`records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json`](records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json)
