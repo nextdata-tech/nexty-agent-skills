@@ -1,10 +1,9 @@
-# Incremental transforms: `transform_state` on Pocket
+# Incremental transforms on Pocket
 
-The sanctioned route to incrementality on desktop. The default Step 3 ingest is a
-**full replace** every run — that is what makes reruns idempotent, and it is the
-right answer for almost every closure. Read this only when the source is
-genuinely append-only, every output model is append-safe, and re-reading the
-source whole is not acceptable.
+The default Step 3 ingest is a **full replace** every run — that is what makes
+reruns idempotent, and it is the right answer for almost every closure. Read this
+only when the source is genuinely append-only, every output model is append-safe,
+and re-reading the source whole is not acceptable.
 
 ## Contents
 
@@ -20,6 +19,12 @@ source whole is not acceptable.
 - [Reading prior data back out of DuckDB](#reading-prior-data-back-out-of-duckdb)
 - [Do NOT](#do-not)
 - [Worked transform: append-only source](#worked-transform-append-only-source)
+
+> **`transform_state` round-trips on desktop: writes persist and the previous
+> run's bag is replayed.** It is the only sanctioned durable store — every
+> hand-rolled alternative is banned in [Do NOT](#do-not) — and a raise does not
+> roll the rows back with the cursor
+> ([Durability](#durability-rows-and-cursor-do-not-share-fate)).
 
 ## Before you start: the eligibility gate
 
@@ -54,23 +59,45 @@ If any promised model fails the gate, the correct answer is one of:
 - **Split the disposition by model.** Land append-safe base models with
   `write_disposition="append"` and rebuild the non-append-safe derived models
   with `write_disposition="replace"` in the same run, from the full table read
-  back out of DuckDB. The derived model is then always correct, and only the
-  base scan is incremental. Two `pipeline.run(...)` calls, each with its own
-  disposition and its own resource list; the cursor covers only the base models.
+  back out of DuckDB. **Order matters and getting it wrong is silent: run the
+  append lane first, then read the table for the rebuild.** The derived model has
+  to see this run's appended rows; read it before the append lands and the derived
+  model trails the base table by one run's delta forever, on a green run. Note what
+  that forces: `prior_counts` is still read **before** the append lane runs, while
+  the rebuild's full-table read comes **after** it. That read is not a validation,
+  so it does not weaken the rule in
+  [Durability](#durability-rows-and-cursor-do-not-share-fate): validation you *can*
+  do before a write still goes before it, and the post-write row-count check still
+  runs after, as it must. Only the
+  base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
+  `run()` on it twice, each call with its own disposition and its own resource
+  list; the cursor covers only the base models. Every snippet in this file is
+  written against a single pipeline object, so a second one puts you outside what
+  any of them has been checked against.
 
 Never append to an aggregate or a regrain. The output is duplicate declared-grain
 keys or stale arithmetic, on a green run, with no error.
+
+**Do not escape the gate by leaving a promised model out of the landed set.**
+Delivering the failing aggregate as a consume-time `semantic_view` — whether you
+drop it from `PHYSICAL_MODELS` or simply never add it — makes the gate pass while
+the model the closure promised is never landed: nothing writes it, the row-count
+check cannot see it, and the naming assert never covers it. A promised aggregate
+belongs in `DERIVED_MODELS` — and so in `PHYSICAL_MODELS`, which is
+`BASE_MODELS + DERIVED_MODELS` — including when a refine cycle is what adds it. If
+a promised model is not append-safe, use one of the two remedies above; it stays a
+landed model either way.
 
 ## Two mechanisms, never composed
 
 An incremental closure runs **two separate state mechanisms**. They are not layers
 of one thing, and wiring one into the other silently corrupts the output.
 
-| | dlt pipeline state | `transform_state` |
+| | dlt pipeline state | your watermark |
 |---|---|---|
-| Holds | dlt's own bookkeeping (load ids, schema) | your watermark / cursor / offset |
-| Lives in | `pipelines_dir` under the run dir | kernel KV, per-workflow SQLite |
-| Lifetime | **ephemeral** — one run, thrown away | **durable** — replayed into the next run |
+| Holds | dlt's own bookkeeping (load ids, schema) | your cursor / offset |
+| Lives in | `pipelines_dir` under the run dir | the kernel's per-workflow SQLite via `transform_state` |
+| Lifetime | **ephemeral** — one run, thrown away | **durable** — survives into the next run |
 | You read it | never | every run |
 
 **The run-local dlt invariant does not change.** `pipelines_dir` still sits under
@@ -108,10 +135,18 @@ def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any], transform_state) -> No
 
 Two rules on what the bag may hold:
 
-- **Empty on the first run.** There is no prior run, so the bag is an empty
-  mapping — never `None`, never absent. Always read through `.get(key, default)`
-  and pick a default that means "take everything from the beginning". Never
-  `transform_state["cursor"]` on a path that can execute on run one.
+- **Empty on the first run.** There is no prior run, so each model's bag is an
+  empty mapping — never `None`, never absent. Read through
+  `.get(key, default)` **on the bag `for_model(...)` returns**, never on
+  `transform_state` itself, and pick a default that means "take everything from
+  the beginning". `transform_state` is the handle, not a bag: never subscript or
+  `.get()` it directly. With one declared model the handle is pre-bound, so flat
+  access happens to reach the right bag; with two or more the handle is unbound and
+  both directions fail silently — a flat write is dropped, and a flat **read**
+  returns your default rather than raising, so the cursor looks like a first run
+  and the whole source is re-yielded into an `"append"` table. So never write it —
+  at any model count, on any run, not just run one — even where it happens to work;
+  [Addressing the bag](#addressing-the-bag-for_model-always) has the mechanism.
 - **JSON-serializable values only.** The kernel serializes the bag; it does not
   inspect or coerce it. A `numpy.int64` row count or a `pandas.Timestamp`
   read off a DataFrame is **not** JSON-serializable and fails the commit. Cast at
@@ -121,24 +156,34 @@ Two rules on what the bag may hold:
 ## Addressing the bag: `for_model()` always
 
 **Use `transform_state.for_model("<name>")` in every closure you write, even a
-single-model one.** Flat indexing (`transform_state["max_event_id"] = ...`) works
-only when the data product promises **exactly one** model, and when it does not
-work it fails **silently** — no exception, no warning, a green run that persists
-nothing.
+single-model one.** Never index the bag flat.
 
-The mechanism: the kernel binds the handle to the sole model only when exactly
-one model is declared. With two or more declared models the handle is unbound,
-nothing is registered for draining, and every flat write is dropped on the floor
-when the transform returns. The next run reads an empty bag, defaults the cursor
-to "take everything", re-yields the entire source into an `"append"` table, and
-duplicates every row — the exact bug this whole document exists to prevent.
+Addressing is a property of the **declared-model list the kernel seeded into the
+handle**, not of how many models the closure promises. Desktop always seeds that
+list (see [Desktop specifics](#desktop-specifics)), so you get a
+`MultiModelTransformState` with `for_model()` / `generic()` available. With
+exactly one declared model that handle is also pre-bound, so flat indexing
+*happens* to reach the right bag — with two or more it is unbound and flat writes
+go nowhere. That is why `for_model()` is the only form worth writing: it is
+correct at every count, and the count crosses without warning.
 
-The trap is that **the model count is easy to cross without noticing**. The
-Step 3 contract's `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` means a
-closure with one base model plus one derived model already declares two. Adding a
-single derived model in a refine cycle silently converts a working flat-indexed
-cursor into a dropped one. `for_model()` is correct at every model count and
-raises `KeyError` listing the valid names on a typo, so it cannot fail silently.
+`for_model()` is always available on desktop. Do **not** guard it with
+`try`/`except AttributeError` — that branch is unreachable here, and there is no
+fallback store to reach for if it were ([Do NOT](#do-not)); a runtime that cannot
+hold a cursor keeps the closure on full replace.
+
+**The failure is silent in both directions**, which is why the rule is absolute.
+`transform_state["max_event_id"] = 12345` raises nothing either way: on a
+pre-bound handle it happens to persist, on an unbound one it persists **nothing**
+while the run stays green and every assert passes. The next run then reads an
+empty bag, defaults the cursor to "take everything", and re-yields the whole
+source into an `"append"` table — the only symptom is a row count growing by the
+full source size every run. And the count is easy to cross without noticing:
+`PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` means one base plus one derived
+already declares two, so a flat cursor that worked becomes a dropped one the
+moment a refine cycle adds a derived model. `for_model()` raises `KeyError`
+listing the valid names on a typo, so it cannot fail silently — which is why it is
+the only form to write.
 
 ```python
 events = transform_state.for_model("events")
@@ -240,7 +285,10 @@ from what was written: set it from the max value actually yielded into
 
 **Build the resource list from `PHYSICAL_MODELS`, not from the models that happen
 to have new rows.** A model with an empty delta yields an empty resource; it does
-not get dropped from the list.
+not get dropped from the list. In a split-disposition closure each lane carries its
+own list — the append lane is a strict subset of `PHYSICAL_MODELS` by design — and
+the invariant is on their **union**: every promised model appears in exactly one
+lane, every run. "The resource list" below means the lane a model belongs to.
 
 This looks like pointless work and it is the single most important structural
 rule in a multi-model incremental transform. Skipping a model with no delta —
@@ -283,9 +331,16 @@ first run whose delta is empty for every model therefore produces **no** data
 tables at all, `data_table_names()` returns `[]`, and the table-name assert
 **fails** — on a run that did nothing wrong.
 
-So keep the table-name assert (it still enforces the naming invariant and still
-catches semantic views leaking into the output), but scope it to what it can
-actually prove, and add a row-count check that verifies the write:
+So the transform ends up with **both checks, not one**. The row-count check is an
+**addition**, never a replacement: keep the table-name assert (it still enforces
+the naming invariant and still catches semantic views leaking into the output),
+scope it to what it can actually prove, and add the row-count check beside it.
+Swapping one for the other drops the naming invariant. The `.transform-complete`
+touch is still mandatory, but it does **not** stay where the default template
+leaves it: the template makes it the last statement after the naming assert,
+whereas here it goes after **both** checks and before the cursor advance. Touch it
+any earlier and the supervisor's readiness gate can report the build ready before
+the row-count check raises — the exact failure this section exists to catch.
 
 ```python
 # Naming invariant: dlt must never write a table we did not promise. Under
@@ -304,26 +359,60 @@ if actual - expected:
 # "silently wrote nothing".
 for model in PHYSICAL_MODELS:
     landed = _table_row_count(duckdb, model)   # 0 when the table does not exist
-    if landed != prior_counts[model] + len(new_rows_by_model[model]):
+    # yielded_by_model[model] counts what THIS run handed to pipeline.run(...) for
+    # that model — not its delta. For an appended model those are the same thing;
+    # for a replaced derived model it is the whole rebuild (the gate has you read
+    # the full table back out of DuckDB), so counting a delta here would raise on
+    # a correct run.
+    yielded = len(yielded_by_model[model])
+    # The expectation depends on THIS model's disposition. An appended model adds
+    # to what was already there; a replaced model (a derived model the
+    # eligibility gate sent back to "replace") is rewritten from this run alone,
+    # so prior rows are gone by design and adding them here would raise on a
+    # correct run.
+    expected_rows = (prior_counts[model] + yielded) if model in APPEND_MODELS else yielded
+    if landed != expected_rows:
         raise RuntimeError(
-            f"{model}: expected {prior_counts[model] + len(new_rows_by_model[model])} "
-            f"rows after append, found {landed}"
+            f"{model}: expected {expected_rows} rows after "
+            f"{'append' if model in APPEND_MODELS else 'replace'}, found {landed}"
         )
 ```
 
-Read `prior_counts` from the table **before** the write, with the same read-back
-helper as below, defaulting to `0` when the table does not exist yet. The check
-then holds on the first run (`0 + n == n`), on an empty delta (`n + 0 == n`), and
-catches the skipped-model case the table-name assert cannot see.
+Three names the snippet expects you to have built. `prior_counts` is read from the
+table **before** the write, with the same read-back helper as below, defaulting to
+`0` when the table does not exist yet. `yielded_by_model` is the per-model row
+lists you handed to `pipeline.run(...)` this run — build it as you assemble the
+resources, so the count and the write cannot drift apart. `APPEND_MODELS` is the
+subset you land with `write_disposition="append"` — for a single-disposition
+closure that is all of `PHYSICAL_MODELS`. The check then holds on the first run
+(`0 + n == n`), on an empty delta (`n + 0 == n`), on a replaced derived model
+(`landed == n`), and still catches the skipped-model case the table-name assert
+cannot see.
 
 ## Desktop specifics
 
+- **`transform_state` round-trips.** The kernel routes the local Python compute
+  driver through its batch module — the module that seeds and folds incremental
+  state — and per-model **state seeding** is wired, so the transform receives a
+  `MultiModelTransformState` with `for_model()` available and the previous run's
+  bag replayed. (Per-model state seeding is a different mechanism from per-model
+  execution *dispatch*, which desktop does not do — see the `.when(...)` entry in
+  [Do NOT](#do-not). One bag per model, one invocation for all of them.) Write the
+  bag and read it back; there is nothing to enable and nothing to check first. A
+  platform acceptance test covers this end-to-end across two builds of one
+  workflow — run 1 commits a cursor, run 2 must observe
+  it. **The product docs' `transform-state.md` scopes `transform_state` to
+  `k8s-compute` and calls it a no-op elsewhere; that caveat does not apply to lean
+  desktop.** Pocket's local `python-compute` driver routes through the same batch
+  module and persists the bag, so do not conclude from that page that the
+  parameter does nothing here — an agent that did exactly that hand-rolled the
+  watermark this document bans.
 - **Persistence is on by default.** The supervisor always hands the kernel a
   per-workflow database path; there is no flag to set and nothing to enable.
 - **One `<workflow_key>.sqlite3` per workflow.** State is scoped to the workflow,
   so it survives refine cycles that reuse the same workflow id — a rebuild of the
-  same workflow reads back the previous run's cursor. A *different* workflow id
-  starts from an empty bag.
+  same workflow reads back the previous run's committed state. A *different*
+  workflow id starts from an empty bag.
 - **There is no cron on Pocket.** Runs happen because the user asks for one. Do
   not write guidance or comments in terms of "each scheduled run" or "nightly" —
   the correct framing is "the next run", whenever that is. A refine cycle is a
@@ -341,8 +430,16 @@ catches the skipped-model case the table-name assert cannot see.
 
 `DuckDbOutput` exposes `path`, `schema`, `model_tables` and `full_table_name` —
 it has **no** query or execute method. To read what previous runs landed (to
-count rows for the verification above, derive a watermark from the table itself,
-or check for overlap), open the file directly.
+count rows for the verification above, or to check for overlap), open the file
+directly. **One rule: no `SELECT max(<cursor>)` off the output table, not even as
+a post-write assertion.** Reads that merely see the cursor column are fine, but
+write the overlap check so it cannot be mistaken for a watermark: ask whether the
+delta's keys are *already present* (`SELECT count(*) … WHERE <cursor> IN (…)`, or
+`>= :delta_min`), not what the table's maximum is. The full-table read the
+[eligibility
+gate](#before-you-start-the-eligibility-gate) requires when you rebuild a
+non-append-safe derived model with `"replace"`. The cursor lives in
+`transform_state`, and nowhere else.
 
 **Import the module under an alias.** The output port parameter must be named
 exactly `duckdb` (the local DuckDB driver requires that name and it cannot be
@@ -391,10 +488,16 @@ insert or update, no `CREATE TABLE` / `CREATE VIEW` DDL, no direct file write in
 staging. All writes still go through dlt with
 `dlt.destinations.duckdb(credentials=duckdb.path)`.
 
-Prefer the `transform_state` cursor over a read-back watermark: the cursor is
-cheap, explicit, and cannot disagree with what was committed. Reach for the
-read-back only when the source gives you no usable cursor column — but do use it
-for the row-count verification, which the cursor cannot substitute for.
+Why the cursor rather than a landed-rows watermark, given that a watermark cannot
+disagree with what was committed and so is immune to the
+[torn state](#durability-rows-and-cursor-do-not-share-fate) above: that immunity
+holds only if a failed load leaves a *prefix* in cursor order. A partial load that
+is not a prefix advances the watermark past rows that never landed and skips them
+permanently — a silent gap, where the cursor's failure mode is a visible duplicate.
+The ban covers the assertion case too because a `max()` that exists in the
+transform is one refactor from being read, and the row-count check already proves
+the write landed. If the source has no usable cursor column at all, the closure is
+not eligible for incrementality: keep it on full replace and say so.
 
 ## Do NOT
 
@@ -416,14 +519,26 @@ for the row-count verification, which the cursor cannot substitute for.
 - **Do NOT append to an aggregate, a regrain, or a dedupe.** Only models that
   pass the [eligibility gate](#before-you-start-the-eligibility-gate) may be
   appended; rebuild the rest with `"replace"` in the same run.
+- **Do NOT hand-roll durable state.** No JSON sidecar file, no marker table, no
+  `SELECT max(<cursor>)` watermark off the output table, no environment variable
+  (dlt's own state has its own bullet below). `transform_state` is the mechanism;
+  the DuckDB read-back never holds the cursor — see
+  [Reading prior data back out of DuckDB](#reading-prior-data-back-out-of-duckdb)
+  for the reads it is for.
 - **Do NOT index the bag flat.** Use `for_model("<name>")` at every model count —
-  flat indexing is dropped silently the moment the closure declares a second
-  model, and adding one derived model is enough.
+  a handle pre-bound to a sole model stops being bound the moment the closure
+  declares a second, and one derived model is enough. Both directions fail
+  silently; see
+  [Addressing the bag](#addressing-the-bag-for_model-always).
 - **Do NOT drop a model from the resource list because it has no new rows.**
   Yield every promised model every run, and advance a cursor only in the branch
   that wrote that model's rows.
 - **Do NOT treat the table-name assert as proof the write happened.** It cannot
   see a missing write under `"append"`. Count rows.
+- **Do NOT delete the table-name assert when you add the row-count check.** They
+  prove different things — naming invariant vs. what landed — and the transform
+  keeps both. Same for the `.transform-complete` touch: adding verification never
+  removes it.
 - **Do NOT assume a raise rolls back the rows.** The local DuckDB driver has no
   transaction; rows are permanent the moment `pipeline.run(...)` returns. Check
   before writing.
@@ -494,8 +609,9 @@ def ingest(
 ) -> None:
     """Land only events newer than the previous run's committed cursor."""
     source_root = Path(secrets["csv_source"])
-    # for_model(), never flat indexing: flat writes are dropped SILENTLY as soon
-    # as the closure promises a second model (one derived model is enough).
+    # for_model() always. With one declared model a flat cursor only HAPPENS to
+    # reach the right bag; it is dropped SILENTLY the moment the closure declares a
+    # second, and one derived model added in a refine cycle is enough.
     events_state = transform_state.for_model("events")
     # First run has no prior state: 0 means "take everything".
     last_seen = int(events_state.get("max_event_id", 0))
@@ -555,11 +671,16 @@ def ingest(
     # Verify the write by ROW COUNT. The table-name assert above cannot detect a
     # model that was silently not written: dlt rehydrates its schema from the
     # destination, so a table landed by an earlier run is reported either way.
+    # "events" is appended, so the expectation is prior + this run's rows. If you
+    # later add a derived model the gate sends back to "replace", that model's
+    # expectation is this run's rows ALONE — switch to the disposition-aware form
+    # in the Verifying-the-write section rather than extending this line, or the
+    # check raises on a correct run.
     landed = _table_row_count(duckdb, "events")
-    if landed != prior_count + len(rows):
+    expected_rows = prior_count + len(rows)
+    if landed != expected_rows:
         raise RuntimeError(
-            f"events: expected {prior_count + len(rows)} rows after append, "
-            f"found {landed}"
+            f"events: expected {expected_rows} rows after append, found {landed}"
         )
 
     # Produce-verification marker: the supervisor's readiness gate waits for it.

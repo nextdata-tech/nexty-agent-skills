@@ -10,7 +10,7 @@
     },
     {
       "id": "uses-transform-state-kwarg",
-      "check": "The agent declares a parameter named transform_state on the @data_product.on_transform() function and uses it to hold the watermark, rather than inventing its own persistence (a JSON sidecar file, a marker table, or a durable dlt pipelines_dir)."
+      "check": "The agent declares a parameter named transform_state on the @data_product.on_transform() function and uses it to hold the watermark, rather than inventing its own persistence (a JSON sidecar file, a marker table, a SELECT max(<cursor>) watermark read back off the output table, or a durable dlt pipelines_dir)."
     },
     {
       "id": "dlt-state-stays-run-local",
@@ -30,7 +30,7 @@
     },
     {
       "id": "verification-can-detect-a-missing-write",
-      "check": "The solution's post-write verification can actually detect that rows were not landed — e.g. comparing a row count read back from DuckDB against prior_count + len(new_rows), or an equivalent count//watermark read-back. Merely keeping the default table-name assert on pipeline.default_schema.data_table_names() does NOT satisfy this: under append, dlt rehydrates its schema from the destination, so a table landed by an earlier run is reported whether or not this run wrote to it. If the agent keeps the table-name assert as well, it must not be presented as proof that the write happened, and it must not raise on a legitimately empty first run (exact-equality against the promised set does raise there)."
+      "check": "The solution's post-write verification can actually detect that rows were not landed — e.g. comparing a row count read back from DuckDB against prior_count + len(new_rows), or an equivalent row-count read-back (NOT a SELECT max(<cursor>) watermark off the output table — the skill bans that SQL shape outright, including as a post-write assertion, because the row-count check already proves the write landed). Merely keeping the default table-name assert on pipeline.default_schema.data_table_names() does NOT satisfy this: under append, dlt rehydrates its schema from the destination, so a table landed by an earlier run is reported whether or not this run wrote to it. If the agent keeps the table-name assert as well, it must not be presented as proof that the write happened, and it must not raise on a legitimately empty first run (exact-equality against the promised set does raise there)."
     },
     {
       "id": "no-false-rollback-assumption",
@@ -50,11 +50,11 @@
     },
     {
       "id": "state-bag-addressed-via-for-model",
-      "check": "The agent addresses the state bag through transform_state.for_model(\"events\") rather than indexing the handle flat (transform_state[\"max_event_id\"] = ...). Flat indexing only works while the closure declares exactly one model and is dropped SILENTLY once a second model is promised — adding one derived model is enough — so the cursor would never persist and every rerun would re-append the whole export. Credit an agent that uses for_model(); an agent that indexes flat fails even though this fixture currently promises one model."
+      "check": "The agent addresses the state bag through transform_state.for_model(\"events\") rather than indexing the handle flat (transform_state[\"max_event_id\"] = ...). Flat indexing is dropped SILENTLY once the closure declares 2+ models — adding one derived model is enough. With exactly one declared model it merely HAPPENS to reach the right bag, which is not a guarantee to rely on; when it is dropped the cursor never persists and every rerun re-appends the whole export. Credit an agent that uses for_model(); an agent that indexes flat fails even though this fixture currently promises one model."
     },
     {
       "id": "readback-avoids-module-shadowing-and-first-run-io",
-      "check": "IF the solution reads back from DuckDB directly (for a row count or a watermark), it must work: the module is imported under an alias (e.g. `import duckdb as duckdb_lib`) because the port parameter is named `duckdb` and shadows it — a bare duckdb.connect(...) inside the transform raises AttributeError on the DuckDbOutput dataclass; and the missing-file case is handled, since connect(path, read_only=True) on a first run raises duckdb.IOException, not CatalogException (catching only CatalogException leaves the first run crashing). If the solution does no direct read-back at all, mark this check not applicable and do not penalize."
+      "check": "IF the solution reads back from DuckDB directly (for a row count, an overlap check, or the full-table read a replaced derived model needs — only a SELECT max(<cursor>) watermark is banned, see uses-transform-state-kwarg), it must work: the module is imported under an alias (e.g. `import duckdb as duckdb_lib`) because the port parameter is named `duckdb` and shadows it — a bare duckdb.connect(...) inside the transform raises AttributeError on the DuckDbOutput dataclass; and the missing-file case is handled, since connect(path, read_only=True) on a first run raises duckdb.IOException, not CatalogException (catching only CatalogException leaves the first run crashing). If the solution does no direct read-back at all, mark this check not applicable and do not penalize."
     },
     {
       "id": "no-when-dag-no-databricks-sidecar",
