@@ -369,9 +369,11 @@ cannot see.
 
 - **`transform_state` round-trips.** The kernel routes the local Python compute
   driver through its batch module — the module that seeds and folds incremental
-  state — and the per-model seeding is wired, so the transform receives a
+  state — and per-model **state seeding** is wired, so the transform receives a
   `MultiModelTransformState` with `for_model()` available and the previous run's
-  bag replayed. Write the bag and read it back; there is nothing to enable and
+  bag replayed. (Per-model state seeding is a different mechanism from per-model
+  execution *dispatch*, which desktop does not do — see the `.when(...)` entry in
+  [Do NOT](#do-not). One bag per model, one invocation for all of them.) Write the bag and read it back; there is nothing to enable and
   nothing to check first. A platform acceptance test covers this end-to-end
   across two builds of one workflow — run 1 commits a cursor, run 2 must observe
   it. **The product docs' `transform-state.md` scopes `transform_state` to
