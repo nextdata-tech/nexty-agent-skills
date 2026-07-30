@@ -1,0 +1,21 @@
+{
+  "mapper_spec_id": "7e4de99250d42a82d795e17d76336186",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "purpose": "End-to-end proof: read invoice terms from landed text.",
+  "input_fields": [
+    "invoice_id",
+    "vendor",
+    "page_text"
+  ],
+  "document_classes": [
+    "invoice"
+  ],
+  "pii_category": "none",
+  "recurring": false,
+  "max_calls": 20,
+  "max_tokens": 200000,
+  "max_usd": 2.0,
+  "granted_by": "e2e-harness",
+  "granted_at": "2026-07-31T00:00:00Z"
+}

@@ -1,0 +1,60 @@
+{
+  "description": "Read an invoice reference and payment terms out of landed invoice text.",
+  "instruction": "Each source document is the text of one invoice.\n\nRead the following:\n\ninvoice_ref: the invoice reference exactly as printed.\n\ntotal_usd: the line total in US dollars, as a number with no currency symbol and no thousands separator.\n\npayment_terms_days: the number of days in the payment terms. If the document does not state payment terms, return the absent sentinel \u2014 do not infer a customary value.\n\nCite the verbatim span you read each value from.",
+  "target_fields": [
+    {
+      "name": "invoice_ref",
+      "value_type": "string",
+      "min_length": 3,
+      "max_length": 32,
+      "required": true,
+      "min_evidence": 1
+    },
+    {
+      "name": "total_usd",
+      "value_type": "float",
+      "minimum": 0.0,
+      "maximum": 1000000.0,
+      "required": true,
+      "min_evidence": 1
+    },
+    {
+      "name": "payment_terms_days",
+      "value_type": "int",
+      "minimum": 1,
+      "maximum": 365,
+      "required": false,
+      "min_evidence": 1
+    }
+  ],
+  "grain": {
+    "identity_fields": [
+      "invoice_id"
+    ],
+    "canonical_sort": [
+      "invoice_id"
+    ],
+    "duplicate_policy": "reject",
+    "source_locators": [],
+    "identity_bearing_inputs": [
+      "invoice_id"
+    ]
+  },
+  "cardinality": {
+    "min_rows": 3,
+    "max_rows": 3,
+    "expected_per_input": 1
+  },
+  "thresholds": {
+    "max_degrade_share": 0.0,
+    "max_error_rate": 0.0,
+    "max_unverified_share": 0.0,
+    "max_absent_share": 0.34,
+    "max_validation_retries": 2
+  },
+  "input_adapter": "landed_text",
+  "model": "claude-haiku-4-5-20251001",
+  "effort": "low",
+  "accepts_media": [],
+  "spec_version": "1"
+}
