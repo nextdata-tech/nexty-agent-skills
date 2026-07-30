@@ -128,10 +128,11 @@ Two rules on what the bag may hold:
   empty mapping — never `None`, never absent. Read through
   `.get(key, default)` **on the bag `for_model(...)` returns**, never on
   `transform_state` itself, and pick a default that means "take everything from
-  the beginning". `transform_state` is the handle, not a bag: subscripting or
-  `.get()`-ing it directly is the silently-dropped write described in
-  [Addressing the bag](#addressing-the-bag-for_model-always), at every model count
-  and on every run — not just run one.
+  the beginning". `transform_state` is the handle, not a bag: never subscript or
+  `.get()` it directly. With one declared model that happens to reach the right bag
+  and with two or more the write is silently dropped — so it is wrong at every model
+  count and on every run, not just run one, and
+  [Addressing the bag](#addressing-the-bag-for_model-always) has the mechanism.
 - **JSON-serializable values only.** The kernel serializes the bag; it does not
   inspect or coerce it. A `numpy.int64` row count or a `pandas.Timestamp`
   read off a DataFrame is **not** JSON-serializable and fails the commit. Cast at
