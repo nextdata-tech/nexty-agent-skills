@@ -28,6 +28,25 @@ closure.** `CONTEXT.md` is that record. It is prose for a human/agent to read;
 machine-enforced rulings still land as data (`nxd_decisions`) and executable
 asserts (Step 3b) — `CONTEXT.md` does not replace those, it explains them.
 
+## Not the same file as `dp-spec.md`
+
+The two are adjacent and easy to conflate, so the split is fixed:
+
+| | `dp-spec.md` | `CONTEXT.md` |
+|---|---|---|
+| Role | the **input** — what the user approved | the **record** — what generation produced |
+| Owner | the user (editable, approved by them) | the generator |
+| Location | **beside** the closure | **inside** the closure, at its root |
+| Carries | intent, questions, model plan, rubric, ledger, open questions | the same rulings *as shipped*, plus the reopen recipe, build outcomes, blockers |
+| Lifetime | drafting and approval; may hold rejected options | travels with the closure forever |
+
+Write `CONTEXT.md` **from** the approved spec plus what actually happened — the
+sections below map onto the spec's, so this is a copy-and-extend, not a
+re-derivation. **Copy, never point.** A `CONTEXT.md` that says "see
+`../dp-spec.md`" is the closure-escaping reference Phase C fails: the moment the
+closure is exported or moved, the contract is gone. The IR is upstream of the
+closure and is never a dependency of it.
+
 ## When to write it
 
 **Always** — every closure emits `CONTEXT.md` at the root. It is a required

@@ -45,7 +45,7 @@ All zero-argument unless noted; import what you need, e.g.
 | `double()`, `float()`, `float16()`, `float32()`, `float64()` | |
 | `int8()`, `int16()`, `int32()`, `int64()` | |
 | `uint()`, `uint8()`, `uint16()`, `uint32()`, `uint64()` | `uint()` is an alias for `uint16()` |
-| `number()` | A generic numeric type distinct from the sized int/float variants — this is what the skill's inferred-type mapping table uses for "int/number" and "number/double/float" |
+| `number()` | A generic numeric type distinct from the sized int/float variants — what the inferred-type mapping below uses for every numeric |
 | `vector()` | |
 | `binary(length=None)`, `vector_embeddings(dimensions)`, `timestamp(unit, timezone=None)`, `decimal(precision, scale)`, `duration(unit)`, `time32(unit)`, `time64(unit)` | Parameterized; `unit` is a `DurationUnit` from `nxd.core.yaml_schemas` |
 | `list(value_type)`, `list_view(value_type)`, `large_list(value_type)`, `large_list_view(value_type)`, `map(key_type, value_type)`, `dictionary(key_type, value_type)`, `struct(fields)` | Complex/nested types — `value_type`/`fields` are `Field` instances from `nxd.core.yaml_schemas` |
@@ -54,6 +54,15 @@ All zero-argument unless noted; import what you need, e.g.
 The desktop closure pattern only ever needs `string()`, `number()`,
 `boolean()`, `date32()` — the rest exist for the k8s/cloud topology's richer
 source types.
+
+**Inferred type → constructor** (what Step 2 places from the inferred model):
+
+| Inferred | Constructor |
+|---|---|
+| string | `string()` |
+| int, number, double, float | `number()` |
+| bool | `boolean()` |
+| date | `date32()` |
 
 ## Semantic role builders (`nxd.spec`)
 
