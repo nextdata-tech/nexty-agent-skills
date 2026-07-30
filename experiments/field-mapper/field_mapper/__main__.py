@@ -38,7 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, replace as dc_replace
+from dataclasses import dataclass, fields as dc_fields, replace as dc_replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -893,6 +893,150 @@ def cmd_resolve(fixture: Fixture, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+#: Pinned BOUND `mapper_spec_id` per fixture — post-`with_wire_schema`,
+#: post-`harness_version` stamp. That is the id the grant actually checks
+#: (`Fixture.load`), so pinning the bare `spec.json` hash instead would leave
+#: `compile_schema` drift invisible to this tripwire.
+#:
+#: WHY THIS EXISTS. A spec field that silently vanishes from the canonical form
+#: changes `mapper_spec_id`, which unbinds every grant and auto-invalidates every
+#: human review bound to it — with no visible cause. That bug shipped twice: in
+#: `_stamp_harness_version`, then at a second site in `map_inputs` that was never
+#: swept when the first was fixed. Nothing detected either; both were found by
+#: reading. These pins turn that class from invisible into a failing check.
+#:
+#: HOW TO UPDATE. Deliberately, in the commit that moves the hash, with the
+#: reason in the message. A pin updated as a reflex is worse than no pin — it
+#: converts a tripwire into a rubber stamp. If a pin moves and you cannot name
+#: the semantic change that moved it, that is the finding: stop and investigate.
+_SPEC_ID_PINS: dict[str, str] = {
+    "01-row-scores": "3d4adc20449936d74fd57d18306743dd",
+    "02-text-extraction": "659d253275dbd818156f1bd5628ae51d",
+    "03-injected-instruction": "696e56a9405200bab9a733659a65caae",
+    "04-wrong-document": "060ffdfcddf5cd1253b35c587eddc7bc",
+    "05-evidence-absent": "528c27a584ea6b255b8285a5395f505d",
+    "06-validation-failure": "2c201747b7f448eb3986197823541258",
+    "07-media-direct": "48932690b7a1a73c1021a1d16625c6b1",
+    "08-pdf-document": "a5dc721545e3e5bca473c6e15e920708",
+}
+
+#: `MapperSpec` fields deliberately absent from `to_canonical()`. Anything listed
+#: here is excluded because it is nondeterministic or non-semantic (CONTRACT §5
+#: step 4); anything NOT listed must appear in the canonical form. `cmd_pins`
+#: enforces the partition, so a field added without deciding which side it falls
+#: on fails loudly instead of silently changing every hash.
+#: - `description`: prose for humans, carries no semantics the model or the
+#:   validator acts on. Hashing it would auto-invalidate every review over a
+#:   typo fix.
+#: - `source_path`: a filesystem path. CONTRACT §5 step 4 names this one
+#:   specifically — a leaked path means `mapper_spec_id` changes when the
+#:   closure moves directory, invalidating every review in the dataset at once.
+_HASH_EXCLUDED: frozenset[str] = frozenset({"description", "source_path"})
+
+
+def _check_canonical_coverage() -> list[str]:
+    """Every `MapperSpec` field is either hashed or explicitly excluded.
+
+    The generic form of the bug that shipped twice: a field added to the
+    dataclass but forgotten in `to_canonical()` is invisible to the hash, so two
+    genuinely different specs collide on one `mapper_spec_id`. Walking
+    `dataclasses.fields` catches that at authoring time rather than waiting for
+    a human to grep.
+
+    Built against the most-populated fixture spec so that omit-when-default
+    serialization — which optional fields added later must use, to avoid moving
+    every pin — cannot hide a field from this check.
+    """
+    probe = MapperSpec.load(
+        Path(__file__).parent.parent / "samples" / "08-pdf-document" / SPEC_FILE
+    )
+    probe = _stamp_harness_version(probe.with_wire_schema(compile_schema(probe)))
+    canonical_keys = set(probe.to_canonical())
+    declared = {f.name for f in dc_fields(MapperSpec)}
+
+    problems: list[str] = []
+    for name in sorted(declared - canonical_keys - _HASH_EXCLUDED):
+        problems.append(
+            f"MapperSpec.{name} is neither in to_canonical() nor in "
+            f"_HASH_EXCLUDED — decide which, or two different specs will "
+            f"collide on one mapper_spec_id"
+        )
+    for name in sorted(canonical_keys - declared):
+        problems.append(
+            f"to_canonical() emits {name!r}, which is not a MapperSpec field"
+        )
+    for name in sorted(_HASH_EXCLUDED & canonical_keys):
+        problems.append(
+            f"MapperSpec.{name} is in _HASH_EXCLUDED but to_canonical() emits "
+            f"it anyway — the exclusion list is lying"
+        )
+    return problems
+
+
+def cmd_pins(root: Path, args: argparse.Namespace) -> int:
+    """Check spec-hash stability and canonical-form coverage.
+
+    Two checks the fixture suite structurally cannot express: it compares
+    *behaviour* against `expect.json`, and a silently-changed hash does not
+    change behaviour until some grant or review fails to bind — by which point
+    the cause is long gone.
+    """
+    problems = _check_canonical_coverage()
+    for problem in problems:
+        print(f"  FAIL coverage: {problem}")
+    if not problems:
+        print("  ok   coverage: every MapperSpec field is hashed or excluded")
+
+    fixtures = sorted(
+        p for p in root.iterdir() if p.is_dir() and (p / SPEC_FILE).exists()
+    )
+    observed: dict[str, str] = {}
+    for path in fixtures:
+        try:
+            observed[path.name] = Fixture.load(path).spec.mapper_spec_id
+        except FieldMapperError as exc:
+            problems.append(f"{path.name}: failed to load — {exc}")
+            print(f"  FAIL {path.name}: {exc}")
+
+    if not _SPEC_ID_PINS:
+        # First run prints the pins for pasting. Deliberately NOT self-writing:
+        # a check that maintains its own expectations is not a check.
+        print("\n  no pins recorded yet; paste into _SPEC_ID_PINS:\n")
+        for name, spec_id in sorted(observed.items()):
+            print(f'    "{name}": "{spec_id}",')
+        return EXIT_USAGE
+
+    for name, spec_id in sorted(observed.items()):
+        pinned = _SPEC_ID_PINS.get(name)
+        if pinned is None:
+            problems.append(f"{name}: no pin recorded")
+            print(f"  FAIL {name}: no pin recorded (observed {spec_id})")
+        elif pinned != spec_id:
+            problems.append(f"{name}: hash moved")
+            print(f"  FAIL {name}: pinned {pinned}, observed {spec_id}")
+            print(
+                "         a moved hash unbinds every grant and invalidates "
+                "every review bound to this spec."
+            )
+            print(
+                "         intended? update the pin IN THIS COMMIT with the "
+                "reason. not intended? this is the bug."
+            )
+        else:
+            print(f"  ok   {name}  {spec_id}")
+
+    for name in sorted(set(_SPEC_ID_PINS) - set(observed)):
+        problems.append(f"{name}: pinned but no such fixture")
+        print(f"  FAIL {name}: pinned but no such fixture — stale pin")
+
+    print()
+    if problems:
+        print(f"  {len(problems)} pin/coverage problem(s)")
+        return EXIT_BLOCKED
+    print(f"  {len(observed)} spec hash(es) stable, canonical coverage complete")
+    return EXIT_OK
+
+
 def cmd_verify(root: Path, args: argparse.Namespace) -> int:
     """Run every fixture and check it against its declared expectation.
 
@@ -1080,7 +1224,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("preflight", "canary", "run", "resolve", "verify"),
+        choices=("preflight", "canary", "run", "resolve", "verify", "pins"),
     )
     parser.add_argument(
         "target",
@@ -1143,6 +1287,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "verify":
             return cmd_verify(target if target.is_dir() else default_root, args)
+        if args.command == "pins":
+            return cmd_pins(target if target.is_dir() else default_root, args)
 
         fixture = Fixture.load(target)
         if args.command == "preflight":
