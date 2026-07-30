@@ -317,8 +317,12 @@ So the transform ends up with **both checks, not one**. The row-count check is a
 **addition**, never a replacement: keep the table-name assert (it still enforces
 the naming invariant and still catches semantic views leaking into the output),
 scope it to what it can actually prove, and add the row-count check beside it.
-Swapping one for the other drops the naming invariant — and the
-`.transform-complete` touch stays exactly where the default template puts it:
+Swapping one for the other drops the naming invariant. The `.transform-complete`
+touch is still mandatory, but it does **not** stay where the default template
+leaves it: the template makes it the last statement after the naming assert,
+whereas here it goes after **both** checks and before the cursor advance. Touch it
+any earlier and the supervisor's readiness gate can report the build ready before
+the row-count check raises — the exact failure this section exists to catch.
 
 ```python
 # Naming invariant: dlt must never write a table we did not promise. Under
@@ -398,9 +402,12 @@ cannot see.
 `DuckDbOutput` exposes `path`, `schema`, `model_tables` and `full_table_name` —
 it has **no** query or execute method. To read what previous runs landed (to
 count rows for the verification above, or to check for overlap), open the file
-directly. **Count rows; do not read the cursor column back at all.** The ban is on
-the SQL shape, not just the intent: `SELECT max(<cursor>)` off the output table is
-out even as a post-write assertion. That is stricter than it strictly needs to be —
+directly. **Never reconstruct the cursor from the table.** The ban is on one SQL
+shape, not on touching the column: `SELECT max(<cursor>)` off the output table is
+out even as a post-write assertion. Reads that legitimately see the cursor column
+are fine — an overlap check, and the full-table read the
+[eligibility gate](#before-you-start-the-eligibility-gate) requires when you
+rebuild a non-append-safe derived model with `"replace"`. That is stricter than it strictly needs to be —
 a `max()` you only assert against never becomes a cursor — but a value that exists
 in the transform is one refactor away from being read, the row-count check already
 proves the write landed, and one rule you can apply without judging your own intent

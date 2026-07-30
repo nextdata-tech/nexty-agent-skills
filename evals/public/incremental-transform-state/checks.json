@@ -54,7 +54,7 @@
     },
     {
       "id": "readback-avoids-module-shadowing-and-first-run-io",
-      "check": "IF the solution reads back from DuckDB directly (for a row count — a watermark read-back is banned, see uses-transform-state-kwarg), it must work: the module is imported under an alias (e.g. `import duckdb as duckdb_lib`) because the port parameter is named `duckdb` and shadows it — a bare duckdb.connect(...) inside the transform raises AttributeError on the DuckDbOutput dataclass; and the missing-file case is handled, since connect(path, read_only=True) on a first run raises duckdb.IOException, not CatalogException (catching only CatalogException leaves the first run crashing). If the solution does no direct read-back at all, mark this check not applicable and do not penalize."
+      "check": "IF the solution reads back from DuckDB directly (for a row count, an overlap check, or the full-table read a replaced derived model needs — only a SELECT max(<cursor>) watermark is banned, see uses-transform-state-kwarg), it must work: the module is imported under an alias (e.g. `import duckdb as duckdb_lib`) because the port parameter is named `duckdb` and shadows it — a bare duckdb.connect(...) inside the transform raises AttributeError on the DuckDbOutput dataclass; and the missing-file case is handled, since connect(path, read_only=True) on a first run raises duckdb.IOException, not CatalogException (catching only CatalogException leaves the first run crashing). If the solution does no direct read-back at all, mark this check not applicable and do not penalize."
     },
     {
       "id": "no-when-dag-no-databricks-sidecar",
