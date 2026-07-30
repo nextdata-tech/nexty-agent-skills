@@ -530,6 +530,10 @@ from nxd.core.context import DuckDbOutput
 BASE_MODELS = ("events",)
 DERIVED_MODELS = ()
 PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS
+# Which models this run APPENDS to. Here that is all of them; a closure that sent
+# a non-append-safe derived model back to "replace" lists only the appended ones,
+# and the row-count check reads this to pick the right expectation per model.
+APPEND_MODELS = PHYSICAL_MODELS
 
 
 def _table_row_count(duckdb: DuckDbOutput, model: str) -> int:
