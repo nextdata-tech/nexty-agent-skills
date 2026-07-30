@@ -54,6 +54,7 @@ from .errors import (
     TransportExhaustedError,
 )
 from .media import MediaInput, build_media_content_block
+from .providers import build_provider
 
 __all__ = [
     "DEFAULT_MODEL_ID",
@@ -570,6 +571,13 @@ class CallResult:
     error_code: str | None = None
     #: Redacted human-readable detail. Never input content, never a credential.
     error_detail: str | None = None
+    #: Which provider dispatched the call. Travels to the ledger so an attempt
+    #: made through a development provider is never mistaken for a real API call.
+    provider: str = "anthropic"
+    #: Every way this response is not what the Anthropic API would have returned
+    #: (no schema enforcement, media as a file read, agent-loop turns, ignored
+    #: effort). Empty on the `anthropic` provider by construction.
+    provider_notes: tuple[str, ...] = ()
 
     @property
     def is_success(self) -> bool:
@@ -761,38 +769,61 @@ class Client:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str | None = None,
         config: TransportConfig | None = None,
         budget_ledger: BudgetLedger | None = None,
         heartbeat: Callable[[str], None] | None = None,
         cancelled: Callable[[], bool] | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        provider: str = "anthropic",
+        provider_model: str | None = None,
+        provider_cwd: str | None = None,
     ) -> None:
-        anthropic = _import_anthropic()
-        self._anthropic = anthropic
         self._config = config or TransportConfig()
         self._ledger = budget_ledger
         # Progress signal so the supervisor readiness gate survives a long run.
         self._heartbeat = heartbeat or (lambda _msg: None)
         self._cancelled = cancelled or (lambda: False)
         self._sleep = sleep
+        self._provider_kind = provider
 
-        # The key lives inside the SDK client and nowhere else on `self`. It is
-        # never assigned to an attribute, so it cannot reach a `repr` or a
-        # pickle of this object.
-        self._client = anthropic.Anthropic(
-            api_key=api_key,
-            timeout=self._config.request_timeout_seconds,
-            # Our own backoff is the retry policy; the SDK's would double it and
-            # make the transport-retry budget unauditable.
-            max_retries=0,
+        if provider == "anthropic":
+            if not api_key:
+                raise CredentialMissingError(
+                    "provider 'anthropic' needs an API key; none was resolved. "
+                    "Bind it via .secrets([...]) or export ANTHROPIC_API_KEY."
+                )
+            anthropic = _import_anthropic()
+            self._anthropic = anthropic
+            # The key lives inside the SDK client and nowhere else on `self`. It
+            # is never assigned to an attribute, so it cannot reach a `repr` or a
+            # pickle of this object.
+            self._client = anthropic.Anthropic(
+                api_key=api_key,
+                timeout=self._config.request_timeout_seconds,
+                # Our own backoff is the retry policy; the SDK's would double it
+                # and make the transport-retry budget unauditable.
+                max_retries=0,
+            )
+        else:
+            # No SDK import and no key: the point of a non-Anthropic provider is
+            # that it runs where neither is available.
+            self._anthropic = None
+            self._client = None
+
+        self._provider = build_provider(
+            provider,
+            client=self._client,
+            should_stream=self._config.should_stream,
+            model=provider_model,
+            cwd=provider_cwd,
         )
 
     def __repr__(self) -> str:
         """Deliberately minimal: nothing here can carry the key."""
         return (
-            f"<field_mapper.transport.Client model={self._config.model} "
-            f"effort={self._config.effort}>"
+            f"<field_mapper.transport.Client provider={self._provider_kind} "
+            f"model={self._config.model} effort={self._config.effort}>"
         )
 
     # -- token counting ---------------------------------------------------
@@ -800,11 +831,18 @@ class Client:
     def count_tokens(
         self, *, instruction: str, text_inputs: Sequence[str] = ()
     ) -> int | None:
-        """Measured input tokens, or None if the endpoint is unavailable."""
-        try:
-            response = self._client.messages.count_tokens(
-                model=self._config.model,
-                messages=[
+        """Measured input tokens, or None if the provider cannot say.
+
+        Routed through the provider: the `claude_cli` provider returns None
+        because its own cached harness prompt dominates its input count, so any
+        figure would describe a different request than the one being sized.
+        `estimate` then falls back to the offline heuristic and reports
+        `token_counts_measured=False` rather than presenting a wrong number.
+        """
+        return self._provider.count_tokens(
+            {
+                "model": self._config.model,
+                "messages": [
                     {
                         "role": "user",
                         "content": build_user_content(
@@ -812,10 +850,8 @@ class Client:
                         ),
                     }
                 ],
-            )
-        except Exception:  # noqa: BLE001 - preflight must not block on preflight
-            return None
-        return int(response.input_tokens)
+            }
+        )
 
     # -- the call ---------------------------------------------------------
 
@@ -968,10 +1004,13 @@ class Client:
         return request
 
     def _dispatch(self, request: Mapping[str, Any]) -> Any:
-        if self._config.should_stream:
-            with self._client.messages.stream(**request) as stream:
-                return stream.get_final_message()
-        return self._client.messages.create(**request)
+        """Hand the built request to the provider.
+
+        Everything above this line — the wire shape, budget accounting, retry
+        policy, outcome classification — is provider-independent by design, so a
+        development provider is governed by the same failure policy as the API.
+        """
+        return self._provider.dispatch(request)
 
     # -- outcome interpretation ------------------------------------------
 
@@ -1008,6 +1047,13 @@ class Client:
                 attempt_index=attempt_index,
                 error_code=error_code,
                 error_detail=error_detail,
+                # Carried from the provider's response so the ledger records
+                # WHICH provider answered. Absent on a real SDK Message, where
+                # the "anthropic" default is correct by construction.
+                provider=getattr(response, "provider", "anthropic"),
+                provider_notes=tuple(
+                    getattr(response, "provider_notes", ()) or ()
+                ),
             )
 
         # Branch on stop_reason, never on stop_details: the latter may be null

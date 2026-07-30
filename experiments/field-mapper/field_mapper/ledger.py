@@ -189,6 +189,24 @@ class AttemptRecord:
     error_code: str | None = None
     harness_version: str | None = None
 
+    provider: str = "anthropic"
+    """Which provider dispatched this call.
+
+    Recorded because a development provider (``claude_cli``) is NOT wire- or
+    behaviour-equivalent to the API. Without this field an attempt made through a
+    local CLI is indistinguishable from a real API attempt in the audit trail,
+    which is precisely the confusion the provider seam exists to make impossible.
+    """
+
+    provider_notes: tuple[str, ...] = ()
+    """Every way this response is not what the Anthropic API would have returned.
+
+    Populated by the provider (missing schema enforcement, media sent as a file
+    read rather than a content block, agent-loop turns, ignored effort). A reader
+    deciding whether an attempt certifies anything needs these, so they travel with
+    the attempt rather than living in a README.
+    """
+
     def to_json_obj(self) -> dict[str, Any]:
         """Plain dict with secret-shaped request params already redacted."""
         return {
@@ -214,6 +232,8 @@ class AttemptRecord:
             "value_status": self.value_status,
             "error_code": self.error_code,
             "harness_version": self.harness_version,
+            "provider": self.provider,
+            "provider_notes": list(self.provider_notes),
         }
 
 

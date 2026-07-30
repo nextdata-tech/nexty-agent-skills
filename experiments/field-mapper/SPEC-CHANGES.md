@@ -442,3 +442,91 @@ fabricating a verbatim quote. That question needs a live call.
 
 Also untested: `url` and `file_id` source forms (only `base64` has a fixture),
 and multi-artifact inputs (one image per input only).
+
+---
+
+# Provider abstraction (added after extension 1)
+
+## Why
+
+Every fixture replayed a hand-authored response, so nothing had ever been checked
+against a real model. Closing that gap through the paid API on each iteration is
+expensive enough that it does not happen in practice.
+
+`providers.py` adds a thin seam: a provider receives an already-built request and
+returns a response object. It does **not** classify outcomes, count budget, retry,
+or write the ledger — those stay in `transport.py`, so a development provider is
+governed by exactly one failure policy.
+
+## Verified: the Anthropic wire shape was already correct
+
+Checked against the API reference before touching anything:
+
+- `output_config: {"effort": ..., "format": {"type": "json_schema", "schema": ...}}` — matches
+- `additionalProperties: false` at every object level — matches
+- `thinking: {"type": "adaptive"}`, no `temperature`/`top_p`/`top_k` — matches
+- the parse side iterates `content` for a text block rather than indexing
+  `content[0]`, with the thinking-block hazard called out at `transport.py:1170` —
+  correct, and the subtle one most implementations get wrong
+
+So the provider work is additive; it did not fix a wire defect.
+
+## `claude_cli` — a development aid, NOT an equivalent
+
+Eight divergences, recorded on every attempt rather than documented and forgotten:
+no `output_config` (schema requested in prose, conformance unenforced); fenced
+output; **media arrives as a filesystem `Read`, not a content block**; agent loop
+rather than one call; no effort control; the CLI's own ~13k-token cached harness
+prompt in context; system prompt concatenated into the user turn; token counts not
+comparable.
+
+The media one matters most: this provider therefore **cannot** validate the media
+content-block path — only whether a model can read the artifact at all.
+
+`AttemptRecord` gained `provider` and `provider_notes` so this travels with the
+audit trail. A `claude_cli` attempt is no longer indistinguishable from a real API
+call, which was the state before and defeated the point of tracking divergence.
+
+Replayed attempts record `provider: "replay"` — not `"anthropic"`. A recorded
+fixture is a *claim* about what some provider once said; the ledger must not
+restate that claim as a call it observed.
+
+## What running it against a real model found
+
+**A bug in my own fence extraction.** The first live run blocked with
+`schema_reject` on four consecutive attempts. The transport calls all succeeded —
+the model answered, and its JSON was structurally perfect. The defect was mine: the
+model appended an explanatory paragraph *after* the closing fence, and my regex was
+end-anchored, so the whole blob went to the JSON parser. Fixed by searching for the
+block instead of requiring the response to be nothing but the block.
+
+This is exactly the class of defect no hand-authored fixture would have caught,
+because a fixture author writes the response they expect.
+
+**Real nondeterminism, on the same image.** Two consecutive runs on the identical
+PNG produced different outcomes: once `ok`/`ok` with values `ABC-1023`/`90.0`
+matching the hand-authored fixture, once `evidence_absent`/`evidence_absent`. The
+model declined to answer on the second run.
+
+Consequences worth stating plainly:
+
+- The design's accepted non-determinism (decision 1) is now **observed**, not
+  assumed. It is a real property of this harness, at a magnitude that flips
+  `value_status` between runs rather than merely perturbing a value.
+- A fixture asserting exact `status_counts` is therefore **not** stable under a
+  live provider. `verify` remains dry-run-only for good reason, and this is that
+  reason rather than a convenience.
+- Under a value-bound review, every such flip is a `value_changed` staleness event
+  — GENERALITY.md S11's review-treadmill mechanism, now demonstrated on a
+  *grounded* field rather than only predicted for ungrounded enrichment.
+
+**CV-5 fixed in passing.** `_live_caller` built `TransportConfig(effort=...)`,
+dropping `spec.model`, so a live run called the default model while
+`mapper_spec_id` claimed another. Now `TransportConfig.from_spec`.
+
+## Still not covered
+
+The **Anthropic** provider has still never run — no API key, and `anthropic` is
+absent from the pinned venv. So the real content-block path, real schema
+enforcement, and real `stop_reason` handling remain unexercised. `url` and
+`file_id` media forms have no fixture either.

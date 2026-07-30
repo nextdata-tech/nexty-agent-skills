@@ -516,6 +516,12 @@ def _map_one(
         outcome = "success"
         stop_reason: str | None = None
         model_snapshot: str | None = None
+        # Which provider answered, and how it diverges from the API contract.
+        # Read off the CallResult so a ledger line is self-describing: an attempt
+        # made through a development provider must never look like a real API
+        # attempt in the audit trail.
+        provider = "unknown"
+        provider_notes: tuple[str, ...] = ()
         in_tok = out_tok = 0
 
         try:
@@ -548,6 +554,8 @@ def _map_one(
                 outcome=outcome,
                 error_code=exc.error_code,
                 latency_ms=(time.monotonic() - started) * 1000,
+                provider=provider,
+                provider_notes=provider_notes,
             )
             break
         except CellError as exc:
@@ -569,6 +577,8 @@ def _map_one(
                 outcome=outcome,
                 error_code=exc.error_code,
                 latency_ms=(time.monotonic() - started) * 1000,
+                provider=provider,
+                provider_notes=provider_notes,
             )
             break
 
@@ -577,6 +587,12 @@ def _map_one(
         response_hash = getattr(call_result, "response_hash", "") or ""
         stop_reason = getattr(call_result, "stop_reason", None)
         model_snapshot = getattr(call_result, "model_snapshot", None)
+        # A replayed answer has NO provider — it was never dispatched. Recording
+        # "replay" rather than defaulting to "anthropic" keeps the ledger honest:
+        # a recorded fixture is a claim about what some provider once said, and
+        # the ledger must not restate that claim as a call it observed.
+        provider = getattr(call_result, "provider", None) or "replay"
+        provider_notes = tuple(getattr(call_result, "provider_notes", ()) or ())
         in_tok = int(getattr(call_result, "input_tokens", 0) or 0)
         out_tok = int(getattr(call_result, "output_tokens", 0) or 0)
         result.calls_made += 1
@@ -604,6 +620,8 @@ def _map_one(
                 input_tokens=in_tok,
                 output_tokens=out_tok,
                 latency_ms=(time.monotonic() - started) * 1000,
+                provider=provider,
+                provider_notes=provider_notes,
             )
             break
 
@@ -632,6 +650,8 @@ def _map_one(
             input_tokens=in_tok,
             output_tokens=out_tok,
             latency_ms=(time.monotonic() - started) * 1000,
+            provider=provider,
+            provider_notes=provider_notes,
         )
 
         outstanding = tuple(
@@ -888,6 +908,8 @@ def _record_attempt(
     input_tokens: int = 0,
     output_tokens: int = 0,
     latency_ms: float = 0.0,
+    provider: str = "anthropic",
+    provider_notes: Sequence[str] = (),
 ) -> None:
     """Write one ledger line. Hashes only — never content, never base64 (§9)."""
     ledger.record(
@@ -917,5 +939,7 @@ def _record_attempt(
             outcome=outcome,
             error_code=error_code,
             harness_version=__version__,
+            provider=provider,
+            provider_notes=tuple(provider_notes),
         )
     )

@@ -54,6 +54,7 @@ from .grant import Grant
 from .ledger import read_attempts
 from .mapper import MapperInput, MapResult, SYSTEM_PROMPT, map_inputs
 from .media import MediaInput
+from .providers import PROVIDER_KINDS
 from .records import (
     EVIDENCE_COLUMNS,
     PROPOSAL_COLUMNS,
@@ -271,6 +272,8 @@ def _media_from_dicts(
                 url=raw.get("url"),
                 file_id=raw.get("file_id"),
                 label=raw.get("label"),
+                # Relative to the fixture dir, which is the CLI provider's cwd.
+                local_path=str(path) if path else None,
             )
         )
     return tuple(built)
@@ -393,23 +396,40 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _live_caller(fixture: Fixture, budget: RunBudget) -> Any:
+def _live_caller(
+    fixture: Fixture,
+    budget: RunBudget,
+    *,
+    provider: str = "anthropic",
+    provider_model: str | None = None,
+) -> Any:
     """Build the live transport caller.
 
     Imported lazily and INSIDE the function so `--dry-run` never touches
     `transport`, which imports the SDK guard. On a machine without `anthropic`
     this raises `DependencyMissing` with an actionable message — the correct
     behavior to observe, not a failure to route around.
+
+    `TransportConfig.from_spec` rather than `TransportConfig(effort=...)`: the
+    latter dropped `spec.model`, so the run called the default model while
+    `mapper_spec_id` claimed another, and reviews bound to a model that never
+    ran (REVIEW.md CV-5).
     """
     from .transport import BudgetLedger, Client  # noqa: PLC0415
 
-    api_key = resolve_api_key()
-    config = TransportConfig(effort=fixture.spec.effort)
+    # Only the Anthropic provider needs a key; `claude_cli` authenticates itself.
+    api_key = resolve_api_key() if provider == "anthropic" else None
+    config = TransportConfig.from_spec(fixture.spec)
     client = Client(
         api_key=api_key,
         config=config,
         budget_ledger=BudgetLedger(budget=budget),
         heartbeat=lambda msg: print(f"    . {msg}", file=sys.stderr),
+        provider=provider,
+        provider_model=provider_model,
+        # Media reaches the CLI provider as a filesystem read, so paths in the
+        # prompt must resolve. The fixture directory is their root.
+        provider_cwd=str(fixture.path),
     )
 
     def call(
@@ -724,7 +744,12 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
         # the BLOCKED code instead of the success code — a systemic failure that
         # exits 0 is exactly the false green this contract exists to prevent.
         try:
-            call, api_key = _live_caller(fixture, budget)
+            call, api_key = _live_caller(
+                fixture,
+                budget,
+                provider=args.provider,
+                provider_model=args.provider_model,
+            )
         except SystemicError as exc:
             print("\n  SYSTEMIC FAILURE — the build blocks, nothing lands:")
             print(f"    [{exc.error_code}] {exc}")
@@ -1065,6 +1090,29 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "replay recorded responses; no API calls, no credentials. "
             "Parser/validator replay ONLY — it does not test a changed prompt."
+        ),
+    )
+    parser.add_argument(
+        "--provider",
+        choices=PROVIDER_KINDS,
+        default="anthropic",
+        help=(
+            "where the call goes. 'anthropic' is the contract of record. "
+            "'claude_cli' shells out to the local `claude -p` binary: cheap, no "
+            "API key, but NOT equivalent — no schema enforcement, media arrives "
+            "via a filesystem read rather than a content block, and it is an "
+            "agent loop rather than one call. A response captured under it is "
+            "not a valid recorded.json for the Anthropic path."
+        ),
+    )
+    parser.add_argument(
+        "--provider-model",
+        default=None,
+        metavar="NAME",
+        help=(
+            "model override for the selected provider, e.g. 'sonnet' for "
+            "claude_cli. Ignored by the anthropic provider, which takes its "
+            "model from the spec so the call and mapper_spec_id agree."
         ),
     )
     parser.add_argument(

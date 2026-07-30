@@ -64,6 +64,13 @@ class MediaInput:
     url: str | None = None
     file_id: str | None = None
     label: str | None = None
+    #: Where `data` was read from, when it came from a file. Carried for
+    #: providers that cannot transmit a base64 block and must reference a path
+    #: instead (`providers.ClaudeCliProvider`). NEVER part of `media_digest` —
+    #: the digest is content-addressed, and letting a path into it would change
+    #: `input_snapshot_id` when the fixture moved directory, unbinding every
+    #: review for no substantive reason.
+    local_path: str | None = None
 
     def __post_init__(self) -> None:
         forms = [
@@ -164,4 +171,10 @@ def build_media_content_block(media: MediaInput) -> dict[str, Any]:
     else:
         source = {"type": "file_id", "file_id": media.file_id}
 
-    return {"type": media.kind, "source": source}
+    block: dict[str, Any] = {"type": media.kind, "source": source}
+    if media.local_path:
+        # Underscore-prefixed so it is visibly not an API field. The SDK rejects
+        # unknown top-level keys, so `transport` strips it before dispatch; a
+        # provider that cannot send base64 reads it instead.
+        block["_local_path"] = media.local_path
+    return block
