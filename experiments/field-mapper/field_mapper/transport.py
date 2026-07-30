@@ -117,7 +117,17 @@ _PDF_TOKENS_PER_KB: Final = 4.0
 
 #: Hard API ceilings, for preflight refusal rather than a 413 discovered
 #: mid-population. Both apply to the WHOLE request, not per document.
+#:
+#: PROVIDER-SPECIFIC. 32 MB is the first-party Claude API and Claude Platform on
+#: AWS figure; Bedrock allows 20 MB and Google Cloud 30 MB. A payload sized against
+#: the value below can therefore 413 on a platform the spec never named — a spec
+#: pins a model, not a platform. Sizing to the tightest (20 MB) would refuse valid
+#: first-party runs, so the honest fix is a declared target platform rather than a
+#: single constant. Until then this is the 1P ceiling and nothing else.
 _MAX_REQUEST_BYTES: Final = 32 * 1024 * 1024
+
+#: Also conditional: 600 pages holds at a 1M-token context window, dropping to 100
+#: below it. So it moves with the model, not just the platform.
 _MAX_PDF_PAGES_PER_REQUEST: Final = 600
 
 

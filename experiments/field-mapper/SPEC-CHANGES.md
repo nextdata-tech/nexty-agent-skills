@@ -539,18 +539,41 @@ The `claude_cli` run proved a model can read a generated PNG. It proved **nothin
 about the API path, because the CLI reaches media through a filesystem `Read` tool.
 These are the actual constraints, from the API reference rather than inference.
 
-## Hard limits
+## Hard limits — and which are provider-specific
 
-| Constraint | Limit |
+These are **first-party Claude API** figures. Two of them move depending on where
+the call goes, which matters because a spec pins a model, not a platform.
+
+| Constraint | 1P Claude API | Varies? |
+|---|---|---|
+| Request size | **32 MB** | **YES** — Bedrock **20 MB**, Google Cloud **30 MB**, Claude Platform on AWS same as 1P |
+| Pages per request | **600** (100 under a 1M-token context window) | Conditional on context window, so it moves with the model |
+| Format | Standard PDF, no passwords or encryption | No |
+| Token cost | **1,500–3,000 tokens/page** text, *plus* image tokens — every page is rasterised | No (it is how the model reads a PDF) |
+
+Both size and page limits apply to the whole request, not per document. The docs
+warn that dense PDFs "can fill the context window before reaching the page limit,"
+and that large PDFs "can also fail before reaching the page limit, even when using
+the Files API."
+
+**Feature availability by platform** (1P / Claude Platform on AWS / Bedrock /
+Vertex / Foundry):
+
+| Feature | Availability |
 |---|---|
-| Request size | **32 MB** total payload (varies by platform) |
-| Pages per request | **600** (100 when the context window is under 1M tokens) |
-| Format | Standard PDF, no passwords or encryption |
-| Token cost | **1,500–3,000 tokens per page** of text, *plus* image tokens — every page is also rasterised |
+| PDF input | GA everywhere except Foundry (beta) |
+| Citations | GA everywhere except Foundry (beta) |
+| Structured outputs | GA everywhere except Foundry (beta) |
+| **Files API** (`file_id` media) | **beta on 1P / P-AWS, NOT SUPPORTED on Bedrock or Vertex** |
 
-Both limits apply to the whole request, not per document. The docs warn that dense
-PDFs "can fill the context window before reaching the page limit," and that large
-PDFs "can also fail before reaching the page limit, even when using the Files API."
+That last row is a real constraint on extension 1's design. `MediaInput` offers
+`file_id` as the cost-efficient source form — upload once instead of re-sending
+base64 on every validation retry — and it **does not exist on Bedrock or Vertex**.
+So the cheap path for large documents is first-party-only, and a spec relying on it
+is not portable. Worth stating in `media.py` rather than discovered at runtime.
+
+The 20 MB Bedrock ceiling is the tightest of the three, so a base64 PDF sized
+against the 32 MB figure can fail on a platform the spec never named.
 
 Consequence for `estimate()`: `_PDF_TOKENS_PER_KB = 4.0` is a size-based heuristic,
 but the real driver is **pages**, and each page costs text *and* image tokens. For a

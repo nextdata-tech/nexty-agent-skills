@@ -53,6 +53,13 @@ class MediaInput:
     and is billed each time, while `file_id` uploads once and is referenced. For
     a large document under a retrying spec, that difference dominates the bill.
 
+    **`file_id` is not portable.** The Files API is beta on the first-party Claude
+    API and Claude Platform on AWS, and **not supported on Bedrock or Vertex**. So
+    the cost-efficient source form for large documents is first-party-only, and a
+    spec built around it will fail on a platform it never named. `data` and `url`
+    work everywhere. This is a deployment constraint the harness cannot detect
+    locally, which is why it is stated here rather than validated.
+
     `label` is carried into the fence so the model can attribute evidence to a
     specific artifact when several are supplied. It is never trusted as identity
     — the wrong-document defence is `MapperInput.asserted_entity`, checked by

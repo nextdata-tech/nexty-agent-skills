@@ -242,6 +242,14 @@ model itself returned is **circular**.
 > documents and do not contain extractable text are not citable"), and **image
 > citations do not exist** — so fixture 07's screenshot case is
 > `evidence_unverified` on the API path too, exactly as built.
+>
+> **These are first-party Claude API facts, and some move by platform.** PDF input,
+> citations, and structured outputs are GA on 1P / Claude Platform on AWS / Bedrock
+> / Vertex, and beta on Foundry. The request ceiling differs — 32 MB on 1P and
+> P-AWS, **20 MB on Bedrock**, 30 MB on Vertex. And the **Files API is not
+> supported on Bedrock or Vertex at all**, so `MediaInput.file_id` — the source
+> form that avoids re-billing base64 on every retry — is first-party-only. A spec
+> pins a model, not a platform, so none of this is checkable locally.
 
 ```mermaid
 graph LR
