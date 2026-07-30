@@ -1,6 +1,6 @@
 # Field-mapper acceptance fixtures
 
-Seven fixtures. Together they are the acceptance suite for the Layer-1 contract in
+Eight fixtures. Together they are the acceptance suite for the Layer-1 contract in
 [`../CONTRACT.md`](../CONTRACT.md) — not a demo directory. Each one declares, in
 `expect.json`, the outcome it proves; `verify` runs them all and fails when
 reality diverges.
@@ -54,6 +54,7 @@ a different and stronger claim than "the status is `validation_failed`".
 | 05 | `05-evidence-absent` | A silent source is a finding, not a low score | no |
 | 06 | `06-validation-failure` | Range enforcement, value discard, review precedence | no |
 | 07 | `07-media-direct` | An image has no substring surface, and the harness says so up front | no |
+| 08 | `08-pdf-document` | A real 2-page PDF: right answers, zero verifiable citations | no |
 
 ### 01 — `01-row-scores`: the normal row-input case
 
@@ -352,3 +353,60 @@ verification happened.
 real model asked to *describe an image region* will comply rather than fabricating
 a verbatim quote — that needs a live call. And only the `base64` source form is
 covered; `url` and `file_id` have no fixture.
+
+### 08 — `08-pdf-document`: the motivating case, and why it is still open
+
+A real two-page PDF (`agreement.pdf`, 1,870 bytes, written byte-by-byte with
+stdlib `zlib`/`struct` — there is no PDF library in the pinned venv). It has a
+genuine text layer: `file` reports "PDF document, version 1.4, 2 pages" and
+`pdftotext` extracts clean text, so this exercises the **text-PDF** path rather
+than the scanned-PDF path.
+
+**This fixture's `recorded.json` is a real model response**, captured from a live
+`claude-opus-5` call. It is the only fixture in this suite not hand-authored, and
+that distinction matters — see below.
+
+All four values are correct, drawn from **both** pages:
+
+```
+carrier_name             Calder Freight Systems Ltd   (page 1)
+payment_terms_days       45                           (page 1)
+termination_notice_days  60                           (page 2)
+auto_renews              true                         (page 2)
+```
+
+Every citation lands `evidence_unverified`. Not one is `verified`.
+
+**Why, precisely.** The API extracts the PDF's text server-side. The harness holds
+base64 bytes. There is no shared string, so `verify_quote` has no haystack and
+returns `UNVERIFIED` the moment it sees `landed_text is None`. Values right,
+verification structurally impossible. This is the exact gap the two-stage design
+exists to close, and it is still open.
+
+**What a real response exposed that a hand-written one would not.** The model's
+quote for clause 3.1 reads:
+
+> `by giving not less than sixty (60) days’ written notice.`
+
+The PDF stores a **straight** apostrophe; the model returned a **curly** one
+(U+2019). And the model joined lines the PDF stores as separate text runs. Neither
+difference survives a substring check — the harness's `normalize_text` handles
+whitespace and case only, never character folding, and deliberately so ("never
+fuzzy").
+
+So even with a local extractor, a model-returned quote is **not byte-identical**
+to a local extraction of the same document. That is Fable's H-4 finding
+(`REVIEW.md`) appearing in real output rather than in a constructed fixture, and it
+means the two-stage design needs its normalisation calibrated against real
+extractor output before the substring check can be trusted on PDFs.
+
+**Cost, measured.** 5,612 input tokens for a 1,870-byte, 2-page PDF. That is the
+per-page pricing at work (1,500–3,000 text tokens/page plus image tokens, since
+every page is rasterised) and it confirms `_PDF_TOKENS_PER_KB` — a *byte*-based
+heuristic — is wrong by orders of magnitude for PDFs.
+
+**What this fixture does not cover.** Paging (2 pages, against a 600-page ceiling
+and documents that fail earlier when dense); the citations path, which would return
+API-extracted `cited_text` and make these quotes verifiable at the cost of
+structured output; scanned PDFs, which have no text layer and are not citable at
+all; and `url`/`file_id` source forms.
