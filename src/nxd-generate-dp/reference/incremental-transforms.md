@@ -132,7 +132,9 @@ Two rules on what the bag may hold:
 single-model one.** Never index the bag flat.
 
 Addressing is a property of the **declared-model list the kernel seeded into the
-handle**, not of how many models the closure promises. Desktop always seeds it
+handle**, not of how many models the closure promises. An **empty** list yields a
+bare `TransformState` — flat-indexable, no `for_model()`, and every write dropped
+when the transform returns. Desktop never hands one over: it always seeds the list
 (see [Desktop specifics](#desktop-specifics)), so you get a
 `MultiModelTransformState` and `for_model()` / `generic()` are there. With
 exactly one declared model that handle is also pre-bound, so flat indexing
