@@ -376,7 +376,12 @@ cannot see.
   bag replayed. Write the bag and read it back; there is nothing to enable and
   nothing to check first. A platform acceptance test covers this end-to-end
   across two builds of one workflow — run 1 commits a cursor, run 2 must observe
-  it.
+  it. **The product docs' `transform-state.md` scopes `transform_state` to
+  `k8s-compute` and calls it a no-op elsewhere; that caveat does not apply to lean
+  desktop.** Pocket's local `python-compute` driver routes through the same batch
+  module and persists the bag, so do not conclude from that page that the
+  parameter does nothing here — an agent that did exactly that hand-rolled the
+  watermark this document bans.
 - **Persistence is on by default.** The supervisor always hands the kernel a
   per-workflow database path; there is no flag to set and nothing to enable.
 - **One `<workflow_key>.sqlite3` per workflow.** State is scoped to the workflow,
