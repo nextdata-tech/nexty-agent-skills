@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -127,30 +128,78 @@ def supports_reasoning_controls(model: str) -> bool:
 #: burning budget: 400/401/403/404 are systemic and retrying cannot fix them.
 _RETRYABLE_STATUS: Final = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
 
-#: Pricing per million tokens, for the preflight spend estimate only. Never used
-#: for billing. These are `DEFAULT_MODEL_ID`'s rates; a spec naming a
-#: differently-priced model makes the spend estimate wrong in that model's
-#: direction, so `estimate()` reports which model it priced.
-_USD_PER_MTOK_INPUT: Final = 5.00
-_USD_PER_MTOK_OUTPUT: Final = 25.00
+#: Pricing per million tokens (input, output), for the preflight spend estimate
+#: only. Never used for billing.
+#:
+#: Prefix-matched, longest prefix first, same shape and maintenance burden as
+#: `_REASONING_CONTROL_MODELS`. Previously two Opus-only constants, so a haiku
+#: spec was priced at 5x its real input rate and 5x its output rate — and the
+#: `pricing_is_approximate` flag that exists to catch exactly that could not
+#: fire, because the one call site that would have set it dropped `spec.model`
+#: before constructing the config.
+_USD_PER_MTOK: Final[tuple[tuple[str, float, float], ...]] = (
+    ("claude-haiku-4-5", 1.00, 5.00),
+    ("claude-haiku", 1.00, 5.00),
+    ("claude-sonnet", 3.00, 15.00),
+    ("claude-fable", 10.00, 50.00),
+    ("claude-opus", 5.00, 25.00),
+)
+
+#: Unknown model: price at the most expensive KNOWN rate rather than refusing or
+#: guessing low. Errs high, which is the estimator's one stated principle — an
+#: underestimate lets a run start and blow the ceiling mid-population, which is
+#: strictly worse than a refusal at preflight.
+_USD_PER_MTOK_FALLBACK: Final = (
+    max(r[1] for r in _USD_PER_MTOK),
+    max(r[2] for r in _USD_PER_MTOK),
+)
+
+
+def rates_for(model: str) -> tuple[float, float, bool]:
+    """(input $/Mtok, output $/Mtok, is_approximate) for a model id."""
+    for prefix, rate_in, rate_out in _USD_PER_MTOK:
+        if model.startswith(prefix):
+            return rate_in, rate_out, False
+    return _USD_PER_MTOK_FALLBACK[0], _USD_PER_MTOK_FALLBACK[1], True
 
 #: Rough chars-per-token for the offline estimate. `count_tokens` is the
 #: accurate path and `estimate()` uses it when a client is supplied; this
 #: constant only backs the no-network preflight.
 _CHARS_PER_TOKEN: Final = 3.5
 
-#: Base64 inflates bytes by 4/3, and a PDF page costs far more than its text.
-#: Deliberately generous: an underestimate that lets a run start and then blow
-#: the ceiling mid-population is worse than a refusal at preflight.
+#: PDF cost is PER PAGE, not per byte. The documented maxima are 3,000 text
+#: tokens per page plus the per-page rasterisation, so a counted PDF is priced at
+#: the ceiling and the figure errs high by construction.
 #:
-#: KNOWN WRONG for PDFs, and in the dangerous direction. The API prices a PDF by
-#: PAGES, not bytes: 1,500-3,000 text tokens per page PLUS image tokens, because
-#: every page is also rasterised. A byte-size heuristic can therefore under-count
-#: a dense document badly, which is the one failure mode this constant exists to
-#: avoid. Sizing by page count needs a PDF library to read the count; until then
-#: a media-heavy preflight is confidently wrong. See SPEC-CHANGES.md § "The real
-#: API's PDF constraints".
-_PDF_TOKENS_PER_KB: Final = 4.0
+#: Byte-based pricing was the previous approach and it erred LOW on dense
+#: documents — the one failure mode the estimator exists to prevent.
+_PDF_TOKENS_PER_PAGE_TEXT: Final = 3_000
+_PDF_TOKENS_PER_PAGE_IMAGE: Final = 4_800
+
+#: Documented per-image cap at high resolution. Flat rather than byte-derived:
+#: image cost scales with PIXELS (ceil(w/28) * ceil(h/28)), which the harness
+#: cannot read without an image library, and a compressed 40 KB PNG can carry
+#: far more pixels than an uncompressed 400 KB one.
+_IMAGE_TOKENS_MAX: Final = 4_784
+
+#: Matches a PDF page object: `/Type /Page` but NOT `/Type /Pages` (the tree
+#: node). Tolerant of the whitespace variants real writers emit.
+_PDF_PAGE_RE: Final = re.compile(rb"/Type\s*/Page(?![s])")
+
+
+def count_pdf_pages(data: bytes) -> int | None:
+    """Best-effort page count with the stdlib only. None when unknowable.
+
+    Scans for uncompressed `/Type /Page` objects. That works on ordinary
+    non-encrypted PDFs and returns **None** on the common real-world case where
+    page objects live in a compressed object stream (`/ObjStm`) — which is
+    correct behaviour, not a limitation to paper over: an unpriceable artifact
+    must be reported as unpriceable rather than silently priced at zero pages.
+    """
+    if not data.startswith(b"%PDF-"):
+        return None
+    found = len(_PDF_PAGE_RE.findall(data))
+    return found or None
 
 #: Hard API ceilings. NOT YET ENFORCED — declared here so the numbers live in one
 #: place, but no call site reads them, so an oversized request still discovers its
@@ -321,6 +370,12 @@ class BudgetLedger:
     """
 
     budget: RunBudget
+    #: Which model's rates reconcile actuals. Empty falls back to the most
+    #: expensive known rate — this governs the `max_usd` STOP, not just a
+    #: printed estimate, so pricing a cheap model at Opus rates halts a run
+    #: early and pricing an expensive one at haiku rates overshoots the ceiling
+    #: the operator consented to.
+    model: str = ""
     started_monotonic: float = field(default_factory=time.monotonic)
     calls_made: int = 0
     calls_reserved: int = 0
@@ -404,14 +459,12 @@ class BudgetLedger:
         self.release(1)
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
-        self.usd_spent += _usd_for(input_tokens, output_tokens)
+        self.usd_spent += _usd_for(input_tokens, output_tokens, self.model)
 
 
-def _usd_for(input_tokens: int, output_tokens: int) -> float:
-    return (
-        input_tokens / 1_000_000 * _USD_PER_MTOK_INPUT
-        + output_tokens / 1_000_000 * _USD_PER_MTOK_OUTPUT
-    )
+def _usd_for(input_tokens: int, output_tokens: int, model: str = "") -> float:
+    rate_in, rate_out, _ = rates_for(model)
+    return input_tokens / 1_000_000 * rate_in + output_tokens / 1_000_000 * rate_out
 
 
 @dataclass(frozen=True)
@@ -716,12 +769,52 @@ def build_user_content(
 # ---------------------------------------------------------------------------
 
 
+def _media_token_estimate(media: Sequence[Any]) -> tuple[int, int]:
+    """(tokens, unpriceable_count) for a set of artifacts.
+
+    Prices at documented CEILINGS so the figure errs high, and reports anything
+    it cannot bound rather than counting it as zero. An artifact reachable only
+    by url or file_id is unreadable from this process; a PDF whose pages live in
+    a compressed object stream is uncountable with the stdlib. Both are
+    genuinely unknown, and a confident zero is the failure this function exists
+    to avoid.
+    """
+    tokens = 0
+    unpriceable = 0
+    for item in media:
+        data = getattr(item, "data", None)
+        media_type = getattr(item, "media_type", "") or ""
+        if data is None:
+            unpriceable += 1
+            continue
+        if media_type == "application/pdf":
+            pages = count_pdf_pages(data)
+            if pages is None:
+                unpriceable += 1
+                continue
+            tokens += pages * (
+                _PDF_TOKENS_PER_PAGE_TEXT + _PDF_TOKENS_PER_PAGE_IMAGE
+            )
+        elif media_type.startswith("image/"):
+            # Flat documented cap: real cost is ceil(w/28) * ceil(h/28), and
+            # reading dimensions needs an image library the venv lacks.
+            tokens += _IMAGE_TOKENS_MAX
+        else:
+            unpriceable += 1
+    return tokens, unpriceable
+
+
 def estimate(
     *,
     cell_count: int,
     instruction: str,
     text_inputs: Sequence[str] = (),
     media_sizes_bytes: Sequence[int | None] = (),
+    #: The artifacts themselves, when the caller holds them. Preferred over
+    #: `media_sizes_bytes`: cost depends on PAGES (PDF) and PIXELS (image), and
+    #: neither is derivable from a byte count. Falls back to the size list when
+    #: absent, which prices every artifact as unsized.
+    media: Sequence[Any] = (),
     config: TransportConfig | None = None,
     calls_per_cell: int = 1,
     expected_output_tokens: int | None = None,
@@ -778,12 +871,16 @@ def estimate(
     # then blows the ceiling at 60% is strictly worse than a refusal. The count
     # is surfaced on the estimate so the caller reports "N artifact(s) unsized"
     # instead of implying full coverage.
-    unsized_media = sum(1 for size in media_sizes_bytes if size is None)
-    per_call_input += sum(
-        int(size / 1024 * _PDF_TOKENS_PER_KB)
-        for size in media_sizes_bytes
-        if size is not None
-    )
+    if media:
+        media_tokens, unsized_media = _media_token_estimate(media)
+    else:
+        # No artifacts handed over: nothing can be priced, because neither page
+        # count nor pixel count follows from a byte count. Every artifact is
+        # unsized, which routes to the unpriced-refusal path rather than to a
+        # confident wrong number.
+        media_tokens = 0
+        unsized_media = len(media_sizes_bytes)
+    per_call_input += media_tokens
 
     # Thinking is on by default and is billed as output. Sizing the output
     # estimate on the JSON alone under-counts every call on this model.
@@ -800,14 +897,18 @@ def estimate(
         estimated_calls=estimated_calls,
         estimated_input_tokens=total_input,
         estimated_output_tokens=total_output,
-        estimated_usd=_usd_for(total_input, total_output),
+        estimated_usd=_usd_for(total_input, total_output, cfg.model),
         estimated_wall_seconds=wall,
         # An unsized artifact means part of the input was never counted at all,
         # so the total is not "measured" even when count_tokens answered for the
         # text half. Claiming measurement here would present a floor as a figure.
         token_counts_measured=measured and not unsized_media,
         model=cfg.model,
-        pricing_is_approximate=cfg.model != DEFAULT_MODEL_ID,
+        # True when the model matched no known rate prefix and was priced at the
+        # most expensive known rate. Previously `model != DEFAULT_MODEL_ID`,
+        # which flagged every correctly-priced non-default model as approximate
+        # and so trained the reader to ignore the flag.
+        pricing_is_approximate=rates_for(cfg.model)[2],
         unsized_media=unsized_media,
     )
 

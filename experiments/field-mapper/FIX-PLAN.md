@@ -1,5 +1,24 @@
 # Fix workflow: FIXES.md A1–A4, Part B, Part C
 
+## Status
+
+| Stage | State |
+|---|---|
+| 0 — test surface + pins | **LANDED** `454874b`. `verify pins` subcommand; coverage assert found 2 unhashed fields; tripwire proven by injecting D-1 (fixture suite stayed green, pins went red on all 8). |
+| 3 — A3 refusal | **LANDED** `b5a2129`. Refusal before dispatch; fixtures 07+08 to `min_evidence: 0`; fixture 09 negative; SYSTEM_PROMPT split per input. Exactly 2 pins moved, as predicted. |
+| E2E proof | **LANDED** `950f621` (replay) + `68be520` (live). dlt→duckdb→mapper→gate→dlt. Found 4 bugs reading had missed. |
+| 8 — CONTRACT §8 capability gate | **LANDED** `772a499`. |
+| 1 — capability probe | not started (the *doc* half landed; the live Models API probe did not) |
+| 2 — estimator | not started |
+| 4 — A1 cross-field | not started |
+| 5 — A2 corroboration | not started |
+| 6 — Part B citations | gated on citation→field attribution design |
+| 7 — A4 marking | blocked behind CV-2/CV-3 |
+
+Fixture 07 rebuild at a legible size (>200px) is still open, and still worth
+doing before Stage 5: it separates "the harness cannot verify" from "the image
+was too small to read".
+
 How the Fable recommendations get built and, more importantly, how each one is
 *proven* rather than asserted. Written before any of it is implemented.
 

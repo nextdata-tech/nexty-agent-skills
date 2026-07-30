@@ -423,7 +423,9 @@ def _live_caller(
     client = Client(
         api_key=api_key,
         config=config,
-        budget_ledger=BudgetLedger(budget=budget),
+        # The model reaches the ledger so actuals reconcile at the right rate:
+        # this governs the max_usd STOP, not merely a printed figure.
+        budget_ledger=BudgetLedger(budget=budget, model=spec.model),
         heartbeat=lambda msg: print(f"    . {msg}", file=sys.stderr),
         provider=provider,
         provider_model=provider_model,
@@ -693,6 +695,10 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
         instruction=spec.instruction,
         text_inputs=[i.landed_text for i in fixture.inputs if i.landed_text],
         media_sizes_bytes=[m.size_bytes() for m in media],
+        # The artifacts themselves, so PDFs price per PAGE and images at the
+        # documented per-image cap. Byte-derived pricing erred low on dense
+        # documents, which is the one direction the estimator must not err.
+        media=media,
         calls_per_cell=1 + spec.thresholds.max_validation_retries,
         # from_spec, not TransportConfig(effort=...): the latter drops spec.model,
         # so preflight priced a haiku run at Opus rates AND reported
