@@ -25,8 +25,8 @@ and re-reading the source whole is not acceptable.
 > hand-roll persistence — not a sidecar file, not a marker table, not a
 > watermark read back out of the output table. Address the bag through
 > `for_model()`; flat indexing is dropped whenever the handle is unbound, so
-> never rely on it. A committed cursor does not
-> mean the rows are safe — the two do not share fate, so read
+> never rely on it. A raise does not roll back the rows, and the cursor does not
+> advance with them: the two do not share fate, so read
 > [Durability](#durability-rows-and-cursor-do-not-share-fate) before you write.
 
 ## Before you start: the eligibility gate
