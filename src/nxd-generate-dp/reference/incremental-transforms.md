@@ -60,12 +60,11 @@ If any promised model fails the gate, the correct answer is one of:
   `write_disposition="append"` and rebuild the non-append-safe derived models
   with `write_disposition="replace"` in the same run, from the full table read
   back out of DuckDB. The derived model is then always correct, and only the
-  base scan is incremental. **One** `dlt.pipeline(...)` object, two `run(...)`
-  calls on it — each with its own disposition and its own resource list; the cursor
-  covers only the base models. Build **one** `dlt.pipeline(...)` and call `run()`
-  on it twice — the snippets in this file are written against a single pipeline
-  object, so a second one puts you outside what any of them has been checked
-  against.
+  base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
+  `run()` on it twice, each call with its own disposition and its own resource
+  list; the cursor covers only the base models. Every snippet in this file is
+  written against a single pipeline object, so a second one puts you outside what
+  any of them has been checked against.
 
 Never append to an aggregate or a regrain. The output is duplicate declared-grain
 keys or stale arithmetic, on a green run, with no error.
@@ -129,11 +128,12 @@ Two rules on what the bag may hold:
   `.get(key, default)` **on the bag `for_model(...)` returns**, never on
   `transform_state` itself, and pick a default that means "take everything from
   the beginning". `transform_state` is the handle, not a bag: never subscript or
-  `.get()` it directly. With one declared model that happens to reach the right bag;
-  with two or more it is unbound, and both directions fail silently — a flat write
-  is dropped, and a flat **read** returns your default rather than raising, so the
-  cursor looks like a first run and the whole source is re-yielded into an
-  `"append"` table. Wrong at every model count and on every run, not just run one;
+  `.get()` it directly. With one declared model the handle is pre-bound, so flat
+  access happens to reach the right bag; with two or more the handle is unbound and
+  both directions fail silently — a flat write is dropped, and a flat **read**
+  returns your default rather than raising, so the cursor looks like a first run
+  and the whole source is re-yielded into an `"append"` table. Wrong at every
+  model count and on every run, not just run one;
   [Addressing the bag](#addressing-the-bag-for_model-always) has the mechanism.
 - **JSON-serializable values only.** The kernel serializes the bag; it does not
   inspect or coerce it. A `numpy.int64` row count or a `pandas.Timestamp`
