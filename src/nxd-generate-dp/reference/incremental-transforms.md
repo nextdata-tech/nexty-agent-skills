@@ -335,7 +335,12 @@ if actual - expected:
 # "silently wrote nothing".
 for model in PHYSICAL_MODELS:
     landed = _table_row_count(duckdb, model)   # 0 when the table does not exist
-    yielded = len(new_rows_by_model[model])
+    # yielded_by_model[model] counts what THIS run handed to pipeline.run(...) for
+    # that model — not its delta. For an appended model those are the same thing;
+    # for a replaced derived model it is the whole rebuild (the gate has you read
+    # the full table back out of DuckDB), so counting a delta here would raise on
+    # a correct run.
+    yielded = len(yielded_by_model[model])
     # The expectation depends on THIS model's disposition. An appended model adds
     # to what was already there; a replaced model (a derived model the
     # eligibility gate sent back to "replace") is rewritten from this run alone,
@@ -637,10 +642,12 @@ def ingest(
     # is in APPEND_MODELS here; keep this shape so adding a replaced derived model
     # later does not silently make the check wrong.
     landed = _table_row_count(duckdb, "events")
-    expected_rows = prior_count + len(rows) if "events" in APPEND_MODELS else len(rows)
+    appended = "events" in APPEND_MODELS
+    expected_rows = prior_count + len(rows) if appended else len(rows)
     if landed != expected_rows:
         raise RuntimeError(
-            f"events: expected {expected_rows} rows after append, found {landed}"
+            f"events: expected {expected_rows} rows after "
+            f"{'append' if appended else 'replace'}, found {landed}"
         )
 
     # Produce-verification marker: the supervisor's readiness gate waits for it.
