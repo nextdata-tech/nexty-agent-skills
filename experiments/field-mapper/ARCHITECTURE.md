@@ -224,6 +224,25 @@ A native PDF block has no mechanical substring surface — the API sees rendered
 content, the validator holds base64 bytes. Validating a quote against text the
 model itself returned is **circular**.
 
+> **Correction (2026-07-30).** The paragraph above is **wrong for text PDFs**, and
+> the error is load-bearing. The API extracts PDF text server-side and chunks it
+> into sentences. With `"citations": {"enabled": true}` on the document block, the
+> response carries `cited_text` **extracted by the API from the document** — not
+> authored by the model — with `page_location` start/end pages, and it does not
+> count toward output tokens. Fabrication is structurally impossible on that path,
+> so the substring check is unnecessary rather than merely satisfied.
+>
+> The catch is a hard fork: **citations and `output_config.format` are mutually
+> exclusive — sending both is a 400.** So the choice is schema-enforced JSON with
+> model-authored quotes (today), or API-extracted quotes with no schema
+> enforcement. Unmade decision; see SPEC-CHANGES.md § "The real API's PDF
+> constraints".
+>
+> Still true as written: **scanned PDFs are not citable** ("PDFs that are scans of
+> documents and do not contain extractable text are not citable"), and **image
+> citations do not exist** — so fixture 07's screenshot case is
+> `evidence_unverified` on the API path too, exactly as built.
+
 ```mermaid
 graph LR
     PDF["PDF / blob"] -->|stage 1: extract| TEXT["landed text model<br/>doc hash · page<br/>extractor+version · offsets"]

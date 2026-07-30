@@ -105,7 +105,20 @@ _CHARS_PER_TOKEN: Final = 3.5
 #: Base64 inflates bytes by 4/3, and a PDF page costs far more than its text.
 #: Deliberately generous: an underestimate that lets a run start and then blow
 #: the ceiling mid-population is worse than a refusal at preflight.
+#:
+#: KNOWN WRONG for PDFs, and in the dangerous direction. The API prices a PDF by
+#: PAGES, not bytes: 1,500-3,000 text tokens per page PLUS image tokens, because
+#: every page is also rasterised. A byte-size heuristic can therefore under-count
+#: a dense document badly, which is the one failure mode this constant exists to
+#: avoid. Sizing by page count needs a PDF library to read the count; until then
+#: a media-heavy preflight is confidently wrong. See SPEC-CHANGES.md § "The real
+#: API's PDF constraints".
 _PDF_TOKENS_PER_KB: Final = 4.0
+
+#: Hard API ceilings, for preflight refusal rather than a 413 discovered
+#: mid-population. Both apply to the WHOLE request, not per document.
+_MAX_REQUEST_BYTES: Final = 32 * 1024 * 1024
+_MAX_PDF_PAGES_PER_REQUEST: Final = 600
 
 
 class AttemptOutcome(str, Enum):
