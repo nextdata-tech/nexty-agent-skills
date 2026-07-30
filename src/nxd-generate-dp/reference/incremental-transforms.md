@@ -124,10 +124,14 @@ def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any], transform_state) -> No
 
 Two rules on what the bag may hold:
 
-- **Empty on the first run.** There is no prior run, so the bag is an empty
-  mapping — never `None`, never absent. Always read through `.get(key, default)`
-  and pick a default that means "take everything from the beginning". Never
-  `transform_state["cursor"]` on a path that can execute on run one.
+- **Empty on the first run.** There is no prior run, so each model's bag is an
+  empty mapping — never `None`, never absent. Read through
+  `.get(key, default)` **on the bag `for_model(...)` returns**, never on
+  `transform_state` itself, and pick a default that means "take everything from
+  the beginning". `transform_state` is the handle, not a bag: subscripting or
+  `.get()`-ing it directly is the silently-dropped write described in
+  [Addressing the bag](#addressing-the-bag-for_model-always), at every model count
+  and on every run — not just run one.
 - **JSON-serializable values only.** The kernel serializes the bag; it does not
   inspect or coerce it. A `numpy.int64` row count or a `pandas.Timestamp`
   read off a DataFrame is **not** JSON-serializable and fails the commit. Cast at
@@ -381,9 +385,10 @@ cannot see.
   `MultiModelTransformState` with `for_model()` available and the previous run's
   bag replayed. (Per-model state seeding is a different mechanism from per-model
   execution *dispatch*, which desktop does not do — see the `.when(...)` entry in
-  [Do NOT](#do-not). One bag per model, one invocation for all of them.) Write the bag and read it back; there is nothing to enable and
-  nothing to check first. A platform acceptance test covers this end-to-end
-  across two builds of one workflow — run 1 commits a cursor, run 2 must observe
+  [Do NOT](#do-not). One bag per model, one invocation for all of them.) Write the
+  bag and read it back; there is nothing to enable and nothing to check first. A
+  platform acceptance test covers this end-to-end across two builds of one
+  workflow — run 1 commits a cursor, run 2 must observe
   it. **The product docs' `transform-state.md` scopes `transform_state` to
   `k8s-compute` and calls it a no-op elsewhere; that caveat does not apply to lean
   desktop.** Pocket's local `python-compute` driver routes through the same batch
