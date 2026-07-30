@@ -20,7 +20,7 @@
     },
     {
       "id": "uses-transform-state-kwarg",
-      "check": "The durable watermark lives in the kernel's transform_state kwarg, not in a hand-rolled mechanism (a file beside the data, a table in the output database, a dlt state hack, or an environment variable)."
+      "check": "The durable watermark lives in the kernel's transform_state kwarg, not in a hand-rolled mechanism (a file beside the data, a table in the output database, a SELECT max(<cursor>) watermark read back off the landed output table, a dlt state hack, or an environment variable)."
     },
     {
       "id": "dlt-state-stays-run-local",

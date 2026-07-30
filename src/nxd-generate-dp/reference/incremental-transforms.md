@@ -24,7 +24,8 @@ and re-reading the source whole is not acceptable.
 > previous run's bag is replayed. It is the only sanctioned mechanism: never
 > hand-roll persistence — not a sidecar file, not a marker table, not a
 > watermark read back out of the output table. Address the bag through
-> `for_model()`; flat indexing is silently dropped. A committed cursor does not
+> `for_model()`; flat indexing is dropped whenever the handle is unbound, so
+> never rely on it. A committed cursor does not
 > mean the rows are safe — the two do not share fate, so read
 > [Durability](#durability-rows-and-cursor-do-not-share-fate) before you write.
 
