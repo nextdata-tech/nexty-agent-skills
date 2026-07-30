@@ -59,8 +59,14 @@ If any promised model fails the gate, the correct answer is one of:
 - **Split the disposition by model.** Land append-safe base models with
   `write_disposition="append"` and rebuild the non-append-safe derived models
   with `write_disposition="replace"` in the same run, from the full table read
-  back out of DuckDB. The derived model is then always correct, and only the
-  base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
+  back out of DuckDB. **Order matters and getting it wrong is silent: run the
+  append lane first, then read the table for the rebuild.** The derived model has
+  to see this run's appended rows; read it before the append lands and the derived
+  model trails the base table by one run's delta forever, on a green run. This is
+  the one place where the
+  [read-before-write advice](#write-first-advance-the-cursor-second) does not
+  apply — `prior_counts` is still read before the write, but the rebuild's own read
+  is not. Only the base scan is incremental. Build **one** `dlt.pipeline(...)` object and call
   `run()` on it twice, each call with its own disposition and its own resource
   list; the cursor covers only the base models. Every snippet in this file is
   written against a single pipeline object, so a second one puts you outside what
