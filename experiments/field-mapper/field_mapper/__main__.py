@@ -52,7 +52,7 @@ from .errors import (
 )
 from .grant import Grant
 from .ledger import read_attempts
-from .mapper import MapperInput, MapResult, SYSTEM_PROMPT, map_inputs
+from .mapper import MapperInput, MapResult, map_inputs, system_prompt_for
 from .media import MediaInput
 from .providers import PROVIDER_KINDS
 from .records import (
@@ -448,7 +448,9 @@ def _live_caller(
                 f"- {v}" for v in violations
             )
         return client.call(
-            system_prompt=SYSTEM_PROMPT,
+            # Must match what `map_inputs` hashed into `prompt_hash` for this
+            # same item, or the ledger records a prompt the API never saw.
+            system_prompt=system_prompt_for(item),
             instruction=instruction,
             wire_schema=wire_schema,
             text_inputs=[item.landed_text] if item.landed_text else [],
@@ -916,8 +918,17 @@ _SPEC_ID_PINS: dict[str, str] = {
     "04-wrong-document": "060ffdfcddf5cd1253b35c587eddc7bc",
     "05-evidence-absent": "528c27a584ea6b255b8285a5395f505d",
     "06-validation-failure": "2c201747b7f448eb3986197823541258",
-    "07-media-direct": "48932690b7a1a73c1021a1d16625c6b1",
-    "08-pdf-document": "a5dc721545e3e5bca473c6e15e920708",
+    # Moved deliberately when min_evidence went 1 -> 0 on both media-direct
+    # fixtures: their evidence obligation was unfalsifiable, and `map_inputs`
+    # now refuses it rather than letting an uncheckable quote discharge it.
+    # "evidence required" -> "evidence waived" is a semantic change, so the
+    # hash SHOULD move and every review bound to the old spec SHOULD unbind.
+    "07-media-direct": "999223f0d21acf55a0a1894254909bf1",
+    "08-pdf-document": "789e2a41ed5d96fef416b8e1aca4a9e6",
+    # Note this is 07's PREVIOUS hash, and that is a proof rather than a
+    # coincidence: 09 is 07 with min_evidence back at 1, so if the two did not
+    # collide here the hash would not be tracking the semantics it claims to.
+    "09-unfalsifiable-evidence": "48932690b7a1a73c1021a1d16625c6b1",
 }
 
 #: `MapperSpec` fields deliberately absent from `to_canonical()`. Anything listed
@@ -1096,6 +1107,22 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
         return f"grant refused unexpectedly: {exc}"
     except SystemicError as exc:
         if expect.get("blocks"):
+            # A fixture may pin WHICH block it expects. `blocks: true` alone
+            # passes on any systemic failure, so a fixture asserting a specific
+            # refusal would still go green if an unrelated error replaced it —
+            # the fixture would look like it still proved something it no
+            # longer tests.
+            want_code = expect.get("blocks_error_code")
+            if want_code and exc.error_code != want_code:
+                return (
+                    f"blocked with [{exc.error_code}], expected "
+                    f"[{want_code}]: {exc}"
+                )
+            want_text = expect.get("blocks_message_contains")
+            if want_text and want_text not in str(exc):
+                return (
+                    f"block message did not contain {want_text!r}: {exc}"
+                )
             return None
         return f"systemic failure: [{exc.error_code}] {exc}"
 

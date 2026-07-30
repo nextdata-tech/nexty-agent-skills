@@ -8,7 +8,7 @@
       "min_length": 3,
       "max_length": 80,
       "required": true,
-      "min_evidence": 1,
+      "min_evidence": 0,
       "description": "Legal name of the Carrier."
     },
     {
@@ -17,7 +17,7 @@
       "minimum": 1,
       "maximum": 365,
       "required": true,
-      "min_evidence": 1,
+      "min_evidence": 0,
       "description": "Days after invoice date that payment falls due."
     },
     {
@@ -26,14 +26,14 @@
       "minimum": 1,
       "maximum": 365,
       "required": true,
-      "min_evidence": 1,
+      "min_evidence": 0,
       "description": "Days of written notice to terminate for convenience."
     },
     {
       "name": "auto_renews",
       "value_type": "bool",
       "required": true,
-      "min_evidence": 1,
+      "min_evidence": 0,
       "description": "Whether the agreement renews automatically."
     }
   ],

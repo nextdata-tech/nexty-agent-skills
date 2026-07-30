@@ -8,7 +8,7 @@
       "min_length": 3,
       "max_length": 32,
       "required": true,
-      "min_evidence": 1,
+      "min_evidence": 0,
       "description": "Invoice reference as printed in the image."
     },
     {
@@ -17,7 +17,7 @@
       "minimum": 0.0,
       "maximum": 1000000.0,
       "required": true,
-      "min_evidence": 1,
+      "min_evidence": 0,
       "description": "Total in USD, read from the image."
     }
   ],
