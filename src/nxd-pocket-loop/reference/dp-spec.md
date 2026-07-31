@@ -295,6 +295,29 @@ A gate blocks an outcome without discarding a row. **Every gate must state its
 `unknown` handling** — an absent input is a landed `UNKNOWN`, never a `FAIL`, and
 the validator enforces that the rule is stated.
 
+**A sentinel that encodes non-capture is an unknown, not a failing value.** Real
+exports rarely leave a missing field empty; they write a string —
+`LISTED - URL NOT CAPTURED`, `not stated`, `N/A`, `unknown`, `-`, `pending`.
+That string is present and non-empty, so the absent-input rule above does not
+visibly apply, and treating it as evidence is the most common way this gate goes
+wrong: it converts *we never captured this* into *the entity does not have it*.
+
+Those are different claims about a real entity. "No portfolio URL was recorded"
+is a defect in the intake form; "this person has no portfolio" is a finding
+about the person. Route a non-capture sentinel to the gate's `unknown` branch,
+and say so in the read-back naming the literal value. Do not let it fail a gate,
+cap a verdict downward, or cascade into a dependent gate.
+
+The validator rejects `unknown: FAIL` (`spec.gate.unknown_is_fail`), but it
+cannot tell that `LISTED - URL NOT CAPTURED` means *uncaptured* — only you can,
+by reading the source. A spec that classifies a sentinel as a real value
+validates clean and is still wrong.
+
+When a sentinel's meaning is genuinely ambiguous — it could mean uncaptured or
+could mean the user checked and found nothing — that ambiguity is exactly the
+kind of gap the read-back exists for. Ask; do not pick the harsher reading
+silently.
+
 ```yaml
 - id: G1
   name: Shipped an agentic system

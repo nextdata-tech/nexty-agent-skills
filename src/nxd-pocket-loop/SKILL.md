@@ -141,14 +141,10 @@ Step 3's skill comes FIRST** — reading a source is always allowed, but copying
 into a closure is a materialization and waits for the user's reply. Per-kind
 rules — attached file, pasted table, database, REST API, and the host-path
 handoff — plus where credentials land are in
-[reference/source-materialization.md](reference/source-materialization.md).
-
-> **Fidelity here; derivation downstream.** Those rules govern **source
-> materialization only** and are absolute: the rows you land are a byte-exact
-> record of what the user supplied, so any later number traces back to it.
-> Cleaning, dedup, amortization, currency normalization, reclassification and
-> regrain are legitimate — but **only as derived models computed downstream of
-> the pristine source**, never as an edit to the source export.
+[reference/source-materialization.md](reference/source-materialization.md),
+which also carries the absolute **fidelity here; derivation downstream** rule —
+landed rows are byte-exact, and every correction is a derived model beside the
+pristine source, never an edit to it.
 
 ### Step 1b — Author `dp-spec.md`, the intermediate representation
 
@@ -172,7 +168,11 @@ scripts/validate_dp_spec.py <path>/dp-spec.md` — which deterministically finds
 the gap classes the gate fires on: a scale defining only its endpoints, weights
 that do not sum, a verdict no band reaches, a gate with no `UNKNOWN` rule, a
 ruling with no ledger row, a judgement with no `generator_model`. Fix each, or
-carry it as an `open_questions` entry, before showing the spec.
+carry it as an `open_questions` entry, before showing the spec. **One gap class
+it cannot see: a sentinel encoding non-capture** — `LISTED - URL NOT CAPTURED`,
+`not stated`, `N/A`. Non-empty, so nothing mechanical flags it, and reading one
+as real turns *never captured* into *the entity lacks it*. Route them to
+`unknown`, name the value in the read-back, never let one fail a gate.
 
 **This file is the policy read-back.** When the request carried a procedure with
 a result-changing gap, show the spec, name every value you authored, and wait —
