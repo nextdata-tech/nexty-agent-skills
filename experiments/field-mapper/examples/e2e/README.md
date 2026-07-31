@@ -45,15 +45,33 @@ The monorepo source is v0.41.147 and has both.
 
 `bootstrap.py` prepends `components/nxd_py/{core,data_product}` to `sys.path`
 before the first `import nxd`. The Python layer overlays the wheel while still
-using its compiled Rust extension, **so no build step is required**. Every run
-prints which nxd answered:
+using its compiled Rust extension, **so no build step is required**.
+
+Point it at a checkout with `NXD_MONOREPO_ROOT`:
+
+```bash
+NXD_MONOREPO_ROOT=~/projects/nxd python3 examples/e2e/transform_main.py
+```
+
+There is no default search path, on purpose. Unset runs against the installed
+wheel and **says so on stderr**; set to a non-monorepo it raises rather than
+falling back, because someone who exported the variable meant to use the source
+tree, and a quiet fallback hands them a weaker proof wearing the same green
+output.
+
+Every run prints which nxd answered:
 
 ```
-[nxd] nxd.core v0.41.147 (monorepo source) — DuckDbOutput available
+nxd.data_product v0.41.148 from <path> (monorepo source) — DuckDbOutput available
 ```
 
-That line is load-bearing: on the older wheel the run fails rather than quietly
-proving less.
+That line is load-bearing: on the older wheel the port-binding proof cannot run,
+and the run must say so rather than quietly proving less. Note it names
+`nxd.data_product`, not `nxd.core` — `nxd` is a namespace package and only
+`data_product` ships a readable `version.py`, while `nxd.core`'s version is
+written to stderr by its compiled extension at import and is not reachable from
+Python. The `DuckDbOutput available` half is the signal that actually matters,
+and it is probed directly rather than inferred from a version number.
 
 ### Publication is NOT atomic, and `--prove-atomicity` characterises it
 

@@ -67,7 +67,22 @@ import dlt  # noqa: E402
 import duckdb as duckdb_lib  # noqa: E402
 
 from nxd import data_product  # noqa: E402
-from nxd.core.context import DuckDbOutput  # noqa: E402
+
+try:
+    from nxd.core.context import DuckDbOutput  # noqa: E402
+except ImportError as exc:  # pragma: no cover - environment-dependent
+    # Expected and documented, so it exits with an instruction rather than a
+    # traceback: this script binds a real DuckDB output port, which the
+    # installed wheel cannot construct. `bootstrap` has already noted on stderr
+    # that it fell back to the wheel; this says what to do about it.
+    raise SystemExit(
+        "This proof binds a real DuckDbOutput port, which the installed nxd "
+        "wheel does not provide (it predates local/duckdb/storage).\n"
+        "Run it against a monorepo checkout:\n\n"
+        "    NXD_MONOREPO_ROOT=/path/to/nxd python3 "
+        "examples/e2e/transform_main.py\n\n"
+        f"(underlying import error: {exc})"
+    ) from exc
 
 from field_mapper import (  # noqa: E402
     evaluate_coverage,
