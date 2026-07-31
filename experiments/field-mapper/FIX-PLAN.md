@@ -8,10 +8,10 @@
 | 3 — A3 refusal | **LANDED** `b5a2129`. Refusal before dispatch; fixtures 07+08 to `min_evidence: 0`; fixture 09 negative; SYSTEM_PROMPT split per input. Exactly 2 pins moved, as predicted. |
 | E2E proof | **LANDED** `950f621` (replay) + `68be520` (live). dlt→duckdb→mapper→gate→dlt. Found 4 bugs reading had missed. |
 | 8 — CONTRACT §8 capability gate | **LANDED** `772a499`. |
-| 1 — capability probe | not started (the *doc* half landed; the live Models API probe did not) |
-| 2 — estimator | not started |
-| 4 — A1 cross-field | not started |
-| 5 — A2 corroboration | not started |
+| 2 — estimator | **LANDED** `2c5545c`. Per-model rates; PDF per-page (old byte heuristic priced a real 2-page PDF at **7 tokens** vs ~15,600 actual); ledger reconciles at the model's rate, so `max_usd` stops at the right point. |
+| 4 — A1 cross-field | **LANDED** `2df1539`. Closed vocabulary; retry integration; fixtures 10 (catches) + 11 (pins the blind spot). Exposed a **third** hash-drop site in `with_wire_schema`, found automatically by the coverage check. |
+| 5 — A2 corroboration | **LANDED** `0307400`. **L1 is now caught.** Second injected callable; 4 refusals each verified to fire; ledger attribution fixed. |
+| 1 — capability probe | doc half landed (`772a499`); the live Models API probe did not |
 | 6 — Part B citations | gated on citation→field attribution design |
 | 7 — A4 marking | blocked behind CV-2/CV-3 |
 
