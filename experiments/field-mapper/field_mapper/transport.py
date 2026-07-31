@@ -114,15 +114,84 @@ _REASONING_CONTROL_MODELS: Final = (
 )
 
 
+@dataclass(frozen=True)
+class ModelCapabilities:
+    """The two reasoning leaves, kept SEPARATE.
+
+    They arrived together on the 4.6 generation, which is why the harness
+    originally carried one boolean for both — and that was wrong. Probed live:
+
+        claude-haiku-4-5   thinking.supported=True (non-adaptive), effort=False
+        claude-sonnet-5    thinking adaptive=True,                 effort=True
+
+    So haiku accepts a `thinking` parameter but refuses `output_config.effort`,
+    and one boolean cannot express that. It made the harness send effort to a
+    model that 400s on it, or omit thinking from one that accepts it.
+    """
+
+    adaptive_thinking: bool
+    effort: bool
+    #: True when this came from the table rather than the API, so a caller can
+    #: say which it trusted. A degraded run that never says it was degraded is
+    #: the failure the probe exists to remove.
+    from_table: bool = True
+
+    @property
+    def any_reasoning_control(self) -> bool:
+        return self.adaptive_thinking or self.effort
+
+
 def supports_reasoning_controls(model: str) -> bool:
-    """Whether `model` accepts adaptive thinking and `output_config.effort`.
+    """Table-only fallback: does `model` plausibly take reasoning controls?
 
     Prefix match so dated snapshots (`claude-opus-5-20260114`) resolve to their
     family. An unknown model is assumed NOT to support them: a needless omission
     costs some reasoning depth, while a wrong inclusion costs a 400 on every
     single cell — which is the failure this exists to prevent.
+
+    Kept as the NO-NETWORK path. `preflight` and dry runs must work with no SDK
+    and no key, so the table cannot simply be deleted in favour of the probe.
+    Prefer `capabilities_for()`, which uses this only when the API cannot answer.
     """
     return any(model.startswith(prefix) for prefix in _REASONING_CONTROL_MODELS)
+
+
+def capabilities_from_table(model: str) -> ModelCapabilities:
+    """Offline guess. Conflates the two leaves, because a prefix cannot see them."""
+    known = supports_reasoning_controls(model)
+    return ModelCapabilities(
+        adaptive_thinking=known, effort=known, from_table=True
+    )
+
+
+def probe_capabilities(client: Any, model: str) -> ModelCapabilities | None:
+    """Ask the Models API what `model` actually supports. None if it cannot say.
+
+    One free request per run. Fixes the table's two structural defects: a model
+    family the table does not name is silently degraded forever, and the two
+    leaves are genuinely independent (see `ModelCapabilities`).
+
+    Never raises. A probe failure must not block a run that would otherwise
+    succeed — the table still answers, and the caller records which was used.
+    """
+    try:
+        info = client.models.retrieve(model)
+        caps = getattr(info, "capabilities", None)
+        if caps is None:
+            return None
+        thinking = getattr(caps, "thinking", None)
+        types = getattr(thinking, "types", None)
+        adaptive = getattr(getattr(types, "adaptive", None), "supported", None)
+        effort = getattr(getattr(caps, "effort", None), "supported", None)
+        if adaptive is None and effort is None:
+            return None
+        return ModelCapabilities(
+            adaptive_thinking=bool(adaptive),
+            effort=bool(effort),
+            from_table=False,
+        )
+    except Exception:  # noqa: BLE001 - a probe must never break the run
+        return None
 
 #: Retried with backoff. Everything else surfaces immediately rather than
 #: burning budget: 400/401/403/404 are systemic and retrying cannot fix them.
@@ -984,6 +1053,51 @@ class Client:
             model=provider_model,
             cwd=provider_cwd,
         )
+        #: Resolved lazily, once, on the first request. Not in __init__ so that
+        #: constructing a Client stays free of network calls — `preflight` and
+        #: the dry-run path build one and never dispatch.
+        self._caps: ModelCapabilities | None = None
+
+    def _capabilities(self) -> ModelCapabilities:
+        """What this run's model actually supports. Probed once, then cached.
+
+        Prefers the API's answer over the prefix table, and says so when they
+        disagree. The table has two structural defects the probe removes: an
+        unnamed model family is degraded silently and forever, and it collapses
+        two genuinely independent leaves into one boolean — haiku-4-5 reports
+        thinking supported with adaptive False and effort False, which the table
+        cannot represent.
+
+        Falls back to the table whenever the probe cannot answer: no SDK, no
+        key, a non-Anthropic provider, or a Models API that does not know this
+        model. A run must not fail because a capability lookup did.
+        """
+        if self._caps is not None:
+            return self._caps
+        table = capabilities_from_table(self._config.model)
+        probed = (
+            probe_capabilities(self._client, self._config.model)
+            if self._client is not None
+            else None
+        )
+        if probed is None:
+            self._caps = table
+            return self._caps
+        if (probed.adaptive_thinking, probed.effort) != (
+            table.adaptive_thinking,
+            table.effort,
+        ):
+            # Loud, because a silent disagreement means the table is wrong and
+            # every offline path (preflight, dry run) is still trusting it.
+            self._heartbeat(
+                f"capability table disagrees with the API for "
+                f"{self._config.model}: table says adaptive="
+                f"{table.adaptive_thinking} effort={table.effort}, API says "
+                f"adaptive={probed.adaptive_thinking} effort={probed.effort} — "
+                f"using the API. The table needs updating."
+            )
+        self._caps = probed
+        return self._caps
 
     def __repr__(self) -> str:
         """Deliberately minimal: nothing here can carry the key."""
@@ -1139,7 +1253,8 @@ class Client:
         output_config: dict[str, Any] = {
             "format": {"type": "json_schema", "schema": dict(wire_schema)},
         }
-        if supports_reasoning_controls(cfg.model):
+        caps = self._capabilities()
+        if caps.effort:
             output_config["effort"] = cfg.effort
         request: dict[str, Any] = {
             "model": cfg.model,
@@ -1162,18 +1277,24 @@ class Client:
         # No temperature / top_p / top_k: rejected with 400 on this model, and
         # rejected by design review independently. They never guaranteed
         # determinism. Do not add them back.
-        if cfg.thinking_enabled and supports_reasoning_controls(cfg.model):
+        if cfg.thinking_enabled and caps.adaptive_thinking:
             request["thinking"] = {
                 "type": "adaptive",
                 "display": cfg.thinking_display,
             }
         elif cfg.thinking_enabled:
-            # Pre-4.6 model: adaptive is a 400 here. Omitting `thinking`
-            # entirely is the correct pre-4.6 default — the alternative,
+            # Thinking wanted, adaptive unavailable. Omitting `thinking`
+            # entirely is the correct default — the alternative,
             # `budget_tokens`, would need a budget this layer has no basis to
             # choose, and a wrong one truncates mid-object.
+            #
+            # NOTE this is where the two leaves genuinely diverge: haiku-4-5
+            # reports thinking.supported=True with adaptive=False, so it would
+            # accept a non-adaptive thinking block. Sending one is left for a
+            # deliberate change rather than inferred here, because picking the
+            # budget is exactly the decision this branch refuses to guess at.
             pass
-        elif supports_reasoning_controls(cfg.model):
+        elif caps.adaptive_thinking:
             # Legal only at effort <= high; enforced in TransportConfig.
             request["thinking"] = {"type": "disabled"}
         # else: a pre-4.6 model has no `thinking` block at all. Sending

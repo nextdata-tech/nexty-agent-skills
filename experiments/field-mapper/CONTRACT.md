@@ -452,18 +452,33 @@ capabilities are NOT universal — this section originally read "Model:
 Sending any of them to an older model is a 400 that blocks the whole run: the API
 refuses before executing, so the same request fails on every cell.
 
-Two things this gate is known to get wrong, both recorded rather than fixed:
+Both defects this gate originally had are now fixed, and the second was
+confirmed empirically rather than argued:
 
-- **Unknown means no.** A model family the table does not name is degraded to no
-  reasoning controls, silently and forever. Conservative, but it fails quiet: the
-  run succeeds at lower quality with nothing in the ledger saying so. The fix is
-  a live probe of the Models API (`capabilities.thinking.types.adaptive.supported`,
-  `capabilities.effort.supported`) preferred over the table, with the table kept
-  as the no-network fallback — `preflight` and dry runs must work with no SDK.
-- **Two bits, one boolean.** Adaptive thinking and `effort` are separate
-  capability leaves that happened to ship together. Models exist where they
-  diverge (Opus 4.5 has `effort` but not adaptive thinking), and one boolean
-  cannot represent that.
+- **Unknown no longer means silently no.** `Client._capabilities()` probes the
+  Models API once per run and prefers its answer, falling back to the table when
+  the probe cannot answer — no SDK, no key, a non-Anthropic provider, or an
+  unrecognised model (verified: a bogus model id returns `None`, it does not
+  raise). When the two disagree the run says so on the heartbeat rather than
+  degrading quietly. The table stays as the no-network path because `preflight`
+  and dry runs must work with neither SDK nor key.
+- **Two leaves, not one boolean.** `ModelCapabilities` carries
+  `adaptive_thinking` and `effort` separately. The live probe shows they
+  genuinely diverge:
+
+  | model | `thinking` | adaptive | `effort` |
+  |---|---|---|---|
+  | `claude-haiku-4-5` | supported | **False** | **False** |
+  | `claude-sonnet-5` | supported | True | True |
+  | `claude-opus-5` | supported | True | True |
+
+  So haiku accepts a `thinking` parameter while refusing `output_config.effort`.
+  One boolean forced the harness to either send `effort` to a model that 400s on
+  it, or omit thinking from one that accepts it.
+
+  Not yet exploited: haiku's non-adaptive `thinking` is still omitted rather than
+  sent, because a non-adaptive block needs a `budget_tokens` this layer has no
+  basis to choose, and a wrong one truncates mid-object.
 
 `_validate_thinking_effort_pairing` encodes an Opus-specific rule (disabled
 above `high` effort) and applies it to every model. Harmless today because it
