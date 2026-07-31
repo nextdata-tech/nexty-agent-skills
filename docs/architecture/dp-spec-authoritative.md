@@ -553,8 +553,13 @@ may carry `origin: "supervisor_reported"` **iff both hold**:
    supervisor-authored payload backing the claim: an error body or traceback
    returned in a tool result, or a field read from `verified.json` /
    `nxd://…/outputs`. Paraphrase, summary, or reconstruction disqualifies it.
-2. `path` names the producing tool (e.g. `mcp:build_data_product`,
-   `verified.json:evidence.model_tables`), so a reader can locate the payload.
+2. `path` names the producing tool, so a reader can locate the payload — a
+   `tool_path` per §1.6's grammar, e.g. `tool:build_data_product.error`. No other
+   prefix is legal here; §1.6 is the whole vocabulary.
+
+   **For a §2.9 evidence sub-block, `source` plays this role, not `path`** — a
+   sub-block has no `path` field. `verified.json:evidence.model_tables` is a
+   `source` value and is never a diagnostic `path`.
 
 Otherwise `origin: "agent_observed"`. **When it is unclear, it is
 `agent_observed`** — this is the D6 fail-closed rule expressed as a field, and it
@@ -568,14 +573,17 @@ rather than aspirational:
 
 - **`environment_suspect` and `retry_environmental` are reachable today.** A
   connection-refused error body returned verbatim by `build_data_product` at
-  `s6_transform` satisfies the criterion, so the environment path is live on the
+  `s6_run` satisfies the criterion, so the environment path is live on the
   current supervisor with no supervisor change. What the agent *cannot* produce
   is a supervisor-authored **stage attribution** — hence `pin.spec_compile_error`
   stays `origin: unbound` until a producer binds (§1.5 registry), and hence D6's
   warning that stage 4 masquerades as environment.
-- **`evidence.supervisor_detail` is the reserved key.** It is the only place a
-  verbatim supervisor payload may live, which is what lets `dp_diagnostics.py`
-  check the criterion mechanically instead of trusting the label.
+- **`evidence.supervisor_detail` is the reserved key *for a diagnostic*.** It is
+  the only place a diagnostic's verbatim supervisor payload may live, which is
+  what lets `dp_diagnostics.py` check the criterion mechanically instead of
+  trusting the label. A §2.9 evidence **sub-block** is the other form: it carries
+  its verbatim payload in its own data fields and names its origin in `source`,
+  with no `supervisor_detail` key. `BUILD_RECORD_SCHEMA` pins both shapes.
   `record append` rejects a diagnostic claiming `supervisor_reported` with an
   absent or empty `evidence.supervisor_detail`, and
   `test_build_record_schema.py` pins both the rejection and the reachability of
@@ -1127,7 +1135,8 @@ Precise enough that two implementers produce the same hash. Implemented once, in
      Vanishingly unlikely in a real spec, but the winner must not be undefined:
      **the canonicalizer raises** on a post-coercion duplicate key rather than
      silently dropping a value, because a silent drop changes the hash of a spec
-     whose content did not change. Pinned by `test_dp_spec_hash.py`.
+     whose content did not change. Pinned by
+     `evals/tests/test_dp_spec_canonicalization.py` (§3.4's stability guard, WS1).
    - **Lists**: **order is preserved.** Order is semantic — criteria order,
      verdict band precedence, decisions order. Never sort a list.
    - **Strings**: replace every run of Unicode whitespace with a single `U+0020`,
@@ -1820,7 +1829,7 @@ is in scope and the AGENTS.md safety rule ("private evals stay under
 | `evals/tests/test_dp_diagnostics_schema.py` **NEW** | JSON Schemas are valid; every registry code has stage/severity/owner/control; no duplicates; the code list is pinned as a frozen snapshot (a rename fails the test). Also pins the closed `tool` enum of §1.8 (`validate_dp_spec` · `self_check` · `dp_diagnostics` · `loop`) and the stages each value may carry. |
 | `evals/tests/test_validator_code_coverage.py` **NEW** | §1.5.1 (iii). AST-walks `scripts/validate_dp_spec.py`: every `report.error(` / `report.warn(` call site passes `code=`; every such literal is in `CODES` with `stage == "s0_spec"`; **and** every `spec.*` code in `CODES` is emitted by ≥1 call site. This is what keeps "one code per existing check, no check dropped" true by construction rather than by review. |
 | `evals/tests/test_build_record_s0_producer.py` **NEW** | `record init` fills `stages.s0_spec` (never `not_reached` on a fresh record); it validates the **snapshot**, not the live IR; `--spec-report` with a `spec_hash` ≠ `lock.spec_hash` exits 2; `record append --stage s0_spec` is rejected (§2.2). |
-| `evals/tests/test_dp_spec_canonicalization.py` **NEW** | The §3.4 golden hash + must-not-change / must-change tables + the idempotence law. |
+| `evals/tests/test_dp_spec_canonicalization.py` **NEW** | The §3.4 golden hash + must-not-change / must-change tables + the idempotence law + **step 9's post-`str()` duplicate-mapping-key raise** (a mapping carrying both `1` and `"1"` raises rather than silently dropping). |
 | `evals/tests/test_build_record_schema.py` **NEW** | A golden record validates; the §5.1 state machine as a truth table; INVARIANT-D2 rejection. **Plus the §2.5 ORDERING RULE, both directions**: a `kind: "heal"`, `exit: "blocked"` attempt with equal hashes alongside a `blockers[]` entry with `written_back: true` is **accepted** and must NOT emit `blocker.spec_edit_required` (the false-accusation case); the same attempt with differing hashes **is** rejected. And the `plan_moved` / `spec_edit_required` disjointness: a live-hash divergence reaches §5.1 only as `plan_moved`. |
 | `evals/tests/test_self_check_diagnostic_vocab.py` **NEW** | CONSTRAINT-1: `self_check.py`'s inlined codes/stages ⊆ `dp_diagnostics.CODES`. |
 | `evals/tests/test_closure_layout_gate.py` **NEW** | The §9 verify-before-build list appears identically in all four skill files. |
