@@ -1,0 +1,325 @@
+{
+  "schema": "nxd-build-record-v1",
+  "workflow": "candidate-scoring",
+  "data_product": "candidate_scoring",
+  "closure_path": "/abs/path/to/closure",
+  "compiled_from": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "compiler_version": {
+    "plugin": "0.28.0",
+    "generator_skill": "nxd-generate-dp",
+    "dp_spec_version": 1,
+    "canonicalization": "nxd-dp-spec-canon-v1"
+  },
+  "generated_at_unix_ms": 1769904000000,
+  "generator_model": "claude-opus-5",
+  "stages": {
+    "s0_spec": {
+      "status": "passed",
+      "ordinal": 0,
+      "at_unix_ms": 1769904012345,
+      "origin": "tool_computed",
+      "diagnostics": [],
+      "detail": {}
+    },
+    "s1_structure": {
+      "status": "passed",
+      "ordinal": 1,
+      "at_unix_ms": 1769904012345,
+      "origin": "tool_computed",
+      "diagnostics": [
+        {
+          "schema": "nxd-diagnostic-v1",
+          "stage": "s1_structure",
+          "code": "struct.unverified",
+          "severity": "info",
+          "owner": "agent",
+          "origin": "tool_computed",
+          "path": "closure:models.py:41",
+          "message": "dynamic construct at models.py:41 not verified",
+          "evidence": {}
+        }
+      ],
+      "detail": {}
+    },
+    "s2_transform": {
+      "status": "passed_with_warnings",
+      "ordinal": 2,
+      "at_unix_ms": 1769904012345,
+      "origin": "tool_computed",
+      "diagnostics": [
+        {
+          "schema": "nxd-diagnostic-v1",
+          "stage": "s2_transform",
+          "code": "runtime.row_count",
+          "severity": "info",
+          "owner": "agent",
+          "origin": "tool_computed",
+          "path": "closure:transform/main.py",
+          "message": "scored_candidates: 856 rows",
+          "evidence": {
+            "model": "scored_candidates",
+            "rows": 856
+          }
+        },
+        {
+          "schema": "nxd-diagnostic-v1",
+          "stage": "s2_transform",
+          "code": "semantic.distribution",
+          "severity": "info",
+          "owner": "agent",
+          "origin": "tool_computed",
+          "path": "closure:models.py:scored_candidates.verdict",
+          "message": "verdict: pass 812, interview 44",
+          "evidence": {
+            "model": "scored_candidates",
+            "column": "verdict",
+            "values": [
+              {
+                "value": "pass",
+                "count": 812
+              },
+              {
+                "value": "interview",
+                "count": 44
+              }
+            ],
+            "uniform": false
+          }
+        },
+        {
+          "schema": "nxd-diagnostic-v1",
+          "stage": "s2_transform",
+          "code": "semantic.uniform_column",
+          "severity": "warning",
+          "owner": "agent",
+          "origin": "tool_computed",
+          "path": "closure:models.py:scored_candidates.gate_g1",
+          "message": "gate_g1 landed UNKNOWN for every row",
+          "evidence": {
+            "model": "scored_candidates",
+            "column": "gate_g1",
+            "values": [
+              {
+                "value": "UNKNOWN",
+                "count": 856
+              }
+            ],
+            "uniform": true
+          }
+        }
+      ],
+      "detail": {
+        "models_counted": 4,
+        "unverified": 1
+      }
+    },
+    "s3_closure": {
+      "status": "passed",
+      "ordinal": 3,
+      "at_unix_ms": 1769904012345,
+      "origin": "tool_computed",
+      "diagnostics": [
+        {
+          "schema": "nxd-diagnostic-v1",
+          "stage": "s3_closure",
+          "code": "closure.canonical_hash_deferred",
+          "severity": "info",
+          "owner": "agent",
+          "origin": "tool_computed",
+          "path": "closure:dp-spec.lock.json",
+          "message": "byte check ran here; run `dp_diagnostics.py lock verify <closure>` for the canonical hash",
+          "evidence": {}
+        }
+      ],
+      "detail": {}
+    },
+    "s4_pin": {
+      "status": "passed",
+      "ordinal": 4,
+      "at_unix_ms": 1769904012345,
+      "origin": "agent_observed",
+      "diagnostics": [],
+      "detail": {}
+    },
+    "s5_serve": {
+      "status": "passed",
+      "ordinal": 5,
+      "at_unix_ms": 1769904012345,
+      "origin": "agent_observed",
+      "diagnostics": [],
+      "detail": {}
+    },
+    "s6_run": {
+      "status": "passed",
+      "ordinal": 6,
+      "at_unix_ms": 1769904012345,
+      "origin": "agent_observed",
+      "diagnostics": [],
+      "detail": {}
+    },
+    "s7_publish": {
+      "status": "passed",
+      "ordinal": 7,
+      "at_unix_ms": 1769904012345,
+      "origin": "agent_observed",
+      "diagnostics": [],
+      "detail": {}
+    },
+    "s8_answer": {
+      "status": "skipped",
+      "ordinal": 8,
+      "at_unix_ms": 1769904012345,
+      "origin": "agent_observed",
+      "diagnostics": [],
+      "detail": {}
+    }
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "kind": "heal",
+      "stage": "s2_transform",
+      "started_at_unix_ms": 1769904030000,
+      "origin": "agent_observed",
+      "diagnosis": {
+        "code": "runtime.assert_failed",
+        "path": "closure:transform/main.py:214",
+        "summary": "per-candidate uniqueness assert fired: 12 duplicate ids"
+      },
+      "changed": [
+        {
+          "file": "transform/main.py",
+          "what": "deduplicate on ashby_candidate_id before the join"
+        }
+      ],
+      "spec_hash_before": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "spec_hash_after": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rerun": {
+        "stage": "s2_transform",
+        "status": "passed",
+        "diagnostics_cleared": [
+          "runtime.assert_failed"
+        ],
+        "diagnostics_new": []
+      },
+      "exit": "healed_with_concessions",
+      "concessions": [
+        "concession.assert_weakened"
+      ]
+    }
+  ],
+  "concessions": [
+    {
+      "code": "concession.assert_weakened",
+      "stage": "s2_transform",
+      "path": "closure:transform/main.py:214",
+      "what": "kept the most recent row per candidate instead of failing on 12 duplicate ids",
+      "why": "the source feed carries genuine duplicate applications",
+      "alternative_rejected": "fail the build and surface the 12 rows",
+      "attempt": 1,
+      "disclosed": true,
+      "at_unix_ms": 1769904031000,
+      "class": "discouraged",
+      "origin": "llm_authored"
+    }
+  ],
+  "blockers": [],
+  "readback": {
+    "distribution": [
+      {
+        "model": "scored_candidates",
+        "column": "verdict",
+        "values": [
+          {
+            "value": "pass",
+            "count": 812
+          },
+          {
+            "value": "interview",
+            "count": 44
+          }
+        ],
+        "uniform": false,
+        "origin": "tool_computed"
+      },
+      {
+        "model": "scored_candidates",
+        "column": "gate_g1",
+        "values": [
+          {
+            "value": "UNKNOWN",
+            "count": 856
+          }
+        ],
+        "uniform": true,
+        "origin": "tool_computed"
+      }
+    ],
+    "absent": []
+  },
+  "evidence": {
+    "phase_b_row_counts": {
+      "origin": "agent_observed",
+      "note": "scratch DuckDB dry run \u2014 NOT the published product",
+      "models": [
+        {
+          "table": "scored_candidates",
+          "row_count": 856
+        }
+      ]
+    },
+    "published_row_counts": {
+      "origin": "supervisor_reported",
+      "source": "verified.json:evidence.model_tables",
+      "models": [
+        {
+          "dataset": "main",
+          "table": "scored_candidates",
+          "row_count": 856
+        }
+      ]
+    },
+    "publish": {
+      "origin": "supervisor_reported",
+      "workflow": "candidate-scoring",
+      "publish_seq": 3,
+      "definition_id": "def_1",
+      "artifact_id": "art_1",
+      "run_id": "run_1",
+      "compiler_id": "cmp_1",
+      "published_at_unix_ms": 1769904100000,
+      "trust": "artifact_verified",
+      "artifact_status": "available"
+    },
+    "endpoint": {
+      "origin": "agent_observed",
+      "reachable": true,
+      "described_models": 4
+    },
+    "source_state": {
+      "origin": "agent_observed",
+      "cursor_field": "created_at",
+      "watermark": "2026-07-30T00:00:00Z",
+      "note": "SOURCE DATA STALENESS \u2014 a separate axis. Never participates in materialization."
+    },
+    "supervisor_detail": {
+      "origin": "unbound",
+      "note": "stage-4 traceback / per-attempt identity; producer not bound (inspect_run is a name only)"
+    }
+  },
+  "caps": {
+    "remap_per_question": 2,
+    "regenerate_total": 3,
+    "retry_environmental_total": 3,
+    "regenerates_used": 0,
+    "remaps_used": {},
+    "retries_used": 0,
+    "exhausted": []
+  },
+  "narrative": {
+    "origin": "llm_authored",
+    "disclaimer": "The fields below are the generator's ANALYSIS. They are neither the approved plan nor a mechanical fact.",
+    "incomplete_extraction": "The source references a scorecard export that was not extracted.",
+    "summary": "Built, checked and published: 856 candidates scored."
+  }
+}

@@ -7,6 +7,18 @@ with no UNKNOWN rule, a ruling with no ledger row. It does NOT judge whether a
 rubric is good or whether the model plan answers the questions — that stays the
 policy read-back's job.
 
+Every finding is FIELD-ADDRESSED: it carries a stable `code` from
+`dp_diagnostics.CODES` and a `path` naming the entry it is about
+(`spec:criteria[C1].anchors`). The code is what lets a harness render the right
+control for the error class; the path is what lets it highlight the right field.
+Both are stable — an array index is never used for an entry that has an identity,
+because indices move when a list is edited and a moving path highlights the
+wrong field.
+
+The vocabularies live in `scripts/dp_diagnostics.py` and are imported here. One
+definition, two consumers, no drift: what this file enforces is exactly what
+`dp_diagnostics.py schema --json` tells a harness to render.
+
 Usage:
     python3 scripts/validate_dp_spec.py path/to/dp-spec.md
     python3 scripts/validate_dp_spec.py path/to/dp-spec.md --json
@@ -25,57 +37,42 @@ import re
 import sys
 from pathlib import Path
 
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - environment guard
     print("dp-spec validation needs PyYAML: pip install pyyaml", file=sys.stderr)
     sys.exit(2)
 
-
-SPEC_VERSION = 1
-
-REQUIRED_FRONTMATTER = ("dp_spec_version", "name", "workflow", "status")
-STATUS_VALUES = ("draft", "proposed", "approved")
-
-REQUIRED_SECTIONS = ("intent", "questions", "sources", "population", "models")
-KNOWN_SECTIONS = REQUIRED_SECTIONS + (
-    "gates",
-    "criteria",
-    "verdicts",
-    "judgments",
-    "schedule",
-    "outputs",
-    "decisions",
-    "open_questions",
+from dp_diagnostics import (  # noqa: E402 - after the PyYAML guard, deliberately
+    CREDENTIAL_PLACEHOLDERS,
+    CREDENTIAL_VALUE_RE,
+    DECISION_PROVENANCE,
+    DECISION_STATUS,
+    DISPOSITIONS,
+    KNOWN_SECTIONS,
+    MODEL_KINDS,
+    NAME_RE,
+    OUTPUT_KINDS,
+    PRODUCED_BY,
+    REQUIRED_ENTRY_FIELDS,
+    REQUIRED_FRONTMATTER,
+    REQUIRED_SECTIONS,
+    RERUNS,
+    SCHEDULE_TRIGGERS,
+    SOURCE_TYPES,
+    SPEC_VERSION,
+    STATUS_VALUES,
+    Report,
+    entry_identity,
+    spec_hash,
+    spec_path,
 )
 
-MODEL_KINDS = ("base", "derived", "view", "reference")
-SOURCE_TYPES = ("csv", "file", "database", "api")
-
-DECISION_STATUS = ("confirmed", "proposed", "blocked")
-DECISION_PROVENANCE = (
-    "user_confirmed",
-    "agent_authored",
-    "source_derived",
-    "deferred",
-)
-
-PRODUCED_BY = ("agent", "user", "source")
-RERUNS = ("incremental", "full")
-DISPOSITIONS = ("blocked", "deferred", "answered")
-
-NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 WEIGHT_TOLERANCE = 0.001
-
-# A credential VALUE smuggled into the spec. Key names are fine and expected;
-# anything that looks like a populated secret is not.
-CREDENTIAL_VALUE_RE = re.compile(
-    r"\b(password|passwd|secret|api[_-]?key|token|bearer|private[_-]?key)\b\s*[:=]\s*\S+",
-    re.IGNORECASE,
-)
-CREDENTIAL_PLACEHOLDERS = frozenset(
-    {"null", "none", "~", "<redacted>", "redacted", "[]", "{}", "''", '""', "..."}
-)
 
 # Model kinds/names whose rows are an aggregate or a regrain — never append-safe,
 # so `incremental: true` over them is the silent-truncation bug.
@@ -86,32 +83,37 @@ REGRAIN_HINT_RE = re.compile(
 )
 
 
-class Report:
-    def __init__(self) -> None:
-        self.errors: list[str] = []
-        self.warnings: list[str] = []
+class FrontmatterError(ValueError):
+    """Fatal to further parsing. `reason` is a closed enum, so a producer never
+    invents a third code for a variant of the same failure."""
 
-    def error(self, msg: str) -> None:
-        self.errors.append(msg)
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
 
-    def warn(self, msg: str) -> None:
-        self.warnings.append(msg)
 
-    @property
-    def ok(self) -> bool:
-        return not self.errors
+def new_report(spec: Path | None = None) -> Report:
+    return Report("validate_dp_spec", target=str(spec) if spec else None)
 
 
 def split_frontmatter(text: str) -> tuple[dict, str]:
-    """Return (frontmatter dict, body). Raises ValueError when absent/invalid."""
+    """Return (frontmatter dict, body). Raises FrontmatterError when absent/invalid.
+
+    This must stay byte-for-byte equivalent to `dp_diagnostics.split_frontmatter`
+    — the hash has to describe the same document this validator judged.
+    """
     if not text.startswith("---"):
-        raise ValueError("no YAML frontmatter — the file must open with '---'")
+        raise FrontmatterError(
+            "no YAML frontmatter — the file must open with '---'", "missing"
+        )
     parts = text.split("---", 2)
     if len(parts) < 3:
-        raise ValueError("unterminated YAML frontmatter — needs a closing '---'")
+        raise FrontmatterError(
+            "unterminated YAML frontmatter — needs a closing '---'", "unterminated"
+        )
     loaded = yaml.safe_load(parts[1])
     if not isinstance(loaded, dict):
-        raise ValueError("frontmatter is not a YAML mapping")
+        raise FrontmatterError("frontmatter is not a YAML mapping", "not_mapping")
     return loaded, parts[2]
 
 
@@ -140,7 +142,12 @@ def load_yaml_section(name: str, raw: str, report: Report):
     try:
         return yaml.safe_load(raw)
     except yaml.YAMLError as exc:
-        report.error(f"[{name}] not parseable as YAML: {exc}")
+        report.error(
+            f"not parseable as YAML: {exc}",
+            code="spec.section.unparseable",
+            path=spec_path(name),
+            evidence={"section": name},
+        )
         return None
 
 
@@ -155,68 +162,109 @@ def as_list(value) -> list:
 def check_frontmatter(fm: dict, report: Report) -> None:
     for key in REQUIRED_FRONTMATTER:
         if key not in fm:
-            report.error(f"[frontmatter] missing required key '{key}'")
+            report.error(
+                f"missing required key {key!r}",
+                code="spec.frontmatter.missing_key",
+                path=spec_path("frontmatter", None, key),
+                evidence={"expected": list(REQUIRED_FRONTMATTER)},
+            )
 
     version = fm.get("dp_spec_version")
     if version is not None and version != SPEC_VERSION:
         report.error(
-            f"[frontmatter] dp_spec_version {version!r} is not the supported "
-            f"version {SPEC_VERSION}"
+            f"dp_spec_version {version!r} is not the supported version {SPEC_VERSION}",
+            code="spec.frontmatter.bad_version",
+            path=spec_path("frontmatter", None, "dp_spec_version"),
+            evidence={"expected": SPEC_VERSION, "found": version},
         )
 
     name = fm.get("name")
     if isinstance(name, str) and not NAME_RE.match(name):
         report.error(
-            f"[frontmatter] name {name!r} must be lowercase snake_case — it "
-            "becomes the data product name"
+            f"name {name!r} must be lowercase snake_case — it becomes the data "
+            "product name",
+            code="spec.frontmatter.bad_name",
+            path=spec_path("frontmatter", None, "name"),
+            evidence={"found": name},
         )
 
     status = fm.get("status")
     if status is not None and status not in STATUS_VALUES:
         report.error(
-            f"[frontmatter] status {status!r} must be one of "
-            f"{', '.join(STATUS_VALUES)}"
+            f"status {status!r} must be one of {', '.join(STATUS_VALUES)}",
+            code="spec.frontmatter.bad_status",
+            path=spec_path("frontmatter", None, "status"),
+            evidence={"allowed": list(STATUS_VALUES), "found": status},
         )
 
 
 def check_sections_present(sections: dict, report: Report) -> None:
     for name in REQUIRED_SECTIONS:
         if name not in sections:
-            report.error(f"missing required section '## {name}'")
+            report.error(
+                f"missing required section '## {name}'",
+                code="spec.section.missing",
+                path=spec_path(name),
+                evidence={"expected": list(REQUIRED_SECTIONS)},
+            )
         elif not sections[name]:
-            report.error(f"section '## {name}' is empty")
+            report.error(
+                f"section '## {name}' is empty",
+                code="spec.section.empty",
+                path=spec_path(name),
+            )
 
     for name in sections:
         if name not in KNOWN_SECTIONS:
             report.warn(
-                f"unknown section '## {name}' — it will not compile to any "
-                "closure artifact; carry it in open_questions if it matters"
+                f"unknown section '## {name}' — it will not compile to any closure "
+                "artifact; carry it in open_questions if it matters",
+                code="spec.section.unknown",
+                path=spec_path(name),
+                evidence={"allowed": list(KNOWN_SECTIONS)},
             )
 
 
 def check_sources(data, report: Report) -> None:
     entries = as_list(data)
     if not entries:
-        report.error("[sources] no source entries")
+        report.error(
+            "no source entries",
+            code="spec.source.no_entries",
+            path=spec_path("sources"),
+        )
         return
 
     labels = []
     for i, src in enumerate(entries):
-        where = f"[sources][{i}]"
+        where = spec_path("sources", entry_identity(src, i))
         if not isinstance(src, dict):
-            report.error(f"{where} is not a mapping")
+            report.error(
+                "is not a mapping",
+                code="spec.source.not_mapping",
+                path=where,
+            )
             continue
 
         stype = src.get("type")
         if stype not in SOURCE_TYPES:
             report.error(
-                f"{where} type {stype!r} must be one of {', '.join(SOURCE_TYPES)}"
+                f"type {stype!r} must be one of {', '.join(SOURCE_TYPES)}",
+                code="spec.source.bad_type",
+                path=f"{where}.type",
+                evidence={"allowed": list(SOURCE_TYPES), "found": stype},
             )
         if not src.get("location"):
-            report.error(f"{where} has no 'location'")
+            report.error(
+                "has no 'location'",
+                code="spec.source.no_location",
+                path=f"{where}.location",
+            )
         if not src.get("scope"):
             report.error(
-                f"{where} has no 'scope' — the population filter must be stated"
+                "has no 'scope' — the population filter must be stated",
+                code="spec.source.no_scope",
+                path=f"{where}.scope",
             )
 
         label = src.get("label")
@@ -226,18 +274,34 @@ def check_sources(data, report: Report) -> None:
         for key in ("credential_keys", "credentials"):
             for value in as_list(src.get(key)):
                 if isinstance(value, dict):
+                    # Owner is `user`, deliberately. The agent could repair this
+                    # structurally, but the shape that triggers it is a mapping
+                    # whose VALUE is a live secret in a shareable file. Only the
+                    # user can decide whether it must now be rotated, and
+                    # silently rewriting the file would erase the evidence that
+                    # it leaked.
                     report.error(
-                        f"{where} {key} carries a mapping — list KEY NAMES only, "
-                        "never a value; credentials land in infra-profile.yaml"
+                        f"{key} carries a mapping — list KEY NAMES only, never a "
+                        "value; credentials land in infra-profile.yaml",
+                        code="spec.source.credential_key_mapping",
+                        path=f"{where}.{key}",
                     )
 
     if len(entries) > 1:
         if len(labels) != len(entries):
             report.error(
-                "[sources] with 2+ sources every source needs a distinct 'label'"
+                "with 2+ sources every source needs a distinct 'label'",
+                code="spec.source.label_missing",
+                path=spec_path("sources"),
+                evidence={"count": len(entries), "found": len(labels)},
             )
         elif len(set(labels)) != len(labels):
-            report.error(f"[sources] duplicate labels: {sorted(labels)}")
+            report.error(
+                f"duplicate labels: {sorted(labels)}",
+                code="spec.source.label_duplicate",
+                path=spec_path("sources"),
+                evidence={"found": sorted(labels)},
+            )
 
 
 def check_credential_leak(raw_sections: dict, report: Report) -> None:
@@ -249,59 +313,89 @@ def check_credential_leak(raw_sections: dict, report: Report) -> None:
                 continue
             if value.startswith("[") or value.startswith("<"):
                 continue
+            # The message is redacted on the way out — a check that prints the
+            # secret it found turns a contained file leak into a transcript leak.
             report.error(
-                f"[{name}] looks like a credential VALUE ({match.group(0)[:40]!r}) "
-                "— this file is shareable; values belong only in the generated "
-                "infra-profile.yaml"
+                f"the key {match.group(1)!r} carries what looks like a credential "
+                "VALUE — this file is shareable; values belong only in the "
+                "generated infra-profile.yaml",
+                code="spec.source.credential_value",
+                path=spec_path(name),
+                evidence={"found": match.group(1)},
             )
 
 
 def check_population(data, report: Report) -> None:
     if isinstance(data, str):
         report.warn(
-            "[population] is prose — a structured 'population'/'sample_rule'/"
-            "'excludes' mapping lets the sample rule land as a decision row"
+            "is prose — a structured 'population'/'sample_rule'/'excludes' "
+            "mapping lets the sample rule land as a decision row",
+            code="spec.population.prose",
+            path=spec_path("population"),
         )
         return
     if not isinstance(data, dict):
-        report.error("[population] is not a mapping")
+        report.error(
+            "is not a mapping",
+            code="spec.population.not_mapping",
+            path=spec_path("population"),
+        )
         return
     if not data.get("population"):
-        report.error("[population] has no 'population' — state the full row set")
+        report.error(
+            "has no 'population' — state the full row set",
+            code="spec.population.missing",
+            path=spec_path("population", None, "population"),
+        )
 
 
 def check_models(data, report: Report) -> list[dict]:
     entries = [m for m in as_list(data) if isinstance(m, dict)]
     if not entries:
-        report.error("[models] no model entries")
+        report.error(
+            "no model entries",
+            code="spec.model.no_entries",
+            path=spec_path("models"),
+        )
         return []
 
     names = []
     for i, model in enumerate(entries):
-        where = f"[models][{i}]"
+        where = spec_path("models", entry_identity(model, i))
         name = model.get("name")
         if not name:
-            report.error(f"{where} has no 'name'")
+            report.error(
+                "has no 'name'",
+                code="spec.model.no_name",
+                path=f"{where}.name",
+            )
         else:
             names.append(name)
-            where = f"[models:{name}]"
             if not NAME_RE.match(str(name)):
                 report.error(
-                    f"{where} name must be lowercase snake_case — the naming "
-                    "invariant is byte-exact across models.py, .promise, "
-                    "PHYSICAL_MODELS and the physical table"
+                    "name must be lowercase snake_case — the naming invariant is "
+                    "byte-exact across models.py, .promise, PHYSICAL_MODELS and "
+                    "the physical table",
+                    code="spec.model.bad_name",
+                    path=f"{where}.name",
+                    evidence={"found": name},
                 )
 
         kind = model.get("kind")
         if kind not in MODEL_KINDS:
             report.error(
-                f"{where} kind {kind!r} must be one of {', '.join(MODEL_KINDS)}"
+                f"kind {kind!r} must be one of {', '.join(MODEL_KINDS)}",
+                code="spec.model.bad_kind",
+                path=f"{where}.kind",
+                evidence={"allowed": list(MODEL_KINDS), "found": kind},
             )
 
         if not model.get("description"):
             report.error(
-                f"{where} has no 'description' — describe_models is all a later "
-                "consumer sees, so an undescribed model is unusable"
+                "has no 'description' — describe_models is all a later consumer "
+                "sees, so an undescribed model is unusable",
+                code="spec.model.no_description",
+                path=f"{where}.description",
             )
 
         # A view is query-time only: no grain, no key, no physical table.
@@ -310,88 +404,135 @@ def check_models(data, report: Report) -> list[dict]:
 
         if not model.get("grain"):
             report.error(
-                f"{where} has no 'grain' — one sentence naming what one row is"
+                "has no 'grain' — one sentence naming what one row is",
+                code="spec.model.no_grain",
+                path=f"{where}.grain",
             )
         if not as_list(model.get("key")):
             report.error(
-                f"{where} has no 'key' — every promised physical model needs a "
-                "primary key, base from a source column, derived from the grain"
+                "has no 'key' — every promised physical model needs a primary "
+                "key, base from a source column, derived from the grain",
+                code="spec.model.no_key",
+                path=f"{where}.key",
             )
 
     dupes = {n for n in names if names.count(n) > 1}
     if dupes:
-        report.error(f"[models] duplicate model names: {sorted(dupes)}")
+        report.error(
+            f"duplicate model names: {sorted(dupes)}",
+            code="spec.model.duplicate_name",
+            path=spec_path("models"),
+            evidence={"found": sorted(dupes)},
+        )
 
     return entries
 
 
 def check_gates(data, report: Report) -> None:
     for i, gate in enumerate(as_list(data)):
-        where = f"[gates][{i}]"
+        where = spec_path("gates", entry_identity(gate, i))
         if not isinstance(gate, dict):
-            report.error(f"{where} is not a mapping")
+            report.error(
+                "is not a mapping",
+                code="spec.gate.not_mapping",
+                path=where,
+            )
             continue
-        gid = gate.get("id") or gate.get("name")
-        if gid:
-            where = f"[gates:{gid}]"
         if not gate.get("rule"):
-            report.error(f"{where} has no 'rule'")
+            report.error(
+                "has no 'rule'",
+                code="spec.gate.no_rule",
+                path=f"{where}.rule",
+            )
 
         unknown = gate.get("unknown")
         if unknown is None:
             report.error(
-                f"{where} has no 'unknown' handling — an absent gate input must "
-                "land UNKNOWN, and leaving it unstated is the gap the policy "
-                "read-back exists to catch"
+                "has no 'unknown' handling — an absent gate input must land "
+                "UNKNOWN, and leaving it unstated is the gap the policy read-back "
+                "exists to catch",
+                code="spec.gate.no_unknown",
+                path=f"{where}.unknown",
             )
         elif str(unknown).strip().upper() == "FAIL":
             report.error(
-                f"{where} maps an absent input to FAIL — absence is never a "
-                "judgement; it lands UNKNOWN"
+                "maps an absent input to FAIL — absence is never a judgement; it "
+                "lands UNKNOWN",
+                code="spec.gate.unknown_is_fail",
+                path=f"{where}.unknown",
+                evidence={"found": unknown},
             )
 
 
 def check_criteria(data, report: Report) -> list[dict]:
     entries = [c for c in as_list(data) if isinstance(c, dict)]
     if not entries:
-        report.error("[criteria] section present but has no criterion entries")
+        report.error(
+            "section present but has no criterion entries",
+            code="spec.criteria.no_entries",
+            path=spec_path("criteria"),
+        )
         return []
 
     total = 0.0
     weights_ok = True
 
     for i, crit in enumerate(entries):
-        cid = crit.get("id") or crit.get("name") or i
-        where = f"[criteria:{cid}]"
+        where = spec_path("criteria", entry_identity(crit, i))
 
         weight = crit.get("weight")
         if weight is None:
-            report.error(f"{where} has no 'weight'")
+            report.error(
+                "has no 'weight'",
+                code="spec.criteria.no_weight",
+                path=f"{where}.weight",
+            )
             weights_ok = False
         elif not isinstance(weight, (int, float)):
-            report.error(f"{where} weight {weight!r} is not a number")
+            report.error(
+                f"weight {weight!r} is not a number",
+                code="spec.criteria.bad_weight",
+                path=f"{where}.weight",
+                evidence={"found": weight},
+            )
             weights_ok = False
         else:
             total += float(weight)
 
         scale = crit.get("scale")
         if not isinstance(scale, dict) or "min" not in scale or "max" not in scale:
-            report.error(f"{where} has no 'scale' with 'min' and 'max'")
+            report.error(
+                "has no 'scale' with 'min' and 'max'",
+                code="spec.criteria.no_scale",
+                path=f"{where}.scale",
+            )
             continue
 
         smin, smax = scale.get("min"), scale.get("max")
         if not isinstance(smin, int) or not isinstance(smax, int):
-            report.error(f"{where} scale min/max must be integers")
+            report.error(
+                "scale min/max must be integers",
+                code="spec.criteria.bad_scale",
+                path=f"{where}.scale",
+                evidence={"reason": "non_integer", "found": [smin, smax]},
+            )
             continue
         if smin >= smax:
-            report.error(f"{where} scale min {smin} is not below max {smax}")
+            report.error(
+                f"scale min {smin} is not below max {smax}",
+                code="spec.criteria.bad_scale",
+                path=f"{where}.scale",
+                evidence={"reason": "min_not_below_max", "found": [smin, smax]},
+            )
             continue
 
         anchors = crit.get("anchors")
         if not isinstance(anchors, dict) or not anchors:
             report.error(
-                f"{where} has no 'anchors' — a scale with no level descriptions "
-                "cannot be applied consistently"
+                "has no 'anchors' — a scale with no level descriptions cannot be "
+                "applied consistently",
+                code="spec.criteria.no_anchors",
+                path=f"{where}.anchors",
             )
             continue
 
@@ -399,28 +540,41 @@ def check_criteria(data, report: Report) -> list[dict]:
         missing = [lvl for lvl in range(smin, smax + 1) if lvl not in have]
         if missing:
             report.error(
-                f"{where} scale {smin}-{smax} has no anchor for level(s) "
-                f"{missing} — this is the incomplete-scale gap: it reads as "
-                "complete and is unexecutable"
+                f"scale {smin}-{smax} has no anchor for level(s) {missing} — this "
+                "is the incomplete-scale gap: it reads as complete and is "
+                "unexecutable",
+                code="spec.criteria.incomplete_scale",
+                path=f"{where}.anchors",
+                evidence={"expected": list(range(smin, smax + 1)), "found": sorted(have)},
             )
 
         extra = sorted(lvl for lvl in have if not smin <= lvl <= smax)
         if extra:
-            report.error(f"{where} has anchors outside the scale: {extra}")
+            report.error(
+                f"has anchors outside the scale: {extra}",
+                code="spec.criteria.anchor_out_of_range",
+                path=f"{where}.anchors",
+                evidence={"expected": list(range(smin, smax + 1)), "found": extra},
+            )
 
         prov = crit.get("provenance")
         if prov is not None and prov not in DECISION_PROVENANCE:
             report.error(
-                f"{where} provenance {prov!r} must be one of "
-                f"{', '.join(DECISION_PROVENANCE)}"
+                f"provenance {prov!r} must be one of {', '.join(DECISION_PROVENANCE)}",
+                code="spec.criteria.bad_provenance",
+                path=f"{where}.provenance",
+                evidence={"allowed": list(DECISION_PROVENANCE), "found": prov},
             )
 
     if weights_ok and entries:
         if abs(total - 1.0) > WEIGHT_TOLERANCE:
             report.error(
-                f"[criteria] weights sum to {total:.4f}, not 1.0 — state the "
-                "user's own numbers and raise the discrepancy as an open "
-                "question rather than rounding it away"
+                f"weights sum to {total:.4f}, not 1.0 — state the user's own "
+                "numbers and raise the discrepancy as an open question rather "
+                "than rounding it away",
+                code="spec.criteria.weights_unbalanced",
+                path=spec_path("criteria"),
+                evidence={"expected": 1.0, "actual": round(total, 6)},
             )
 
     return entries
@@ -430,152 +584,226 @@ def check_verdicts(data, criteria: list, report: Report) -> None:
     if data is None:
         if criteria:
             report.error(
-                "[verdicts] missing while [criteria] is present — a score with "
-                "no mapping to a verdict is an unresolvable gap"
+                "missing while [criteria] is present — a score with no mapping to "
+                "a verdict is an unresolvable gap",
+                code="spec.verdict.missing",
+                path=spec_path("verdicts"),
             )
         return
 
     if not isinstance(data, dict):
-        report.error("[verdicts] is not a mapping")
+        report.error(
+            "is not a mapping",
+            code="spec.verdict.not_mapping",
+            path=spec_path("verdicts"),
+        )
         return
 
     values = as_list(data.get("values"))
     if not values:
-        report.error("[verdicts] has no 'values' — the verdict vocabulary")
+        report.error(
+            "has no 'values' — the verdict vocabulary",
+            code="spec.verdict.no_values",
+            path=spec_path("verdicts", None, "values"),
+        )
 
     bands = [b for b in as_list(data.get("bands")) if isinstance(b, dict)]
     banded = set()
     for i, band in enumerate(bands):
-        where = f"[verdicts.bands][{i}]"
+        where = f"{spec_path('verdicts', None, 'bands')}[{entry_identity(band, i)}]"
         verdict = band.get("verdict")
         if not verdict:
-            report.error(f"{where} has no 'verdict'")
+            report.error(
+                "has no 'verdict'",
+                code="spec.verdict.band_no_verdict",
+                path=f"{where}.verdict",
+            )
             continue
         banded.add(verdict)
         if verdict not in values:
             report.error(
-                f"{where} verdict {verdict!r} is not in the declared values list"
+                f"verdict {verdict!r} is not in the declared values list",
+                code="spec.verdict.band_unknown_verdict",
+                path=f"{where}.verdict",
+                evidence={"allowed": list(values), "found": verdict},
             )
         if band.get("min_score") is None and not band.get("rule"):
             report.error(
-                f"{where} verdict {verdict!r} has neither a 'min_score' nor a "
-                "'rule' — it is unreachable"
+                f"verdict {verdict!r} has neither a 'min_score' nor a 'rule' — it "
+                "is unreachable",
+                code="spec.verdict.band_unreachable",
+                path=where,
             )
 
     unreached = [v for v in values if v not in banded]
     if unreached and bands:
         report.error(
-            f"[verdicts] no band or rule reaches {unreached} — every declared "
-            "verdict must be reachable"
+            f"no band or rule reaches {unreached} — every declared verdict must "
+            "be reachable",
+            code="spec.verdict.value_unreached",
+            path=spec_path("verdicts", None, "values"),
+            evidence={"found": unreached},
         )
 
     if not data.get("precedence") and len(bands) > 1:
         report.error(
-            "[verdicts] has no 'precedence' — with gates and score bands both "
-            "in play, which wins must be stated, not inferred"
+            "has no 'precedence' — with gates and score bands both in play, which "
+            "wins must be stated, not inferred",
+            code="spec.verdict.no_precedence",
+            path=spec_path("verdicts", None, "precedence"),
         )
 
 
 def check_judgments(data, fm: dict, report: Report) -> None:
     entries = [j for j in as_list(data) if isinstance(j, dict)]
     if not entries:
-        report.error("[judgments] section present but has no entries")
+        report.error(
+            "section present but has no entries",
+            code="spec.judgment.no_entries",
+            path=spec_path("judgments"),
+        )
         return
 
     if not fm.get("rubric_version"):
         report.error(
-            "[frontmatter] judgments are present but 'rubric_version' is not "
-            "set — every judgement row records the version it was judged under"
+            "judgments are present but 'rubric_version' is not set — every "
+            "judgement row records the version it was judged under",
+            code="spec.frontmatter.rubric_version_missing",
+            path=spec_path("frontmatter", None, "rubric_version"),
         )
 
     for i, j in enumerate(entries):
-        where = f"[judgments][{i}]"
-        model = j.get("model")
-        if model:
-            where = f"[judgments:{model}]"
-        else:
-            report.error(f"{where} has no 'model'")
+        where = spec_path("judgments", entry_identity(j, i))
+        if not j.get("model"):
+            report.error(
+                "has no 'model'",
+                code="spec.judgment.no_model",
+                path=f"{where}.model",
+            )
 
         produced_by = j.get("produced_by")
         if produced_by not in PRODUCED_BY:
             report.error(
-                f"{where} produced_by {produced_by!r} must be one of "
-                f"{', '.join(PRODUCED_BY)}"
+                f"produced_by {produced_by!r} must be one of {', '.join(PRODUCED_BY)}",
+                code="spec.judgment.bad_produced_by",
+                path=f"{where}.produced_by",
+                evidence={"allowed": list(PRODUCED_BY), "found": produced_by},
             )
 
         if produced_by == "agent" and not j.get("generator_model"):
             report.error(
-                f"{where} is agent-produced but names no 'generator_model' — "
-                "that identity lands in judged_by, and nothing else in the "
-                "closure records which model produced the scores"
+                "is agent-produced but names no 'generator_model' — that identity "
+                "lands in judged_by, and nothing else in the closure records "
+                "which model produced the scores",
+                code="spec.judgment.no_generator_model",
+                path=f"{where}.generator_model",
             )
 
         if not j.get("rubric_version"):
-            report.error(f"{where} has no 'rubric_version'")
+            report.error(
+                "has no 'rubric_version'",
+                code="spec.judgment.no_rubric_version",
+                path=f"{where}.rubric_version",
+            )
 
         reruns = j.get("reruns")
         if reruns is not None and reruns not in RERUNS:
             report.error(
-                f"{where} reruns {reruns!r} must be one of {', '.join(RERUNS)}"
+                f"reruns {reruns!r} must be one of {', '.join(RERUNS)}",
+                code="spec.judgment.bad_reruns",
+                path=f"{where}.reruns",
+                evidence={"allowed": list(RERUNS), "found": reruns},
             )
 
         if j.get("evidence_required") is False:
             report.error(
-                f"{where} sets evidence_required: false — an agent judgement "
-                "without a citation into the source is unreviewable"
+                "sets evidence_required: false — an agent judgement without a "
+                "citation into the source is unreviewable",
+                code="spec.judgment.evidence_disabled",
+                path=f"{where}.evidence_required",
             )
 
 
 def check_schedule(data, models: list, report: Report) -> None:
     if not isinstance(data, dict):
-        report.error("[schedule] is not a mapping")
+        report.error(
+            "is not a mapping",
+            code="spec.schedule.not_mapping",
+            path=spec_path("schedule"),
+        )
         return
 
     trigger = data.get("trigger")
-    if trigger not in ("manual", "cron", "on_new_data"):
+    if trigger not in SCHEDULE_TRIGGERS:
         report.error(
-            f"[schedule] trigger {trigger!r} must be manual, cron or on_new_data"
+            f"trigger {trigger!r} must be {', '.join(SCHEDULE_TRIGGERS)}",
+            code="spec.schedule.bad_trigger",
+            path=spec_path("schedule", None, "trigger"),
+            evidence={"allowed": list(SCHEDULE_TRIGGERS), "found": trigger},
         )
     if trigger == "cron" and not data.get("cron"):
-        report.error("[schedule] trigger is cron but no 'cron' expression is set")
+        report.error(
+            "trigger is cron but no 'cron' expression is set",
+            code="spec.schedule.no_cron",
+            path=spec_path("schedule", None, "cron"),
+        )
 
     if data.get("incremental") is True:
         if not data.get("cursor_field"):
             report.error(
-                "[schedule] incremental: true with no 'cursor_field' — an "
-                "append with no cursor is the duplicate-rows bug"
+                "incremental: true with no 'cursor_field' — an append with no "
+                "cursor is the duplicate-rows bug",
+                code="spec.schedule.no_cursor_field",
+                path=spec_path("schedule", None, "cursor_field"),
             )
-        for model in models:
+        for i, model in enumerate(models):
             name = str(model.get("name", ""))
             grain = str(model.get("grain", ""))
             if model.get("kind") == "view":
                 continue
             if REGRAIN_HINT_RE.search(name) or REGRAIN_HINT_RE.search(grain):
                 report.warn(
-                    f"[schedule] incremental: true, but model {name!r} reads as "
-                    "an aggregate or regrain — incrementality gates on EVERY "
-                    "promised model being append-safe"
+                    f"incremental: true, but model {name!r} reads as an aggregate "
+                    "or regrain — incrementality gates on EVERY promised model "
+                    "being append-safe",
+                    code="spec.schedule.regrain_not_append_safe",
+                    path=spec_path("models", entry_identity(model, i)),
+                    evidence={"model": name},
                 )
 
 
 def check_outputs(data, models: list, report: Report) -> None:
     known = {m.get("name") for m in models}
     for i, out in enumerate(as_list(data)):
-        where = f"[outputs][{i}]"
+        where = spec_path("outputs", entry_identity(out, i))
         if not isinstance(out, dict):
-            report.error(f"{where} is not a mapping")
+            report.error(
+                "is not a mapping",
+                code="spec.output.not_mapping",
+                path=where,
+            )
             continue
         name = out.get("name")
         if not name:
-            report.error(f"{where} has no 'name'")
+            report.error(
+                "has no 'name'",
+                code="spec.output.no_name",
+                path=f"{where}.name",
+            )
         elif name not in known:
             report.error(
-                f"{where} names {name!r}, which is not a declared model"
+                f"names {name!r}, which is not a declared model",
+                code="spec.output.unknown_model",
+                path=f"{where}.name",
+                evidence={"allowed": sorted(str(k) for k in known), "found": name},
             )
         kind = out.get("kind")
-        if kind is not None and kind not in ("semantic_port", "static_artifact"):
+        if kind is not None and kind not in OUTPUT_KINDS:
             report.error(
-                f"{where} kind {kind!r} must be semantic_port or static_artifact"
+                f"kind {kind!r} must be {' or '.join(OUTPUT_KINDS)}",
+                code="spec.output.bad_kind",
+                path=f"{where}.kind",
+                evidence={"allowed": list(OUTPUT_KINDS), "found": kind},
             )
 
 
@@ -584,46 +812,67 @@ def check_decisions(data, report: Report) -> list[dict]:
     ids = []
 
     for i, dec in enumerate(entries):
-        where = f"[decisions][{i}]"
+        where = spec_path("decisions", entry_identity(dec, i))
         did = dec.get("decision_id")
         if not did:
-            report.error(f"{where} has no 'decision_id'")
+            report.error(
+                "has no 'decision_id'",
+                code="spec.decision.no_id",
+                path=f"{where}.decision_id",
+            )
         else:
             ids.append(did)
-            where = f"[decisions:{did}]"
 
         status = dec.get("status")
         if status not in DECISION_STATUS:
             report.error(
-                f"{where} status {status!r} must be one of "
-                f"{', '.join(DECISION_STATUS)}"
+                f"status {status!r} must be one of {', '.join(DECISION_STATUS)}",
+                code="spec.decision.bad_status",
+                path=f"{where}.status",
+                evidence={"allowed": list(DECISION_STATUS), "found": status},
             )
 
         prov = dec.get("provenance")
         if prov not in DECISION_PROVENANCE:
             report.error(
-                f"{where} provenance {prov!r} must be one of "
+                f"provenance {prov!r} must be one of "
                 f"{', '.join(DECISION_PROVENANCE)} — status and provenance are "
-                "orthogonal and both are required on every row"
+                "orthogonal and both are required on every row",
+                code="spec.decision.bad_provenance",
+                path=f"{where}.provenance",
+                evidence={"allowed": list(DECISION_PROVENANCE), "found": prov},
             )
 
         if not dec.get("ruling"):
-            report.error(f"{where} has no 'ruling'")
+            report.error(
+                "has no 'ruling'",
+                code="spec.decision.no_ruling",
+                path=f"{where}.ruling",
+            )
 
         if status == "blocked" and dec.get("applies_to"):
             report.error(
-                f"{where} is blocked but sets 'applies_to' — a blocked ruling "
-                "materializes nothing"
+                "is blocked but sets 'applies_to' — a blocked ruling materializes "
+                "nothing",
+                code="spec.decision.blocked_with_applies_to",
+                path=f"{where}.applies_to",
             )
         if status != "blocked" and not dec.get("applies_to"):
             report.error(
-                f"{where} has no 'applies_to' — name the models and columns it "
-                "materializes in"
+                "has no 'applies_to' — name the models and columns it "
+                "materializes in",
+                code="spec.decision.no_applies_to",
+                path=f"{where}.applies_to",
             )
 
     dupes = {d for d in ids if ids.count(d) > 1}
     if dupes:
-        report.error(f"[decisions] duplicate decision_id: {sorted(dupes)}")
+        report.error(
+            f"duplicate decision_id: {sorted(dupes)}",
+            code="spec.decision.duplicate_id",
+            path=spec_path("decisions"),
+            evidence={"found": sorted(dupes)},
+        )
 
     return entries
 
@@ -638,9 +887,11 @@ def check_ruling_coverage(
         sampled = isinstance(population, dict) and population.get("sample_rule")
         if has_ruling or sampled:
             report.error(
-                "[decisions] missing while the spec encodes rulings (criteria, "
-                "verdicts, gates or a sample rule) — every ruling lands as an "
-                "nxd_decisions row, never as prose alone"
+                "missing while the spec encodes rulings (criteria, verdicts, "
+                "gates or a sample rule) — every ruling lands as an nxd_decisions "
+                "row, never as prose alone",
+                code="spec.decision.missing_for_ruling",
+                path=spec_path("decisions"),
             )
         return
 
@@ -656,42 +907,58 @@ def check_ruling_coverage(
     ):
         if section in sections and keyword not in blob:
             report.warn(
-                f"[decisions] no row mentions the '{section}' rulings — confirm "
-                "each is recorded, since the ledger is what a later session queries"
+                f"no row mentions the '{section}' rulings — confirm each is "
+                "recorded, since the ledger is what a later session queries",
+                code="spec.decision.ruling_uncovered",
+                path=spec_path("decisions"),
+                evidence={"section": section},
             )
 
     if isinstance(population, dict) and population.get("sample_rule"):
         if "sampl" not in blob and "population" not in blob:
             report.error(
-                "[decisions] the population is sampled but no ledger row records "
-                "the selection rule — which rows entered the closure is a "
-                "judgement the user can disagree with"
+                "the population is sampled but no ledger row records the "
+                "selection rule — which rows entered the closure is a judgement "
+                "the user can disagree with",
+                code="spec.decision.sample_rule_unrecorded",
+                path=spec_path("decisions"),
             )
 
 
 def check_open_questions(data, decisions: list, report: Report) -> None:
     dec_ids = {d.get("decision_id") for d in decisions}
     for i, q in enumerate(as_list(data)):
-        where = f"[open_questions][{i}]"
+        where = spec_path("open_questions", entry_identity(q, i))
         if not isinstance(q, dict):
-            report.error(f"{where} is not a mapping")
+            report.error(
+                "is not a mapping",
+                code="spec.open_question.not_mapping",
+                path=where,
+            )
             continue
         qid = q.get("id")
-        if qid:
-            where = f"[open_questions:{qid}]"
         if not q.get("question"):
-            report.error(f"{where} has no 'question'")
+            report.error(
+                "has no 'question'",
+                code="spec.open_question.no_question",
+                path=f"{where}.question",
+            )
 
         disposition = q.get("disposition")
         if disposition is not None and disposition not in DISPOSITIONS:
             report.error(
-                f"{where} disposition {disposition!r} must be one of "
-                f"{', '.join(DISPOSITIONS)}"
+                f"disposition {disposition!r} must be one of {', '.join(DISPOSITIONS)}",
+                code="spec.open_question.bad_disposition",
+                path=f"{where}.disposition",
+                evidence={"allowed": list(DISPOSITIONS), "found": disposition},
             )
         if disposition == "answered" and qid not in dec_ids:
             report.warn(
-                f"{where} is answered but no decision row carries that id — an "
-                "answered question should leave a ruling behind"
+                "is answered but no decision row carries that id — an answered "
+                "question should leave a ruling behind",
+                code="spec.open_question.answered_without_decision",
+                path=f"{where}.disposition",
+                evidence={"found": qid},
             )
 
 
@@ -703,16 +970,15 @@ def check_question_model_coverage(
     for model in models:
         answered.update(str(a) for a in as_list(model.get("answers")))
 
-    unmotivated = [
-        m.get("name")
-        for m in models
-        if m.get("kind") == "derived" and not as_list(m.get("answers"))
-    ]
-    if unmotivated:
-        report.warn(
-            f"[models] derived model(s) {unmotivated} name no question in "
-            "'answers' — a derived model no question motivates should not be built"
-        )
+    for i, model in enumerate(models):
+        if model.get("kind") == "derived" and not as_list(model.get("answers")):
+            report.warn(
+                f"derived model {model.get('name')!r} names no question in "
+                "'answers' — a derived model no question motivates should not be "
+                "built",
+                code="spec.model.unmotivated",
+                path=f"{spec_path('models', entry_identity(model, i))}.answers",
+            )
 
     q_list = as_list(questions)
     if q_list and answered:
@@ -722,9 +988,43 @@ def check_question_model_coverage(
         orphans = sorted(ids - answered)
         if orphans and answered & ids:
             report.warn(
-                f"[questions] {orphans} are answered by no model — either a "
-                "model is missing or the question is out of scope"
+                f"{orphans} are answered by no model — either a model is missing "
+                "or the question is out of scope",
+                code="spec.question.unanswered",
+                path=spec_path("questions"),
+                evidence={"found": orphans},
             )
+
+
+def check_prefill(parsed: dict, report: Report) -> None:
+    """RULE-PREFILL, made mechanical: a blank is illegal.
+
+    The agent always pre-fills from the conversation or the user's own document;
+    a rendered form is review-and-correct, never data entry. So a field the agent
+    has no basis for does not appear as an empty control — it becomes an
+    open_questions entry. A required field that is PRESENT AND BLANK is that
+    failure caught early.
+    """
+    for section, fields in REQUIRED_ENTRY_FIELDS.items():
+        entries = as_list(parsed.get(section))
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            where = spec_path(section, entry_identity(entry, i))
+            for name in fields:
+                if name not in entry:
+                    continue
+                if entry.get("kind") == "view" and name in ("grain", "key"):
+                    continue
+                value = entry[name]
+                if value in (None, "", [], {}):
+                    report.warn(
+                        f"'{name}' is present but blank — pre-fill it from what "
+                        "the user already told you, or carry it as an "
+                        "open_questions entry; a blank is never the entry point",
+                        code="spec.prefill.empty_required_field",
+                        path=f"{where}.{name}",
+                    )
 
 
 def check_approval_consistency(fm: dict, criteria: list, report: Report) -> None:
@@ -737,20 +1037,35 @@ def check_approval_consistency(fm: dict, criteria: list, report: Report) -> None
     ]
     if authored:
         report.warn(
-            f"[criteria] {authored} are agent_authored at status: approved — "
-            "legitimate, but the read-back must have named them as yours; "
-            "approval moves status, never provenance"
+            f"{authored} are agent_authored at status: approved — legitimate, but "
+            "the read-back must have named them as yours; approval moves status, "
+            "never provenance",
+            code="spec.approval.agent_authored_at_approved",
+            path=spec_path("criteria"),
+            evidence={"found": authored},
         )
 
 
 def validate(path: Path) -> Report:
-    report = Report()
+    report = new_report(path)
     text = path.read_text(encoding="utf-8")
 
     try:
+        report.spec_hash = spec_hash(text.encode("utf-8"))
+    except Exception:
+        # A spec that cannot be canonicalized has no hash yet. The frontmatter
+        # diagnostics below say why; the hash is not the place to report it.
+        report.spec_hash = None
+
+    try:
         fm, body = split_frontmatter(text)
-    except ValueError as exc:
-        report.error(str(exc))
+    except FrontmatterError as exc:
+        report.error(
+            str(exc),
+            code="spec.frontmatter.unparseable",
+            path=spec_path("frontmatter"),
+            evidence={"reason": exc.reason},
+        )
         return report
 
     check_frontmatter(fm, report)
@@ -801,12 +1116,16 @@ def validate(path: Path) -> Report:
     check_question_model_coverage(
         raw_sections, parsed.get("questions"), models, report
     )
+    check_prefill(parsed, report)
     check_approval_consistency(fm, criteria, report)
 
     if fm.get("status") == "approved" and report.errors:
         report.error(
-            "[frontmatter] status is 'approved' while the spec has errors — an "
-            "approved spec must be compilable"
+            "status is 'approved' while the spec has errors — an approved spec "
+            "must be compilable",
+            code="spec.frontmatter.approved_with_errors",
+            path=spec_path("frontmatter", None, "status"),
+            evidence={"count": len(report.errors)},
         )
 
     return report
@@ -826,26 +1145,25 @@ def main() -> int:
         print(f"no such file: {args.spec}", file=sys.stderr)
         return 2
 
-    report = validate(args.spec)
+    try:
+        report = validate(args.spec)
+    except UnicodeDecodeError as exc:
+        # spec.encoding.not_utf8 — raised at the file-read boundary, before a
+        # Report exists, so it is the one code emitted outside report.error().
+        print(
+            f"spec.encoding.not_utf8 {args.spec}: the file is not valid UTF-8 ({exc})",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "spec": str(args.spec),
-                    "ok": report.ok,
-                    "errors": report.errors,
-                    "warnings": report.warnings,
-                },
-                indent=2,
-            )
-        )
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
         return 0 if report.ok else 1
 
-    for warning in report.warnings:
-        print(f"WARN  {warning}")
-    for error in report.errors:
-        print(f"ERROR {error}")
+    for diag in report.warnings:
+        print(f"WARN  {diag.code} {diag.path}: {diag.message}")
+    for diag in report.errors:
+        print(f"ERROR {diag.code} {diag.path}: {diag.message}")
 
     if report.ok:
         suffix = f" ({len(report.warnings)} warning(s))" if report.warnings else ""

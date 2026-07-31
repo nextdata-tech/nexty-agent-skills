@@ -105,9 +105,11 @@ criteria against the approved policy and **bounce** — write nothing, return
 Encoding a defensible-but-unseen interpretation is the same unrecoverable
 failure as skipping the gate.
 
-On the happy path: carry the approved text verbatim into `CONTEXT.md` and
-`nxd_decisions`, and **surface the encoded bands in your return** so the
-orchestrator can confirm shipped-matches-approved.
+On the happy path the approved text is carried verbatim by the byte-copied
+`dp-spec.approved.md` — the snapshot is the copy, so there is nothing to
+transcribe and nothing to drift — and it lands as data in `nxd_decisions`.
+**Surface the encoded bands in your return** so the orchestrator can confirm
+shipped-matches-approved.
 
 **You hold no credential for a db/API source and must not be given one:** write
 a placeholder in the `attributes`, return `credential_slots` (key names only,

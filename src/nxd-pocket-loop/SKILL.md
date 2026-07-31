@@ -39,11 +39,11 @@ intent + source + questions
 
 This skill is the **orchestrator** and the **entry point for any end-to-end
 "build me a data product from this source" request**. `nxd-generate-dp`
-constructs the closure once the plan is settled; it is not where a request
-starts — if you are in the generator without having done Steps 1–1b here, come
-back, do them, then invoke it from Step 3. This skill does not re-teach inference
-or code generation; it invokes the owning skills, then drives the supervisor MCP
-path. Do not expose this routing to the user.
+constructs the closure once the plan is settled; it is not where a request starts
+— if you are in the generator without having done Steps 1–1b here, come back, do
+them, then invoke it from Step 3. It does not re-teach inference or code
+generation; it invokes the owning skills, then drives the supervisor MCP path.
+Do not expose this routing to the user.
 
 > **You own the conversation and sequencing** — loosely, with **one exception**:
 > the policy read-back, discharged by the approved `dp-spec.md` in Step 1b. That
@@ -52,25 +52,19 @@ path. Do not expose this routing to the user.
 
 ## Route the request before doing work
 
-Classify the request before provisioning, generation, or querying, and prefer
-the smallest path that gives an honest answer. The full routing table plus step
-order, remap/regenerate caps, the one-DP-in-flight rule and the subagent fan-out
-live in [reference/scheduling.md](reference/scheduling.md). The two routes that
-decide the whole loop:
-
-- **A source is in scope, no suitable local product exists** → run the loop:
-  gather, spec, infer, generate, build, artifact, describe, query, present,
-  refine.
-- **An existing local product but no live endpoint/token** (the typical new
-  session, since the bearer never persists) → **reattach, don't rebuild**:
-  `list_data_products` → `resume_data_product` → artifact. `list_data_products` is
-  discovery only and must never supply a static-artifact fallback — see
-  [reference/context-and-resume.md](reference/context-and-resume.md).
-
-Treat ambiguous requests conservatively: if a question could mean either a
-one-off calculation or analysis of an unseen source, ask which should answer it.
-Prefer the reusable local-product path for a recurring, shareable, or
-multi-question analysis.
+Classify the request before provisioning, generation, or querying, and prefer the
+smallest path that gives an honest answer — the routing table, step order, caps,
+the one-DP-in-flight rule and the subagent fan-out are in
+[reference/scheduling.md](reference/scheduling.md). The two routes that decide
+the whole loop: **a source is in scope with no suitable local product** → run the
+loop end to end; **an existing local product but no live endpoint/token** (the
+typical new session, since the bearer never persists) → **reattach, don't
+rebuild**: `list_data_products` → `resume_data_product` → artifact.
+`list_data_products` is discovery only and must never supply a static-artifact
+fallback ([reference/context-and-resume.md](reference/context-and-resume.md)).
+Treat ambiguity conservatively: when a request could mean either a one-off
+calculation or analysis of an unseen source, ask which should answer it, and
+prefer the reusable local-product path for recurring or multi-question work.
 
 ## Choose the execution surface
 
@@ -82,7 +76,10 @@ Choose this order before invoking any runtime command:
    `mcp__nxd-desktop__run_semantic_query`, and `mcp__nxd-desktop__inspect_run`
    — use them for the entire discover, build, resume, describe, and query
    sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
-   on-demand handoffs. This is the supported route for Claude Desktop and Claude
+   on-demand handoffs. **`inspect_run` is unbound** — no step calls it, no
+   reference doc describes what it returns, and supervisor-side run detail is
+   recorded as having no producer until one exists; do not invent a contract for
+   it. This is the supported route for Claude Desktop and Claude
    Cowork. Read-only `nxd://` **resources** — with tool bridges where a client exposes none —
    expose what a release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
@@ -128,25 +125,23 @@ Warm the user up before long work: state you'll write the spec, generate the DP,
 run it locally, then answer their questions — a multi-minute build is expected,
 not a stall. **Determine every source the data product needs before
 materializing.** A data product may need one source or several — the same
-connector type twice (two databases), or a mix (a database plus a REST API). For
-each, determine its connector type: local file(s) (CSV/JSON/JSONL/Parquet), a
-live database connection, or an off-mesh REST API. Ask if not already stated;
-never assume database or API access exists just because a question sounds
-analytical. If the request already states a source's type and details, gather
-everything in one turn rather than confirming type first and asking a second
-round.
+connector type twice, or a mix (a database plus a REST API). For each, determine
+its connector type: local file(s) (CSV/JSON/JSONL/Parquet), a live database
+connection, or an off-mesh REST API. Ask if not already stated; never assume
+database or API access exists because a question sounds analytical. If the
+request already states a source's type and details, gather everything in one turn
+rather than confirming type first and asking a second round.
 
 **The moment there is more than one source, give each a short, distinct label**
 (lowercase, hyphenated, e.g. `orders`, `users`) and use it consistently for the
 rest of the loop; a single-source data product needs none, so don't invent one.
-This doesn't conflict with "keep one data product in flight" above, which limits
-how many data products you build at once, not how many sources one may have.
-Materialize each source faithfully before inference — repeat the matching bullet
-once per source, tagging every artifact with that source's label. **If the request supplied a
-procedure (rubric, gates, thresholds, verdicts) with a gap that changes a
-result, the policy read-back in Step 3's skill comes FIRST** — reading a source
-is always allowed, but copying it into a closure is a materialization and waits
-for the user's reply:
+The one-product-in-flight rule above limits how many products you build at once,
+never how many sources one may have. Materialize each source faithfully before
+inference — repeat the matching bullet once per source, tagging every artifact
+with that source's label. **If the request supplied a procedure (rubric, gates,
+thresholds, verdicts) with a gap that changes a result, the policy read-back in
+Step 3's skill comes FIRST** — reading a source is always allowed, but copying it
+into a closure is a materialization and waits for the user's reply:
 
 Per-kind rules — attached file, pasted table, database, REST API, and the
 host-path handoff — plus where credentials land are in
@@ -156,9 +151,8 @@ host-path handoff — plus where credentials land are in
 > materialization only** and are absolute: the rows you land are a byte-exact
 > record of what the user supplied, so any later number traces back to it.
 > Cleaning, dedup, amortization, currency normalization, reclassification and
-> regrain are legitimate — often necessary — but exist **only as derived models
-> computed downstream of the pristine source**, never as an edit to the source
-> export.
+> regrain are legitimate — but **only as derived models computed downstream of
+> the pristine source**, never as an edit to the source export.
 
 ### Step 1b — Author `dp-spec.md`, the intermediate representation
 
@@ -167,11 +161,9 @@ Write what Step 1 gathered into **`dp-spec.md`** at
 `closure/`) — the user-editable IR carrying intent, questions, sources,
 population, the model plan, any gates / criteria / verdicts / judgements /
 schedule, the rulings ledger, and every open question. Schema, authoring modes
-and the compile map: [reference/dp-spec.md](reference/dp-spec.md).
-
-It is **not a closure file**, so writing it is not a materialization and the
-policy gate is not violated by it. Nothing under `closure/` is written until the
-user replies.
+and the compile map: [reference/dp-spec.md](reference/dp-spec.md). It is **not a
+closure file**, so writing it is not a materialization and the policy gate is not
+violated by it — nothing under `closure/` is written until the user replies.
 
 **If the user supplied a doc** — a build spec, a rubric page — translate it onto
 the schema rather than asking them to re-type it. Their values are the
@@ -193,7 +185,11 @@ a result-changing gap, show the spec, name every value you authored, and wait �
 the gate in Step 3's skill is discharged by the user's reply to *this*. **A
 validator pass is not approval**, and `status: approved` is the user's to set.
 With no procedure in play the spec is still written (it is the generator's input)
-but needs no approval turn.
+but needs no approval turn. **The approved revision is what gets snapshotted** —
+byte-copied into the closure and hashed at generation, so the plan a build came
+from stays recoverable. A ruling only the user can make, discovered *later*
+during the build, is an open question found late: write it back into
+`## open_questions` here, which **un-approves** the spec and re-enters this step.
 
 **When a question needs a judgement read from each entity's evidence** — a
 per-entity score, verdict or classification — it is nondeterministic, so route it
@@ -216,7 +212,8 @@ separately, carrying labels forward. That skill owns the role grammar.
 
 Invoke the **nxd-generate-dp** skill: assemble the complete Python-authored
 closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-`requirements.txt`, `CONTEXT.md`, and the connector-type-specific artifact(s) —
+`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
+`build-record.json`, `README.md`, and the connector-type-specific artifact(s) —
 from the **approved `dp-spec.md`** (Step 1b), the inferred model(s), and the
 connector config. Pass the spec's path: it carries the intent, questions, model
 plan and every ruling, so the generator compiles rather than re-derives, and the
@@ -224,18 +221,17 @@ plan and every ruling, so the generator compiles rather than re-derives, and the
 policy read-back gate**: when the request carried a procedure with a gap that
 changes a score, verdict, gate outcome, or which rows land, it writes nothing
 until the user has seen the enumerated proposal and replied — the approved spec
-is what discharges it, so don't route around it, and don't treat earlier
-technical questions as that approval.
-Pass through **every** gathered source with its label (or the single unlabeled
-source) and its per-model provenance from Step 2, untouched — one artifact per
-source, labeled per `nxd-generate-dp's reference/multi-source.md` when there's
-more than one. **That skill owns the exact per-type shape — don't re-derive it
-here**, along with the local DP shape (DuckDB output port, dlt-in-transform,
-local executor), the naming invariant, and the derived models carrying any
-business ruling the semantic layer can't express. **Never author
-`deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the supervisor
-compiles those from the Python sources when it pins the definition.** Include
-instructions from `reference/dlt.md`. The output is a **closure directory** —
+discharges it, so don't route around it and don't treat an earlier technical
+question as that approval. Pass through **every** gathered source with its label
+(or the single unlabeled source) and its per-model provenance from Step 2,
+untouched — one artifact per source, labeled per `nxd-generate-dp`'s
+`reference/multi-source.md` when there's more than one. **That skill owns the
+exact per-type shape — don't re-derive it here**, along with the local DP shape
+(DuckDB output port, dlt-in-transform, local executor), the naming invariant, and
+the derived models carrying any business ruling the semantic layer can't express.
+**Never author `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the
+supervisor compiles those from the Python sources when it pins the definition.**
+Include `reference/dlt.md`'s instructions. The output is a **closure directory** —
 the `--definition` argument for Step 4.
 
 **Steps 2–3 MAY be offloaded to isolated subagents** — a profile subagent and a
@@ -254,18 +250,21 @@ and **state both paths to the user in the handoff**; a scratch dir is lost when
 the session ends. The bearer never persists, so a later session reattaches by
 **workflow id** (`list_data_products` → `resume_data_product`) while the
 **closure path** keys the rebuild fallback when the published artifact is gone
-([reference/context-and-resume.md](reference/context-and-resume.md)) — naming
-the dir by the workflow id keeps the two recoverable from each other. The
-closure's `CONTEXT.md` (emitted by nxd-generate-dp) is the durable record a
-*later* session reads to continue the work, and must be **self-contained**: a
-derived model's contract lives inside the closure, never behind a `../` pointer
-the handoff would strand — `../dp-spec.md` included, since the IR is upstream of
-the closure, not a dependency of it. **Relay the self-check's distribution
-read-back before building**, in one or two lines: the per-classification-column
-value counts (call out a uniform one), and which assertions are
-internal-consistency only rather than checks against the source. A green
-self-check means the closure is structurally sound and the transform ran — never
-evidence the numbers are right.
+([reference/context-and-resume.md](reference/context-and-resume.md)) — naming the
+dir by the workflow id keeps the two recoverable from each other. The durable
+record a later session reads is **generated, never hand-written**: the approved
+spec byte-copied in as `dp-spec.approved.md`, `dp-spec.lock.json` carrying its
+hash and the compiler version, and `build-record.json` carrying what happened —
+stages, attempts, concessions, blockers, the read-back. Self-containment is
+checked against the lock rather than trusted: a derived model's contract lives
+inside the closure, never behind a `../` pointer the handoff would strand —
+`../dp-spec.md` included, since the IR is upstream of the closure, not a
+dependency of it. **Relay the distribution read-back before building** in one or
+two lines — the per-classification-column value counts (call out a uniform one),
+and which assertions are internal-consistency only rather than checks against the
+source; it is recorded in `build-record.readback`, relayed verbatim, non-gating.
+A green self-check means the closure is structurally sound and the transform ran
+— never evidence the numbers are right.
 
 ### Step 4 — Build and serve through MCP
 
@@ -286,7 +285,12 @@ failure and its actionable message, and **do not retry through workspace Bash,
 SQLite, raw SQL, pandas, or another local database** — a successful build is the
 only proof the product is ready to query. The direct CLI is used only under the
 confirmed host-local Darwin conditions in "Choose the execution surface," kept
-equivalent: same closure served, same stop-on-failure.
+equivalent: same closure served, same stop-on-failure. **A build failure is not
+evidence of a bad machine**: the supervisor compiles code the offline self-check
+never executes, so a real code fault arrives wearing an environment's clothes.
+Absent a supervisor-reported error body it is yours — heal, record the attempt,
+and never claim an "environment issue" you cannot evidence
+([reference/failure-handling.md](reference/failure-handling.md)).
 
 ### Step 4a — Render the pinned static artifact
 
@@ -345,9 +349,12 @@ natural-language translation is yours to do. For each question:
 ### Step 6 — Refine wrong answers back into the loop
 
 If an answer is wrong, missing, or unsatisfying, decide where the fix belongs.
-Both levels are **bounded** — caps (remap ≤~2/question, regenerate ≤~3 total)
-and the non-convergence report live in
-[reference/scheduling.md](reference/scheduling.md):
+Every level is **bounded**, and the bounds are **counted** from
+`build-record.json` `attempts[]`, never estimated — remap ≤~2/question,
+regenerate ≤~3 total, environmental retry ≤~3. Each attempt ends in one typed
+exit: `healed`, `healed_with_concessions`, `caps_exhausted`, `blocked`,
+`retry_environmental` ([reference/failure-handling.md](reference/failure-handling.md),
+[reference/scheduling.md](reference/scheduling.md)):
 
 - **Query-level** (cheapest) — the model is right but the selection was wrong or
   a dimension was missing. Re-describe, re-map, re-query through MCP.
@@ -363,14 +370,27 @@ and the non-convergence report live in
   user accepts. If the loop doesn't converge within the caps, report what you
   tried, what the product declares, and where the gap is — never loop
   indefinitely or give up silently.
+- **Blocked** — the fix is a ruling only the user can make (a missing rate, an
+  ambiguous scope, a measurement no source carries). That is an open question
+  found late, not a heal: write it back into `dp-spec.md`'s `## open_questions`
+  with what it blocks, which **un-approves** the spec, ask the one smallest
+  question, and re-enter Step 1b. Never reach green by changing the plan.
 
 ## Narration discipline (always)
 
+You are the middleman. The user hears **exactly two classes** — **blockers** ("I
+need something from you") and **concessions** ("I did something you should know
+about"); everything else you absorb into one plain line of outcome. **Who owns a
+problem decides whether it is spoken, not how severe it is**: an error you can
+fix yourself is absorbed, a warning that is a concession is said out loud. Never
+put a stage name, phase letter, diagnostic code or hash in front of the user
+([reference/failure-handling.md](reference/failure-handling.md)).
+
 - **Warm up** before any multi-minute step (inference, generation, serve), and
   report entering each phase — never a silent stall.
-- **Label previews as previews.** A sampled, partial, or `truncated` result is a
-  preview, not a verified answer — say so, and never present an unvalidated
-  intermediate as final.
+- **Label previews as previews, and never present green as right.** A sampled,
+  partial, or `truncated` result is a preview, not a verified answer; a build
+  that passed is "built and checked", never "the numbers are correct".
 - **Show the query behind the answer, and the ruling behind the query** — every
   answer states the measure/dimension selection that produced it, plus the ruling
   behind any dimension whose catalog description names one.
@@ -428,7 +448,19 @@ and the non-convergence report live in
   authored is marked `agent_authored` and named in the read-back; `status:
   approved` is the user's to set, never yours. Run
   `scripts/validate_dp_spec.py` before the read-back and again before generating
-  — but a validator pass only means compilable, never approved.
+  — but a validator pass only means compilable, never approved. What the user
+  approves is what the generator byte-copies and hashes into the closure.
+- **A heal changes generated code, never the plan.** The self-heal loop may
+  rewrite `transform/main.py`, `models.py` or `spec.py`; it may never edit
+  `dp-spec.md` to make a build pass. Narrowing the population to dodge a bad
+  join, dropping a model whose grain won't resolve, relaxing a threshold — those
+  are spec edits needing re-approval, and the build record catches one
+  mechanically. Escalate instead of quietly re-planning.
+- **Never claim green over an undisclosed concession, and say `materialized`,
+  never `correct`.** A run that reached green by doing something the skills
+  discourage is finished only once the user has heard what and why; until then it
+  merely reads as finished. Green means the approved plan compiled, ran and
+  published — never that the numbers are right.
 - **A ruling behind a number is stated with the number.** When a dimension's
   catalog description names the ruling that created it, the answer says so, and
   a classified total reports its review-bucket share whenever nonzero —
@@ -493,6 +525,8 @@ and the non-convergence report live in
 ## Reference docs (this skill)
 
 Use [dp-spec](reference/dp-spec.md),
+[build-record](reference/build-record.md),
+[failure-handling](reference/failure-handling.md),
 [source-materialization](reference/source-materialization.md),
 [scheduling](reference/scheduling.md),
 [context-and-resume](reference/context-and-resume.md),

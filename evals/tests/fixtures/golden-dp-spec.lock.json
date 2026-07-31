@@ -1,0 +1,19 @@
+{
+  "schema": "nxd-dp-spec-lock-v1",
+  "spec_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "canonicalization": "nxd-dp-spec-canon-v1",
+  "snapshot": "dp-spec.approved.md",
+  "snapshot_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "spec_status_at_copy": "approved",
+  "dp_spec_version": 1,
+  "name": "candidate_scoring",
+  "workflow": "candidate-scoring",
+  "source_basename": "dp-spec.md",
+  "compiler_version": {
+    "plugin": "0.28.0",
+    "generator_skill": "nxd-generate-dp",
+    "self_check": "nxd-self-check-v1"
+  },
+  "copied_at_unix_ms": 1769904000000,
+  "resolved_refs": []
+}

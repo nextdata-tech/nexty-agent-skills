@@ -80,8 +80,10 @@ because it looks settled.
 
 ## Land the adjudication
 
-Record the round in `CONTEXT.md`: each finding's `id`, its adjudication, the
-citation for a rejection, and what changed for an acceptance.
+Record the round in `build-record.json` `attempts[]` — one entry per accepted
+finding that changed code (`kind: "heal"`), carrying the finding's `id` and its
+adjudication in `diagnosis.summary` and what changed in `changed[].what`, with a
+rejection's `file:line` or request-text citation in the same summary.
 
 This follows the pack's existing stance that rulings are landed as reviewable
 data rather than buried in prose. It also makes the round auditable — a later

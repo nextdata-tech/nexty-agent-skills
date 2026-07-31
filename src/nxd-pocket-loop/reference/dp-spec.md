@@ -3,6 +3,7 @@
 ## Contents
 
 - [Why this file exists](#why-this-file-exists)
+- [Outcomes do not live in this file](#outcomes-do-not-live-in-this-file)
 - [Where it lives, and why not in the closure](#where-it-lives-and-why-not-in-the-closure)
 - [The three authoring modes](#the-three-authoring-modes)
 - [Reading a user-written spec: fill, never silently correct](#reading-a-user-written-spec-fill-never-silently-correct)
@@ -10,7 +11,8 @@
 - [Sections](#sections)
 - [What each section compiles to](#what-each-section-compiles-to)
 - [The validator](#the-validator)
-- [Approval](#approval)
+- [The spec as an elicitation contract](#the-spec-as-an-elicitation-contract)
+- [Approval, the snapshot, and the lock](#approval-the-snapshot-and-the-lock)
 - [Worked example](#worked-example)
 
 ## Why this file exists
@@ -42,23 +44,53 @@ Three things it fixes:
    the user typed is `user_confirmed`; a value the agent added to the spec is
    `agent_authored` and stays so even after approval.
 
-It is **not** a replacement for `CONTEXT.md`. This file is the *input* to
-generation; `CONTEXT.md` is the closure's own record of what generation
-*produced* — the reopen recipe, the build outcomes, the known blockers. The
-generator writes `CONTEXT.md` from this spec plus what actually happened.
+## Outcomes do not live in this file
+
+The framing that decides what belongs here: **user intent is the source, this
+file is the IR, `nxd-generate-dp` is codegen, the closure's Python is the output
+artifact.** An IR is a pure function of its source, so a build outcome cannot
+live in it — it would be a value nothing in the spec derived.
+
+So nothing about *what happened* is written here. Row counts, runtime blockers,
+review rounds, observed missing-field rows, build results, attempts, concessions
+— all of it lands in the closure's generated `build-record.json`, described in
+[`build-record.md`](build-record.md). Nobody hand-authors that file, and nobody
+hand-copies plan content into it.
+
+Two rules fall straight out of the same framing, and both are enforced rather
+than advised:
+
+- **The self-heal loop may change generated code. It may never change this
+  file.** A compiler does not edit your source to make the build pass. If green
+  is only reachable by changing the plan — narrowing the population to dodge a
+  bad join, dropping a model whose grain will not resolve, relaxing a threshold
+  — that is a **spec edit requiring re-approval**, not a heal. The build record
+  compares the spec hash before and after every heal attempt and rejects one
+  that moved it.
+- **A build-time blocker is an `open_questions` entry discovered late**, not a
+  second mechanism. It is written back into this file, which un-approves it —
+  see the `## open_questions` section below and
+  [Approval](#approval-the-snapshot-and-the-lock).
 
 ## Where it lives, and why not in the closure
 
 ```
 …/nxd-pocket/<workflow>/
-├── dp-spec.md          ← the IR. Beside the closure, not inside it.
-└── closure/            ← the generated definition; build_data_product points here
-    ├── spec.py
-    ├── CONTEXT.md
+├── dp-spec.md                 HAND-EDITED. The live IR. Beside, never inside.
+├── prompts/…                  HAND-EDITED. Referenced by judgments[].prompt_ref.
+└── closure/                   ← the generated definition; build_data_product points here
+    ├── dp-spec.approved.md    GENERATED  byte copy of the approved IR
+    ├── dp-spec.lock.json      GENERATED  hash + compiler version + resolved refs
+    ├── build-record.json      GENERATED  outcomes, attempts, concessions, blockers
+    ├── README.md              GENERATED  reopen recipe + credentials block ONLY
+    ├── spec.py                GENERATED
+    ├── models.py              GENERATED
+    ├── transform/main.py      GENERATED
+    ├── prompts/…              COPIED     mirrors the IR's relative prompt_ref paths
     └── …
 ```
 
-**Beside, never inside.** Two reasons, and both matter:
+**The live file is beside, never inside.** Two reasons, and both still matter:
 
 - The policy gate forbids writing **closure** files before approval. The IR must
   be written *to get* approval. Putting it outside the closure directory keeps
@@ -69,11 +101,34 @@ generator writes `CONTEXT.md` from this spec plus what actually happened.
   would either leak drafting state into a handed-off product or force the IR to
   be sanitized at exactly the moment it is most useful.
 
-The closure stays self-contained regardless: `CONTEXT.md` and any
-`contracts/<name>.md` still hold everything a later session needs, and **no
-closure file may reference `../dp-spec.md`** — that is precisely the
-closure-escaping pointer Phase C fails. The IR is upstream of the closure, not a
-dependency of it.
+**The approved revision is copied inside, at generation.** The copy happens
+*after* approval, so the bright line the gate draws — nothing under `closure/`
+before the user approves — is unchanged. What the copy buys:
+
+- **Self-containment stops being a prose discipline and becomes a checkable
+  snapshot.** There is no "copy the plan into a record, never point at it"
+  rule to remember and no way to get it half-right: `dp-spec.approved.md` is a
+  byte-for-byte `shutil.copyfile` of `dp-spec.md`, and `dp-spec.lock.json`
+  carries the sha256 of those bytes plus the canonical hash of the plan they
+  encode. Self-check compares them.
+- **Approval becomes tamper-evident.** "Once approved, the spec is frozen for
+  this build" used to be honour-system. A live spec whose canonical hash no
+  longer equals `lock.spec_hash` was edited after approval, and that is now a
+  reported state (`plan_moved`), not a thing a reader has to notice.
+- **Phase C's escape scan needs no carve-outs.** **No closure file may reference
+  `../dp-spec.md`** — that is precisely the closure-escaping pointer Phase C
+  fails, and the snapshot is scanned like every other file. Because the IR is
+  *copied* rather than *pointed at*, no exception has to be carved into the scan
+  for the one file that would otherwise need one. The lock deliberately stores
+  `source_basename: dp-spec.md`, not a path: a `../`-shaped string inside the
+  closure is the thing this design removes.
+- **Drafting history stays out of handoffs.** The copy is of the approved
+  revision only. Rejected options and superseded wording live in the live file's
+  git history, beside, where a handed-off zip never carries them.
+
+The IR is upstream of the closure, not a dependency of it. Nothing in the
+closure reads the live file at runtime; the snapshot is what a cold reader, the
+reviewer and the export handoff read.
 
 ## The three authoring modes
 
@@ -199,10 +254,12 @@ The model plan, backward-chained from the questions. This is the section
   answers: [q1, q2]          # which questions this model serves; [] for an input-only model
   description: |
     What it is, in one sentence — this becomes the semantic model description.
+  deferred: false            # optional; true = planned but not built this round
   fields:                    # optional at draft; required before approval for derived models
     - name: rust_verbatim
       type: string
       role: dimension
+      required_capture: true # optional; the model is wrong without this field
       derivation: |
         Verbatim résumé quote, or the sentinel NOT MENTIONED.
 ```
@@ -216,6 +273,21 @@ corresponding `decisions:` row.
 requirement, and stating it here means the generator validates rather than
 invents. A derived model whose key is grain-derived says so:
 `key: [invoice_id, period]` with the grain sentence naming invoice × month.
+
+Two optional keys carry what the plan must say about a model that is not fully
+built this round. Both are **plan**, which is why they are here; their outcome
+halves are counted by the build record and never written back.
+
+- **`deferred: true`** — the model is agreed and specified but not `.promise`d
+  this round. The generator writes its contract to `contracts/<name>.md` instead
+  of building it, and a later round builds it from that contract plus this
+  entry. A deferred model still states grain, key and description: deferring the
+  build never defers the plan.
+- **`fields[].required_capture: true`** — the field is not optional to the
+  model's meaning. A row missing it is not a row with a null, it is a row the
+  product should not be trusted about. The spec declares *which* fields those
+  are; how many rows actually arrived without one is an outcome and lands in
+  `build-record.json` `evidence.required_capture`. Do not record counts here.
 
 ### `## gates` (optional)
 
@@ -368,19 +440,42 @@ at approval or lands as a `blocked` / `deferred` decision.
 A measurement you must not propose (`derivation-plan.md`'s hard boundary) belongs
 here, never in `criteria:` or `decisions:` as a value you invented.
 
+**This section is also where a build-time blocker lands.** A gap the build
+discovers — the invoices are in two currencies and no source carries a rate, a
+join has no key the plan named — is not a new mechanism and does not get one. It
+is an `open_questions` entry discovered late, written back into **this file**,
+with the vocabulary the section already has: a `question`, a `blocks:` list, and
+a `disposition`. Three consequences, all intended:
+
+- Writing it back changes the canonical hash, so the spec **un-approves** itself.
+  That is correct — the plan the user approved turned out to be incomplete.
+- The blocker surfaces in the same "needs your input" queue as the gaps found
+  before the build, because it is the same queue.
+- The elicitation contract is therefore a **loop**, not a pre-build-only gate.
+
+The build record records the blocker with `written_back: true` once the edit has
+been made; the write-back is a separate recorded event from the attempt that
+discovered it. See [`build-record.md`](build-record.md).
+
 ## What each section compiles to
 
 | Spec section | Closure artifact |
 |---|---|
-| `name`, `## intent`, `## questions` | `data_product(...)` name/description; `CONTEXT.md` Intent |
+| the whole file, byte for byte | `dp-spec.approved.md` |
+| the whole file, canonicalized | `dp-spec.lock.json` `spec_hash`; `build-record.json` `compiled_from` |
+| `name`, `## intent`, `## questions` | `data_product(...)` name/description |
 | `## sources` | connector type, `infra-profile.yaml` service, `data/`, the companion path file |
-| `## population` | `CONTEXT.md` Population; a `decisions:` row for the sample rule |
+| `## sources[].credential_keys` | the credentials block in the generated `README.md` — key names only |
+| `## population` | the `decisions:` row for the sample rule; the transform's filter |
 | `## models` | `models.py`, `.promise(...)`, `PHYSICAL_MODELS`, the Step-1a plan |
 | `## models[].grain` + `.key` | `primary_key()`, the Step-3b Tier-1 uniqueness assert |
+| `## models[].deferred` | `contracts/<name>.md` instead of a `.promise(...)` |
+| `## models[].fields[].derivation` | the per-field extraction rule and its determinism caveat |
 | `## gates` | gate columns on the derived model; `UNKNOWN` handling |
 | `## criteria` | the landed `scoring_rubric` reference model |
 | `## verdicts` | the landed `verdict_thresholds` reference model |
 | `## judgments` | `judged_by` / `rubric_version` on the judgement rows; batch cadence |
+| `## judgments[].prompt_ref` | the mirrored `prompts/…` copy and its `resolved_refs[]` entry in the lock |
 | `## schedule` | `incremental-transforms.md` route, `transform_state` cursor |
 | `## outputs` | `.port("duckdb", …)`, semantic views, static artifact |
 | `## decisions` | `data/nxd_decisions/nxd_decisions.csv`, row for row |
@@ -389,6 +484,20 @@ here, never in `criteria:` or `decisions:` as a value you invented.
 Note the direction: **the spec is the source and the closure is the output.** A
 value that appears in the closure but in no spec section is a value the user
 never approved.
+
+**This table is a review aid, not a rebuild graph.** Do not read it as a
+dependency map and regenerate "just the affected artifact" when one section
+changes. The fan-in is many-to-many rather than a DAG — `nxd_decisions` is fed
+by `population`, `gates`, `criteria`, `verdicts` and `open_questions` at once,
+and a `criteria` change cascades through `rubric_version` into `judgments`. With
+an LLM doing the codegen, partial regeneration also risks breaking the
+`PHYSICAL_MODELS` naming invariant, which spans `models.py`, `spec.py` and the
+transform. That is why content tracking is **one whole-spec hash** and not a
+hash per section: a changed plan regenerates the closure, and an unchanged plan
+regenerates nothing.
+
+No cell names an outcome. Row counts, blockers and concessions are not compiled
+from any section — they are recorded in `build-record.json`.
 
 ## The validator
 
@@ -426,12 +535,111 @@ and the agent's.
 - `incremental: true` alongside a model whose kind implies aggregation or regrain
 - an agent-authored value at `status: approved` — legitimate, but it is exactly
   the pair a reviewer should see named
+- a required field that is **present but empty** rather than either filled with a
+  `provenance` or carried as an open question (`spec.prefill.empty_required_field`
+  — see [the pre-fill rule](#the-spec-as-an-elicitation-contract))
 
 Run it before every read-back and again before invoking the generator. A spec
 that fails the validator is not shown to the user as a proposal — fix it first,
 or convert the gap into an `open_questions` entry, which is a legitimate answer.
 
-## Approval
+### Field-addressed output
+
+`--json` emits an `nxd-diagnostic-report-v1` envelope, not prose:
+
+```jsonc
+{
+  "schema": "nxd-diagnostic-report-v1",
+  "tool":   "validate_dp_spec",
+  "target": "…/dp-spec.md",
+  "ok":     false,
+  "counts": { "error": 1, "warning": 0, "info": 0 },
+  "spec_hash": "sha256:…",
+  "diagnostics": [
+    { "schema": "nxd-diagnostic-v1", "stage": "s0_spec",
+      "code": "spec.criteria.incomplete_scale", "severity": "error",
+      "owner": "agent", "origin": "tool_computed",
+      "path": "spec:criteria[C1].anchors",
+      "message": "scale 1-5 has no anchor for level(s) [2, 3, 4]",
+      "evidence": { "expected": [1,2,3,4,5], "found": [1,5] },
+      "fix": "Author anchors for 2, 3 and 4, or carry the gap as an open question." }
+  ]
+}
+```
+
+This is the **same shape every stage of the pipeline emits** — self-check, the
+build loop, the supervisor-facing steps. Only `stage` differs.
+[`build-record.md`](build-record.md) is normative for the record, the code
+registry and the `owner` / `origin` semantics; three things about it matter when
+you are reading a spec's findings:
+
+- **`code` is a stable identifier, not a message.** It is never renamed and never
+  repurposed; a changed meaning is a new code. Match on it rather than on
+  `message` text. The registry lives in `scripts/dp_diagnostics.py::CODES` and
+  every `spec.*` code is produced by exactly one check.
+- **`path` addresses the field, by identity.** Grammar:
+  `spec:` then dotted segments, each optionally subscripted with the entry's own
+  identity — `id`, else `name`, else `decision_id`, else `model`, and only when
+  an entry has none of those, `#<0-based index>`. So
+  `spec:criteria[C1].anchors`, `spec:models[scored_candidates].key`,
+  `spec:open_questions[fx_rates].disposition` — never `criteria[2]` for an entry
+  that has an `id`, because an index moves when the list is edited and a moving
+  address points a reader at the wrong field.
+- **`owner` says who fixes it, and it is not `severity`.** `owner: agent` gaps
+  are ones you fill and label `agent_authored`; `owner: user` findings are
+  rulings, credentials and answers only the user has. A `spec.source.credential_value`
+  is `owner: user` even though the agent could mechanically delete the line —
+  only the user can decide whether a leaked secret must now be rotated, and
+  quietly rewriting the file would erase the evidence that it leaked.
+
+## The spec as an elicitation contract
+
+From the user's point of view this file is not a schema, it is the mechanism
+that **gets enough information out of them to build the product**. The validator
+already encodes that as conditional requirements: criteria ⇒ verdicts; judgments
+⇒ `rubric_version`; every gate ⇒ an `unknown:` rule; every derived model ⇒ grain
++ key; every ruling-bearing section ⇒ a `decisions` row. That is a
+progressive-disclosure form spec, already written and already executable.
+
+A harness — Claude Desktop, say — can render that as a UI. The supervisor cannot
+and does not need to: nothing here requires a supervisor change. What this repo
+owes a harness is three things, and it ships all three:
+
+| Prerequisite | What it is |
+|---|---|
+| Field-addressed diagnostics | `{path, code, severity, owner, control, …}` per finding, above. `control` names the widget class per code — `mapping` for an anchors gap, `number` for a bad weight — so the harness renders the right control per **error class** rather than guessing from the path. |
+| A machine-readable schema | `dp_diagnostics.py schema --json` emits the sections, the conditional requirements and every vocabulary **from the Python constants themselves**, so a harness never re-types `MODEL_KINDS` or `DECISION_PROVENANCE` and cannot drift from them. |
+| A canonical emitter | `dp_diagnostics.py canonicalize` / `emit`, needed for the hash anyway, and the same component gives a form its round trip and a reviewer a readable diff. |
+
+`provenance` becomes a **rendering property**: an agent-filled field renders as
+"proposed, unconfirmed", and the user confirming it is real evidence they saw
+it. Approval moves `status`; it never moves `provenance`.
+
+### RULE-PREFILL — the trap this section exists to name
+
+A form-first UI regresses to forty empty fields. That is the exact failure this
+file was built to avoid, and it is already forbidden in prose above:
+**translate their document; do not ask them to re-type it.**
+
+> **The agent always pre-fills** — from the conversation, or from the user's own
+> doc. The UI's job is **review-and-correct, never data entry.** A blank form is
+> a fallback, never the entry point. `open_questions` is the only surface that
+> should actively demand input.
+
+Mechanized, so it is a rule rather than an aspiration: **a blank is illegal.** A
+field you have no basis for does not ship as an empty control waiting for
+someone to type into it — it becomes an `open_questions` entry, which is a
+question with a reason attached. `spec.prefill.empty_required_field` fires on a
+required field that is present-but-empty, precisely because that is the shape a
+blank form leaves behind.
+
+The emitter has its own trap, worth stating once: the round trip is **canonical,
+not byte-exact** — comments, wrapping and key order do not survive it. So the
+emitter must never overwrite a hand-edited `dp-spec.md` wholesale. It writes a
+proposal the user reviews, or a targeted edit. Silently reformatting the user's
+own file is the same class of failure as silently correcting their values.
+
+## Approval, the snapshot, and the lock
 
 The read-back **is** this file. Show it, name what you filled in, and ask for a
 correction or approval. The user approves by saying so, or by editing the file
@@ -445,11 +653,61 @@ and setting `status: approved`.
 Once approved, the spec is frozen for that build. A later change is an edit plus
 a re-approval, and a change to `criteria` is a new `rubric_version`.
 
+### What approval triggers
+
+Approval is what gets **snapshotted and hashed**. At generation, and only after
+`status: approved`:
+
+1. `dp-spec.md` is copied byte-for-byte to `closure/dp-spec.approved.md`. No
+   reformatting, no normalization — the snapshot is evidence, and evidence that
+   was rewritten on the way in cannot be compared.
+2. Every `judgments[].prompt_ref` is resolved against **this file's** directory
+   and mirrored into the closure at the same relative path, so the byte copy
+   stays correct without being rewritten. An absolute or `../`-rooted
+   `prompt_ref` is a closure-escaping reference and blocks generation: fix the
+   IR, never the copy.
+3. `closure/dp-spec.lock.json` records the canonical hash of the plan, the raw
+   sha256 of the snapshot's bytes, `spec_status_at_copy: "approved"`, the
+   compiler version and the resolved refs.
+4. `build-record.json` opens with `compiled_from` set to that same hash.
+
+**"Frozen for that build" stops being honour-system.** The lock's hash is
+whitespace-, wrapping- and key-order-insensitive but semantic in every value,
+list order and section — `status` included. That last part is deliberate:
+`compiled_from` names the **approved** revision, and "the hash no longer matches,
+so this was edited after approval" only works if approval is itself part of the
+hashed content. Three questions that used to require a careful reader now have
+mechanical answers:
+
+| Question | Answered by |
+|---|---|
+| Was the in-closure copy edited after it was written? | snapshot bytes vs `lock.snapshot_sha256` — self-check does this |
+| Has the plan moved since the closure was built? | canonical hash of the live file vs `lock.spec_hash` — `dp_diagnostics.py lock verify --spec` |
+| Is this closure the compiled form of this plan? | `build-record.compiled_from == lock.spec_hash` |
+
+### Approval is revocable, and the build can revoke it
+
+A build-time blocker written back into `## open_questions` changes the canonical
+hash, so the live file **un-approves itself**: it no longer matches the snapshot
+the closure was compiled from, and nothing downstream can report the product as
+materialized while the question stands. That is the intended behaviour, not a
+side effect to work around. Re-approval goes through this section again, from
+the top.
+
+**A heal never does this.** The self-heal loop may edit generated code; it may
+not edit this file to make a build pass. An attempt whose spec hash moved is
+rejected and escalated for re-approval — see [`build-record.md`](build-record.md).
+
 ## Worked example
 
 A build spec the user wrote in a doc, translated. It validates clean, and
 `scripts/validate_dp_spec.py` uses it as its fixture — so an edit here that
-breaks the schema is caught by the test, not by a reader.
+breaks the schema is caught by the test, not by a reader. Its canonical hash is
+pinned as a golden literal too, which is what makes the canonicalization stable
+across implementations: **changing a byte inside the fence below changes that
+hash and requires updating the pinned value in the same change.** The fence is
+identified mechanically as the file's sole ` ```markdown ` block; do not add a
+second one.
 
 Note what the translation did to the user's own numbers: the source doc's nine
 criteria are carried verbatim, weights and all. Where it gave only the 5 and 1

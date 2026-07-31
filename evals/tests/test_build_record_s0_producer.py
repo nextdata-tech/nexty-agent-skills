@@ -1,0 +1,315 @@
+"""`record init` is the only producer of `s0_spec` — and it must actually be one.
+
+Every other stage has an obvious producer and `s0_spec` had none. Left
+unwritten it would stay `not_reached` forever, which pins the materialization
+predicate at false and sticks a fully green, published product at
+`in_progress`. These tests hold that hole closed:
+
+* a fresh record's `s0_spec` is filled, never `not_reached`;
+* it validates the SNAPSHOT, not the live IR — the snapshot is what the closure
+  was compiled from, and the live IR having moved is `plan_moved`, not an
+  `s0_spec` regression;
+* a `--spec-report` computed against different bytes is a hard error, because
+  ingesting it would silently certify the wrong plan;
+* `record append --stage s0_spec` is rejected.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[2]
+SCRIPTS = REPO / "scripts"
+DIAG = SCRIPTS / "dp_diagnostics.py"
+VALIDATOR = SCRIPTS / "validate_dp_spec.py"
+WORKED_EXAMPLE = REPO / "src" / "nxd-pocket-loop" / "reference" / "dp-spec.md"
+
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import dp_diagnostics as dpd  # noqa: E402
+
+pytest.importorskip("yaml")
+
+
+def _run(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, *args], capture_output=True, text=True, cwd=str(REPO)
+    )
+
+
+def _spec_text() -> str:
+    blocks = re.findall(
+        r"^```markdown\n(.*?)^```", WORKED_EXAMPLE.read_text(encoding="utf-8"), re.S | re.M
+    )
+    assert len(blocks) == 1
+    return blocks[0].replace("status: proposed", "status: approved", 1)
+
+
+@pytest.fixture
+def workflow(tmp_path) -> dict:
+    """The layout the design specifies: the IR beside, the closure below it."""
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(_spec_text(), encoding="utf-8")
+    prompt = tmp_path / "prompts" / "score_candidate.md"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("Score one candidate against the rubric.\n", encoding="utf-8")
+    closure = tmp_path / "closure"
+    result = _run(str(DIAG), "lock", "write", str(spec), str(closure))
+    assert result.returncode == 0, result.stderr
+    return {
+        "spec": spec,
+        "closure": closure,
+        "lock": closure / "dp-spec.lock.json",
+        "record": closure / "build-record.json",
+    }
+
+
+def test_lock_write_byte_copies_the_spec(workflow):
+    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    assert snapshot.read_bytes() == workflow["spec"].read_bytes(), (
+        "the snapshot is evidence, and evidence reformatted on the way in cannot "
+        "be compared"
+    )
+    lock = json.loads(workflow["lock"].read_text())
+    assert lock["schema"] == "nxd-dp-spec-lock-v1"
+    assert lock["spec_hash"] == dpd.spec_hash(workflow["spec"].read_bytes())
+    assert lock["snapshot_sha256"] == dpd.raw_sha256(snapshot.read_bytes())
+    assert lock["source_basename"] == "dp-spec.md"
+    assert "/" not in lock["source_basename"], (
+        "the lock carries no path to the live IR — a '../'-shaped string inside "
+        "the closure is exactly the pointer this design removes"
+    )
+
+
+def test_prompt_refs_are_mirrored_at_the_same_relative_path(workflow):
+    """A byte copy would otherwise carry a path resolving outside the closure —
+    a dangling pointer by another name. The relative path is preserved, so the
+    copied spec stays correct without being rewritten and the hash stays valid."""
+    mirrored = workflow["closure"] / "prompts" / "score_candidate.md"
+    assert mirrored.is_file()
+    lock = json.loads(workflow["lock"].read_text())
+    assert lock["resolved_refs"] == [
+        {
+            "spec_ref": "prompts/score_candidate.md",
+            "closure_path": "prompts/score_candidate.md",
+            "sha256": dpd.raw_sha256(mirrored.read_bytes()),
+        }
+    ]
+
+
+def test_an_escaping_prompt_ref_blocks_the_snapshot(tmp_path):
+    """Fix the IR, do not rewrite the copy."""
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(
+        _spec_text().replace("prompts/score_candidate.md", "../prompts/score.md"),
+        encoding="utf-8",
+    )
+    result = _run(str(DIAG), "lock", "write", str(spec), str(tmp_path / "closure"), "--json")
+    assert result.returncode == 1
+    codes = [d["code"] for d in json.loads(result.stdout)["diagnostics"]]
+    assert codes == ["closure.escaping_reference"]
+    assert not (tmp_path / "closure" / "dp-spec.lock.json").exists()
+
+
+def test_lock_verify_passes_and_catches_a_moved_live_spec(workflow):
+    ok = _run(str(DIAG), "lock", "verify", str(workflow["closure"]))
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+    both = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--spec", str(workflow["spec"]))
+    assert both.returncode == 0, both.stdout + both.stderr
+
+    workflow["spec"].write_text(
+        _spec_text().replace("weight: 0.25", "weight: 0.30", 1), encoding="utf-8"
+    )
+    moved = _run(
+        str(DIAG), "lock", "verify", str(workflow["closure"]), "--spec",
+        str(workflow["spec"]), "--json",
+    )
+    assert moved.returncode == 1
+    codes = [d["code"] for d in json.loads(moved.stdout)["diagnostics"]]
+    assert "closure.live_spec_diverged" in codes
+
+
+def test_lock_verify_catches_an_edited_snapshot(workflow):
+    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    snapshot.write_text(snapshot.read_text() + "\n## sneaky\n\nnothing\n", encoding="utf-8")
+    result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
+    assert result.returncode == 1
+    codes = [d["code"] for d in json.loads(result.stdout)["diagnostics"]]
+    assert "closure.lock_snapshot_byte_mismatch" in codes
+    assert "closure.spec_hash_mismatch" in codes
+
+
+def test_record_init_fills_s0_spec(workflow):
+    result = _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = json.loads(workflow["record"].read_text())
+    assert record["stages"]["s0_spec"]["status"] != "not_reached"
+    assert record["stages"]["s0_spec"]["status"] in ("passed", "passed_with_warnings")
+    assert record["stages"]["s0_spec"]["origin"] == "tool_computed"
+    assert record["compiled_from"] == json.loads(workflow["lock"].read_text())["spec_hash"]
+    assert dpd.validate_build_record(record) == []
+    # Every other stage is honestly `not_reached`.
+    assert record["stages"]["s4_pin"]["status"] == "not_reached"
+
+
+def test_record_init_validates_the_snapshot_not_the_live_ir(workflow):
+    """The snapshot is what the closure was compiled from."""
+    workflow["spec"].write_text("this is no longer a spec at all\n", encoding="utf-8")
+    result = _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = json.loads(workflow["record"].read_text())
+    assert record["stages"]["s0_spec"]["status"] in ("passed", "passed_with_warnings")
+
+
+def test_spec_report_against_different_bytes_exits_two(workflow, tmp_path):
+    other = tmp_path / "other.md"
+    other.write_text(_spec_text().replace("weight: 0.25", "weight: 0.30", 1), encoding="utf-8")
+    report = _run(str(VALIDATOR), str(other), "--json")
+    report_path = tmp_path / "report.json"
+    report_path.write_text(report.stdout, encoding="utf-8")
+
+    result = _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]), "--spec-report", str(report_path),
+    )
+    assert result.returncode == 2, result.stdout
+    assert "different spec" in result.stderr
+
+
+def test_spec_report_against_the_right_bytes_is_ingested(workflow, tmp_path):
+    report = _run(str(VALIDATOR), str(workflow["closure"] / "dp-spec.approved.md"), "--json")
+    report_path = tmp_path / "report.json"
+    report_path.write_text(report.stdout, encoding="utf-8")
+
+    result = _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]), "--spec-report", str(report_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = json.loads(workflow["record"].read_text())
+    assert record["stages"]["s0_spec"]["status"] in ("passed", "passed_with_warnings")
+
+
+def test_record_append_to_s0_spec_is_rejected(workflow, tmp_path):
+    _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "schema": "nxd-diagnostic-report-v1",
+                "tool": "validate_dp_spec",
+                "target": "x",
+                "ok": True,
+                "counts": {"error": 0, "warning": 0, "info": 0},
+                "spec_hash": None,
+                "diagnostics": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = _run(
+        str(DIAG), "record", "append", "--record", str(workflow["record"]),
+        "--stage", "s0_spec", "--from", str(report),
+    )
+    assert result.returncode == 2
+    assert "record init is the only writer" in result.stderr
+
+
+def test_record_append_rejects_a_tool_that_cannot_produce_the_stage(workflow, tmp_path):
+    _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "schema": "nxd-diagnostic-report-v1",
+                "tool": "self_check",
+                "target": "x",
+                "ok": True,
+                "counts": {"error": 0, "warning": 0, "info": 0},
+                "spec_hash": None,
+                "diagnostics": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = _run(
+        str(DIAG), "record", "append", "--record", str(workflow["record"]),
+        "--stage", "s6_run", "--from", str(report),
+    )
+    assert result.returncode == 2
+    assert "cannot carry stage" in result.stderr
+
+
+def test_a_loop_report_merges_and_the_record_stays_valid(workflow, tmp_path):
+    _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    report = tmp_path / "loop.json"
+    report.write_text(
+        json.dumps(
+            {
+                "schema": "nxd-diagnostic-report-v1",
+                "tool": "loop",
+                "target": "build_data_product",
+                "ok": False,
+                "counts": {"error": 1, "warning": 0, "info": 0},
+                "spec_hash": None,
+                "diagnostics": [
+                    dpd.diagnostic(
+                        "pin.build_failed",
+                        message="build returned an error with no endpoint",
+                        path="tool:build_data_product.error",
+                        origin="agent_observed",
+                        evidence={"stdout_excerpt": "…"},
+                    ).to_dict()
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = _run(
+        str(DIAG), "record", "append", "--record", str(workflow["record"]),
+        "--stage", "s4_pin", "--from", str(report),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = json.loads(workflow["record"].read_text())
+    assert record["stages"]["s4_pin"]["status"] == "failed"
+    assert record["stages"]["s4_pin"]["origin"] == "agent_observed", (
+        "an agent-constructed report is visibly weaker evidence than a tool's"
+    )
+    assert dpd.validate_build_record(record) == []
+
+    state = _run(str(DIAG), "materialized", "--record", str(workflow["record"]), "--json")
+    assert state.returncode == 1
+    assert json.loads(state.stdout)["state"] == "unsettled"
+
+
+def test_materialized_exits_one_when_not_materialized(workflow):
+    _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    result = _run(str(DIAG), "materialized", "--record", str(workflow["record"]))
+    assert result.returncode == 1
+    assert "state: in_progress" in result.stdout
