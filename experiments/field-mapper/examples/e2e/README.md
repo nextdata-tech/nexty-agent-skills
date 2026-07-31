@@ -18,10 +18,16 @@ python3 examples/e2e/transform_main.py --prove-block  # the gate must refuse
 ## What `transform_main.py` proves
 
 - nxd's **real decorator and registry** accept the closure, and nxd's
-  `TransformTask` binds the `context` kwarg through `FullContextArgumentProvider`
-  — the same provider a platform run uses.
+  `TransformTask` binds its arguments through the same providers a platform run
+  uses.
 - The `ExecutionContext` is built by **nxd's own `from_json`**, not a stub shaped
   to look like one. A context-schema change fails here loudly.
+- **The output port is a real `DuckDbOutput`**, declared in the context as a
+  `local/duckdb/storage` service and injected into the closure **by parameter
+  name** (`def ingest(duckdb: DuckDbOutput)`) by
+  `TransformInputOutputPortArgumentProvider`. Every physical table name comes
+  from `duckdb.model_tables` / `full_table_name()` — the transform hardcodes
+  none.
 - **`--prove-block` demonstrates the gate refusing.** With `max_absent_share`
   tightened to 0, the transform raises and the database shows
   `invoice_documents` present (run 1) with **no** `mapper_proposals`,
@@ -29,16 +35,31 @@ python3 examples/e2e/transform_main.py --prove-block  # the gate must refuse
   verified by observation: a refused build publishes nothing. Checked against
   the database, not the return value.
 
+### It needs the monorepo source, not the installed wheel
+
+The installed wheel is `nxd.core` v0.41.26, which predates
+`local/duckdb/storage`: `storage_context_type_for_driver` has no duckdb case
+there, so `DuckDbOutput` does not exist and the port cannot be bound at all.
+The monorepo source is v0.41.147 and has both.
+
+`bootstrap.py` prepends `components/nxd_py/{core,data_product}` to `sys.path`
+before the first `import nxd`. The Python layer overlays the wheel while still
+using its compiled Rust extension, **so no build step is required**. Every run
+prints which nxd answered:
+
+```
+[nxd] nxd.core v0.41.147 (monorepo source) — DuckDbOutput available
+```
+
+That line is load-bearing: on the older wheel the run fails rather than quietly
+proving less.
+
 ## What it does NOT prove
 
-**The output port carries no driver.** `storage_context_type_for_driver` in nxd
-v0.41.26 has no `duckdb` case, so a DuckDB output port cannot be constructed at
-all — the desktop DuckDB path is not in this version. The context declares zero
-ports and the closure opens duckdb itself. A platform run would receive a
-driver-resolved port and write through it. **The transform contract is proven;
-the storage binding is not.**
-
-No kernel, no transaction, no `transform_state`, no provisioning.
+No kernel, no transaction, no `transform_state`, no provisioning. The context is
+hand-built rather than produced by the kernel — its *shape* is nxd's and the
+port is real, but nothing orchestrates it. The DuckDB file is created by the
+script, not provisioned by a driver.
 
 ---
 

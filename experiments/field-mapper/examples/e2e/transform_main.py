@@ -22,19 +22,24 @@ What is genuinely real here:
   `FullContextArgumentProvider`, the same provider a platform run uses.
 - dlt and duckdb are real, and so is the whole mapper.
 
+- **The output port is a real `DuckDbOutput`**, resolved from the context by
+  nxd's `TransformInputOutputPortArgumentProvider` and injected into the closure
+  BY PARAMETER NAME — the same binding a platform run performs. The closure
+  reads `duckdb.path`, `duckdb.schema` and `duckdb.model_tables` from it rather
+  than from the environment, and asks `full_table_name()` for every physical
+  table name.
+
+  This needs the monorepo source on `PYTHONPATH`, because the installed wheel is
+  v0.41.26 and `local/duckdb/storage` did not exist yet there. `bootstrap.py`
+  handles it; see the README.
+
 What is NOT real, stated plainly:
 
-- **The output port carries no driver.** `storage_context_type_for_driver` in
-  this nxd version has no `duckdb` case, so a DuckDB output port is not
-  constructible here at all — the desktop DuckDB path is not in v0.41.26. The
-  context therefore declares NO ports and the closure opens duckdb itself.
-  A platform run would receive a driver-resolved port and write through it.
-- No kernel, no transaction, no `transform_state`, no provisioning. This proves
-  the entrypoint and the closure, not the orchestration around them.
-
-So: the transform contract is proven, the storage binding is not. That boundary
-is exactly where a cluster would be required, and it is named rather than
-papered over.
+- No kernel, no transaction, no `transform_state`, no provisioning. The context
+  is hand-built rather than produced by the kernel, so this proves the
+  ENTRYPOINT and the STORAGE BINDING, not the orchestration that would supply
+  them in a cluster.
+- The DuckDB file is created by this script, not provisioned by a driver.
 """
 
 from __future__ import annotations
@@ -48,13 +53,21 @@ from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent.parent))
 
+# BEFORE any `import nxd`. The installed wheel predates `local/duckdb/storage`,
+# so without this the DuckDbOutput port cannot be bound at all and the run would
+# prove strictly less while looking identical.
+from bootstrap import describe, use_monorepo_nxd  # noqa: E402
+
+use_monorepo_nxd()
+
 import dlt  # noqa: E402
-import duckdb  # noqa: E402
+import duckdb as duckdb_lib  # noqa: E402
 
 from nxd import data_product  # noqa: E402
-from nxd.core.context import ExecutionContext  # noqa: E402
+from nxd.core.context import DuckDbOutput  # noqa: E402
 
 from field_mapper import (  # noqa: E402
     evaluate_coverage,
@@ -83,8 +96,47 @@ from run_e2e import (  # noqa: E402
 #: Where the closure puts its warehouse. A platform run gets this from the
 #: output port; with no port available (see the module docstring) the transform
 #: is told through the environment, which is at least explicit.
-DB_ENV_VAR = "FIELD_MAPPER_E2E_DB"
 LIVE_ENV_VAR = "FIELD_MAPPER_E2E_LIVE"
+
+
+def _context_json(db_path: Path) -> str:
+    """The execution context, in nxd's own wire shape.
+
+    A platform run gets this from the kernel with the port resolved by the
+    driver. Hand-building it is the one thing still stubbed — but the SHAPE is
+    nxd's, parsed by `ExecutionContext.from_json`, and the port is a real
+    `local/duckdb/storage` service that nxd materialises into a `DuckDbOutput`.
+    A schema change on nxd's side fails here rather than drifting.
+
+    Note `service` is a sibling of `context`, not a key inside it — copied from
+    nxd's own `test_context.py` rather than guessed.
+    """
+    return json.dumps(
+        {
+            "data_product": "invoice-terms",
+            "inputs": [],
+            "output_ports": [
+                {
+                    "name": "duckdb",
+                    "service": "local/duckdb/storage",
+                    "context": {
+                        "type_hint": "DuckDbOutput",
+                        "models": [],
+                        "data": {
+                            "path": str(db_path),
+                            "schema": "invoices",
+                            # The model -> physical table map the closure reads.
+                            # A platform run gets these from the driver; the
+                            # transform never hardcodes a table name either way.
+                            "model_tables": {
+                                m: m for m in (BASE_MODEL,) + MAPPER_MODELS
+                            },
+                        },
+                    },
+                }
+            ],
+        }
+    )
 
 #: Set by the closure so the caller can assert on what happened. A platform run
 #: would surface this through the task result and the landed tables; here it is
@@ -93,12 +145,15 @@ OUTCOME: dict[str, Any] = {}
 
 
 @data_product.on_transform()
-def ingest(context: ExecutionContext) -> None:
+def ingest(duckdb: DuckDbOutput) -> None:
     """Land invoice documents, judge them with the mapper, land the judgements.
 
     Registered with nxd's real decorator and invoked by nxd's real
-    `run_transform`. The `context` kwarg is bound by nxd's
-    `FullContextArgumentProvider`.
+    `run_transform`. The `duckdb` argument is bound BY PARAMETER NAME to the
+    output port named `duckdb` in the context, and materialised as a real
+    `DuckDbOutput` by nxd's `TransformInputOutputPortArgumentProvider` — the
+    same binding a platform run performs. Every physical table name comes from
+    `duckdb.model_tables` / `full_table_name()`, never from a literal here.
 
     The ORDER is the load-bearing part, and it is why this cannot be one
     `pipeline.run`:
@@ -112,14 +167,16 @@ def ingest(context: ExecutionContext) -> None:
     A single run would either judge rows that are not landed yet, or land
     judgements before the gate has spoken.
     """
-    db_path = Path(os.environ[DB_ENV_VAR])
+    # Everything physical comes FROM THE PORT.
+    db_path = Path(duckdb.path)
+    schema = duckdb.schema
+    tables = duckdb.model_tables
     live = os.environ.get(LIVE_ENV_VAR) == "1"
     run_dir = db_path.parent
-    schema = "invoices"
-    tables = {m: m for m in (BASE_MODEL,) + MAPPER_MODELS}
 
-    OUTCOME["context_data_product"] = getattr(context, "name", None)
-    OUTCOME["ports"] = [getattr(p, "name", None) for p in context.output_ports]
+    OUTCOME["port_path"] = duckdb.path
+    OUTCOME["port_schema"] = duckdb.schema
+    OUTCOME["port_tables"] = dict(duckdb.model_tables)
 
     os.environ["DLT_DATA_DIR"] = str(run_dir / "dlt-data")
     pipeline = dlt.pipeline(
@@ -136,10 +193,12 @@ def ingest(context: ExecutionContext) -> None:
 
     pipeline.run([invoice_documents()])
 
-    con = duckdb.connect(str(db_path))
+    # `duckdb_lib`, not `duckdb`: the port argument shadows the library name
+    # inside this closure, which is precisely why the import is aliased.
+    con = duckdb_lib.connect(str(db_path))
     landed = con.execute(
-        f"SELECT invoice_id, vendor, page_text FROM {schema}.{BASE_MODEL} "
-        f"ORDER BY invoice_id"
+        f"SELECT invoice_id, vendor, page_text "
+        f"FROM {duckdb.full_table_name(BASE_MODEL)} ORDER BY invoice_id"
     ).fetchall()
     con.close()
 
@@ -259,7 +318,6 @@ def _prove_block() -> int:
     shutil.rmtree(run_dir, ignore_errors=True)
     run_dir.mkdir(parents=True)
     db_path = run_dir / "warehouse.duckdb"
-    os.environ[DB_ENV_VAR] = str(db_path)
     os.environ[LIVE_ENV_VAR] = "0"
 
     original = _re._build_spec
@@ -274,11 +332,7 @@ def _prove_block() -> int:
     _re._build_spec = _strict
     print("\n[nxd] run_transform  (block proof: max_absent_share=0)")
     try:
-        data_product.run_transform(
-            json.dumps(
-                {"data_product": "invoice-terms", "inputs": [], "output_ports": []}
-            )
-        )
+        data_product.run_transform(_context_json(db_path))
         print("  FAIL: the transform returned; the gate did not block")
         return 1
     except RuntimeError as exc:
@@ -286,7 +340,7 @@ def _prove_block() -> int:
     finally:
         _re._build_spec = original
 
-    con = duckdb.connect(str(db_path))
+    con = duckdb_lib.connect(str(db_path))
     present = {
         r[0]
         for r in con.execute(
@@ -332,18 +386,15 @@ def main(argv: list[str] | None = None) -> int:
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
     db_path = run_dir / "warehouse.duckdb"
-    os.environ[DB_ENV_VAR] = str(db_path)
     os.environ[LIVE_ENV_VAR] = "1" if args.live else "0"
 
-    # The context is built by NXD'S OWN deserializer. No output ports: this nxd
-    # version has no duckdb storage-context type, so a DuckDB port cannot be
-    # constructed (module docstring). Declaring none is honest; declaring a
-    # fake one would claim a binding that does not exist.
-    context_json = json.dumps(
-        {"data_product": "invoice-terms", "inputs": [], "output_ports": []}
-    )
+    context_json = _context_json(db_path)
 
-    print(f"\n[nxd] run_transform  ({'LIVE' if args.live else 'replay'})")
+    # Which nxd answered decides what a green run proves, so it is printed
+    # rather than assumed: on the older wheel the DuckDbOutput binding does not
+    # exist and the run would fail rather than silently prove less.
+    print(f"\n[nxd] {describe()}")
+    print(f"[nxd] run_transform  ({'LIVE' if args.live else 'replay'})")
     try:
         data_product.run_transform(context_json)
     except RuntimeError as exc:
@@ -351,11 +402,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print("[nxd] transform returned cleanly")
-    print(f"      ports from context: {OUTCOME.get('ports')}")
-    print(f"      status counts:      {OUTCOME.get('status_counts')}")
+    # Read back off the PORT the closure was handed, which is the thing being
+    # proven: nxd resolved it and injected it by parameter name.
+    print(f"      port path:     {OUTCOME.get('port_path')}")
+    print(f"      port schema:   {OUTCOME.get('port_schema')}")
+    print(f"      port tables:   {sorted(OUTCOME.get('port_tables') or {})}")
+    print(f"      status counts: {OUTCOME.get('status_counts')}")
 
     # ---- assert on what LANDED, not on what the closure said -------------
-    con = duckdb.connect(str(db_path))
+    con = duckdb_lib.connect(str(db_path))
     print("\n--- landed tables " + "-" * 42)
     problems: list[str] = []
     for model in (BASE_MODEL,) + MAPPER_MODELS:
