@@ -63,7 +63,12 @@ class Grant:
     mapper_spec_id: str
     provider: str
     model: str
-    purpose: str
+    #: The SECOND model, when the spec declares corroboration. Consent is
+    #: per-model: a user who approved sending an artifact to one provider's
+    #: model has not thereby approved sending it to another. Empty means the
+    #: grant authorizes no corroborator, and a spec declaring one is refused.
+    corroboration_model: str = ""
+    purpose: str = ""
     #: Input fields and document classes the user consented to expose.
     input_fields: tuple[str, ...] = ()
     document_classes: tuple[str, ...] = ()
@@ -116,7 +121,8 @@ class Grant:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "Grant":
         known = {
-            "mapper_spec_id", "provider", "model", "purpose", "input_fields",
+            "mapper_spec_id", "provider", "model", "corroboration_model",
+            "purpose", "input_fields",
             "document_classes", "pii_category", "recurring", "expires_at",
             "max_calls", "max_tokens", "max_usd", "granted_by", "granted_at",
         }
@@ -133,6 +139,7 @@ class Grant:
             mapper_spec_id=str(raw["mapper_spec_id"]),
             provider=str(raw["provider"]),
             model=str(raw["model"]),
+            corroboration_model=str(raw.get("corroboration_model", "")),
             purpose=str(raw["purpose"]),
             input_fields=tuple(raw.get("input_fields", ())),
             document_classes=tuple(raw.get("document_classes", ())),
@@ -177,6 +184,19 @@ class Grant:
             problems.append(
                 f"model mismatch: grant authorizes {self.model!r}, spec names "
                 f"{spec.model!r}"
+            )
+
+        # Consent is PER MODEL. Approving an artifact for one model is not
+        # approval to send it to a second one, so a corroborating run under a
+        # grant that does not name the corroborator refuses — the same shape as
+        # the primary-model mismatch above, which demonstrably fires live.
+        if spec.corroboration_model != self.corroboration_model:
+            problems.append(
+                f"corroboration model mismatch: grant authorizes "
+                f"{self.corroboration_model or 'none'!r}, spec names "
+                f"{spec.corroboration_model or 'none'!r}. Sending the artifact "
+                f"to a second model is a separate disclosure and needs its own "
+                f"consent."
             )
 
         moment = now or _dt.datetime.now(_dt.timezone.utc)

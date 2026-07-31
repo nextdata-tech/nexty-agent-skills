@@ -478,6 +478,11 @@ class MapperSpec:
     #: inapplicable. Empty by default and OMITTED from the canonical form when
     #: empty, so adding this field moved no existing spec hash.
     cross_field_checks: tuple["CrossFieldCheck", ...] = ()
+    #: A second model that independently answers each media-direct input, whose
+    #: values are compared to the primary's. The only mitigation that catches a
+    #: STABLE single-model misread — see `corroboration_model`'s note below.
+    #: Empty means off, and is omitted from the canonical form when empty.
+    corroboration_model: str = ""
     spec_version: str = "1"
     #: Compiled wire-schema bytes, hashed into the spec id per §5 step 3. Set by
     #: `schema.py` after compilation; `None` until then.
@@ -513,6 +518,25 @@ class MapperSpec:
         # arithmetic cannot apply to, can never fire. It would sit in the spec
         # looking like a safeguard while checking nothing — the same failure
         # mode as a constant that looks like a guard. Refuse at construction.
+        if self.corroboration_model:
+            if not self.accepts_media:
+                raise SpecError(
+                    "corroboration_model is declared but accepts_media is "
+                    "empty. Corroboration exists for the media-direct path, "
+                    "where the substring check is inapplicable and a second "
+                    "reader is the only available cross-check. On a text spec "
+                    "the quote check already relates every value to its "
+                    "source, so a second model doubles cost to re-answer a "
+                    "question the harness can already check."
+                )
+            if self.corroboration_model == self.model:
+                raise SpecError(
+                    f"corroboration_model {self.corroboration_model!r} is the "
+                    "same model as the primary. Asking one model twice cannot "
+                    "catch a STABLE misread — the failure corroboration exists "
+                    "for is by definition one the model repeats. Name a "
+                    "different model."
+                )
         numeric = {f.name for f in self.target_fields if f.value_type in ("int", "float")}
         declared = set(names)
         for check in self.cross_field_checks:
@@ -685,6 +709,8 @@ class MapperSpec:
             canonical["cross_field_checks"] = [
                 c.to_canonical() for c in self.cross_field_checks
             ]
+        if self.corroboration_model:
+            canonical["corroboration_model"] = self.corroboration_model
         return canonical
 
     def canonical_bytes(self) -> bytes:
@@ -728,6 +754,7 @@ class MapperSpec:
             "effort",
             "accepts_media",
             "cross_field_checks",
+            "corroboration_model",
             "spec_version",
             "wire_schema",
             "harness_version",
@@ -804,6 +831,7 @@ class MapperSpec:
                 )
                 for c in raw.get("cross_field_checks", ())
             ),
+            corroboration_model=str(raw.get("corroboration_model", "")),
             spec_version=str(raw.get("spec_version", "1")),
             wire_schema=raw.get("wire_schema"),
             harness_version=raw.get("harness_version", ""),

@@ -83,6 +83,9 @@ SPEC_FILE = "spec.json"
 GRANT_FILE = "grant.json"
 INPUTS_FILE = "inputs.json"
 RECORDED_FILE = "recorded.json"
+#: The corroborating model's answers, kept in their own file so a fixture shows
+#: at a glance what each of the two readers said.
+CORROBORATED_FILE = "corroborated.json"
 REVIEWS_FILE = "reviews.csv"
 EXPECT_FILE = "expect.json"
 
@@ -108,6 +111,7 @@ class Fixture:
     grant: Grant
     inputs: list[MapperInput]
     recorded: dict[str, Any]
+    corroborated: dict[str, Any]
     reviews: list[MapperReview]
     expect: dict[str, Any]
 
@@ -148,6 +152,12 @@ class Fixture:
             if recorded_path.exists()
             else {}
         )
+        corroborated_path = base / CORROBORATED_FILE
+        corroborated = (
+            json.loads(corroborated_path.read_text(encoding="utf-8"))
+            if corroborated_path.exists()
+            else {}
+        )
         reviews_path = base / REVIEWS_FILE
         reviews = (
             reviews_from_csv(reviews_path.read_text(encoding="utf-8"))
@@ -172,6 +182,7 @@ class Fixture:
             grant=grant,
             inputs=inputs,
             recorded=recorded,
+            corroborated=corroborated,
             reviews=reviews,
             expect=expect,
         )
@@ -943,6 +954,7 @@ _SPEC_ID_PINS: dict[str, str] = {
     # is precisely what a spec hash should treat as the same question.
     "10-cross-field-check": "0a7a05262303d4db6646bfe57ba1aeee",
     "11-consistent-misread": "0a7a05262303d4db6646bfe57ba1aeee",
+    "12-corroboration": "52426d56c09aaf11965307e2ee382971",
 }
 
 #: `MapperSpec` fields deliberately absent from `to_canonical()`. Anything listed
@@ -1013,6 +1025,7 @@ def _check_canonical_coverage() -> list[str]:
             "cross_field_checks": [
                 {"kind": "product_equals", "target": "a", "operands": ["b", "c"]}
             ],
+            "corroboration_model": "claude-sonnet-5",
         }
     )
     probe = _stamp_harness_version(probe.with_wire_schema(compile_schema(probe)))
@@ -1154,6 +1167,15 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
             grant=fixture.grant,
             run_dir=str(run_dir),
             call=RecordedPlayer(fixture.recorded),
+            # A separate answer table, so the two readers' responses are
+            # visibly distinct in the fixture rather than interleaved in one
+            # file. None when the fixture declares no corroboration, which
+            # `map_inputs` refuses if the spec asked for it.
+            corroborate=(
+                RecordedPlayer(fixture.corroborated)
+                if fixture.corroborated
+                else None
+            ),
         )
     except GrantError as exc:
         if expect.get("grant_refused"):

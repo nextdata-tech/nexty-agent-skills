@@ -374,6 +374,12 @@ def map_inputs(
     grant: Grant,
     run_dir: str,
     call: Callable[..., "Any"],
+    #: A SECOND callable bound to `spec.corroboration_model`, same signature as
+    #: `call`. A second callable rather than a model argument on the first: it
+    #: keeps one-model-per-callable, so the mapper never has to construct a
+    #: `TransportConfig` and `transport.Client` stays out of its reach
+    #: (CONTRACT §1). Required when the spec declares a corroboration model.
+    corroborate: Callable[..., "Any"] | None = None,
     api_key: str | None = None,
     execution_id: str | None = None,
     allow_unverified: bool = True,
@@ -437,6 +443,18 @@ def map_inputs(
             beat(f"quarantined {item.input_id}: {quarantine.reason}")
             continue
         survivors.append(item)
+
+    # -- 2a. A declared corroborator must actually be wired. -----------------
+    # Silently skipping it would be the worst outcome: the spec says every
+    # media-direct value was read twice, the grant was consented to on that
+    # basis, and the run would land single-read values that look corroborated.
+    if bound_spec.corroboration_model and corroborate is None:
+        raise SpecError(
+            f"spec declares corroboration_model "
+            f"{bound_spec.corroboration_model!r} but no `corroborate` callable "
+            f"was supplied. Skipping it silently would land single-read values "
+            f"under a spec and grant that promise two readers."
+        )
 
     # -- 2b. Refuse an evidence obligation this population cannot discharge. --
     # A media-direct input has no landed text behind it, so `verify_quote` has
@@ -535,6 +553,8 @@ def map_inputs(
             schema_hash=schema_hash,
             prompt_hash=prompt_hash,
             call=call,
+            corroborate=corroborate,
+            beat=beat,
             ledger=ledger,
             result=result,
             allow_unverified=allow_unverified,
@@ -570,6 +590,8 @@ def _map_one(
     ledger: RunLedger,
     result: MapResult,
     allow_unverified: bool,
+    corroborate: Callable[..., Any] | None = None,
+    beat: Callable[[str], None] = lambda _msg: None,
 ) -> None:
     """One input -> one target row's worth of cells, with validation retry.
 
@@ -743,6 +765,64 @@ def _map_one(
             break
         violations = outstanding
 
+    # -- Corroboration: a second reader, after the retry loop has settled. ---
+    # AFTER, deliberately. A corroborator disagreement is not a violation the
+    # primary can be asked to fix: neither reader is authoritative, so feeding
+    # it back as retry feedback would pressure the primary to converge on the
+    # other model's answer — manufacturing agreement instead of detecting
+    # disagreement, and destroying the signal.
+    #
+    # Media-direct inputs only. On a text input the substring check already
+    # relates every value to its source, so a second model spends a call
+    # re-answering a question the harness can check itself.
+    if spec.corroboration_model and corroborate is not None and item.is_media_direct:
+        second_parsed: Mapping[str, Any] | None = None
+        try:
+            second_result = corroborate(
+                item=item, spec=spec, wire_schema=wire_schema, violations=()
+            )
+            second_parsed = getattr(second_result, "parsed", None)
+        except SystemicError as exc:
+            # A failed corroboration must never silently become agreement. The
+            # cells keep the primary's values, and the ledger carries the
+            # failed attempt so the run does not look corroborated when it was
+            # not.
+            beat(f"corroboration failed for {item.input_id}: {exc}")
+            second_parsed = None
+        if second_parsed is not None:
+            _record_attempt(
+                ledger,
+                result=result,
+                attempt_id=ledger.new_attempt_id(),
+                attempt_index=attempts,
+                row_key=row_key,
+                field_name="*",
+                spec=spec,
+                prompt_hash=prompt_hash,
+                schema_hash=schema_hash,
+                item=item,
+                outcome="success",
+                stop_reason=getattr(second_result, "stop_reason", None),
+                # The CORROBORATOR's model, not the primary's: an attempt
+                # attributed to the wrong model makes the audit trail claim a
+                # call that never happened.
+                model=getattr(second_result, "model_snapshot", None)
+                or spec.corroboration_model,
+                response_hash=getattr(second_result, "response_hash", None),
+                input_tokens=getattr(second_result, "input_tokens", 0),
+                output_tokens=getattr(second_result, "output_tokens", 0),
+                latency_ms=0.0,
+                provider=getattr(second_result, "provider", "unknown"),
+                provider_notes=getattr(second_result, "provider_notes", ()),
+                request_model=spec.corroboration_model,
+            )
+            per_field = _corroborate(
+                per_field,
+                second_parsed,
+                corroboration_model=spec.corroboration_model,
+                primary_model=spec.model,
+            )
+
     # -- Assemble the row's proposals. --------------------------------------
     for name, constraint in constraints.items():
         cell = per_field.get(name)
@@ -837,6 +917,86 @@ def _map_one(
             f"{row_key}: systemic failure recorded as error cells — "
             f"{systemic.error_code}: {str(systemic).splitlines()[0]}"
         )
+
+
+def _values_disagree(primary: Any, second: Any) -> bool:
+    """Exact comparison, with normalization for strings only.
+
+    NO tolerance and NO similarity. Fuzz here reopens the hole the substring
+    check refuses to open: "close enough" is exactly the judgement the harness
+    has no basis to make about an artifact it cannot read. Floats compare
+    exactly on purpose too — two readers of the same printed number should
+    produce the same number, and a near-miss is a real disagreement worth a
+    human's attention.
+
+    A value present on one side and absent on the other IS a disagreement: one
+    reader found something the other could not, which is precisely the case a
+    person should adjudicate.
+    """
+    if primary is None or second is None:
+        return primary is not second
+    if isinstance(primary, str) and isinstance(second, str):
+        return normalize_text(primary) != normalize_text(second)
+    if isinstance(primary, bool) or isinstance(second, bool):
+        return primary is not second
+    if isinstance(primary, (int, float)) and isinstance(second, (int, float)):
+        return float(primary) != float(second)
+    return primary != second
+
+
+def _corroborate(
+    cells: Mapping[str, ValidatedCell],
+    second: Mapping[str, Any] | None,
+    *,
+    corroboration_model: str,
+    primary_model: str,
+) -> dict[str, ValidatedCell]:
+    """Compare a second model's answers to the primary's, per field.
+
+    AGREEMENT IS NOT VERIFICATION. An agreeing cell keeps `ok` and its evidence
+    keeps `evidence_unverified` — two readers concurring about an artifact
+    neither can quote from is corroboration, and upgrading the status would
+    claim a check that never ran.
+
+    DISAGREEMENT DISCARDS THE VALUE. We know one reader is wrong and not which;
+    landing either is a coin flip. The cell lands `validation_failed` naming
+    both models and both readings, which is a well-posed question for a human
+    looking at the artifact rather than a silent landing.
+    """
+    if second is None:
+        return dict(cells)
+    out = dict(cells)
+    for name, cell in cells.items():
+        if cell.value_status != ValueStatus.OK.value:
+            continue
+        block = second.get(name)
+        second_value = None
+        if isinstance(block, Mapping):
+            raw = block.get("value")
+            second_value = None if raw == ABSENT_SENTINEL else raw
+        if not _values_disagree(cell.value, second_value):
+            continue
+        out[name] = dc_replace(
+            cell,
+            value=None,
+            value_status=ValueStatus.VALIDATION_FAILED.value,
+            needs_review=True,
+            violations=cell.violations
+            + (
+                Violation(
+                    field=name,
+                    kind="corroboration",
+                    message=(
+                        f"{primary_model} read {cell.value!r} but "
+                        f"{corroboration_model} read {second_value!r} from the "
+                        f"same artifact. One of them is wrong and the harness "
+                        f"cannot tell which, so the value is discarded for a "
+                        f"human to adjudicate against the artifact."
+                    ),
+                ),
+            ),
+        )
+    return out
 
 
 def _validate_response(
@@ -1020,6 +1180,11 @@ def _record_attempt(
     latency_ms: float = 0.0,
     provider: str = "anthropic",
     provider_notes: Sequence[str] = (),
+    #: Which model this attempt REQUESTED. Defaults to the spec's primary; a
+    #: corroboration attempt passes its own, because `request_params` hardcoded
+    #: to `spec.model` would attribute a second model's call to the first and
+    #: make the ledger claim a call that never happened.
+    request_model: str | None = None,
 ) -> None:
     """Write one ledger line. Hashes only — never content, never base64 (§9)."""
     ledger.record(
@@ -1040,7 +1205,10 @@ def _record_attempt(
                 + (item.landed_text or "")
             ),
             model=model,
-            request_params={"model": spec.model, "effort": spec.effort},
+            request_params={
+                "model": request_model or spec.model,
+                "effort": spec.effort,
+            },
             response_hash=response_hash,
             stop_reason=stop_reason,
             input_tokens=input_tokens or None,
