@@ -10,8 +10,7 @@ retirement. It cannot avoid naming the thing it retired, and it is the
 historical record of why the file went away. Never a prefix, never a pattern —
 a second exempted file would let the rot back in.
 
-SKIPPED until integration: it asserts against files owned by WS3, WS4 and WS5
-and fails until all of them land.
+Un-skipped at integration: WS3, WS4 and WS5 have all landed.
 """
 
 from __future__ import annotations
@@ -25,10 +24,6 @@ SEARCH_ROOTS = (REPO / "src", REPO / "docs")
 
 CARVE_OUT = REPO / "docs" / "architecture" / "dp-spec-authoritative.md"
 FORBIDDEN = ("CONTEXT.md", "context-doc.md")
-
-pytestmark = pytest.mark.skip(
-    reason="un-skip at integration — asserts against WS3/WS4/WS5-owned files"
-)
 
 
 def _files() -> list[Path]:

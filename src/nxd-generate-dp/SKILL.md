@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.27.0
+  version: 0.28.0
 ---
 
 # nxd-generate-dp skill
@@ -174,11 +174,11 @@ short confirming turn; no procedure at all means this gate does not fire.
 **Invoked directly**, without nxd-pocket-loop having gathered intent, source,
 questions and the procedure, the gate has NOT been satisfied — run the read-back
 here or hand back. **Invoked as a generation subagent**, the user turn is the
-orchestrator's and you never open one: re-run the "fires when" criteria against
-the approved policy and **bounce** (`gap_found: <what and why>`, writing nothing)
-when an element is absent or a profiling finding makes one ambiguous. You hold no
-credential — placeholder the `attributes`, return `credential_slots` (key names
-only), report the connectivity dry-run **not run**.
+orchestrator's and you never open one, and the gate is **not a rubber stamp**:
+re-run the "fires when" criteria and **bounce** (`gap_found: <what and why>`,
+writing nothing) on an element absent from the enumeration, or one a profiling
+finding makes ambiguous or conditional. You hold no credential — placeholder
+the `attributes`, return `credential_slots` (key names only), dry-run **not run**.
 
 The complete gate — every clause, the subagent return contract, and the
 credential boundary — is [reference/policy-gate.md](reference/policy-gate.md).

@@ -68,7 +68,7 @@
     },
     {
       "id": "context-discloses-as-of-fetch",
-      "check": "CONTEXT.md honestly discloses that the landed data is a snapshot of a live source as of a fetch, that a rebuild will pick up revised figures, and \u2014 since the response envelope carries it \u2014 the upstream lastupdated value the fetch observed. It must NOT claim the closure is byte-reproducible or that reruns land identical rows. FAIL if CONTEXT.md is missing, if it presents the figures as static, or if it asserts a reproducibility guarantee this source cannot honor. The CC BY 4.0 attribution the brief asks for is also present."
+      "check": "The closure honestly discloses \u2014 in `dp-spec.approved.md` `## sources` scope and/or `## population` excludes \u2014 that the landed data is a snapshot of a live source as of a fetch, that a rebuild will pick up revised figures, and \u2014 since the response envelope carries it \u2014 the upstream lastupdated value the fetch observed. It must NOT claim the closure is byte-reproducible or that reruns land identical rows. FAIL if `dp-spec.approved.md` or `build-record.json` is missing, if the closure presents the figures as static, or if it asserts a reproducibility guarantee this source cannot honor. The CC BY 4.0 attribution the brief asks for is also present."
     }
   ]
 }

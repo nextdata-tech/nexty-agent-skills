@@ -41,7 +41,7 @@ resume is exceptional.
 ## Task
 
 Build it at the workspace root: `spec.py`, `models.py`, `infra-profile.yaml`,
-`transform/main.py`, `requirements.txt`, `CONTEXT.md`, and `csv-source-path`
+`transform/main.py`, `requirements.txt`, and `csv-source-path`
 containing the relative path `data`. Do not author `deployment-spec.yaml`,
 `manifest.yaml`, or `models.yaml` — the supervisor compiles those.
 

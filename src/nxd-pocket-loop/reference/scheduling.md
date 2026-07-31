@@ -67,7 +67,7 @@ re-`describe_models` before mapping again — never map against a remembered cat
 
 ## Bounded-loop caps
 
-The loop is bounded at both levels. Keep BOTH bounded and report
+The loop is bounded at every level. Keep them all bounded and report
 non-convergence rather than looping forever or giving up silently:
 
 - **Query-level remap** (cheapest) — the model is right but the selection was
@@ -79,9 +79,25 @@ non-convergence rather than looping forever or giving up silently:
   query tweak: go back to Step 2/3, have `nxd-generate-dp` materialize the
   ruling, rebuild through MCP with the **same** workflow id. Cap at **~3
   regenerate cycles total**.
+- **Environmental retry** — a failure the closure cannot fix, evidenced by a
+  supervisor-reported error. Cap at **~3 retries**. It consumes neither of the
+  bounds above, which is exactly why it needs one of its own: without it an
+  environment fault could retry forever and never reach the user.
+
+**These caps are counted, not estimated.** Every attempt — generate, regenerate,
+remap, heal, retry — is appended to the closure's `build-record.json`
+`attempts[]` before the re-run, and `caps` in that record carries the bounds
+alongside `regenerates_used`, `remaps_used` and `retries_used`. Read them instead
+of keeping a tally in your head:
+
+```bash
+python3 scripts/dp_diagnostics.py record query --record <closure>/build-record.json --unresolved
+```
 
 If the loop does not converge within the caps, report what you tried, what the
-product currently declares, and where the gap is.
+product currently declares, and where the gap is. What the user hears about a
+failed attempt — and what they never hear — is in
+[failure-handling.md](failure-handling.md).
 
 ## One data product in flight
 
@@ -127,7 +143,9 @@ Two hard boundaries on fan-out:
 
 Profiling (Step 2) and code generation (Step 3) are the loop's heaviest context
 consumers: source sample reads, model inference, and authoring `spec.py` /
-`models.py` / `transform/main.py` / `CONTEXT.md`. None of that touches the
+`models.py` / `transform/main.py` plus the generated record files
+(`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`,
+`README.md`). None of that touches the
 supervisor — it is pure file authoring against a durable closure directory — so
 it MAY run in an isolated subagent whose intermediate reads never enter the main
 conversation. The main thread keeps the things it alone can do: the **policy
@@ -200,14 +218,20 @@ would re-inflate the context this split exists to save). Its return is
 
 **The main thread verifies before it builds.** Never pass a subagent-returned
 path to `build_data_product` unverified: confirm the path resolves on the
-supervisor's **host** surface and that `spec.py`, `models.py`,
-`infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `CONTEXT.md`, the
-connector companion artifact (a file source's `data/` export, or the db/API
-mapping file) — and, for a credentialed source, `SENSITIVE` and `.gitignore` —
-all exist under it. `infra-profile.yaml` matters most: it is the file host-side
-credential injection writes into, so a closure missing it passes a naive check
-and then fails the build. A path that does not resolve host-side, or is missing a
-required file, is a handoff failure, not a build input.
+supervisor's **host** surface and that
+`spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
+`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
+`build-record.json`, `README.md`, the connector companion artifact — and,
+for a credentialed source, `SENSITIVE` and `.gitignore`
+— all exist under it. The connector companion artifact is a file source's `data/`
+export, or the db/API mapping file. `infra-profile.yaml` matters most: it is the
+file host-side credential injection writes into, so a closure missing it passes a
+naive check and then fails the build. The three generated record files matter
+next: `dp-spec.approved.md` is the byte copy of the approved plan the closure was
+compiled from, `dp-spec.lock.json` carries its hash, and `build-record.json`
+carries what happened — without them nothing downstream can tell whether the
+closure still matches the plan. A path that does not resolve host-side, or is
+missing a required file, is a handoff failure, not a build input.
 
 **Credential boundary — a live credential never enters a subagent.** For a
 database or REST API source the closure carries a real credential in

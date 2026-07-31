@@ -175,6 +175,34 @@ def test_record_init_validates_the_snapshot_not_the_live_ir(workflow):
     assert record["stages"]["s0_spec"]["status"] in ("passed", "passed_with_warnings")
 
 
+def test_record_init_on_an_unparseable_snapshot_records_it(workflow):
+    """The regression: `_validate_snapshot` runs the validator in-process, and a
+    `yaml.YAMLError` escaping it used to take `record init` down with a raw
+    traceback — no record written, nothing machine-readable.
+
+    The fix is upstream: the split is now field-addressed, so the failure
+    arrives as a diagnostic. `record init` therefore does what §2.2 says and
+    RECORDS it — `s0_spec: failed`, exit 1 — rather than refusing to write.
+    Recording is the point: a closure generated against a spec that does not
+    validate is exactly the thing that must become visible instead of implicit.
+    """
+    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    snapshot.write_text("---\nname: [unclosed\n---\n\n## intent\n\nx\n", encoding="utf-8")
+
+    result = _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+
+    record = json.loads(workflow["record"].read_text())
+    s0 = record["stages"]["s0_spec"]
+    assert s0["status"] == "failed"
+    assert [d["code"] for d in s0["diagnostics"]] == ["spec.frontmatter.unparseable"]
+    assert dpd.validate_build_record(record) == []
+
+
 def test_spec_report_against_different_bytes_exits_two(workflow, tmp_path):
     other = tmp_path / "other.md"
     other.write_text(_spec_text().replace("weight: 0.25", "weight: 0.30", 1), encoding="utf-8")

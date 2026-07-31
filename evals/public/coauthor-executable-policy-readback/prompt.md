@@ -93,7 +93,7 @@ your message with the exact marker `[[AWAITING_USER_INPUT]]` on its own final
 line, so I know you are waiting rather than still working.
 
 After I reply, build it at the workspace root: `spec.py`, `models.py`,
-`infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `CONTEXT.md`, and
+`infra-profile.yaml`, `transform/main.py`, `requirements.txt`, and
 `csv-source-path` containing the relative path `data`. Do not author
 `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml` — the supervisor
 compiles those.

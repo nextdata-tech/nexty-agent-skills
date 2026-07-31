@@ -6,9 +6,8 @@ against whichever one it happened to read and ships a closure missing the file
 the other one names. So the list is a frozen string and this test compares them
 after collapsing whitespace — line wrapping may differ, wording may not.
 
-SKIPPED until integration: it asserts against files owned by WS4 and WS5 and
-cannot pass until both land. A red suite mid-fan-out is indistinguishable from a
-real regression.
+Un-skipped at integration: WS4 and WS5 have both landed, so the four carriers
+exist and must agree.
 """
 
 from __future__ import annotations
@@ -45,11 +44,6 @@ GENERATED_CLOSURE_FILES = (
 
 def _collapse(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
-
-
-pytestmark = pytest.mark.skip(
-    reason="un-skip at integration — asserts against WS4/WS5-owned files"
-)
 
 
 @pytest.mark.parametrize("path", CARRIERS, ids=lambda p: p.name)

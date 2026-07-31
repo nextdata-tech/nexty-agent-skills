@@ -67,9 +67,12 @@ from dp_diagnostics import (  # noqa: E402 - after the PyYAML guard, deliberatel
     SPEC_VERSION,
     STATUS_VALUES,
     Report,
+    SpecReadError,
     entry_identity,
     spec_hash,
     spec_path,
+    split_frontmatter,
+    split_sections,
 )
 
 WEIGHT_TOLERANCE = 0.001
@@ -83,56 +86,17 @@ REGRAIN_HINT_RE = re.compile(
 )
 
 
-class FrontmatterError(ValueError):
-    """Fatal to further parsing. `reason` is a closed enum, so a producer never
-    invents a third code for a variant of the same failure."""
-
-    def __init__(self, message: str, reason: str):
-        super().__init__(message)
-        self.reason = reason
-
-
 def new_report(spec: Path | None = None) -> Report:
     return Report("validate_dp_spec", target=str(spec) if spec else None)
 
 
-def split_frontmatter(text: str) -> tuple[dict, str]:
-    """Return (frontmatter dict, body). Raises FrontmatterError when absent/invalid.
-
-    This must stay byte-for-byte equivalent to `dp_diagnostics.split_frontmatter`
-    — the hash has to describe the same document this validator judged.
-    """
-    if not text.startswith("---"):
-        raise FrontmatterError(
-            "no YAML frontmatter — the file must open with '---'", "missing"
-        )
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        raise FrontmatterError(
-            "unterminated YAML frontmatter — needs a closing '---'", "unterminated"
-        )
-    loaded = yaml.safe_load(parts[1])
-    if not isinstance(loaded, dict):
-        raise FrontmatterError("frontmatter is not a YAML mapping", "not_mapping")
-    return loaded, parts[2]
-
-
-def split_sections(body: str) -> dict[str, str]:
-    """Split the body on '## ' headings. Later duplicates overwrite earlier."""
-    sections: dict[str, str] = {}
-    current: str | None = None
-    buf: list[str] = []
-    for line in body.splitlines():
-        if line.startswith("## "):
-            if current is not None:
-                sections[current] = "\n".join(buf).strip()
-            current = line[3:].strip().lower().replace(" ", "_")
-            buf = []
-        elif current is not None:
-            buf.append(line)
-    if current is not None:
-        sections[current] = "\n".join(buf).strip()
-    return sections
+# `split_frontmatter` and `split_sections` are IMPORTED from `dp_diagnostics`,
+# never redefined here. They used to be duplicated with a "must stay
+# byte-for-byte equivalent" docstring, and they drifted anyway: the copy lost
+# the `yaml.YAMLError` guard, so `name: [unclosed` produced a raw traceback
+# instead of a `spec.frontmatter.unparseable` diagnostic — no `--json` output,
+# and the exit-code contract broken. One definition cannot drift, and the hash
+# now describes exactly the document this validator judged, by construction.
 
 
 def load_yaml_section(name: str, raw: str, report: Report):
@@ -1059,7 +1023,10 @@ def validate(path: Path) -> Report:
 
     try:
         fm, body = split_frontmatter(text)
-    except FrontmatterError as exc:
+    except SpecReadError as exc:
+        # Fatal to further parsing: return the report immediately. `reason` is
+        # the closed discriminator enum, so nobody invents a second code for a
+        # variant of the same failure.
         report.error(
             str(exc),
             code="spec.frontmatter.unparseable",

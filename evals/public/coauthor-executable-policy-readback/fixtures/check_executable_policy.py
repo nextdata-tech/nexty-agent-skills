@@ -47,7 +47,10 @@ REQUIRED = (
     "infra-profile.yaml",
     "transform/main.py",
     "requirements.txt",
-    "CONTEXT.md",
+    "dp-spec.approved.md",
+    "dp-spec.lock.json",
+    "build-record.json",
+    "README.md",
     "csv-source-path",
 )
 FORBIDDEN = ("deployment-spec.yaml", "manifest.yaml", "models.yaml")

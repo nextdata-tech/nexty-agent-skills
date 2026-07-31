@@ -200,6 +200,51 @@ def test_duplicate_key_after_str_coercion_raises():
     assert "collide" in str(exc.value)
 
 
+YAML_SET_SPEC = (
+    "---\ndp_spec_version: 1\nname: x\nworkflow: x\nstatus: draft\n---\n\n"
+    "## population\n\npopulation: !!set\n  ? alpha\n  ? bravo\n  ? charlie\n"
+    "  ? delta\n  ? echo\n"
+)
+
+
+def test_yaml_set_canonicalizes_to_a_sorted_list():
+    """A `!!set` is unordered, so unlike a list its canonical form IS sorted."""
+    obj = dpd.canonical_object(YAML_SET_SPEC.encode("utf-8"))
+    assert obj["sections"]["population"]["population"] == [
+        "alpha", "bravo", "charlie", "delta", "echo"
+    ]
+
+
+def test_yaml_set_hash_is_stable_across_hash_seeds():
+    """Set iteration order is PYTHONHASHSEED-randomized.
+
+    Without a `set` branch in `_normalize`, a `!!set` fell through to
+    `str(value)` and the spec hash changed on every interpreter start —
+    breaking skip-if-unchanged (an untouched spec looks edited) and
+    tamper-evidence (an approved hash stops matching itself). This runs the
+    hash in fresh interpreters under different seeds; one distinct value is
+    the whole assertion.
+    """
+    import json as _json
+    import subprocess
+
+    prog = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import dp_diagnostics as D\n"
+        "print(D.spec_hash(%r.encode('utf-8')))\n"
+        % (str(SCRIPTS), YAML_SET_SPEC)
+    )
+    seen = set()
+    for seed in ("0", "1", "2", "3", "4"):
+        proc = subprocess.run(
+            [sys.executable, "-c", prog],
+            capture_output=True, text=True, env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin"},
+        )
+        assert proc.returncode == 0, proc.stderr
+        seen.add(proc.stdout.strip())
+    assert len(seen) == 1, f"hash is seed-dependent: {_json.dumps(sorted(seen))}"
+
+
 def test_non_utf8_is_exit_two_material():
     with pytest.raises(dpd.SpecReadError) as exc:
         dpd.canonical_object(b"---\n\xff\xfe\n---\n")

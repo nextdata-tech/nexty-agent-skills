@@ -12,7 +12,7 @@ It asserts, over the shipped skill/reference text (no agent, no supervisor):
    `list_data_products` before `resume_data_product` before the
    `build_data_product` fallback.
 2. The stale three-tool / no-list / reopen-by-rebuild framing is gone from the
-   pocket-loop skill and the generate-dp context-doc reference.
+   pocket-loop skill and the generate-dp build-record reference.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ POCKET_LOOP = SRC / "nxd-pocket-loop"
 SKILL = POCKET_LOOP / "SKILL.md"
 CONTEXT_AND_RESUME = POCKET_LOOP / "reference" / "context-and-resume.md"
 SCHEDULING = POCKET_LOOP / "reference" / "scheduling.md"
-GENERATE_DP_CONTEXT_DOC = SRC / "nxd-generate-dp" / "reference" / "context-doc.md"
+GENERATE_DP_CLOSURE_RECORD = SRC / "nxd-generate-dp" / "reference" / "closure-record.md"
 
 # The three tools whose relative order encodes "reattach before rebuild".
 LIST = "list_data_products"
@@ -104,7 +104,7 @@ def _strip_markdown(text: str) -> str:
 
 @pytest.mark.parametrize(
     "doc",
-    [SKILL, CONTEXT_AND_RESUME, SCHEDULING, GENERATE_DP_CONTEXT_DOC],
+    [SKILL, CONTEXT_AND_RESUME, SCHEDULING, GENERATE_DP_CLOSURE_RECORD],
     ids=lambda p: p.parent.name + "/" + p.name,
 )
 def test_no_stale_three_tool_framing(doc):

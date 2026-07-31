@@ -5,7 +5,7 @@
 - What Nexty Pocket is
 - End-to-end flow
 - The skills (subskills) and what each owns
-- Context capture: `CONTEXT.md` and `nxd_decisions`
+- Context capture: the spec snapshot, the lock, the build record, and `nxd_decisions`
 - Deterministic runtime checks (the self-check phases)
 - Evals that exercise this loop
 - Automated tests that guard the gates themselves
@@ -41,7 +41,8 @@ infer the semantic model                (nxd-semantic-data-product, inference mo
       ▼
 generate the runnable closure           (nxd-generate-dp)
       │  spec.py + models.py + infra-profile.yaml + transform/main.py +
-      │  requirements.txt + CONTEXT.md + connector artifact
+      │  requirements.txt + dp-spec.approved.md + dp-spec.lock.json +
+      │  build-record.json + README.md + connector artifact
       │  → Step 7 self-check (Phases A–D, see below) before handoff
       ▼
 build + serve on the supervisor         (nxd-desktop MCP, or direct CLI on host-local Darwin)
@@ -73,7 +74,7 @@ reattach, rebuild fallback, the session ledger) in `context-and-resume.md`.
 |---|---|---|
 | **`nxd-pocket-loop`** | Entry point and orchestrator. Gathers intent/source/questions/procedure, runs the policy read-back, sequences Steps 2–6, does the NL→selection translation and answer presentation, bounds query-remap/regenerate cycles. | Inference logic and closure authoring — it invokes the two skills below rather than re-teaching either. |
 | **`nxd-semantic-data-product`** (inference mode) | Profiles a materialized local source (`nxd-mesh-analyzer`'s profiler → `schema.json`) and derives the semantic vocabulary — grains/primary keys, dimensions, metrics, joins, PII flags — from the profile **and** the user's questions. Owns the public semantic role grammar (`primary_key()`, `dimension()`, `metric()`, `join()`). | Placing those roles into the desktop closure shape, or generating `spec.py`/`transform/main.py` — that's `nxd-generate-dp`. This skill also has a separate **platform flow** (Snowflake/k8s `.semantic_tools()`) that Pocket does not use. |
-| **`nxd-generate-dp`** | Construction specialist. Takes the settled plan (intent + inferred model + connector config) and emits the complete Python-only closure: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `CONTEXT.md`, plus the connector-specific artifact (CSV/file/database/API). Owns the naming invariant, derived-model rules, the in-transform asserts (Step 3b), and the Step 7 self-check. Opens with its own policy read-back gate as a backstop if invoked directly. | Inferring semantic roles (placed, not designed) and driving the supervisor — that's `nxd-pocket-loop` Step 4. |
+| **`nxd-generate-dp`** | Construction specialist. Takes the settled plan (intent + inferred model + connector config) and emits the complete Python-only closure: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, the generated record files (`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`), plus the connector-specific artifact (CSV/file/database/API). Owns the naming invariant, derived-model rules, the in-transform asserts (Step 3b), and the Step 7 self-check. Opens with its own policy read-back gate as a backstop if invoked directly. | Inferring semantic roles (placed, not designed) and driving the supervisor — that's `nxd-pocket-loop` Step 4. |
 | **`nxd-desktop` MCP** (not a skill in `src/`, a capability of the Claude Desktop/Cowork host) | `build_data_product`, `describe_models`, `run_semantic_query` — compiles `spec.py` into the kernel definition YAML, runs the transform, verifies staging, stands up the semantic MCP endpoint, and answers governed queries. | Everything upstream of a settled closure. |
 | **`nxd-mesh-analyzer`** | Supplies the profiler script (`scripts/profile_tabular.py`) `nxd-semantic-data-product` calls to build `schema.json` from a local DuckDB sample. | Anything past the profile — it does not infer roles itself. |
 | **`nxd-data-product-query`** | Not part of the Pocket loop's build path, but Step 5's NL→concept mapping approach is reused from its semantic-layer section. It targets a **deployed** platform DP; Pocket routes there instead of building locally when the user names a remote DP. | Local desktop closures. |
@@ -83,28 +84,62 @@ A single-source build needs only `nxd-pocket-loop` → `nxd-semantic-data-produc
 short label per source through all three steps (`reference/multi-source.md` in
 `nxd-generate-dp`).
 
-## Context capture: `CONTEXT.md` and `nxd_decisions`
+## Context capture: the spec snapshot, the lock, the build record, and `nxd_decisions`
 
 A closure has to survive being handed off cold — a later session, possibly
 without this skill loaded, has to be able to continue or reopen the work with
-nothing but the closure directory. Two distinct, complementary mechanisms
-capture that context, and neither substitutes for the other:
+nothing but the closure directory. Distinct, complementary mechanisms capture
+that context, and none substitutes for another.
 
-**`CONTEXT.md`** (`src/nxd-generate-dp/reference/context-doc.md`) is the
-**prose** design/process record, emitted at the closure root by every build
-(Step 6a), mandatory (enforced by self-check Phase C below). It has 8 required
-sections: intent; the population/sample-selection rule (and, if sampled, an
-explicit statement of what's excluded and whether a downstream step depends on
-it); per-field inference/determinism caveats (distinguishing what the agent
-inferred from what the user actually supplied — otherwise indistinguishable in
-the data); required-capture fields (a source field a downstream model depends
-on — missing it silently no-ops the downstream step rather than erroring);
-the full contract for any derived model not yet built; the reopen recipe
-(workflow id + closure path — the only durable key, since the bearer token
-never persists); credentials (key *names* only, never values); and known
-runtime blockers, kept separate from artifact correctness. A worked template
-for both `CONTEXT.md` and the companion `contracts/<name>.md` ships in the
-same reference file.
+The organising idea is a **compiler** one, and it is what retired the old
+hand-written in-closure prose record (see
+[`dp-spec-authoritative.md`](dp-spec-authoritative.md) for the full argument):
+user intent is the *source*, `dp-spec.md` is the *IR*, `nxd-generate-dp` is the
+*codegen*, and the closure's Python is the *output artifact*. An IR is a pure
+function of its source, so the **plan** and the **outcomes** live in different
+files and are produced by different actors.
+
+**`dp-spec.md`** (`src/nxd-pocket-loop/reference/dp-spec.md`) is the live,
+user-editable IR. It stays **beside** the closure, never inside it, so that
+authoring it is not a materialization and the pre-approval policy gate keeps its
+bright line ("nothing under `closure/`"). It holds drafting history, rejected
+options and open questions.
+
+**`dp-spec.approved.md`** is a **byte-for-byte copy** of the approved revision,
+taken at generation time (Step 6a) and written at the closure root. Because the
+copy happens *after* approval, the gate's bright line is untouched, and
+self-containment becomes a hash-checkable snapshot instead of a prose
+"copy, never point" discipline nobody could enforce.
+
+**`dp-spec.lock.json`** pins that snapshot: the whole-spec canonical hash
+(`nxd-dp-spec-canon-v1`), the compiler/skill version, `spec_status_at_copy`, and
+a sha256 for every mirrored `prompt_ref`. It is what makes approval
+**tamper-evident** — a snapshot whose hash no longer matches the lock was edited
+after approval — and what lets a rebuild be skipped when nothing changed.
+
+**`build-record.json`** (`src/nxd-pocket-loop/reference/build-record.md`) is
+**generated, never hand-authored**, and carries outcomes only: per-stage
+results across the nine-stage ladder, `attempts[]` (what failed, what changed,
+what the re-run did), `concessions[]`, `blockers[]`, the distribution read-back,
+and countable caps. Its `compiled_from` records which spec hash was compiled, so
+"fully materialized" is a **derived predicate** — current hash == `compiled_from`
+and stages 0–7 green and no undisclosed concessions and no open blockers — never
+a status field on the IR. The label is deliberately `materialized`, never
+`correct`: a green run proves the closure is structurally sound and the transform
+ran, nothing more.
+
+**`README.md`** is generated and template-filled, and carries **only** the reopen
+recipe (workflow id + closure path — the only durable key, since the bearer token
+never persists) and credentials (key *names* only, never values). It is not the
+old prose record under a new name: it has no plan sections, no outcomes and no
+rulings.
+
+A build-time blocker is not a second mechanism: it is an `## open_questions`
+entry **discovered late**, written back into the live IR — which un-approves it
+(the hash moves) and surfaces it in the same "needs your input" queue the
+pre-build gaps use. The elicitation contract is therefore a loop, not a
+pre-build-only gate. And the self-heal loop may change generated code but
+**never** the IR: a compiler does not edit your source to make the build pass.
 
 **`nxd_decisions`** (`src/nxd-generate-dp/reference/derivation-plan.md`) is the
 **machine-queryable** ledger for the same rulings — a reserved-name base model
@@ -121,16 +156,15 @@ merely documented, and it's mechanically enforced by self-check Phase D below
 columns present and in-vocabulary; no policy value may also appear as a
 hardcoded literal in the transform).
 
-The two are meant to describe the **same** rulings from two angles — `CONTEXT.md`
-says "here's the ruling and why," `nxd_decisions` makes it a queryable, editable
-row — and this is stated in both files (`CONTEXT.md`'s per-field-inference
-section says it "mirrors the dimension `description=` in `models.py`"; the
-model itself is what a later consumer edits). What's *not* stated explicitly in
-either file is the failure mode of the two drifting apart — e.g. `CONTEXT.md`
-describing a ruling that was later changed in `nxd_decisions` without the prose
-being updated to match. No check catches that divergence today; Phase D only
-catches a ruling duplicated as a code literal, not a ruling whose prose and
-data have quietly diverged from each other.
+The snapshot and the ledger describe the **same** rulings from two angles — the
+approved spec's `decisions:` block says "here's the ruling and why,"
+`nxd_decisions` makes it a queryable, editable row — and the ledger is now a
+**projection of a hashed snapshot** rather than a second hand-maintained prose
+copy. That closes the old drift gap: `nxd_decisions` is generated from the
+approved spec row for row, with `provenance` copied at write time rather than
+reconstructed at codegen, and the snapshot's hash is checked against the lock by
+self-check Phase C. Prose and data can no longer quietly diverge, because there
+is no longer a second prose copy to diverge from.
 
 ## Deterministic runtime checks (the self-check phases)
 
@@ -147,7 +181,7 @@ handoff. It has four phases plus two non-blocking read-backs:
 |---|---|---|---|
 | **A — structural** | `models.py` / `spec.py` parsed with `ast` against the pinned `nxd.spec` DSL surface (`reference/nxd-spec-api.md`, pinned to a specific `nxd` version): known role kwargs, known data types, known `Agg` members, the naming invariant (`semantic_model` name == `.promise` == `PHYSICAL_MODELS` == `data/<name>/`), `.semantic_tools()` forbidden, output port must be `"duckdb"`, `infra_profile="desktop-local"`, every base model has a `primary_key()`. | Pure `ast.parse` — nothing imported or executed. Dynamic constructs (variables, comprehensions, `**` spreads) are reported `unverified:` rather than silently passed. | Yes |
 | **B — transform dry-run** | Actually **executes** `transform/main.py` against a scratch DuckDB with a stub `DuckDbOutput`, then queries every `PHYSICAL_MODELS` table and asserts `.transform-complete` exists. | Real execution — the only phase that runs code. | Yes |
-| **C — context-completeness** | `CONTEXT.md` exists at the closure root; no closure file references a contract/design doc by a `../`-rooted path that escapes the closure; if `infra-profile.yaml` carries a populated `attributes:` list (a live credential), `.gitignore` (naming the file, never `*`) and `SENSITIVE` both exist. | Text/regex scan of author-facing files; never reads or echoes a secret value, only reports missing guard files. | Yes |
+| **C — context-completeness** | The snapshot/lock/record gate (C1–C11): `dp-spec.approved.md` and `README.md` exist at the closure root; `dp-spec.lock.json` parses as `nxd-dp-spec-lock-v1`; the snapshot's **raw bytes** hash to `lock.snapshot_sha256` (the tamper check — approved means frozen for that build); `lock.spec_status_at_copy == "approved"`; `build-record.json` parses with `compiled_from == lock.spec_hash`; every mirrored `prompt_ref` exists with a matching sha256; no closure file (the snapshot included) references a contract/design doc by a `../`-rooted path that escapes the closure; if `infra-profile.yaml` carries a populated `attributes:` list (a live credential), `.gitignore` (naming the file, never `*`) and `SENSITIVE` both exist. | sha256 over raw bytes + JSON schema checks + text/regex scan of author-facing files; never reads or echoes a secret value, only reports missing guard files. The **canonical** hash check is deferred to `dp_diagnostics.py lock verify` and Phase C says so with an always-emitted informational diagnostic. | Yes |
 | **D — policy boundary** | A promised `nxd_decisions` model must be a **base** model (backed by `data/`, not derived from a Python literal) with a `status` column restricted to `{confirmed, proposed, blocked}`; no distinctive value in a landed policy CSV also appears as a literal in `transform/main.py`. | AST-derived `PHYSICAL_MODELS`/`BASE_MODELS` from the values Phase B actually imported (not the static parse, which can't resolve `BASE_MODELS + DERIVED_MODELS` as a literal) + CSV/text scan. | Yes |
 | **Distribution read-back** | Prints value counts for every classification-shaped column of every derived model; flags `UNIFORM` (a value the code supplied, not one the data produced). | Query over the Phase-B DuckDB connection. | No — always relayed to the user before build, never fails the run. |
 | **ABSENT read-back** | Flags a declared vocabulary value (verdict/bucket/tier/category-named CSV columns) that never appears in any derived output column — a branch that never fired. | Set-difference over declared vs. produced values. | No — informational only. |
@@ -279,9 +313,17 @@ open tracked issue or a documented note in the eval ledger:
   ("Covered only by `ci_skip` scenarios") and **#103** E3 (whether
   `pocket_verify` should generalize beyond this one scenario).
 
-There is also **no check for `CONTEXT.md`/`nxd_decisions` drifting apart** from
-each other over time (see "Context capture" above) — not yet filed as an issue,
-since it's a narrower, newly-noticed gap rather than an already-tracked one.
+The old **prose/`nxd_decisions` drift gap is closed**: the hand-written prose
+record is retired, and the ledger is a projection of a snapshot whose hash the
+lock pins and Phase C checks (see "Context capture" above). What remains
+unbound is the **supervisor-side** half of the build record — which stage a
+build failure died in, the supervisor traceback, per-attempt identity. The
+schema carries those fields with an `origin` marking them
+`supervisor_reported`, but nothing binds `mcp__nxd-desktop__inspect_run` yet, so
+they are populated agent-side or not at all. That is deliberately fail-closed:
+an agent-inferred field is visibly weaker evidence than a supervisor-reported
+one, and an unbacked "the environment was bad" claim cannot reach
+`environment_suspect`.
 
 ## Where things live
 

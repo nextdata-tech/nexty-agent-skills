@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.27.0
+  version: 0.28.0
 ---
 
 # nxd Data Product Query

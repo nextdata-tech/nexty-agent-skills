@@ -191,13 +191,26 @@ def test_credential_slots_are_key_names_only():
     )
 
 
+# §9 frozen verify-before-build closure file list. Line wrapping may differ, so
+# compare whitespace-collapsed; wording may not differ at all.
+VERIFY_LIST = (
+    "`spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, "
+    "`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, "
+    "`build-record.json`, `README.md`, the connector companion artifact — and, "
+    "for a credentialed source, `SENSITIVE` and `.gitignore`"
+)
+
+
 def test_verify_list_enumerates_the_required_files():
     # H2/finding-5: the host-side verify must name the files, and MUST include
-    # infra-profile.yaml (the file credential injection writes into).
-    text = SCHEDULING.read_text()
-    for fname in ("spec.py", "models.py", "infra-profile.yaml",
-                  "transform/main.py", "requirements.txt", "CONTEXT.md"):
-        assert fname in text, f"the verify-before-build list must name `{fname}`"
+    # infra-profile.yaml (the file credential injection writes into) and the
+    # three generated record files that replaced the retired prose doc.
+    collapsed = re.sub(r"\s+", " ", SCHEDULING.read_text())
+    assert re.sub(r"\s+", " ", VERIFY_LIST) in collapsed, (
+        "scheduling.md must carry the frozen verify-before-build closure file "
+        "list verbatim — an agent that verifies a different set ships a closure "
+        "missing a file the other skill files name"
+    )
 
 
 def test_skill_offloads_two_subagents_not_one_unit():

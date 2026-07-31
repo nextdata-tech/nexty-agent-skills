@@ -192,7 +192,7 @@ ships a test that makes the claim mechanical rather than editorial.
 | code | sev | owner | control | agent-fillable | replaces |
 |---|---|---|---|---|---|
 | `spec.encoding.not_utf8` | error | agent | none | no | (new, exit 2) |
-| `spec.frontmatter.unparseable` | error | agent | none | yes | **`:105-115` raise → `:750-754`** — all three `split_frontmatter` `ValueError`s |
+| `spec.frontmatter.unparseable` | error | agent | none | yes | all four `dp_diagnostics.split_frontmatter` `SpecReadError`s, surfaced by the validator's one handler — see §1.5.1 (i) |
 | `spec.frontmatter.missing_key` | error | agent | text | yes | missing required key |
 | `spec.frontmatter.bad_version` | error | agent | number | yes | `dp_spec_version` mismatch |
 | `spec.frontmatter.bad_name` | error | agent | text | yes | name not snake_case |
@@ -286,18 +286,34 @@ Three things make the completeness claim above true rather than merely stated.
 
 **(i) The two many-to-one codes, enumerated.** Every other code has exactly one
 call site. These two do not, and the discriminator is `evidence.reason` — a
-closed enum, so no implementer invents a third code for a variant:
+closed enum, so no implementer invents another code for a variant:
 
-| code | call sites | `evidence.reason` |
+| code | raised in | `evidence.reason` |
 |---|---|---|
-| `spec.frontmatter.unparseable` | `:108` / `:111` / `:114`, all surfaced at `:753` | `missing` (no leading `---`) · `unterminated` (no closing `---`) · `not_mapping` (frontmatter is not a YAML mapping) |
-| `spec.criteria.bad_scale` | `:383-384` / `:386-387` | `non_integer` (min/max not `int`) · `min_not_below_max` |
+| `spec.frontmatter.unparseable` | the four `raise`s in `dp_diagnostics.split_frontmatter`, all surfaced at the one `except SpecReadError` in `validate_dp_spec.validate` | `missing` (no leading `---`) · `unterminated` (no closing `---`) · `unparseable` (delimited, but `yaml.safe_load` raised) · `not_mapping` (loaded, but not a YAML mapping) |
+| `spec.criteria.bad_scale` | two call sites in `check_criteria` | `non_integer` (min/max not `int`) · `min_not_below_max` |
 
-Both are fatal to further parsing at their own level: `spec.frontmatter.unparseable`
-returns the report immediately (`:754`), and `spec.criteria.bad_scale` `continue`s
-past the anchor checks for that criterion. Producers must not synthesize the
-downstream diagnostics that were never reached — a not-reached check emits
-nothing, exactly as at the stage level (§2.2).
+Both are fatal to further parsing at their own level:
+`spec.frontmatter.unparseable` returns the report immediately, and
+`spec.criteria.bad_scale` `continue`s past the anchor checks for that criterion.
+Producers must not synthesize the downstream diagnostics that were never reached
+— a not-reached check emits nothing, exactly as at the stage level (§2.2).
+
+**The splitters have exactly ONE definition, in `dp_diagnostics.py`.**
+`validate_dp_spec.py` imports `split_frontmatter` and `split_sections`; it does
+not keep a copy. It did keep one, under a docstring saying the two "must stay
+byte-for-byte equivalent", and they drifted anyway — the validator's copy lost
+the `yaml.YAMLError` guard, so `name: [unclosed` produced a raw traceback: no
+diagnostic, no `--json`, and the exit-code contract broken. A docstring is not an
+enforcement mechanism. The `reason` enum therefore lives on `SpecReadError`
+(the shared exception) rather than on a validator-local error class, and
+`test_validator_code_coverage.py` asserts both that the validator defines
+neither function and that its names are the canonicalizer's objects.
+
+The same drift class is why `dp_diagnostics._READ_FAILURES` exists and is used by
+every "could not read the spec" CLI handler: `yaml.YAMLError` is **not** a
+subclass of `ValueError`, so a handler catching `(SpecReadError, OSError,
+ValueError)` looks exhaustive and is not.
 
 **(ii) The `spec.source.credential_key_mapping` owner is `user`, deliberately.**
 Structurally the agent could repair it (drop the value, keep the key name), which
@@ -1112,13 +1128,16 @@ Precise enough that two implementers produce the same hash. Implemented once, in
 1. Decode UTF-8, strict. Failure → `spec.encoding.not_utf8`, exit 2.
 2. Replace `\r\n` and lone `\r` with `\n`.
 3. Apply Unicode **NFC** normalization to the whole text.
-4. Split frontmatter/body exactly as `validate_dp_spec.split_frontmatter` does
-   (leading `---`, `text.split("---", 2)`). No frontmatter → exit 2.
+4. Split frontmatter/body with `dp_diagnostics.split_frontmatter` — the ONE
+   definition, which `validate_dp_spec.py` imports rather than copies (§1.5.1),
+   so the hash necessarily describes the document the validator judged (leading
+   `---`, `text.split("---", 2)`). No frontmatter → exit 2.
 5. `yaml.safe_load` the frontmatter into a mapping.
-6. Split the body exactly as `validate_dp_spec.split_sections` does: on `## `
+6. Split the body with `dp_diagnostics.split_sections`, likewise the one
+   definition: on `## `
    headings; the heading is lowercased and spaces become underscores; a later
    duplicate heading overwrites an earlier one; section bodies are `.strip()`ed.
-   **Two consequences of copying that function exactly, stated so nobody
+   **Two consequences of that exact behaviour, stated so nobody
    "improves" on it:** (i) body text **before the first `## ` heading is dropped**
    — `split_sections` only buffers once `current is not None` — so a preamble
    paragraph between the frontmatter and the first section never reaches the
@@ -1164,6 +1183,16 @@ presence and section names; prose section text after whitespace collapsing;
 `status` participating is deliberate. `compiled_from` names the *approved*
 revision, and the tamper check ("hash ≠ approved hash means the spec was edited
 after approval") only works if approval itself is part of the hashed content.
+
+**Known, accepted collision: the hash erases the YAML *type* of a float-like
+string.** Step 9 renders a non-integral `float` as `format(x, ".10g")` — a
+string — so `weight: 0.25` and `weight: '0.25'` canonicalize identically and
+hash identically, while the validator treats them differently (the quoted one is
+`spec.criteria.bad_weight`). This is harmless rather than merely unlikely: the
+invalid twin carries an error, an errored spec cannot reach `approved`
+(`spec.frontmatter.approved_with_errors`), and nothing is snapshotted before
+approval — so the two can never both be a *compiled_from*. Stated here so a
+later reader does not discover it and assume it is a bug.
 
 **Stability guard.** The canonicalizer pins `yaml.safe_load` behaviour. A PyYAML
 major bump requires re-verifying the golden fixture. WS1 must ship
@@ -1815,7 +1844,7 @@ is in scope and the AGENTS.md safety rule ("private evals stay under
 | File | Edit |
 |---|---|
 | `scripts/dp_diagnostics.py` **NEW** | The shared module. `Diagnostic` dataclass; `CODES` registry (§1.5, complete); `DIAGNOSTIC_SCHEMA`, `BUILD_RECORD_SCHEMA`, `LOCK_SCHEMA`; the spec vocabularies moved out of `validate_dp_spec.py` (§8.2); `canonicalize()` / `spec_hash()` / `emit()` (§3.4, §8.3); the lock writer/verifier (§3.2, §3.5); the `BuildRecord` reader/writer with INVARIANT-D2 enforcement (§2.5); `materialized()` (§5); the redaction pass (§1.7); the full CLI (§9). |
-| `scripts/validate_dp_spec.py` | Import vocabularies from `dp_diagnostics`. Replace `Report.errors/warnings: list[str]` with `list[Diagnostic]`; every `report.error(...)` / `report.warn(...)` call site takes a `code` + identity-based `path` per §1.5/§1.6 — one code per existing check, no check dropped, **verified by `test_validator_code_coverage.py` in both directions** (§1.5.1). Mind the two many-to-one codes and their `evidence.reason` enums (§1.5.1 (i)). `--json` emits `nxd-diagnostic-report-v1` with `tool: "validate_dp_spec"` and `spec_hash`. Human output keeps `WARN`/`ERROR` lines but prefixes the code. Add `spec.prefill.empty_required_field` (§8.4). Exit codes unchanged. |
+| `scripts/validate_dp_spec.py` | Import vocabularies **and `split_frontmatter` / `split_sections`** from `dp_diagnostics` — import, never copy (§1.5.1). Replace `Report.errors/warnings: list[str]` with `list[Diagnostic]`; every `report.error(...)` / `report.warn(...)` call site takes a `code` + identity-based `path` per §1.5/§1.6 — one code per existing check, no check dropped, **verified by `test_validator_code_coverage.py` in both directions** (§1.5.1). Mind the two many-to-one codes and their `evidence.reason` enums (§1.5.1 (i)). `--json` emits `nxd-diagnostic-report-v1` with `tool: "validate_dp_spec"` and `spec_hash`. Human output keeps `WARN`/`ERROR` lines but prefixes the code. Add `spec.prefill.empty_required_field` (§8.4). Exit codes unchanged. |
 | `evals/public/coauthor-supplied-rubric/fixtures/check_coauthored_closure.py:38-46` | **BREAKS (hard).** `REQUIRED` tuple: drop `"CONTEXT.md"`, add `"dp-spec.approved.md"`, `"dp-spec.lock.json"`, `"build-record.json"`, `"README.md"`. |
 | `evals/public/coauthor-executable-policy-readback/fixtures/check_executable_policy.py:44-52` | **BREAKS (hard).** Same `REQUIRED` edit. Do not touch its ordering output — `test_executable_policy_gate.py`'s 30 tests grade that and are otherwise safe. |
 | `evals/tests/test_generation_subagent_gate.py:194-200` | **BREAKS (hard).** Assert the §9 verify-before-build list against `scheduling.md` instead of `"CONTEXT.md"`. |

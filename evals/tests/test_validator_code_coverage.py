@@ -110,7 +110,7 @@ def test_the_exemption_is_a_name_not_a_pattern():
 
 def test_the_two_many_to_one_codes_carry_a_reason(tmp_path):
     """Two codes have more than one call site. The discriminator is
-    `evidence.reason`, a closed enum, so nobody invents a third code for a
+    `evidence.reason`, a closed enum, so nobody invents another code for a
     variant of the same failure."""
     import validate_dp_spec
 
@@ -128,6 +128,13 @@ def test_the_two_many_to_one_codes_carry_a_reason(tmp_path):
     assert reasons("---\njust a string\n---\n", "spec.frontmatter.unparseable") == {
         "not_mapping"
     }
+    # The fourth reason: frontmatter that IS delimited and IS a mapping shape but
+    # does not parse. This one used to escape as a raw `yaml.ParserError` — no
+    # diagnostic, no --json, no exit-code contract.
+    assert reasons(
+        "---\nname: [unclosed\n---\n\n## intent\n\nScore candidates.\n",
+        "spec.frontmatter.unparseable",
+    ) == {"unparseable"}
 
     head = "---\ndp_spec_version: 1\nname: x\nworkflow: x\nstatus: draft\n---\n\n"
     assert reasons(
@@ -246,3 +253,61 @@ def test_severity_matches_the_registry():
                 "emitted through report.error — a producer may relax downward, "
                 "never raise"
             )
+
+
+# --- the splitters have exactly one definition ------------------------------
+#
+# `split_frontmatter` / `split_sections` were duplicated between the validator
+# and the canonicalizer under a "must stay byte-for-byte equivalent" docstring.
+# They drifted anyway: the validator's copy lost the `yaml.YAMLError` guard, so
+# `name: [unclosed` produced a raw traceback instead of a field-addressed
+# `spec.frontmatter.unparseable`. A comment is not an enforcement mechanism;
+# these two tests are.
+
+
+def test_the_validator_does_not_redefine_the_splitters():
+    """One definition cannot drift from itself."""
+    tree = ast.parse(VALIDATOR.read_text(encoding="utf-8"))
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for name in ("split_frontmatter", "split_sections"):
+        assert name not in defined, (
+            f"{name!r} is defined in validate_dp_spec.py as well as in "
+            "dp_diagnostics.py. The hash must describe the same document the "
+            "validator judged, and two copies is how that stops being true."
+        )
+
+
+def test_the_validator_uses_the_canonicalizers_splitters():
+    import validate_dp_spec
+
+    assert validate_dp_spec.split_frontmatter is dp_diagnostics.split_frontmatter
+    assert validate_dp_spec.split_sections is dp_diagnostics.split_sections
+
+
+def test_unparseable_frontmatter_is_a_diagnostic_not_a_traceback(tmp_path):
+    """The regression, end to end at the CLI: a stable code in valid --json, and
+    the documented exit code — not a stack trace on stderr."""
+    import json
+    import subprocess
+
+    path = tmp_path / "dp-spec.md"
+    path.write_text("---\nname: [unclosed\n---\n\n## intent\n\nx\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR), str(path), "--json"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "Traceback" not in result.stderr
+    payload = json.loads(result.stdout)
+    assert dp_diagnostics.validate_report(payload) == []
+    assert payload["spec_hash"] is None, "a spec that cannot be split has no hash"
+    assert [d["code"] for d in payload["diagnostics"]] == [
+        "spec.frontmatter.unparseable"
+    ]
+    assert payload["diagnostics"][0]["evidence"]["reason"] == "unparseable"

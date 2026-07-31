@@ -314,7 +314,8 @@ _register_table(
         ("spec.encoding.not_utf8", "error", "agent", "none", False,
          "the file is not valid UTF-8"),
         ("spec.frontmatter.unparseable", "error", "agent", "none", True,
-         "frontmatter missing, unterminated, or not a mapping"),
+         "frontmatter missing, unterminated, not parseable as YAML, or not a "
+         "mapping"),
         ("spec.frontmatter.missing_key", "error", "agent", "text", True,
          "a required frontmatter key is absent"),
         ("spec.frontmatter.bad_version", "error", "agent", "number", True,
@@ -839,11 +840,37 @@ class DiagnosticError(ValueError):
 
 
 class SpecReadError(Exception):
-    """The spec could not be read, decoded or split. Exit 2, never exit 1."""
+    """The spec could not be read, decoded or split. Exit 2, never exit 1.
 
-    def __init__(self, message: str, code: str = "spec.frontmatter.unparseable"):
+    `reason` is the closed discriminator enum for `spec.frontmatter.unparseable`,
+    which has more than one call site: `missing` | `unterminated` |
+    `unparseable` | `not_mapping`. It lives on the exception rather than beside
+    it so that the one `split_frontmatter` both the canonicalizer and the
+    validator call can carry it — the validator turns it into
+    `evidence.reason`. `None` for every other SpecReadError.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        code: str = "spec.frontmatter.unparseable",
+        reason: str | None = None,
+    ):
         super().__init__(message)
         self.code = code
+        self.reason = reason
+
+
+# Everything a "could not read the spec" CLI path may legally raise, so it exits
+# 2 with a message instead of a traceback. `yaml.YAMLError` is NOT a subclass of
+# `ValueError` — that is exactly how a bad-frontmatter spec escaped `record
+# init`'s handler and produced a traceback. Naming the tuple once keeps every
+# such handler in agreement instead of relying on each one remembering.
+_READ_FAILURES: tuple[type[BaseException], ...] = (
+    (SpecReadError, OSError, ValueError)
+    if yaml is None
+    else (SpecReadError, OSError, ValueError, yaml.YAMLError)
+)
 
 
 @dataclass(frozen=True)
@@ -1188,20 +1215,36 @@ def split_frontmatter(text: str) -> tuple[dict, str]:
     """Return (frontmatter dict, body). Raises SpecReadError when absent/invalid.
 
     The canonicalizer and the validator MUST split identically, or the hash
-    describes a different document than the one that was validated.
+    describes a different document than the one that was validated. This is the
+    ONLY definition: `validate_dp_spec.py` imports this function rather than
+    keeping a copy, because a copy is a thing that drifts — and the drift that
+    actually happened was a missing `yaml.YAMLError` guard, which turned a
+    field-addressed diagnostic into a raw traceback.
+
+    Every raise carries a `reason` from the closed enum documented on
+    `SpecReadError`; the validator surfaces it as `evidence.reason`.
     """
     _require_yaml()
     if not text.startswith("---"):
-        raise SpecReadError("no YAML frontmatter — the file must open with '---'")
+        raise SpecReadError(
+            "no YAML frontmatter — the file must open with '---'", reason="missing"
+        )
     parts = text.split("---", 2)
     if len(parts) < 3:
-        raise SpecReadError("unterminated YAML frontmatter — needs a closing '---'")
+        raise SpecReadError(
+            "unterminated YAML frontmatter — needs a closing '---'",
+            reason="unterminated",
+        )
     try:
         loaded = yaml.safe_load(parts[1])
     except yaml.YAMLError as exc:
-        raise SpecReadError(f"frontmatter is not parseable as YAML: {exc}") from exc
+        raise SpecReadError(
+            f"frontmatter is not parseable as YAML: {exc}", reason="unparseable"
+        ) from exc
     if not isinstance(loaded, dict):
-        raise SpecReadError("frontmatter is not a YAML mapping")
+        raise SpecReadError(
+            "frontmatter is not a YAML mapping", reason="not_mapping"
+        )
     return loaded, parts[2]
 
 
@@ -1250,6 +1293,20 @@ def _normalize(value: Any, where: str = "") -> Any:
         # Order is semantic — criteria order, band precedence, decisions order.
         # Never sort a list.
         return [_normalize(v, f"{where}[{i}]") for i, v in enumerate(value)]
+    if isinstance(value, (set, frozenset)):
+        # A YAML `!!set` is genuinely unordered, so — unlike a list — its
+        # canonical form IS sorted, and it MUST be: Python set iteration order
+        # is PYTHONHASHSEED-randomized, so without this branch a `!!set` fell
+        # through to `str(value)` below and produced a different spec hash on
+        # every interpreter start. That silently breaks both guarantees the
+        # hash exists for: skip-if-unchanged (a spec nobody touched looks
+        # changed) and tamper-evidence (an approved hash stops matching itself).
+        # Sort on the JSON form of the NORMALIZED element so the order is a
+        # total one across mixed element types.
+        return sorted(
+            (_normalize(v, f"{where}{{}}") for v in value),
+            key=lambda n: json.dumps(n, sort_keys=True, ensure_ascii=False),
+        )
     if isinstance(value, str):
         return re.sub(r"\s+", " ", value, flags=re.UNICODE).strip()
     if isinstance(value, int):
@@ -3030,7 +3087,7 @@ def cmd_record_init(args) -> int:
             spec_report=_json_arg(f"@{args.spec_report}" if args.spec_report else None),
             generator_model=args.generator_model,
         )
-    except (SpecReadError, OSError, ValueError) as exc:
+    except _READ_FAILURES as exc:
         print(f"record init failed: {exc}", file=sys.stderr)
         return 2
     status = record["stages"]["s0_spec"]["status"]
@@ -3167,7 +3224,7 @@ def cmd_materialized(args) -> int:
     if args.spec:
         try:
             live = spec_hash(args.spec.read_bytes())
-        except (SpecReadError, OSError) as exc:
+        except _READ_FAILURES as exc:
             print(f"could not hash {args.spec}: {exc}", file=sys.stderr)
             return 2
 
@@ -3287,7 +3344,7 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"no such file: {exc.filename}", file=sys.stderr)
         return 2
-    except (OSError, ValueError) as exc:
+    except _READ_FAILURES as exc:
         print(f"{exc}", file=sys.stderr)
         return 2
 
