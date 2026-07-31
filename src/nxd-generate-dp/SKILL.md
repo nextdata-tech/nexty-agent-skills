@@ -322,34 +322,18 @@ clause below is mandatory:
 
 ### Step 3b — In-memory asserts: the only durable data-quality check
 
-**Transform asserts remain the durable check for derived-row relationships.**
-Custom input expectations and output promises are separate executable contracts
-when explicitly requested; they do not replace a derived model's in-transform
-reconciliation before rows are yielded. One helper per derived model, invoked
-between deriving and yielding, each an **invariant over the source-vs-derived
-relationship**: a claim that could be false if the derivation were wrong.
-Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
+**Transform asserts are the durable derived-row check; custom expectations and
+promises never replace them.** One helper per derived model runs before yielding
+and asserts a source-vs-derived relationship, never its own arithmetic:
 
-- **Tier 1 — every derived model, always:** (a) the **declared key is unique**
-  over the complete derived set, and (b) the **row count computed from the
-  grain** matches source rows **read independently** from the base CSVs.
-- **Tier 2 — whenever the model carries a MEASURE column** (any amount/quantity
-  a metric will aggregate): the **signed measure total must reconcile** against
-  the signed total read independently from the base CSVs, with **every
-  intentional divergence itemized as its own named term**
-  (`- refund_pairs_total`). Use `Decimal`, reconcile **per source currency
-  BEFORE any FX conversion**.
+- **Tier 1 — every derived model, always:** (a) the **declared key is unique** over the complete derived set, and (b) the grain-derived **row count** matches source rows read independently from the base CSVs.
+- **Tier 2 — whenever the model carries a MEASURE column:** its **signed total** reconciles to an independently-read source total; itemize each intentional divergence, use `Decimal`, and reconcile per source currency before FX.
 
-An itemized exclusion means the derivation **removes** rows or value rather than
-enriching — reclassify it as a removal and apply the removal invariants too.
-Classification totality is never sufficient alone: it can pass while every
-monetary answer is overstated. Raise `RuntimeError` carrying the
-actual-vs-expected numbers. Worked code for both steps:
-[reference/derived-models.md](reference/derived-models.md).
+An exclusion is a removal. Raise `RuntimeError` with actual-vs-expected values;
+see [reference/derived-models.md](reference/derived-models.md) for worked code.
 
-**Other connector types**: Step 3 is identical except the `readers=[...]` body
-and `secrets[...]` key — take those from `reference/` (`file-source.md`,
-`database-source.md`, `api-source.md`). Steps 3a/3b are connector-independent.
+**Other connector types**: only the `readers=[...]` body and `secrets[...]` key
+change; Steps 3a/3b remain connector-independent.
 
 ### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
 

@@ -38,7 +38,7 @@ spec:
       attributes: []
 """)
     promise_name = "accepted-currency" if duplicate else "order-total-reconciles"
-    (root / "spec.py").write_text(f'''_csv = "csv-source"\n_compute = "python-compute"\n_duckdb = "duckdb"\norders = object()\nspec = (data_product()\n.input("orders", source_aligned_input().source(_csv).config({{"model_paths": {{"orders": "orders/orders.csv"}}}}).expectation(custom("accepted-currency").description("currency set").model(orders).verify(script("contracts/expectations/accepted.py").compute(_compute))))\n.output(data_product_output().promise(orders).promise(custom("{promise_name}").description("reconciliation").model(orders).verify(script("contracts/promises/reconciles.py").compute(_compute))).port("duckdb", storage(_duckdb))))\n''')
+    (root / "spec.py").write_text(f'''_csv = "/infra-profile/desktop-local#/services/csv-source"\n_compute = "/infra-profile/desktop-local#/services/python-compute"\n_duckdb = "/infra-profile/desktop-local#/services/duckdb"\norders = object()\nspec = (data_product()\n.input("orders", source_aligned_input().source(_csv).config({{"model_paths": {{"orders": "orders/orders.csv"}}}}).expectation(custom("accepted-currency").description("currency set").model(orders).verify(script("contracts/expectations/accepted.py").compute(_compute))))\n.output(data_product_output().promise(orders).promise(custom("{promise_name}").description("reconciliation").model(orders).verify(script("contracts/promises/reconciles.py").compute(_compute))).port("duckdb", storage(_duckdb))))\n''')
     input_verifier = '''import csv
 from nxd import data_product
 from nxd.core.context import VerifyResult, VerifyResultEnum
@@ -156,6 +156,16 @@ def test_csv_source_path_is_required(tmp_path: Path) -> None:
     assert any("csv-source-path" in error for error in checker.check(tmp_path))
 
 
+def test_public_checker_rejects_labeled_csv_input_service(tmp_path: Path) -> None:
+    write_closure(tmp_path)
+    spec_path = tmp_path / "spec.py"
+    spec_path.write_text(spec_path.read_text().replace(
+        "/services/csv-source", "/services/csv-source-orders"
+    ))
+    assert any("unlabeled desktop-local csv-source" in error
+               for error in checker.check(tmp_path))
+
+
 def swap_duckdb_and_compute_drivers(profile_path: Path) -> None:
     profile_path.write_text(profile_path.read_text()
                             .replace("nxd:local/duckdb/storage:0.1.0", "TEMP_DRIVER")
@@ -217,8 +227,9 @@ def test_generated_verifiers_execute_valid_and_failure_fixtures(tmp_path: Path, 
 def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_path=False,
                         nested_main_guard=False, wrong_duckdb_storage=False, missing_model_path=False,
                         bad_csv_source_path=False, missing_csv_source_path=False, swapped_drivers=False,
-                        wrong_profile_name=False, csv_service_name="csv-source",
-                        nested_escape=False, without_input_custom=False,
+                        wrong_profile_name=False, nested_escape=False,
+                        without_input_custom=False, output_only=False,
+                        multiple_inputs=False, labeled_input=False,
                         wrong_csv_driver=False):
     """Phase A must not mistake verifier script paths for transform executors."""
     write_closure(tmp_path)
@@ -231,14 +242,17 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
     # The checker parses, but does not import, this spec. The scripts are nested
     # custom verifiers and must not be constrained to transform/main.py.
     (tmp_path / "spec.py").write_text('''from nxd.spec import data_product, script, custom, source_aligned_input, data_product_output, storage, simple_sensor\nfrom models import orders\n_csv = "/infra-profile/desktop-local#/services/csv-source"\n_compute = "/infra-profile/desktop-local#/services/python-compute"\n_duckdb = "/infra-profile/desktop-local#/services/duckdb"\nspec = (\n    data_product(name="orders", infra_profile="desktop-local")\n    .transform(script("transform/main.py").compute(_compute).secrets([_csv]).when(simple_sensor(startup=False, when="any")))\n    .input("orders", source_aligned_input().source(_csv).config({"model_paths": {"orders": "orders/orders.csv"}}).expectation(custom("accepted-currency").description("currency set").model(orders).verify(script("contracts/expectations/accepted.py").compute(_compute))))\n    .output(data_product_output().promise(orders).promise(custom("order-total-reconciles").description("reconcile").model(orders).verify(script("contracts/promises/reconciles.py").compute(_compute))).port("duckdb", storage(_duckdb)))\n)\n''')
-    if csv_service_name != "csv-source":
+    if labeled_input:
         spec_path = tmp_path / "spec.py"
         spec_path.write_text(spec_path.read_text().replace(
-            "/services/csv-source", f"/services/{csv_service_name}"
+            "/services/csv-source", "/services/csv-source-orders"
         ))
-        profile_path = tmp_path / "infra-profile.yaml"
-        profile_path.write_text(profile_path.read_text().replace(
-            "name: csv-source", f"name: {csv_service_name}"
+    if multiple_inputs:
+        spec_path = tmp_path / "spec.py"
+        spec_path.write_text(spec_path.read_text().replace(
+            '    .output(data_product_output()',
+            '    .input("orders-again", source_aligned_input().source(_csv).config({"model_paths": {"orders": "orders/orders.csv"}}))\n'
+            '    .output(data_product_output()',
         ))
     if without_input_custom:
         spec_path = tmp_path / "spec.py"
@@ -247,9 +261,23 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
             "",
         ))
         (tmp_path / "contracts" / "expectations" / "accepted.py").unlink()
+    if output_only:
+        spec_path = tmp_path / "spec.py"
+        spec_path.write_text('''from nxd.spec import data_product, script, custom, data_product_output, storage, simple_sensor
+from models import orders
+_compute = "/infra-profile/desktop-local#/services/python-compute"
+_duckdb = "/infra-profile/desktop-local#/services/duckdb"
+spec = (
+    data_product(name="orders", infra_profile="desktop-local")
+    .transform(script("transform/main.py").compute(_compute).secrets([]).when(simple_sensor(startup=False, when="any")))
+    .output(data_product_output().promise(orders).promise(custom("order-total-reconciles").description("reconcile").model(orders).verify(script("contracts/promises/reconciles.py").compute(_compute))).port("duckdb", storage(_duckdb)))
+)
+''')
+        (tmp_path / "contracts" / "expectations" / "accepted.py").unlink()
+        (tmp_path / "csv-source-path").unlink()
         profile_path = tmp_path / "infra-profile.yaml"
         profile_path.write_text(profile_path.read_text().replace(
-            f"    - name: {csv_service_name}\n"
+            "    - name: csv-source\n"
             "      driver: nxd:local/file/storage:0.1.0\n"
             "      attributes: []\n",
             "",
@@ -303,8 +331,8 @@ if __name__ == "__main__":
     return subprocess.run([sys.executable, str(Path(__file__).parents[2] / "scripts" / "self_check.py")], cwd=tmp_path, text=True, capture_output=True)
 
 
-def test_complete_self_check_accepts_custom_verifier_scripts(tmp_path: Path) -> None:
-    """Phase A must not mistake verifier script paths for transform executors."""
+def test_complete_self_check_accepts_exact_unlabeled_source_aligned_input(tmp_path: Path) -> None:
+    """The runtime-valid `_csv` source wiring must pass end to end."""
     proc = complete_self_check(tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SELF-CHECK OK" in proc.stdout
@@ -364,26 +392,28 @@ def test_complete_self_check_requires_matching_profile_metadata_name(tmp_path: P
     assert "metadata.name must be desktop-local" in proc.stdout
 
 
-def test_complete_self_check_resolves_labeled_csv_service(tmp_path: Path) -> None:
-    proc = complete_self_check(tmp_path, csv_service_name="csv-source-orders")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "SELF-CHECK OK" in proc.stdout
-
-
-def test_complete_self_check_does_not_require_csv_without_custom_input(tmp_path: Path) -> None:
-    proc = complete_self_check(tmp_path, without_input_custom=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "SELF-CHECK OK" in proc.stdout
-
-
-def test_complete_self_check_rejects_wrong_labeled_csv_driver(tmp_path: Path) -> None:
-    proc = complete_self_check(
-        tmp_path,
-        csv_service_name="csv-source-orders",
-        wrong_csv_driver=True,
-    )
+def test_complete_self_check_rejects_labeled_source_aligned_input(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, labeled_input=True)
     assert proc.returncode != 0
-    assert "csv-source-orders must use nxd:local/file/storage:0.1.0" in proc.stdout
+    assert "labeled CSV services are transform-only" in proc.stdout
+
+
+def test_complete_self_check_accepts_multiple_inputs_sharing_unlabeled_csv(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, multiple_inputs=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SELF-CHECK OK" in proc.stdout
+
+
+def test_complete_self_check_accepts_output_only_promise_without_csv_artifacts(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, output_only=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SELF-CHECK OK" in proc.stdout
+
+
+def test_complete_self_check_rejects_wrong_csv_driver_for_non_custom_input(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, without_input_custom=True, wrong_csv_driver=True)
+    assert proc.returncode != 0
+    assert "csv-source must use nxd:local/file/storage:0.1.0" in proc.stdout
 
 
 def test_complete_self_check_scans_nested_verifiers_for_escape_paths(tmp_path: Path) -> None:

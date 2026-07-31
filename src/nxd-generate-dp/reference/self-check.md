@@ -647,6 +647,37 @@ if len(custom_names) != len(set(custom_names)):
     cerrors.append(f"spec.py: custom contract names are not unique: {custom_names}")
 if len(custom_script_refs) != len(set(custom_script_refs)):
     cerrors.append("spec.py: each named custom contract needs its own verifier script")
+
+# The merged Desktop runtime only supports the unlabeled local-file service for
+# source-aligned inputs. Labeled CSV services remain valid transform secrets,
+# but they cannot be bound through `.input(...).source(...)` yet. Check this
+# for every source-aligned input, not just custom expectations: otherwise a
+# non-custom input could compile against the wrong runtime service/driver.
+csv_ref = "/infra-profile/desktop-local#/services/csv-source"
+csv_bindings = [literal_str(node.value) for node in spec_tree.body
+                if isinstance(node, ast.Assign) and
+                any(isinstance(target, ast.Name) and target.id == "_csv"
+                    for target in node.targets)]
+csv_binding = csv_bindings[0] if len(csv_bindings) == 1 else None
+source_aligned_inputs = 0
+for node in ast.walk(spec_tree):
+    if call_name(node) != "input" or len(node.args) < 2:
+        continue
+    chain = spine(node.args[1])
+    if not any(call_name(c) == "source_aligned_input" for c in chain):
+        continue
+    source_aligned_inputs += 1
+    source_calls = [c for c in chain if call_name(c) == "source" and c.args]
+    if (len(source_calls) != 1 or
+            not isinstance(source_calls[0].args[0], ast.Name) or
+            source_calls[0].args[0].id != "_csv" or csv_binding != csv_ref):
+        cerrors.append(
+            "spec.py: Pocket source-aligned inputs currently require "
+            ".source(_csv) bound exactly to "
+            "/infra-profile/desktop-local#/services/csv-source; labeled CSV "
+            "services are transform-only on this runtime."
+        )
+
 csv_root = Path("data")
 if input_custom:
     csv_source_path = Path("csv-source-path")
@@ -679,8 +710,6 @@ for node in ast.walk(spec_tree):
                                     literal_str(k) == "model_paths" for k in c.args[0].keys)]
             if not any(call_name(c) == "source_aligned_input" for c in chain) or not source_calls:
                 cerrors.append("spec.py: custom input expectation must be on its source_aligned_input declaration")
-            elif not isinstance(source_calls[0].args[0], ast.Name) or source_calls[0].args[0].id != "_csv":
-                cerrors.append("spec.py: custom CSV input expectation must use .source(_csv)")
             if not model_path_calls:
                 cerrors.append("spec.py: custom CSV input expectation needs .config({model_paths: ...})")
             else:
@@ -782,21 +811,8 @@ if profile.exists():
         "duckdb": "nxd:local/duckdb/storage:0.1.0",
         "python-compute": "nxd:local/python/compute:0.1.0",
     }
-    if input_custom:
-        csv_url = next((literal_str(node.value) for node in spec_tree.body
-                        if isinstance(node, ast.Assign) and
-                        any(isinstance(target, ast.Name) and target.id == "_csv"
-                            for target in node.targets)), None)
-        csv_service = re.fullmatch(
-            r"/infra-profile/desktop-local#/services/([^/]+)", csv_url or ""
-        )
-        if not csv_service:
-            cerrors.append(
-                "spec.py: _csv must resolve to a desktop-local service for a "
-                "custom CSV input expectation"
-            )
-        else:
-            required_services[csv_service.group(1)] = "nxd:local/file/storage:0.1.0"
+    if source_aligned_inputs:
+        required_services["csv-source"] = "nxd:local/file/storage:0.1.0"
     for service, driver in required_services.items():
         if not has_service_driver(service, driver):
             cerrors.append(f"infra-profile.yaml: {service} must use {driver}")

@@ -54,6 +54,13 @@ def check(root: Path):
     ]
     if len(specs) != 1: return ["expected exactly one generated spec.py"]
     text = specs[0].read_text(); tree = ast.parse(text)
+    bindings = {
+        target.id: value.value
+        for node in tree.body if isinstance(node, ast.Assign)
+        for target in node.targets if isinstance(target, ast.Name)
+        for value in [node.value]
+        if isinstance(value, ast.Constant) and isinstance(value.value, str)
+    }
     profile = specs[0].parent / "infra-profile.yaml"
     profile_text = profile.read_text() if profile.is_file() else ""
     required_services = {
@@ -153,8 +160,12 @@ def check(root: Path):
             errors.append("CSV input model_paths must be a non-empty literal mapping")
         if not any(name(c) == "source_aligned_input" for c in chain) or not any(
                 name(c) == "source" and c.args and isinstance(c.args[0], ast.Name)
-                and c.args[0].id == "_csv" for c in chain):
-            errors.append("custom input expectation must be on source_aligned_input().source(_csv)")
+                and c.args[0].id == "_csv" for c in chain) or bindings.get("_csv") != (
+                    "/infra-profile/desktop-local#/services/csv-source"):
+            errors.append(
+                "custom input expectation must use source_aligned_input().source(_csv) "
+                "bound exactly to the unlabeled desktop-local csv-source service"
+            )
         for model in custom_models:
             rel = mappings.get(model)
             if not rel:

@@ -23,6 +23,19 @@ checks. A named custom contract represents only an explicit user-stated
 guarantee: must/must-not, cross-field, aggregate, reconciliation, freshness, or
 accepted-set rule.
 
+## Platform/API setup and validation
+
+Use this section **only for the connected platform/API branch**. Pocket/Desktop
+uses the closure self-check and focused fixture in the workflow below; it does
+not require a mesh session configuration.
+
+- Confirm `nxd-setup` selected the mesh and produced `<session_config>`.
+- Resolve `<app_url>` from the active mesh registry and consult:
+  - `<app_url>/docs/#/tutorials/guides/05-expectations`
+  - `<app_url>/docs/#/tutorials/guides/03-promises`
+  - `<app_url>/docs/#/tutorials/cli/data_quality`
+  - `<app_url>/docs/#/basics/transactional_guarantees`
+
 ## Decision rule
 
 - Input quality before transform: attach an expectation to the input.
@@ -34,6 +47,9 @@ accepted-set rule.
 - Select the runtime before choosing the verifier API: Pocket/Desktop uses the
   script contract below; a connected platform/API runtime keeps the normal
   `code(...)` verifier path.
+- A computational policy that needs a contract is activated afterward through
+  `nxd-adding-policy` or `nxd-policies`; a missing contract never authorizes
+  disabling that policy.
 
 Record each custom contract's name, wording, model, phase, source of authority,
 executable rule, and diagnostic in `CONTEXT.md`. Ask for a missing tolerance,
@@ -90,9 +106,17 @@ active documentation before writing a verifier.
 ## Pocket/Desktop script contract shape
 
 Pocket supports executable custom **input** expectations only for a declared
-CSV source-aligned input. The `csv-source` service uses
-`nxd:local/file/storage:0.1.0` and is both the input `.source(_csv)` and the
-transform secret. For a true DB/API input, obtain a CSV export or explain that
+CSV source-aligned input. Every Pocket source-aligned input — custom or not —
+uses `.source(_csv)`, with `_csv` bound exactly to
+`/infra-profile/desktop-local#/services/csv-source`; that service uses
+`nxd:local/file/storage:0.1.0`. Labeled CSV services are transform-only on this
+runtime. Multiple source-aligned inputs may share the same `_csv` and one
+`csv-source-path`.
+
+The input verifier receives `LocalFileInput` **before** DLT runs and reads only
+its declared relative `model_paths`. DLT then loads the export during the
+transform through `.secrets([_csv])`; the verifier does not receive a DLT
+loading context. For a true DB/API input, obtain a CSV export or explain that
 custom input verification is unsupported on this runtime path; never ship a
 decorative script. An output promise is possible only where its real output
 storage and contract context support it.
@@ -206,7 +230,18 @@ if __name__ == "__main__":
    promises after it; retain `.promise(model)`.
 5. Keep contract code deterministic, side-effect-free, secret-free, and scoped
    to its supplied context. Return only redacted diagnostics/counts.
-6. Run the closure self-check plus a focused contract fixture when available.
+6. For Pocket, run the closure self-check plus a focused contract fixture when
+   available. For the connected platform/API branch, also run:
+
+```bash
+nxd --config <session_config> whoami
+nxd validate --config <session_config> <data_product_directory> --debug
+```
+
+On the platform/API branch, `nxd validate` imports and validates the spec but
+does not execute a custom verifier against live data. The verifier runs in its
+expectation or promise phase. If a computational policy needs this contract,
+hand off to `nxd-adding-policy` or `nxd-policies` after wiring it.
 
 ## Guardrails
 
@@ -214,6 +249,8 @@ if __name__ == "__main__":
   output ports.
 - Do not rename an inferred schema constraint as a custom guarantee, or drop an
   explicit guarantee because a type/key partly overlaps it.
+- Do not disable a policy because a contract is missing; add the required
+  contract or explain the missing artifact.
 - Do not leave decorative `contracts/*.py` files, duplicate names,
   absolute/escaping script paths, or secrets in a verifier.
 - A `script(...)` executes its complete file: one script registers exactly one

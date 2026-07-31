@@ -668,3 +668,22 @@ Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-w
 Notes: Both uncached Codex runs passed all 5 checks and the authoritative deterministic checker. The revised skill used 16 vs 17 tool calls and 8,271 vs 10,382 output tokens while generating executable CSV-input and DuckDB-output custom contracts.
 
 Record: [`records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json`](records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json)
+
+## 2026-07-31 — nxd-generate-dp: round-two Pocket CSV runtime contract fixes (plugin v0.27.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline-main-current-rubric | current_pack | api-to-vector-data-product-build | PASS | 6/6 | — | 38 | 31098 | — | gpt-5.6-terra |
+| baseline-main-current-rubric | current_pack | generate-runnable-dp-from-intent | FAIL | 7/16 | — | 15 | 9757 | — | gpt-5.6-terra |
+| baseline-main-current-rubric | current_pack | policy-compliance-failure | PASS | 5/5 | — | 13 | 6020 | — | gpt-5.6-terra |
+| head-initial | current_pack | api-to-vector-data-product-build | FAIL | 4/6 | — | 20 | 18935 | — | gpt-5.6-terra |
+| head-initial | current_pack | generate-runnable-dp-from-intent | FAIL | 15/16 | — | 22 | 10549 | — | gpt-5.6-terra |
+| head-initial | current_pack | pocket-custom-contracts | FAIL | 4/5 | — | 18 | 11161 | — | gpt-5.6-terra |
+| head-initial | current_pack | policy-compliance-failure | PASS | 5/5 | — | 14 | 5620 | — | gpt-5.6-terra |
+| head-path-fixed | current_pack | generate-runnable-dp-from-intent | PASS | 16/16 | — | 18 | 10227 | — | gpt-5.6-terra |
+| head-path-fixed | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 16 | 14823 | — | gpt-5.6-terra |
+| head-api-rerun | current_pack | api-to-vector-data-product-build | ERROR | — | — | — | — | — | gpt-5.6-terra |
+
+Notes: Current-rubric baseline versus round-two review fixes. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.
+
+Record: [`records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json`](records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json)

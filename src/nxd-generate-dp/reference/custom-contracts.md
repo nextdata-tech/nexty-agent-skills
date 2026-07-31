@@ -37,10 +37,17 @@ population when it changes pass/fail.
 ## CSV-first support boundary
 
 Pocket supports executable **custom input expectations only for a declared
-CSV source-aligned input**. The source service is the local-file driver
-`nxd:local/file/storage:0.1.0`; it is both the `.input(...).source(_csv)`
-service and a transform secret via `.secrets([_csv])`. This lets the verifier
-read the exact, pinned CSV export before the transform runs.
+CSV source-aligned input**. Every Pocket source-aligned input — custom or not
+— must use `.source(_csv)`, where `_csv` binds exactly to
+`/infra-profile/desktop-local#/services/csv-source`. That unlabeled service
+uses `nxd:local/file/storage:0.1.0` and is also the transform secret via
+`.secrets([_csv])`. Labeled CSV services are supported only as transform
+secrets on this runtime; do not bind one through `.input(...).source(...)`.
+
+The input expectation receives `LocalFileInput` and runs **before** the DLT
+transform. It reads only its declared `model_paths` from the pinned export.
+DLT separately loads that same export during the transform; a verifier does
+not receive a DLT loader or connection context.
 
 For a true database or API source, do not pretend the same local runtime can
 run a custom input expectation. Explain that input custom verification is not
@@ -171,7 +178,9 @@ The closure self-check must fail when any custom-contract invariant is broken:
   closure, cannot be parsed, has anything other than one registered verifier,
   or does not invoke `data_product.verify()` under its main guard;
 - a custom contract has no unique name, description, model, or verifier;
-- an input contract is not attached to a declared source-aligned CSV input;
+- any Pocket source-aligned input is not `.source(_csv)` with `_csv` bound to
+  the exact unlabeled desktop-local `csv-source`, or an input contract is not
+  attached to that declaration;
 - an output contract is not attached to the DuckDB output alongside ordinary
   `.promise(model)`;
 - the verifier script path escapes the closure or does not export the expected
