@@ -685,6 +685,17 @@ def _render_provenance(resolution: Any) -> None:
             f"{row['effective_source']:<16} {row['value_status']:<18} "
             f"hash={row['value_hash'][:12]} ev={row['evidence_count']}"
             + (f" reviewer={row['reviewer']}" if row["reviewer"] else "")
+            # Marked inline rather than in a legend: an `ok` cell whose citation
+            # could not be checked looks identical to one whose citation was,
+            # and that similarity is what let a live misread pass for grounded.
+            + (" UNFALSIFIABLE" if row.get("evidence_unfalsifiable") else "")
+        )
+    if any(row.get("evidence_unfalsifiable") for row in resolution.provenance):
+        print(
+            "\n  UNFALSIFIABLE: every citation on that cell is "
+            "evidence_unverified — the\n  harness holds no text to check the "
+            "quote against, so the quote is a model\n  CLAIM about the "
+            "artifact. Verify it against the artifact itself, not the quote."
         )
     if resolution.stale_reviews:
         _print_header("Stale reviews (auto-invalidated, never deleted)")
@@ -1548,6 +1559,19 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
             f"expected blocks={expect['blocks']}, got blocked={blocked}"
             + (f" ({'; '.join(report.reasons)})" if report.reasons else "")
         )
+
+    # A4: which cells carry unfalsifiable evidence. Declared per fixture so the
+    # media-direct path cannot silently start looking checkable — the whole
+    # point of the column is that `ok` alone does not distinguish the two.
+    if "unfalsifiable_cells" in expect:
+        marked = sorted(
+            c.field for c in resolution.effective if c.evidence_unfalsifiable
+        )
+        want_marked = sorted(expect["unfalsifiable_cells"])
+        if marked != want_marked:
+            return (
+                f"unfalsifiable cells {marked}, expected {want_marked}"
+            )
 
     # -- resolve round trip ------------------------------------------------
     # Land the long form to CSV, read it back, and re-resolve. `resolve` is a

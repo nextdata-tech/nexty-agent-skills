@@ -58,6 +58,7 @@ from .records import (
     ValueStatus,
     ValueType,
     Verdict,
+    VerifyStatus,
 )
 
 __all__ = [
@@ -137,6 +138,24 @@ class EffectiveValue:
     """What the model proposed, retained even when a human override won."""
     proposal_value_hash: str | None = None
     error_code: str | None = None
+    #: True when EVERY evidence atom backing this cell is `evidence_unverified`
+    #: — i.e. the harness holds no substring surface and could not check a single
+    #: quote. The value may still be right; nothing here says it is wrong.
+    #:
+    #: WHY IT IS SEPARATE FROM `value_status`. Such a cell is `ok` and looks
+    #: exactly like a cell whose citation was checked against landed text, which
+    #: is the confusion that let a live misread land indistinguishable from a
+    #: verified reading. This column is what lets a review queue say "the quote
+    #: below is a model CLAIM about the artifact, not a checkable quote —
+    #: compare it against the artifact yourself".
+    #:
+    #: NOT a second-class approval. A human who looks at the artifact and
+    #: confirms the value has performed the only verification this path admits,
+    #: and that confirmation is as durable as any other: no new Verdict, no new
+    #: EffectiveSource, no TTL. Swapping the artifact still unbinds it, because
+    #: the media digest is in `snapshot_projection` — the case binding cannot
+    #: see is "same artifact, stably wrong model", which is corroboration's job.
+    evidence_unfalsifiable: bool = False
 
     @property
     def value(self) -> Any:
@@ -216,6 +235,10 @@ class Resolution:
                 "review_id": item.review_id,
                 "proposal_value_hash": item.proposal_value_hash,
                 "error_code": item.error_code,
+                # A4: lets a review queue distinguish "citation checked against
+                # landed text" from "citation is a model claim about an artifact
+                # the harness cannot read", which are otherwise both `ok`.
+                "evidence_unfalsifiable": item.evidence_unfalsifiable,
             }
             for item in self.effective
         )
@@ -479,9 +502,11 @@ def resolve(
         reviews_by_cell.setdefault(review.key, []).append(review)
 
     evidence_counts: dict[tuple[str, str], int] = {}
+    evidence_by_cell: dict[tuple[str, str], list[MapperEvidence]] = {}
     for atom in evidence_list:
         cell = (atom.target_row_key, atom.field)
         evidence_counts[cell] = evidence_counts.get(cell, 0) + 1
+        evidence_by_cell.setdefault(cell, []).append(atom)
 
     if row_keys is None:
         keys = {p.target_row_key for p in proposal_list}
@@ -521,6 +546,16 @@ def resolve(
                     valid.append(review)
 
             winner = max(valid, key=_review_sort_key) if valid else None
+            # Unfalsifiable when the cell HAS evidence and every atom of it is
+            # unverified. Requiring at least one atom matters: a cell with no
+            # evidence at all is `evidence_absent`, which already says what it
+            # is, and marking it here would conflate "nothing was cited" with
+            # "what was cited cannot be checked".
+            cell_atoms = evidence_by_cell.get(cell, ())
+            unfalsifiable = bool(cell_atoms) and all(
+                atom.verify_status is VerifyStatus.EVIDENCE_UNVERIFIED
+                for atom in cell_atoms
+            )
             effective.append(
                 _resolve_cell(
                     row_key=row_key,
@@ -528,6 +563,7 @@ def resolve(
                     proposal=proposal,
                     review=winner,
                     evidence_count=evidence_counts.get(cell, 0),
+                    evidence_unfalsifiable=unfalsifiable,
                 )
             )
 
@@ -548,6 +584,7 @@ def _resolve_cell(
     proposal: MapperProposal | None,
     review: MapperReview | None,
     evidence_count: int,
+    evidence_unfalsifiable: bool = False,
 ) -> EffectiveValue:
     """Apply §6 steps 3-6 to one cell. Pure; no I/O, no model call."""
     proposal_value = proposal.typed.value if proposal else None
@@ -567,6 +604,7 @@ def _resolve_cell(
             effective_source=EffectiveSource.HUMAN_OVERRIDE,
             needs_review=False,
             evidence_count=evidence_count,
+        evidence_unfalsifiable=evidence_unfalsifiable,
             observation_id=observation_id,
             value_hash=review.override.hash,
             reviewer=review.reviewer,
@@ -589,6 +627,7 @@ def _resolve_cell(
             effective_source=EffectiveSource.HUMAN_REJECTED,
             needs_review=False,
             evidence_count=evidence_count,
+        evidence_unfalsifiable=evidence_unfalsifiable,
             observation_id=observation_id,
             value_hash=null_typed.hash,
             reviewer=review.reviewer,
@@ -611,6 +650,7 @@ def _resolve_cell(
             effective_source=EffectiveSource.MODEL_PROPOSED,
             needs_review=True,
             evidence_count=evidence_count,
+        evidence_unfalsifiable=evidence_unfalsifiable,
             observation_id="",
             value_hash=null_typed.hash,
             error_code=None,
@@ -637,6 +677,7 @@ def _resolve_cell(
         effective_source=source,
         needs_review=needs_review,
         evidence_count=evidence_count,
+        evidence_unfalsifiable=evidence_unfalsifiable,
         observation_id=proposal.observation_id,
         value_hash=proposal.value_hash,
         reviewer=reviewer,

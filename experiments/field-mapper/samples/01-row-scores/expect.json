@@ -13,5 +13,6 @@
     "verified": 4,
     "verify_failed": 0,
     "evidence_unverified": 0
-  }
+  },
+  "unfalsifiable_cells": []
 }

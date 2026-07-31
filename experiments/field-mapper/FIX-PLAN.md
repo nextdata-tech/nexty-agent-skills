@@ -17,7 +17,7 @@
 | Fixture 07 size | **LANDED** `bdb0347`. 656×272; the misread **survives** — haiku 99.0 vs sonnet 90.0, live. |
 | A2 live client | **LANDED** `abbc929`. L1 closed end to end with two real models. |
 | 6 — Part B citations | gated on citation→field attribution design |
-| 7 — A4 marking | now UNBLOCKED (CV-3 done), still needs CV-2 |
+| 7 — A4 marking | **LANDED**. `evidence_unfalsifiable` on the effective cell and the provenance sidecar; declared per fixture. CV-2 turned out to be the same defect as the H2 review finding, so both blockers were already closed. |
 
 Fixture 07 rebuild at a legible size (>200px) is still open, and still worth
 doing before Stage 5: it separates "the harness cannot verify" from "the image
