@@ -48,7 +48,7 @@ import shutil
 import sys
 from dataclasses import dataclass, replace as dc_replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 HERE = Path(__file__).resolve().parent
 PKG_ROOT = HERE.parent.parent
@@ -188,6 +188,29 @@ def _fake_source_rows() -> list[dict[str, Any]]:
                 # evidence_absent here rather than inventing a plausible 30.
             ),
         },
+    ]
+
+
+def _mapper_inputs_from_rows(rows: Sequence[tuple]) -> list[MapperInput]:
+    """Landed `(invoice_id, vendor, page_text)` rows -> MapperInputs.
+
+    Shared with `transform_main.py` rather than duplicated: two copies of this
+    would drift, and a divergence between the direct runner and the real
+    transform would be invisible until one of them lied about what it proved.
+
+    `landed_text` is deliberately separate from `media`. It is the haystack the
+    substring check runs against; merging the two is the circularity the whole
+    design exists to prevent.
+    """
+    return [
+        MapperInput(
+            input_id=invoice_id,
+            identity={"invoice_id": invoice_id},
+            fields={"invoice_id": invoice_id, "vendor": vendor},
+            landed_text=page_text,
+            document_class="invoice",
+        )
+        for invoice_id, vendor, page_text in rows
     ]
 
 
@@ -478,19 +501,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- read back and build MapperInputs -------------------------------
     print("[2/6] building mapper inputs from LANDED rows ...")
-    inputs = [
-        MapperInput(
-            input_id=invoice_id,
-            identity={"invoice_id": invoice_id},
-            fields={"invoice_id": invoice_id, "vendor": vendor},
-            # The haystack the substring check runs against. Separate from
-            # `media` on purpose: merging them is the circularity the design
-            # exists to prevent.
-            landed_text=page_text,
-            document_class="invoice",
-        )
-        for invoice_id, vendor, page_text in landed
-    ]
+    inputs = _mapper_inputs_from_rows(landed)
 
     spec = _build_spec()
     grant = _build_grant(spec)

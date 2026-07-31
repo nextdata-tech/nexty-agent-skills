@@ -14,3 +14,5 @@ __pycache__/
 
 # E2E scratch: duckdb file, dlt state, and a run ledger. Same reason as runs/.
 examples/e2e/_run/
+examples/e2e/_transform_run/
+examples/e2e/_blockproof/

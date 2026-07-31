@@ -1,7 +1,48 @@
 # End-to-end proof
 
-`transform_main_mockup.py` (one level up) shows the shape of a real NXD
-transform and **does not run**. This one does.
+Two runnable files, proving two different things. `transform_main_mockup.py`
+(one level up) shows the shape of a transform and **does not run**; both of
+these do.
+
+| file | proves |
+|---|---|
+| `run_e2e.py` | the **data chain** — dlt lands rows, the mapper judges them, the gate decides, dlt lands the judgements. Calls `map_inputs` directly. |
+| `transform_main.py` | the **platform entrypoint** — the closure is registered with `@data_product.on_transform()` and invoked by nxd's own `data_product.run_transform(...)`. |
+
+```bash
+python3 examples/e2e/transform_main.py                # replay
+python3 examples/e2e/transform_main.py --prove-block  # the gate must refuse
+.venv-live/bin/python examples/e2e/transform_main.py --live
+```
+
+## What `transform_main.py` proves
+
+- nxd's **real decorator and registry** accept the closure, and nxd's
+  `TransformTask` binds the `context` kwarg through `FullContextArgumentProvider`
+  — the same provider a platform run uses.
+- The `ExecutionContext` is built by **nxd's own `from_json`**, not a stub shaped
+  to look like one. A context-schema change fails here loudly.
+- **`--prove-block` demonstrates the gate refusing.** With `max_absent_share`
+  tightened to 0, the transform raises and the database shows
+  `invoice_documents` present (run 1) with **no** `mapper_proposals`,
+  `mapper_evidence`, or `invoice_terms`. That is the two-`pipeline.run` ordering
+  verified by observation: a refused build publishes nothing. Checked against
+  the database, not the return value.
+
+## What it does NOT prove
+
+**The output port carries no driver.** `storage_context_type_for_driver` in nxd
+v0.41.26 has no `duckdb` case, so a DuckDB output port cannot be constructed at
+all — the desktop DuckDB path is not in this version. The context declares zero
+ports and the closure opens duckdb itself. A platform run would receive a
+driver-resolved port and write through it. **The transform contract is proven;
+the storage binding is not.**
+
+No kernel, no transaction, no `transform_state`, no provisioning.
+
+---
+
+## `run_e2e.py`
 
 ```bash
 python3 examples/e2e/run_e2e.py            # replay, no API calls, no key
