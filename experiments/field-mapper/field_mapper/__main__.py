@@ -494,12 +494,16 @@ def _live_caller(
     # Only the Anthropic provider needs a key; `claude_cli` authenticates itself.
     api_key = resolve_api_key() if provider == "anthropic" else None
     config = TransportConfig.from_spec(fixture.spec)
+    # ONE ledger, shared by both clients below. Two ledgers would each hold the
+    # full ceiling, so a corroborating run could spend twice the max_usd the
+    # operator consented to while both halves reported themselves within budget.
+    ledger = BudgetLedger(budget=budget, model=fixture.spec.model)
     client = Client(
         api_key=api_key,
         config=config,
         # The model reaches the ledger so actuals reconcile at the right rate:
         # this governs the max_usd STOP, not merely a printed figure.
-        budget_ledger=BudgetLedger(budget=budget, model=fixture.spec.model),
+        budget_ledger=ledger,
         heartbeat=lambda msg: print(f"    . {msg}", file=sys.stderr),
         provider=provider,
         provider_model=provider_model,
@@ -534,7 +538,51 @@ def _live_caller(
             input_hash=item.input_id,
         )
 
-    return call, api_key
+    corroborate: Any | None = None
+    if fixture.spec.corroboration_model:
+        # A SECOND client on the SECOND model. Its own TransportConfig, because
+        # capability gating (`supports_reasoning_controls`) is per-model — which
+        # is exactly why the spec knob is a model id rather than a config copy:
+        # corroborating an opus primary with a pre-4.6 model must send a
+        # different request shape, not the same one twice.
+        corroboration_config = dc_replace(
+            config, model=fixture.spec.corroboration_model
+        )
+        corroboration_client = Client(
+            api_key=api_key,
+            config=corroboration_config,
+            # SHARED ledger. Its `model` stays the primary's, so corroboration
+            # tokens reconcile at the primary's rate — recorded as a known
+            # imprecision in the preflight note rather than silently wrong,
+            # since a per-attempt rate would need a per-attempt ledger.
+            budget_ledger=ledger,
+            heartbeat=lambda msg: print(f"    . [corroborate] {msg}", file=sys.stderr),
+            provider=provider,
+            provider_model=provider_model,
+            provider_cwd=str(fixture.path),
+        )
+
+        def corroborate(  # noqa: F811 - deliberate conditional definition
+            *,
+            item: MapperInput,
+            spec: MapperSpec,
+            wire_schema: Mapping[str, Any],
+            violations: Sequence[Any] = (),
+        ) -> Any:
+            # NO violations forwarded, ever. The corroborator answers the
+            # ORIGINAL question independently; feeding it the primary's
+            # correction turn would tell it what the primary said and
+            # manufacture the agreement this exists to detect.
+            return corroboration_client.call(
+                system_prompt=system_prompt_for(item),
+                instruction=spec.instruction,
+                wire_schema=wire_schema,
+                text_inputs=[item.landed_text] if item.landed_text else [],
+                media_inputs=item.media,
+                input_hash=item.input_id,
+            )
+
+    return call, api_key, corroborate
 
 
 # ==========================================================================
@@ -847,27 +895,13 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
             RecordedPlayer(fixture.corroborated) if fixture.corroborated else None
         )
     else:
-        # A live corroborating run needs a SECOND client bound to
-        # `spec.corroboration_model`, which nothing builds yet. Refuse rather
-        # than call `map_inputs` without it: that path raises anyway (by
-        # design), but with an error about a missing callable rather than the
-        # real reason, which is that the live corroborator is unimplemented.
-        if spec.corroboration_model:
-            print("\n  SYSTEMIC FAILURE — the build blocks, nothing lands:")
-            print(
-                f"    [spec_invalid] spec declares corroboration_model "
-                f"{spec.corroboration_model!r}, but no live corroborating "
-                f"client exists yet. Use --dry-run, which replays "
-                f"corroborated.json."
-            )
-            return EXIT_BLOCKED
         # Building the live caller is itself a blocking operation: it imports
         # the SDK and resolves the key, and both failures are systemic. Caught
         # here rather than left to escape, so a missing `anthropic` exits with
         # the BLOCKED code instead of the success code — a systemic failure that
         # exits 0 is exactly the false green this contract exists to prevent.
         try:
-            call, api_key = _live_caller(
+            call, api_key, corroborate = _live_caller(
                 fixture,
                 budget,
                 provider=args.provider,
