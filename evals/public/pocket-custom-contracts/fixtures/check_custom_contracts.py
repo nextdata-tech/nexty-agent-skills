@@ -197,8 +197,12 @@ def check(root: Path):
     for rel in scripts:
         p = specs[0].parent / rel
         if not p.is_file(): errors.append(f"missing script {rel}"); continue
-        t = ast.parse(p.read_text()); registered = sum(any(name(d) == "on_verify" for d in f.decorator_list) for f in ast.walk(t) if isinstance(f, ast.FunctionDef))
-        source = p.read_text(); verifier = next((f for f in ast.walk(t) if isinstance(f, ast.FunctionDef) and any(name(d) == "on_verify" for d in f.decorator_list)), None)
+        t = ast.parse(p.read_text())
+        verifiers = [f for f in ast.walk(t)
+                     if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and
+                     any(name(d) == "on_verify" for d in f.decorator_list)]
+        registered = len(verifiers)
+        source = p.read_text(); verifier = next(iter(verifiers), None)
         verifier_source = ast.unparse(verifier) if verifier else ""
         conditional_failed = verifier and any(
             not isinstance(branch.test, ast.Constant) and any(
@@ -206,9 +210,11 @@ def check(root: Path):
                 "VerifyResultEnum.FAILED" in ast.unparse(result.value)
                 for result in ast.walk(branch))
             for branch in ast.walk(verifier) if isinstance(branch, ast.If))
-        inert = not verifier or not verifier.args.args or any(isinstance(n, ast.Pass) or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and n.value.value is Ellipsis) for n in ast.walk(verifier)) or "VerifyResultEnum.FAILED" not in verifier_source or "VerifyResultEnum.PASS" not in verifier_source or not conditional_failed
+        inert = not verifier or any(isinstance(n, ast.Pass) or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and n.value.value is Ellipsis) for n in ast.walk(verifier)) or "VerifyResultEnum.FAILED" not in verifier_source or "VerifyResultEnum.PASS" not in verifier_source or not conditional_failed
         if registered != 1 or not has_main_guard(t) or inert: errors.append(f"bad verifier {rel}")
-        if re.search(r'(?i)(api[_-]?key|password|token|secret)\s*=', source): errors.append(f"secret-like assignment in {rel}")
+        if any(isinstance(f, ast.AsyncFunctionDef) for f in verifiers):
+            errors.append("Pocket custom verifier must be synchronous; the runtime does not await async verifier functions")
+        if re.search(r'(?i)(api[_-]?key|password|token|secret)\s*=\s*["\']', source): errors.append(f"secret-like assignment in {rel}")
     for p in (specs[0].parent / "contracts").rglob("*.py") if (specs[0].parent / "contracts").exists() else []:
         if str(p.relative_to(specs[0].parent)) not in scripts: errors.append(f"decorative script {p}")
     for p in [specs[0], profile]:

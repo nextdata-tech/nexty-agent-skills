@@ -1,5 +1,0 @@
-{
-  "duplicate_name": "Two custom contracts named accepted-currency must fail.",
-  "decorative_script": "An unreferenced contracts/promises/extra.py must fail.",
-  "missing_main_guard": "A verifier without data_product.verify() main guard must fail."
-}

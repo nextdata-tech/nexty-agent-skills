@@ -1,7 +1,7 @@
 {
   "date": "2026-07-30",
   "label": "nxd-generate-dp: executable Pocket custom contracts",
-  "notes": "Both uncached Codex runs passed all 5 checks and the authoritative deterministic checker. The revised skill used 16 vs 17 tool calls and 8,271 vs 10,382 output tokens while generating executable CSV-input and DuckDB-output custom contracts.",
+  "notes": "RETRACTED for Pocket correctness and efficiency claims. These runs did not prove isolation from the checker, rubric, prior reports or closures, session history, memories, and evaluator checkout. Preserve this record as history, but use the 2026-07-31 source-isolated Pocket custom-contract record instead.",
   "plugin_version": "0.27.0",
   "reports": {
     "before-v0.26.2": {

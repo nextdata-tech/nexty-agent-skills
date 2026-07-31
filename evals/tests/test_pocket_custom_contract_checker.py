@@ -14,6 +14,51 @@ spec = importlib.util.spec_from_file_location("custom_contract_checker", CHECKER
 checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
 
+RUNNER = Path(__file__).parents[1] / "run.py"
+runner_spec = importlib.util.spec_from_file_location("eval_runner_pocket_custom", RUNNER)
+runner = importlib.util.module_from_spec(runner_spec)
+sys.modules[runner_spec.name] = runner
+sys.path.insert(0, str(RUNNER.parent))
+try:
+    runner_spec.loader.exec_module(runner)
+finally:
+    sys.path.remove(str(RUNNER.parent))
+
+ASYNC_VERIFIER_ERROR = (
+    "Pocket custom verifier must be synchronous; the runtime does not await "
+    "async verifier functions"
+)
+
+
+def input_verifier_source(*, async_verifier=False, nonliteral_secret_fields=False,
+                          literal_secret=False, mixed_decorated=False) -> str:
+    prefix = "async def" if async_verifier else "def"
+    nonliteral_fields = (
+        "password_columns = ('password',)\n"
+        "token_fields = []\n"
+        "token = 0\n"
+        if nonliteral_secret_fields else ""
+    )
+    fields = 'token = "literal-secret"\n' if literal_secret else nonliteral_fields
+    extra = '''
+@data_product.on_verify()
+async def second_verify():
+    bad = []
+    if bad:
+        return VerifyResult(VerifyResultEnum.FAILED, {"bad": bad})
+    return VerifyResult(VerifyResultEnum.PASS, {})
+''' if mixed_decorated else ""
+    return f'''from nxd import data_product
+from nxd.core.context import VerifyResult, VerifyResultEnum
+{fields}@data_product.on_verify()
+{prefix} verify():
+    bad = []
+    if bad:
+        return VerifyResult(VerifyResultEnum.FAILED, {{"bad": bad}})
+    return VerifyResult(VerifyResultEnum.PASS, {{}})
+{extra}if __name__ == '__main__': data_product.verify()
+'''
+
 
 def write_closure(root: Path, *, duplicate=False, decorative=False) -> None:
     (root / "contracts" / "expectations").mkdir(parents=True)
@@ -74,12 +119,92 @@ def test_valid_closure_passes(tmp_path: Path) -> None:
     assert checker.check(tmp_path) == []
 
 
+def test_sync_no_arg_verifier_is_accepted_by_both_checkers(tmp_path: Path) -> None:
+    write_closure(tmp_path)
+    (tmp_path / "contracts" / "expectations" / "accepted.py").write_text(
+        input_verifier_source()
+    )
+    assert checker.check(tmp_path) == []
+    proc = complete_self_check(tmp_path / "full", no_arg_verifier=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_async_verifier_is_rejected_by_both_checkers(tmp_path: Path) -> None:
+    write_closure(tmp_path)
+    (tmp_path / "contracts" / "expectations" / "accepted.py").write_text(
+        input_verifier_source(async_verifier=True)
+    )
+    assert ASYNC_VERIFIER_ERROR in checker.check(tmp_path)
+    proc = complete_self_check(tmp_path / "full", async_verifier=True)
+    assert proc.returncode != 0
+    assert ASYNC_VERIFIER_ERROR in proc.stdout
+
+
+def test_nonliteral_password_and_token_fields_are_accepted_by_both_checkers(tmp_path: Path) -> None:
+    write_closure(tmp_path)
+    (tmp_path / "contracts" / "expectations" / "accepted.py").write_text(
+        input_verifier_source(nonliteral_secret_fields=True)
+    )
+    assert checker.check(tmp_path) == []
+    proc = complete_self_check(tmp_path / "full", nonliteral_secret_fields=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_literal_secret_assignment_is_rejected_by_both_checkers(tmp_path: Path) -> None:
+    write_closure(tmp_path)
+    (tmp_path / "contracts" / "expectations" / "accepted.py").write_text(
+        input_verifier_source(literal_secret=True)
+    )
+    assert any("secret-like assignment" in error for error in checker.check(tmp_path))
+    proc = complete_self_check(tmp_path / "full", literal_secret=True)
+    assert proc.returncode != 0
+    assert "contains a literal secret-like assignment" in proc.stdout
+
+
+def test_mixed_sync_and_async_verifiers_count_as_duplicates(tmp_path: Path) -> None:
+    write_closure(tmp_path)
+    (tmp_path / "contracts" / "expectations" / "accepted.py").write_text(
+        input_verifier_source(mixed_decorated=True)
+    )
+    errors = checker.check(tmp_path)
+    assert any(error.startswith("bad verifier") for error in errors)
+    assert ASYNC_VERIFIER_ERROR in errors
+    proc = complete_self_check(tmp_path / "full", mixed_decorated=True)
+    assert proc.returncode != 0
+    assert "needs exactly one @data_product.on_verify()" in proc.stdout
+    assert ASYNC_VERIFIER_ERROR in proc.stdout
+
+
 def test_hidden_staged_skill_specs_are_not_generated_artifacts(tmp_path: Path) -> None:
     write_closure(tmp_path / "data_product")
     hidden_spec = tmp_path / ".skills" / "reference" / "spec.py"
     hidden_spec.parent.mkdir(parents=True)
     hidden_spec.write_text("not_a_generated_closure = True\n")
     assert checker.check(tmp_path) == []
+
+
+def test_pocket_custom_checker_stays_runner_side_but_input_fixtures_stage(
+        tmp_path: Path) -> None:
+    scenario = Path(__file__).parents[1] / "public" / "pocket-custom-contracts"
+    workspace, _ = runner.build_workspace(
+        tmp_path, runner.SkillSet("no_skills", "test", []), scenario,
+    )
+    fixtures = scenario / "fixtures"
+    assert not (workspace / "check_custom_contracts.py").exists()
+    for name in ("orders.csv", "models.py"):
+        assert (workspace / name).read_bytes() == (fixtures / name).read_bytes()
+
+
+def test_other_scenario_keeps_same_named_checker_fixture(tmp_path: Path) -> None:
+    scenario = tmp_path / "another-contract-scenario"
+    fixtures = scenario / "fixtures"
+    fixtures.mkdir(parents=True)
+    checker_fixture = fixtures / "check_custom_contracts.py"
+    checker_fixture.write_text("print('ordinary fixture')\n", encoding="utf-8")
+    workspace, _ = runner.build_workspace(
+        tmp_path / "build", runner.SkillSet("no_skills", "test", []), scenario,
+    )
+    assert (workspace / checker_fixture.name).read_bytes() == checker_fixture.read_bytes()
 
 
 def test_duplicate_name_and_decorative_script_fail(tmp_path: Path) -> None:
@@ -230,7 +355,10 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
                         wrong_profile_name=False, nested_escape=False,
                         without_input_custom=False, output_only=False,
                         multiple_inputs=False, labeled_input=False,
-                        wrong_csv_driver=False):
+                        wrong_csv_driver=False, no_arg_verifier=False,
+                        async_verifier=False, nonliteral_secret_fields=False,
+                        literal_secret=False,
+                        mixed_decorated=False):
     """Phase A must not mistake verifier script paths for transform executors."""
     write_closure(tmp_path)
     (tmp_path / "CONTEXT.md").write_text("# context\n")
@@ -301,6 +429,16 @@ def verify(source):
 if __name__ == "__main__":
     data_product.verify()
 ''')
+    if (no_arg_verifier or async_verifier or nonliteral_secret_fields or
+            literal_secret or mixed_decorated):
+        (tmp_path / "contracts" / "expectations" / "accepted.py").write_text(
+            input_verifier_source(
+                async_verifier=async_verifier,
+                nonliteral_secret_fields=nonliteral_secret_fields,
+                literal_secret=literal_secret,
+                mixed_decorated=mixed_decorated,
+            )
+        )
     if absolute_model_path:
         spec_path = tmp_path / "spec.py"
         spec_path.write_text(spec_path.read_text().replace("orders/orders.csv", "/tmp/orders.csv"))

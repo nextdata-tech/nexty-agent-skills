@@ -1,7 +1,7 @@
 {
   "date": "2026-07-31",
   "label": "nxd-generate-dp: round-two Pocket CSV runtime contract fixes",
-  "notes": "Current-rubric baseline versus round-two review fixes. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.",
+  "notes": "Current-rubric baseline versus round-two review fixes. The pocket-custom-contracts cells are RETRACTED and superseded by the 2026-07-31 source-isolated Pocket record because these runs did not prove answer-source isolation; their Pocket verdicts and efficiency metrics must not be cited. Non-Pocket cells retain their original status. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.",
   "plugin_version": "0.27.0",
   "reports": {
     "baseline-main-current-rubric": {

@@ -33,7 +33,7 @@ it is evidence that it never ran.
 | | Runs on every PR | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 11 `ci_skip` | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | any | any |
 | **Backend** | `codex` both sides | any | any |
 | **Gate** | fails on regression vs. baseline | reports drift, never fails | — |
@@ -49,7 +49,7 @@ one is responsible when a change ships unmeasured:
   scenarios whose `checks.json` names a changed skill (computed by
   `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
   `skill-sets.yaml`, the workflow — select every scenario.
-- **The 11 `ci_skip` scenarios never run automatically**, so the skills they
+- **The 12 `ci_skip` scenarios never run automatically**, so the skills they
   cover are unguarded. `nxd-data-product-query` is covered *only* by skipped
   scenarios and `nxd-mesh-analyzer` has no scenario at all — for those two, a
   green eval check means "nothing ran", not "nothing regressed". Run them
@@ -449,7 +449,7 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Eleven scenarios are currently skipped:
+Twelve scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
@@ -464,10 +464,21 @@ Eleven scenarios are currently skipped:
 | `pharma-mesh-query-loop` | same |
 | `semantic-intent-validation` | same |
 | `coauthor-executable-policy-readback` | scripts a follow-up turn; the PR gate runs `codex`, which cannot drive multi-turn |
+| `pocket-custom-contracts` | requires the manually operated default-deny source-isolation wrapper and operator-resolved protected roots; the automatic PR runner does not provision either |
 
-That last one is a *provider* limit rather than an infrastructure one: it runs
+`coauthor-executable-policy-readback` is the provider-limit entry: it runs
 unattended on `--agent-backend claude` and needs the manual entry point only
-because the automatic gate defaults to `codex`.
+because the automatic gate defaults to `codex`. `pocket-custom-contracts` is
+different: it is wrapper-only on the Codex backend and must be run manually
+with the default-deny source-isolation attestation and protected-root mapping.
+The protected manual path is `evals/run.py --scenario pocket-custom-contracts
+--agent-backend codex`, with `EVAL_CODEX_WRAPPER`,
+`EVAL_SOURCE_ISOLATION_CAPABILITY_ID`,
+`EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT`, and
+`EVAL_SOURCE_ISOLATION_ROOTS` configured by the operator (alongside the normal
+Pocket runtime variables). The automatic PR runner deliberately provides none
+of those inputs, so it cannot accidentally turn this environment gate into a
+deterministic scenario error.
 
 **Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
 skipped scenarios, so a PR touching it currently gets a green no-op. One more

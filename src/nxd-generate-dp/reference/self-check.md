@@ -767,13 +767,16 @@ for script_path in custom_scripts:
     except SyntaxError as exc:
         cerrors.append(f"{script_path}: verifier cannot be imported (syntax error: {exc.msg})")
         continue
-    registered = sum(any(call_name(d) == "on_verify" for d in n.decorator_list)
-                     for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    verifiers = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and
+                 any(call_name(d) == "on_verify" for d in n.decorator_list)]
+    registered = len(verifiers)
     main_calls_verify = has_main_guard(tree)
     if registered != 1 or not main_calls_verify:
         cerrors.append(f"{script_path}: needs exactly one @data_product.on_verify() and data_product.verify() main guard")
-    verifier = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and any(call_name(d) == "on_verify" for d in n.decorator_list)), None)
+    verifier = next(iter(verifiers), None)
+    if any(isinstance(n, ast.AsyncFunctionDef) for n in verifiers):
+        cerrors.append("Pocket custom verifier must be synchronous; the runtime does not await async verifier functions")
     verifier_src = ast.unparse(verifier) if verifier else ""
     conditional_failed = verifier and any(
         not isinstance(branch.test, ast.Constant) and any(

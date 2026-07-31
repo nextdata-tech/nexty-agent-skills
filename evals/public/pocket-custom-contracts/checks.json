@@ -1,6 +1,7 @@
 {
   "name": "Generate executable Pocket custom contracts",
   "skills": ["nxd-pocket-loop", "nxd-generate-dp"],
+  "ci_skip": "requires a manually operated default-deny source-isolation wrapper plus operator-resolved protected roots; the automatic PR runner has no such adapter. Run explicitly outside CI with the isolation attestation, wrapper, and roots configured.",
   "workspace_files": [
     "CONTEXT.md",
     "spec.py",
@@ -14,6 +15,27 @@
   "deterministic_check": {
     "script": "check_custom_contracts.py",
     "deps": []
+  },
+  "agent_source_isolation": {
+    "capability_id": "nxd-eval-source-isolation-v1",
+    "raw_stream_markers": [
+      {"id": "withheld-custom-contract-checker", "needle": "check_custom_contracts.py"},
+      {"id": "source-checks-rubric", "target": "scenario_checks"},
+      {"id": "prior-benchmark-report-history", "root": "benchmark_report_history"},
+      {"id": "prior-closure-temp-history", "root": "closure_temp_history"},
+      {"id": "codex-memories", "root": "codex_memories"},
+      {"id": "codex-session-history", "root": "codex_session_history"},
+      {"id": "evaluator-checkout", "root": "evaluator_checkout"}
+    ],
+    "probes": [
+      {"id": "withheld-custom-contract-checker", "target": "withheld_fixture", "fixture": "check_custom_contracts.py", "command": ["/bin/cat", "{target}"]},
+      {"id": "source-checks-rubric", "target": "scenario_checks", "command": ["/bin/cat", "{target}"]},
+      {"id": "prior-benchmark-report-history", "target": "operator_root", "root": "benchmark_report_history", "command": ["/bin/ls", "{target}"]},
+      {"id": "prior-closure-temp-history", "target": "operator_root", "root": "closure_temp_history", "command": ["/bin/ls", "{target}"]},
+      {"id": "codex-memories", "target": "operator_root", "root": "codex_memories", "command": ["/bin/ls", "{target}"]},
+      {"id": "codex-session-history", "target": "operator_root", "root": "codex_session_history", "command": ["/bin/ls", "{target}"]},
+      {"id": "evaluator-checkout", "target": "operator_root", "root": "evaluator_checkout", "command": ["/bin/ls", "{target}"]}
+    ]
   },
   "checks": [
     {"id": "contract-inventory", "check": "Collect the two user-stated guarantees separately from inferred schema constraints and record them in CONTEXT.md."},

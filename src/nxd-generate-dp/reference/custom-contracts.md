@@ -147,6 +147,9 @@ path inside a verifier.
 
 ## Verification scripts
 
+Verifier entrypoints must be synchronous `def` functions. Pocket does not await
+an `async def` verifier, so the closure self-check rejects coroutine entrypoints.
+
 Each script has exactly one `@data_product.on_verify()` verifier and ends with
 `if __name__ == "__main__": data_product.verify()`. It must be parseable and
 has one small `verify` function for its named custom contract; make its
