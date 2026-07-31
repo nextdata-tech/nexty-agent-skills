@@ -16,3 +16,5 @@ __pycache__/
 examples/e2e/_run/
 examples/e2e/_transform_run/
 examples/e2e/_blockproof/
+examples/e2e/_atomicity/
+examples/e2e/_atomicity_stale/

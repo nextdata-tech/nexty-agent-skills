@@ -10,8 +10,9 @@ these do.
 | `transform_main.py` | the **platform entrypoint** — the closure is registered with `@data_product.on_transform()` and invoked by nxd's own `data_product.run_transform(...)`. |
 
 ```bash
-python3 examples/e2e/transform_main.py                # replay
-python3 examples/e2e/transform_main.py --prove-block  # the gate must refuse
+python3 examples/e2e/transform_main.py                    # replay
+python3 examples/e2e/transform_main.py --prove-block      # the gate must refuse
+python3 examples/e2e/transform_main.py --prove-atomicity  # crash between loads
 .venv-live/bin/python examples/e2e/transform_main.py --live
 ```
 
@@ -53,6 +54,28 @@ prints which nxd answered:
 
 That line is load-bearing: on the older wheel the run fails rather than quietly
 proving less.
+
+### Publication is NOT atomic, and `--prove-atomicity` characterises it
+
+CONTRACT §7.7 asks what a crash between the two `pipeline.run` calls leaves
+behind. This injects exactly that fault and reports the real state rather than
+asserting a hoped-for one. Two scenarios, and the second is the dangerous one:
+
+**Crash on a first run** — inputs landed, judgement tables absent entirely. A
+consumer joining them gets zero rows and **fails loudly**; a re-run
+replace-loads both sides and repairs it. Survivable.
+
+**Crash after a previous successful run** — the new (smaller) input set is
+landed while the OLD judgements survive. Verified: 1 input, 3 judged rows, 2 of
+them describing inputs that no longer exist. This is **not detectable by
+absence** — `invoice_terms` is present, populated, internally consistent, and
+partly obsolete, with survivors and orphans indistinguishable.
+
+Mitigation available today: join judgements to inputs on the identity column, or
+filter on the `execution_id` every proposal already carries — a stale row's is
+not the latest. The real fix is one transaction across both loads, which dlt
+gives per `pipeline.run` but not across two, and the mapper needs two because it
+must read landed inputs before it can judge them.
 
 ## What it does NOT prove
 

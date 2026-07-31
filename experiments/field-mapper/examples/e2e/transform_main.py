@@ -268,6 +268,12 @@ def ingest(duckdb: DuckDbOutput) -> None:
         )
 
     # ---- run 2: land the judgements --------------------------------------
+    # Fault injection for `--prove-atomicity`. Placed here rather than inside a
+    # resource so the crash lands squarely BETWEEN the two committed loads,
+    # which is the window CONTRACT §7.7 asks about.
+    if os.environ.get(CRASH_ENV_VAR) == "1":
+        raise _InjectedCrash("simulated process death between the two loads")
+
     @dlt.resource(
         name=tables["mapper_proposals"],
         write_disposition="replace",
@@ -290,6 +296,208 @@ def ingest(duckdb: DuckDbOutput) -> None:
 
     pipeline.run([mapper_proposals(), mapper_evidence(), invoice_terms()])
     OUTCOME["landed"] = True
+
+
+#: Set to make the closure raise immediately before its SECOND `pipeline.run`.
+#: Fault injection for the atomicity proof; unset in every normal run.
+CRASH_ENV_VAR = "FIELD_MAPPER_E2E_CRASH_BEFORE_RUN2"
+
+
+class _InjectedCrash(RuntimeError):
+    """A simulated process death between the two loads. Not a real failure."""
+
+
+def _prove_atomicity() -> int:
+    """CONTRACT §7.7: what does a crash between the two loads leave behind?
+
+    The gate proof (`--prove-block`) shows a REFUSED build publishes nothing.
+    That is a different property from this one: here the gate PASSED, run 1
+    committed, and the process dies before run 2. Nothing in the design prevents
+    that, so the question is not "is it atomic" — it is not — but "what exactly
+    is a consumer left reading, and is that state detectable?"
+
+    Reports rather than asserts a hoped-for outcome. A test that asserted
+    atomicity would have to fail, and a test that asserted nothing would be
+    decoration; this pins the ACTUAL post-crash state so a future change that
+    alters it shows up as a diff.
+    """
+    run_dir = HERE / "_atomicity"
+    shutil.rmtree(run_dir, ignore_errors=True)
+    run_dir.mkdir(parents=True)
+    db_path = run_dir / "warehouse.duckdb"
+    os.environ[LIVE_ENV_VAR] = "0"
+    os.environ[CRASH_ENV_VAR] = "1"
+
+    print("\n[nxd] run_transform  (atomicity proof: crash before run 2)")
+    try:
+        data_product.run_transform(_context_json(db_path))
+        print("  FAIL: the injected crash did not fire")
+        return 1
+    except _InjectedCrash:
+        print("  crashed between the loads, as injected")
+    finally:
+        os.environ.pop(CRASH_ENV_VAR, None)
+
+    con = duckdb_lib.connect(str(db_path))
+    present = {
+        r[0]
+        for r in con.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'invoices'"
+        ).fetchall()
+    }
+    base_rows = (
+        con.execute(f"SELECT count(*) FROM invoices.{BASE_MODEL}").fetchone()[0]
+        if BASE_MODEL in present
+        else 0
+    )
+    con.close()
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    judgements = sorted(present & set(MAPPER_MODELS))
+    print(f"  run-1 rows landed:   {base_rows}")
+    print(f"  run-2 tables present: {judgements or 'none'}")
+
+    # The state that actually exists, named plainly.
+    if base_rows and not judgements:
+        print(
+            "\n  CONFIRMED NON-ATOMIC, and this is the shape of it:\n"
+            "    inputs are landed and judgements are absent. A consumer joining\n"
+            "    invoice_documents to mapper_proposals gets ZERO rows — not\n"
+            "    wrong values, and not a partially-judged population.\n"
+            "\n  Detectable: the judgement tables are missing entirely, so a\n"
+            "  consumer fails loudly rather than reading a half-built table.\n"
+            "  A re-run replace-loads both sides and repairs it.\n"
+            "\n  NOT SAFE if a previous successful run left judgement tables\n"
+            "  behind: those are STALE relative to the inputs that just landed,\n"
+            "  and nothing marks them so. That is the real exposure, and it is\n"
+            "  why CONTRACT §7.7 wants one transaction across both loads."
+        )
+        return _prove_stale_judgements_survive()
+    if judgements:
+        print(
+            "\n  UNEXPECTED: judgement tables exist after a crash before run 2.\n"
+            "  Either the injection fired late or dlt committed early."
+        )
+        return 1
+    print("\n  UNEXPECTED: run 1 landed nothing; the injection fired too early.")
+    return 1
+
+
+def _prove_stale_judgements_survive() -> int:
+    """The dangerous half: a crash AFTER a previous successful run.
+
+    Run once cleanly so judgement tables exist. Then change the inputs, run
+    again, and crash between the loads. The new inputs are landed; the OLD
+    judgements are still sitting there, now describing rows that no longer
+    exist. Nothing in the schema says so.
+    """
+    import dataclasses
+
+    _re = sys.modules[__name__]
+    run_dir = HERE / "_atomicity_stale"
+    shutil.rmtree(run_dir, ignore_errors=True)
+    run_dir.mkdir(parents=True)
+    db_path = run_dir / "warehouse.duckdb"
+    os.environ[LIVE_ENV_VAR] = "0"
+
+    print("\n  --- second scenario: crash after a PREVIOUS successful run ---")
+    data_product.run_transform(_context_json(db_path))
+    con = duckdb_lib.connect(str(db_path))
+    first = con.execute(
+        "SELECT count(*), min(invoice_ref) FROM invoices.invoice_terms"
+    ).fetchone()
+    con.close()
+    print(f"  run A landed cleanly: {first[0]} judged row(s)")
+
+    # Drop an input, so run B's landed population is genuinely smaller than the
+    # judgements run A left behind. Identity is untouched: the replay answer
+    # table is keyed by invoice_id, and renaming them would fail the run for an
+    # unrelated reason (KeyError) instead of proving anything about staleness.
+    original = _re._fake_source_rows
+
+    def _fewer() -> Any:
+        return [dict(r) for r in original()][:1]
+
+    # The spec declares min_rows 3, so a one-input run would BLOCK on
+    # cardinality before ever reaching the injected crash — and prove nothing.
+    # Relaxing it here keeps the scenario about atomicity rather than about the
+    # gate, which `--prove-block` already covers.
+    original_spec = _re._build_spec
+
+    def _relaxed() -> Any:
+        spec = original_spec()
+        return dataclasses.replace(
+            spec,
+            cardinality=dataclasses.replace(spec.cardinality, min_rows=1),
+        )
+
+    _re._fake_source_rows = _fewer
+    _re._build_spec = _relaxed
+    os.environ[CRASH_ENV_VAR] = "1"
+    try:
+        data_product.run_transform(_context_json(db_path))
+        print("  FAIL: the injected crash did not fire on run B")
+        return 1
+    except _InjectedCrash:
+        print("  run B crashed between the loads, as injected")
+    finally:
+        os.environ.pop(CRASH_ENV_VAR, None)
+        _re._fake_source_rows = original
+        _re._build_spec = original_spec
+
+    con = duckdb_lib.connect(str(db_path))
+    inputs_now = [
+        r[0]
+        for r in con.execute(
+            f"SELECT invoice_id FROM invoices.{BASE_MODEL} ORDER BY 1"
+        ).fetchall()
+    ]
+    judged_now = [
+        r[0]
+        for r in con.execute(
+            "SELECT invoice_ref FROM invoices.invoice_terms ORDER BY 1"
+        ).fetchall()
+    ]
+    orphaned = con.execute(
+        f"SELECT count(*) FROM invoices.invoice_terms t "
+        f"LEFT JOIN invoices.{BASE_MODEL} d ON d.invoice_id = t.invoice_ref "
+        f"WHERE d.invoice_id IS NULL"
+    ).fetchone()[0]
+    con.close()
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    print(f"  inputs now:     {inputs_now}")
+    print(f"  judgements now: {judged_now}")
+    print(f"  judgement rows with no matching input: {orphaned}")
+
+    if orphaned and len(judged_now) > len(inputs_now):
+        print(
+            f"\n  CONFIRMED, and this is the exposure CONTRACT §7.7 names:\n"
+            f"    invoice_terms still holds {len(judged_now)} judged rows while\n"
+            f"    only {len(inputs_now)} input(s) are landed. {orphaned} of those\n"
+            f"    judgements describe inputs that are GONE, and nothing in the\n"
+            f"    schema marks them stale.\n"
+            f"\n  Worse than the first scenario, because it is NOT detectable by\n"
+            f"  absence: invoice_terms is present, populated, and internally\n"
+            f"  consistent. A consumer reading it alone sees a plausible table\n"
+            f"  that is partly obsolete — the survivors and the orphans look\n"
+            f"  identical.\n"
+            f"\n  Mitigation available today: join judgements to inputs on the\n"
+            f"  identity column and drop non-matching rows, or filter on the\n"
+            f"  execution_id every proposal already carries — a stale row's\n"
+            f"  execution_id is not the latest one.\n"
+            f"\n  Real fix: both loads in ONE transaction. dlt gives that per\n"
+            f"  pipeline.run, not across two, and the mapper needs two because\n"
+            f"  it must read landed inputs before it can judge them."
+        )
+        return 0
+    print(
+        f"\n  UNEXPECTED: expected orphaned judgements, got "
+        f"{orphaned} orphan(s) across {len(judged_now)} judged row(s) "
+        f"and {len(inputs_now)} input(s)."
+    )
+    return 1
 
 
 def _prove_block() -> int:
@@ -377,9 +585,19 @@ def main(argv: list[str] | None = None) -> int:
             "table exists"
         ),
     )
+    ap.add_argument(
+        "--prove-atomicity",
+        action="store_true",
+        help=(
+            "kill the closure between the two pipeline.run calls and report "
+            "what the database is left holding (CONTRACT §7.7)"
+        ),
+    )
     args = ap.parse_args(argv)
     if args.prove_block:
         return _prove_block()
+    if args.prove_atomicity:
+        return _prove_atomicity()
 
     run_dir = HERE / "_transform_run"
     if run_dir.exists():
