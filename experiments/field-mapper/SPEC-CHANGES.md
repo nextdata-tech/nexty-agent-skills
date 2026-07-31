@@ -746,13 +746,38 @@ Three consequences worth stating plainly:
    right — but nothing warns that a cheaper model on an evidence-blind path has no
    safety net at all.
 
-### What this does NOT show
+### The size caveat, retired
 
-Haiku is the smallest model and this is a low-resolution 240x96 synthetic PNG with
-a 5x7 bitmap font — adversarial for OCR in a way real invoices are not. The finding
-is not "haiku cannot read images." It is that **the harness cannot tell the
-difference**, and would have landed the wrong number just as confidently from any
-model on any image.
+This originally read: haiku is the smallest model and the fixture was a 240x96
+PNG, under the ~200px short edge the API documents as an accuracy floor — so a
+misread was ambiguous between "the harness cannot verify" and "the image was too
+small to read."
+
+**That caveat is now retired, by rebuilding the fixture and re-running it.** The
+image is 656x272 (`samples/make_invoice_png.py`, checked in so it can be rebuilt
+rather than reconstructed), comfortably above the floor, and plainly legible:
+`ACME INVOICE / REF INV-2044 / TOTAL $90.00`.
+
+At that size, live:
+
+| model | reads `total_usd` | image says |
+|---|---|---|
+| `claude-haiku-4-5` | **99.0**, three runs out of three | `$90.00` |
+| `claude-sonnet-5` | 90.0 | `$90.00` |
+
+So the misread survives at legible size, is stable rather than flaky, and is
+model-specific. The two remaining readings are the ones that matter: the harness
+still cannot tell the difference on its own, and the disagreement between two
+models is the only signal available — which is exactly what corroboration
+(`corroboration_model`) now consumes.
+
+Note the value moved from `30.00` at 240x96 to `99.0` at 656x272. The *specific*
+wrong number is not stable across renderings; the *fact of being confidently
+wrong* is.
+
+The finding was never "haiku cannot read images." It is that a wrong value lands
+`ok` with a citation, and nothing in the harness distinguishes it from a right
+one.
 
 ## Estimator note
 

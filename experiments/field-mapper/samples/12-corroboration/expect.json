@@ -1,5 +1,5 @@
 {
-  "proves": "A stable single-model misread is caught by a SECOND model and never lands. The primary read 30.00 from an image showing 90.00 -- typed, in range, cited, and stable across runs, so retry and review-staleness are both blind to it. The corroborator read 90.00; the disagreement discards the value (validation_failed, needs_review) rather than landing either reading. invoice_ref agrees and stays ok, with evidence still evidence_unverified because agreement is corroboration, not verification.",
+  "proves": "A stable single-model misread is caught by a SECOND model and never lands. Both readings are observed live, not invented: haiku 99.0 vs sonnet 90.0 on an image that says $90.00, at a size well above the documented accuracy floor so 'too small to read' is excluded. The disagreement discards the value (validation_failed, needs_review) rather than landing either reading. invoice_ref agrees and stays ok, with evidence still evidence_unverified because agreement is corroboration, not verification.",
   "blocks": false,
   "status_counts": {
     "ok": 1,
