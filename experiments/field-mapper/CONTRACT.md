@@ -49,7 +49,7 @@ field_mapper/
   validate.py        range/enum/type/evidence checks, retry policy, degrade accounting
   transport.py       anthropic SDK call, budget, backoff, cancellation, heartbeat
   ledger.py          append-only run ledger (hashes only)
-  grant.py           consent-grant load + match, refused before any source read
+  grant.py           consent-grant load + match, refused before any model call
   resolver.py        proposals + reviews + evidence -> effective wide rows
   errors.py          the exception taxonomy value_status maps from
   __main__.py        CLI: preflight | canary | run | resolve | verify
@@ -310,22 +310,49 @@ as conditions evaluated after mapping completes, before landing:
 | Any cell `validation_failed` | no, until threshold | The model got this cell wrong; the harness caught it. Working as designed. |
 | `validation_failed` share > spec's `max_degrade_share` | **yes** | Past some share, "the harness caught it" becomes "the spec doesn't work." Threshold value is open question 1. |
 | `evidence_absent` share > spec's `max_absent_share` (when declared) | **yes** | Guards against a prompt/adapter change that silently stops finding anything. Optional — a genuinely sparse source declares no ceiling. |
-| Any cell `error` with `error_code = credential_missing` | **yes** | Systemic. One missing credential means every cell is unattempted; landing 0% coverage as data is the failure this rule exists to prevent. |
-| Any cell `error` with `error_code = dependency_missing` | **yes** | Systemic — the `anthropic` package absent, extractor absent, landed text model absent. |
-| Any cell `error` with `error_code = schema_reject` | **yes** | The wire schema the spec compiled to was rejected by the API. Systemic: it will reject every cell. |
+| Any cell `error` whose `error_code` is systemic | **yes** | The set is **derived** from the `SystemicError` hierarchy in `errors.py` (`SYSTEMIC_ERROR_CODES`), never hand-listed at the gate, so the two cannot drift apart: `credential_missing`, `dependency_missing`, `schema_reject`, `budget_exceeded`, `cancelled`, `model_not_found`, `grant_missing`, `spec_invalid`. One missing credential means every cell was unattempted; equally, a cancelled or budget-exhausted run must not land as a complete one. `coverage_blocked` is excluded, because it is what this gate *raises* — feeding it back would make the decision self-referential. |
 | `error` share (transport/refusal) > spec's `max_error_rate` | **yes** | Transport failure above rate is systemic per design §4. |
 | `error` share below that rate | no | An isolated 529 that exhausted its backoff is a row-level fact. |
 | Any cell `skipped` | **yes** | The run did not complete. Landing a partial run as if complete is the coverage lie. |
 | Any evidence `verify_failed` | no directly | It propagates: the owning cell becomes `validation_failed`, and the degrade threshold governs. |
 | `evidence_unverified` share > spec's `max_unverified_share` | **yes** | Past a threshold, "we don't claim verification" describes the whole dataset, and the evidence obligation has silently lapsed. |
 | Bijection assert fails (§7) | **yes** | Structural. |
-| Grant missing or mismatched | **yes**, *before* any source read | Design §9. Refused at the boundary, not after. |
+| Grant missing or mismatched | **yes**, before any model call — see the note below on what "before" does and does not cover | Design §9. Refused at the dispatch boundary. |
 | Preflight estimate exceeds grant ceiling | **yes**, before the first call | Design §10. |
 | Remaining budget cannot meet required coverage | **yes**, mid-run, deterministically | Better to fail than to land a silently truncated run. |
 
 Blocking is a raised `FieldMapperError` subclass that fails the transform. It is
 never a landed row with a `blocked` status — a blocked build lands nothing,
 because a partially-landed governed model is worse than no model.
+
+### What the grant gate does and does not guarantee
+
+Earlier revisions of this document claimed refusal happens "before any source
+read". **That is stronger than what the code does, and the claim is withdrawn.**
+
+What actually holds: the grant is checked in `map_inputs` before any content is
+sent to a model and before the API key is resolved. Nothing reaches a provider,
+and no money is spent, without a matching grant.
+
+What does not hold: callers may already have read source bytes off local disk by
+then. `Fixture.load()` hydrates inputs — including `landed_text` from disk —
+while building the argument it then passes to `map_inputs`, so a *mismatched* or
+*expired* grant is refused after that local read, not before it. Only a wholly
+**missing grant file** is refused before it, and only because loading the fixture
+fails outright.
+
+This is scoped deliberately rather than fixed, because the two readings protect
+different things. The gate is a **consent boundary on disclosure** — it governs
+what leaves the process for a third-party model, which is where the consent
+question actually bites. It is *not* an access-control boundary on the local
+filesystem: the caller already had those bytes, chose to read them, and could
+have read them with no harness involved. Promising otherwise would be a
+guarantee this library is not positioned to enforce.
+
+Consequence worth stating plainly for anyone building on this: **do not treat
+grant refusal as a substitute for filesystem permissions.** If a caller must not
+read a document at all, that has to be enforced before the harness is invoked.
+A grant governs disclosure to the model, nothing more.
 
 ---
 

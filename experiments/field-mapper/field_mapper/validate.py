@@ -27,7 +27,22 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field as dc_field
 from typing import Any
 
-from .errors import CoverageBlocked, SpecError
+from .errors import SYSTEMIC_ERROR_CODES, CoverageBlocked, SpecError
+
+#: Why each systemic code blocks, in the words the gate reports to a human.
+#: Only narration — `SYSTEMIC_ERROR_CODES` decides WHAT blocks, and a code
+#: missing from this table still blocks, with a generic reason. Deliberate: a
+#: forgotten sentence must never be able to unblock a systemic failure.
+_SYSTEMIC_REASONS: dict[str, str] = {
+    "credential_missing": "a required credential was not available",
+    "dependency_missing": "a required dependency was not available",
+    "schema_reject": "the API rejected the compiled wire schema",
+    "budget_exceeded": "the run exhausted its declared budget",
+    "cancelled": "the run was cancelled or hit its deadline",
+    "model_not_found": "the configured model was rejected by the API",
+    "grant_missing": "the grant was missing or did not match the spec",
+    "spec_invalid": "the spec is unusable",
+}
 
 __all__ = [
     "ValueStatus",
@@ -687,9 +702,13 @@ def evaluate_coverage(
     - `skipped`            -> ANY occurrence blocks. The run did not complete,
                               and landing a partial run as complete is the
                               coverage lie §3 added this status to prevent.
-    - systemic `error_code` -> ANY occurrence blocks (credential_missing,
-                              dependency_missing, schema_reject). One missing
-                              credential means every cell was unattempted.
+    - systemic `error_code` -> ANY occurrence blocks. The set is DERIVED from
+                              the `SystemicError` hierarchy
+                              (`SYSTEMIC_ERROR_CODES`), not listed here, so the
+                              gate cannot drift from the taxonomy: one missing
+                              credential means every cell was unattempted, and
+                              equally a cancelled or budget-exhausted run must
+                              not land as a complete one.
     - transport/refusal errors -> block past `max_error_rate` only.
     - ZERO `ok` cells      -> ANY such run blocks, unconditionally. See below.
 
@@ -773,13 +792,18 @@ def evaluate_coverage(
             f"not complete and must not land as if it had"
         )
 
+    # Derived from the `SystemicError` hierarchy, not hand-listed here. The
+    # literal three-code set this replaced left the gate disagreeing with the
+    # taxonomy it claimed to enforce: `budget_exceeded`, `cancelled`,
+    # `model_not_found`, `grant_missing` and `spec_invalid` are all systemic in
+    # `errors.py`, and all five landed as green partial runs. A run killed by
+    # its deadline published as though it had completed.
+    #
+    # An explicit `blocking_error_codes` still wins, so a caller can narrow the
+    # set deliberately; it just can no longer happen by omission.
     systemic = dict(
         blocking_error_codes
-        or {
-            "credential_missing": "a required credential was not available",
-            "dependency_missing": "a required dependency was not available",
-            "schema_reject": "the API rejected the compiled wire schema",
-        }
+        or {code: _SYSTEMIC_REASONS.get(code, "a systemic failure") for code in SYSTEMIC_ERROR_CODES}
     )
     seen: dict[str, int] = {}
     for cell in cells:

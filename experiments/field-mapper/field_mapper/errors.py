@@ -141,7 +141,13 @@ class SchemaRejectedByApi(SystemicError):
 
 
 class GrantError(SystemicError):
-    """Grant missing or mismatched. Raised BEFORE any source read (design §9)."""
+    """Grant missing or mismatched. Raised before any model call (CONTRACT §4).
+
+    NOT before any source read: a caller may already have hydrated inputs from
+    local disk before `map_inputs` runs. The gate is a consent boundary on
+    disclosure to a third-party model, not access control on the filesystem —
+    see CONTRACT §4, "What the grant gate does and does not guarantee".
+    """
 
     error_code = "grant_missing"
 
@@ -233,3 +239,44 @@ ERROR_CODES = frozenset(
         "cancelled",
     }
 )
+
+
+def _systemic_error_codes() -> frozenset[str]:
+    """Every `error_code` reachable from a `SystemicError`, walked live.
+
+    DERIVED, never hand-listed, and that is the whole point. `evaluate_coverage`
+    previously carried its own literal set of three codes, so the
+    `CellError`/`SystemicError` split was real in this hierarchy and silently
+    unenforced at the gate: `budget_exceeded`, `cancelled`, `model_not_found`,
+    `grant_missing` and `spec_invalid` are all systemic here, and every one of
+    them landed as a green partial run. A cancelled run, a budget-exhausted run
+    and a wrong-model run all published as though they had finished — which
+    defeated the design's central failure-policy claim.
+
+    Walking the subclass tree means the gate cannot drift from the taxonomy
+    again: a new `SystemicError` blocks the moment it is declared, with nobody
+    needing to remember a second list in another module.
+    """
+    found: set[str] = set()
+    stack: list[type] = [SystemicError]
+    while stack:
+        cls = stack.pop()
+        code = getattr(cls, "error_code", None)
+        if isinstance(code, str) and code:
+            found.add(code)
+        stack.extend(cls.__subclasses__())
+    return frozenset(found)
+
+
+#: Systemic codes as a set, computed once at import.
+#:
+#: `coverage_blocked` is EXCLUDED, and the exclusion is load-bearing rather than
+#: an oversight. It is the code `evaluate_coverage` itself raises when a gate
+#: trips, so feeding it back in would make the decision self-referential — a
+#: blocked run would re-block on the evidence of having been blocked, and the
+#: reported reason would name the gate instead of the cause. It is genuinely
+#: systemic (landing after it would be a lie) but it is an OUTPUT of this
+#: decision, never an input to it.
+SYSTEMIC_ERROR_CODES: frozenset[str] = _systemic_error_codes() - {
+    "coverage_blocked"
+}

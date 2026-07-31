@@ -2,8 +2,9 @@
 
 Layer-1 harness for LLM inference from inside a data-product transform.
 
-Status: **prototype**. Acceptance suite passes 8/8. Not integrated into a
-transform; see [Blocked](#blocked-on) below.
+Status: **prototype**. Acceptance suite passes 13/13. Proven end to end as a
+real nxd transform (dlt → duckdb → mapper → gate → dlt), but not adopted for
+production use: two items still gate that; see [Blocked](#blocked-on) below.
 
 Design of record: vault note `designs/ai-dp-gen/19 - Data field mapper harness
 (in-transform inference)`. This file documents what the code actually does.
@@ -35,11 +36,11 @@ already carries vocabulary for that case — `source_locators` (`spec.py:207`),
 `ordinal_suffix`, duplicate policies — which the dispatch loop and wire schema
 cannot execute. The spec language is more general than the implementation.
 
-See [GENERALITY.md](GENERALITY.md) for the 13-scenario stress test and
-[SPEC-CHANGES.md](SPEC-CHANGES.md) for the four proposed extensions — the one
-that closes this gap is `identity_source: output` + row-array output mode.
+See [GENERALITY.md](GENERALITY.md) for the 13-scenario stress test. The
+extension that closes this gap — `identity_source: output` plus a row-array
+output mode — is designed but not built.
 
-**Media inputs work for any modality** (SPEC-CHANGES extension 1, landed). Was
+**Media inputs work for any modality** (landed). Was
 `pdf`-shaped and orphaned; now `media.py` owns `MediaInput` and `MapperInput.media`
 carries it. Exercised live: fixture 07 (PNG) and fixture 08 (a real 2-page PDF whose
 `recorded.json` is a genuine model response).
@@ -187,7 +188,17 @@ should declare and currently cannot. See GENERALITY.md extension 2
 ## Failure policy
 
 Row-level conditions degrade; systemic conditions block. This is enforced by the
-**exception hierarchy**, not by convention.
+**exception hierarchy**, not by convention: the gate derives its blocking set by
+walking `SystemicError`'s subclasses (`SYSTEMIC_ERROR_CODES`), so a new systemic
+error blocks the moment it is declared.
+
+That derivation replaced a hand-written list, and the distinction was not
+cosmetic. The gate previously named three codes literally while the hierarchy
+declared eight, so `budget_exceeded`, `cancelled`, `model_not_found`,
+`grant_missing` and `spec_invalid` were systemic in the taxonomy and *ignored*
+at the only place it mattered — a cancelled or budget-exhausted run landed as
+though it had completed. The hierarchy was real and unenforced; a split that
+lives in two places is a split that will drift.
 
 ```mermaid
 graph TD
@@ -238,9 +249,17 @@ model itself returned is **circular**.
 >
 > The catch is a hard fork: **citations and `output_config.format` are mutually
 > exclusive — sending both is a 400.** So the choice is schema-enforced JSON with
-> model-authored quotes (today), or API-extracted quotes with no schema
-> enforcement. Unmade decision; see SPEC-CHANGES.md § "The real API's PDF
-> constraints".
+> model-authored quotes, or API-extracted quotes with no schema enforcement.
+>
+> **Decided, and both are now available**, selected per spec by `evidence_mode`
+> (`"structured"` default, `"citations"` opt-in). On the citations path the
+> schema is asked for in prose and re-checked locally after parse, so what is
+> lost is API-side enforcement, never validation. A quote matching an
+> API-extracted span lands `api_cited` — verified-equivalent for gating, but
+> distinct in the audit trail, because an API citation cannot be re-run offline
+> from `text_hash` + offsets. One non-obvious constraint: asking for bare JSON
+> suppresses citations entirely (they attach to narrative text blocks), so the
+> citations path must request prose *then* JSON.
 >
 > Still true as written: **scanned PDFs are not citable** ("PDFs that are scans of
 > documents and do not contain extractable text are not citable"), and **image
@@ -299,7 +318,13 @@ reviews re-attach to the wrong entity while the uniqueness assert still passes.
 
 ## Acceptance suite
 
-`python -m field_mapper verify samples` — 8/8 pass.
+`python -m field_mapper verify samples` — 13/13 pass. Each fixture declares what
+it proves in its own `expect.json`; `verify` fails a fixture that stops behaving
+as declared, so the claims below are checked rather than asserted.
+
+`python -m field_mapper pins` checks three invariants the fixture suite
+structurally cannot: spec-hash stability, canonical-form coverage, and that
+every `SystemicError` code still blocks at the gate.
 
 | fixture | proves |
 |---|---|
@@ -309,6 +334,13 @@ reviews re-attach to the wrong entity while the uniqueness assert still passes.
 | 04-wrong-document | wrong-filed document quarantined *before* mapping; row shortfall then blocks on cardinality |
 | 05-evidence-absent | silent source → `evidence_absent`, all typed slots null, build still lands |
 | 06-validation-failure | out-of-range value discarded; human override wins in the wide row while the long-form proposal stays `validation_failed`; stale confirmation goes `value_changed` |
+| 07-media-direct | an image with no landed text yields correct values whose evidence is `evidence_unverified`, never `verified` — the substring check is inapplicable, not weakened, and preflight says so |
+| 08-pdf-document | a real 2-page PDF as a native document block: values right across both pages, every citation `evidence_unverified` — the harness holds only base64, so it has no haystack |
+| 09-unfalsifiable-evidence | **NEGATIVE** — a media-direct spec demanding evidence is refused before any model call; an unfalsifiable quote must not discharge an evidence obligation |
+| 10-cross-field-check | a cross-field arithmetic check catches a misread every per-field check passes; the violation flows into the retry loop and the corrected read lands |
+| **11-consistent-misread** | **ADVERSARIAL / NEGATIVE CAPABILITY** — a *consistent* misread defeats the cross-field check and lands `ok` with a verified citation. The residual that needs a second reader. |
+| 12-corroboration | a stable single-model misread is caught by a SECOND model and never lands; disagreement discards the value rather than picking a side |
+| 13-citations | the twin of 08: `evidence_mode: "citations"` lands `api_cited` at a `0.0` unverified ceiling that 08 cannot meet. The pair is the proof. |
 
 ### Fixture 03 is a demonstrated vulnerability, not a defence
 
@@ -351,7 +383,7 @@ experiments require live calls.
 
 ## Blocked on
 
-Not integrated into a transform. Two open items gate that:
+Proven as a transform, not adopted as one. Two open items gate that:
 
 1. **PDF text extractor.** Stage 1 needs canonical text with page and character
    offsets. Nothing in the pinned venv extracts PDF text, and adding `anthropic`

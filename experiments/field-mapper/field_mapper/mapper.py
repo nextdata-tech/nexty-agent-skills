@@ -3,9 +3,13 @@
 This is the module that binds the others together, and it exists so that no
 caller ever has to. The ordering below is the contract, not a convenience:
 
-1. **Grant check first**, before any source content is read and before the API
-   key is resolved (design §9, CONTRACT.md §4's last three rows). A gate that
-   runs after the inputs are in memory has already lost.
+1. **Grant check first**, before any source content is DISCLOSED to a model and
+   before the API key is resolved (CONTRACT.md §4). Note the scope carefully:
+   this runs after the caller has hydrated inputs, so bytes already read off
+   local disk are not covered. The gate is a consent boundary on disclosure,
+   not access control on the filesystem — CONTRACT.md §4, "What the grant gate
+   does and does not guarantee", states what it does and does not promise, and
+   why closing the gap is the caller's job rather than this library's.
 2. Source-identity reconciliation. A résumé attached to the wrong candidate
    otherwise validates *cleanly* — every quote is a real substring of the
    attached document, so the substring check certifies the wrong entity's

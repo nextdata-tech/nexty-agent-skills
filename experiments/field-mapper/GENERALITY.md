@@ -1,9 +1,11 @@
 # Generality stress test — does `map(inputs) -> rows` hold?
 
-Scope: the design as intended, with REVIEW.md's defects assumed fixed. This
-document invents scenarios the harness was not built against and determines
-whether the single primitive and the single call shape survive them. Existing
-defects are cited only where one is load-bearing for a verdict.
+Scope: the design as intended, with the prototype's then-known defects assumed
+fixed. (They were tracked in a review document during the fix workflow; that
+document is in the branch history, and the load-bearing findings have since
+landed.) This document invents scenarios the harness was not built against and
+determines whether the single primitive and the single call shape survive them.
+Defects are cited only where one is load-bearing for a verdict.
 
 Two structural facts drive most verdicts below, so they are stated once:
 
@@ -68,9 +70,9 @@ response does not rename rows; `target_row_key` hashes values, not
 position), so the review-binding story survives. What changes is the trust
 model: a hallucinated `sku` mints a phantom row that substring-evidence on
 *other* fields cannot catch, and a transcription variant of an identity
-value orphans reviews via a new key rather than a stale one. That makes
-REVIEW.md H-2 (reviews whose row key vanished are silently dropped)
-**load-bearing**: under `identity_source: output`, vanished-key is the
+value orphans reviews via a new key rather than a stale one. That makes the
+vanished-row-key defect (reviews whose row key no longer exists are silently
+dropped) **load-bearing**: under `identity_source: output`, vanished-key is the
 *common* invalidation path, not the corner case.
 
 ### S3. Résumé → employment-history rows — BREAKS (and it's the whiteboard case)
@@ -242,9 +244,9 @@ mechanisms, both population-scale:
   assert a run-1-bound confirmed review survives — it cannot. The design
   already recognizes this failure class for *reordering* (`canonical_sort`
   exists solely so a reorder is a no-op) but not for *append*, which is the
-  more common no-op-per-row change. Note this is not one of REVIEW.md's
-  findings; it is a design-level scope choice, and for row-independent specs
-  it is the wrong scope.
+  more common no-op-per-row change. Note this was never a review finding
+  against the implementation; it is a design-level scope choice, and for
+  row-independent specs it is the wrong scope.
 - **Cost:** no-cache + replace-load re-infers every unreviewed historical
   cell nightly. Spend is O(population) per rebuild, O(population × days)
   cumulative, for a workload whose information delta is O(daily arrivals).

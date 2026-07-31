@@ -535,7 +535,7 @@ def _live_caller(
     `TransportConfig.from_spec` rather than `TransportConfig(effort=...)`: the
     latter dropped `spec.model`, so the run called the default model while
     `mapper_spec_id` claimed another, and reviews bound to a model that never
-    ran (REVIEW.md CV-5).
+    ran.
     """
     from .transport import BudgetLedger, Client  # noqa: PLC0415
 
@@ -998,7 +998,7 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
             heartbeat=(lambda msg: print(f"    . {msg}")) if args.verbose else None,
         )
     except GrantError as exc:
-        print(f"\n  GRANT REFUSED (before any source read):\n    {exc}")
+        print(f"\n  GRANT REFUSED (nothing was sent to a model):\n    {exc}")
         return EXIT_BLOCKED
     except BudgetExceeded as exc:
         print(f"\n  BUDGET BLOCK:\n    {exc}")
@@ -1352,6 +1352,57 @@ def _check_canonical_coverage() -> list[str]:
     return problems
 
 
+def _check_systemic_codes() -> list[str]:
+    """The gate's block set still matches the `SystemicError` hierarchy.
+
+    `SYSTEMIC_ERROR_CODES` is walked from the class tree, so it self-heals when
+    a systemic error is added — but only while the walk itself is correct. This
+    pins the OUTCOME, so a refactor that breaks the derivation (a systemic class
+    moved out from under `SystemicError`, an `error_code` dropped) is caught
+    here rather than by a partial run landing green in production.
+
+    The bug it guards against shipped: the gate carried its own literal set of
+    three codes while five other systemic failures — including `cancelled` and
+    `budget_exceeded` — landed as complete runs.
+    """
+    from .errors import ERROR_CODES, SYSTEMIC_ERROR_CODES
+
+    #: Pinned deliberately. `coverage_blocked` is systemic in the hierarchy but
+    #: excluded from the gate's inputs — it is what the gate RAISES, and feeding
+    #: it back would make the decision self-referential.
+    want = {
+        "budget_exceeded",
+        "cancelled",
+        "credential_missing",
+        "dependency_missing",
+        "grant_missing",
+        "model_not_found",
+        "schema_reject",
+        "spec_invalid",
+    }
+
+    problems: list[str] = []
+    missing = want - SYSTEMIC_ERROR_CODES
+    extra = SYSTEMIC_ERROR_CODES - want
+    if missing:
+        problems.append(
+            f"systemic code(s) {sorted(missing)} no longer reach the gate — a "
+            f"run failing this way would land as if it had completed"
+        )
+    if extra:
+        problems.append(
+            f"systemic code(s) {sorted(extra)} newly block; if that is "
+            f"intended, add them to the pin in _check_systemic_codes"
+        )
+    unknown = SYSTEMIC_ERROR_CODES - ERROR_CODES
+    if unknown:
+        problems.append(
+            f"systemic code(s) {sorted(unknown)} are not in ERROR_CODES, so "
+            f"they cannot legally land in the error_code column"
+        )
+    return problems
+
+
 def _check_trailing_json_parser() -> list[str]:
     """The citations path's JSON recovery still handles every known shape.
 
@@ -1431,6 +1482,13 @@ def cmd_pins(root: Path, args: argparse.Namespace) -> int:
     if not parser_problems:
         print("  ok   parser: prose-wrapped JSON recovers on every known shape")
     problems.extend(parser_problems)
+
+    systemic_problems = _check_systemic_codes()
+    for problem in systemic_problems:
+        print(f"  FAIL systemic: {problem}")
+    if not systemic_problems:
+        print("  ok   systemic: every SystemicError code blocks at the gate")
+    problems.extend(systemic_problems)
 
     fixtures = sorted(
         p for p in root.iterdir() if p.is_dir() and (p / SPEC_FILE).exists()
