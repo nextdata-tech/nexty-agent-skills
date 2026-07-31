@@ -19,9 +19,15 @@
 | 6 — Part B citations | gated on citation→field attribution design |
 | 7 — A4 marking | **LANDED**. `evidence_unfalsifiable` on the effective cell and the provenance sidecar; declared per fixture. CV-2 turned out to be the same defect as the H2 review finding, so both blockers were already closed. |
 
-Fixture 07 rebuild at a legible size (>200px) is still open, and still worth
-doing before Stage 5: it separates "the harness cannot verify" from "the image
-was too small to read".
+**Everything in this plan is landed except Stage 6.** That one is gated on a
+citation→field attribution design — a citation anchors to a span of RESPONSE
+text while an evidence atom belongs to a specific FIELD, and nothing maps one to
+the other. That is design work, not plumbing, so it is not started rather than
+half-built.
+
+Also landed outside the original plan, because reviews found them: the record
+CSV round trip (`cmd_resolve`), publication-atomicity characterisation, the
+live corroborating client, per-attempt spend pricing, and A4 marking.
 
 How the Fable recommendations get built and, more importantly, how each one is
 *proven* rather than asserted. Written before any of it is implemented.
