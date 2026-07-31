@@ -16,14 +16,28 @@
 | §7.7 — atomicity | **LANDED** `63a9967`. Characterised, not asserted. Crash-after-success leaves a populated, partly-obsolete table where survivors and orphans look identical. |
 | Fixture 07 size | **LANDED** `bdb0347`. 656×272; the misread **survives** — haiku 99.0 vs sonnet 90.0, live. |
 | A2 live client | **LANDED** `abbc929`. L1 closed end to end with two real models. |
-| 6 — Part B citations | gated on citation→field attribution design |
+| 6 — Part B citations | designed, not built. The attribution blocker was **withdrawn** — it did not exist. Real question was the circularity ceiling, now decided: `API_CITED` as its own status (§6.3). |
 | 7 — A4 marking | **LANDED**. `evidence_unfalsifiable` on the effective cell and the provenance sidecar; declared per fixture. CV-2 turned out to be the same defect as the H2 review finding, so both blockers were already closed. |
 
-**Everything in this plan is landed except Stage 6.** That one is gated on a
-citation→field attribution design — a citation anchors to a span of RESPONSE
-text while an evidence atom belongs to a specific FIELD, and nothing maps one to
-the other. That is design work, not plumbing, so it is not started rather than
-half-built.
+**Everything in this plan is landed except Stage 6**, which is now designed
+(§6) but not built.
+
+**The stated blocker on Stage 6 was wrong and is withdrawn.** Two prior
+revisions of this file claimed a citation→field attribution problem: a citation
+anchors to a span of *response text* while an evidence atom belongs to a
+*field*, with nothing mapping one to the other. Checking the code instead of
+re-reading the plan shows the mapping was never needed. The wire schema already
+nests `evidence` **under each field** (`schema.py:217-247`), so a quote arrives
+already attributed by construction. There is no matching step to design.
+
+That correction also cancels the "one call per field" fallback, which existed
+only to buy attribution the schema already provides. It would have multiplied
+cost by the field count to solve a solved problem.
+
+The genuine gap is a different one, and narrower: `verify_quote` has no haystack
+for media, so media evidence can never be checked (§6.2). Citations supply that
+haystack for PDFs. What that leaves open is a **trust** question, not an
+attribution one.
 
 Also landed outside the original plan, because reviews found them: the record
 CSV round trip (`cmd_resolve`), publication-atomicity characterisation, the
@@ -392,16 +406,127 @@ block (`transport.py:1290`). With citations enabled the API splits output into
 **multiple** text blocks — cited blocks carry `citations` arrays — so the JSON
 body is fragmented and first-block parsing fails outright.
 
-Stage 6 therefore needs three things the plan did not name:
+Stage 6 therefore needs two things the plan did not name:
 1. **block concatenation** plus fence/JSON search hoisted into `_interpret` or a
    shared helper, so both providers use one parse path;
-2. a **citations carrier on `CallResult`** (`transport.py:614` has `parsed` and
+2. a **citations carrier on `CallResult`** (`transport.py:749` has `parsed` and
    nothing else) to get `cited_text` / `page_location` down to
-   `mapper._evidence_for` (`mapper.py:825`);
-3. a **citation→field attribution design.** This is the hard one and it is a
-   design problem, not plumbing: a citation anchors to a *span of response text*,
-   while an evidence atom belongs to a *specific field*. Nothing currently maps
-   one to the other. Until that is designed, Stage 6 cannot start.
+   `mapper._evidence_for`.
+
+A third item stood here — a citation→field attribution design — and it was
+wrong. See §6.1. It is struck rather than deleted because the plan's value
+depends on which claims were checked and which were assumed, and this one was
+assumed across two revisions.
+
+### 6.1 The attribution blocker, withdrawn
+
+The claim was that a citation anchors to a span of response text while an
+evidence atom belongs to a field, with nothing mapping one to the other.
+
+The compiled wire schema (`schema.py:214-247`) emits, per field:
+
+```json
+{"value": <typed | absent-sentinel>,
+ "evidence": [{"quote": "...", "source_field_name": "..."}]}
+```
+
+`evidence` is **nested inside the field's own object**. A quote is therefore
+bound to its field by position in the JSON tree, before any citation exists.
+Enabling citations does not move the values out of that shape — it fragments the
+*transport* of the text across blocks (item 1 above, still real) and attaches
+`cited_text` to those blocks. The field binding is unaffected.
+
+So the attribution work is zero, and the per-field-call fallback that was
+proposed to buy attribution is cancelled: it would have multiplied cost by the
+field count to solve a problem the schema already solved.
+
+**Why the error survived two revisions:** the plan reasoned about the Anthropic
+citations API in the abstract, where citations do anchor to response spans,
+without checking what this harness asks the model to emit. The general fact was
+true; its application here was not.
+
+### 6.2 The real gap: `verify_quote` has no haystack for media
+
+`verify_quote` (`validate.py:410-451`) checks a quote as a substring of
+`landed_text` and returns one of three statuses. Its `evidence_unverified`
+branch fires on exactly one condition: **`landed_text is None`.**
+
+For a media input that is always the case. `MapperInput.is_media_direct`
+(`mapper.py:195`) is `bool(self.media) and self.landed_text is None` — there is
+no canonical text of a PNG to check a quote against. Every media quote returns
+`evidence_unverified`, which is what Stage 7's `evidence_unfalsifiable` now
+marks.
+
+This reframes fixtures 07 and 08. They are not unfalsifiable because attribution
+is unsolved; they are unfalsifiable because **the haystack does not exist.**
+
+Citations supply that missing haystack for PDFs: `cited_text` is extracted from
+the document **by the API**, not authored by the model. That is a second party's
+reading of the bytes.
+
+### 6.3 The open decision: does `cited_text` count as verification?
+
+It arrives in the same response as the value. `verify_quote`'s docstring bans
+precisely this:
+
+> it makes it structurally impossible to validate a quote against text the model
+> returned in the same response. That check is circular and proves nothing.
+
+Citations are extractive rather than generative, so the circularity is weaker
+than the case that docstring guards — but it is **not** the independent landed
+model the contract requires. Both readings are defensible:
+
+- **Collapse into `verified`** — simplest, and the extraction is genuinely not
+  the model's authorship.
+- **Its own status** — keeps the audit meaning of `verified` intact.
+
+**Decision: its own status, `API_CITED`.** `verified` has one contract — *the
+harness ran a substring check it can re-run offline from `text_hash` + offsets*.
+An API citation cannot be re-run offline; re-checking it means trusting the same
+response again. Collapsing the two would let a provider-side extraction clear
+the same gate as a check against independently landed text, and that is the
+distinction the two-stage design exists to hold.
+
+Consequences, which are the point of choosing this way:
+
+- counts as verified-equivalent **for gating** — it does not inflate
+  `unverified_share`, and it satisfies `min_evidence_per_ok_cell`;
+- **not** `verified` in the audit trail, so a reviewer can always ask "which of
+  these did we check ourselves?" and get an answer;
+- `evidence_unfalsifiable` (Stage 7) must stay **false** for an `api_cited`
+  atom. The A4 predicate is `all(atom is EVIDENCE_UNVERIFIED)`, so an enum
+  member that is neither `EVIDENCE_UNVERIFIED` nor `VERIFIED` gets this right
+  with no edit — but it must be **asserted by test**, not assumed, since a later
+  refactor to `!= VERIFIED` would silently invert it.
+
+**New vocabulary:** `API_CITED = "api_cited"`, landing in **two places, not
+one**. Verified by execution, and the shape is worse than previously recorded:
+
+- `records.py:108` — `VerifyStatus(_LandedEnum)`, members `VERIFIED`,
+  `EVIDENCE_UNVERIFIED`, `VERIFY_FAILED`.
+- `validate.py:71` — a **second, unrelated class also named `VerifyStatus`**,
+  a plain class of string constants plus an `ALL` frozenset, with members
+  `VERIFIED`, `UNVERIFIED`, `FAILED`.
+
+Same class name, same string *values*, **different member names**. They are
+bridged only by the string: `mapper._evidence_for` builds the records enum from
+the validate constant, so a member added to one side alone raises `ValueError:
+'api_cited' is not a valid VerifyStatus` at atom construction — confirmed by
+running it. That failure is loud, which is the good case; the trap is that
+`validate.VerifyStatus.API_CITED` and `records.VerifyStatus.API_CITED` look
+interchangeable at a call site and are not the same object.
+
+Add to both, and add `API_CITED` to `validate.ALL` — omitting it there is the
+silent half of the failure, since `ALL` is what gates landed vocabulary.
+
+`extractor` = `anthropic-api-citations` + the `anthropic-version` date, so a
+change in extraction behaviour is attributable after the fact.
+
+`VerifyStatus` subclasses `_LandedEnum` (`records.py:50`) — its values are
+**persisted CSV vocabulary**, gated by `all_values()`. Adding a member is a data
+format change: rows written after it can no longer be read by a build without
+it. Worth stating in `SPEC-CHANGES.md`; it does not move `mapper_spec_id`, since
+verify status is landed data rather than spec.
 
 **The trade:** schema-guaranteed parse vs fabrication-proof evidence. For this
 harness evidence is the scarcer good — the wire schema was never the load-
@@ -410,25 +535,48 @@ it costs retries, never correctness. What citations uniquely buy — `cited_text
 extracted **by the API, never authored by the model** — is the property the
 entire two-stage design was built to reconstruct.
 
-**New vocabulary:** `VerifyStatus.API_CITED`, which must land in **two places,
-not one**: the string constants + `ALL` frozenset in `validate.py:71-82`, *and*
-the enum in `records.py:106`. `mapper._evidence_for` constructs the records enum
-from the validate string (`mapper.py:861`), so a value present in only one side
-raises at atom construction. Not `verified` — that value's
-contract is "the harness ran a substring check it can re-run from `text_hash` +
-offsets." An API citation is a stronger claim by a *different verifier the
-harness cannot locally re-check*. Conflating them corrupts the audit meaning of
-`verified`. Counts as verified-equivalent for gating (not into
-`unverified_share`); `extractor` = `anthropic-api-citations` + the
-`anthropic-version` date.
+### 6.4 Scope limit: this closes the PDF path, not the media path
 
-**Verification:** live PDF call with citations on, asserting `cited_text` comes
-back with `page_location` and lands `api_cited`; a rejection test for
-`evidence_mode: citations` on an image spec.
+Citations apply to document blocks (PDF, plain text) — **not images**. Fixtures
+07 and 08 are PNGs. The cells this harness currently cannot falsify are exactly
+the ones citations **cannot** fix.
+
+Stating it plainly because the opposite is the natural assumption: Stage 6 does
+not retire `evidence_unfalsifiable`. It gives PDF specs a path to evidence that
+is checkable by someone other than the model, and leaves image specs where they
+are — which is why A3 (refuse unfalsifiable obligations) and A4 (mark them) stay
+load-bearing after Stage 6 lands.
+
+### 6.5 Verification
+
+Reading proves nothing here; four times in this project a read-verified claim
+failed when run. Each of these must execute:
+
+1. **Live PDF call, citations on** — assert `cited_text` returns with
+   `page_location`, and lands `api_cited`. Uses the existing throwaway key path.
+2. **Multi-block parse** — assert the concatenating parser recovers the JSON
+   object when the API splits it across cited blocks. Must be proven to *fail*
+   against the current `_first_text_block` (§6, item 1), or it is not testing
+   anything.
+3. **Image spec rejection** — `evidence_mode: citations` on a media/PNG spec
+   refuses at spec validation, not at dispatch and not silently degraded.
+4. **Vocabulary two-place landing** — a test that constructs an atom with
+   `api_cited`; it raises today, passes only when both `validate.py` and
+   `records.py` carry it. This is the pin for the class of bug the plan already
+   predicts.
+5. **A4 interaction** — an `api_cited` atom must yield
+   `evidence_unfalsifiable = false`. Asserted, not assumed (§6.3).
+6. **Gating arithmetic** — an `api_cited` atom satisfies
+   `min_evidence_per_ok_cell` and does not raise `unverified_share`.
+7. **Pins** — `verify pins` stays 12/12. Verify status is landed data, not spec,
+   so `mapper_spec_id` must not move. `evidence_mode` **does** move it when set,
+   which is why it must be omitted from `to_canonical()` at its default (§0.3) —
+   the fourth appearance of the omit-when-default trap, which has shipped as a
+   bug three times.
 
 ---
 
-## Stage 7 — A4: unfalsifiable marking (BLOCKED — do not start)
+## Stage 7 — A4: unfalsifiable marking (LANDED — header kept for history)
 
 One boolean `evidence_unfalsifiable` on the effective cell, populated by
 `resolve()` from data the `Resolution` bundle already holds; review queue renders
@@ -505,9 +653,14 @@ since `harness_version` is hashed. Stage 3 then makes L1's *dressing*
 structurally impossible; it is the cheapest hash-moving change, so the pin
 machinery gets exercised on a case with a known expected answer (exactly two
 pins move). Stages 4–5 attack the wrong value itself, cheap-deterministic before
-expensive-probabilistic. Stage 6 is independent but **gated on the
-citation→field attribution design**, which does not exist yet. Stage 7 does not
-start.
+expensive-probabilistic. Stage 6 is independent; it was held back on a blocker
+that turned out not to exist (§6.1), and is now designed but unbuilt. Stage 7
+does not start.
+
+*(Stage 7 subsequently landed, and Stage 6's blocker was withdrawn on
+inspection. Both are left as written above — the ordering argument is the
+record of what was believed at planning time, and the corrections are more
+useful visible than silently folded in.)*
 
 Stage 5 is where the money is: it is the only stage whose verification converts
 L1 from an open finding into a regression test, because ground truth is already
