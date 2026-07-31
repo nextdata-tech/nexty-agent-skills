@@ -20,7 +20,7 @@ import csv
 import io
 from dataclasses import dataclass, field as dc_field
 from enum import Enum
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .errors import SpecError
 from .identity import value_hash
@@ -42,6 +42,8 @@ __all__ = [
     "REVIEW_COLUMNS",
     "rows_to_csv",
     "reviews_from_csv",
+    "proposals_from_csv",
+    "evidence_from_csv",
 ]
 
 
@@ -482,6 +484,120 @@ def _csv_cell(value: Any) -> Any:
     if isinstance(value, bool):
         return "true" if value else "false"
     return value
+
+
+def _typed_from_row(
+    row: Mapping[str, Any], mapping: Mapping[ValueType, str]
+) -> TypedValue:
+    """Rebuild a `TypedValue` from the five nullable slot columns.
+
+    The declared `value_type` decides which slot is authoritative — NOT
+    "whichever column is non-empty". Reading it the other way would silently
+    retype a null cell: an `evidence_absent` int cell has every slot empty, and
+    guessing from emptiness would make it a string.
+
+    CSV carries no types, so slot text is coerced back through the declared
+    type. This is not cosmetic: `value_hash` is computed over
+    `(value_type, value)`, so a float landing back as the string "90.0" hashes
+    differently, and every review bound to that cell would go stale for a reason
+    no human could see.
+    """
+    value_type = ValueType(str(row["value_type"]))
+    raw = row.get(mapping[value_type])
+    if raw in ("", None):
+        return TypedValue(value_type=value_type, value=None)
+    text = str(raw)
+    if value_type is ValueType.INT:
+        return TypedValue(value_type=value_type, value=int(text))
+    if value_type is ValueType.FLOAT:
+        return TypedValue(value_type=value_type, value=float(text))
+    if value_type is ValueType.BOOL:
+        return TypedValue(value_type=value_type, value=text.lower() == "true")
+    return TypedValue(value_type=value_type, value=text)
+
+
+def proposals_from_csv(
+    text: str, evidence: Iterable[MapperEvidence] = ()
+) -> list[MapperProposal]:
+    """Parse landed `mapper_proposals.csv` back into records.
+
+    The inverse of `as_row()`, and what lets `resolve` run as a separate step at
+    all: re-resolving reads the LANDED long form instead of re-calling the
+    model, which is what makes a review cycle free.
+
+    `evidence` re-attaches the atoms by `(target_row_key, field)`. Pass it
+    whenever the sidecar is available: `evidence_count` is DERIVED from
+    `len(self.evidence)`, so a proposal parsed without its atoms re-serializes
+    with `evidence_count = 0` while the atoms still exist in the evidence table.
+    That is a silent corruption of the provenance join — the proposal claims no
+    evidence supports it and the sidecar disagrees. Caught by diffing a
+    round-trip, not by reading.
+    """
+    by_cell: dict[tuple[str, str], list[MapperEvidence]] = {}
+    for atom in evidence:
+        by_cell.setdefault((atom.target_row_key, atom.field), []).append(atom)
+
+    out: list[MapperProposal] = []
+    for lineno, raw in enumerate(csv.DictReader(io.StringIO(text)), start=2):
+        row = {k: (v if v not in ("", None) else None) for k, v in raw.items()}
+        try:
+            key = (str(row["target_row_key"]), str(row["field"]))
+            out.append(
+                MapperProposal(
+                    target_row_key=key[0],
+                    field=key[1],
+                    evidence=by_cell.get(key, []),
+                    typed=_typed_from_row(row, _SLOT),
+                    value_status=ValueStatus(str(row["value_status"])),
+                    error_code=row.get("error_code"),
+                    error_detail=row.get("error_detail"),
+                    attempt_count=int(row.get("attempt_count") or 0),
+                    attempt_id=row.get("attempt_id"),
+                    needs_review=str(row.get("needs_review")).lower() == "true",
+                    observation_id=str(row.get("observation_id") or ""),
+                    input_snapshot_id=str(row.get("input_snapshot_id") or ""),
+                    mapper_spec_id=str(row.get("mapper_spec_id") or ""),
+                    execution_id=str(row.get("execution_id") or ""),
+                    emission_ordinal=int(row.get("emission_ordinal") or 0),
+                )
+            )
+        except (KeyError, ValueError) as exc:
+            raise SpecError(f"mapper_proposals.csv line {lineno}: {exc}") from exc
+    return out
+
+
+def evidence_from_csv(text: str) -> list[MapperEvidence]:
+    """Parse landed `mapper_evidence.csv` back into records."""
+    out: list[MapperEvidence] = []
+    for lineno, raw in enumerate(csv.DictReader(io.StringIO(text)), start=2):
+        row = {k: (v if v not in ("", None) else None) for k, v in raw.items()}
+        try:
+            page = row.get("page")
+            start = row.get("char_start")
+            end = row.get("char_end")
+            out.append(
+                MapperEvidence(
+                    target_row_key=str(row["target_row_key"]),
+                    field=str(row["field"]),
+                    evidence_ordinal=int(row.get("evidence_ordinal") or 0),
+                    quote=str(row.get("quote") or ""),
+                    verify_status=VerifyStatus(str(row["verify_status"])),
+                    locator_kind=LocatorKind(str(row["locator_kind"])),
+                    source_model=row.get("source_model"),
+                    source_row_key=row.get("source_row_key"),
+                    source_field_name=row.get("source_field_name"),
+                    document_hash=row.get("document_hash"),
+                    page=int(page) if page is not None else None,
+                    char_start=int(start) if start is not None else None,
+                    char_end=int(end) if end is not None else None,
+                    extractor=row.get("extractor"),
+                    extractor_version=row.get("extractor_version"),
+                    text_hash=row.get("text_hash"),
+                )
+            )
+        except (KeyError, ValueError) as exc:
+            raise SpecError(f"mapper_evidence.csv line {lineno}: {exc}") from exc
+    return out
 
 
 def reviews_from_csv(text: str) -> list[MapperReview]:

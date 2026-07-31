@@ -58,12 +58,15 @@ from .providers import PROVIDER_KINDS
 from .records import (
     EVIDENCE_COLUMNS,
     PROPOSAL_COLUMNS,
+    MapperProposal,
     MapperReview,
     ValueStatus,
+    evidence_from_csv,
+    proposals_from_csv,
     reviews_from_csv,
     rows_to_csv,
 )
-from .resolver import BijectionError, resolve
+from .resolver import BijectionError, EffectiveSource, resolve
 from .schema import compile_schema, describe_unenforceable, routing_table
 from .spec import CrossFieldCheck, MapperSpec
 from .transport import (
@@ -202,6 +205,65 @@ def _stamp_harness_version(spec: MapperSpec) -> MapperSpec:
     every review in the dataset with no visible cause.
     """
     return dc_replace(spec, harness_version=__version__)
+
+
+def bind_reviews_to_landed(
+    reviews: Sequence[MapperReview],
+    proposals: Sequence[MapperProposal],
+    fixture: Fixture | None = None,
+) -> list[MapperReview]:
+    """`bind_reviews`, but against LANDED proposals instead of a live MapResult.
+
+    `resolve` reads long-form records off disk, so there is no `MapResult` to
+    take `input_snapshot_id` from — but every proposal carries it as a column,
+    which is the point of landing it. Reading it back from the data rather than
+    recomputing it is what makes the resolve step independent of the run.
+
+    Same placeholder contract as `bind_reviews`, including the important half: a
+    review pinning a REAL hash is left alone, so a fixture proving a stale review
+    goes stale can write a deliberately wrong hash and this must not repair it.
+    """
+    if not reviews:
+        return []
+    ordinal_to_key = {p.emission_ordinal: p.target_row_key for p in proposals}
+    by_cell = {(p.target_row_key, p.field): p for p in proposals}
+    snapshot = proposals[0].input_snapshot_id if proposals else ""
+    spec_id = proposals[0].mapper_spec_id if proposals else ""
+    input_ids = [i.input_id for i in fixture.inputs] if fixture else []
+
+    bound: list[MapperReview] = []
+    for review in reviews:
+        row_key = review.target_row_key
+        if row_key in input_ids:
+            row_key = ordinal_to_key.get(input_ids.index(row_key), row_key)
+        proposal = by_cell.get((row_key, review.field))
+        value_hash = review.bound_value_hash
+        if value_hash == "<derived>":
+            value_hash = proposal.value_hash if proposal else None
+        bound.append(
+            MapperReview(
+                review_id=review.review_id,
+                target_row_key=row_key,
+                field=review.field,
+                verdict=review.verdict,
+                bound_value_hash=value_hash,
+                override=review.override,
+                bound_input_snapshot_id=(
+                    snapshot
+                    if review.bound_input_snapshot_id == "<derived>"
+                    else review.bound_input_snapshot_id
+                ),
+                bound_mapper_spec_id=(
+                    spec_id
+                    if review.bound_mapper_spec_id == "<derived>"
+                    else review.bound_mapper_spec_id
+                ),
+                reviewer=review.reviewer,
+                reviewed_at=review.reviewed_at,
+                note=review.note,
+            )
+        )
+    return bound
 
 
 def bind_reviews(
@@ -939,16 +1001,92 @@ def cmd_resolve(fixture: Fixture, args: argparse.Namespace) -> int:
     landed = Path(
         args.run_dir or (Path(__file__).parent.parent / "runs" / fixture.name)
     ) / "landed"
-    if not (landed / "mapper_proposals.csv").exists():
+    proposals_csv = landed / "mapper_proposals.csv"
+    if not proposals_csv.exists():
         print(
             f"  no landed proposals at {landed}. Run `run --dry-run --write-csv` "
             "first."
         )
         return EXIT_USAGE
-    print(
-        "  `resolve` re-projects landed long-form records; it makes no model "
-        "call.\n  Reviews are the only thing that survives a replace-load."
+
+    evidence_csv = landed / "mapper_evidence.csv"
+    evidence = (
+        evidence_from_csv(evidence_csv.read_text(encoding="utf-8"))
+        if evidence_csv.exists()
+        else []
     )
+    # Atoms are passed so `evidence_count` survives the round trip: it is
+    # DERIVED from len(proposal.evidence), so parsing without them would make
+    # every proposal claim zero evidence while the sidecar still holds atoms.
+    proposals = proposals_from_csv(
+        proposals_csv.read_text(encoding="utf-8"), evidence
+    )
+
+    # Reviews come from the FIXTURE, not from the landed directory. That is the
+    # whole point of the review model: `mapper_proposals` is replace-loaded on
+    # every run, and reviews are the only thing that survives it. A review file
+    # living inside `landed/` would be wiped by the very load it is meant to
+    # outlive.
+    reviews = bind_reviews_to_landed(fixture.reviews, proposals, fixture)
+
+    resolution = resolve(
+        proposals,
+        reviews,
+        evidence,
+        fields=fixture.spec.field_names,
+        min_evidence_per_ok_cell=min(
+            (f.min_evidence for f in fixture.spec.target_fields), default=0
+        ),
+    )
+
+    print(
+        f"  {len(proposals)} proposal(s), {len(evidence)} evidence atom(s), "
+        f"{len(reviews)} review(s) — no model call"
+    )
+    _render_wide(resolution, fixture.spec.field_names)
+    _render_provenance(resolution)
+
+    # The interesting half. A confirmation binds (row, field, value hash, input
+    # snapshot, spec id); if any of those moved since the review was written it
+    # goes STALE and the fresh proposal wins instead. A stale approval is never
+    # silently reapplied — that is the property the whole binding model exists
+    # for, and this is the only surface that exercises it.
+    if resolution.stale_reviews:
+        print(f"\n  {len(resolution.stale_reviews)} STALE review(s):")
+        for stale in resolution.stale_reviews:
+            # `stale_reasons` is plural on purpose: a review can be invalidated
+            # by several bindings at once (the value moved AND the spec
+            # changed), and collapsing that to one reason would hide half of
+            # what a re-reviewer needs to know.
+            reasons = ", ".join(
+                getattr(r, "value", str(r)) for r in stale.stale_reasons
+            )
+            print(f"    {stale.target_row_key[:10]} {stale.field}: {reasons}")
+    else:
+        print("\n  no stale reviews")
+
+    applied = [
+        cell
+        for cell in resolution.effective
+        if cell.effective_source is not EffectiveSource.MODEL_PROPOSED
+    ]
+    if applied:
+        print(f"  {len(applied)} cell(s) resolved from a REVIEW, not the model:")
+        for cell in applied:
+            print(
+                f"    {cell.target_row_key[:10]} {cell.field} <- "
+                f"{cell.effective_source.value}"
+                + (f" (by {cell.reviewer})" if cell.reviewer else "")
+            )
+    else:
+        print("  no review overrode a proposal")
+
+    try:
+        resolution.assert_bijection()
+        resolution.assert_value_hashes()
+    except FieldMapperError as exc:
+        print(f"\n  STRUCTURAL ASSERT FAILED: {exc}")
+        return EXIT_BLOCKED
     return EXIT_OK
 
 
@@ -1348,6 +1486,47 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
         return (
             f"expected blocks={expect['blocks']}, got blocked={blocked}"
             + (f" ({'; '.join(report.reasons)})" if report.reasons else "")
+        )
+
+    # -- resolve round trip ------------------------------------------------
+    # Land the long form to CSV, read it back, and re-resolve. `resolve` is a
+    # SEPARATE step in real use — a reviewer edits reviews.csv days later and
+    # re-runs it against landed records, with no model call — so the records
+    # must survive the trip through CSV without changing meaning.
+    #
+    # The failure this catches is quiet: a value that comes back as the string
+    # "90.0" instead of the float 90.0 hashes differently, so every review bound
+    # to that cell goes stale for a reason no human could see. Comparing the
+    # re-resolved wide rows against the in-memory ones makes that loud.
+    landed_proposals = proposals_from_csv(
+        rows_to_csv([p.as_row() for p in result.proposals], PROPOSAL_COLUMNS),
+        evidence_from_csv(
+            rows_to_csv([e.as_row() for e in result.evidence], EVIDENCE_COLUMNS)
+        ),
+    )
+    reresolved = resolve(
+        landed_proposals,
+        bind_reviews_to_landed(fixture.reviews, landed_proposals, fixture),
+        evidence_from_csv(
+            rows_to_csv([e.as_row() for e in result.evidence], EVIDENCE_COLUMNS)
+        ),
+        fields=list(fixture.spec.field_names),
+        row_keys=result.row_keys,
+        min_evidence_per_ok_cell=min(
+            (f.min_evidence for f in fixture.spec.target_fields), default=0
+        ),
+    )
+    if reresolved.wide_rows != resolution.wide_rows:
+        return (
+            "resolve round trip changed the wide projection: landing the long "
+            "form and re-resolving it produced different rows, so a review "
+            "cycle would not see what the run landed"
+        )
+    if len(reresolved.stale_reviews) != len(resolution.stale_reviews):
+        return (
+            f"resolve round trip changed staleness: "
+            f"{len(resolution.stale_reviews)} stale in-memory, "
+            f"{len(reresolved.stale_reviews)} after the CSV trip"
         )
     return None
 

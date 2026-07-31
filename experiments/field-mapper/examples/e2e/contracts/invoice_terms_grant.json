@@ -1,5 +1,5 @@
 {
-  "mapper_spec_id": "ee3feb0d6f750703f3f018adba13edcc",
+  "mapper_spec_id": "7e4de99250d42a82d795e17d76336186",
   "provider": "anthropic",
   "model": "claude-haiku-4-5-20251001",
   "purpose": "End-to-end proof: read invoice terms from landed text.",
