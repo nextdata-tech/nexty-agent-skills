@@ -78,8 +78,15 @@ class VerifyStatus:
     UNVERIFIED = "evidence_unverified"
     #: Landed text exists and the quote is NOT in it. A hallucinated citation.
     FAILED = "verify_failed"
+    #: Extracted from the document BY THE API (citations), not authored by the
+    #: model. Verified-equivalent for gating, distinct in the audit trail — see
+    #: `records.VerifyStatus.API_CITED`, whose string value this must match.
+    API_CITED = "api_cited"
 
-    ALL = frozenset({VERIFIED, UNVERIFIED, FAILED})
+    #: The landed vocabulary. A member present in `records.VerifyStatus` but
+    #: missing HERE is the silent half of the two-class split: atoms construct
+    #: fine and this gate then rejects the landed row.
+    ALL = frozenset({VERIFIED, UNVERIFIED, FAILED, API_CITED})
 
 
 #: Which typed slot each declared type writes into (CONTRACT.md §2.1).

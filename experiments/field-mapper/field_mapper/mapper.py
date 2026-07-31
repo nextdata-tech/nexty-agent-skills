@@ -476,7 +476,21 @@ def map_inputs(
     # required" for some rows and "evidence waived" for others, with nothing in
     # the spec hash recording which. An over-broad refusal a human resolves by
     # declaring intent is the better failure.
-    direct = [i.input_id for i in survivors if i.is_media_direct]
+    # `evidence_mode: citations` is the ONE exception, and it is an exception to
+    # the premise rather than to the rule: the API extracts `cited_text` from
+    # the document server-side, so a quote CAN be checked against a span the
+    # harness did not author. The refusal above turns on "there is no text to
+    # check against", which stops being true here. Leaving the block in place
+    # would refuse the only configuration that answers it.
+    #
+    # `MapperSpec.__post_init__` has already established that this mode is legal
+    # only for document media, so an image spec still reaches the refusal below.
+    citations_mode = getattr(bound_spec, "evidence_mode", "structured") == "citations"
+    direct = [
+        i.input_id
+        for i in survivors
+        if i.is_media_direct and not citations_mode
+    ]
     if direct:
         obliged = [f.name for f in bound_spec.target_fields if f.min_evidence > 0]
         if obliged:
@@ -607,6 +621,10 @@ def _map_one(
     last_attempt_id: str | None = None
     response_hash = ""
     parsed: Mapping[str, Any] | None = None
+    #: Initialized here, not only inside the loop: a systemic failure breaks
+    #: before the assignment, and an unbound read below would turn an
+    #: already-failing run into a NameError that hides it.
+    citations: tuple[Any, ...] = ()
     systemic: SystemicError | None = None
     cell_error_code: str | None = None
     cell_error_detail: str | None = None
@@ -690,6 +708,10 @@ def _map_one(
         response_hash = getattr(call_result, "response_hash", "") or ""
         stop_reason = getattr(call_result, "stop_reason", None)
         model_snapshot = getattr(call_result, "model_snapshot", None)
+        # Empty unless the spec asked for citations. A replayed fixture has no
+        # attribute at all, which is the same thing: no API extracted anything,
+        # so no atom can claim `api_cited`.
+        citations = tuple(getattr(call_result, "citations", ()) or ())
         # A replayed answer has NO provider — it was never dispatched. Recording
         # "replay" rather than defaulting to "anthropic" keeps the ledger honest:
         # a recorded fixture is a claim about what some provider once said, and
@@ -735,6 +757,7 @@ def _map_one(
             constraints=constraints,
             allow_unverified=allow_unverified,
             cross_field_checks=spec.cross_field_checks,
+            citations=citations,
         )
         _record_attempt(
             ledger,
@@ -944,7 +967,13 @@ def _map_one(
 
         result.cells.append(cell)
         atoms = _evidence_for(
-            parsed, item=item, row_key=row_key, field_name=name, cell=cell
+            parsed,
+            item=item,
+            row_key=row_key,
+            field_name=name,
+            cell=cell,
+            citations=citations,
+            citation_source=model_snapshot,
         )
         # Evidence is retained on a `validation_failed` cell for triage (§3) but
         # NOT on an `error`/`skipped` cell, which never got an answer to cite.
@@ -1103,8 +1132,18 @@ def _validate_response(
     constraints: Mapping[str, FieldConstraint],
     allow_unverified: bool,
     cross_field_checks: Sequence[Any] = (),
+    citations: Sequence[Any] = (),
 ) -> dict[str, ValidatedCell]:
-    """Type/range/enum/evidence-check one response. No I/O, no model call."""
+    """Type/range/enum/evidence-check one response. No I/O, no model call.
+
+    `citations` must be threaded in for the same reason `_evidence_for` takes
+    it. These statuses are what `evaluate_coverage` counts, while
+    `_evidence_for` produces the ones that land in the sidecar. Upgrading only
+    the latter left the two disagreeing: every atom displayed `api_cited` while
+    the gate still saw `evidence_unverified` and blocked the build at a 0.0
+    ceiling. A status that governs a decision and a status shown to a human must
+    come from the same rule.
+    """
     out: dict[str, ValidatedCell] = {}
     for name, constraint in constraints.items():
         block = parsed.get(name)
@@ -1130,8 +1169,10 @@ def _validate_response(
         for atom in raw_evidence:
             if not isinstance(atom, Mapping):
                 continue
-            status, _, _ = verify_quote(
-                str(atom.get("quote", "")), item.landed_text
+            status, _ = _verify_atom(
+                str(atom.get("quote", "")),
+                landed_text=item.landed_text,
+                citations=citations,
             )
             statuses.append(status)
 
@@ -1212,6 +1253,70 @@ def _validate_response(
     return out
 
 
+#: Names the party that extracted an `api_cited` span, so the audit trail
+#: distinguishes it from a local extractor's landed text.
+_CITATION_EXTRACTOR = "anthropic-api-citations"
+
+
+def _matching_citation(quote: str, citations: Sequence[Any]) -> Any | None:
+    """The API-extracted span that supports `quote`, or None.
+
+    Containment in EITHER direction counts, and the asymmetry is the point:
+
+    - quote inside cited_text — the model quoted a fragment of a span the API
+      extracted. The API's span is the superset, so the quote is supported.
+    - cited_text inside quote — the model quoted a longer run than the API
+      chose to cite. The cited span still corroborates the part it covers.
+
+    Normalized on both sides with the same `normalize_text` the substring check
+    uses, so whitespace differences between a PDF's extracted text and the
+    model's rendering of it do not read as a mismatch.
+
+    No match means no upgrade: the atom stays `evidence_unverified`, which is
+    the honest reading of "the model asserted a quote the API never cited".
+    """
+    needle = normalize_text(quote)
+    if not needle:
+        # An empty quote is contained in everything. Upgrading it would let a
+        # model cite nothing and collect the stronger status for it.
+        return None
+    for cite in citations:
+        text = normalize_text(str(getattr(cite, "text", "") or ""))
+        if not text:
+            continue
+        if needle in text or text in needle:
+            return cite
+    return None
+
+
+def _verify_atom(
+    quote: str,
+    *,
+    landed_text: str | None,
+    citations: Sequence[Any] = (),
+) -> tuple[str, Any | None]:
+    """The single verification rule: `(status, matching_citation_or_None)`.
+
+    The ONE place the `evidence_unverified -> api_cited` upgrade is decided.
+    Both the gating path (`_validate_response`, whose statuses `evaluate_
+    coverage` counts) and the audit path (`_evidence_for`, whose statuses land
+    in the sidecar) call it, because when those two paths each carried their own
+    copy of the rule they disagreed — the sidecar showed `api_cited` while the
+    gate still blocked on `evidence_unverified`.
+
+    The upgrade fires ONLY from `evidence_unverified`. A `verify_failed` atom
+    was checked against real landed text and lost; a citation must not rescue
+    it, or the API's reading would silently override a local disproof.
+    """
+    status, _, _ = verify_quote(quote, landed_text)
+    if status != VerifyStatus.EVIDENCE_UNVERIFIED.value or not citations:
+        return status, None
+    match = _matching_citation(quote, citations)
+    if match is None:
+        return status, None
+    return VerifyStatus.API_CITED.value, match
+
+
 def _evidence_for(
     parsed: Mapping[str, Any] | None,
     *,
@@ -1219,12 +1324,23 @@ def _evidence_for(
     row_key: str,
     field_name: str,
     cell: ValidatedCell,
+    citations: Sequence[Any] = (),
+    citation_source: str | None = None,
 ) -> list[MapperEvidence]:
     """Build the evidence atoms for one cell, re-running the substring check.
 
     Re-verifying rather than trusting the statuses from `_validate_response` is
     what puts the offsets on the atom: `verify_quote` returns them only on a
     pass, and an atom claiming `verified` without offsets would be unauditable.
+
+    `citations` are the `cited_text` spans the API extracted from the source
+    documents. A quote no local check could verify — because no landed text
+    exists — is matched against them, and a match lands `api_cited`: the API's
+    own extraction rather than the model's claim about what the document says.
+
+    Attribution needs no work here. `parsed[field_name]["evidence"]` is already
+    the quotes for THIS field, because the wire schema nests evidence inside
+    each field's own object. The citations are a haystack, never a mapping.
     """
     if parsed is None:
         return []
@@ -1236,12 +1352,23 @@ def _evidence_for(
         if not isinstance(raw, Mapping):
             continue
         quote = str(raw.get("quote", ""))
-        status, start, end = verify_quote(quote, item.landed_text)
+        _, start, end = verify_quote(quote, item.landed_text)
+        # Same rule the gating path uses, from the same helper — see
+        # `_verify_atom`. The eligibility exclusions (a `verified` atom is never
+        # downgraded to the weaker claim; a `verify_failed` atom is never
+        # laundered into an acceptable bucket, §2.3) live there.
+        status, match = _verify_atom(
+            quote, landed_text=item.landed_text, citations=citations
+        )
         locator = (
             LocatorKind.LANDED_TEXT
             if item.landed_text is not None
             else LocatorKind.SOURCE_FIELD
         )
+        cite_page: int | None = None
+        if match is not None:
+            locator = LocatorKind.PAGE_REGION
+            cite_page = getattr(match, "page", None)
         atoms.append(
             MapperEvidence(
                 target_row_key=row_key,
@@ -1254,11 +1381,29 @@ def _evidence_for(
                 source_row_key=item.input_id,
                 source_field_name=raw.get("source_field_name"),
                 document_hash=item.document_hash,
-                page=item.page,
+                # The API's page when it cited one, since that locates the span
+                # in the document rather than restating the input's own page.
+                page=cite_page if cite_page is not None else item.page,
                 char_start=start,
                 char_end=end,
-                extractor=item.extractor,
-                extractor_version=item.extractor_version,
+                # Attribute an API-extracted span to the API, not to whatever
+                # extractor produced the input's landed text — on this path
+                # there is none, and naming one would credit a component that
+                # did no work here.
+                extractor=(
+                    _CITATION_EXTRACTOR
+                    if status == VerifyStatus.API_CITED.value
+                    else item.extractor
+                ),
+                # The model snapshot that served the call, so a change in
+                # extraction behaviour is attributable to a specific build
+                # after the fact. Not the input's extractor version, which
+                # describes a component that did no work on this path.
+                extractor_version=(
+                    citation_source or ""
+                    if status == VerifyStatus.API_CITED.value
+                    else item.extractor_version
+                ),
                 text_hash=(
                     hash_text(normalize_text(item.landed_text))
                     if item.landed_text is not None

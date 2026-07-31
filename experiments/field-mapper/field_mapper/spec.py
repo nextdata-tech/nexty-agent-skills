@@ -41,6 +41,8 @@ __all__ = [
     "VALUE_TYPES",
     "DUPLICATE_POLICIES",
     "INPUT_ADAPTER_KINDS",
+    "EVIDENCE_MODES",
+    "CITABLE_MEDIA_TYPES",
     "TargetField",
     "GrainDeclaration",
     "Cardinality",
@@ -68,6 +70,18 @@ DUPLICATE_POLICIES: Final[frozenset[str]] = frozenset(
 #: the choice is hashed into `mapper_spec_id` and visible in an experiment diff.
 INPUT_ADAPTER_KINDS: Final[frozenset[str]] = frozenset(
     {"landed_rows", "landed_text", "document_blob"}
+)
+
+#: How evidence is obtained. Closed set for the same reason as the adapter
+#: kinds: the choice changes what an `ok` cell's evidence MEANS, so it is hashed
+#: and visible in an experiment diff.
+EVIDENCE_MODES: Final[frozenset[str]] = frozenset({"structured", "citations"})
+
+#: Media types the API can extract citations from. Images are absent and that is
+#: the whole point: there is no text in a PNG for the API to cite, so the media
+#: path this harness cannot falsify stays unfalsifiable after citations land.
+CITABLE_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
+    {"application/pdf", "text/plain"}
 )
 
 
@@ -483,6 +497,17 @@ class MapperSpec:
     #: STABLE single-model misread — see `corroboration_model`'s note below.
     #: Empty means off, and is omitted from the canonical form when empty.
     corroboration_model: str = ""
+    #: How evidence is obtained. `"structured"` (default) asks the model to
+    #: quote spans in the wire schema, which the harness then re-checks as a
+    #: substring of landed text. `"citations"` enables the API's citations
+    #: feature, whose `cited_text` is extracted from the document BY THE API and
+    #: lands as `api_cited`.
+    #:
+    #: Legal only for document media (`application/pdf`, `text/plain`).
+    #: Citations do not apply to images, so declaring this on an image spec is
+    #: refused at construction rather than degraded at dispatch — see
+    #: `__post_init__`. Omitted from the canonical form at its default.
+    evidence_mode: str = "structured"
     spec_version: str = "1"
     #: Compiled wire-schema bytes, hashed into the spec id per §5 step 3. Set by
     #: `schema.py` after compilation; `None` until then.
@@ -536,6 +561,38 @@ class MapperSpec:
                     "catch a STABLE misread — the failure corroboration exists "
                     "for is by definition one the model repeats. Name a "
                     "different model."
+                )
+        # Citations are an API feature of DOCUMENT blocks. Declaring the mode
+        # where it cannot operate must fail loudly here rather than silently
+        # produce `evidence_unverified` atoms at dispatch, which would look
+        # exactly like the structured path failing to verify and would let a
+        # spec claim an evidence guarantee it never had.
+        if self.evidence_mode not in EVIDENCE_MODES:
+            raise SpecError(
+                f"unknown evidence_mode {self.evidence_mode!r}; "
+                f"expected one of {sorted(EVIDENCE_MODES)}"
+            )
+        if self.evidence_mode == "citations":
+            if not self.accepts_media:
+                raise SpecError(
+                    "evidence_mode='citations' is declared but accepts_media "
+                    "is empty. Citations attach to document blocks sent to the "
+                    "API; a text spec has landed text, where the substring "
+                    "check already verifies every quote locally and can be "
+                    "re-run offline."
+                )
+            unsupported = [
+                m for m in self.accepts_media if m not in CITABLE_MEDIA_TYPES
+            ]
+            if unsupported:
+                raise SpecError(
+                    f"evidence_mode='citations' is not available for media "
+                    f"type(s) {unsupported!r}. The API extracts citations from "
+                    f"documents ({sorted(CITABLE_MEDIA_TYPES)}), never from "
+                    f"images — there is no text in an image for it to cite. An "
+                    f"image spec cannot obtain checkable evidence by any route; "
+                    f"declare min_evidence=0 and rely on cross_field_checks or "
+                    f"corroboration_model instead."
                 )
         numeric = {f.name for f in self.target_fields if f.value_type in ("int", "float")}
         declared = set(names)
@@ -711,6 +768,8 @@ class MapperSpec:
             ]
         if self.corroboration_model:
             canonical["corroboration_model"] = self.corroboration_model
+        if self.evidence_mode != "structured":
+            canonical["evidence_mode"] = self.evidence_mode
         return canonical
 
     def canonical_bytes(self) -> bytes:
@@ -755,6 +814,7 @@ class MapperSpec:
             "accepts_media",
             "cross_field_checks",
             "corroboration_model",
+            "evidence_mode",
             "spec_version",
             "wire_schema",
             "harness_version",
@@ -832,6 +892,7 @@ class MapperSpec:
                 for c in raw.get("cross_field_checks", ())
             ),
             corroboration_model=str(raw.get("corroboration_model", "")),
+            evidence_mode=str(raw.get("evidence_mode", "structured")),
             spec_version=str(raw.get("spec_version", "1")),
             wire_schema=raw.get("wire_schema"),
             harness_version=raw.get("harness_version", ""),

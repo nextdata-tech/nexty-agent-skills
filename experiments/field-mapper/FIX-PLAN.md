@@ -16,11 +16,11 @@
 | §7.7 — atomicity | **LANDED** `63a9967`. Characterised, not asserted. Crash-after-success leaves a populated, partly-obsolete table where survivors and orphans look identical. |
 | Fixture 07 size | **LANDED** `bdb0347`. 656×272; the misread **survives** — haiku 99.0 vs sonnet 90.0, live. |
 | A2 live client | **LANDED** `abbc929`. L1 closed end to end with two real models. |
-| 6 — Part B citations | designed, not built. The attribution blocker was **withdrawn** — it did not exist. Real question was the circularity ceiling, now decided: `API_CITED` as its own status (§6.3). |
+| 6 — Part B citations | **LANDED**. Fixture `13-citations` lands 4 `api_cited` atoms at a `0.0` unverified ceiling that its twin 08 cannot meet. All seven §6.5 cases pass. The attribution blocker was **withdrawn** — it did not exist; the real question was the circularity ceiling, decided as `API_CITED` in its own status (§6.3). Two unpredicted findings in §6.6. |
 | 7 — A4 marking | **LANDED**. `evidence_unfalsifiable` on the effective cell and the provenance sidecar; declared per fixture. CV-2 turned out to be the same defect as the H2 review finding, so both blockers were already closed. |
 
-**Everything in this plan is landed except Stage 6**, which is now designed
-(§6) but not built.
+**Everything in this plan is now landed**, Stage 6 included (§6.6 records what
+it cost and what the design did not predict).
 
 **The stated blocker on Stage 6 was wrong and is withdrawn.** Two prior
 revisions of this file claimed a citation→field attribution problem: a citation
@@ -574,6 +574,46 @@ failed when run. Each of these must execute:
    the fourth appearance of the omit-when-default trap, which has shipped as a
    bug three times.
 
+### 6.6 Outcome — all seven pass; two things the design did not predict
+
+Stage 6 is **built and verified**. Fixture `13-citations` lands four `api_cited`
+atoms at `max_unverified_share: 0.0` — a ceiling fixture 08 cannot meet with the
+same PDF, the same fields, and the same quotes. That pair is the proof, and
+`pins` now records 13 hashes with 13 deliberately distinct from 08.
+
+Two findings cost real debugging time and are worth stating, because neither is
+visible from reading the code.
+
+**1. Asking for JSON suppresses citations entirely.** Citations attach to
+narrative text blocks. `_instruction_with_prose_schema` originally said "Return
+ONLY a JSON object … with no prose before or after it", which is exactly the
+instruction that leaves the API nothing to cite. Measured on the fixture PDF,
+one call each:
+
+    json only        blocks=1   cites=0
+    prose then json  blocks=10  cites=4
+
+The mode was fully wired and returned **zero** citations, with no error anywhere
+— every atom simply stayed `evidence_unverified` and the build blocked. The fix
+is to ask for prose *then* JSON; the prose is load-bearing, not decoration, and
+deleting it silently reverts `citations` to `structured` behaviour. `pins` now
+carries a parser invariant so the recovery of the JSON tail cannot regress
+quietly (a break there presents as "the model stopped complying", which is the
+wrong diagnosis).
+
+**2. The upgrade had to land in two places, and the first one was the wrong
+one.** `_evidence_for` computes the statuses that are *displayed and landed*;
+`_validate_response` computes the ones `evaluate_coverage` *gates on*. Upgrading
+only the former produced a run whose sidecar showed `api_cited 4` while the gate
+still blocked on `evidence_unverified 100%` — the audit trail and the decision
+disagreeing about the same atoms. Both now call one `_verify_atom` helper. A
+status that governs a decision and a status shown to a human must come from the
+same rule, and the duplicated-rule shape is what let them drift.
+
+Both findings are the same underlying shape as the two-`VerifyStatus`-class trap
+this document already warns about: a rule expressed in two places, where the
+copies are only bridged by a string.
+
 ---
 
 ## Stage 7 — A4: unfalsifiable marking (LANDED — header kept for history)
@@ -657,10 +697,13 @@ expensive-probabilistic. Stage 6 is independent; it was held back on a blocker
 that turned out not to exist (§6.1), and is now designed but unbuilt. Stage 7
 does not start.
 
-*(Stage 7 subsequently landed, and Stage 6's blocker was withdrawn on
-inspection. Both are left as written above — the ordering argument is the
-record of what was believed at planning time, and the corrections are more
-useful visible than silently folded in.)*
+*(Stage 7 subsequently landed, Stage 6's blocker was withdrawn on inspection,
+and Stage 6 itself is now built and verified — §6.6. All of it is left as
+written above: the ordering argument is the record of what was believed at
+planning time, and the corrections are more useful visible than silently folded
+in. Worth noting the last line aged badly — Stage 6 was the cheapest stage to
+finish once the blocker evaporated, and cutting it would have cost the only
+evidence path that works on a PDF.)*
 
 Stage 5 is where the money is: it is the only stage whose verification converts
 L1 from an open finding into a regression test, because ground truth is already

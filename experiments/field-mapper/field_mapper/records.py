@@ -106,11 +106,28 @@ class Verdict(_LandedEnum):
 
 
 class VerifyStatus(_LandedEnum):
-    """`VERIFIED` is the ONLY value that may claim substring verification."""
+    """`VERIFIED` is the ONLY value that may claim substring verification.
+
+    Mirrored by a second class of the same name in `validate.py`, whose member
+    NAMES differ (`UNVERIFIED`, `FAILED`) while the string VALUES match. The two
+    are bridged only by the string, in `mapper._evidence_for`. Adding a member
+    to one side alone raises at atom construction.
+    """
 
     VERIFIED = "verified"
     EVIDENCE_UNVERIFIED = "evidence_unverified"
     VERIFY_FAILED = "verify_failed"
+    #: The quote was extracted from the document BY THE API (citations) rather
+    #: than authored by the model — a second party's reading of the bytes.
+    #:
+    #: Deliberately NOT `verified`. That value promises the harness ran a check
+    #: it can re-run offline from `text_hash` + offsets; an API citation cannot
+    #: be re-checked without trusting the same response again. It counts as
+    #: verified-equivalent for GATING (both ceilings in `validate.py` test
+    #: `== UNVERIFIED`, so it neither inflates `unverified_share` nor trips the
+    #: unverified block) while staying distinct in the audit trail, so "which of
+    #: these did we check ourselves?" stays answerable.
+    API_CITED = "api_cited"
 
 
 class LocatorKind(_LandedEnum):

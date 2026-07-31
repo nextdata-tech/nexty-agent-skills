@@ -397,6 +397,23 @@ def _input_from_dict(raw: Mapping[str, Any], base: Path) -> MapperInput:
 
 
 @dataclass
+class RecordedCitation:
+    """A stored citation span, shaped like a `transport.CitationSpan` duck.
+
+    Mirrored rather than imported for the same reason as `RecordedCall`: the
+    dry-run path must not reach into `transport`. The field names must track
+    `CitationSpan`, because `mapper._matching_citation` reads them by name off
+    whatever object the caller returned.
+    """
+
+    text: str
+    document_index: int | None = None
+    page: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+
+
+@dataclass
 class RecordedCall:
     """A stored response, shaped like a `transport.CallResult` duck.
 
@@ -414,6 +431,10 @@ class RecordedCall:
     output_tokens: int = 0
     error_code: str | None = None
     error_detail: str | None = None
+    #: Spans the API attached to its own answer. Empty for every fixture that
+    #: does not set `evidence_mode: "citations"`, which is why the default has
+    #: to be a real empty tuple rather than None: `mapper` iterates it.
+    citations: tuple[RecordedCitation, ...] = ()
 
 
 class RecordedPlayer:
@@ -466,11 +487,28 @@ class RecordedPlayer:
             )
 
         payload = json.dumps(entry, sort_keys=True, separators=(",", ":"))
+        # `__citations__` models what the API attached alongside the answer
+        # under `evidence_mode: "citations"`. It is stripped from `parsed` so a
+        # reserved transport key can never be mistaken for a target field —
+        # the wire schema is closed, and an unknown key would be a validation
+        # error rather than the citation set it actually is.
+        answer = {k: v for k, v in entry.items() if k != "__citations__"}
+        cites = tuple(
+            RecordedCitation(
+                text=str(c.get("text", "")),
+                document_index=c.get("document_index"),
+                page=c.get("page"),
+                char_start=c.get("char_start"),
+                char_end=c.get("char_end"),
+            )
+            for c in (entry.get("__citations__") or ())
+        )
         return RecordedCall(
-            parsed=dict(entry),
+            parsed=dict(answer),
             response_hash=_sha256(payload),
             input_tokens=len(payload) // 4,
             output_tokens=len(payload) // 4,
+            citations=cites,
         )
 
 
@@ -1205,6 +1243,16 @@ _SPEC_ID_PINS: dict[str, str] = {
     # disagreement message attributed 99.0 to a model that never said it. The
     # model IS part of the question a review approves, so the hash should move.
     "12-corroboration": "25d984014c9b68efc2dc3d1c379b967f",
+    # Must NOT equal 08's hash, and that is the assertion rather than an
+    # incidental fact. 13 is 08's PDF and 08's four fields, differing in
+    # `evidence_mode` ("citations" vs the "structured" default) and in the
+    # ceilings that mode makes reachable. Those change what the harness checks
+    # and what it will let land, so they are part of the question a reviewer
+    # approves. If `evidence_mode` were ever dropped from `to_canonical()` the
+    # two specs would collide here — a review of the unverifiable 08 would
+    # silently carry over to 13 — which is the exact bug class the tripwire
+    # exists to catch, and it has shipped three times before.
+    "13-citations": "ae90791f4b08d13d4d8fb18700821672",
 }
 
 #: `MapperSpec` fields deliberately absent from `to_canonical()`. Anything listed
@@ -1276,6 +1324,9 @@ def _check_canonical_coverage() -> list[str]:
                 {"kind": "product_equals", "target": "a", "operands": ["b", "c"]}
             ],
             "corroboration_model": "claude-sonnet-5",
+            # Legal here only because `accepts_media` above is a DOCUMENT type;
+            # `citations` on an image spec is refused at construction.
+            "evidence_mode": "citations",
         }
     )
     probe = _stamp_harness_version(probe.with_wire_schema(compile_schema(probe)))
@@ -1301,6 +1352,65 @@ def _check_canonical_coverage() -> list[str]:
     return problems
 
 
+def _check_trailing_json_parser() -> list[str]:
+    """The citations path's JSON recovery still handles every known shape.
+
+    `evidence_mode: "citations"` cannot use `output_config.format` (sending both
+    is a 400), so the schema is asked for in prose and the answer arrives
+    wrapped in narrative. `_trailing_json_object` recovers it. A break here does
+    not look like a parser bug from the outside — every citations response
+    becomes a SCHEMA_REJECT and the run reports a model that stopped complying,
+    which is the wrong diagnosis entirely.
+
+    The fixture suite cannot catch this: replay feeds `recorded.json` through
+    the player, which never exercises the text path at all.
+
+    Each case below is a shape observed or provoked on the live path, not a
+    hypothetical: fenced output, a schema echoed in the preamble before the real
+    answer, and a brace inside a quoted contract clause.
+    """
+    import json as _json
+
+    from .transport import _trailing_json_object
+
+    cases: list[tuple[str, str, Any]] = [
+        ("bare object", '{"a": 1}', {"a": 1}),
+        ("markdown fence", 'Reading:\n\n```json\n{"a": 2}\n```', {"a": 2}),
+        (
+            "brace inside a quoted clause",
+            'The clause reads "pay {x} days".\n{"a": 3}',
+            {"a": 3},
+        ),
+        (
+            "schema echoed before the answer",
+            'Schema: {"a": {"type": "int"}}\nAnswer:\n{"a": 4}',
+            {"a": 4},
+        ),
+        ("escaped quote in a string", '{"q": "he said \\"hi\\" {"}', {"q": 'he said "hi" {'}),
+    ]
+
+    problems: list[str] = []
+    for label, text, want in cases:
+        try:
+            got = _trailing_json_object(text)
+        except _json.JSONDecodeError as exc:
+            problems.append(f"{label}: raised at char {exc.pos}, expected {want!r}")
+            continue
+        if got != want:
+            problems.append(f"{label}: got {got!r}, expected {want!r}")
+
+    # Nothing parseable must RAISE rather than return a quiet empty dict: an
+    # empty answer would land as `evidence_absent` and read as a finding about
+    # the document instead of a failure to parse the response.
+    try:
+        _trailing_json_object("no json here at all")
+        problems.append("unparseable text returned a value instead of raising")
+    except _json.JSONDecodeError:
+        pass
+
+    return problems
+
+
 def cmd_pins(root: Path, args: argparse.Namespace) -> int:
     """Check spec-hash stability and canonical-form coverage.
 
@@ -1314,6 +1424,13 @@ def cmd_pins(root: Path, args: argparse.Namespace) -> int:
         print(f"  FAIL coverage: {problem}")
     if not problems:
         print("  ok   coverage: every MapperSpec field is hashed or excluded")
+
+    parser_problems = _check_trailing_json_parser()
+    for problem in parser_problems:
+        print(f"  FAIL parser: {problem}")
+    if not parser_problems:
+        print("  ok   parser: prose-wrapped JSON recovers on every known shape")
+    problems.extend(parser_problems)
 
     fixtures = sorted(
         p for p in root.iterdir() if p.is_dir() and (p / SPEC_FILE).exists()

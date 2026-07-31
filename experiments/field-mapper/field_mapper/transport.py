@@ -677,6 +677,11 @@ class TransportConfig:
     thinking_enabled: bool = True
     #: `"omitted"` (default) or `"summarized"`.
     thinking_display: str = "omitted"
+    #: Mirrors `MapperSpec.evidence_mode`. On `"citations"` the request carries
+    #: `citations: {enabled: true}` on every document block and OMITS
+    #: `output_config.format` — the API rejects the pair with a 400. Response
+    #: text is then reassembled from many blocks rather than one.
+    evidence_mode: str = "structured"
 
     def __post_init__(self) -> None:
         if not self.model or not self.model.strip():
@@ -699,17 +704,19 @@ class TransportConfig:
     def from_spec(cls, spec: Any, **overrides: Any) -> TransportConfig:
         """Derive the config from a landed `MapperSpec`.
 
-        Takes `model` and `effort` from the spec so the call and the spec hash
-        can never disagree. Everything else is a transport-only knob the spec
-        does not declare, and stays overridable here.
+        Takes `model`, `effort` and `evidence_mode` from the spec so the call
+        and the spec hash can never disagree. Everything else is a
+        transport-only knob the spec does not declare, and stays overridable
+        here.
 
         Typed as `Any` deliberately: importing `MapperSpec` would make
         `spec.py` -> `schema.py` -> `transport.py` a cycle, and this module
-        needs only two attributes.
+        needs only three attributes.
         """
         return cls(
             model=getattr(spec, "model", DEFAULT_MODEL_ID),
             effort=getattr(spec, "effort", "medium"),
+            evidence_mode=getattr(spec, "evidence_mode", "structured"),
             **overrides,
         )
 
@@ -746,6 +753,33 @@ def _validate_thinking_effort_pairing(
 
 
 @dataclass(frozen=True)
+class CitationSpan:
+    """One `cited_text` span the API extracted from a source document.
+
+    The distinction this type exists to preserve: `text` was extracted from the
+    document BY THE API, not authored by the model. That is what makes it worth
+    a separate verify status (`api_cited`) rather than the model's own claim
+    about what a source says.
+
+    Locations are whatever the API returned for the block type — `page` for a
+    PDF, character offsets for plain text. Both are optional because the two
+    location shapes do not overlap, and inventing a zero for the missing one
+    would land a coordinate that points nowhere.
+    """
+
+    #: The extracted span. Retained verbatim: it is already in the response, and
+    #: it is the evidence itself rather than a pointer to it.
+    text: str
+    #: Which document block this came from, as the API indexed them.
+    document_index: int | None = None
+    #: 1-based page, for PDF sources.
+    page: int | None = None
+    #: Character offsets, for plain-text sources.
+    char_start: int | None = None
+    char_end: int | None = None
+
+
+@dataclass(frozen=True)
 class CallResult:
     """One attempt's outcome, carrying exactly what a ledger line needs.
 
@@ -778,6 +812,11 @@ class CallResult:
     #: (no schema enforcement, media as a file read, agent-loop turns, ignored
     #: effort). Empty on the `anthropic` provider by construction.
     provider_notes: tuple[str, ...] = ()
+    #: `cited_text` spans the API extracted, in response order. Populated only
+    #: when the spec asked for `evidence_mode: citations`; empty on every
+    #: structured-mode call, which is why an atom can never claim `api_cited`
+    #: on a spec that did not request citations.
+    citations: tuple[CitationSpan, ...] = ()
 
     @property
     def is_success(self) -> bool:
@@ -806,6 +845,7 @@ def build_user_content(
     instruction: str,
     text_inputs: Sequence[str] = (),
     media_inputs: Sequence[MediaInput] = (),
+    citations: bool = False,
 ) -> list[dict[str, Any]]:
     """Assemble the user turn.
 
@@ -816,11 +856,19 @@ def build_user_content(
     are elsewhere: source-identity reconciliation before mapping, separate
     contract types for extraction versus rubric-scoring, and evidence restricted
     to approved extracted fields.
+
+    `citations=True` sets `citations: {enabled: true}` on each DOCUMENT block,
+    which is what makes the API return `cited_text` spans it extracted itself.
+    It is applied only to document blocks: the flag is meaningless on an image,
+    and `MapperSpec` refuses the mode for image media before reaching here.
     """
     blocks: list[dict[str, Any]] = []
     # Media before text, per the document-input convention.
     for media in media_inputs:
-        blocks.append(build_media_content_block(media))
+        block = build_media_content_block(media)
+        if citations and block.get("type") == "document":
+            block["citations"] = {"enabled": True}
+        blocks.append(block)
         # A labelled marker after the block, so a model reading several artifacts
         # can attribute evidence to one of them. Text, not trusted identity —
         # `reconcile_identity` is what defends against a wrong-filed document.
@@ -832,18 +880,73 @@ def build_user_content(
                 }
             )
     for source_text in text_inputs:
-        blocks.append(
-            {
-                "type": "text",
-                "text": (
-                    "<source_document>\n"
-                    f"{source_text}\n"
-                    "</source_document>"
-                ),
-            }
-        )
+        if citations:
+            # A plain text block is not citable — the API extracts spans from
+            # DOCUMENT blocks. Wrapping the same text as a `text/plain`
+            # document is what makes `cited_text` available for it, and it
+            # keeps the fenced-data framing above in the document's title
+            # rather than losing it.
+            blocks.append(
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": "text/plain",
+                        "data": source_text,
+                    },
+                    "title": "source_document",
+                    "citations": {"enabled": True},
+                }
+            )
+        else:
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "<source_document>\n"
+                        f"{source_text}\n"
+                        "</source_document>"
+                    ),
+                }
+            )
     blocks.append({"type": "text", "text": instruction})
     return blocks
+
+
+def _instruction_with_prose_schema(
+    instruction: str, wire_schema: Mapping[str, Any]
+) -> str:
+    """Append the wire schema as prose, for the citations path.
+
+    `citations` and `output_config.format` are mutually exclusive — sending both
+    is a 400 — so on this path the schema stops being enforced by the API and
+    has to be ASKED for instead. `validate.py` re-checks every value after
+    parse regardless, so what is lost is retries, never correctness: a
+    non-conforming response becomes a SCHEMA_REJECT that burns an attempt and
+    can never land.
+
+    The answer is asked for as PROSE FIRST, then JSON, and that ordering is
+    load-bearing rather than stylistic. Citations attach to narrative text
+    blocks; a request for bare JSON produces one block the API declines to cite,
+    so demanding "JSON only, no prose" silently returns ZERO citations and every
+    atom stays `evidence_unverified` — defeating the entire mode. Measured on
+    this fixture PDF (`claude-opus-5`, one call each):
+
+        json only        blocks=1   cites=0
+        prose then json  blocks=10  cites=4
+
+    So the prose is not decoration to be tidied away later; deleting it turns
+    `evidence_mode: "citations"` back into `structured` without any error.
+    `_joined_text_blocks` concatenates the blocks and the parser recovers the
+    JSON from the tail, which is why the surrounding narrative costs nothing.
+    """
+    return (
+        f"{instruction}\n\n"
+        "First, in prose, state each value and quote the exact words from the "
+        "document that establish it. Then, after that prose, emit a JSON "
+        "object matching this schema exactly:\n"
+        f"{json.dumps(dict(wire_schema), indent=2, sort_keys=True)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1266,11 +1369,15 @@ class Client:
         media_inputs: Sequence[MediaInput],
     ) -> dict[str, Any]:
         cfg = self._config
+        citations_on = cfg.evidence_mode == "citations"
         # `format` is ungated — structured output works on 4.5-generation models.
         # `effort` is not: it is a 400 there, so it is added only where supported.
-        output_config: dict[str, Any] = {
-            "format": {"type": "json_schema", "schema": dict(wire_schema)},
-        }
+        output_config: dict[str, Any] = {}
+        if not citations_on:
+            output_config["format"] = {
+                "type": "json_schema",
+                "schema": dict(wire_schema),
+            }
         caps = self._capabilities()
         if caps.effort:
             output_config["effort"] = cfg.effort
@@ -1284,9 +1391,16 @@ class Client:
                 {
                     "role": "user",
                     "content": build_user_content(
-                        instruction=instruction,
+                        instruction=(
+                            _instruction_with_prose_schema(
+                                instruction, wire_schema
+                            )
+                            if citations_on
+                            else instruction
+                        ),
                         text_inputs=text_inputs,
                         media_inputs=media_inputs,
+                        citations=citations_on,
                     ),
                 }
             ],
@@ -1371,7 +1485,17 @@ class Client:
                 provider_notes=tuple(
                     getattr(response, "provider_notes", ()) or ()
                 ),
+                citations=citations,
             )
+
+        # Read once, before any early return: a refusal or a truncation still
+        # carries whatever the API cited up to that point, and the ledger line
+        # for a failed attempt is exactly where that is worth having.
+        citations = (
+            _citations_of(response)
+            if self._config.evidence_mode == "citations"
+            else ()
+        )
 
         # Branch on stop_reason, never on stop_details: the latter may be null
         # even on a refusal. A refusal is an HTTP 200 with empty or partial
@@ -1403,7 +1527,14 @@ class Client:
                 ),
             )
 
-        text = _first_text_block(response)
+        # Citations fragment one JSON object across many text blocks, each
+        # cited run being its own block. Taking only the first would return a
+        # prefix that cannot parse, so the whole body is reassembled.
+        text = (
+            _joined_text_blocks(response)
+            if self._config.evidence_mode == "citations"
+            else _first_text_block(response)
+        )
         if text is None:
             return _result(
                 AttemptOutcome.SCHEMA_REJECT,
@@ -1415,7 +1546,17 @@ class Client:
 
         response_hash = _sha256_hex(text)
         try:
-            parsed = json.loads(text)
+            # Citations mode asks for prose THEN JSON (see
+            # `_instruction_with_prose_schema`), so the body is narrative with a
+            # JSON object at the tail and a strict whole-body parse would always
+            # fail. The structured path keeps the strict parse: there the model
+            # was told to emit JSON alone, and quietly tolerating a preamble
+            # there would hide a prompt that stopped being obeyed.
+            parsed = (
+                _trailing_json_object(text)
+                if self._config.evidence_mode == "citations"
+                else json.loads(text)
+            )
         except json.JSONDecodeError as exc:
             return _result(
                 AttemptOutcome.SCHEMA_REJECT,
@@ -1532,6 +1673,11 @@ def _first_text_block(response: Any) -> str | None:
 
     Never indexes `content[0]`: on a refusal the list is empty, and with
     thinking on the first block may be a thinking block rather than text.
+
+    Correct for a structured-mode response, which emits ONE text block. With
+    citations enabled the API splits output across many, so the JSON body is
+    fragmented and this returns a prefix that does not parse — use
+    `_joined_text_blocks` on that path.
     """
     content = getattr(response, "content", None) or []
     for block in content:
@@ -1540,6 +1686,116 @@ def _first_text_block(response: Any) -> str | None:
             if isinstance(text, str) and text.strip():
                 return text
     return None
+
+
+def _trailing_json_object(text: str) -> Any:
+    """The last balanced top-level JSON object in `text`.
+
+    The citations path asks for prose followed by JSON, so the payload arrives
+    wrapped in narrative and often inside a ```json fence. Scanning for the LAST
+    top-level object rather than the first matters: the prose frequently quotes
+    a fragment of the schema back, and the first `{` is then a description of
+    the answer rather than the answer.
+
+    Brace counting is string-aware. A supply agreement can legitimately contain
+    a brace inside a quoted clause, and a naive counter would end the object
+    early and report a parse position in the middle of a valid response.
+
+    Raises `json.JSONDecodeError` when nothing parses, so the caller's existing
+    SCHEMA_REJECT branch handles it unchanged.
+    """
+    starts: list[int] = []
+    depth = 0
+    in_string = False
+    escaped = False
+    best: tuple[int, int] | None = None
+
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                starts.append(i)
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and starts:
+                    best = (starts[-1], i + 1)
+
+    if best is not None:
+        candidate = text[best[0] : best[1]]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    # No balanced object, or the balanced one did not parse. Re-parse the whole
+    # body so the raised error carries a real position rather than a synthetic
+    # one, and so a response that IS bare JSON still succeeds here.
+    return json.loads(text)
+
+
+def _joined_text_blocks(response: Any) -> str | None:
+    """Every text block concatenated in order, or None if there are none.
+
+    With citations enabled a single JSON object arrives split across blocks —
+    each cited run of text is its own block carrying a `citations` array. Taking
+    only the first (`_first_text_block`) yields `'{"total_usd": {"value": '` and
+    a JSONDecodeError. Concatenation reassembles the body.
+
+    Thinking blocks are skipped rather than joined: they are not part of the
+    JSON body, and splicing them in would corrupt a document that would
+    otherwise parse.
+    """
+    content = getattr(response, "content", None) or []
+    parts = [
+        text
+        for block in content
+        if getattr(block, "type", None) == "text"
+        and isinstance((text := getattr(block, "text", None)), str)
+    ]
+    if not parts:
+        return None
+    joined = "".join(parts)
+    return joined if joined.strip() else None
+
+
+def _citations_of(response: Any) -> tuple[CitationSpan, ...]:
+    """Every `cited_text` span across the response's text blocks, in order.
+
+    Reads defensively via `getattr` throughout: the SDK's citation objects are
+    typed per source kind (`page_location`, `char_location`, `content_block_
+    location`) and a shape this does not recognise must degrade to "no citation
+    recorded", never raise. An attempt that dies here would turn an evidence
+    upgrade into an outage.
+    """
+    spans: list[CitationSpan] = []
+    for block in getattr(response, "content", None) or []:
+        if getattr(block, "type", None) != "text":
+            continue
+        for cite in getattr(block, "citations", None) or []:
+            text = getattr(cite, "cited_text", None)
+            if not isinstance(text, str) or not text.strip():
+                continue
+            spans.append(
+                CitationSpan(
+                    text=text,
+                    document_index=getattr(cite, "document_index", None),
+                    page=getattr(cite, "start_page_number", None),
+                    char_start=getattr(cite, "start_char_index", None),
+                    char_end=getattr(cite, "end_char_index", None),
+                )
+            )
+    return tuple(spans)
 
 
 def _usage_of(response: Any) -> tuple[int, int]:
