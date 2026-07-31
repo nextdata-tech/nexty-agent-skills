@@ -462,7 +462,7 @@ if not Path("CONTEXT.md").exists():
 # Scan the human/author-facing text files, not data.
 ESCAPE = re.compile(r"\.\.(?:/[^\s\)\"']*)+\.md", re.IGNORECASE)
 scan = ["CONTEXT.md", "README.md", "spec.py", "models.py", "transform/main.py"]
-scan += [str(p) for p in Path(".").glob("contracts/*")]
+scan += [str(p) for p in Path("contracts").rglob("*")]
 for rel in scan:
     p = Path(rel)
     if not p.is_file():
@@ -478,7 +478,7 @@ for rel in scan:
 # module. This is deliberately static/offline; the Desktop runtime remains the
 # authority for actually executing a verifier against its context.
 spec_tree = ast.parse(spec_src, "spec.py")
-custom_names, custom_scripts, custom_script_refs, input_custom, output_custom = [], set(), [], 0, 0
+custom_names, custom_scripts, custom_script_refs, input_custom = [], set(), [], 0
 for node in ast.walk(spec_tree):
     if not isinstance(node, ast.Call):
         continue
@@ -493,8 +493,6 @@ for node in ast.walk(spec_tree):
         if any(call_name(c) == "custom" for c in chain):
             if call_name(node) == "expectation":
                 input_custom += 1
-            else:
-                output_custom += 1
             verify_calls = [c for c in chain if call_name(c) == "verify" and c.args]
             scripts = [c for verify in verify_calls for c in spine(verify.args[0])
                        if call_name(c) == "script"]
@@ -657,8 +655,22 @@ if profile.exists():
     required_services = {
         "duckdb": "nxd:local/duckdb/storage:0.1.0",
         "python-compute": "nxd:local/python/compute:0.1.0",
-        "csv-source": "nxd:local/file/storage:0.1.0",
     }
+    if input_custom:
+        csv_url = next((literal_str(node.value) for node in spec_tree.body
+                        if isinstance(node, ast.Assign) and
+                        any(isinstance(target, ast.Name) and target.id == "_csv"
+                            for target in node.targets)), None)
+        csv_service = re.fullmatch(
+            r"/infra-profile/desktop-local#/services/([^/]+)", csv_url or ""
+        )
+        if not csv_service:
+            cerrors.append(
+                "spec.py: _csv must resolve to a desktop-local service for a "
+                "custom CSV input expectation"
+            )
+        else:
+            required_services[csv_service.group(1)] = "nxd:local/file/storage:0.1.0"
     for service, driver in required_services.items():
         if not has_service_driver(service, driver):
             cerrors.append(f"infra-profile.yaml: {service} must use {driver}")

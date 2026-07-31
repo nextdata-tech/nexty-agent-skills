@@ -6,7 +6,6 @@
 - CSV-first support boundary
 - Generated layout and public DSL wiring
 - Verification scripts
-- Closure and handoff record
 - Preflight checks
 
 ## What belongs in a custom contract

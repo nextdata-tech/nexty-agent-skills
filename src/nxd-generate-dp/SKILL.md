@@ -183,16 +183,13 @@ host-side. The dispatch/return contract is in `nxd-pocket-loop`'s
 
 ### Step 1a — Plan the derivation before authoring anything
 
-The semantic layer used here cannot express derivation — no dimension
-expressions, no default filters, no row generation/removal, and no
-`Agg.EXPRESSION` shortcut for business rulings. **Every business ruling
-therefore has to be materialized as a physical column or row by the transform**,
-before the semantic layer sees it. So plan the models by backward-chaining from
-the user's QUESTIONS, not forward from the source headers. [reference/derivation-plan.md](reference/derivation-plan.md)
-has the worked method, base-vs-derived test, `Agg.EXPRESSION` boundary, and
+The semantic layer used here cannot express derivation — no dimension expressions,
+default filters, row generation/removal, or `Agg.EXPRESSION` shortcut. **Every business
+ruling therefore has to be materialized by the transform** before the semantic layer
+sees it. So plan the models by backward-chaining from
+the user's QUESTIONS, not forward from the source headers. [reference/derivation-plan.md](reference/derivation-plan.md) has the worked method, base-vs-derived test, `Agg.EXPRESSION` boundary, and
 mandatory reference-data handling, including per-entity **agent** judgements —
 [reference/llm-judgments.md](reference/llm-judgments.md).
-
 
 ### Gate — validate primary keys before authoring
 
@@ -261,6 +258,7 @@ string → `string()`; int/number/double/float → `number()`; bool → `boolean
 date → `date32()`.
 
 ### Step 3 — `transform/main.py`: the dlt-through-port ingest
+
 The transform receives the typed **output port handle** (`DuckDbOutput`: `path`,
 `schema`, `model_tables`) and connector secrets, streams each **base model's**
 CSV directory through dlt, yields each **derived model's** computed rows into the
@@ -354,6 +352,7 @@ and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 `database-source.md`, `api-source.md`). Steps 3a/3b are connector-independent.
 
 ### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
+
 `spec.py` is the author-facing source of truth the supervisor compiles into the
 deployment YAML: it declares the infra profile, wires the transform to compute,
 promises every physical model — base and derived — on the DuckDB port, and
@@ -474,7 +473,7 @@ an exact fixture count. Without credentials, report it **not run**.
 
 ## Invariants — NEVER violate these
 
-- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + `CONTEXT.md` + the connector-type-specific companion artifact (see the connector-types table in Overview), plus one `contracts/expectations/<name>.py` or `contracts/promises/<name>.py` script per inventoryed explicit custom contract, plus `.gitignore` and `SENSITIVE` when a source carries live credentials (they are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
+- **Python-only closure**: emit `spec.py` + `models.py` + `infra-profile.yaml` + `transform/main.py` + `requirements.txt` + `CONTEXT.md` + the connector-type-specific companion artifact (see the connector-types table in Overview), plus one `contracts/expectations/<name>.py` or `contracts/promises/<name>.py` script per inventoried explicit custom contract, plus `.gitignore` and `SENSITIVE` when a source carries live credentials (they are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
 - **Explicit custom contracts are executable, not decorative**: preserve user-stated guarantees separately from inferred schema constraints; name each once; attach custom expectations to declared source-aligned CSV inputs before the transform and custom promises to the DuckDB output after it while retaining ordinary `.promise(model)`. Use the exact `custom(...).verify(script(...).compute(_compute))` nesting. Every script registers exactly one `@data_product.on_verify()` function and invokes `data_product.verify()` in its `__main__` guard; no escaping script paths, secrets, or unwired contract file — [reference/custom-contracts.md](reference/custom-contracts.md).
 - **Self-contained closure — no cross-boundary contract pointers** (Step 6a): `CONTEXT.md` is emitted at the closure root, and everything a later session needs to continue the work lives INSIDE the closure. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in `CONTEXT.md` / `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure. Phase C fails a missing `CONTEXT.md` or any closure-escaping contract reference.
 - **Sample-selection is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in `CONTEXT.md`, reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends. A deterministic-but-arbitrary sample (e.g. "the oldest N") that silently excludes the rows a later step needs is a defect even though it reruns identically. A source field a downstream model or step depends on (a URL a later evaluation needs, a key a later join needs) is a **required-capture** field: record every row where it is missing, because a missing required field disables the downstream step without erroring.

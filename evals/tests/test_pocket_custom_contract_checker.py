@@ -217,7 +217,9 @@ def test_generated_verifiers_execute_valid_and_failure_fixtures(tmp_path: Path, 
 def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_path=False,
                         nested_main_guard=False, wrong_duckdb_storage=False, missing_model_path=False,
                         bad_csv_source_path=False, missing_csv_source_path=False, swapped_drivers=False,
-                        wrong_profile_name=False):
+                        wrong_profile_name=False, csv_service_name="csv-source",
+                        nested_escape=False, without_input_custom=False,
+                        wrong_csv_driver=False):
     """Phase A must not mistake verifier script paths for transform executors."""
     write_closure(tmp_path)
     (tmp_path / "CONTEXT.md").write_text("# context\n")
@@ -229,6 +231,35 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
     # The checker parses, but does not import, this spec. The scripts are nested
     # custom verifiers and must not be constrained to transform/main.py.
     (tmp_path / "spec.py").write_text('''from nxd.spec import data_product, script, custom, source_aligned_input, data_product_output, storage, simple_sensor\nfrom models import orders\n_csv = "/infra-profile/desktop-local#/services/csv-source"\n_compute = "/infra-profile/desktop-local#/services/python-compute"\n_duckdb = "/infra-profile/desktop-local#/services/duckdb"\nspec = (\n    data_product(name="orders", infra_profile="desktop-local")\n    .transform(script("transform/main.py").compute(_compute).secrets([_csv]).when(simple_sensor(startup=False, when="any")))\n    .input("orders", source_aligned_input().source(_csv).config({"model_paths": {"orders": "orders/orders.csv"}}).expectation(custom("accepted-currency").description("currency set").model(orders).verify(script("contracts/expectations/accepted.py").compute(_compute))))\n    .output(data_product_output().promise(orders).promise(custom("order-total-reconciles").description("reconcile").model(orders).verify(script("contracts/promises/reconciles.py").compute(_compute))).port("duckdb", storage(_duckdb)))\n)\n''')
+    if csv_service_name != "csv-source":
+        spec_path = tmp_path / "spec.py"
+        spec_path.write_text(spec_path.read_text().replace(
+            "/services/csv-source", f"/services/{csv_service_name}"
+        ))
+        profile_path = tmp_path / "infra-profile.yaml"
+        profile_path.write_text(profile_path.read_text().replace(
+            "name: csv-source", f"name: {csv_service_name}"
+        ))
+    if without_input_custom:
+        spec_path = tmp_path / "spec.py"
+        spec_path.write_text(spec_path.read_text().replace(
+            '.expectation(custom("accepted-currency").description("currency set").model(orders).verify(script("contracts/expectations/accepted.py").compute(_compute)))',
+            "",
+        ))
+        (tmp_path / "contracts" / "expectations" / "accepted.py").unlink()
+        profile_path = tmp_path / "infra-profile.yaml"
+        profile_path.write_text(profile_path.read_text().replace(
+            f"    - name: {csv_service_name}\n"
+            "      driver: nxd:local/file/storage:0.1.0\n"
+            "      attributes: []\n",
+            "",
+        ))
+    if wrong_csv_driver:
+        profile_path = tmp_path / "infra-profile.yaml"
+        profile_path.write_text(profile_path.read_text().replace(
+            "nxd:local/file/storage:0.1.0",
+            "nxd:local/duckdb/storage:0.1.0",
+        ))
     (tmp_path / "transform").mkdir()
     (tmp_path / "transform" / "main.py").write_text('''from pathlib import Path\nBASE_MODELS = ("orders",)\nPHYSICAL_MODELS = ("orders",)\ndef ingest(duckdb, secrets):\n    import duckdb as db\n    con = db.connect(duckdb.path); con.execute("create table orders (order_id varchar, currency varchar)"); con.execute("insert into orders values ('o-1', 'EUR')"); con.close(); Path(duckdb.path).parent.joinpath(".transform-complete").touch()\n''')
     if dead_verifier:
@@ -266,6 +297,9 @@ if __name__ == "__main__":
     if wrong_profile_name:
         profile_path = tmp_path / "infra-profile.yaml"
         profile_path.write_text(profile_path.read_text().replace("name: desktop-local", "name: wrong-profile"))
+    if nested_escape:
+        verifier_path = tmp_path / "contracts" / "expectations" / "accepted.py"
+        verifier_path.write_text(verifier_path.read_text() + "\n# See ../../POLICY.md\n")
     return subprocess.run([sys.executable, str(Path(__file__).parents[2] / "scripts" / "self_check.py")], cwd=tmp_path, text=True, capture_output=True)
 
 
@@ -328,3 +362,31 @@ def test_complete_self_check_requires_matching_profile_metadata_name(tmp_path: P
     proc = complete_self_check(tmp_path, wrong_profile_name=True)
     assert proc.returncode != 0
     assert "metadata.name must be desktop-local" in proc.stdout
+
+
+def test_complete_self_check_resolves_labeled_csv_service(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, csv_service_name="csv-source-orders")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SELF-CHECK OK" in proc.stdout
+
+
+def test_complete_self_check_does_not_require_csv_without_custom_input(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, without_input_custom=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SELF-CHECK OK" in proc.stdout
+
+
+def test_complete_self_check_rejects_wrong_labeled_csv_driver(tmp_path: Path) -> None:
+    proc = complete_self_check(
+        tmp_path,
+        csv_service_name="csv-source-orders",
+        wrong_csv_driver=True,
+    )
+    assert proc.returncode != 0
+    assert "csv-source-orders must use nxd:local/file/storage:0.1.0" in proc.stdout
+
+
+def test_complete_self_check_scans_nested_verifiers_for_escape_paths(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, nested_escape=True)
+    assert proc.returncode != 0
+    assert "contracts/expectations/accepted.py: references '../../POLICY.md'" in proc.stdout
