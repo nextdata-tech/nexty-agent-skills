@@ -9,7 +9,7 @@ WHY THE SIZE MATTERS. The first version was 240x96. The API documents accuracy
 problems below roughly 200px on the short edge, which made a live misread
 ambiguous: was the harness unable to verify, or was the image simply too small
 to read? Those are different findings and the fixture must not conflate them.
-This renders at 5x scale (1200x480), comfortably above the floor, so a misread
+This renders at 8x scale (656x272), comfortably above the floor, so a misread
 is a genuine misread.
 
 The glyphs are a hand-built 5x7 bitmap font. Only the characters this invoice

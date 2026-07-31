@@ -1137,6 +1137,21 @@ def _validate_response(
 
         # The absent sentinel dies here, at the harness boundary. It never
         # reaches a typed column (schema.py's ABSENT_SENTINEL note, §3).
+        #
+        # An EMPTY STRING is the same finding wearing different clothes. It
+        # passes `check_type` (it is a str) and `check_length` (no min_length
+        # declared means no check), so it lands `ok` — and then CSV cannot carry
+        # the difference between "" and NULL, so reading it back produces a null
+        # value on an `ok` cell and `MapperProposal.__post_init__` refuses it.
+        # Every later `resolve` then dies on a parse error until someone
+        # hand-edits the file.
+        #
+        # It also defeats `identity.NULL_SENTINEL`, which exists precisely so a
+        # null and an empty string never hash the same. Treating it as absent is
+        # both the honest reading — the source said nothing — and the only one
+        # that survives the round trip.
+        if isinstance(raw_value, str) and not raw_value.strip():
+            raw_value = None
         if raw_value is None or raw_value == ABSENT_SENTINEL:
             out[name] = ValidatedCell(
                 field=name,

@@ -228,9 +228,12 @@ def ingest(duckdb: DuckDbOutput) -> None:
         reviews,
         result.evidence,
         fields=spec.field_names,
-        min_evidence_per_ok_cell=min(
-            (f.min_evidence for f in spec.target_fields), default=0
-        ),
+        # PER FIELD. `min(...)` re-checked a spec declaring 2 and 0 at 0,
+        # making the resolve-time backstop weaker than the run-time check it
+        # re-checks.
+        min_evidence_per_ok_cell={
+            f.name: f.min_evidence for f in spec.target_fields
+        },
     )
 
     # ---- the gate --------------------------------------------------------

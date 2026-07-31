@@ -542,9 +542,12 @@ def main(argv: list[str] | None = None) -> int:
         # The CLI passes this; omitting it here made the copied gate WEAKER
         # than the one the harness actually ships — an ok cell could carry
         # fewer evidence atoms than its field declares and still resolve.
-        min_evidence_per_ok_cell=min(
-            (f.min_evidence for f in spec.target_fields), default=0
-        ),
+        # PER FIELD. `min(...)` re-checked a spec declaring 2 and 0 at 0,
+        # making the resolve-time backstop weaker than the run-time check it
+        # re-checks.
+        min_evidence_per_ok_cell={
+            f.name: f.min_evidence for f in spec.target_fields
+        },
     )
     print(f"      {len(resolution.wide_rows)} wide row(s), {len(reviews)} review(s)")
 

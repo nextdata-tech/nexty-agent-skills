@@ -522,13 +522,26 @@ class BudgetLedger:
     def release(self, calls: int = 1) -> None:
         self.calls_reserved = max(0, self.calls_reserved - calls)
 
-    def record(self, *, input_tokens: int, output_tokens: int) -> None:
-        """Reconcile a completed attempt to actuals."""
+    def record(
+        self, *, input_tokens: int, output_tokens: int, model: str | None = None
+    ) -> None:
+        """Reconcile a completed attempt to actuals.
+
+        `model` prices THIS attempt. A corroborating run shares one ledger
+        across two models, and pricing every attempt at the primary's rate makes
+        the `max_usd` STOP wrong in whichever direction the two differ: a haiku
+        primary with a fable corroborator under-counts the corroboration calls
+        10x, and those are the image-heavy ones. Under-counting a spend ceiling
+        means passing the limit the operator actually consented to.
+
+        The earlier note here claimed a per-attempt rate would need a
+        per-attempt ledger. That was simply wrong — it needs this argument.
+        """
         self.calls_made += 1
         self.release(1)
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
-        self.usd_spent += _usd_for(input_tokens, output_tokens, self.model)
+        self.usd_spent += _usd_for(input_tokens, output_tokens, model or self.model)
 
 
 def _usd_for(input_tokens: int, output_tokens: int, model: str = "") -> float:
@@ -1219,7 +1232,12 @@ class Client:
             usage_in, usage_out = _usage_of(response)
             if self._ledger is not None:
                 self._ledger.record(
-                    input_tokens=usage_in, output_tokens=usage_out
+                    input_tokens=usage_in,
+                    output_tokens=usage_out,
+                    # THIS client's model, which on a corroborating run is not
+                    # the ledger's. Both clients share one ledger so the ceiling
+                    # is shared; the RATE has to stay per-attempt.
+                    model=self._config.model,
                 )
             self._heartbeat(
                 f"call ok in {latency:.1f}s "

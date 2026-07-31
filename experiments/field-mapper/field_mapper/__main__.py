@@ -862,14 +862,26 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
         rate_in, rate_out, _ = rates_for(spec.corroboration_model)
         prim_in, prim_out, _ = rates_for(spec.model)
         if (rate_in, rate_out) != (prim_in, prim_out):
+            # Direction from BOTH rates, not `rate_out` alone: a corroborator
+            # with a higher input rate on an input-dominated media workload
+            # errs low while its output rate says otherwise, and media runs are
+            # exactly the input-dominated ones.
+            dearer = rate_in > prim_in or rate_out > prim_out
+            cheaper = rate_in < prim_in or rate_out < prim_out
+            direction = (
+                "LOW" if dearer and not cheaper
+                else "high" if cheaper and not dearer
+                else "in a direction that depends on the input/output mix"
+            )
             print(
-                f"  NOTE the corroborating call is COUNTED but priced at "
-                f"{spec.model}'s rate\n       (${prim_in}/${prim_out} per Mtok), "
-                f"not {spec.corroboration_model}'s (${rate_in}/${rate_out}). "
-                f"The estimator\n       prices a run at one model; with a "
-                f"{'more' if rate_out > prim_out else 'less'} expensive "
-                f"corroborator the figure errs "
-                f"{'LOW' if rate_out > prim_out else 'high'}."
+                f"  NOTE the corroborating call is COUNTED but ESTIMATED at "
+                f"{spec.model}'s rate\n       (${prim_in}/${prim_out} per Mtok "
+                f"in/out) rather than {spec.corroboration_model}'s "
+                f"(${rate_in}/${rate_out}),\n       so this figure errs "
+                f"{direction}.\n"
+                f"       The RUNTIME ceiling is not affected: BudgetLedger."
+                f"record() prices each\n       attempt at its own model, so the "
+                f"max_usd stop is exact even though this\n       estimate is not."
             )
 
     budget = _budget_from(fixture, None)
@@ -951,16 +963,16 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
     _render_evidence(result)
 
     # -- Resolve: wide rows + provenance, from ONE bundle (§6, §7). ----------
-    min_evidence = min(
-        (f.min_evidence for f in spec.target_fields), default=0
-    )
     resolution = resolve(
         result.proposals,
         bind_reviews(fixture.reviews, result, fixture),
         result.evidence,
         fields=list(spec.field_names),
         row_keys=result.row_keys,
-        min_evidence_per_ok_cell=min_evidence,
+        # PER FIELD, not the weakest field's floor.
+        min_evidence_per_ok_cell={
+            f.name: f.min_evidence for f in spec.target_fields
+        },
     )
     _render_wide(resolution, spec.field_names)
     _render_provenance(resolution)
@@ -1078,9 +1090,9 @@ def cmd_resolve(fixture: Fixture, args: argparse.Namespace) -> int:
         reviews,
         evidence,
         fields=fixture.spec.field_names,
-        min_evidence_per_ok_cell=min(
-            (f.min_evidence for f in fixture.spec.target_fields), default=0
-        ),
+        min_evidence_per_ok_cell={
+            f.name: f.min_evidence for f in fixture.spec.target_fields
+        },
     )
 
     print(
@@ -1176,7 +1188,12 @@ _SPEC_ID_PINS: dict[str, str] = {
     # is precisely what a spec hash should treat as the same question.
     "10-cross-field-check": "0a7a05262303d4db6646bfe57ba1aeee",
     "11-consistent-misread": "0a7a05262303d4db6646bfe57ba1aeee",
-    "12-corroboration": "52426d56c09aaf11965307e2ee382971",
+    # Moved deliberately when the spec's primary model changed opus-5 ->
+    # haiku-4-5. The fixture records readings that live haiku and live sonnet
+    # actually produced, but the spec still named opus, so the landed
+    # disagreement message attributed 99.0 to a model that never said it. The
+    # model IS part of the question a review approves, so the hash should move.
+    "12-corroboration": "25d984014c9b68efc2dc3d1c379b967f",
 }
 
 #: `MapperSpec` fields deliberately absent from `to_canonical()`. Anything listed
@@ -1506,9 +1523,9 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
         result.evidence,
         fields=list(fixture.spec.field_names),
         row_keys=result.row_keys,
-        min_evidence_per_ok_cell=min(
-            (f.min_evidence for f in fixture.spec.target_fields), default=0
-        ),
+        min_evidence_per_ok_cell={
+            f.name: f.min_evidence for f in fixture.spec.target_fields
+        },
     )
     # The same three asserts `run` applies, in the same order. `verify` and
     # `run` must agree on whether a fixture blocks, or the suite would pass a
@@ -1556,9 +1573,9 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
         ),
         fields=list(fixture.spec.field_names),
         row_keys=result.row_keys,
-        min_evidence_per_ok_cell=min(
-            (f.min_evidence for f in fixture.spec.target_fields), default=0
-        ),
+        min_evidence_per_ok_cell={
+            f.name: f.min_evidence for f in fixture.spec.target_fields
+        },
     )
     if reresolved.wide_rows != resolution.wide_rows:
         return (

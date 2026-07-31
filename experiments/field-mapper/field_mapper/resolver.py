@@ -44,7 +44,7 @@ three record sets it returns the same resolution every time, which is what lets
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .errors import FieldMapperError
 from .identity import value_hash
@@ -162,7 +162,22 @@ class Resolution:
     evidence: tuple[MapperEvidence, ...]
     row_keys: tuple[str, ...]
     fields: tuple[str, ...]
-    min_evidence_per_ok_cell: int = 0
+    #: The resolve-time evidence backstop. An int applies one floor to every
+    #: field; a MAPPING gives each field its own, which is what the spec
+    #: actually declares.
+    #:
+    #: Callers used to pass `min(f.min_evidence for f in target_fields)`, which
+    #: silently re-checks a spec declaring 2 and 0 at 0 — so a landed CSV
+    #: stripped of the strict field's atoms passes `assert_bijection`. The
+    #: run-time check in `validate` is per-field; this is the re-check path, and
+    #: it should not be weaker than the thing it re-checks.
+    min_evidence_per_ok_cell: int | Mapping[str, int] = 0
+
+    def min_evidence_for(self, field: str) -> int:
+        """The floor this field must clear. Falls back to 0 for unknown fields."""
+        if isinstance(self.min_evidence_per_ok_cell, Mapping):
+            return int(self.min_evidence_per_ok_cell.get(field, 0))
+        return int(self.min_evidence_per_ok_cell)
 
     # -- projections -------------------------------------------------------
 
@@ -306,10 +321,11 @@ class Resolution:
             cell = (item.target_row_key, item.field)
             if item.value_status is ValueStatus.OK:
                 have = counts.get(cell, 0)
-                if have < self.min_evidence_per_ok_cell:
+                want = self.min_evidence_for(item.field)
+                if have < want:
                     raise BijectionError(
                         f"cell {cell!r} is ok with {have} evidence atom(s); the "
-                        f"spec requires at least {self.min_evidence_per_ok_cell}"
+                        f"spec requires at least {want}"
                     )
             elif item.value is not None:
                 raise BijectionError(
@@ -416,7 +432,7 @@ def resolve(
     *,
     fields: Sequence[str],
     row_keys: Sequence[str] | None = None,
-    min_evidence_per_ok_cell: int = 0,
+    min_evidence_per_ok_cell: "int | Mapping[str, int]" = 0,
 ) -> Resolution:
     """Resolve proposals + reviews + evidence into effective values.
 
