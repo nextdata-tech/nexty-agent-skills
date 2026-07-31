@@ -775,47 +775,104 @@ def _map_one(
     # Media-direct inputs only. On a text input the substring check already
     # relates every value to its source, so a second model spends a call
     # re-answering a question the harness can check itself.
-    if spec.corroboration_model and corroborate is not None and item.is_media_direct:
+    # Skipped when the primary produced nothing: there is no reading to compare
+    # against, so the second call would spend real money to be discarded. This
+    # matters most when the primary failed on BUDGET — spending again there is
+    # the worst possible response to running out of money.
+    if (
+        spec.corroboration_model
+        and corroborate is not None
+        and item.is_media_direct
+        and systemic is None
+        and per_field
+    ):
         second_parsed: Mapping[str, Any] | None = None
+        second_result: Any = None
+        failure: str | None = None
+        started_second = time.monotonic()
         try:
             second_result = corroborate(
                 item=item, spec=spec, wire_schema=wire_schema, violations=()
             )
             second_parsed = getattr(second_result, "parsed", None)
-        except SystemicError as exc:
-            # A failed corroboration must never silently become agreement. The
-            # cells keep the primary's values, and the ledger carries the
-            # failed attempt so the run does not look corroborated when it was
-            # not.
+            if second_parsed is None:
+                # A CallResult that came back without a parsed body is a failed
+                # attempt, not an absent one. `transport.Client` RETURNS this
+                # shape on exhausted retries rather than raising, so it must be
+                # handled alongside the exception path or it reads as success.
+                failure = (
+                    getattr(second_result, "error_code", None) or "no_parsed_body"
+                )
+        except (SystemicError, CellError) as exc:
+            # CellError too, not just SystemicError. A transient per-attempt
+            # failure on the SECOND reader must not be more destructive than the
+            # same failure on the first: the primary loop degrades that row,
+            # while an uncaught CellError here escaped `map_inputs` entirely and
+            # discarded every already-completed row's proposals.
+            failure = getattr(exc, "error_code", None) or exc.__class__.__name__
             beat(f"corroboration failed for {item.input_id}: {exc}")
-            second_parsed = None
-        if second_parsed is not None:
-            _record_attempt(
-                ledger,
-                result=result,
-                attempt_id=ledger.new_attempt_id(),
-                attempt_index=attempts,
-                row_key=row_key,
-                field_name="*",
-                spec=spec,
-                prompt_hash=prompt_hash,
-                schema_hash=schema_hash,
-                item=item,
-                outcome="success",
-                stop_reason=getattr(second_result, "stop_reason", None),
-                # The CORROBORATOR's model, not the primary's: an attempt
-                # attributed to the wrong model makes the audit trail claim a
-                # call that never happened.
-                model=getattr(second_result, "model_snapshot", None)
-                or spec.corroboration_model,
-                response_hash=getattr(second_result, "response_hash", None),
-                input_tokens=getattr(second_result, "input_tokens", 0),
-                output_tokens=getattr(second_result, "output_tokens", 0),
-                latency_ms=0.0,
-                provider=getattr(second_result, "provider", "unknown"),
-                provider_notes=getattr(second_result, "provider_notes", ()),
-                request_model=spec.corroboration_model,
-            )
+
+        _record_attempt(
+            ledger,
+            result=result,
+            attempt_id=ledger.new_attempt_id(),
+            attempt_index=attempts,
+            row_key=row_key,
+            field_name="*",
+            spec=spec,
+            prompt_hash=prompt_hash,
+            schema_hash=schema_hash,
+            item=item,
+            # ALWAYS written, success or not. Previously this lived inside the
+            # success branch, so a failed corroboration left no trace at all —
+            # the run landed single-read values under a spec and grant that
+            # promise two readers, and nothing anywhere recorded that the
+            # second reader never answered.
+            outcome="success" if failure is None else "transport_error",
+            error_code=failure,
+            stop_reason=getattr(second_result, "stop_reason", None),
+            # The CORROBORATOR's model, not the primary's: an attempt
+            # attributed to the wrong model makes the audit trail claim a
+            # call that never happened.
+            model=getattr(second_result, "model_snapshot", None)
+            or spec.corroboration_model,
+            response_hash=getattr(second_result, "response_hash", None),
+            input_tokens=getattr(second_result, "input_tokens", 0),
+            output_tokens=getattr(second_result, "output_tokens", 0),
+            latency_ms=(time.monotonic() - started_second) * 1000,
+            provider=getattr(second_result, "provider", "unknown"),
+            provider_notes=getattr(second_result, "provider_notes", ()),
+            request_model=spec.corroboration_model,
+        )
+
+        if failure is not None:
+            # FAIL CLOSED. The spec and the grant say every media-direct value
+            # is read twice; only one reading exists. Marking the cells
+            # needs_review is the difference between "corroborated" and
+            # "we could not corroborate", which the landed record must not blur.
+            per_field = {
+                name: dc_replace(
+                    cell,
+                    needs_review=True,
+                    violations=cell.violations
+                    + (
+                        Violation(
+                            field=name,
+                            kind="corroboration",
+                            message=(
+                                f"corroboration by {spec.corroboration_model} "
+                                f"did not complete ({failure}); this value was "
+                                f"read once, under a spec that declares two "
+                                f"readers."
+                            ),
+                        ),
+                    ),
+                )
+                if cell.value_status == ValueStatus.OK.value
+                else cell
+                for name, cell in per_field.items()
+            }
+        else:
             per_field = _corroborate(
                 per_field,
                 second_parsed,
@@ -869,6 +926,20 @@ def _map_one(
                 attempt_count=attempts,
                 violations=cell.violations,
                 evidence_statuses=cell.evidence_statuses,
+                # Violations reach `error_detail` here too, not only in the
+                # branch above. A cell whose value was ALREADY discarded (by
+                # corroboration, which nulls the value at the point of
+                # disagreement) has `value is None`, so it falls through to this
+                # branch — and previously landed with no message at all. The
+                # "X read A, Y read B" text existed only in memory, while the
+                # landed record a human is supposed to adjudicate carried
+                # nothing to adjudicate.
+                error_detail=(
+                    "; ".join(v.message for v in cell.violations)
+                    if cell.violations
+                    else cell.error_detail
+                ),
+                error_code=cell.error_code,
             )
 
         result.cells.append(cell)
@@ -941,6 +1012,16 @@ def _values_disagree(primary: Any, second: Any) -> bool:
         return primary is not second
     if isinstance(primary, (int, float)) and isinstance(second, (int, float)):
         return float(primary) != float(second)
+    # The primary's value passed `check_type`; the corroborator's is raw and
+    # unvalidated, so a second reader returning "90.0" where the primary
+    # returned 90.0 would otherwise fall through to `!=` and discard a value
+    # both readers agree on. Coerce a numeric-looking string ONCE, for
+    # comparison only — never to make it landable.
+    if isinstance(primary, (int, float)) and isinstance(second, str):
+        try:
+            return float(primary) != float(second.strip())
+        except ValueError:
+            return True
     return primary != second
 
 
@@ -967,7 +1048,20 @@ def _corroborate(
         return dict(cells)
     out = dict(cells)
     for name, cell in cells.items():
-        if cell.value_status != ValueStatus.OK.value:
+        # OK and EVIDENCE_ABSENT both participate. Skipping absent cells would
+        # hide the asymmetric case — the primary found nothing where the second
+        # reader found a value — which `_values_disagree` explicitly calls a
+        # disagreement a human should adjudicate. Landing that as "honestly
+        # absent" claims the two readers agreed the source was silent when one
+        # of them read something.
+        #
+        # Other statuses are skipped: a validation_failed or error cell has
+        # already been discarded on its own merits, and there is no surviving
+        # value for a second reading to contradict.
+        if cell.value_status not in (
+            ValueStatus.OK.value,
+            ValueStatus.EVIDENCE_ABSENT.value,
+        ):
             continue
         block = second.get(name)
         second_value = None
@@ -975,6 +1069,8 @@ def _corroborate(
             raw = block.get("value")
             second_value = None if raw == ABSENT_SENTINEL else raw
         if not _values_disagree(cell.value, second_value):
+            continue
+        if cell.value is None and second_value is None:
             continue
         out[name] = dc_replace(
             cell,

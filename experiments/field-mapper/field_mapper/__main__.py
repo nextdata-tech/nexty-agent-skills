@@ -68,6 +68,7 @@ from .schema import compile_schema, describe_unenforceable, routing_table
 from .spec import CrossFieldCheck, MapperSpec
 from .transport import (
     RunBudget,
+    rates_for,
     TransportConfig,
     estimate,
     resolve_api_key,
@@ -436,7 +437,7 @@ def _live_caller(
         config=config,
         # The model reaches the ledger so actuals reconcile at the right rate:
         # this governs the max_usd STOP, not merely a printed figure.
-        budget_ledger=BudgetLedger(budget=budget, model=spec.model),
+        budget_ledger=BudgetLedger(budget=budget, model=fixture.spec.model),
         heartbeat=lambda msg: print(f"    . {msg}", file=sys.stderr),
         provider=provider,
         provider_model=provider_model,
@@ -710,7 +711,14 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
         # documented per-image cap. Byte-derived pricing erred low on dense
         # documents, which is the one direction the estimator must not err.
         media=media,
-        calls_per_cell=1 + spec.thresholds.max_validation_retries,
+        # +1 for the corroborating read. Without it the bound omits a whole
+        # extra call per media-direct input, so the gate that exists to refuse
+        # at the boundary would wave through a run it cannot afford.
+        calls_per_cell=(
+            1
+            + spec.thresholds.max_validation_retries
+            + (1 if spec.corroboration_model else 0)
+        ),
         # from_spec, not TransportConfig(effort=...): the latter drops spec.model,
         # so preflight priced a haiku run at Opus rates AND reported
         # pricing_is_approximate=False. CV-5's shape at a second call site.
@@ -730,6 +738,19 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
             "locally (url/file_id), so\n       their token cost is EXCLUDED. The "
             "figures above are a floor, not an estimate."
         )
+    if spec.corroboration_model:
+        rate_in, rate_out, _ = rates_for(spec.corroboration_model)
+        prim_in, prim_out, _ = rates_for(spec.model)
+        if (rate_in, rate_out) != (prim_in, prim_out):
+            print(
+                f"  NOTE the corroborating call is COUNTED but priced at "
+                f"{spec.model}'s rate\n       (${prim_in}/${prim_out} per Mtok), "
+                f"not {spec.corroboration_model}'s (${rate_in}/${rate_out}). "
+                f"The estimator\n       prices a run at one model; with a "
+                f"{'more' if rate_out > prim_out else 'less'} expensive "
+                f"corroborator the figure errs "
+                f"{'LOW' if rate_out > prim_out else 'high'}."
+            )
 
     budget = _budget_from(fixture, None)
     breaches = est.fits_within(budget)
@@ -757,9 +778,27 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
     budget = _budget_from(fixture, args.canary)
 
     api_key: str | None = None
+    corroborate: Any | None = None
     if args.dry_run:
         call = RecordedPlayer(fixture.recorded)
+        corroborate = (
+            RecordedPlayer(fixture.corroborated) if fixture.corroborated else None
+        )
     else:
+        # A live corroborating run needs a SECOND client bound to
+        # `spec.corroboration_model`, which nothing builds yet. Refuse rather
+        # than call `map_inputs` without it: that path raises anyway (by
+        # design), but with an error about a missing callable rather than the
+        # real reason, which is that the live corroborator is unimplemented.
+        if spec.corroboration_model:
+            print("\n  SYSTEMIC FAILURE — the build blocks, nothing lands:")
+            print(
+                f"    [spec_invalid] spec declares corroboration_model "
+                f"{spec.corroboration_model!r}, but no live corroborating "
+                f"client exists yet. Use --dry-run, which replays "
+                f"corroborated.json."
+            )
+            return EXIT_BLOCKED
         # Building the live caller is itself a blocking operation: it imports
         # the SDK and resolves the key, and both failures are systemic. Caught
         # here rather than left to escape, so a missing `anthropic` exits with
@@ -787,6 +826,7 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
             grant=fixture.grant,
             run_dir=str(run_dir),
             call=call,
+            corroborate=corroborate,
             api_key=api_key,
             heartbeat=(lambda msg: print(f"    . {msg}")) if args.verbose else None,
         )

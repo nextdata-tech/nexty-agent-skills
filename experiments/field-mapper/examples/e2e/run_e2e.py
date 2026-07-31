@@ -74,7 +74,12 @@ from field_mapper.records import (  # noqa: E402
 )
 from field_mapper.ledger import hash_text  # noqa: E402
 from field_mapper.schema import ABSENT_SENTINEL, compile_schema  # noqa: E402
-from field_mapper.transport import AttemptOutcome, CallResult  # noqa: E402
+from field_mapper.transport import (  # noqa: E402
+    AttemptOutcome,
+    BudgetLedger,
+    CallResult,
+    RunBudget,
+)
 
 # Imported for the signature check described in the module docstring: if the
 # platform's transform entrypoint moves, this file should fail at import rather
@@ -391,10 +396,25 @@ def _live_caller(spec: MapperSpec):
     from field_mapper.mapper import system_prompt_for
     from field_mapper.transport import Client, TransportConfig, resolve_api_key
 
+    # The grant declares max_calls / max_tokens / max_usd, but `Grant.check()`
+    # does NOT enforce them — it checks consent, not spend. A BudgetLedger is
+    # what actually stops the run, and without one those ceilings are
+    # decoration. This file is meant to be copied into a real transform, so an
+    # unbounded live path here would ship as an unbounded live path there.
+    grant = _build_grant(spec)
+    budget = RunBudget(
+        max_calls=grant.max_calls,
+        max_input_tokens=grant.max_tokens,
+        max_output_tokens=grant.max_tokens,
+        max_usd=grant.max_usd,
+        max_wall_seconds=600,
+    )
     client = Client(
         api_key=resolve_api_key({}),
         config=TransportConfig.from_spec(spec),
-        budget_ledger=None,
+        # `model` so actuals reconcile at this model's rate: it governs the
+        # max_usd STOP, not just a printed figure.
+        budget_ledger=BudgetLedger(budget=budget, model=spec.model),
     )
 
     def call(*, item, spec, wire_schema, violations=()):  # noqa: ANN001
@@ -508,6 +528,12 @@ def main(argv: list[str] | None = None) -> int:
         reviews,
         result.evidence,
         fields=spec.field_names,
+        # The CLI passes this; omitting it here made the copied gate WEAKER
+        # than the one the harness actually ships — an ok cell could carry
+        # fewer evidence atoms than its field declares and still resolve.
+        min_evidence_per_ok_cell=min(
+            (f.min_evidence for f in spec.target_fields), default=0
+        ),
     )
     print(f"      {len(resolution.wide_rows)} wide row(s), {len(reviews)} review(s)")
 
