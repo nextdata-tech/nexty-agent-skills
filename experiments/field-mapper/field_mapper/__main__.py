@@ -51,6 +51,7 @@ from .errors import (
     SystemicError,
 )
 from .grant import Grant
+from .identity import target_row_key
 from .ledger import read_attempts
 from .mapper import MapperInput, MapResult, map_inputs, system_prompt_for
 from .media import MediaInput
@@ -225,17 +226,59 @@ def bind_reviews_to_landed(
     """
     if not reviews:
         return []
-    ordinal_to_key = {p.emission_ordinal: p.target_row_key for p in proposals}
     by_cell = {(p.target_row_key, p.field): p for p in proposals}
-    snapshot = proposals[0].input_snapshot_id if proposals else ""
-    spec_id = proposals[0].mapper_spec_id if proposals else ""
-    input_ids = [i.input_id for i in fixture.inputs] if fixture else []
+
+    # Landed proposals from a single run all carry the same snapshot and spec
+    # id. A hand-merged CSV of two runs would not, and binding every review to
+    # the first row's values would spuriously stale the second run's reviews —
+    # so refuse rather than guess which run the reviewer meant.
+    snapshots = {p.input_snapshot_id for p in proposals}
+    spec_ids = {p.mapper_spec_id for p in proposals}
+    if len(snapshots) > 1 or len(spec_ids) > 1:
+        raise SpecError(
+            f"landed proposals span {len(snapshots)} input snapshot(s) and "
+            f"{len(spec_ids)} spec id(s). Reviews bind to one of each, so this "
+            f"file is either two runs concatenated or a partial re-run — "
+            f"resolve one population at a time."
+        )
+    snapshot = next(iter(snapshots), "")
+    spec_id = next(iter(spec_ids), "")
+
+    # input_id -> target_row_key BY CONTENT, never by list position. The
+    # previous version indexed `fixture.inputs` and looked the ordinal up in the
+    # proposals — but `emission_ordinal` indexes the CANONICALLY SORTED,
+    # quarantine-filtered survivors, while `fixture.inputs` is file order. When
+    # those differ (a fixture listing [B, A], or any quarantined input shifting
+    # the rest), a human confirmation binds to the WRONG ROW: it clears
+    # needs_review on a value the reviewer never saw, and the row they did
+    # review stays unreviewed, with no error anywhere.
+    #
+    # `identity.target_row_key` is the same derivation `map_inputs` uses, and
+    # its own docstring is explicit that the key is content-derived precisely so
+    # reviews cannot attach to the wrong row.
+    by_input_id: dict[str, str] = {}
+    if fixture is not None:
+        grain = fixture.spec.grain
+        for item in fixture.inputs:
+            try:
+                by_input_id[item.input_id] = target_row_key(
+                    {k: item.identity[k] for k in grain.identity_fields},
+                    source_locators={
+                        k: item.fields[k]
+                        for k in grain.source_locators
+                        if k in item.fields
+                    }
+                    or None,
+                )
+            except (KeyError, SpecError):
+                # An input whose identity cannot be derived was quarantined and
+                # has no row; a review addressed to it simply will not resolve,
+                # which `resolve` reports rather than this silently papering.
+                continue
 
     bound: list[MapperReview] = []
     for review in reviews:
-        row_key = review.target_row_key
-        if row_key in input_ids:
-            row_key = ordinal_to_key.get(input_ids.index(row_key), row_key)
+        row_key = by_input_id.get(review.target_row_key, review.target_row_key)
         proposal = by_cell.get((row_key, review.field))
         value_hash = review.bound_value_hash
         if value_hash == "<derived>":
@@ -284,45 +327,12 @@ def bind_reviews(
     """
     if not reviews:
         return []
-    # input_id -> target_row_key, via emission order (which is the sorted input
-    # order `map_inputs` used). Display-only elsewhere; here it is just a lookup.
-    ordinal_to_key = {p.emission_ordinal: p.target_row_key for p in result.proposals}
-    by_cell = {(p.target_row_key, p.field): p for p in result.proposals}
-    input_ids = [i.input_id for i in fixture.inputs]
-
-    bound: list[MapperReview] = []
-    for review in reviews:
-        row_key = review.target_row_key
-        if row_key in input_ids:
-            row_key = ordinal_to_key.get(input_ids.index(row_key), row_key)
-        proposal = by_cell.get((row_key, review.field))
-        value_hash = review.bound_value_hash
-        if value_hash == "<derived>":
-            value_hash = proposal.value_hash if proposal else None
-        bound.append(
-            MapperReview(
-                review_id=review.review_id,
-                target_row_key=row_key,
-                field=review.field,
-                verdict=review.verdict,
-                bound_value_hash=value_hash,
-                override=review.override,
-                bound_input_snapshot_id=(
-                    result.input_snapshot_id
-                    if review.bound_input_snapshot_id == "<derived>"
-                    else review.bound_input_snapshot_id
-                ),
-                bound_mapper_spec_id=(
-                    fixture.spec.mapper_spec_id
-                    if review.bound_mapper_spec_id == "<derived>"
-                    else review.bound_mapper_spec_id
-                ),
-                reviewer=review.reviewer,
-                reviewed_at=review.reviewed_at,
-                note=review.note,
-            )
-        )
-    return bound
+    # Delegates, so the input_id -> target_row_key derivation exists ONCE. It
+    # used to be duplicated here and in the landed variant, and both copies
+    # resolved by list position — which binds a human confirmation to the wrong
+    # row whenever fixture order differs from canonical sort order, or a
+    # quarantined input shifts the rest.
+    return bind_reviews_to_landed(reviews, result.proposals, fixture)
 
 
 def _media_from_dicts(
@@ -1556,11 +1566,33 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
             "form and re-resolving it produced different rows, so a review "
             "cycle would not see what the run landed"
         )
-    if len(reresolved.stale_reviews) != len(resolution.stale_reviews):
+    # PROVENANCE, not just the wide rows. The wide projection compares values
+    # with Python equality, where 90 == 90.0 and True == 1, so it is blind to
+    # exactly the round-trip defects that matter — a float cell landing as an
+    # int hashes differently and silently stales every review bound to it while
+    # both sides still display "90". The sidecar carries value_hash,
+    # value_status, needs_review, effective_source and reviewer, which is where
+    # that shows up.
+    if reresolved.provenance != resolution.provenance:
+        before = {(r["target_row_key"], r["field"]): r for r in resolution.provenance}
+        diffs = [
+            f"{row['field']}: {before.get((row['target_row_key'], row['field']))} "
+            f"-> {row}"
+            for row in reresolved.provenance
+            if before.get((row["target_row_key"], row["field"])) != row
+        ]
         return (
-            f"resolve round trip changed staleness: "
-            f"{len(resolution.stale_reviews)} stale in-memory, "
-            f"{len(reresolved.stale_reviews)} after the CSV trip"
+            "resolve round trip changed the provenance sidecar: "
+            + (diffs[0] if diffs else "row set differs")
+        )
+    # Stale review IDENTITY, not just the count. A swap — one review going
+    # stale in place of another — keeps the count and changes who has to
+    # re-review.
+    if reresolved.stale_review_rows != resolution.stale_review_rows:
+        return (
+            f"resolve round trip changed which reviews went stale: "
+            f"{resolution.stale_review_rows} in-memory, "
+            f"{reresolved.stale_review_rows} after the CSV trip"
         )
     return None
 

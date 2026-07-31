@@ -162,6 +162,29 @@ class TypedValue:
     value_type: ValueType
     value: Any = None
 
+    def __post_init__(self) -> None:
+        """Canonicalize the value into its declared slot type.
+
+        ONE encoding, both directions. Without this, a model answering `90` for
+        a float field produced `TypedValue(FLOAT, 90)` — `check_type` accepts a
+        JSON int for a float field and does not coerce — while the same cell
+        read back from landed CSV produced `TypedValue(FLOAT, 90.0)`. Those hash
+        differently (`value_hash` canonicalizes the VALUE, and `90` is not
+        `90.0` in JSON), so every review bound to that cell went stale on the
+        next `resolve` with `value_changed`, for a reason no human could see:
+        both sides display `90`.
+
+        Canonicalizing here rather than in `value_hash` keeps `slots()` honest
+        too — the landed column gets the same float the hash was taken over.
+        """
+        if self.value is None:
+            return
+        if self.value_type is ValueType.FLOAT and isinstance(self.value, int):
+            # bool is an int subclass; a bool in a float slot is a type error,
+            # not something to silently widen to 1.0.
+            if not isinstance(self.value, bool):
+                object.__setattr__(self, "value", float(self.value))
+
     @property
     def is_null(self) -> bool:
         return self.value is None
@@ -516,6 +539,29 @@ def _typed_from_row(
     return TypedValue(value_type=value_type, value=text)
 
 
+def _strict_bool(raw: Any, lineno: int) -> bool:
+    """Parse `true`/`false` and NOTHING else.
+
+    `needs_review` is the one flag that means "a human must look at this", so a
+    missing or unparseable column must not quietly become `False` — that clears
+    every human-attention marker in a hand-trimmed or truncated CSV with no
+    error anywhere. The previous form, `str(row.get(...)).lower() == "true"`,
+    turned a missing key into the string "none" and then into False.
+    """
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw).strip().lower() if raw is not None else ""
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    raise SpecError(
+        f"mapper_proposals.csv line {lineno}: needs_review is {raw!r}, expected "
+        f"'true' or 'false'. Defaulting it would silently clear a human-review "
+        f"marker."
+    )
+
+
 def proposals_from_csv(
     text: str, evidence: Iterable[MapperEvidence] = ()
 ) -> list[MapperProposal]:
@@ -553,7 +599,7 @@ def proposals_from_csv(
                     error_detail=row.get("error_detail"),
                     attempt_count=int(row.get("attempt_count") or 0),
                     attempt_id=row.get("attempt_id"),
-                    needs_review=str(row.get("needs_review")).lower() == "true",
+                    needs_review=_strict_bool(row.get("needs_review"), lineno),
                     observation_id=str(row.get("observation_id") or ""),
                     input_snapshot_id=str(row.get("input_snapshot_id") or ""),
                     mapper_spec_id=str(row.get("mapper_spec_id") or ""),

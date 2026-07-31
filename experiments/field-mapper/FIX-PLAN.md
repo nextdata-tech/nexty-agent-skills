@@ -11,9 +11,13 @@
 | 2 — estimator | **LANDED** `2c5545c`. Per-model rates; PDF per-page (old byte heuristic priced a real 2-page PDF at **7 tokens** vs ~15,600 actual); ledger reconciles at the model's rate, so `max_usd` stops at the right point. |
 | 4 — A1 cross-field | **LANDED** `2df1539`. Closed vocabulary; retry integration; fixtures 10 (catches) + 11 (pins the blind spot). Exposed a **third** hash-drop site in `with_wire_schema`, found automatically by the coverage check. |
 | 5 — A2 corroboration | **LANDED** `0307400`. **L1 is now caught.** Second injected callable; 4 refusals each verified to fire; ledger attribution fixed. |
-| 1 — capability probe | doc half landed (`772a499`); the live Models API probe did not |
+| 1 — capability probe | **LANDED** `52f0d43`. Live Models API probe, two leaves separated. The API confirmed haiku-4-5 has `thinking` **without** `effort` — the one-boolean defect was real. |
+| CV-3 — `cmd_resolve` | **LANDED** `ccec00c`. The review model executes for the first time: human override wins, stale confirmation invalidates. Round-trip checked on every fixture. |
+| §7.7 — atomicity | **LANDED** `63a9967`. Characterised, not asserted. Crash-after-success leaves a populated, partly-obsolete table where survivors and orphans look identical. |
+| Fixture 07 size | **LANDED** `bdb0347`. 656×272; the misread **survives** — haiku 99.0 vs sonnet 90.0, live. |
+| A2 live client | **LANDED** `abbc929`. L1 closed end to end with two real models. |
 | 6 — Part B citations | gated on citation→field attribution design |
-| 7 — A4 marking | blocked behind CV-2/CV-3 |
+| 7 — A4 marking | now UNBLOCKED (CV-3 done), still needs CV-2 |
 
 Fixture 07 rebuild at a legible size (>200px) is still open, and still worth
 doing before Stage 5: it separates "the harness cannot verify" from "the image
