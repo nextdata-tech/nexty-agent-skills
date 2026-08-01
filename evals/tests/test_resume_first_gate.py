@@ -28,6 +28,8 @@ SRC = REPO_ROOT / "src"
 POCKET_LOOP = SRC / "nxd-pocket-loop"
 SKILL = POCKET_LOOP / "SKILL.md"
 CONTEXT_AND_RESUME = POCKET_LOOP / "reference" / "context-and-resume.md"
+HANDOFF_EXPORT = POCKET_LOOP / "reference" / "handoff-export.md"
+BUILD_RECORD = POCKET_LOOP / "reference" / "build-record.md"
 SCHEDULING = POCKET_LOOP / "reference" / "scheduling.md"
 GENERATE_DP_CLOSURE_RECORD = SRC / "nxd-generate-dp" / "reference" / "closure-record.md"
 
@@ -62,6 +64,15 @@ def test_context_and_resume_exists_and_reopen_removed():
     assert not REMOVED_DOC.exists(), (
         "reopen.md must be deleted — its content folded into context-and-resume.md"
     )
+
+
+def test_closure_path_and_self_check_contracts_name_the_closure_root():
+    closure_path = "`…/nxd-pocket/<workflow>/closure/`"
+    assert closure_path in CONTEXT_AND_RESUME.read_text()
+    assert closure_path in HANDOFF_EXPORT.read_text()
+    build_record = BUILD_RECORD.read_text()
+    assert "scripts/self_check.py" not in build_record
+    assert "python3 self_check.py" in build_record
 
 
 def test_reattach_guidance_orders_list_resume_then_build_fallback():

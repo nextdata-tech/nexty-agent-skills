@@ -42,7 +42,7 @@ Three properties, all load-bearing:
 - **Generated, never hand-authored.** No template, no prose sections to fill in,
   no discipline to remember. It is written by
   `"$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record …` and, for the self-check stages, by
-  `scripts/self_check.py --record build-record.json`.
+  `self_check.py --record build-record.json` at the closure root.
 - **It records attempts, not just an outcome.** Per attempt: which stage failed,
   what the agent thought was wrong, what it changed, and what the re-run did.
   That is what turns "healed with concessions" from an assertion into something
@@ -215,7 +215,7 @@ the agent:
 | `tool` | written by | stages it may carry |
 |---|---|---|
 | `validate_dp_spec` | `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py" --json` | `s0_spec` |
-| `self_check` | `scripts/self_check.py --json` | `s1_structure`, `s2_transform`, `s3_closure` |
+| `self_check` | `self_check.py --json` at the closure root | `s1_structure`, `s2_transform`, `s3_closure` |
 | `dp_diagnostics` | `"$POCKET_HELPER_DIR/scripts/dp_diagnostics.py"` | any |
 | `loop` | **the agent**, hand-constructed from tool results | `s4_pin` … `s8_answer` |
 
@@ -272,7 +272,7 @@ predicate below.
    `compiled_from`, `compiler_version`, and every stage as `not_reached` —
    except `s0_spec`, which it fills in the same pass by validating the
    **snapshot** (not the live IR, because the snapshot is what was compiled).
-2. **Step 7**: `self_check.py --json --record build-record.json` merges
+2. **Step 7**: closure-root `self_check.py --json --record build-record.json` merges
    `s1_structure`, `s2_transform`, `s3_closure`. Phase C validates this file's
    own presence and its `compiled_from`, so the record must exist before Phase C
    runs — which is why step 1 is unconditional.
@@ -856,7 +856,7 @@ python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record append --record <p
 python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record query  --record <path> \
        [--stage …] [--owner …] [--severity …] [--code …] [--unresolved] [--attempt N]
 python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" materialized  --record <path> [--lock <path>] [--spec <path>]
-python3 scripts/self_check.py [--json] [--record build-record.json]
+python3 self_check.py [--json] [--record build-record.json]  # closure root
 ```
 
 `record query` is the one to reach for instead of re-reading logs: what failed,

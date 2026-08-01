@@ -21,7 +21,7 @@ Draw the line clearly, because the recovery path depends on it:
 
 **Durable (survives the session):**
 
-- The **closure directory** at `…/nxd-pocket/<workflow>/` on the file-writing
+- The **closure directory** at `…/nxd-pocket/<workflow>/closure/` on the file-writing
   surface — the source copy, `spec.py`, `models.py`, `transform/`, and the four
   generated record files: `dp-spec.approved.md`, `dp-spec.lock.json`,
   `build-record.json` and `README.md`. This is the one key a later session always

@@ -39,7 +39,7 @@ mcp__nxd-desktop__export_data_product(
 ```
 
 - `definition` is the closure's durable, host-visible absolute path — the one
-  stated in the handoff and named by the workflow id (`…/nxd-pocket/<workflow>/`).
+  stated in the handoff and named by the workflow id (`…/nxd-pocket/<workflow>/closure/`).
   It is the same path `build_data_product` takes.
 - `import_notes` is **required**.
 - `redact` is optional and rarely needed — see the next section.
