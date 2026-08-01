@@ -599,7 +599,7 @@ def check_verdicts(data, criteria: list, report: Report) -> None:
             )
 
     unreached = [v for v in values if v not in banded]
-    if unreached and bands:
+    if unreached:
         report.error(
             f"no band or rule reaches {unreached} — every declared verdict must "
             "be reachable",

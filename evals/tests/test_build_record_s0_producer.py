@@ -147,6 +147,66 @@ def test_lock_verify_catches_an_edited_snapshot(workflow):
     assert "closure.spec_hash_mismatch" in codes
 
 
+@pytest.mark.parametrize("snapshot", ("/tmp/foreign-spec.md", "../foreign-spec.md"))
+def test_lock_verify_rejects_snapshot_paths_outside_the_closure(workflow, snapshot):
+    lock = json.loads(workflow["lock"].read_text())
+    lock["snapshot"] = snapshot
+    workflow["lock"].write_text(json.dumps(lock), encoding="utf-8")
+
+    result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
+
+    assert result.returncode == 1
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
+    assert diagnostics[0]["evidence"] == {"found": snapshot}
+
+
+def test_lock_verify_rejects_a_snapshot_symlink_outside_the_closure(workflow, tmp_path):
+    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    external = tmp_path / "external-spec.md"
+    external.write_bytes(snapshot.read_bytes())
+    snapshot.unlink()
+    snapshot.symlink_to(external)
+
+    result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
+
+    assert result.returncode == 1
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
+    assert diagnostics[0]["evidence"] == {"found": "dp-spec.approved.md"}
+
+
+@pytest.mark.parametrize("closure_path", ("/tmp/foreign-ref.md", "../foreign-ref.md"))
+def test_lock_verify_rejects_resolved_ref_paths_outside_the_closure(workflow, closure_path):
+    lock = json.loads(workflow["lock"].read_text())
+    lock["resolved_refs"][0]["closure_path"] = closure_path
+    workflow["lock"].write_text(json.dumps(lock), encoding="utf-8")
+
+    result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
+
+    assert result.returncode == 1
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
+    assert diagnostics[0]["evidence"] == {"found": closure_path}
+
+
+def test_lock_verify_rejects_a_resolved_ref_symlink_outside_the_closure(workflow, tmp_path):
+    mirrored = workflow["closure"] / "prompts" / "score_candidate.md"
+    external_dir = tmp_path / "external-prompts"
+    external_dir.mkdir()
+    (external_dir / mirrored.name).write_bytes(mirrored.read_bytes())
+    mirrored.unlink()
+    mirrored.parent.rmdir()
+    mirrored.parent.symlink_to(external_dir, target_is_directory=True)
+
+    result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
+
+    assert result.returncode == 1
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
+    assert diagnostics[0]["evidence"] == {"found": "prompts/score_candidate.md"}
+
+
 def test_record_init_fills_s0_spec(workflow):
     result = _run(
         str(DIAG), "record", "init", "--record", str(workflow["record"]),

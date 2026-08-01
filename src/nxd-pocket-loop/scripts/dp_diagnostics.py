@@ -1591,6 +1591,15 @@ def read_lock(closure: Path) -> dict:
     return json.loads((closure / CLOSURE_LOCK).read_text(encoding="utf-8"))
 
 
+def _stays_within_closure(closure: Path, target: Path) -> bool:
+    """Whether a target's canonical path remains under the closure root."""
+    try:
+        target.resolve().relative_to(closure.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
 def verify_lock(closure: Path, spec: Path | None = None) -> Report:
     """The canonical half of the verification split (§3.5).
 
@@ -1627,7 +1636,27 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
         )
         return report
 
-    snapshot = closure / str(lock.get("snapshot") or CLOSURE_SNAPSHOT)
+    snapshot_ref = str(lock.get("snapshot") or CLOSURE_SNAPSHOT)
+    if Path(snapshot_ref).is_absolute() or ".." in Path(snapshot_ref).parts:
+        report.error(
+            f"snapshot {snapshot_ref!r} points outside the closure",
+            code="closure.escaping_reference",
+            path=f"closure:{CLOSURE_LOCK}:snapshot",
+            evidence={"found": snapshot_ref},
+            stage="s3_closure",
+        )
+        return report
+
+    snapshot = closure / snapshot_ref
+    if not _stays_within_closure(closure, snapshot):
+        report.error(
+            f"snapshot {snapshot_ref!r} resolves outside the closure",
+            code="closure.escaping_reference",
+            path=f"closure:{CLOSURE_LOCK}:snapshot",
+            evidence={"found": snapshot_ref},
+            stage="s3_closure",
+        )
+        return report
     if not snapshot.is_file():
         report.error(
             f"{snapshot.name} is missing — the approved plan is not in the closure",
@@ -1677,7 +1706,27 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
         )
 
     for ref in lock.get("resolved_refs") or []:
-        target = closure / str(ref.get("closure_path", ""))
+        closure_path = str(ref.get("closure_path", ""))
+        if Path(closure_path).is_absolute() or ".." in Path(closure_path).parts:
+            report.error(
+                f"mirrored reference {closure_path!r} points outside the closure",
+                code="closure.escaping_reference",
+                path=f"closure:{CLOSURE_LOCK}:resolved_refs",
+                evidence={"found": closure_path},
+                stage="s3_closure",
+            )
+            continue
+
+        target = closure / closure_path
+        if not _stays_within_closure(closure, target):
+            report.error(
+                f"mirrored reference {closure_path!r} resolves outside the closure",
+                code="closure.escaping_reference",
+                path=f"closure:{CLOSURE_LOCK}:resolved_refs",
+                evidence={"found": closure_path},
+                stage="s3_closure",
+            )
+            continue
         if not target.is_file():
             report.error(
                 f"mirrored reference {ref.get('closure_path')!r} is missing",

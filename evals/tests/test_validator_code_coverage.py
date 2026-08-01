@@ -212,6 +212,22 @@ def test_diagnostics_are_addressed_by_identity_not_index(tmp_path):
         assert spec_ref == "" or spec_ref.startswith("spec:"), (code, spec_ref)
 
 
+def test_declared_verdicts_without_bands_are_unreachable(tmp_path):
+    """A vocabulary without a band or rule cannot produce any verdict."""
+    import validate_dp_spec
+
+    path = tmp_path / "dp-spec.md"
+    path.write_text(
+        BROKEN_SPEC + "\n## verdicts\n\nvalues: [ADVANCE, REJECT]\n",
+        encoding="utf-8",
+    )
+    diagnostics = validate_dp_spec.validate(path).diagnostics
+    unreachable = [d for d in diagnostics if d.code == "spec.verdict.value_unreached"]
+
+    assert len(unreachable) == 1
+    assert unreachable[0].evidence == {"found": ["ADVANCE", "REJECT"]}
+
+
 def test_the_json_envelope_is_the_shared_report_shape(tmp_path):
     import validate_dp_spec
 
