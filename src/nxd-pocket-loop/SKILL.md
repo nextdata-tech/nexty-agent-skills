@@ -164,7 +164,8 @@ agent_authored`, and **show what you filled in**. Never change a value they wrot
 never silently fix weights that do not sum, never mark your own addition
 `user_confirmed`. Draft the whole file when they only described it; edit and
 re-approve an existing one on a later pass. Then **validate** — `python3
-scripts/validate_dp_spec.py <path>/dp-spec.md` — which deterministically finds
+"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-spec.md` after resolving
+`POCKET_HELPER_DIR` with [scripts bootstrap](reference/scripts-bootstrap.md) — which deterministically finds
 the gap classes the gate fires on: a scale defining only its endpoints, weights
 that do not sum, a verdict no band reaches, a gate with no `UNKNOWN` rule, a
 ruling with no ledger row, a judgement with no `generator_model`. Fix each, or
@@ -222,6 +223,8 @@ exact per-type shape — don't re-derive it here**, along with the local DP shap
 the derived models carrying any business ruling the semantic layer can't express
 — its own `reference/` holds the connector-type-specific shape, and
 `reference/llm-judgments.md` holds how an agent judgement lands as data.
+Pass the bootstrap-resolved absolute `pocket_helper_dir` too; this is a required
+generator handoff field, not a path it may reconstruct from its own cwd.
 **Never author `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`: the
 supervisor compiles those from the Python sources when it pins the definition.**
 Include `reference/dlt.md`'s instructions. The output is a **closure directory** —
@@ -434,7 +437,8 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   `dp-spec.md` (Step 1b) written beside the closure, never inside it, and passed
   to the generator. A user-supplied value in it is encoded verbatim; a value you
   authored is marked `agent_authored` and named in the read-back; `status:
-  approved` is the user's to set, never yours. Run `scripts/validate_dp_spec.py`
+  approved` is the user's to set, never yours. Run
+  `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"` after the scripts bootstrap
   before the read-back and again before generating — a validator pass only means
   compilable, never approved. What the user approves is what the generator
   byte-copies and hashes into the closure.
@@ -469,9 +473,7 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
 - **A subagent never owns the policy turn and never holds a credential.** When
   generation is offloaded (Step 3), the policy read-back stays a main-thread user
   turn — a subagent returns `gap_found` on a new gap instead of opening one; a
-  live credential is placeholdered in the subagent and injected host-side before
-  build, never in its prompt, return, or narration
-  ([reference/scheduling.md](reference/scheduling.md)).
+  live credential is placeholdered in the subagent and injected host-side before build, never in its prompt, return, or narration ([reference/scheduling.md](reference/scheduling.md)).
 - **Query is by measure/dimension name, and a standing ruling materializes — a
   filter never enforces one.** Ground the NL→selection translation in
   `describe_models`; `filters[]`, `order_by[]` and `limit` are for **per-question
@@ -482,19 +484,12 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   `is_transfer` dimension and expecting callers to filter on it is that same
   silent failure wearing a column.
 - **The supervisor data dir is off-limits.** Everything under `.pocket/state/` —
-  pinned snapshots in `definitions/<id>/`, `state.sqlite*`, `staging/` — is
-  immutable supervisor-owned state; never `chmod`, edit, or hand-write it, and a
+  pinned snapshots in `definitions/<id>/`, `state.sqlite*`, `staging/` — is immutable supervisor-owned state; never `chmod`, edit, or hand-write it, and a
   `.../staging/run-<id>/data.duckdb` path inside a pinned `manifest.yaml` is its
   own resolved runtime path, not a defect. If a served closure is wrong, fix
   **your** source dir and re-`serve` — the supervisor re-pins.
-- **Bearer only as a tool parameter** — keep it out of narration, never persist or
-  print it. **Never present a preview or truncated result as verified data**, and
-  never stall silently.
+- **Bearer only as a tool parameter** — keep it out of narration, never persist or print it. **Never present a preview or truncated result as verified data**, and never stall silently.
 
 ## Reference docs (this skill)
 
-Use [dp-spec](reference/dp-spec.md), [build-record](reference/build-record.md),
-[failure-handling](reference/failure-handling.md), [source-materialization](reference/source-materialization.md),
-[scheduling](reference/scheduling.md), [context-and-resume](reference/context-and-resume.md),
-[inference](reference/inference.md), [handoff-export](reference/handoff-export.md),
-[query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for their named details.
+Use [dp-spec](reference/dp-spec.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.

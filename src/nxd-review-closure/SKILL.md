@@ -110,13 +110,11 @@ bytes still match the lock's `snapshot_sha256`, that `README.md` is present, and
 that `build-record.json` exists with `compiled_from` equal to the lock's
 `spec_hash`.
 
-Those are mechanical, and Step 7 runs **two** commands to settle them:
-`self_check.py` (which does the byte-level half inside the closure) and
-`dp_diagnostics.py lock verify` (which does the canonical-hash half, because
-comparing against the live `dp-spec.md` needs a full canonicalization). **Confirm
-both were run.** If only one was, say so in one line — a byte-matching snapshot
-whose canonical hash was never checked against the live plan proves the copy is
-intact, not that it is current.
+Those are mechanical, settled by generator-run `self_check.py` and canonical lock
+verification. This read-only review **does not execute either helper** and receives
+only the closure path plus verbatim request; inspect their recorded evidence in
+the closure. If evidence is absent, say it is unverified rather than inventing a
+failure or requesting a helper path.
 
 If you notice a structural problem, mention it in one line under
 `structural_note` and move on. Do not spend the round on it.

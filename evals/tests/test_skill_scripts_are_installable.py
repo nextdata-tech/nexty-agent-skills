@@ -24,8 +24,13 @@ fence in `reference/self-check.md`, never by an installer.
 
 from __future__ import annotations
 
-import re
+import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
+import zipfile
 
 import pytest
 
@@ -36,37 +41,28 @@ SRC = REPO / "src"
 # `test_self_check_sync.py` keeps the fence and the file byte-identical.
 DELIVERED_BY_EMBEDDING = {"self_check.py"}
 
-# `python3 <something>/foo.py` or a bare `scripts/foo.py` mention.
-INVOCATION = re.compile(r"(?:^|[\s`(])((?:[\w<>./-]*/)?scripts/[\w-]+\.py)")
+HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py")
+SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
+WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
+BOOTSTRAP = re.compile(r"```bash\n(POCKET_HELPER_DIR=.*?test -n \"\$POCKET_HELPER_DIR\")\n```", re.S)
 
 
 def _skill_docs() -> list[Path]:
     return sorted(p for p in SRC.rglob("*.md") if p.is_file())
 
 
-def _referenced_scripts() -> dict[str, set[str]]:
-    """script basename -> set of skills whose docs invoke it."""
-    found: dict[str, set[str]] = {}
-    for doc in _skill_docs():
-        skill = doc.relative_to(SRC).parts[0]
-        for match in INVOCATION.findall(doc.read_text(encoding="utf-8")):
-            found.setdefault(Path(match).name, set()).add(skill)
-    return found
-
-
 def test_every_referenced_script_ships_inside_a_skill_tree():
-    """The file the docs name must exist under some `src/<skill>/scripts/`."""
+    """Every helper named by a skill document survives an install."""
     installable = {p.name for p in SRC.rglob("scripts/*.py")}
-    missing = {
-        name: sorted(skills)
-        for name, skills in _referenced_scripts().items()
-        if name not in installable and name not in DELIVERED_BY_EMBEDDING
-    }
+    missing: dict[str, list[str]] = {}
+    for doc in _skill_docs():
+        names = set(SCRIPT_PATH.findall(doc.read_text(encoding="utf-8")))
+        unavailable = names - installable - DELIVERED_BY_EMBEDDING
+        if unavailable:
+            missing[str(doc.relative_to(SRC))] = sorted(unavailable)
     assert not missing, (
         "these scripts are invoked by skill docs but ship to no install target "
-        f"(not under any src/<skill>/scripts/): {missing}. Move the file into a "
-        "skill tree, or deliver it by embedding it in a reference doc the way "
-        "self_check.py is delivered."
+        f"(not under any src/<skill>/scripts/): {missing}"
     )
 
 
@@ -92,23 +88,135 @@ def test_the_embedded_exception_is_real(name):
 
 
 def test_a_cross_skill_call_names_the_owning_skill():
-    """Outside nxd-pocket-loop the bare relative path would not resolve.
-
-    The pack's existing convention (mesh-analyzer's profiler) is to qualify the
-    path with the owning skill: `<nxd-mesh-analyzer>/scripts/profile_tabular.py`.
-    """
+    """No skill may resolve these helpers from its workflow or closure cwd."""
     offenders = []
     for doc in _skill_docs():
         rel = doc.relative_to(SRC)
-        if rel.parts[0] == "nxd-pocket-loop":
-            continue  # its own scripts/ IS relative to it
         for line_no, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
-            for match in INVOCATION.findall(line):
-                if Path(match).name not in {"dp_diagnostics.py", "validate_dp_spec.py"}:
-                    continue
-                if not match.startswith("<nxd-pocket-loop>/"):
-                    offenders.append(f"{rel}:{line_no}: {match}")
+            if "python3" in line and any(name in line and "scripts/" in line for name in HELPERS):
+                if "$POCKET_HELPER_DIR/scripts/" not in line:
+                    offenders.append(f"{rel}:{line_no}: {line.strip()}")
     assert not offenders, (
-        "these call sites use a path that does not resolve from their own skill "
-        f"directory; qualify them as <nxd-pocket-loop>/scripts/...: {offenders}"
+        "helper call sites must use the resolved POCKET_HELPER_DIR path, not a path "
+        f"relative to a repository, workflow, or closure: {offenders}"
     )
+
+
+def _assert_helpers_run(skill_dir: Path) -> None:
+    """Assert both entrypoints run from a copied or extracted install tree."""
+    scripts = skill_dir / "scripts"
+    validator = scripts / "validate_dp_spec.py"
+    diagnostics = scripts / "dp_diagnostics.py"
+    assert validator.is_file()
+    assert diagnostics.is_file()
+    assert (scripts / "requirements.txt").read_text(encoding="utf-8") == "PyYAML>=6.0,<7\n"
+
+    schema = subprocess.run(
+        [sys.executable, str(diagnostics), "schema", "--json"],
+        cwd=skill_dir.parent,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(schema.stdout)["schema"] == "nxd-dp-spec-schema-v1"
+
+    examples = WORKED_SPEC.findall(
+        (SRC / "nxd-pocket-loop" / "reference" / "dp-spec.md").read_text(encoding="utf-8")
+    )
+    assert len(examples) == 1
+    worked_spec = skill_dir.parent / "worked-dp-spec.md"
+    worked_spec.write_text(examples[0], encoding="utf-8")
+    report = subprocess.run(
+        [sys.executable, str(validator), str(worked_spec), "--json"],
+        cwd=skill_dir.parent,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(report.stdout)
+    assert payload["tool"] == "validate_dp_spec"
+    assert payload["ok"] is True
+    assert payload["counts"]["error"] == 0
+
+
+def _bootstrap_resolves(home: Path, cwd: Path) -> Path:
+    """Run the documented resolver, not a reimplementation of it."""
+    text = (SRC / "nxd-pocket-loop" / "reference" / "scripts-bootstrap.md").read_text()
+    match = BOOTSTRAP.search(text)
+    assert match, "scripts-bootstrap.md must retain one executable resolver block"
+    env = os.environ | {"HOME": str(home)}
+    result = subprocess.run(
+        ["bash", "-c", match.group(1) + '\nprintf "%s\\n" "$POCKET_HELPER_DIR"'],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def _install(target: str, home: Path, *args: str) -> None:
+    env = os.environ | {"HOME": str(home)}
+    if target == "desktop":
+        # Exercise the macOS-only cache installer on every test platform.
+        fake_bin = home / "bin"
+        fake_bin.mkdir()
+        uname = fake_bin / "uname"
+        uname.write_text("#!/usr/bin/env sh\necho Darwin\n")
+        uname.chmod(0o755)
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    subprocess.run(
+        ["bash", "scripts/install.sh", f"--{target}", "--skills", "nxd-pocket-loop",
+         "--no-validate", "--no-submodule", "--yes", *args],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def test_code_install_includes_and_invokes_pocket_helpers(tmp_path: Path):
+    _install("code", tmp_path)
+    skill_dir = tmp_path / ".claude" / "skills" / "nxd-pocket-loop"
+    outside = tmp_path / "outside-code"
+    outside.mkdir()
+    assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
+    _assert_helpers_run(skill_dir)
+
+
+def test_desktop_cache_install_includes_and_invokes_pocket_helpers(tmp_path: Path):
+    account, device = "test-account", "test-device"
+    support = tmp_path / "Library" / "Application Support" / "Claude"
+    (support / "local-agent-mode-sessions" / account / device / "cowork_plugins").mkdir(parents=True)
+    (support / "cowork-enabled-cli-ops.json").write_text(json.dumps({"ownerAccountId": account}))
+    (support / "config.json").write_text(json.dumps({f"dxt:allowlistEnabled:{device}": True}))
+
+    _install("desktop", tmp_path)
+    version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+    cache = support / "local-agent-mode-sessions" / account / device / "cowork_plugins" / "cache"
+    skill_dir = cache / "nexty" / "nexty-agent-skills" / version / "skills" / "nxd-pocket-loop"
+    outside = tmp_path / "outside-cowork"
+    outside.mkdir()
+    assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
+    _assert_helpers_run(skill_dir)
+
+
+def test_desktop_zip_includes_and_invokes_pocket_helpers(tmp_path: Path):
+    subprocess.run(["bash", "build-skills.sh"], cwd=REPO, check=True, capture_output=True, text=True)
+    archive = REPO / "build" / "nxd-pocket-loop.zip"
+    assert archive.is_file()
+    with zipfile.ZipFile(archive) as zf:
+        assert "scripts/dp_diagnostics.py" in zf.namelist()
+        assert "scripts/validate_dp_spec.py" in zf.namelist()
+        assert "scripts/requirements.txt" in zf.namelist()
+        skill_dir = (
+            tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
+            / "skills-plugin" / "test-account" / "test-device" / "test-session" / "skills" / "nxd-pocket-loop"
+        )
+        zf.extractall(skill_dir)
+    outside = tmp_path / "outside-zip"
+    outside.mkdir()
+    assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
+    _assert_helpers_run(skill_dir)

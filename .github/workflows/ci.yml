@@ -41,4 +41,4 @@ jobs:
       # agent/judge backends and run the runner-side checkers directly, so a
       # deterministic gate cannot silently regress to judge-only grading.
       - name: Harness unit tests
-        run: uv run --no-project --with pytest --with duckdb python -m pytest evals/tests -q
+        run: uv run --no-project --with pytest --with duckdb --with pyyaml python -m pytest evals/tests -q

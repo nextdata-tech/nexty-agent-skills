@@ -53,7 +53,7 @@ Three preconditions, all hard:
 - The live spec's `status:` is `approved`. Copying a `proposed` spec would
   certify a plan the user never approved. `lock.spec_status_at_copy` records what
   was true at copy time, and the self-check fails a snapshot that was not.
-- `<nxd-pocket-loop>/scripts/validate_dp_spec.py` passes against that spec. A spec that does not
+- `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"` passes against that spec. A spec that does not
   validate is not a settled plan.
 - The copy happens **after** the policy read-back gate, at generation. That is
   precisely what keeps the gate's bright line intact — "nothing under `closure/`"
@@ -79,7 +79,7 @@ to make the path resolve.
 ## 3. Write the lock
 
 ```bash
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock write <spec.md> <closure-dir>
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir>
 ```
 
 `dp-spec.lock.json` carries the canonical `spec_hash`, the raw
@@ -100,7 +100,7 @@ is not a broken product.
 ## 4. Open the build record
 
 ```bash
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record init \
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record init \
     --record <closure>/build-record.json \
     --lock   <closure>/dp-spec.lock.json
 ```

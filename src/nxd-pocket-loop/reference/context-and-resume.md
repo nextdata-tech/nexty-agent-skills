@@ -58,8 +58,8 @@ closure carries its own answer, and the check is two commands.
 | `build-record.json` | what happened: stages, attempts, concessions, blockers, the read-back |
 
 ```bash
-python3 scripts/dp_diagnostics.py lock verify <closure> --spec <workflow>/dp-spec.md
-python3 scripts/dp_diagnostics.py materialized --record <closure>/build-record.json \
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec <workflow>/dp-spec.md
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" materialized --record <closure>/build-record.json \
     --lock <closure>/dp-spec.lock.json --spec <workflow>/dp-spec.md
 ```
 

@@ -45,6 +45,10 @@ rely on a custom/plugin agent definition. Give it both halves:
 2. **The original request, verbatim** — every question asked, and any procedure
    supplied. Not your summary of it.
 
+Those are the **only** dispatch inputs. In particular, never pass
+`pocket_helper_dir`: the reviewer is read-only and does not execute the Pocket
+helpers; it inspects their recorded evidence inside the closure.
+
 The second is load-bearing. The defects this round targets are OMISSIONS, so a
 reviewer holding only the artifact will pass a well-formed closure that answers
 the wrong question. Dispatching without the request wastes the round.

@@ -91,7 +91,7 @@ alongside `regenerates_used`, `remaps_used` and `retries_used`. Read them instea
 of keeping a tally in your head:
 
 ```bash
-python3 scripts/dp_diagnostics.py record query --record <closure>/build-record.json --unresolved
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record query --record <closure>/build-record.json --unresolved
 ```
 
 If the loop does not converge within the caps, report what you tried, what the
@@ -192,6 +192,8 @@ expensive profiling on every bounce:
    approved element ambiguous or conditional — it stops and returns `gap_found`
    rather than guessing; the main thread does a fresh read-back and re-dispatches
    **generation only**, against the **same** workflow id and closure directory.
+   It also receives `pocket_helper_dir`, the main thread's resolved absolute
+   Pocket helper directory; it does not rediscover that path.
 
 Scope each subagent's context to the work at hand: the dispatch names the
 connector type(s) in play so the generate subagent loads only the matching

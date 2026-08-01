@@ -41,7 +41,7 @@ Three properties, all load-bearing:
 
 - **Generated, never hand-authored.** No template, no prose sections to fill in,
   no discipline to remember. It is written by
-  `scripts/dp_diagnostics.py record …` and, for the self-check stages, by
+  `"$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record …` and, for the self-check stages, by
   `scripts/self_check.py --record build-record.json`.
 - **It records attempts, not just an outcome.** Per attempt: which stage failed,
   what the agent thought was wrong, what it changed, and what the re-run did.
@@ -89,7 +89,7 @@ bug and the shared validator rejects it.
 renamed and never repurposed, and a changed meaning is a new code. Match on the
 code, never on `message` text.
 
-The registry is `scripts/dp_diagnostics.py::CODES`, mapping each code to its
+The registry is `"$POCKET_HELPER_DIR/scripts/dp_diagnostics.py"::CODES`, mapping each code to its
 `stage`, `severity`, `owner`, `control`, `agent_fillable` and a summary.
 Producers supply the code plus a per-instance `path` / `message` / `evidence`.
 Domains:
@@ -214,9 +214,9 @@ the agent:
 
 | `tool` | written by | stages it may carry |
 |---|---|---|
-| `validate_dp_spec` | `scripts/validate_dp_spec.py --json` | `s0_spec` |
+| `validate_dp_spec` | `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py" --json` | `s0_spec` |
 | `self_check` | `scripts/self_check.py --json` | `s1_structure`, `s2_transform`, `s3_closure` |
-| `dp_diagnostics` | `scripts/dp_diagnostics.py` | any |
+| `dp_diagnostics` | `"$POCKET_HELPER_DIR/scripts/dp_diagnostics.py"` | any |
 | `loop` | **the agent**, hand-constructed from tool results | `s4_pin` … `s8_answer` |
 
 `loop` exists because stages 4–8 have no script producer: the agent observes a
@@ -845,17 +845,17 @@ Stdlib-only Python, `--json` everywhere, exit codes `0` ok / `1` findings /
 `2` could not read.
 
 ```bash
-python3 scripts/dp_diagnostics.py hash         <spec.md>
-python3 scripts/dp_diagnostics.py canonicalize <spec.md>
-python3 scripts/dp_diagnostics.py emit         <canonical.json>
-python3 scripts/dp_diagnostics.py schema       [--json|--diagnostic|--record]
-python3 scripts/dp_diagnostics.py lock write   <spec.md> <closure-dir>
-python3 scripts/dp_diagnostics.py lock verify  <closure-dir> [--spec <spec.md>]
-python3 scripts/dp_diagnostics.py record init   --record <path> --lock <path> [--spec-report <report.json>]
-python3 scripts/dp_diagnostics.py record append --record <path> --stage <id> --from <report.json>
-python3 scripts/dp_diagnostics.py record query  --record <path> \
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" hash         <spec.md>
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" canonicalize <spec.md>
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" emit         <canonical.json>
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" schema       [--json|--diagnostic|--record]
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock write   <spec.md> <closure-dir>
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock verify  <closure-dir> [--spec <spec.md>]
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record init   --record <path> --lock <path> [--spec-report <report.json>]
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record append --record <path> --stage <id> --from <report.json>
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record query  --record <path> \
        [--stage …] [--owner …] [--severity …] [--code …] [--unresolved] [--attempt N]
-python3 scripts/dp_diagnostics.py materialized  --record <path> [--lock <path>] [--spec <path>]
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" materialized  --record <path> [--lock <path>] [--spec <path>]
 python3 scripts/self_check.py [--json] [--record build-record.json]
 ```
 

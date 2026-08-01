@@ -44,10 +44,9 @@ if _HERE not in sys.path:
 try:
     import yaml
 except ImportError:  # pragma: no cover - environment guard
-    print("dp-spec validation needs PyYAML: pip install pyyaml", file=sys.stderr)
-    sys.exit(2)
+    yaml = None
 
-from dp_diagnostics import (  # noqa: E402 - after the PyYAML guard, deliberately
+from dp_diagnostics import (  # noqa: E402 - after the optional-PyYAML guard, deliberately
     CREDENTIAL_PLACEHOLDERS,
     CREDENTIAL_VALUE_RE,
     DECISION_PROVENANCE,
@@ -1107,6 +1106,10 @@ def main() -> int:
         "--json", action="store_true", help="emit machine-readable JSON"
     )
     args = parser.parse_args()
+
+    if yaml is None:
+        print("dp-spec validation needs PyYAML: pip install pyyaml", file=sys.stderr)
+        return 2
 
     if not args.spec.is_file():
         print(f"no such file: {args.spec}", file=sys.stderr)

@@ -161,11 +161,11 @@ this design**, because it reads as finished. Say it, then claim.
 
 ```bash
 # what failed, at which step, and who owns it — instead of re-reading logs
-python3 scripts/dp_diagnostics.py record query --record <closure>/build-record.json --unresolved
-python3 scripts/dp_diagnostics.py record query --record <closure>/build-record.json --owner user
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record query --record <closure>/build-record.json --unresolved
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record query --record <closure>/build-record.json --owner user
 
 # did the plan move, is anything still open, is this actually finished
-python3 scripts/dp_diagnostics.py materialized --record <closure>/build-record.json \
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" materialized --record <closure>/build-record.json \
     --lock <closure>/dp-spec.lock.json --spec <workflow>/dp-spec.md
 ```
 

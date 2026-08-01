@@ -525,7 +525,7 @@ from any section — they are recorded in `build-record.json`.
 ## The validator
 
 ```bash
-python3 scripts/validate_dp_spec.py path/to/dp-spec.md
+python3 "$POCKET_HELPER_DIR/scripts/validate_dp_spec.py" path/to/dp-spec.md
 ```
 
 It is deterministic and finds only what a script can find with certainty. It
@@ -598,7 +598,7 @@ you are reading a spec's findings:
 
 - **`code` is a stable identifier, not a message.** It is never renamed and never
   repurposed; a changed meaning is a new code. Match on it rather than on
-  `message` text. The registry lives in `scripts/dp_diagnostics.py::CODES` and
+  `message` text. The registry lives in `"$POCKET_HELPER_DIR/scripts/dp_diagnostics.py"::CODES` and
   every `spec.*` code is produced by exactly one check.
 - **`path` addresses the field, by identity.** Grammar:
   `spec:` then dotted segments, each optionally subscripted with the entry's own
@@ -724,7 +724,7 @@ rejected and escalated for re-approval — see [`build-record.md`](build-record.
 ## Worked example
 
 A build spec the user wrote in a doc, translated. It validates clean, and
-`scripts/validate_dp_spec.py` uses it as its fixture — so an edit here that
+`"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"` uses it as its fixture — so an edit here that
 breaks the schema is caught by the test, not by a reader. Its canonical hash is
 pinned as a golden literal too, which is what makes the canonicalization stable
 across implementations: **changing a byte inside the fence below changes that

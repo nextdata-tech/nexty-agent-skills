@@ -104,6 +104,11 @@ snake_case); derived ones are the keys your resource yields.
 
 ## Workflow
 
+The nxd-pocket-loop handoff MUST carry `pocket_helper_dir`, an already-resolved
+absolute installed-skill directory. Set `POCKET_HELPER_DIR` to that exact value;
+if it is absent, return to nxd-pocket-loop — never reconstruct it from the
+closure or this skill's cwd.
+
 ### Step 1 — Collect the inputs
 
 - **The approved `dp-spec.md`** is the primary input when one exists — the
@@ -112,7 +117,7 @@ snake_case); derived ones are the keys your resource yields.
   its `models:` block is the Step-1a plan, `criteria:`/`verdicts:` are the landed
   rubric models, and `decisions:` is `data/nxd_decisions/nxd_decisions.csv` row
   for row with `provenance` **copied, never recomputed**. Re-run
-  `<nxd-pocket-loop>/scripts/validate_dp_spec.py` before authoring — a spec that fails is not a
+  `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"` before authoring — a spec that fails is not a
   settled plan — and treat any closure value appearing in no spec section as one
   the user never approved. Schema and compile map: **nxd-pocket-loop**'s
   `reference/dp-spec.md`. **Never write it into the closure**: it is upstream,
@@ -159,7 +164,7 @@ is not a materialization. Asking technical delivery questions is allowed and
 your own recommended defaults are not a reason to proceed.
 
 **The read-back artifact is `dp-spec.md`**, validated with
-`<nxd-pocket-loop>/scripts/validate_dp_spec.py`, which finds those gap classes deterministically.
+`"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"`, which finds those gap classes deterministically.
 It must ENUMERATE every gate with its UNKNOWN handling, every criterion weight,
 **every anchor you propose for an incomplete scale**, the score aggregation, the
 **proposed verdict bands and precedence**, and the provenance and
@@ -425,9 +430,7 @@ did. Preconditions, procedure, and the `README.md` and `contracts/<name>.md` tem
    never re-serialized — the snapshot is evidence; requires `status: approved` and
    a validator pass. Mirror every `judgments[].prompt_ref` in at the same relative
    path; an absolute or `../`-rooted ref blocks generation.
-2. `dp_diagnostics.py lock write <spec.md> <closure>` → `dp-spec.lock.json`, then
-   `record init --record <closure>/build-record.json --lock
-   <closure>/dp-spec.lock.json`, before Step 7 reads the record.
+2. `python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure>` → `dp-spec.lock.json`, then `python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record init --record <closure>/build-record.json --lock <closure>/dp-spec.lock.json`, before Step 7 reads the record.
 3. Render `README.md`: the reopen recipe plus, only for a credentialed source, the
    credentials block. No plan sections, no outcomes.
 
@@ -449,7 +452,7 @@ matches the `data/` directories (derived models and `.model(...)` views have no
 `dp-spec.md` governed the build, confirm shipped-matches-approved**: every
 promised model, gate, weight, band and `nxd_decisions` row traces to a spec
 section, and none carries a value the spec does not. Confirm the
-supplied export is unchanged, then run BOTH `python3 self_check.py --json --record build-record.json` ([reference/self-check.md](reference/self-check.md)) and `python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform
+supplied export is unchanged, then run BOTH `python3 self_check.py --json --record build-record.json` ([reference/self-check.md](reference/self-check.md)) and `python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform
 against a scratch DuckDB, **structurally validates `models.py`/`spec.py` against
 the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
 installable here), runs **Phase C** (`dp-spec.approved.md` and `dp-spec.lock.json` present with the snapshot's bytes matching the lock, `build-record.json` present with a matching `compiled_from`, `README.md` present, no `../`-rooted contract pointer) and **Phase D — the policy boundary**: a promised
@@ -492,8 +495,4 @@ an exact fixture count. Without credentials, report it **not run**.
 - **Reference data is landed, never hardcoded**: FX rates, merchant→category rulings, account mappings and similar judgements that exist in no source data are user-confirmed and landed as their own model, so they stay queryable and reviewable. **This includes any agent- or LLM-inferred score, verdict, or classification** — landed as data (`status = proposed`, `provenance = agent_authored`); a per-entity judgement literal in transform code is hardcoded even when the downstream arithmetic is computed. Never bake reference data into transform code as a constant dict or `if` ladder. With no user available to confirm, land the mapping anyway as PROPOSED, recorded as a row in the closure's landed `nxd_decisions` model — never a `DECISIONS.md` file — see [reference/derivation-plan.md](reference/derivation-plan.md) and, for agent judgement, [reference/llm-judgments.md](reference/llm-judgments.md). **The transform never calls a model**: judging is agent-side and lands as CSV before the build; no model call, API key, or network in `transform/main.py` — inferring from inside the transform is nondeterministic and re-judges every rerun.
 - **Proven pins**: `dlt[duckdb]==1.28.2`, `duckdb==1.5.4`, pandas, the nxd wheel; Python `>=3.12,<3.13`.
 
-## Related skills
-
-**`nxd-pocket-loop`** owns the conversation and sequencing; it gathers the plan
-and invokes this skill. **`nxd-semantic-data-product`** produces the inferred
-model this skill places. **`nxd-data-product-builder`** is the k8s/cloud path.
+**Related skills:** **`nxd-pocket-loop`** owns the conversation and invokes this skill; **`nxd-semantic-data-product`** produces the inferred model it places; **`nxd-data-product-builder`** is the k8s/cloud path.
