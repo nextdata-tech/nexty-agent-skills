@@ -46,6 +46,7 @@ try:
 except ImportError:  # pragma: no cover - environment guard
     yaml = None
 
+import dp_diagnostics  # noqa: E402 - after adding the local scripts directory
 from dp_diagnostics import (  # noqa: E402 - after the optional-PyYAML guard, deliberately
     CREDENTIAL_PLACEHOLDERS,
     CREDENTIAL_VALUE_RE,
@@ -65,6 +66,7 @@ from dp_diagnostics import (  # noqa: E402 - after the optional-PyYAML guard, de
     SOURCE_TYPES,
     SPEC_VERSION,
     STATUS_VALUES,
+    DependencyError,
     Report,
     SpecReadError,
     entry_identity,
@@ -1010,6 +1012,12 @@ def check_approval_consistency(fm: dict, criteria: list, report: Report) -> None
 
 
 def validate(path: Path) -> Report:
+    if yaml is None or dp_diagnostics.yaml is None:
+        raise DependencyError(
+            "environment.dependency_missing: dp-spec validation needs PyYAML: "
+            "pip install pyyaml"
+        )
+
     report = new_report(path)
     text = path.read_text(encoding="utf-8")
 
@@ -1022,6 +1030,8 @@ def validate(path: Path) -> Report:
 
     try:
         fm, body = split_frontmatter(text)
+    except DependencyError:
+        raise
     except SpecReadError as exc:
         # Fatal to further parsing: return the report immediately. `reason` is
         # the closed discriminator enum, so nobody invents a second code for a
@@ -1107,8 +1117,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if yaml is None:
-        print("dp-spec validation needs PyYAML: pip install pyyaml", file=sys.stderr)
+    if yaml is None or dp_diagnostics.yaml is None:
+        print(
+            "environment.dependency_missing: dp-spec validation needs PyYAML: "
+            "pip install pyyaml",
+            file=sys.stderr,
+        )
         return 2
 
     if not args.spec.is_file():

@@ -147,6 +147,17 @@ def test_lock_verify_catches_an_edited_snapshot(workflow):
     assert "closure.spec_hash_mismatch" in codes
 
 
+def test_lock_verify_missing_pyyaml_is_an_environment_failure(workflow, monkeypatch, capsys):
+    monkeypatch.setattr(dpd, "yaml", None)
+
+    assert dpd.main(["lock", "verify", str(workflow["closure"]), "--json"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "environment.dependency_missing" in captured.err
+    assert "closure.lock_unparseable" not in captured.err
+
+
 @pytest.mark.parametrize("snapshot", ("/tmp/foreign-spec.md", "../foreign-spec.md"))
 def test_lock_verify_rejects_snapshot_paths_outside_the_closure(workflow, snapshot):
     lock = json.loads(workflow["lock"].read_text())

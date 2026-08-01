@@ -18,19 +18,18 @@ from pathlib import Path
 import sys
 
 home, cwd = map(Path, sys.argv[1:])
-version = "0.29.0"
 roots = [home / ".claude" / "skills" / "nxd-pocket-loop"]
 roots += [parent / ".claude" / "skills" / "nxd-pocket-loop" for parent in (cwd, *cwd.parents)]
 claude = home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
-roots += list(claude.glob(f"*/*/cowork_plugins/cache/nexty/nexty-agent-skills/{version}/skills/nxd-pocket-loop"))
+roots += list(claude.glob("*/*/cowork_plugins/cache/nexty/nexty-agent-skills/*/skills/nxd-pocket-loop"))
 roots += list(claude.glob("skills-plugin/*/*/*/skills/nxd-pocket-loop"))
 for root in roots:
     skill = root / "SKILL.md"
-    if (root / "scripts/dp_diagnostics.py").is_file() and (root / "scripts/validate_dp_spec.py").is_file() and skill.is_file() and f"version: {version}" in skill.read_text():
+    if (root / "scripts/dp_diagnostics.py").is_file() and (root / "scripts/validate_dp_spec.py").is_file() and skill.is_file():
         print(root.resolve())
         break
 else:
-    raise SystemExit("nxd-pocket-loop helpers not found; install or upload version " + version)
+    raise SystemExit("nxd-pocket-loop helpers not found; install or upload the skill")
 PY
 )"
 test -n "$POCKET_HELPER_DIR"

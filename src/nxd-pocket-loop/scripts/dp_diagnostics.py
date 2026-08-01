@@ -866,6 +866,13 @@ class SpecReadError(Exception):
         self.reason = reason
 
 
+class DependencyError(SpecReadError):
+    """A required runtime dependency is unavailable. Exit 2, never report it as spec input."""
+
+    def __init__(self, message: str):
+        super().__init__(message, code="environment.dependency_missing")
+
+
 # Everything a "could not read the spec" CLI path may legally raise, so it exits
 # 2 with a message instead of a traceback. `yaml.YAMLError` is NOT a subclass of
 # `ValueError` — that is exactly how a bad-frontmatter spec escaped `record
@@ -1209,9 +1216,9 @@ def spec_path(section: str, identity: str | None = None, *rest: str) -> str:
 
 def _require_yaml():
     if yaml is None:  # pragma: no cover - environment guard
-        raise SpecReadError(
-            "canonicalization needs PyYAML: pip install pyyaml",
-            code="spec.section.unparseable",
+        raise DependencyError(
+            "environment.dependency_missing: canonicalization needs PyYAML: "
+            "pip install pyyaml",
         )
     return yaml
 
@@ -1687,6 +1694,8 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
 
     try:
         snapshot_hash = spec_hash(raw)
+    except DependencyError:
+        raise
     except SpecReadError as exc:
         report.error(
             f"the snapshot could not be canonicalized: {exc}",

@@ -156,6 +156,12 @@ def _bootstrap_resolves(home: Path, cwd: Path) -> Path:
     return Path(result.stdout.strip())
 
 
+def test_bootstrap_resolver_has_no_hardcoded_plugin_version():
+    text = (SRC / "nxd-pocket-loop" / "reference" / "scripts-bootstrap.md").read_text()
+    assert not re.search(r"version\s*=\s*['\"]\d+\.\d+\.\d+['\"]", text)
+    assert "nexty-agent-skills/*/skills/nxd-pocket-loop" in text
+
+
 def _install(target: str, home: Path, *args: str) -> None:
     env = os.environ | {"HOME": str(home)}
     if target == "desktop":

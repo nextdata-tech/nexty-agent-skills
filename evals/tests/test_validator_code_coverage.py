@@ -23,6 +23,8 @@ import ast
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
@@ -327,3 +329,22 @@ def test_unparseable_frontmatter_is_a_diagnostic_not_a_traceback(tmp_path):
         "spec.frontmatter.unparseable"
     ]
     assert payload["diagnostics"][0]["evidence"]["reason"] == "unparseable"
+
+
+def test_missing_pyyaml_exits_two_without_a_spec_diagnostic(tmp_path, monkeypatch, capsys):
+    """A missing dependency is an environment failure, not malformed user input."""
+    import validate_dp_spec
+
+    path = tmp_path / "dp-spec.md"
+    path.write_text("---\nname: x\n---\n", encoding="utf-8")
+    monkeypatch.setattr(dp_diagnostics, "yaml", None)
+    monkeypatch.setattr(sys, "argv", [str(VALIDATOR), str(path), "--json"])
+
+    assert validate_dp_spec.main() == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "environment.dependency_missing" in captured.err
+    assert "spec.frontmatter.unparseable" not in captured.err
+    with pytest.raises(dp_diagnostics.DependencyError) as exc:
+        validate_dp_spec.validate(path)
+    assert exc.value.code == "environment.dependency_missing"
