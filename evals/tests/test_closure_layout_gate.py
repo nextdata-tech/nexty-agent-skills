@@ -41,6 +41,11 @@ GENERATED_CLOSURE_FILES = (
     "build-record.json",
 )
 
+COAUTHOR_PROMPTS = (
+    REPO / "evals" / "public" / "coauthor-supplied-rubric" / "prompt.md",
+    REPO / "evals" / "public" / "coauthor-executable-policy-readback" / "prompt.md",
+)
+
 
 def _collapse(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
@@ -60,3 +65,10 @@ def test_the_file_list_appears_verbatim(path):
 def test_the_generated_record_files_are_named_in_the_generator(name):
     text = (SRC / "nxd-generate-dp" / "SKILL.md").read_text(encoding="utf-8")
     assert name in text, f"the generator never mentions emitting {name}"
+
+
+@pytest.mark.parametrize("prompt", COAUTHOR_PROMPTS, ids=lambda path: path.parent.name)
+def test_coauthor_prompts_name_the_complete_closure_records(prompt):
+    text = prompt.read_text(encoding="utf-8")
+    for name in (*GENERATED_CLOSURE_FILES, "README.md"):
+        assert name in text, f"{prompt.relative_to(REPO)} omits required closure file {name}"

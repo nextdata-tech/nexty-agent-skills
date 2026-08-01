@@ -44,6 +44,9 @@ Build it at the workspace root: `spec.py`, `models.py`, `infra-profile.yaml`,
 `transform/main.py`, `requirements.txt`, and `csv-source-path`
 containing the relative path `data`. Do not author `deployment-spec.yaml`,
 `manifest.yaml`, or `models.yaml` — the supervisor compiles those.
+The complete closure also carries the approved-spec snapshot and compiler
+record: `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, and
+`README.md`.
 
 Preserve the supplied CSV byte-for-byte. Use a local DuckDB output port named
 `duckdb` and the dlt-through-port transform.
