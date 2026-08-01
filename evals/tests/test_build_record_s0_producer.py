@@ -79,6 +79,7 @@ def test_lock_write_byte_copies_the_spec(workflow):
     )
     lock = json.loads(workflow["lock"].read_text())
     assert lock["schema"] == "nxd-dp-spec-lock-v1"
+    assert lock["compiler_version"]["plugin"] == "0.29.0"
     assert lock["spec_hash"] == dpd.spec_hash(workflow["spec"].read_bytes())
     assert lock["snapshot_sha256"] == dpd.raw_sha256(snapshot.read_bytes())
     assert lock["source_basename"] == "dp-spec.md"
@@ -86,6 +87,20 @@ def test_lock_write_byte_copies_the_spec(workflow):
         "the lock carries no path to the live IR — a '../'-shaped string inside "
         "the closure is exactly the pointer this design removes"
     )
+
+
+def test_plugin_version_is_unknown_without_a_manifest(tmp_path):
+    assert dpd._plugin_version(tmp_path) == "unknown"
+
+
+def test_plugin_version_rejects_a_foreign_manifest(tmp_path):
+    manifest = tmp_path / ".claude-plugin"
+    manifest.mkdir()
+    (manifest / "plugin.json").write_text(
+        json.dumps({"name": "another-plugin", "version": "9.9.9"}),
+        encoding="utf-8",
+    )
+    assert dpd._plugin_version(tmp_path) == "unknown"
 
 
 def test_prompt_refs_are_mirrored_at_the_same_relative_path(workflow):

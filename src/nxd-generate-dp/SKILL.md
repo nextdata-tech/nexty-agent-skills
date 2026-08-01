@@ -1,6 +1,6 @@
 ---
 name: nxd-generate-dp
-description: CONSTRUCTION SPECIALIST, not an entry point. Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS from an ALREADY-SETTLED plan (intent, inferred model, connector config): spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (local file, live database, or REST API), ready to boot into a queryable DuckDB result. The supervisor compiles spec.py into the kernel definition YAML, so never hand-write deployment-spec / manifest / models YAML. Use when the plan is settled and the closure needs constructing. An end-to-end request to build a data product from a source starts in nxd-pocket-loop, which gathers intent, source, questions and any supplied procedure and runs the policy read-back FIRST; arriving here directly means that has not happened, and this skill's gate blocks materialization until it does. Pairs with nxd-semantic-data-product, which INFERS the model this skill PLACES. Not for k8s — use nxd-data-product-builder.
+description: CONSTRUCTION SPECIALIST, not an entry point. Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS from an ALREADY-SETTLED plan (intent, inferred model, connector config): spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (local file, live database, or REST API), ready to boot into a queryable DuckDB result. Supervisor compiles spec.py into the kernel definition YAML, so never hand-write deployment-spec / manifest / models YAML. Use when the plan is settled and the closure needs constructing. End-to-end requests to build a data product from a source start in nxd-pocket-loop, which gathers intent, source, questions and any supplied procedure and runs the policy read-back FIRST; arriving here directly means that handoff is absent, so return to nxd-pocket-loop before any read-back or materialization. Pairs with nxd-semantic-data-product, which INFERS the model this skill PLACES. Not for k8s — use nxd-data-product-builder.
 allowed-tools:
   - Bash
   - Read
@@ -104,10 +104,11 @@ snake_case); derived ones are the keys your resource yields.
 
 ## Workflow
 
-The nxd-pocket-loop handoff MUST carry `pocket_helper_dir`, an already-resolved
-absolute installed-skill directory. Set `POCKET_HELPER_DIR` to that exact value;
+The nxd-pocket-loop handoff MUST carry `pocket_helper_dir`, an already-resolved absolute installed-skill directory. Set `POCKET_HELPER_DIR` to that exact value;
 if it is absent, return to nxd-pocket-loop — never reconstruct it from the
 closure or this skill's cwd.
+
+**Selective-install dependency:** this skill needs **nxd-pocket-loop** at runtime for the approved-spec validator, lock writer, and build-record helpers. A selective install must include both skills; installing `nxd-generate-dp` alone is not a supported substitute for that handoff.
 
 ### Step 1 — Collect the inputs
 
@@ -176,9 +177,9 @@ approval, and `status: approved` is the user's to set.
 then showing it and waiting again. A fully specified procedure still gets one
 short confirming turn; no procedure at all means this gate does not fire.
 
-**Invoked directly**, without nxd-pocket-loop having gathered intent, source,
-questions and the procedure, the gate has NOT been satisfied — run the read-back
-here or hand back. **Invoked as a generation subagent**, the user turn is the
+**Invoked directly**, without an nxd-pocket-loop handoff, **return to
+nxd-pocket-loop immediately**. Do not run the read-back, materialize a closure, or serve; nxd-pocket-loop owns the user-facing read-back and approval.
+**Invoked as a generation subagent**, the user turn is the
 orchestrator's and you never open one, and the gate is **not a rubber stamp**:
 re-run the "fires when" criteria and **bounce** (`gap_found: <what and why>`,
 writing nothing) on an element absent from the enumeration, or one a profiling

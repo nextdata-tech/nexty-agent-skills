@@ -1515,13 +1515,22 @@ def emit(obj: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _plugin_version(root: Path | None = None) -> str:
-    """Read the authoritative plugin version. Never write it."""
-    start = root or Path(__file__).resolve().parent.parent
-    manifest = start / ".claude-plugin" / "plugin.json"
-    try:
-        return str(json.loads(manifest.read_text(encoding="utf-8")).get("version", ""))
-    except Exception:
-        return "unknown"
+    """Read the nearest authoritative plugin version. Never write it."""
+    start = (root or Path(__file__)).resolve()
+    if start.is_file():
+        start = start.parent
+    for candidate in (start, *start.parents):
+        manifest = candidate / ".claude-plugin" / "plugin.json"
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or payload.get("name") != "nexty-agent-skills":
+            continue
+        version = payload.get("version")
+        if isinstance(version, str) and version:
+            return version
+    return "unknown"
 
 
 def _prompt_refs(raw: bytes) -> list[str]:

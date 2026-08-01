@@ -83,10 +83,9 @@ never authorship.
 
 ## Invoked directly
 
-Without **nxd-pocket-loop** having gathered intent, source, questions and the
-procedure, that gathering has not happened, so this gate has not been satisfied.
-"The user asked for a data product" is not a settled plan: run the read-back
-here, or hand back to `nxd-pocket-loop`.
+Without an **nxd-pocket-loop** handoff, **return to `nxd-pocket-loop`
+immediately**. Do not run a local read-back, materialize a closure, or serve:
+that skill owns the user-facing read-back and approval.
 
 ## Invoked as a generation subagent
 

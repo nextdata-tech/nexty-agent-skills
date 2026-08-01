@@ -103,6 +103,14 @@ def test_a_cross_skill_call_names_the_owning_skill():
     )
 
 
+def test_generator_selective_install_names_its_pocket_loop_dependency():
+    generator = (SRC / "nxd-generate-dp" / "SKILL.md").read_text(encoding="utf-8")
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert "Selective-install dependency" in generator
+    assert "selective install must include both skills" in generator
+    assert "nxd-pocket-loop nxd-generate-dp" in readme
+
+
 def _assert_helpers_run(skill_dir: Path) -> None:
     """Assert both entrypoints run from a copied or extracted install tree."""
     scripts = skill_dir / "scripts"
