@@ -2307,7 +2307,9 @@ def validate_review_round(review_round: Any) -> list[str]:
         problems.append("ended_at_unix_ms must not precede started_at_unix_ms")
     if isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int) and budget > 0:
         elapsed = ended - started
-        if elapsed > budget:
+        if status == "timed_out" and elapsed < budget:
+            problems.append("timed_out review ended before budget_ms")
+        elif status in ("complete", "needs_user") and elapsed > budget:
             problems.append(f"{status} review exceeded budget_ms")
 
     findings = review_round.get("findings")

@@ -306,6 +306,12 @@ def test_the_validator_uses_the_canonicalizers_splitters():
     assert validate_dp_spec.split_sections is dp_diagnostics.split_sections
 
 
+def test_validator_usage_names_the_resolved_helper_directory():
+    usage = VALIDATOR.read_text(encoding="utf-8").partition("Exit codes:")[0]
+    assert 'python3 "$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"' in usage
+    assert "python3 scripts/validate_dp_spec.py" not in usage
+
+
 def test_unparseable_frontmatter_is_a_diagnostic_not_a_traceback(tmp_path):
     """The regression, end to end at the CLI: a stable code in valid --json, and
     the documented exit code — not a stack trace on stderr."""

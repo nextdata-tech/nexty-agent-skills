@@ -20,8 +20,8 @@ definition, two consumers, no drift: what this file enforces is exactly what
 `dp_diagnostics.py schema --json` tells a harness to render.
 
 Usage:
-    python3 scripts/validate_dp_spec.py path/to/dp-spec.md
-    python3 scripts/validate_dp_spec.py path/to/dp-spec.md --json
+    python3 "$POCKET_HELPER_DIR/scripts/validate_dp_spec.py" path/to/dp-spec.md
+    python3 "$POCKET_HELPER_DIR/scripts/validate_dp_spec.py" path/to/dp-spec.md --json
 
 Exit codes:
     0  compilable (warnings may be present)

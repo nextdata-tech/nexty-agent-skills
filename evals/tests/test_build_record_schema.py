@@ -222,10 +222,40 @@ def test_structural_note_can_record_an_evidenced_mechanical_fix(record):
 def test_timed_out_review_can_preserve_partial_results_at_the_deadline(record):
     review = _review_round(
         status="timed_out",
-        ended_at_unix_ms=1769904139999,
+        ended_at_unix_ms=1769904140000,
     )
     record["review_rounds"] = [review]
     assert dpd.validate_build_record(record) == []
+
+
+def test_timed_out_review_may_include_cancellation_overhead(record):
+    review = _review_round(
+        status="timed_out",
+        ended_at_unix_ms=1769904140001,
+    )
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+
+
+def test_timed_out_review_cannot_end_before_its_budget(record):
+    review = _review_round(
+        status="timed_out",
+        ended_at_unix_ms=1769904139999,
+    )
+    record["review_rounds"] = [review]
+    problems = dpd.validate_build_record(record)
+    assert any("timed_out review ended before budget_ms" in problem for problem in problems)
+
+
+@pytest.mark.parametrize("status", ("complete", "needs_user"))
+def test_non_timed_out_review_cannot_exceed_its_budget(record, status):
+    review = _review_round(
+        status=status,
+        ended_at_unix_ms=1769904140001,
+    )
+    record["review_rounds"] = [review]
+    problems = dpd.validate_build_record(record)
+    assert any(f"{status} review exceeded budget_ms" in problem for problem in problems)
 
 
 def test_timed_out_review_without_auditable_user_choice_blocks_materialization(record, lock):
@@ -233,7 +263,7 @@ def test_timed_out_review_without_auditable_user_choice_blocks_materialization(r
     # and materialized because only status=needs_user was checked.
     review = _review_round(
         status="timed_out",
-        ended_at_unix_ms=1769904139999,
+        ended_at_unix_ms=1769904140000,
     )
     record["review_rounds"] = [review]
     assert dpd.validate_build_record(record) == []
@@ -248,7 +278,7 @@ def test_auditable_user_choice_unblocks_a_timed_out_review(record, lock):
     # records the user's decision to continue without a completed review.
     review = _review_round(
         status="timed_out",
-        ended_at_unix_ms=1769904139999,
+        ended_at_unix_ms=1769904140000,
         user_decision={
             "approved_at_unix_ms": 1769904140000,
             "citation": "user:continue without completed review",
