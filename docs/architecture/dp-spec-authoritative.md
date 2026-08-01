@@ -11,6 +11,7 @@ the rationale is stated once and not repeated.
 
 - [0. What changes, in one paragraph](#0-what-changes-in-one-paragraph)
 - [1. The unified diagnostic record (D9)](#1-the-unified-diagnostic-record-d9)
+  - [1.8.2 `inspect_run` — the measured contract (2026-08-01)](#182-inspect_run--the-measured-contract-2026-08-01)
 - [2. The build record (D8)](#2-the-build-record-d8)
 - [3. The lock file and the canonical hash (D3)](#3-the-lock-file-and-the-canonical-hash-d3)
 - [4. The closure layout after this change (D1)](#4-the-closure-layout-after-this-change-d1)
@@ -610,6 +611,63 @@ rather than aspirational:
 in the repo reads it (verified across `evals/`, `scripts/`, `.github/`), and
 carrying both invites drift.
 
+### 1.8.2 `inspect_run` — the measured contract (2026-08-01)
+
+§11 originally said not to design around a guess about `inspect_run`. It has
+since been run against a real `nxd-desktop-supervisor` in an isolated
+`--data-dir` (no Claude Desktop needed:
+`nxd-desktop-supervisor --data-dir <dir> mcp serve` speaks stdio JSON-RPC to any
+client). What follows is measured, not inferred. **It is still not wired** — no
+step calls it and `origin: "unbound"` stays until one does.
+
+On a **failed** run, `inspect_run {run_id}` returns `run` with ~18 keys. The
+load-bearing ones:
+
+| key | why it matters |
+|---|---|
+| `stdout_tail` | the verbatim, unedited Python traceback — including the user transform's own file and line. This is the payload `evidence.supervisor_detail` requires. |
+| `phases[]` | a timeline (`snapshot_compiled` → `transform_dispatched` → `child_reaped`) with `at_ms`/`duration_ms`. **The only truthful stage-attribution signal.** |
+| `staging_present`, `marker_present`, `child_exit` | corroborate where the run died |
+| `run_id`, `status` | durable identity; `Failed` vs `Published` |
+
+A diagnostic built from that payload — `origin: supervisor_reported`,
+`path: "tool:inspect_run.run.stdout_tail"`, traceback in
+`evidence.supervisor_detail` — passes `validate_diagnostic()` with zero problems,
+while dropping `supervisor_detail` or using a non-`tool:` path fails with the
+§1.8.1 messages. **So `supervisor_reported` at `s6_run` is backable today.**
+
+Boundary, and it is narrower than it looks:
+
+- **s4_pin / s6_run / s7_publish are distinguishable** from `phases[]` plus
+  `staging_present`/`child_exit`/`status`.
+- **s5_serve is not.** Nothing in the payload speaks to post-publish serving.
+- The supervisor emits **no** `code`/`stage`/`severity`/`owner`/`origin`. Stage
+  attribution remains an *agent inference* over supervisor-authored evidence —
+  §1.8.1's caveat is correct and unchanged.
+
+Traps, each observed:
+
+- `inspect_run {}` lists **failures only**; a successful run is invisible there
+  and retrievable only by explicit `run_id`.
+- On success the diagnostic fields are present but empty — `phases: []`,
+  `error: ""`, and misleadingly `staging_present: false` on a run that published
+  rows. **Never read those booleans as health**; use `list_data_products` or
+  `status: "Published"`.
+- An unknown `run_id` returns `{"recent": []}` with `isError: false` and **no
+  `run` key** — indistinguishable from "no failures". Test for the key.
+- The key set is outcome-dependent (failure has `timeout_phase`/`child_exit`;
+  success has `release_basename`/`published_at_unix_ms`). Treat both as optional.
+- `run.error` is a generic wrapper (`boot kernel against snapshot: …`) and can
+  **name the wrong stage** — a transform crash at `transform_dispatched` reported
+  a boot/serve failure. Trust `phases[]`, never the error string.
+- A transform raising in ~1 ms cost **170 s** and surfaced through
+  `build_data_product` as "did not materialize staging output", never naming the
+  user exception. `inspect_run` is the only route to the real cause.
+
+Not yet representable in the build record: `phases[]` (the best attribution
+signal we have) and `nxd-verification-v1` (per-table row counts + sha256, the
+strongest s7 evidence). Both currently have to ride as ad-hoc `evidence` keys.
+
 ### 1.9 JSON Schema (normative)
 
 Ships as `scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is emitted by
@@ -988,7 +1046,7 @@ route to retrying a closure that is genuinely broken.
     "note": "SOURCE DATA STALENESS — a separate axis. Never participates in materialization."
   },
   "supervisor_detail": { "origin": "unbound",
-    "note": "stage-4 traceback / per-attempt identity; producer not bound (inspect_run is a name only)" }
+    "note": "stage-4 traceback / per-attempt identity; producer not bound (inspect_run characterized but unwired — §1.8.2)" }
 }
 ```
 
@@ -1973,7 +2031,7 @@ before handing off — a 501-line SKILL.md fails CI for every other workstream t
 
 | File | Edit |
 |---|---|
-| `pocket-loop/SKILL.md:79-87` | The six-tool sentence names `inspect_run` and nothing else in the pack ever uses it. State plainly that it is **unbound**: no reference doc, no step calls it, and the build record marks supervisor-side detail `origin: unbound` until a producer exists. Do not invent a contract for it. |
+| `pocket-loop/SKILL.md:79-87` | The six-tool sentence names `inspect_run` and no step in the pack calls it. State plainly that it is **unbound**: no step calls it, and the build record marks supervisor-side detail `origin: unbound` until a producer exists. Its contract is no longer a guess — §1.8.2 records what a real supervisor returns — but do not treat characterized as wired. |
 | `pocket-loop/SKILL.md:163-205` (Step 1b) | Add: approval is what gets snapshotted and hashed; a build-time blocker is written back into `## open_questions`, which **un-approves** the spec and re-enters this step. The elicitation contract is a loop. |
 | `pocket-loop/SKILL.md:215-269` (Step 3) | Closure file list → §9. Relay rule for the distribution read-back: it is now recorded in `build-record.readback`, still relayed verbatim, still non-gating. |
 | `pocket-loop/SKILL.md:220,259-262` | Replace the `CONTEXT.md` durable-record sentences with the snapshot/lock/record trio. Keep "`../dp-spec.md` included" as the escaping-pointer example — it is still exactly right. |
@@ -2039,11 +2097,17 @@ Skills** table — no skill directory is added or removed.
   invariant, which spans `models.py`, `spec.py` and the transform. **One
   whole-spec hash.** The table stays a review aid, never a rebuild graph.
 - **No supervisor changes.** Everything here is in-repo. Stage-4 detail,
-  per-attempt identity and the supervisor traceback are **schema without a
-  producer** (`origin: "unbound"`). `mcp__nxd-desktop__inspect_run` is a name in
-  one sentence of one skill file and nothing else in the pack — no schema, no
-  reference doc, no step, no test. Do not design around a guess about what it
-  returns.
+  per-attempt identity and the supervisor traceback ship as **schema without a
+  bound producer** (`origin: "unbound"`).
+
+  > **SUPERSEDED IN PART — measured 2026-08-01.** This bullet used to say
+  > `inspect_run` "is a name in one sentence of one skill file and nothing else
+  > in the pack" and "do not design around a guess about what it returns." That
+  > was true of the *pack*, not of the *tool*. `inspect_run` has since been run
+  > against a real supervisor in an isolated `--data-dir` and is characterized —
+  > see §1.8.2. The decision not to change the supervisor still stands, and
+  > `unbound` remains correct until a producer is actually wired; what is no
+  > longer true is that its contract is unknown.
 - **The live IR does not move into the closure.** It stays beside. The
   pre-approval policy gate keeps its bright line ("nothing under `closure/`"),
   drafting history and rejected options stay out of handoffs, and the byte copy

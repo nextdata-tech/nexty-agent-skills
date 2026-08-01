@@ -256,6 +256,44 @@ def test_environment_suspect_is_reachable_today(record, lock):
     assert dpd.materialization_state(record, lock)["state"] == "environment_suspect"
 
 
+def test_a_silent_failing_stage_cannot_ride_on_another_stages_evidence(record, lock):
+    """REGRESSION. A real supervisor failing at pin attaches NO per-stage
+    diagnostics. Flattening diagnostics across stages before the relay check let
+    that empty stage pass vacuously on a LATER stage's supervisor payload, so a
+    pure code bug reported as `environment_suspect` and the agent was told to
+    retry an unbroken environment forever. Silence is not evidence: every
+    failing stage must contribute its own.
+    """
+    record["stages"]["s4_pin"]["status"] = "failed"
+    record["stages"]["s4_pin"]["diagnostics"] = []
+    _fail_stage(
+        record,
+        "s6_run",
+        "env.connection_refused",
+        origin="supervisor_reported",
+        path="tool:build_data_product.error",
+        evidence={"supervisor_detail": "ConnectionRefusedError: [Errno 111]"},
+    )
+    state = dpd.materialization_state(record, lock)
+    assert state["state"] == "unsettled"
+    assert "s4_pin" in " ".join(state["why"])
+
+
+def test_every_failing_stage_backed_still_reaches_environment_suspect(record, lock):
+    """The fix must not close the environment path when the evidence IS there:
+    two failing stages, each carrying its own supervisor-authored diagnostic."""
+    for stage in ("s5_serve", "s6_run"):
+        _fail_stage(
+            record,
+            stage,
+            "env.connection_refused",
+            origin="supervisor_reported",
+            path="tool:build_data_product.error",
+            evidence={"supervisor_detail": "ConnectionRefusedError: [Errno 111]"},
+        )
+    assert dpd.materialization_state(record, lock)["state"] == "environment_suspect"
+
+
 def test_undisclosed_concession_is_not_materialized(record, lock):
     """The worst state in the design, because it reads as materialized."""
     record["concessions"][0]["disclosed"] = False

@@ -341,3 +341,41 @@ def test_materialized_exits_one_when_not_materialized(workflow):
     result = _run(str(DIAG), "materialized", "--record", str(workflow["record"]))
     assert result.returncode == 1
     assert "state: in_progress" in result.stdout
+
+
+def test_evidence_with_a_stage_is_rejected_rather_than_silently_dropped(workflow):
+    """REGRESSION. `--evidence` is record-level; `--status` stamps
+    `origin: agent_observed`. Pairing it with `--stage` reads like "attach this
+    supervisor payload to that stage" but merged it record-level at exit 0 —
+    which is how a real supervisor's diagnostic.json got dropped on the floor.
+    It must now refuse and name the working route.
+    """
+    _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    result = _run(
+        str(DIAG), "record", "append", "--record", str(workflow["record"]),
+        "--stage", "s6_run", "--status", "failed",
+        "--evidence", '{"supervisor_detail": "kernel host exited"}',
+    )
+    assert result.returncode == 2
+    assert "--from" in result.stderr
+
+    record = json.loads(workflow["record"].read_text(encoding="utf-8"))
+    assert "supervisor_detail" not in (record.get("evidence") or {})
+
+
+def test_record_level_evidence_without_a_stage_still_works(workflow):
+    """The guard must not break the legitimate build-wide use."""
+    _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    result = _run(
+        str(DIAG), "record", "append", "--record", str(workflow["record"]),
+        "--evidence", '{"row_counts": {"main.widget_sales": 5}}',
+    )
+    assert result.returncode == 0
+    record = json.loads(workflow["record"].read_text(encoding="utf-8"))
+    assert record["evidence"]["row_counts"] == {"main.widget_sales": 5}

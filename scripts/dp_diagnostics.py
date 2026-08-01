@@ -664,7 +664,8 @@ _register_table(
         ("pin.build_failed", "error", "agent", "none", False,
          "build_data_product returned an error — a code fault Phase A cannot see"),
         ("pin.spec_compile_error", "error", "agent", "none", False,
-         "the supervisor could not compile the spec (origin unbound — no producer yet)"),
+         "the supervisor could not compile the spec (origin unbound — inspect_run "
+         "is characterized but not wired; see design note §1.8.2)"),
         ("pin.no_endpoint", "error", "agent", "none", False,
          "the build returned no endpoint"),
     ),
@@ -2253,6 +2254,26 @@ def _stage_errors(record: dict, stage: str) -> list[dict]:
     return [d for d in entry.get("diagnostics") or [] if d.get("severity") == "error"]
 
 
+def _stage_is_environmental(record: dict, stage: str) -> bool:
+    """Whether ONE failing stage carries its own supervisor-authored evidence.
+
+    A stage with no error diagnostics returns False: silence is not evidence,
+    and a stage nobody can vouch for must never read as environmental. This is
+    the per-stage half of the §1.8.1 relay criterion — the per-diagnostic half
+    lives in `validate_diagnostic`.
+    """
+    errors = _stage_errors(record, stage)
+    if not errors:
+        return False
+    return all(
+        d.get("owner") == "environment"
+        and d.get("origin") == "supervisor_reported"
+        and (d.get("evidence") or {}).get("supervisor_detail")
+        and STAGES.index(d.get("stage", "s4_pin")) >= STAGES.index("s5_serve")
+        for d in errors
+    )
+
+
 def materialization_state(
     record: dict, lock: dict | None = None, live_spec_hash: str | None = None
 ) -> dict:
@@ -2330,16 +2351,17 @@ def materialization_state(
     elif offline_failing or not hash_ok:
         state = "code_wrong"
     elif late_failing:
-        # Fail closed. Reaching `environment_suspect` needs supervisor-authored
-        # evidence for EVERY failing diagnostic; anything less is `unsettled`
-        # and is treated as `code_wrong`.
-        errors = [d for s in late_failing for d in _stage_errors(record, s)]
-        environmental = errors and all(
-            d.get("owner") == "environment"
-            and d.get("origin") == "supervisor_reported"
-            and (d.get("evidence") or {}).get("supervisor_detail")
-            and STAGES.index(d.get("stage", "s4_pin")) >= STAGES.index("s5_serve")
-            for d in errors
+        # Fail closed, PER STAGE. Reaching `environment_suspect` needs every
+        # failing stage to CONTRIBUTE supervisor-authored evidence — not merely
+        # to fail to contradict another stage's. Flattening the diagnostics
+        # across stages first would let a stage that failed with an EMPTY
+        # diagnostics list ride on a different stage's payload: `all()` never
+        # sees it, so a stage nobody can vouch for reads as environmental and
+        # the agent is told to retry against what may be a pure code bug.
+        # A real supervisor produces exactly that shape (a pin failure with no
+        # per-stage diagnostics attached), so this is not a hypothetical.
+        environmental = bool(late_failing) and all(
+            _stage_is_environmental(record, s) for s in late_failing
         )
         state = "environment_suspect" if environmental else "unsettled"
     elif undisclosed:
@@ -3159,6 +3181,23 @@ def cmd_record_append(args) -> int:
         if not hit:
             problems.append(f"no concession carries code {args.disclose!r}")
     if args.evidence:
+        # `--evidence` is RECORD-level (build-wide facts: row counts, source
+        # state). It never reaches a stage, and `--status` stamps
+        # `origin: agent_observed` — so pairing it with `--stage` reads like
+        # "attach this supervisor payload to that stage" while silently doing
+        # something else. That is how a real supervisor's diagnostic.json gets
+        # dropped on the floor at exit 0. Stage-level supervisor evidence has
+        # exactly one route: `--from` with a diagnostic report, which carries
+        # the code/severity/owner/origin the relay criterion checks.
+        if args.stage:
+            print(
+                "--evidence is record-level and cannot carry stage evidence; "
+                f"pairing it with --stage {args.stage} would drop the payload. "
+                "Use --from <report.json> to attach a stage diagnostic, or drop "
+                "--stage to record a build-wide fact.",
+                file=sys.stderr,
+            )
+            return 2
         record.setdefault("evidence", {}).update(_json_arg(args.evidence))
     if args.narrative:
         record.setdefault("narrative", {}).update(_json_arg(args.narrative))
