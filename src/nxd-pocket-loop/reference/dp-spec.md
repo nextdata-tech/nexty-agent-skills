@@ -544,8 +544,10 @@ and the agent's.
 - a derived model with no `grain` or no `key`
 - a `decisions` row missing `status` or `provenance`, or carrying a value outside
   either vocabulary
-- a ruling-bearing section (`criteria`, `verdicts`, `gates`, `population.sample_rule`)
-  with no corresponding `decisions` row
+- a ruling-bearing section with no matching `decisions` row: an absent ledger is
+  `spec.decision.missing_for_ruling`; unrelated rows for `criteria`, `verdicts`,
+  or `gates` are `spec.decision.ruling_uncovered`; an unrelated row for
+  `population.sample_rule` is `spec.decision.sample_rule_unrecorded`
 - `judgments` present without `rubric_version` in frontmatter
 - anything that looks like a credential value in `sources`
 - `status: approved` while any error above holds

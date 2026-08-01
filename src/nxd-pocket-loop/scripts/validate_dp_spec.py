@@ -871,9 +871,9 @@ def check_ruling_coverage(
         ("gates", "gate"),
     ):
         if section in sections and keyword not in blob:
-            report.warn(
-                f"no row mentions the '{section}' rulings — confirm each is "
-                "recorded, since the ledger is what a later session queries",
+            report.error(
+                f"no row mentions the '{section}' rulings — record each before "
+                "compiling, since the ledger is what a later session queries",
                 code="spec.decision.ruling_uncovered",
                 path=spec_path("decisions"),
                 evidence={"section": section},

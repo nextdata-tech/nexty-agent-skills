@@ -264,7 +264,7 @@ contract.
 | `spec.decision.no_applies_to` | error | agent | list | yes |
 | `spec.decision.duplicate_id` | error | agent | text | yes |
 | `spec.decision.missing_for_ruling` | error | agent | table | yes |
-| `spec.decision.ruling_uncovered` | warning | agent | table | yes |
+| `spec.decision.ruling_uncovered` | error | agent | table | yes |
 | `spec.decision.sample_rule_unrecorded` | error | agent | table | yes |
 | `spec.open_question.not_mapping` | error | agent | mapping | yes |
 | `spec.open_question.no_question` | error | agent | long_text | yes |

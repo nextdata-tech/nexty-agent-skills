@@ -482,7 +482,7 @@ _register_table(
          "two decision rows share a decision_id"),
         ("spec.decision.missing_for_ruling", "error", "agent", "table", True,
          "the spec encodes rulings and carries no ledger"),
-        ("spec.decision.ruling_uncovered", "warning", "agent", "table", True,
+        ("spec.decision.ruling_uncovered", "error", "agent", "table", True,
          "no ledger row mentions a ruling-bearing section"),
         ("spec.decision.sample_rule_unrecorded", "error", "agent", "table", True,
          "the population is sampled and no ledger row records the rule"),

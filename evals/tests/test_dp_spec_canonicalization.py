@@ -14,7 +14,9 @@ major bump requires re-verifying the golden hash below.
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,6 +24,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
+VALIDATOR = SCRIPTS / "validate_dp_spec.py"
 WORKED_EXAMPLE = REPO / "src" / "nxd-pocket-loop" / "reference" / "dp-spec.md"
 
 if str(SCRIPTS) not in sys.path:
@@ -76,6 +79,72 @@ def test_worked_example_validates_clean(tmp_path, spec):
     report = validate_dp_spec.validate(path)
     assert report.ok, [d.code for d in report.errors]
     assert report.spec_hash == GOLDEN_HASH
+
+
+def test_approved_spec_with_unrelated_decisions_fails_ruling_coverage(tmp_path, spec):
+    """A nonempty ledger cannot stand in for the rulings it fails to record."""
+    parsed = dpd.canonical_object(spec.encode("utf-8"))
+    parsed["frontmatter"]["status"] = "approved"
+    parsed["sections"]["decisions"] = [
+        {
+            "decision_id": "unrelated_operational_choice",
+            "status": "confirmed",
+            "provenance": "user_confirmed",
+            "ruling": "Retain exports for 30 days.",
+            "applies_to": "scored_candidates",
+        }
+    ]
+    path = tmp_path / "dp-spec.md"
+    path.write_text(dpd.emit(parsed), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR), str(path), "--json"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1, result.stderr
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    uncovered = [d for d in diagnostics if d["code"] == "spec.decision.ruling_uncovered"]
+    assert uncovered
+    assert {d["severity"] for d in uncovered} == {"error"}
+    assert "spec.decision.missing_for_ruling" not in {d["code"] for d in diagnostics}
+
+
+def test_unrelated_decisions_fail_a_sample_rule_with_its_own_code(tmp_path, spec):
+    """Sample selection has a distinct coverage diagnostic from other rulings."""
+    parsed = dpd.canonical_object(spec.encode("utf-8"))
+    parsed["sections"]["population"] = {
+        "population": "All scored applicants.",
+        "sample_rule": "Keep only applicants submitted after 2026-01-01.",
+    }
+    parsed["sections"]["decisions"] = [
+        {
+            "decision_id": "unrelated_operational_choice",
+            "status": "confirmed",
+            "provenance": "user_confirmed",
+            "ruling": "Retain exports for 30 days.",
+            "applies_to": "scored_candidates",
+        }
+    ]
+    path = tmp_path / "dp-spec.md"
+    path.write_text(dpd.emit(parsed), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR), str(path), "--json"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1, result.stderr
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    sample = [d for d in diagnostics if d["code"] == "spec.decision.sample_rule_unrecorded"]
+    assert sample and {d["severity"] for d in sample} == {"error"}
+    assert all(
+        d.get("evidence", {}).get("section") != "population"
+        for d in diagnostics
+        if d["code"] == "spec.decision.ruling_uncovered"
+    )
 
 
 # --- must NOT change the hash ----------------------------------------------
