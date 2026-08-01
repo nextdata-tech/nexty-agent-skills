@@ -9,7 +9,7 @@ therefore invalid once the skill is installed.
 
 Run this exact stdlib-only resolver before the first helper call. It emits one
 absolute directory or fails; it never guesses from the workflow or closure cwd.
-The three paths are the supported install surfaces: Claude Code global/project,
+The supported install surfaces are Claude Code global/project and plugin installs,
 Cowork marketplace cache, and Claude Desktop's uploaded-skill store.
 
 ```bash
@@ -20,6 +20,9 @@ import sys
 home, cwd = map(Path, sys.argv[1:])
 roots = [home / ".claude" / "skills" / "nxd-pocket-loop"]
 roots += [parent / ".claude" / "skills" / "nxd-pocket-loop" for parent in (cwd, *cwd.parents)]
+plugins = home / ".claude" / "plugins"
+roots += list(plugins.glob("**/src/nxd-pocket-loop"))
+roots += list(plugins.glob("**/skills/nxd-pocket-loop"))
 claude = home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
 roots += list(claude.glob("*/*/cowork_plugins/cache/nexty/nexty-agent-skills/*/skills/nxd-pocket-loop"))
 roots += list(claude.glob("skills-plugin/*/*/*/skills/nxd-pocket-loop"))

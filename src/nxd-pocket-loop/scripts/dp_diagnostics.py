@@ -123,6 +123,14 @@ CREDENTIAL_VALUE_RE = re.compile(
     r"\b(password|passwd|secret|api[_-]?key|token|bearer|private[_-]?key)\b\s*[:=]\s*\S+",
     re.IGNORECASE,
 )
+CREDENTIAL_URL_RE = re.compile(
+    r"\b([a-z][a-z0-9+.-]*://[^:\s@/]+:)([^@\s]+)(@)",
+    re.IGNORECASE,
+)
+CREDENTIAL_KEY_RE = re.compile(
+    r"(?:^|[_-])(?:password|passwd|secret|api[_-]?key|token|bearer|private[_-]?key)$",
+    re.IGNORECASE,
+)
 CREDENTIAL_PLACEHOLDERS = frozenset(
     {"null", "none", "~", "<redacted>", "redacted", "[]", "{}", "''", '""', "..."}
 )
@@ -819,12 +827,33 @@ def redact(value: Any) -> Any:
     contained file leak into a transcript leak.
     """
     if isinstance(value, str):
-        return CREDENTIAL_VALUE_RE.sub(_redact_match, value)
+        redacted = CREDENTIAL_VALUE_RE.sub(_redact_match, value)
+        return CREDENTIAL_URL_RE.sub(r"\1<redacted>\3", redacted)
     if isinstance(value, dict):
-        return {k: redact(v) for k, v in value.items()}
+        return {
+            k: _redact_credential_value(v) if _is_credential_key(k) else redact(v)
+            for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [redact(v) for v in value]
     return value
+
+
+def _is_credential_key(key: Any) -> bool:
+    if not isinstance(key, str):
+        return False
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    normalized = normalized.replace("-", "_").lower()
+    return normalized == "authorization" or CREDENTIAL_KEY_RE.search(normalized) is not None
+
+
+def _redact_credential_value(value: Any) -> Any:
+    """Preserve known empty placeholders, but never a populated credential value."""
+    if value is None or value in ("", [], {}):
+        return value
+    if isinstance(value, str) and value.strip().lower() in CREDENTIAL_PLACEHOLDERS:
+        return value
+    return "<redacted>"
 
 
 def _redact_match(match: re.Match) -> str:
@@ -1882,8 +1911,9 @@ def merge_report(
         return problems
     stamp = now_ms if now_ms is not None else _now_ms()
 
+    diagnostics = [redact(diag) for diag in report.get("diagnostics") or []]
     touched: dict[str, list[dict]] = {}
-    for diag in report.get("diagnostics") or []:
+    for diag in diagnostics:
         touched.setdefault(diag["stage"], []).append(diag)
     if stage:
         touched.setdefault(stage, [])
@@ -1909,7 +1939,7 @@ def merge_report(
         record["stages"][stage]["status"] = status
         record["stages"][stage]["at_unix_ms"] = stamp
 
-    _merge_readback(record, report.get("diagnostics") or [])
+    _merge_readback(record, diagnostics)
     return []
 
 
@@ -3353,7 +3383,7 @@ def record_init(
                 f"{spec_report.get('spec_hash')} != {lock.get('spec_hash')}"
             )
 
-    diags = list(spec_report.get("diagnostics") or [])
+    diags = [redact(diag) for diag in spec_report.get("diagnostics") or []]
     record["stages"]["s0_spec"].update(
         {
             "status": status_for(diags),

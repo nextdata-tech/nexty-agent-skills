@@ -304,6 +304,55 @@ def test_spec_report_against_the_right_bytes_is_ingested(workflow, tmp_path):
     assert record["stages"]["s0_spec"]["status"] in ("passed", "passed_with_warnings")
 
 
+def test_record_init_redacts_external_spec_report_diagnostics(workflow, tmp_path):
+    url = "postgresql://admin:url-password@db.example.internal/app"
+    diagnostic = dpd.diagnostic(
+        "spec.frontmatter.bad_name",
+        message="invalid name",
+        path="spec:frontmatter.name",
+        evidence={},
+    ).to_dict()
+    diagnostic["message"] = f"invalid name from {url}"
+    diagnostic["evidence"] = {
+        "password": "bare-password",
+        "nested": {
+            "token": "bare-token",
+            "label": "preserve this context",
+        },
+    }
+    report = tmp_path / "spec-report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "schema": "nxd-diagnostic-report-v1",
+                "tool": "validate_dp_spec",
+                "target": str(workflow["spec"]),
+                "ok": False,
+                "counts": {"error": 1, "warning": 0, "info": 0},
+                "spec_hash": dpd.spec_hash(
+                    (workflow["closure"] / "dp-spec.approved.md").read_bytes()
+                ),
+                "diagnostics": [diagnostic],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]), "--spec-report", str(report),
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    exported = workflow["record"].read_text(encoding="utf-8")
+    for secret in ("url-password", "bare-password", "bare-token"):
+        assert secret not in exported
+    record = json.loads(exported)
+    stored = record["stages"]["s0_spec"]["diagnostics"][0]
+    assert stored["evidence"]["nested"]["label"] == "preserve this context"
+    assert stored["evidence"]["password"] == "<redacted>"
+
+
 def test_record_append_to_s0_spec_is_rejected(workflow, tmp_path):
     _run(
         str(DIAG), "record", "init", "--record", str(workflow["record"]),
@@ -403,6 +452,59 @@ def test_a_loop_report_merges_and_the_record_stays_valid(workflow, tmp_path):
     state = _run(str(DIAG), "materialized", "--record", str(workflow["record"]), "--json")
     assert state.returncode == 1
     assert json.loads(state.stdout)["state"] == "unsettled"
+
+
+def test_record_append_redacts_incoming_diagnostic_url_credentials(workflow, tmp_path):
+    _run(
+        str(DIAG), "record", "init", "--record", str(workflow["record"]),
+        "--lock", str(workflow["lock"]),
+    )
+    url = "postgresql://admin:password@db.example.internal/app"
+    diagnostic = dpd.diagnostic(
+        "pin.build_failed",
+        message=f"build failed while connecting to {url}",
+        path="tool:build_data_product.error",
+        origin="agent_observed",
+        evidence={
+            "endpoint": url,
+            "nested": ["keep this context", {"detail": f"retry {url}"}],
+        },
+    ).to_dict()
+    # The producer normally redacts. A report received from another tool is
+    # untrusted input, so record append must protect persistent output itself.
+    diagnostic["message"] = f"build failed while connecting to {url}"
+    diagnostic["evidence"] = {
+        "endpoint": url,
+        "nested": ["keep this context", {"detail": f"retry {url}"}],
+    }
+    report = tmp_path / "loop.json"
+    report.write_text(
+        json.dumps(
+            {
+                "schema": "nxd-diagnostic-report-v1",
+                "tool": "loop",
+                "target": "build_data_product",
+                "ok": False,
+                "counts": {"error": 1, "warning": 0, "info": 0},
+                "spec_hash": None,
+                "diagnostics": [diagnostic],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(
+        str(DIAG), "record", "append", "--record", str(workflow["record"]),
+        "--stage", "s4_pin", "--from", str(report),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    exported = workflow["record"].read_text(encoding="utf-8")
+    assert "password" not in exported
+    assert "postgresql://admin:<redacted>@db.example.internal/app" in exported
+    record = json.loads(exported)
+    stored = record["stages"]["s4_pin"]["diagnostics"][0]
+    assert stored["evidence"]["nested"][0] == "keep this context"
 
 
 def test_materialized_exits_one_when_not_materialized(workflow):

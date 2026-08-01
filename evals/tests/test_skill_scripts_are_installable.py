@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -190,6 +191,18 @@ def test_code_install_includes_and_invokes_pocket_helpers(tmp_path: Path):
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
     _assert_helpers_run(skill_dir)
+
+
+@pytest.mark.parametrize("layout", ("src/nxd-pocket-loop", "skills/nxd-pocket-loop"))
+def test_claude_code_plugin_install_layout_resolves_pocket_helpers(
+    tmp_path: Path, layout: str
+):
+    skill_dir = tmp_path / ".claude" / "plugins" / "nexty-agent-skills" / layout
+    shutil.copytree(SRC / "nxd-pocket-loop", skill_dir)
+    outside = tmp_path / "outside-plugin"
+    outside.mkdir()
+
+    assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
 
 
 def test_desktop_cache_install_includes_and_invokes_pocket_helpers(tmp_path: Path):

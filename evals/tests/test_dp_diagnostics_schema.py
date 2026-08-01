@@ -400,6 +400,37 @@ def test_redaction_leaves_placeholders_alone():
     assert dpd.redact("api_key: null") == "api_key: null"
 
 
+def test_redaction_is_recursive_and_key_aware():
+    redacted = dpd.redact(
+        {
+            "password": "bare-password",
+            "nested": {
+                "api_key": "bare-api-key",
+                "token": "bare-token",
+                "clientSecret": "bare-client-secret",
+                "accessToken": "bare-access-token",
+                "authToken": "bare-auth-token",
+                "Authorization": "Bearer bare-header-token",
+                "label": "retain this",
+            },
+            "items": [{"secret": "bare-secret", "count": 3}],
+            "token_count": 7,
+        }
+    )
+
+    assert redacted["password"] == "<redacted>"
+    assert redacted["nested"]["api_key"] == "<redacted>"
+    assert redacted["nested"]["token"] == "<redacted>"
+    assert redacted["nested"]["clientSecret"] == "<redacted>"
+    assert redacted["nested"]["accessToken"] == "<redacted>"
+    assert redacted["nested"]["authToken"] == "<redacted>"
+    assert redacted["nested"]["Authorization"] == "<redacted>"
+    assert redacted["items"][0]["secret"] == "<redacted>"
+    assert redacted["nested"]["label"] == "retain this"
+    assert redacted["items"][0]["count"] == 3
+    assert redacted["token_count"] == 7
+
+
 # --- the path grammar -------------------------------------------------------
 
 def test_identity_beats_index():
