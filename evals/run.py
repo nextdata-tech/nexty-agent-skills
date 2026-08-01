@@ -271,6 +271,20 @@ class SourceIsolation:
                 for name, value in self.roots
             },
         }
+
+# Scenario-specific: the stub module's filename is excluded per-scenario (added
+# to this set below, keyed by scenario) because its payload/auth/pagination
+# logic is the answer key the agent must instead discover by calling the live
+# endpoint — exactly why MCP_SERVER_SIDE_FIXTURES hides catalog.json/semantic.json.
+HTTP_STUB_RUNNER_SIDE_FIXTURES = {
+    "http_stub.json",  # runner opt-in marker, parallel to mcp.json/pocket.json
+    "stub_beacon_api.py",  # authenticated-api-source-build's stub module/answer key
+    "check_authenticated_api_source.py",  # its deterministic checker: states
+    # the exact expected row counts (12 monitors, 37 checks) and every trap by
+    # name, which would turn "discover the payload's shape" into "satisfy this
+    # file" — same reasoning as DERIVATION_RUNNER_SIDE_FIXTURES excluding
+    # check_derived_closure.py.
+}
 # MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
 # file read, so MCP scenarios get a longer agent timeout.
 MCP_AGENT_TIMEOUT_S = 1800
@@ -496,6 +510,7 @@ def build_workspace(
                     | STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES
                     | DERIVATION_RUNNER_SIDE_FIXTURES
                     | EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES
+                    | HTTP_STUB_RUNNER_SIDE_FIXTURES
                     or item.name in scenario_exclusions):
                 continue
             dst = ws / item.name
@@ -640,6 +655,27 @@ def scenario_needs_pocket(scenario_dir: Path) -> dict | None:
     desktop supervisor. Kept parallel to MCP opt-in so ordinary cells never
     inherit a host binary, Python venv, or persistent-process cleanup."""
     marker = scenario_dir / "fixtures" / "pocket.json"
+    if not marker.exists():
+        return None
+    return json.loads(marker.read_text(encoding="utf-8"))
+
+
+def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
+    """Return the HTTP-stub marker when a scenario opts into a runner-started
+    local REST fixture. Kept parallel to the MCP/Pocket opt-ins for the same
+    reason: ordinary cells must not inherit a background process, and only a
+    scenario that names ``fixtures/http_stub.json`` gets one.
+
+    Marker shape: ``{"module": "<py filename under fixtures/>",
+    "start": "<callable name>", "stop": "<callable name>",
+    "endpoint_file": "<workspace-relative path the base URL is written to>"}``.
+    ``start`` must return ``(server, port, thread)``; ``stop`` takes those same
+    three (minus port). This is intentionally generic — the module supplies its
+    own routes/auth/payload, the runner only supplies the process lifecycle and
+    the port handoff, exactly as ``semantic_http_server`` supplies lifecycle for
+    the (heavier, license-gated) semantic MCP server.
+    """
+    marker = scenario_dir / "fixtures" / "http_stub.json"
     if not marker.exists():
         return None
     return json.loads(marker.read_text(encoding="utf-8"))
@@ -1251,6 +1287,47 @@ def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> Non
         except (urllib.error.URLError, ConnectionError, OSError):
             time.sleep(0.5)
     raise TimeoutError(f"MCP server did not come up within {timeout_s}s at {endpoint}")
+
+
+@contextlib.contextmanager
+def http_stub_server(scenario_dir: Path, ws: Path, spec: dict):
+    """Start a scenario-supplied in-process HTTP stub for the run's duration.
+
+    Runs the fixture module's own ``start``/``stop`` callables IN this process
+    (unlike ``semantic_http_server``, which shells to a separate interpreter for
+    a heavy licensed dependency) — the stub is stdlib-only `http.server`, so no
+    subprocess or extra interpreter is needed. Writes the base URL to
+    ``spec["endpoint_file"]`` inside the workspace before yielding, so the agent
+    reads it exactly like any other fixture file; the port itself is chosen
+    fresh per run via ``socket.bind(("127.0.0.1", 0))`` inside the module.
+    """
+    fixtures_dir = scenario_dir / "fixtures"
+    module_name = str(spec.get("module", "")).removesuffix(".py")
+    module_path = fixtures_dir / f"{module_name}.py"
+    if not module_path.is_file():
+        raise RuntimeError(f"http_stub module not found: {module_path}")
+
+    import importlib.util
+
+    mod_spec = importlib.util.spec_from_file_location(
+        f"_eval_http_stub_{module_name}", module_path
+    )
+    if mod_spec is None or mod_spec.loader is None:
+        raise RuntimeError(f"could not load http_stub module: {module_path}")
+    module = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(module)
+
+    start_fn = getattr(module, str(spec.get("start", "start_server")))
+    stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
+    server, port, thread = start_fn()
+    try:
+        base_url = f"http://127.0.0.1:{port}"
+        endpoint_file = ws / str(spec.get("endpoint_file", "ENDPOINT_URL"))
+        endpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        endpoint_file.write_text(base_url + "\n", encoding="utf-8")
+        yield base_url
+    finally:
+        stop_fn(server, thread)
 
 
 def _write_fake_nxd(bin_dir: Path) -> None:
@@ -2035,6 +2112,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     )
 
     pocket_spec = scenario_needs_pocket(scenario_dir)
+    http_stub_spec = scenario_needs_http_stub(scenario_dir)
     # Pocket cells run the agent with extra_dirs=[] (see the agent call below),
     # so the prompt must not advertise an examples directory the agent can never
     # --add-dir, or it wastes turns hunting for it.
@@ -2260,6 +2338,21 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             scenario_dir, ws, pocket_python,
                             str(pocket_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
                         ))
+            elif http_stub_spec is not None:
+                # A runner-started local REST fixture the agent reaches over a
+                # real socket for the duration of this run — see
+                # http_stub_server(). No extra interpreter/subprocess: the stub
+                # is stdlib-only and runs in this process.
+                try:
+                    with http_stub_server(scenario_dir, ws, http_stub_spec):
+                        ok, trace, metrics = agent_backend.run_agent(
+                            ws, prompt, agent_model, agent_timeout,
+                            extra_dirs=extra_dirs, effort=args.agent_effort,
+                            skill_pack_dir=plugin_dir, **turn_kwargs,
+                        )
+                except RuntimeError as exc:
+                    res.error = f"http stub setup failed: {exc}"
+                    return res
             else:
                 ok, trace, metrics = agent_backend.run_agent(
                     ws, prompt, agent_model, agent_timeout,

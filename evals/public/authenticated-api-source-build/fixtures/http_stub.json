@@ -1,0 +1,7 @@
+{
+  "module": "stub_beacon_api.py",
+  "start": "start_server",
+  "stop": "stop_server",
+  "endpoint_file": "ENDPOINT_URL",
+  "description": "Runner-started, stdlib-only Beacon API stub bound to 127.0.0.1 on an ephemeral port for the duration of this run. The agent reaches it as a real socket over ENDPOINT_URL; this file itself and the stub module are runner-side only (see HTTP_STUB_RUNNER_SIDE_FIXTURES in run.py) and never enter the agent workspace."
+}
