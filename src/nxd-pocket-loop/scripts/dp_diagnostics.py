@@ -212,6 +212,10 @@ ATTEMPT_EXITS = (
     "blocked",
     "retry_environmental",
 )
+REVIEW_STATUSES = ("complete", "timed_out", "needs_user")
+REVIEW_DISPOSITIONS = ("accepted", "rejected", "out_of_scope")
+REVIEW_CLASSIFICATIONS = ("behavior_affecting", "structural_note")
+REVIEW_FINDING_STATES = ("not_applied", "needs_user", "applied")
 # The kinds INVARIANT-D2 binds: a heal that moved the spec hash edited the IR
 # to make the build pass. `regenerate` is the one kind allowed to move it.
 HASH_FROZEN_KINDS = ("heal", "retry", "remap")
@@ -1777,6 +1781,7 @@ def new_build_record(
             for i, stage in enumerate(STAGES)
         },
         "attempts": [],
+        "review_rounds": [],
         "concessions": [],
         "blockers": [],
         "readback": {"distribution": [], "absent": []},
@@ -2099,6 +2104,7 @@ def validate_build_record(record: Any) -> list[str]:
         "generator_model",
         "stages",
         "attempts",
+        "review_rounds",
         "concessions",
         "blockers",
         "readback",
@@ -2156,6 +2162,14 @@ def validate_build_record(record: Any) -> list[str]:
                     "build pass"
                 )
 
+    review_rounds = record.get("review_rounds")
+    if not isinstance(review_rounds, list):
+        problems.append("review_rounds must be an array")
+    else:
+        for i, review_round in enumerate(review_rounds):
+            for problem in validate_review_round(review_round):
+                problems.append(f"review_rounds[{i}]: {problem}")
+
     for i, c in enumerate(record.get("concessions") or []):
         if not isinstance(c, dict):
             problems.append(f"concessions[{i}] is not an object")
@@ -2189,6 +2203,211 @@ def validate_build_record(record: Any) -> list[str]:
             "narrative.origin must be 'llm_authored' — the narrative is the "
             "generator's analysis, not a measurement"
         )
+    return problems
+
+
+def validate_review_round(review_round: Any) -> list[str]:
+    """Validate one bounded adversarial-review audit entry.
+
+    A review produces claims, not executable instructions.  The record keeps
+    those claims, their evidence, and one adjudication for every claim so a
+    later run cannot silently treat a review as either accepted or ignored.
+    The deadline is a time budget, deliberately not a finding-count budget.
+    """
+    if not isinstance(review_round, dict):
+        return ["must be an object"]
+
+    required = {
+        "status",
+        "started_at_unix_ms",
+        "ended_at_unix_ms",
+        "budget_ms",
+        "findings",
+        "adjudications",
+        "user_decision",
+    }
+    problems: list[str] = []
+    for key in required - set(review_round):
+        problems.append(f"missing required key {key!r}")
+    for key in set(review_round) - required:
+        problems.append(f"unknown key {key!r}")
+
+    status = review_round.get("status")
+    if status not in REVIEW_STATUSES:
+        problems.append(f"status {status!r} is unknown")
+
+    started = review_round.get("started_at_unix_ms")
+    ended = review_round.get("ended_at_unix_ms")
+    budget = review_round.get("budget_ms")
+    if not isinstance(started, int):
+        problems.append("started_at_unix_ms must be an integer")
+    if not isinstance(ended, int):
+        problems.append("ended_at_unix_ms must be an integer")
+    if not isinstance(budget, int) or budget <= 0:
+        problems.append("budget_ms must be a positive integer")
+    if isinstance(started, int) and isinstance(ended, int) and ended < started:
+        problems.append("ended_at_unix_ms must not precede started_at_unix_ms")
+    if isinstance(started, int) and isinstance(ended, int) and isinstance(budget, int) and budget > 0:
+        elapsed = ended - started
+        if elapsed > budget:
+            problems.append(f"{status} review exceeded budget_ms")
+
+    findings = review_round.get("findings")
+    finding_ids: set[str] = set()
+    if not isinstance(findings, list):
+        problems.append("findings must be an array")
+    else:
+        for i, finding in enumerate(findings):
+            prefix = f"findings[{i}]"
+            if not isinstance(finding, dict):
+                problems.append(f"{prefix} must be an object")
+                continue
+            finding_required = {
+                "id",
+                "claim",
+                "evidence",
+                "classification",
+                "proposed_effect",
+                "applied_files",
+                "state",
+            }
+            for key in finding_required - set(finding):
+                problems.append(f"{prefix} missing required key {key!r}")
+            for key in set(finding) - finding_required:
+                problems.append(f"{prefix} unknown key {key!r}")
+            finding_id = finding.get("id")
+            if not isinstance(finding_id, str) or not finding_id:
+                problems.append(f"{prefix}.id must be a non-empty string")
+            elif finding_id in finding_ids:
+                problems.append(f"{prefix}.id {finding_id!r} is duplicated")
+            else:
+                finding_ids.add(finding_id)
+            if not isinstance(finding.get("claim"), str) or not finding.get("claim"):
+                problems.append(f"{prefix}.claim must be a non-empty string")
+            evidence = finding.get("evidence")
+            if not isinstance(evidence, list) or not evidence:
+                problems.append(f"{prefix}.evidence must be a non-empty array")
+            elif any(not isinstance(citation, str) or not citation for citation in evidence):
+                problems.append(f"{prefix}.evidence entries must be non-empty strings")
+            if finding.get("classification") not in REVIEW_CLASSIFICATIONS:
+                problems.append(
+                    f"{prefix}.classification {finding.get('classification')!r} is unknown"
+                )
+            if not isinstance(finding.get("proposed_effect"), str) or not finding.get("proposed_effect"):
+                problems.append(f"{prefix}.proposed_effect must be a non-empty string")
+            applied_files = finding.get("applied_files")
+            if not isinstance(applied_files, list):
+                problems.append(f"{prefix}.applied_files must be an array")
+            elif any(not isinstance(path, str) or not path for path in applied_files):
+                problems.append(f"{prefix}.applied_files entries must be non-empty strings")
+            finding_state = finding.get("state")
+            if finding_state not in REVIEW_FINDING_STATES:
+                problems.append(f"{prefix}.state {finding_state!r} is unknown")
+            elif finding_state == "applied" and not applied_files:
+                problems.append(f"{prefix}.applied state requires applied_files")
+            elif finding_state != "applied" and applied_files:
+                problems.append(f"{prefix}.applied_files must be empty unless state is applied")
+
+    adjudications = review_round.get("adjudications")
+    adjudicated_ids: set[str] = set()
+    if not isinstance(adjudications, list):
+        problems.append("adjudications must be an array")
+    else:
+        for i, adjudication in enumerate(adjudications):
+            prefix = f"adjudications[{i}]"
+            if not isinstance(adjudication, dict):
+                problems.append(f"{prefix} must be an object")
+                continue
+            adjudication_required = {"finding_id", "disposition", "citation"}
+            for key in adjudication_required - set(adjudication):
+                problems.append(f"{prefix} missing required key {key!r}")
+            for key in set(adjudication) - adjudication_required:
+                problems.append(f"{prefix} unknown key {key!r}")
+            finding_id = adjudication.get("finding_id")
+            if not isinstance(finding_id, str) or not finding_id:
+                problems.append(f"{prefix}.finding_id must be a non-empty string")
+            elif finding_id in adjudicated_ids:
+                problems.append(f"{prefix}.finding_id {finding_id!r} is duplicated")
+            else:
+                adjudicated_ids.add(finding_id)
+            disposition = adjudication.get("disposition")
+            if disposition not in REVIEW_DISPOSITIONS:
+                problems.append(f"{prefix}.disposition {disposition!r} is unknown")
+            citation = adjudication.get("citation")
+            if citation is not None and (not isinstance(citation, str) or not citation):
+                problems.append(f"{prefix}.citation must be a non-empty string or null")
+            if disposition == "rejected" and not citation:
+                problems.append(f"{prefix}.rejected findings require a citation")
+
+    if isinstance(findings, list) and isinstance(adjudications, list):
+        missing = finding_ids - adjudicated_ids
+        unknown = adjudicated_ids - finding_ids
+        if missing:
+            problems.append("findings without an adjudication: " + ", ".join(sorted(missing)))
+        if unknown:
+            problems.append("adjudications reference unknown finding ids: " + ", ".join(sorted(unknown)))
+
+    user_decision = review_round.get("user_decision")
+    if user_decision is not None:
+        if not isinstance(user_decision, dict):
+            problems.append("user_decision must be an object or null")
+        else:
+            decision_required = {"approved_at_unix_ms", "citation", "approved_finding_ids"}
+            for key in decision_required - set(user_decision):
+                problems.append(f"user_decision missing required key {key!r}")
+            for key in set(user_decision) - decision_required:
+                problems.append(f"user_decision unknown key {key!r}")
+            if not isinstance(user_decision.get("approved_at_unix_ms"), int):
+                problems.append("user_decision.approved_at_unix_ms must be an integer")
+            if not isinstance(user_decision.get("citation"), str) or not user_decision.get("citation"):
+                problems.append("user_decision.citation must be a non-empty string")
+            approved_ids = user_decision.get("approved_finding_ids")
+            if not isinstance(approved_ids, list) or any(
+                not isinstance(finding_id, str) or not finding_id
+                for finding_id in approved_ids
+            ):
+                problems.append("user_decision.approved_finding_ids must be an array of non-empty strings")
+            elif len(approved_ids) != len(set(approved_ids)):
+                problems.append("user_decision.approved_finding_ids must not contain duplicates")
+            elif not set(approved_ids).issubset(finding_ids):
+                problems.append("user_decision.approved_finding_ids reference unknown finding ids")
+        if status != "complete":
+            problems.append("user_decision is only allowed when user approval moves a review to complete")
+    elif status == "needs_user":
+        # This makes the handoff explicit: a user decision is still needed and
+        # cannot be fabricated by an agent as a silent status transition.
+        pass
+
+    if isinstance(findings, list):
+        states_by_id = {
+            finding.get("id"): finding.get("state")
+            for finding in findings
+            if isinstance(finding, dict) and isinstance(finding.get("id"), str)
+        }
+        needs_user_ids = {
+            finding_id
+            for finding_id, finding_state in states_by_id.items()
+            if finding_state == "needs_user"
+        }
+        applied_behavior_ids = {
+            finding.get("id")
+            for finding in findings
+            if isinstance(finding, dict)
+            and finding.get("classification") == "behavior_affecting"
+            and finding.get("state") == "applied"
+            and isinstance(finding.get("id"), str)
+        }
+        if status == "needs_user" and not needs_user_ids:
+            problems.append("needs_user review must carry a finding in needs_user state")
+        if status != "needs_user" and needs_user_ids:
+            problems.append("only a needs_user review may carry a finding in needs_user state")
+        decision_data = user_decision if isinstance(user_decision, dict) else {}
+        approved_ids = set(decision_data.get("approved_finding_ids") or [])
+        if applied_behavior_ids - approved_ids:
+            problems.append(
+                "behavior_affecting applied findings require explicit user approval: "
+                + ", ".join(sorted(applied_behavior_ids - approved_ids))
+            )
     return problems
 
 
@@ -2236,6 +2455,12 @@ def materialized(record: dict, lock: dict | None = None, live_spec_hash: str | N
     if not all(c.get("disclosed") for c in record.get("concessions") or []):
         return False
     if any(b.get("disposition") == "blocked" for b in record.get("blockers") or []):
+        return False
+    if any(
+        review_round.get("status") == "needs_user"
+        for review_round in record.get("review_rounds") or []
+        if isinstance(review_round, dict)
+    ):
         return False
     for attempt in record.get("attempts") or []:
         if attempt.get("kind") in HASH_FROZEN_KINDS:
@@ -2302,6 +2527,14 @@ def materialization_state(
     if blocked:
         why.append(f"{len(blocked)} blocker(s) are waiting on the user")
 
+    reviews_needing_user = [
+        review_round
+        for review_round in record.get("review_rounds") or []
+        if isinstance(review_round, dict) and review_round.get("status") == "needs_user"
+    ]
+    if reviews_needing_user:
+        why.append("review round(s) need a user decision before the build can materialize")
+
     failing = _failing_stages(record)
     offline_failing = [s for s in failing if s in OFFLINE_STAGES]
     # s8_answer is deliberately NOT in this set. A stage-8 failure is a fully
@@ -2344,7 +2577,7 @@ def materialization_state(
     if materialized(record, lock, live_spec_hash):
         return {"materialized": True, "state": "materialized", "why": why}
 
-    if blocked:
+    if blocked or reviews_needing_user:
         state = "needs_user"
     elif plan_moved:
         state = "plan_moved"
@@ -2506,6 +2739,7 @@ BUILD_RECORD_SCHEMA = {
         "generator_model",
         "stages",
         "attempts",
+        "review_rounds",
         "concessions",
         "blockers",
         "readback",
@@ -2638,6 +2872,109 @@ BUILD_RECORD_SCHEMA = {
                     "exit": {"enum": list(ATTEMPT_EXITS)},
                     "concessions": {"type": "array", "items": {"type": "string"}},
                 },
+            },
+        },
+        "review_rounds": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "status",
+                    "started_at_unix_ms",
+                    "ended_at_unix_ms",
+                    "budget_ms",
+                    "findings",
+                    "adjudications",
+                    "user_decision",
+                ],
+                "properties": {
+                    "status": {"enum": list(REVIEW_STATUSES)},
+                    "started_at_unix_ms": {"type": "integer"},
+                    "ended_at_unix_ms": {"type": "integer"},
+                    "budget_ms": {"type": "integer", "minimum": 1},
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "id",
+                                "claim",
+                                "evidence",
+                                "classification",
+                                "proposed_effect",
+                                "applied_files",
+                                "state",
+                            ],
+                            "properties": {
+                                "id": {"type": "string", "minLength": 1},
+                                "claim": {"type": "string", "minLength": 1},
+                                "evidence": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "items": {"type": "string", "minLength": 1},
+                                },
+                                "classification": {"enum": list(REVIEW_CLASSIFICATIONS)},
+                                "proposed_effect": {"type": "string", "minLength": 1},
+                                "applied_files": {
+                                    "type": "array",
+                                    "items": {"type": "string", "minLength": 1},
+                                },
+                                "state": {"enum": list(REVIEW_FINDING_STATES)},
+                            },
+                        },
+                    },
+                    "adjudications": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["finding_id", "disposition", "citation"],
+                            "properties": {
+                                "finding_id": {"type": "string", "minLength": 1},
+                                "disposition": {"enum": list(REVIEW_DISPOSITIONS)},
+                                "citation": {"type": ["string", "null"], "minLength": 1},
+                            },
+                            "allOf": [
+                                {
+                                    "if": {"properties": {"disposition": {"const": "rejected"}}},
+                                    "then": {
+                                        "properties": {"citation": {"type": "string", "minLength": 1}}
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                    "user_decision": {
+                        "type": ["object", "null"],
+                        "additionalProperties": False,
+                        "required": [
+                            "approved_at_unix_ms",
+                            "citation",
+                            "approved_finding_ids",
+                        ],
+                        "properties": {
+                            "approved_at_unix_ms": {"type": "integer"},
+                            "citation": {"type": "string", "minLength": 1},
+                            "approved_finding_ids": {
+                                "type": "array",
+                                "uniqueItems": True,
+                                "items": {"type": "string", "minLength": 1},
+                            },
+                        },
+                    },
+                },
+                "allOf": [
+                    {
+                        "if": {"properties": {"status": {"const": "needs_user"}}},
+                        "then": {"properties": {"user_decision": {"type": "null"}}},
+                    },
+                    {
+                        "if": {"properties": {"user_decision": {"type": "object"}}},
+                        "then": {"properties": {"status": {"const": "complete"}}},
+                    },
+                ],
             },
         },
         "concessions": {

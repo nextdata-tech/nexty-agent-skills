@@ -23,7 +23,7 @@ at generation time, **after** approval, the approved spec is copied in and hashe
 |---|---|---|
 | `dp-spec.approved.md` | byte-identical copy of the approved `dp-spec.md` | `cp` / `shutil.copyfile` |
 | `dp-spec.lock.json` | its canonical hash, the compiler version, the resolved refs | `dp_diagnostics.py lock write` |
-| `build-record.json` | what happened: stages, attempts, concessions, blockers | `dp_diagnostics.py record …` |
+| `build-record.json` | what happened: stages, review rounds, attempts, concessions, blockers | `dp_diagnostics.py record …` |
 | `README.md` | the reopen recipe, and a credentials block when one is needed | this skill, from the template below |
 | `contracts/<name>.md` | the contract for a model still to be built | this skill, from the template below |
 
@@ -53,7 +53,7 @@ Three preconditions, all hard:
 - The live spec's `status:` is `approved`. Copying a `proposed` spec would
   certify a plan the user never approved. `lock.spec_status_at_copy` records what
   was true at copy time, and the self-check fails a snapshot that was not.
-- `scripts/validate_dp_spec.py` passes against that spec. A spec that does not
+- `<nxd-pocket-loop>/scripts/validate_dp_spec.py` passes against that spec. A spec that does not
   validate is not a settled plan.
 - The copy happens **after** the policy read-back gate, at generation. That is
   precisely what keeps the gate's bright line intact — "nothing under `closure/`"
@@ -79,7 +79,7 @@ to make the path resolve.
 ## 3. Write the lock
 
 ```bash
-python3 scripts/dp_diagnostics.py lock write <spec.md> <closure-dir>
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock write <spec.md> <closure-dir>
 ```
 
 `dp-spec.lock.json` carries the canonical `spec_hash`, the raw
@@ -100,7 +100,7 @@ is not a broken product.
 ## 4. Open the build record
 
 ```bash
-python3 scripts/dp_diagnostics.py record init \
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record init \
     --record <closure>/build-record.json \
     --lock   <closure>/dp-spec.lock.json
 ```
@@ -116,6 +116,8 @@ From here the record is **generated, never hand-authored**.
 `self_check.py --record build-record.json` merges its own stages; the loop
 appends the build, serve, run, publish and query stages as they happen; and every
 heal, regenerate, remap and retry appends to `attempts[]` *before* the re-run.
+Every adversarial review instead appends its claims, adjudications and user
+decisions to `review_rounds[]` before any authorized mutation.
 There is no section for you to fill in, and no prose to keep in sync — which is
 the whole point: the outcomes are a pure product of the build, so nobody should
 be transcribing them.

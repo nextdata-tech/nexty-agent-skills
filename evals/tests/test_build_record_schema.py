@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = REPO / "scripts"
+SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 if str(SCRIPTS) not in sys.path:
@@ -103,6 +103,129 @@ def test_a_concession_is_never_forbidden(record):
     record["concessions"][0]["class"] = "forbidden"
     problems = dpd.validate_build_record(record)
     assert any("discouraged" in p for p in problems), problems
+
+
+# --- bounded adversarial review --------------------------------------------
+
+def _review_round(**overrides) -> dict:
+    base = {
+        "status": "complete",
+        "started_at_unix_ms": 1769904020000,
+        "ended_at_unix_ms": 1769904025000,
+        "budget_ms": 120000,
+        "findings": [
+            {
+                "id": "R1",
+                "claim": "The grain does not answer the requested cohort question.",
+                "evidence": ["closure:models.py:42", "request:question 2"],
+                "classification": "behavior_affecting",
+                "proposed_effect": "Change the cohort grain before materialization.",
+                "applied_files": [],
+                "state": "not_applied",
+            }
+        ],
+        "adjudications": [
+            {
+                "finding_id": "R1",
+                "disposition": "rejected",
+                "citation": "closure:models.py:42",
+            }
+        ],
+        "user_decision": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_review_round_adjudicates_every_finding(record):
+    record["review_rounds"] = [_review_round(adjudications=[])]
+    problems = dpd.validate_build_record(record)
+    assert any("without an adjudication" in p for p in problems), problems
+
+
+def test_rejected_review_finding_requires_a_citation(record):
+    review = _review_round()
+    review["adjudications"][0]["citation"] = None
+    record["review_rounds"] = [review]
+    problems = dpd.validate_build_record(record)
+    assert any("rejected findings require a citation" in p for p in problems), problems
+
+
+def test_review_needing_user_blocks_materialization(record, lock):
+    review = _review_round(status="needs_user")
+    review["findings"][0]["state"] = "needs_user"
+    review["adjudications"][0]["disposition"] = "accepted"
+    review["adjudications"][0]["citation"] = None
+    record["review_rounds"] = [review]
+    state = dpd.materialization_state(record, lock)
+    assert state["materialized"] is False
+    assert state["state"] == "needs_user"
+    assert any("review round" in reason for reason in state["why"]), state
+
+
+def test_user_decision_cannot_be_fabricated_while_review_needs_user(record):
+    review = _review_round(
+        status="needs_user",
+        user_decision={
+            "approved_at_unix_ms": 1769904026000,
+            "citation": "user:approval message",
+            "approved_finding_ids": ["R1"],
+        },
+    )
+    review["findings"][0]["state"] = "needs_user"
+    review["adjudications"][0]["disposition"] = "accepted"
+    review["adjudications"][0]["citation"] = None
+    record["review_rounds"] = [review]
+    problems = dpd.validate_build_record(record)
+    assert any("only allowed when user approval moves a review to complete" in p for p in problems)
+
+
+def test_behavior_affecting_review_change_requires_named_user_approval(record):
+    review = _review_round()
+    review["findings"][0].update(
+        state="applied",
+        applied_files=["transform/main.py"],
+    )
+    record["review_rounds"] = [review]
+    problems = dpd.validate_build_record(record)
+    assert any("require explicit user approval" in p for p in problems), problems
+
+
+def test_named_user_approval_allows_the_corresponding_behavior_change(record):
+    review = _review_round(
+        user_decision={
+            "approved_at_unix_ms": 1769904026000,
+            "citation": "user:approve R1",
+            "approved_finding_ids": ["R1"],
+        }
+    )
+    review["findings"][0].update(
+        state="applied",
+        applied_files=["transform/main.py"],
+    )
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+
+
+def test_structural_note_can_record_an_evidenced_mechanical_fix(record):
+    review = _review_round()
+    review["findings"][0].update(
+        classification="structural_note",
+        proposed_effect="Correct a typo without changing behavior.",
+        state="applied",
+        applied_files=["transform/main.py"],
+    )
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+
+
+def test_timed_out_review_can_preserve_partial_results_at_the_deadline(record):
+    review = _review_round(
+        status="timed_out",
+        ended_at_unix_ms=1769904139999,
+    )
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
 
 
 # --- INVARIANT-D2 -----------------------------------------------------------

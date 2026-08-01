@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = REPO / "scripts"
+SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
 DIAG = SCRIPTS / "dp_diagnostics.py"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
 WORKED_EXAMPLE = REPO / "src" / "nxd-pocket-loop" / "reference" / "dp-spec.md"
@@ -159,6 +159,7 @@ def test_record_init_fills_s0_spec(workflow):
     assert record["stages"]["s0_spec"]["origin"] == "tool_computed"
     assert record["compiled_from"] == json.loads(workflow["lock"].read_text())["spec_hash"]
     assert dpd.validate_build_record(record) == []
+    assert record["review_rounds"] == []
     # Every other stage is honestly `not_reached`.
     assert record["stages"]["s4_pin"]["status"] == "not_reached"
 

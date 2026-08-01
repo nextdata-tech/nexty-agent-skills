@@ -60,7 +60,7 @@ The dry-run for Step 7 of nxd-generate-dp, in four phases:
   byte match means the canonical hash still holds by construction. The
   **canonical** hash — the one that answers "did the plan change?" — needs PyYAML
   and the live `dp-spec.md`, which lives outside the closure by design. Step 7
-  therefore runs `python3 scripts/dp_diagnostics.py lock verify <closure> --spec
+  therefore runs `python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock verify <closure> --spec
   <dp-spec.md>` as well, and Phase C emits an informational diagnostic naming
   that command so a reader of the JSON can never mistake one check for the other.
   (Note: the naming invariant that Phase A enforces already requires every
@@ -183,7 +183,7 @@ trustworthy rather than decorative:
   scratch count stand in as evidence that the product has rows.
 
 This script is copied into the closure and run there with a bare interpreter, so
-it **cannot import `scripts/dp_diagnostics.py`**. The code table at the top is an
+it **cannot import `<nxd-pocket-loop>/scripts/dp_diagnostics.py`**. The code table at the top is an
 inlined literal subset of that module's registry, and
 `evals/tests/test_self_check_diagnostic_vocab.py` is what stops the two drifting.
 Sharing the code by import would be wrong even where it is possible.
@@ -243,7 +243,7 @@ from pathlib import Path
 #                else, so it can be piped straight into a build record.
 #
 # This file is COPIED INTO THE CLOSURE and run there with a bare interpreter, so
-# it can never import scripts/dp_diagnostics.py. The table below is an inlined
+# it can never import <nxd-pocket-loop>/scripts/dp_diagnostics.py. The table below is an inlined
 # literal subset of that module's registry; evals/tests/
 # test_self_check_diagnostic_vocab.py is what keeps the two from drifting.
 # severity and owner come from the table and are never chosen per call site:
@@ -362,7 +362,7 @@ def merge_record(path, stages):
         rec = json.loads(p.read_text())
     except Exception as exc:
         say(f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
-            f"stages 1-3 NOT merged. Run `python3 scripts/dp_diagnostics.py "
+            f"stages 1-3 NOT merged. Run `python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py "
             f"record init` before self_check.py.")
         return
     rec.setdefault("stages", {}).update(stages)
@@ -972,7 +972,7 @@ def cerr(code, msg, at="", ev=None):
 diag("s3_closure", "closure.canonical_hash_deferred",
      "Phase C checked the snapshot's raw bytes against dp-spec.lock.json. The "
      "canonical (semantic) hash and the comparison against the live dp-spec.md "
-     "are NOT checked here — run `python3 scripts/dp_diagnostics.py lock "
+     "are NOT checked here — run `python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock "
      "verify <closure> --spec <dp-spec.md>` for that.",
      path=cpath("dp-spec.lock.json"))
 

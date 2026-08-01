@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = REPO / "scripts"
+SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
 
 if str(SCRIPTS) not in sys.path:

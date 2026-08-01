@@ -22,8 +22,13 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "scripts"
 SELF_CHECK = SCRIPTS / "self_check.py"
 
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+# `dp_diagnostics.py` ships INSIDE the skill tree so the installer carries it;
+# `self_check.py` stays at the repo root because it is copied into the closure
+# and run there, never installed. Two locations, deliberately.
+SKILL_SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
+
+if str(SKILL_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SKILL_SCRIPTS))
 
 import dp_diagnostics as dpd  # noqa: E402
 

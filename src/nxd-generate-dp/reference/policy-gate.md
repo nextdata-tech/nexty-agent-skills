@@ -25,7 +25,7 @@ verdict, a gate outcome, or which rows land**:
 - a gate whose UNKNOWN / missing / inferred value could change the outcome;
 - evidence with no provenance rule, or no missing-evidence rule.
 
-`scripts/validate_dp_spec.py` detects every one of these mechanically over the
+`<nxd-pocket-loop>/scripts/validate_dp_spec.py` detects every one of these mechanically over the
 IR, which is why the read-back is a structured file rather than a paragraph.
 
 **A fully specified procedure** still gets read back and confirmed, but expect
@@ -49,7 +49,7 @@ your own recommended defaults.
 ## The read-back artifact
 
 `dp-spec.md` — the user-editable IR, written beside the closure and validated
-with `scripts/validate_dp_spec.py`. Schema and authoring modes:
+with `<nxd-pocket-loop>/scripts/validate_dp_spec.py`. Schema and authoring modes:
 **nxd-pocket-loop**'s `reference/dp-spec.md`.
 
 It must **enumerate**, in the user's vocabulary and understandable without

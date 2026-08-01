@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.28.0
+  version: 0.29.0
 ---
 
 # nxd-generate-dp skill
@@ -112,7 +112,7 @@ snake_case); derived ones are the keys your resource yields.
   its `models:` block is the Step-1a plan, `criteria:`/`verdicts:` are the landed
   rubric models, and `decisions:` is `data/nxd_decisions/nxd_decisions.csv` row
   for row with `provenance` **copied, never recomputed**. Re-run
-  `scripts/validate_dp_spec.py` before authoring — a spec that fails is not a
+  `<nxd-pocket-loop>/scripts/validate_dp_spec.py` before authoring — a spec that fails is not a
   settled plan — and treat any closure value appearing in no spec section as one
   the user never approved. Schema and compile map: **nxd-pocket-loop**'s
   `reference/dp-spec.md`. **Never write it into the closure**: it is upstream,
@@ -159,7 +159,7 @@ is not a materialization. Asking technical delivery questions is allowed and
 your own recommended defaults are not a reason to proceed.
 
 **The read-back artifact is `dp-spec.md`**, validated with
-`scripts/validate_dp_spec.py`, which finds those gap classes deterministically.
+`<nxd-pocket-loop>/scripts/validate_dp_spec.py`, which finds those gap classes deterministically.
 It must ENUMERATE every gate with its UNKNOWN handling, every criterion weight,
 **every anchor you propose for an incomplete scale**, the score aggregation, the
 **proposed verdict bands and precedence**, and the provenance and
@@ -440,7 +440,7 @@ rulings still land as data (`nxd_decisions`, carrying both `status` and
 
 ### Step 7 — Self-check before handing off (MANDATORY)
 
-**Step 6b, only when `nxd-review-closure` is installed**: first dispatch a read-only reviewer with the closure AND the verbatim request, to hunt what this structural check cannot see (an unanswerable question, a capability dismissed rather than researched, an aggregation wrong for its grain, a silently-resolved ruling, an assert restating its own arithmetic). What returns are CLAIMS — adjudicate each `accepted`/`rejected`/`out_of_scope`, reject ONLY with a `file:line` or request-text citation, bounce a HIGH finding needing a new ruling back as `gap_found`, record the round in `build-record.json` `attempts[]`. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
+**Step 6b, only when `nxd-review-closure` is installed**: dispatch its read-only reviewer with the closure and verbatim request under a dispatcher-enforced 120-second deadline. Record every returned claim (or timeout) in `build-record.json` `review_rounds[]`, then adjudicate it with a citation. `accepted` means *verified*, never *authorized to change*. Relay every claim, including rejected/out-of-scope ones, to the user with its effect and adjudication. A review finding defaults to behavior-affecting: pause as `needs_user` and apply only explicitly approved IDs. Only a syntax, mechanical, or procedural `structural_note` with evidence that the spec hash, models, grain, rows, values, aggregation, thresholds, verdicts and assertions are unchanged may self-heal. A timeout with partial claims is relayed the same way; continuing without a completed review is an explicit user decision. Contract: [reference/adversarial-review.md](reference/adversarial-review.md).
 Then the self-check itself. Confirm the `duckdb` port/parameter pair and no `.semantic_tools(...)`. Walk the
 naming invariant (`models.py` == `.promise` == `PHYSICAL_MODELS` ==
 `main.<name>`), then separately confirm `BASE_MODELS` — and only `BASE_MODELS` —
@@ -449,7 +449,7 @@ matches the `data/` directories (derived models and `.model(...)` views have no
 `dp-spec.md` governed the build, confirm shipped-matches-approved**: every
 promised model, gate, weight, band and `nxd_decisions` row traces to a spec
 section, and none carries a value the spec does not. Confirm the
-supplied export is unchanged, then run BOTH `python3 self_check.py --json --record build-record.json` ([reference/self-check.md](reference/self-check.md)) and `python3 scripts/dp_diagnostics.py lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform
+supplied export is unchanged, then run BOTH `python3 self_check.py --json --record build-record.json` ([reference/self-check.md](reference/self-check.md)) and `python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform
 against a scratch DuckDB, **structurally validates `models.py`/`spec.py` against
 the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
 installable here), runs **Phase C** (`dp-spec.approved.md` and `dp-spec.lock.json` present with the snapshot's bytes matching the lock, `build-record.json` present with a matching `compiled_from`, `README.md` present, no `../`-rooted contract pointer) and **Phase D — the policy boundary**: a promised
