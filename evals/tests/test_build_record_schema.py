@@ -177,7 +177,7 @@ def test_user_decision_cannot_be_fabricated_while_review_needs_user(record):
     review["adjudications"][0]["citation"] = None
     record["review_rounds"] = [review]
     problems = dpd.validate_build_record(record)
-    assert any("only allowed when user approval moves a review to complete" in p for p in problems)
+    assert any("only allowed for a complete review" in p for p in problems)
 
 
 def test_behavior_affecting_review_change_requires_named_user_approval(record):
@@ -226,6 +226,65 @@ def test_timed_out_review_can_preserve_partial_results_at_the_deadline(record):
     )
     record["review_rounds"] = [review]
     assert dpd.validate_build_record(record) == []
+
+
+def test_timed_out_review_without_auditable_user_choice_blocks_materialization(record, lock):
+    # A timed-out round is not a clean review. This shape was previously valid
+    # and materialized because only status=needs_user was checked.
+    review = _review_round(
+        status="timed_out",
+        ended_at_unix_ms=1769904139999,
+    )
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+    state = dpd.materialization_state(record, lock)
+    assert state["materialized"] is False
+    assert state["state"] == "needs_user"
+    assert any("timed_out review" in reason for reason in state["why"]), state
+
+
+def test_auditable_user_choice_unblocks_a_timed_out_review(record, lock):
+    # The review remains truthfully timed_out; an explicit empty approval list
+    # records the user's decision to continue without a completed review.
+    review = _review_round(
+        status="timed_out",
+        ended_at_unix_ms=1769904139999,
+        user_decision={
+            "approved_at_unix_ms": 1769904140000,
+            "citation": "user:continue without completed review",
+            "approved_finding_ids": [],
+        },
+    )
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+    assert dpd.materialization_state(record, lock)["materialized"] is True
+
+
+def test_accepted_behavior_finding_without_user_decision_blocks_materialization(record, lock):
+    # An accepted logical finding left not_applied is still a pending choice;
+    # it must not read as materialized simply because review status is complete.
+    review = _review_round()
+    review["adjudications"][0].update(disposition="accepted", citation="closure:models.py:42")
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+    state = dpd.materialization_state(record, lock)
+    assert state["materialized"] is False
+    assert state["state"] == "needs_user"
+    assert any("accepted behavior-affecting" in reason for reason in state["why"]), state
+
+
+def test_auditable_user_decision_unblocks_accepted_behavior_finding(record, lock):
+    review = _review_round(
+        user_decision={
+            "approved_at_unix_ms": 1769904026000,
+            "citation": "user:decline R1 and continue",
+            "approved_finding_ids": [],
+        }
+    )
+    review["adjudications"][0].update(disposition="accepted", citation="closure:models.py:42")
+    record["review_rounds"] = [review]
+    assert dpd.validate_build_record(record) == []
+    assert dpd.materialization_state(record, lock)["materialized"] is True
 
 
 # --- INVARIANT-D2 -----------------------------------------------------------

@@ -685,6 +685,16 @@ Notes: ARMS. before = c03ca60 (this branch's merge base, v0.27.0 — the last co
 
 Record: [`records/2026-07-31-spec-authoritative-closures-context-md-retired-for-a-byte-co.json`](records/2026-07-31-spec-authoritative-closures-context-md-retired-for-a-byte-co.json)
 
+## 2026-08-01 — nxd-pocket-loop / nxd-generate-dp: explicit built-in Desktop subagent dispatch (plugin v0.29.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| desktop-synthetic-probe | disposable synthetic skill | desktop-subagent-probe:run-probe | OBSERVED | 1/1 | — | — | — | — | Claude Desktop built-in Explore |
+
+Notes: Observational evidence, not a `run.py` before/after benchmark. A disposable synthetic skill containing explicit built-in-subagent dispatch prose — and **no** custom/plugin agent definition — was invoked in Claude Desktop. Desktop visibly dispatched one built-in Explore subagent and returned the requested synthetic JSON. This establishes one instruction-following dispatch path only. It makes **no** correctness, latency, token, cost, review-quality, cancellation, deadline-persistence, or multi-question governed-query availability conclusion; the shipped source-contract tests cover the intended boundaries, and a full production closure Desktop E2E remains required.
+
+Record: [`records/2026-08-01-explicit-built-in-desktop-subagent-dispatch.json`](records/2026-08-01-explicit-built-in-desktop-subagent-dispatch.json)
+
 ## 2026-07-31 — pocket-loop: non-capture sentinel routed to gate unknown (N=10/arm re-test of the reported provenance regression) (plugin v0.28.0)
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |

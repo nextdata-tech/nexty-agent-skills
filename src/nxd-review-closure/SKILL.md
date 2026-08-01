@@ -7,7 +7,7 @@ allowed-tools:
   - Grep
 metadata:
   author: nextdata
-  version: 0.28.0
+  version: 0.29.0
 ---
 
 # Review a generated closure — adversarially
@@ -17,7 +17,9 @@ You are reviewing a closure someone else authored. Your job is to find what is
 Python project.
 
 You have read-only tools. You do not edit the closure, you do not fix anything,
-and you do not run the transform. You return findings and stop.
+and you do not run the transform. You return every evidenced finding produced
+before the caller's deadline and stop; elapsed time, not finding count, bounds
+this review.
 
 ## What you are given
 
@@ -137,7 +139,10 @@ Return, per finding:
   finding with no evidence is an opinion; do not return it.
 - `why_it_matters` — what a consumer of this data product gets wrong
 
-Rank most severe first. Prefer three well-evidenced findings to ten speculative
-ones — the builder must adjudicate every one you return, so noise has a cost.
+Rank most severe first. Return every evidenced finding you have; do not impose a
+numerical finding cap. The caller is responsible for enforcing the elapsed-time
+deadline and must preserve partial results if it expires.
 
 Do not propose an implementation. Name the defect; the builder decides the fix.
+The builder must show every claim to the user before changing behavior. Your
+claims are never authorization to apply a change.

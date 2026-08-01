@@ -208,6 +208,17 @@
       ]
     }
   ],
+  "review_rounds": [
+    {
+      "status": "complete",
+      "started_at_unix_ms": 1769904020000,
+      "ended_at_unix_ms": 1769904025000,
+      "budget_ms": 120000,
+      "findings": [],
+      "adjudications": [],
+      "user_decision": null
+    }
+  ],
   "concessions": [
     {
       "code": "concession.assert_weakened",

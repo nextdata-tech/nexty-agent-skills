@@ -117,17 +117,22 @@ primitive and returns the same product.
 Independent, read-only work in the loop MAY be dispatched to parallel subagents
 so their intermediate reads stay out of the main conversation. This is
 **permitted, not required** — a single-source, single-question loop needs none
-of it. Fan out only when the work is genuinely independent:
+of it. These are explicit instructions to dispatch **built-in** subagents; do
+not add, select, or rely on a custom/plugin agent definition. Fan out only when
+the work is genuinely independent:
 
 - **Step 2, multi-source profiling** — when a data product draws on several
   sources, each source's profile (`schema.json`) is independent. Profiling them
   concurrently keeps each source's sample reads out of the main thread. Carry
   every source's label forward on the model it produces, exactly as the
   single-thread path would.
-- **Step 5, multi-question answering** — independent questions that map to
-  their own selections can be answered concurrently against the **already-served**
-  endpoint. Each subagent runs `describe_models` + `run_semantic_query` against
-  the same endpoint/bearer and returns its rows; the main thread presents them.
+- **Step 5, multi-question answering** — dispatch a built-in read-only query
+  subagent for each independent question *only when* the governed
+  `describe_models` and `run_semantic_query` MCP tools are available directly
+  to that child. Do not pass an endpoint or bearer in its prompt, return, or
+  narration. If those tools are not available to the child, the main thread
+  runs the governed queries sequentially and presents the rows; it never falls
+  back to raw SQL, pandas, or shell aggregation.
 
 Two hard boundaries on fan-out:
 
@@ -163,17 +168,18 @@ closure, or a long codegen.
 as one unit.** A gap discovered after generation would otherwise re-run the
 expensive profiling on every bounce:
 
-1. **Profile subagent (Step 2, read-only).** Runs `nxd-semantic-data-product`
-   inference: profiles each source into `schema.json`, derives the semantic
-   model, and — crucially — surfaces any way the source data makes the user's
-   supplied procedure ambiguous or under-determined. It returns the inferred
-   model, the per-source schemas (each with its label), and a `gap_found` field
-   naming any policy gap the profile exposed. It writes no closure and asks the
-   user nothing. A **file** source (CSV/JSON/JSONL/Parquet) profiles freely here;
-   a **live database/API** source is profiled on the main thread or from the
-   user's description only (table/endpoint list, sample shape) — never fan out a
-   profile that would need a live credential to connect (same credential boundary
-   as generation, below).
+1. **Profile subagent (Step 2, read-only).** Dispatch a built-in read-only
+   subagent for a **file** source (CSV/JSON/JSONL/Parquet), giving it only the
+   source path and the `nxd-semantic-data-product` inference instructions. It
+   profiles each source into `schema.json`, derives the semantic model, and —
+   crucially — surfaces any way the source data makes the user's supplied
+   procedure ambiguous or under-determined. It returns the inferred model, the
+   per-source schemas (each with its label), and a `gap_found` field naming any
+   policy gap the profile exposed. It writes no closure, does not transform the
+   source, and asks the user nothing. A live database/API source is profiled on
+   the main thread or from the user's description only (table/endpoint list,
+   sample shape) — never fan out a profile that would need a live credential to
+   connect (same credential boundary as generation, below).
 2. **Main thread: the policy read-back.** With the profile in hand, run the
    Step 1a read-back for any result-changing gap — including one the profile
    surfaced — and wait for the user's approval. This user turn is the

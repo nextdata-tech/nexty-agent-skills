@@ -6,6 +6,7 @@
 - [The unified diagnostic record](#the-unified-diagnostic-record)
 - [The report envelope](#the-report-envelope)
 - [The build record, field by field](#the-build-record-field-by-field)
+- [`review_rounds[]` — review claims and user decisions](#review_rounds--review-claims-and-user-decisions)
 - [`attempts[]` — the part that makes claims checkable](#attempts--the-part-that-makes-claims-checkable)
 - [The stage ladder](#the-stage-ladder)
 - [The three caveats](#the-three-caveats)
@@ -33,7 +34,7 @@ build result — cannot live in it. It lives here.
 closure/
 ├── dp-spec.approved.md    byte copy of the approved IR       — the plan
 ├── dp-spec.lock.json      its canonical hash + compiler version — the binding
-└── build-record.json      outcomes, attempts, concessions     — this file
+└── build-record.json      outcomes, reviews, attempts, concessions — this file
 ```
 
 Three properties, all load-bearing:
@@ -235,7 +236,7 @@ disguise an observation as a measurement. `record append` rejects a report whose
   "closure_path": "/abs/path/to/closure",
   "compiled_from": "sha256:…",          // == dp-spec.lock.json spec_hash
   "compiler_version": {
-    "plugin": "0.28.0",
+    "plugin": "0.29.0",
     "generator_skill": "nxd-generate-dp",
     "dp_spec_version": 1,
     "canonicalization": "nxd-dp-spec-canon-v1"
@@ -243,6 +244,7 @@ disguise an observation as a measurement. `record append` rejects a report whose
   "generated_at_unix_ms": 1769904000000,
   "generator_model": "claude-opus-5",
   "stages":      { /* nine keys, always all present */ },
+  "review_rounds": [ /* every dispatched complete, timed-out, or needs-user review */ ],
   "attempts":    [ /* every heal, remap, regenerate, retry */ ],
   "concessions": [ /* discouraged things done, and whether disclosed */ ],
   "blockers":    [ /* open_questions discovered late */ ],
@@ -277,6 +279,9 @@ predicate below.
 3. **Stages 4–8** are merged by the loop as they happen, via `record append`.
 4. **Every** heal, regenerate, remap and retry appends to `attempts[]` *before*
    re-running.
+5. **Every** adversarial review appends one `review_rounds[]` entry before any
+   authorized mutation; pending behavior-affecting claims set materialization to
+   `needs_user`.
 
 `record init` is the only writer of `s0_spec`, and re-validating after a
 write-back does not update it: `s0_spec` describes the snapshot the closure was
@@ -464,6 +469,24 @@ exhaustion the next occurrence is re-emitted as `blocker.caps_exhausted` with
 A cap is a **bound on retrying, not a verdict on the closure.** Exhausting the
 retry cap does not make the closure known-bad; it means the user hears about it
 instead of the agent looping in silence.
+
+## `review_rounds[]` — review claims and user decisions
+
+Reviews are separate from mutation attempts: a finding can be rejected, denied,
+pending or timed out without changing code. A dispatched round has exactly one
+of `complete`, `timed_out`, or `needs_user` status — never `skipped`. A
+non-eligible review is no dispatch and no round entry. Each round records its
+deadline, elapsed time and every returned finding's claim, evidence,
+adjudication/citation, classification, proposed effect, user decision and
+applied files. `accepted` means verified, not authorized. A behavior-affecting
+accepted finding remains `needs_user` until the user explicitly approves it;
+only a proved behavior-preserving structural note may be applied automatically.
+Likewise, a `timed_out` round blocks materialization until an auditable
+`user_decision` cites the user's choice to continue; keep the round status
+`timed_out` and use an empty `approved_finding_ids` list when that choice
+approves no finding. A user decision on `complete` or `timed_out` is the only
+unblock representation; `needs_user` deliberately carries null while awaiting
+the decision.
 
 ## `attempts[]` — the part that makes claims checkable
 

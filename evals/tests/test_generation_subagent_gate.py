@@ -30,6 +30,8 @@ POCKET_LOOP = SRC / "nxd-pocket-loop"
 SKILL = POCKET_LOOP / "SKILL.md"
 SCHEDULING = POCKET_LOOP / "reference" / "scheduling.md"
 GENERATE_DP = SRC / "nxd-generate-dp" / "SKILL.md"
+ADVERSARIAL_REVIEW = SRC / "nxd-generate-dp" / "reference" / "adversarial-review.md"
+BUILD_RECORD = POCKET_LOOP / "reference" / "build-record.md"
 
 
 def _strip_markdown(text: str) -> str:
@@ -221,3 +223,59 @@ def test_skill_offloads_two_subagents_not_one_unit():
         "profile subagent" in collapsed and "generate subagent" in collapsed
         and "never one combined unit" in collapsed
     ), "SKILL.md must offload Steps 2-3 as two subagents split at the seam, not one unit"
+
+
+def test_file_profile_dispatch_is_builtin_read_only_and_non_mutating():
+    # The Desktop experiment proved that explicit skill prose can dispatch a
+    # built-in agent. Keep file profiling on that narrow surface rather than
+    # smuggling a custom plugin agent or a writer into the source-profile step.
+    text = _strip_markdown(SCHEDULING.read_text())
+    collapsed = re.sub(r"\s+", " ", text)
+    assert "built-in read-only" in text
+    assert "file source (csv/json/jsonl/parquet)" in text
+    assert "source path" in text and "inference instructions" in text
+    assert "writes no closure" in collapsed and "does not transform the source" in collapsed
+    assert "asks the user nothing" in text
+
+
+def test_multi_question_dispatch_never_transfers_runtime_credentials():
+    text = _strip_markdown(SCHEDULING.read_text())
+    collapsed = re.sub(r"\s+", " ", text)
+    # A child may query only through governed MCP tools that it already has; a
+    # lead must not proxy the endpoint/bearer through prompt or result text.
+    assert "describemodels" in text and "runsemanticquery" in text
+    assert "available directly to that child" in collapsed
+    assert "do not pass an endpoint or bearer" in text
+    assert "main thread runs the governed queries sequentially" in collapsed
+    assert "never falls back to raw sql, pandas, or shell aggregation" in collapsed
+
+
+def test_adversarial_review_is_builtin_claims_only_dispatch():
+    skill = _strip_markdown(GENERATE_DP.read_text())
+    reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
+    # Step 6b is the entry contract; the reference supplies the full handoff.
+    assert "explicitly dispatch one built-in read-only reviewer" in skill
+    assert "never a custom/plugin agent definition" in skill
+    assert "closure path and verbatim request" in skill
+    assert "return claims only" in skill
+    assert all(word in skill for word in ("never edits", "builds", "serves", "transforms", "talks to the user"))
+    assert "one built-in read-only subagent" in reference
+    assert "the closure path" in reference and "original request, verbatim" in reference
+    assert "return claims only" in reference
+    assert all(word in reference for word in ("never edits", "builds", "serves", "runs the transform", "user conversation"))
+
+
+def test_adversarial_deadline_records_partial_claims_without_a_finding_cap():
+    reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
+    record = _strip_markdown(BUILD_RECORD.read_text())
+    collapsed = re.sub(r"\s+", " ", reference)
+    assert "120000 ms elapsed-time deadline" in reference
+    assert "status: timedout" in reference and "budgetms: 120000" in reference
+    assert "every partial claim received by then" in collapsed
+    assert "no finding-count cap" in collapsed
+    assert "client cannot cancel or collect" in collapsed and "stop the workflow as needsuser" in collapsed
+    # `skipped` was never a legal review round status. Non-eligibility is no
+    # dispatch, while a dispatched entry is complete/timed_out/needs_user.
+    assert "skipped is not a review status" in collapsed
+    assert "complete, timedout, or needsuser" in record
+    assert "never skipped" in record

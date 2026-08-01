@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.28.0
+  version: 0.29.0
 ---
 
 # nxd-pocket-loop skill
@@ -211,8 +211,7 @@ from the **approved `dp-spec.md`** (Step 1b), the inferred model(s), and the
 connector config. Pass the spec's path: it carries the intent, questions, model
 plan and every ruling, so the generator compiles rather than re-derives, and the
 `decisions:` block becomes `nxd_decisions` row for row. **That skill opens with a
-policy read-back gate**: when the request carried a procedure with a gap that
-changes a score, verdict, gate outcome, or which rows land, it writes nothing
+policy read-back gate**: when the request carried a procedure with a gap that changes a score, verdict, gate outcome, or which rows land, it writes nothing
 until the user has replied — the approved spec discharges it, so don't route
 around it. Pass through **every** gathered source with its label
 (or the single unlabeled source) and its per-model provenance from Step 2,
@@ -231,9 +230,10 @@ the `--definition` argument for Step 4.
 **Steps 2–3 MAY be offloaded to isolated subagents** — a profile subagent and a
 separate generate subagent, split at the inference/authoring seam, never one
 combined unit — but only when generation would otherwise dominate the main
-context. The policy read-back stays a main-thread user turn preceding the
-dispatch, and no live credential enters either subagent. Seam, return contract
-and credential boundary: [reference/scheduling.md](reference/scheduling.md).
+context. Policy read-back and review relay stay main-thread: show every claim/effect and wait before behavior-affecting change.
+Auto-fix only an evidenced syntax/mechanical/procedural structural correction with approved spec, models, grain, rows, values, aggregation, thresholds, verdicts and asserts unchanged.
+A timeout needs explicit user consent. No live credential enters either subagent. Seam and boundary:
+[reference/scheduling.md](reference/scheduling.md).
 
 **Land the closure at a durable, user-visible path — never a temp or scratch
 directory.** Put it under a directory named by the workflow id, with the IR

@@ -1,56 +1,54 @@
-# The spec is authoritative — design note
+# The spec is authoritative — architecture
 
-Status: **settled design, ready to implement.** This is the coordination artifact
-for five parallel workstreams. Where it is ambiguous, five implementations
-diverge — so it specifies shapes, names and literals rather than intentions.
-Nothing here is up for relitigation; the decisions it encodes (D1–D11) were
-taken before it was written. Where a decision has a rationale worth carrying,
-the rationale is stated once and not repeated.
+How a Nexty Pocket data product goes from user intent to a running, queryable
+closure, and how the pipeline records what it did. This note is normative: it
+specifies shapes, names and literals, because several independent producers must
+agree on them exactly.
 
 ## Contents
 
-- [0. What changes, in one paragraph](#0-what-changes-in-one-paragraph)
-- [1. The unified diagnostic record (D9)](#1-the-unified-diagnostic-record-d9)
-  - [1.8.2 `inspect_run` — the measured contract (2026-08-01)](#182-inspect_run--the-measured-contract-2026-08-01)
-- [2. The build record (D8)](#2-the-build-record-d8)
-- [3. The lock file and the canonical hash (D3)](#3-the-lock-file-and-the-canonical-hash-d3)
-- [4. The closure layout after this change (D1)](#4-the-closure-layout-after-this-change-d1)
-- [5. The materialization predicate (D5)](#5-the-materialization-predicate-d5)
-- [6. The stage ladder and the failure taxonomy (D6, D7)](#6-the-stage-ladder-and-the-failure-taxonomy-d6-d7)
-- [7. The middleman presentation rules (D11)](#7-the-middleman-presentation-rules-d11)
-- [8. Elicitation and UI prerequisites (D4)](#8-elicitation-and-ui-prerequisites-d4)
-- [9. Frozen strings — the cross-workstream contract](#9-frozen-strings--the-cross-workstream-contract)
-- [10. File-by-file change manifest](#10-file-by-file-change-manifest)
-- [11. What we are explicitly NOT doing](#11-what-we-are-explicitly-not-doing)
+- [0. The model](#0-the-model)
+- [1. The unified diagnostic record](#1-the-unified-diagnostic-record)
+  - [1.8.2 `inspect_run` — the measured contract](#182-inspect_run--the-measured-contract)
+- [2. The build record](#2-the-build-record)
+- [3. The lock file and the canonical hash](#3-the-lock-file-and-the-canonical-hash)
+- [4. The closure layout](#4-the-closure-layout)
+- [5. The materialization predicate](#5-the-materialization-predicate)
+- [6. The stage ladder and the failure taxonomy](#6-the-stage-ladder-and-the-failure-taxonomy)
+- [7. The middleman presentation rules](#7-the-middleman-presentation-rules)
+- [8. Elicitation and UI prerequisites](#8-elicitation-and-ui-prerequisites)
+- [9. Frozen strings — the cross-file contract](#9-frozen-strings--the-cross-file-contract)
+- [10. Design boundaries](#10-design-boundaries)
 
 ---
 
-## 0. What changes, in one paragraph
+## 0. The model
 
-`CONTEXT.md` is retired. The live, hand-edited `dp-spec.md` stays **beside** the
-closure; at generation time the approved spec is **byte-copied into** the closure
-as `dp-spec.approved.md` next to a `dp-spec.lock.json` carrying its canonical
-hash and the compiler version. Build **outcomes** leave the IR entirely and
-become a generated `build-record.json`. Self-containment stops being a prose
-discipline ("copy, never point") and becomes a hash-checkable snapshot. Every
-producer in the pipeline — `validate_dp_spec.py`, `self_check.py`, the build
-loop — emits the **same** diagnostic shape, differing only in which stage
-produced it.
+**User intent is the source, `dp-spec.md` is the IR, `nxd-generate-dp` is codegen,
+the closure's Python is the output artifact.** Everything below follows from
+that framing, and two consequences are load-bearing throughout:
 
-The compiler framing that makes all of this fall out: **user intent is the
-source, `dp-spec.md` is the IR, `nxd-generate-dp` is codegen, the closure's
-Python is the output artifact.** Two consequences are load-bearing throughout:
-
-1. An IR is a pure function of its source, so outcomes cannot live in it.
+1. **An IR is a pure function of its source, so outcomes cannot live in it.**
+   The plan and what happened to it are different files, produced by different
+   actors.
 2. **A compiler does not edit your source to make the build pass.** The self-heal
    loop may change generated code; it may **never** change the IR. Reaching green
    by narrowing the population, dropping a model whose grain won't resolve, or
    relaxing a threshold is a **spec edit requiring re-approval**, not a heal.
-   §2 makes this mechanically checkable.
+   §2.5 makes this mechanically checkable.
+
+Concretely: the live, hand-edited `dp-spec.md` sits **beside** the closure. At
+generation time the approved spec is **byte-copied into** the closure as
+`dp-spec.approved.md` next to a `dp-spec.lock.json` carrying its canonical hash
+and the compiler version. Build outcomes live in a generated `build-record.json`.
+Self-containment is a hash-checkable snapshot, not a prose discipline. Every
+producer in the pipeline — `validate_dp_spec.py`, `self_check.py`, the build
+loop — emits the **same** diagnostic shape, differing only in which stage
+produced it.
 
 ---
 
-## 1. The unified diagnostic record (D9)
+## 1. The unified diagnostic record
 
 One shape, emitted by every stage. This is the most important section: three
 independent producers must agree on it byte-for-byte.
@@ -78,12 +76,11 @@ independent producers must agree on it byte-for-byte.
 No other keys are permitted — an unknown key is a producer bug, and the shared
 validator rejects it.
 
-`origin` is not in the original D9 field list; it is required here because D6
-fails closed. An agent-inferred field is visibly weaker evidence than a
-supervisor-reported one, and the classifier must be able to see the difference
-without parsing prose. `unbound` means *the schema defines this field and no
-producer exists yet* — that is how stage 4 detail is carried until a supervisor
-binds it.
+`origin` exists because classification fails closed (§6.4). An agent-inferred
+field is visibly weaker evidence than a supervisor-reported one, and the
+classifier must be able to see the difference without parsing prose. `unbound`
+means *the schema defines this field and no producer exists yet* — that is how
+stage-4 detail is carried until a supervisor binds it.
 
 ### 1.2 `stage` — closed vocabulary
 
@@ -139,7 +136,7 @@ The presentation rule that hangs off this field (full form in §7):
   must hear about; a retryable one is not.
 
 The re-emission trigger names a **specific counter**, deliberately. "After caps
-are exhausted" was undefined for an environmental failure: the remap and
+are exhausted" would be undefined for an environmental failure: the remap and
 regenerate caps are not consumed by a retry (§6.7), so without a retry bound of
 its own an environmental failure could retry forever and never reach the user.
 §2.10 carries that bound.
@@ -154,7 +151,7 @@ Grammar: `<domain> "." <slug> [ "." <slug> ]`, lowercase, `[a-z0-9_]` segments.
 Stable forever: a code is never renamed or repurposed; a changed meaning is a new
 code. Unknown codes fail the shared validator.
 
-The registry is **`scripts/dp_diagnostics.py::CODES`**, a mapping
+The registry is **`<nxd-pocket-loop>/scripts/dp_diagnostics.py::CODES`**, a mapping
 `code -> {stage, severity, owner, control, agent_fillable, summary}`. Producers
 supply `code` plus per-instance `path`/`message`/`evidence`.
 
@@ -163,8 +160,8 @@ producer may relax `error` to `warning`, never the reverse.
 
 **`owner` is NEVER producer-overridable.** It comes from the registry and only
 from the registry. A diagnostic whose ownership changes is **re-emitted under a
-new code**, never mutated in place — which is already how the design handles the
-one legitimate ownership transition (`environment` → `user` becomes
+new code**, never mutated in place — which is how the design handles the one
+legitimate ownership transition (`environment` → `user` becomes
 `blocker.caps_exhausted`, §1.4), and follows directly from "a changed meaning is
 a new code" above.
 
@@ -175,111 +172,107 @@ warning; a producer-demoted `owner` silences a blocker. `dp_diagnostics.py`
 rejects any report whose diagnostic carries an `owner` differing from its
 registry entry, and `test_dp_diagnostics_schema.py` pins that rejection.
 
-`control` exists for D4's UI (§8): it tells a harness which form control to
-render for a spec-addressed error. Values: `text`, `long_text`, `number`,
+`control` serves the elicitation UI (§8): it tells a harness which form control
+to render for a spec-addressed error. Values: `text`, `long_text`, `number`,
 `enum`, `list`, `mapping`, `table`, `confirm`, `none`.
 
 #### Domain `spec.` — stage `s0_spec`, produced by `validate_dp_spec.py`
 
-Every existing check in `validate_dp_spec.py` maps to exactly one code. This is
-the complete v1 registry for that file; WS1 produces exactly these, no more.
+Every check in `validate_dp_spec.py` maps to exactly one code, and the mapping is
+complete in both directions. **Completeness is enforced, not asserted** (§1.5.1):
+the table is documentation, and `test_validator_code_coverage.py` is the
+contract.
 
-**Completeness is enforced, not asserted** (§1.5.1). The table below was built by
-walking every `report.error(...)` / `report.warn(...)` call site in
-`scripts/validate_dp_spec.py`; a line-anchored reference is given in the
-`replaces` column wherever the mapping is not obvious from the message text. WS1
-ships a test that makes the claim mechanical rather than editorial.
-
-| code | sev | owner | control | agent-fillable | replaces |
-|---|---|---|---|---|---|
-| `spec.encoding.not_utf8` | error | agent | none | no | (new, exit 2) |
-| `spec.frontmatter.unparseable` | error | agent | none | yes | all four `dp_diagnostics.split_frontmatter` `SpecReadError`s, surfaced by the validator's one handler — see §1.5.1 (i) |
-| `spec.frontmatter.missing_key` | error | agent | text | yes | missing required key |
-| `spec.frontmatter.bad_version` | error | agent | number | yes | `dp_spec_version` mismatch |
-| `spec.frontmatter.bad_name` | error | agent | text | yes | name not snake_case |
-| `spec.frontmatter.bad_status` | error | user | enum | no | status not in vocabulary |
-| `spec.frontmatter.approved_with_errors` | error | user | confirm | no | approved while errors hold |
-| `spec.frontmatter.rubric_version_missing` | error | user | text | no | judgments without `rubric_version` |
-| `spec.section.missing` | error | agent | none | yes | missing required section |
-| `spec.section.empty` | error | agent | none | yes | required section empty |
-| `spec.section.unknown` | warning | agent | none | no | unknown `##` heading |
-| `spec.section.unparseable` | error | agent | long_text | no | YAML parse failure |
-| `spec.source.no_entries` | error | agent | table | yes | **`:199-201`** `[sources] no source entries` |
-| `spec.source.not_mapping` | error | agent | mapping | yes | **`:206-208`** `[sources][i] is not a mapping` |
-| `spec.source.bad_type` | error | agent | enum | yes | type not in `SOURCE_TYPES` |
-| `spec.source.no_location` | error | user | text | no | |
-| `spec.source.no_scope` | error | user | long_text | no | |
-| `spec.source.credential_value` | error | user | none | no | credential VALUE in the file |
-| `spec.source.credential_key_mapping` | error | user | none | no | **`:226-233`** `credential_keys`/`credentials` carries a mapping — see the owner note below |
-| `spec.source.label_missing` | error | agent | text | yes | 2+ sources, no label |
-| `spec.source.label_duplicate` | error | agent | text | yes | |
-| `spec.population.not_mapping` | error | agent | mapping | yes | |
-| `spec.population.prose` | warning | agent | mapping | yes | prose instead of a mapping |
-| `spec.population.missing` | error | user | long_text | no | no `population:` |
-| `spec.model.no_entries` | error | agent | table | yes | **`:275-277`** `[models] no model entries` |
-| `spec.model.no_name` | error | agent | text | yes | |
-| `spec.model.bad_name` | error | agent | text | yes | not snake_case |
-| `spec.model.bad_kind` | error | agent | enum | yes | |
-| `spec.model.no_description` | error | agent | long_text | yes | |
-| `spec.model.no_grain` | error | user | long_text | no | |
-| `spec.model.no_key` | error | user | list | no | |
-| `spec.model.duplicate_name` | error | agent | text | yes | |
-| `spec.model.unmotivated` | warning | agent | list | yes | derived model, empty `answers` |
-| `spec.gate.not_mapping` | error | agent | mapping | yes | **`:331-333`** `[gates][i] is not a mapping` |
-| `spec.gate.no_rule` | error | user | long_text | no | |
-| `spec.gate.no_unknown` | error | user | enum | no | |
-| `spec.gate.unknown_is_fail` | error | user | enum | no | absence is never a judgement |
-| `spec.criteria.no_entries` | error | agent | table | yes | |
-| `spec.criteria.no_weight` | error | user | number | no | |
-| `spec.criteria.bad_weight` | error | user | number | no | |
-| `spec.criteria.weights_unbalanced` | error | user | table | no | sum ≠ 1.0 ±0.001 |
-| `spec.criteria.no_scale` | error | user | mapping | no | |
-| `spec.criteria.bad_scale` | error | user | mapping | no | min ≥ max, non-int |
-| `spec.criteria.no_anchors` | error | agent | mapping | yes | |
-| `spec.criteria.incomplete_scale` | error | agent | mapping | yes | **the flagship gap** |
-| `spec.criteria.anchor_out_of_range` | error | agent | mapping | yes | |
-| `spec.criteria.bad_provenance` | error | agent | enum | yes | |
-| `spec.verdict.missing` | error | agent | table | yes | criteria present, verdicts absent |
-| `spec.verdict.not_mapping` | error | agent | mapping | yes | |
-| `spec.verdict.no_values` | error | user | list | no | |
-| `spec.verdict.band_no_verdict` | error | agent | text | yes | |
-| `spec.verdict.band_unknown_verdict` | error | agent | enum | yes | |
-| `spec.verdict.band_unreachable` | error | user | mapping | no | neither `min_score` nor `rule` |
-| `spec.verdict.value_unreached` | error | user | table | no | declared verdict no band reaches |
-| `spec.verdict.no_precedence` | error | user | long_text | no | |
-| `spec.judgment.no_entries` | error | agent | table | yes | |
-| `spec.judgment.no_model` | error | agent | text | yes | |
-| `spec.judgment.bad_produced_by` | error | agent | enum | yes | |
-| `spec.judgment.no_generator_model` | error | agent | text | yes | |
-| `spec.judgment.no_rubric_version` | error | agent | text | yes | |
-| `spec.judgment.bad_reruns` | error | agent | enum | yes | |
-| `spec.judgment.evidence_disabled` | error | user | confirm | no | `evidence_required: false` |
-| `spec.schedule.not_mapping` | error | agent | mapping | yes | |
-| `spec.schedule.bad_trigger` | error | agent | enum | yes | |
-| `spec.schedule.no_cron` | error | user | text | no | |
-| `spec.schedule.no_cursor_field` | error | user | text | no | |
-| `spec.schedule.regrain_not_append_safe` | warning | user | confirm | no | |
-| `spec.output.not_mapping` | error | agent | mapping | yes | **`:565-567`** `[outputs][i] is not a mapping` |
-| `spec.output.no_name` | error | agent | text | yes | |
-| `spec.output.unknown_model` | error | agent | enum | yes | |
-| `spec.output.bad_kind` | error | agent | enum | yes | |
-| `spec.decision.no_id` | error | agent | text | yes | |
-| `spec.decision.bad_status` | error | agent | enum | yes | |
-| `spec.decision.bad_provenance` | error | agent | enum | yes | |
-| `spec.decision.no_ruling` | error | user | long_text | no | |
-| `spec.decision.blocked_with_applies_to` | error | agent | none | yes | |
-| `spec.decision.no_applies_to` | error | agent | list | yes | |
-| `spec.decision.duplicate_id` | error | agent | text | yes | |
-| `spec.decision.missing_for_ruling` | error | agent | table | yes | rulings exist, no ledger |
-| `spec.decision.ruling_uncovered` | warning | agent | table | yes | no row mentions a ruling section |
-| `spec.decision.sample_rule_unrecorded` | error | agent | table | yes | |
-| `spec.open_question.not_mapping` | error | agent | mapping | yes | |
-| `spec.open_question.no_question` | error | agent | long_text | yes | |
-| `spec.open_question.bad_disposition` | error | agent | enum | yes | |
-| `spec.open_question.answered_without_decision` | warning | agent | table | yes | |
-| `spec.question.unanswered` | warning | agent | list | yes | question no model answers |
-| `spec.approval.agent_authored_at_approved` | warning | user | confirm | no | |
-| `spec.prefill.empty_required_field` | warning | agent | none | yes | **new** — see §8.4 |
+| code | sev | owner | control | agent-fillable |
+|---|---|---|---|---|
+| `spec.encoding.not_utf8` | error | agent | none | no |
+| `spec.frontmatter.unparseable` | error | agent | none | yes |
+| `spec.frontmatter.missing_key` | error | agent | text | yes |
+| `spec.frontmatter.bad_version` | error | agent | number | yes |
+| `spec.frontmatter.bad_name` | error | agent | text | yes |
+| `spec.frontmatter.bad_status` | error | user | enum | no |
+| `spec.frontmatter.approved_with_errors` | error | user | confirm | no |
+| `spec.frontmatter.rubric_version_missing` | error | user | text | no |
+| `spec.section.missing` | error | agent | none | yes |
+| `spec.section.empty` | error | agent | none | yes |
+| `spec.section.unknown` | warning | agent | none | no |
+| `spec.section.unparseable` | error | agent | long_text | no |
+| `spec.source.no_entries` | error | agent | table | yes |
+| `spec.source.not_mapping` | error | agent | mapping | yes |
+| `spec.source.bad_type` | error | agent | enum | yes |
+| `spec.source.no_location` | error | user | text | no |
+| `spec.source.no_scope` | error | user | long_text | no |
+| `spec.source.credential_value` | error | user | none | no |
+| `spec.source.credential_key_mapping` | error | user | none | no |
+| `spec.source.label_missing` | error | agent | text | yes |
+| `spec.source.label_duplicate` | error | agent | text | yes |
+| `spec.population.not_mapping` | error | agent | mapping | yes |
+| `spec.population.prose` | warning | agent | mapping | yes |
+| `spec.population.missing` | error | user | long_text | no |
+| `spec.model.no_entries` | error | agent | table | yes |
+| `spec.model.no_name` | error | agent | text | yes |
+| `spec.model.bad_name` | error | agent | text | yes |
+| `spec.model.bad_kind` | error | agent | enum | yes |
+| `spec.model.no_description` | error | agent | long_text | yes |
+| `spec.model.no_grain` | error | user | long_text | no |
+| `spec.model.no_key` | error | user | list | no |
+| `spec.model.duplicate_name` | error | agent | text | yes |
+| `spec.model.unmotivated` | warning | agent | list | yes |
+| `spec.gate.not_mapping` | error | agent | mapping | yes |
+| `spec.gate.no_rule` | error | user | long_text | no |
+| `spec.gate.no_unknown` | error | user | enum | no |
+| `spec.gate.unknown_is_fail` | error | user | enum | no |
+| `spec.criteria.no_entries` | error | agent | table | yes |
+| `spec.criteria.no_weight` | error | user | number | no |
+| `spec.criteria.bad_weight` | error | user | number | no |
+| `spec.criteria.weights_unbalanced` | error | user | table | no |
+| `spec.criteria.no_scale` | error | user | mapping | no |
+| `spec.criteria.bad_scale` | error | user | mapping | no |
+| `spec.criteria.no_anchors` | error | agent | mapping | yes |
+| `spec.criteria.incomplete_scale` | error | agent | mapping | yes |
+| `spec.criteria.anchor_out_of_range` | error | agent | mapping | yes |
+| `spec.criteria.bad_provenance` | error | agent | enum | yes |
+| `spec.verdict.missing` | error | agent | table | yes |
+| `spec.verdict.not_mapping` | error | agent | mapping | yes |
+| `spec.verdict.no_values` | error | user | list | no |
+| `spec.verdict.band_no_verdict` | error | agent | text | yes |
+| `spec.verdict.band_unknown_verdict` | error | agent | enum | yes |
+| `spec.verdict.band_unreachable` | error | user | mapping | no |
+| `spec.verdict.value_unreached` | error | user | table | no |
+| `spec.verdict.no_precedence` | error | user | long_text | no |
+| `spec.judgment.no_entries` | error | agent | table | yes |
+| `spec.judgment.no_model` | error | agent | text | yes |
+| `spec.judgment.bad_produced_by` | error | agent | enum | yes |
+| `spec.judgment.no_generator_model` | error | agent | text | yes |
+| `spec.judgment.no_rubric_version` | error | agent | text | yes |
+| `spec.judgment.bad_reruns` | error | agent | enum | yes |
+| `spec.judgment.evidence_disabled` | error | user | confirm | no |
+| `spec.schedule.not_mapping` | error | agent | mapping | yes |
+| `spec.schedule.bad_trigger` | error | agent | enum | yes |
+| `spec.schedule.no_cron` | error | user | text | no |
+| `spec.schedule.no_cursor_field` | error | user | text | no |
+| `spec.schedule.regrain_not_append_safe` | warning | user | confirm | no |
+| `spec.output.not_mapping` | error | agent | mapping | yes |
+| `spec.output.no_name` | error | agent | text | yes |
+| `spec.output.unknown_model` | error | agent | enum | yes |
+| `spec.output.bad_kind` | error | agent | enum | yes |
+| `spec.decision.no_id` | error | agent | text | yes |
+| `spec.decision.bad_status` | error | agent | enum | yes |
+| `spec.decision.bad_provenance` | error | agent | enum | yes |
+| `spec.decision.no_ruling` | error | user | long_text | no |
+| `spec.decision.blocked_with_applies_to` | error | agent | none | yes |
+| `spec.decision.no_applies_to` | error | agent | list | yes |
+| `spec.decision.duplicate_id` | error | agent | text | yes |
+| `spec.decision.missing_for_ruling` | error | agent | table | yes |
+| `spec.decision.ruling_uncovered` | warning | agent | table | yes |
+| `spec.decision.sample_rule_unrecorded` | error | agent | table | yes |
+| `spec.open_question.not_mapping` | error | agent | mapping | yes |
+| `spec.open_question.no_question` | error | agent | long_text | yes |
+| `spec.open_question.bad_disposition` | error | agent | enum | yes |
+| `spec.open_question.answered_without_decision` | warning | agent | table | yes |
+| `spec.question.unanswered` | warning | agent | list | yes |
+| `spec.approval.agent_authored_at_approved` | warning | user | confirm | no |
+| `spec.prefill.empty_required_field` | warning | agent | none | yes |
 
 #### 1.5.1 Keeping the `spec.` registry complete — by construction
 
@@ -302,14 +295,14 @@ Producers must not synthesize the downstream diagnostics that were never reached
 
 **The splitters have exactly ONE definition, in `dp_diagnostics.py`.**
 `validate_dp_spec.py` imports `split_frontmatter` and `split_sections`; it does
-not keep a copy. It did keep one, under a docstring saying the two "must stay
-byte-for-byte equivalent", and they drifted anyway — the validator's copy lost
-the `yaml.YAMLError` guard, so `name: [unclosed` produced a raw traceback: no
-diagnostic, no `--json`, and the exit-code contract broken. A docstring is not an
-enforcement mechanism. The `reason` enum therefore lives on `SpecReadError`
-(the shared exception) rather than on a validator-local error class, and
-`test_validator_code_coverage.py` asserts both that the validator defines
-neither function and that its names are the canonicalizer's objects.
+not keep a copy. A copy is exactly how these drift: a duplicated splitter that
+loses its `yaml.YAMLError` guard turns `name: [unclosed` into a raw traceback —
+no diagnostic, no `--json`, and the exit-code contract broken. A docstring saying
+"these must stay byte-for-byte equivalent" is not an enforcement mechanism. The
+`reason` enum therefore lives on `SpecReadError` (the shared exception) rather
+than on a validator-local error class, and `test_validator_code_coverage.py`
+asserts both that the validator defines neither function and that its names are
+the canonicalizer's objects.
 
 The same drift class is why `dp_diagnostics._READ_FAILURES` exists and is used by
 every "could not read the spec" CLI handler: `yaml.YAMLError` is **not** a
@@ -324,26 +317,24 @@ would argue for `owner: agent`. It is `owner: user` for the same reason
 whether that secret must now be rotated, and silently rewriting the file would
 erase the evidence that it leaked. Fail closed, and let the user hear it (§7).
 
-**(iii) WS1 ships `evals/tests/test_validator_code_coverage.py`, which makes this
-mechanical.** The table above is documentation; the test is the contract:
+**(iii) `evals/tests/test_validator_code_coverage.py` makes this mechanical.**
 
-- every `report.error(` / `report.warn(` call site in `scripts/validate_dp_spec.py`
+- every `report.error(` / `report.warn(` call site in `<nxd-pocket-loop>/scripts/validate_dp_spec.py`
   passes a `code=` argument (AST walk over the `Call` nodes — a call site with no
   `code=` fails the test);
 - every such literal is a key in `dp_diagnostics.CODES` whose registry `stage` is
   `s0_spec`;
 - **and the converse**: every `spec.*` key in `CODES` is emitted by at least one
   call site, with **one declared exemption**: `spec.encoding.not_utf8` is raised
-  at the file-read boundary (`:748`) and exits 2 before a `Report` exists, so it
-  is emitted outside the `report.error` path. It is listed by name in the test as
-  the sole exemption — never a pattern, never a prefix, so a second uncovered code
-  cannot slip in behind it. This is the direction that catches a dropped check — a code in the
-  registry that nothing produces means a check went missing on the way in.
+  at the file-read boundary and exits 2 before a `Report` exists, so it is
+  emitted outside the `report.error` path. It is listed by name in the test as
+  the sole exemption — never a pattern, never a prefix, so a second uncovered
+  code cannot slip in behind it. This is the direction that catches a dropped
+  check — a code in the registry that nothing produces means a check went missing
+  on the way in.
 
 Adding a check to `validate_dp_spec.py` therefore *requires* adding a code, and
-deleting a check *requires* deleting its code. Neither can happen silently, and
-the "no check dropped, no code invented" constraint stops depending on five
-implementers reading this table carefully.
+deleting a check *requires* deleting its code. Neither can happen silently.
 
 #### Domain `struct.` — stage `s1_structure` (Phase A)
 
@@ -378,28 +369,28 @@ At `s6_run`: `runtime.remote_assert_failed`, `runtime.remote_traceback`
 
 #### Domain `closure.` and `policy.` — stage `s3_closure` (Phases C, D)
 
-| code | sev | owner | replaces / new |
-|---|---|---|---|
-| `closure.spec_snapshot_missing` | error | agent | **replaces** `CONTEXT.md is missing` |
-| `closure.lock_missing` | error | agent | new |
-| `closure.lock_unparseable` | error | agent | new |
-| `closure.lock_snapshot_byte_mismatch` | error | agent | new (tamper) |
-| `closure.lock_status_not_approved` | error | user | new |
-| `closure.build_record_missing` | error | agent | new |
-| `closure.build_record_invalid` | error | agent | new |
-| `closure.build_record_hash_mismatch` | error | agent | new |
-| `closure.readme_missing` | error | agent | new (reopen recipe) |
-| `closure.resolved_ref_missing` | error | agent | new (`prompt_ref` mirror) |
-| `closure.escaping_reference` | error | agent | unchanged behaviour |
-| `closure.gitignore_missing` | error | agent | unchanged |
-| `closure.sensitive_missing` | error | agent | unchanged |
-| `closure.gitignore_not_naming_profile` | error | agent | unchanged |
-| `closure.canonical_hash_deferred` | info | agent | new — see §3.5 |
-| `policy.decisions_not_base_model` | error | agent | unchanged |
-| `policy.decisions_csv_missing` | error | agent | unchanged |
-| `policy.decisions_column_missing` | error | agent | unchanged |
-| `policy.decisions_value_out_of_vocab` | error | agent | unchanged |
-| `policy.literal_duplicates_landed_value` | error | agent | unchanged |
+| code | sev | owner |
+|---|---|---|
+| `closure.spec_snapshot_missing` | error | agent |
+| `closure.lock_missing` | error | agent |
+| `closure.lock_unparseable` | error | agent |
+| `closure.lock_snapshot_byte_mismatch` | error | agent |
+| `closure.lock_status_not_approved` | error | user |
+| `closure.build_record_missing` | error | agent |
+| `closure.build_record_invalid` | error | agent |
+| `closure.build_record_hash_mismatch` | error | agent |
+| `closure.readme_missing` | error | agent |
+| `closure.resolved_ref_missing` | error | agent |
+| `closure.escaping_reference` | error | agent |
+| `closure.gitignore_missing` | error | agent |
+| `closure.sensitive_missing` | error | agent |
+| `closure.gitignore_not_naming_profile` | error | agent |
+| `closure.canonical_hash_deferred` | info | agent |
+| `policy.decisions_not_base_model` | error | agent |
+| `policy.decisions_csv_missing` | error | agent |
+| `policy.decisions_column_missing` | error | agent |
+| `policy.decisions_value_out_of_vocab` | error | agent |
+| `policy.literal_duplicates_landed_value` | error | agent |
 
 #### Domain `semantic.` — the stage-8 tells
 
@@ -416,15 +407,15 @@ At `s6_run`: `runtime.remote_assert_failed`, `runtime.remote_traceback`
 The distribution read-back is emitted at **`s2_transform`**, because that is
 mechanically where it runs — against Phase B's scratch DuckDB, before any build.
 It is nonetheless the designated **stage-8 predictor**: a uniform classification
-column is the tell that a green build will answer wrongly. It stays non-gating,
-and the build record must **record and surface** it adjacent to concessions
-(§2.6). Recording it is the change; failing on it is not.
+column is the tell that a green build will answer wrongly. It is non-gating, and
+the build record **records and surfaces** it adjacent to concessions (§2.6).
 
 #### Domain `pin.` — stage `s4_pin`
 
 `pin.build_failed` (`error` / **`agent`** / `origin: agent_observed`),
-`pin.spec_compile_error` (`error` / `agent` / `origin: supervisor_reported`, no
-producer today → `origin: unbound`), `pin.no_endpoint` (`error` / `agent`).
+`pin.spec_compile_error` (`error` / `agent` / `origin: supervisor_reported`; no
+producer is wired, so it carries `origin: unbound` — see §1.8.2),
+`pin.no_endpoint` (`error` / `agent`).
 
 `pin.build_failed` is `owner: agent` **by construction**, not by evidence. This
 is caveat 1 of §6.3 encoded in the registry.
@@ -514,9 +505,9 @@ more than ~4 KB per diagnostic. Reserved keys with fixed meaning: `expected`,
 `stdout_excerpt`, `exit_code`, `command`, `alternative`, `model`, `table`.
 
 **Redaction is mandatory.** Every producer runs `evidence` and `message` through
-the same `CREDENTIAL_VALUE_RE` that `validate_dp_spec.py` already uses, replacing
-a match with `<redacted>`. A check that prints the secret it found turns a
-contained file leak into a transcript leak.
+the same `CREDENTIAL_VALUE_RE` that `validate_dp_spec.py` uses, replacing a match
+with `<redacted>`. A check that prints the secret it found turns a contained file
+leak into a transcript leak.
 
 ### 1.8 The report envelope
 
@@ -539,9 +530,9 @@ field. Three name a script; the fourth names the agent:
 
 | `tool` | who writes the report | stages it may carry |
 |---|---|---|
-| `validate_dp_spec` | `scripts/validate_dp_spec.py --json` | `s0_spec` |
+| `validate_dp_spec` | `<nxd-pocket-loop>/scripts/validate_dp_spec.py --json` | `s0_spec` |
 | `self_check` | `scripts/self_check.py --json` | `s1_structure`, `s2_transform`, `s3_closure` |
-| `dp_diagnostics` | `scripts/dp_diagnostics.py` (`lock verify`, `materialized`) | any |
+| `dp_diagnostics` | `<nxd-pocket-loop>/scripts/dp_diagnostics.py` (`lock verify`, `materialized`) | any |
 | `loop` | **the agent**, hand-constructed from tool results | `s4_pin` … `s8_answer` |
 
 `loop` exists because stages 4–8 have no script producer — the agent observes a
@@ -549,7 +540,7 @@ field. Three name a script; the fourth names the agent:
 report itself. Naming that honestly matters: a `loop` report is agent-constructed
 and is **visibly weaker evidence** than a `tool_computed` report. Labelling it
 `dp_diagnostics` would disguise an observation as a measurement, which is exactly
-the fail-closed posture of D6 inverted. `record append --stage <s4…s8> --from
+the fail-closed posture of §6.4 inverted. `record append --stage <s4…s8> --from
 <report.json>` therefore expects `tool: "loop"` in the ordinary case and rejects a
 report whose `tool` cannot produce the `--stage` it was given.
 
@@ -579,21 +570,21 @@ may carry `origin: "supervisor_reported"` **iff both hold**:
    `source` value and is never a diagnostic `path`.
 
 Otherwise `origin: "agent_observed"`. **When it is unclear, it is
-`agent_observed`** — this is the D6 fail-closed rule expressed as a field, and it
-is load-bearing: an unbacked claim cannot reach `environment_suspect` (§5.1) and
-therefore falls to `unsettled`, which is treated as `code_wrong`. Misclassifying
-a real bug as "the environment" is what ships a broken DP flagged green; the cost
-of the opposite error is a wasted heal attempt.
+`agent_observed`** — this is the fail-closed rule of §6.4 expressed as a field,
+and it is load-bearing: an unbacked claim cannot reach `environment_suspect`
+(§5.1) and therefore falls to `unsettled`, which is treated as `code_wrong`.
+Misclassifying a real bug as "the environment" is what ships a broken DP flagged
+green; the cost of the opposite error is a wasted heal attempt.
 
 Two consequences worth stating, because they are what makes the design coherent
 rather than aspirational:
 
-- **`environment_suspect` and `retry_environmental` are reachable today.** A
-  connection-refused error body returned verbatim by `build_data_product` at
-  `s6_run` satisfies the criterion, so the environment path is live on the
-  current supervisor with no supervisor change. What the agent *cannot* produce
-  is a supervisor-authored **stage attribution** — hence `pin.spec_compile_error`
-  stays `origin: unbound` until a producer binds (§1.5 registry), and hence D6's
+- **`environment_suspect` and `retry_environmental` are reachable on the current
+  supervisor.** A connection-refused error body returned verbatim by
+  `build_data_product` at `s6_run` satisfies the criterion, so the environment
+  path is live with no supervisor change. What the agent *cannot* produce is a
+  supervisor-authored **stage attribution** — hence `pin.spec_compile_error`
+  stays `origin: unbound` until a producer binds (§1.5 registry), and hence §6.3's
   warning that stage 4 masquerades as environment.
 - **`evidence.supervisor_detail` is the reserved key *for a diagnostic*.** It is
   the only place a diagnostic's verbatim supervisor payload may live, which is
@@ -606,19 +597,16 @@ rather than aspirational:
   `test_build_record_schema.py` pins both the rejection and the reachability of
   `environment_suspect` through a satisfying fixture.
 
-`validate_dp_spec.py --json` emits exactly this. The old
-`{spec, ok, errors[], warnings[]}` shape is **removed**, not deprecated: nothing
-in the repo reads it (verified across `evals/`, `scripts/`, `.github/`), and
-carrying both invites drift.
+`validate_dp_spec.py --json` emits exactly this envelope, and it is the only
+shape it emits.
 
-### 1.8.2 `inspect_run` — the measured contract (2026-08-01)
+### 1.8.2 `inspect_run` — the measured contract
 
-§11 originally said not to design around a guess about `inspect_run`. It has
-since been run against a real `nxd-desktop-supervisor` in an isolated
-`--data-dir` (no Claude Desktop needed:
-`nxd-desktop-supervisor --data-dir <dir> mcp serve` speaks stdio JSON-RPC to any
-client). What follows is measured, not inferred. **It is still not wired** — no
-step calls it and `origin: "unbound"` stays until one does.
+`inspect_run` has been run against a real `nxd-desktop-supervisor` in an isolated
+`--data-dir` (no Claude Desktop needed: `nxd-desktop-supervisor --data-dir <dir>
+mcp serve` speaks stdio JSON-RPC to any client). What follows is measured, not
+inferred. **It is not wired** — no step calls it and `origin: "unbound"` stays
+until one does. Characterized is not the same as bound.
 
 On a **failed** run, `inspect_run {run_id}` returns `run` with ~18 keys. The
 load-bearing ones:
@@ -643,7 +631,7 @@ Boundary, and it is narrower than it looks:
 - **s5_serve is not.** Nothing in the payload speaks to post-publish serving.
 - The supervisor emits **no** `code`/`stage`/`severity`/`owner`/`origin`. Stage
   attribution remains an *agent inference* over supervisor-authored evidence —
-  §1.8.1's caveat is correct and unchanged.
+  §1.8.1's caveat holds.
 
 Traps, each observed:
 
@@ -664,14 +652,15 @@ Traps, each observed:
   `build_data_product` as "did not materialize staging output", never naming the
   user exception. `inspect_run` is the only route to the real cause.
 
-Not yet representable in the build record: `phases[]` (the best attribution
-signal we have) and `nxd-verification-v1` (per-table row counts + sha256, the
-strongest s7 evidence). Both currently have to ride as ad-hoc `evidence` keys.
+Not representable in the build record: `phases[]` (the best attribution signal
+available) and `nxd-verification-v1` (per-table row counts + sha256, the
+strongest s7 evidence). Both ride as ad-hoc `evidence` keys until the schema
+grows a home for them.
 
 ### 1.9 JSON Schema (normative)
 
-Ships as `scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is emitted by
-`python3 scripts/dp_diagnostics.py schema --diagnostic`.
+Ships as `<nxd-pocket-loop>/scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is emitted by
+`python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py schema --diagnostic`.
 
 ```json
 {
@@ -699,7 +688,7 @@ Ships as `scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is emitted by
 
 ---
 
-## 2. The build record (D8)
+## 2. The build record
 
 ### 2.1 Identity
 
@@ -707,12 +696,11 @@ Ships as `scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is emitted by
 - **Generated, never hand-authored.** No template, no prose sections to fill.
 - **Travels with the closure** — it is what a cold reader and the export handoff
   read to learn what actually happened.
-- Written and updated by `scripts/dp_diagnostics.py record …` and, for stages
+- Written and updated by `<nxd-pocket-loop>/scripts/dp_diagnostics.py record …` and, for stages
   1–3 only, by `self_check.py --record build-record.json`.
 
-**This is not `CONTEXT.md` renamed.** The five duplicated plan sections are gone
-— the byte-copied spec carries them. The hand-copy discipline is gone. What
-remains is outcome-only and mostly mechanical.
+It carries **outcomes only**. The plan lives in the byte-copied spec snapshot;
+nothing here duplicates it, and nothing here is hand-copied.
 
 ### 2.2 Lifecycle
 
@@ -726,15 +714,15 @@ remains is outcome-only and mostly mechanical.
 3. **Stages 4–8** are merged by the loop as they happen, via `record append`.
 4. Every heal / regenerate / remap appends to `attempts[]` **before** re-running.
 
-**The `s0_spec` producer is `record init`.** Every other stage has an obvious
-producer and `s0_spec` had none, which would leave it `not_reached` forever and
-make §5's `materialized()` permanently false — a fully green, published product
-stuck at `in_progress`. `record init` closes that hole, and it is the natural
-place: generation only happens against an **approved, validated** spec, so the
-validator has necessarily been run against exactly the bytes being snapshotted.
+**The `s0_spec` producer is `record init`.** Every stage needs exactly one
+producer; an `s0_spec` with none would stay `not_reached` forever and make §5's
+`materialized()` permanently false — a fully green, published product stuck at
+`in_progress`. `record init` is the natural place: generation only happens
+against an **approved, validated** spec, so the validator has necessarily been
+run against exactly the bytes being snapshotted.
 
 ```
-python3 scripts/dp_diagnostics.py record init \
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record init \
     --record <closure>/build-record.json \
     --lock   <closure>/dp-spec.lock.json \
     [--spec-report <report.json>]
@@ -744,15 +732,14 @@ python3 scripts/dp_diagnostics.py record init \
   in-process, against **`<closure>/dp-spec.approved.md`** — the snapshot, not the
   live IR, because the snapshot is what the closure was compiled from. It records
   the resulting `nxd-diagnostic-report-v1` as `stages.s0_spec`.
-  **Import direction (WS1, do not get this wrong):** `validate_dp_spec` imports
+  **Import direction (do not get this wrong):** `validate_dp_spec` imports
   `dp_diagnostics` at module top (§8.2), so `dp_diagnostics` must **not** import
   `validate_dp_spec` at module top — that is a cycle. `record init` does the
   import **inside the function body**, by which point `dp_diagnostics` is fully
-  loaded and already in `sys.modules`. `record init` also runs when the closure is
-  generated in a context where importing the validator fails; in that case it
-  falls back to requiring `--spec-report` and exits 2 with a message saying so,
-  rather than writing `s0_spec: not_reached` and quietly recreating the hole this
-  rule exists to close.
+  loaded and already in `sys.modules`. When `record init` runs in a context where
+  importing the validator fails, it falls back to requiring `--spec-report` and
+  exits 2 with a message saying so, rather than writing `s0_spec: not_reached`
+  and quietly recreating the hole this rule exists to close.
 - **With `--spec-report`**: it ingests an already-emitted
   `nxd-diagnostic-report-v1` from `validate_dp_spec.py --json` instead of
   re-running it. The report's `spec_hash` **must** equal `lock.spec_hash`; a
@@ -858,7 +845,7 @@ Keyed by the nine stage ids. Every key present at all times.
 **INVARIANT-D2 (mechanical).** For every attempt with
 `kind ∈ {heal, retry, remap}`, `spec_hash_before == spec_hash_after`. A heal that
 moved the hash edited the IR to make the build pass. That is a spec edit, and the
-record writer must reject it: emit `blocker.spec_edit_required`, set
+record writer rejects it: emit `blocker.spec_edit_required`, set
 `exit: "blocked"`, and route it to the user for re-approval. This is the single
 place where "a compiler does not edit your source" stops being advice.
 
@@ -891,7 +878,7 @@ That divergence is a **`plan_moved` condition** — observable only via
 is what makes them so: `blocker.spec_edit_required` means *an attempt's own hashes
 differed*; `plan_moved` means *the live IR has moved away from the snapshot the
 closure was built from*. A blocked-and-written-back run produces the second and
-never the first. (§5.1 will report it as `needs_user` rather than `plan_moved`,
+never the first. (§5.1 reports it as `needs_user` rather than `plan_moved`,
 because the blocker outranks the divergence it caused; both appear in `why[]`.)
 
 **Honest caveat on `attempts[]` (extending §2.11).** The entry as a whole is
@@ -901,7 +888,7 @@ of what it thought was wrong and what it did about it. `diagnosis.code`,
 `diagnosis.path`, both hashes, `rerun` and `exit` are mechanical and checkable;
 the two prose fields are not, and a consumer must not treat them as evidence. The
 `origin` field stays at entry granularity for schema simplicity; this paragraph is
-the disclosure, and `build-record.md` (WS3) must repeat it.
+the disclosure, and `src/nxd-pocket-loop/reference/build-record.md` repeats it.
 
 ### 2.6 `readback` — the distribution read-back as DATA
 
@@ -922,11 +909,11 @@ the disclosure, and `build-record.md` (WS3) must repeat it.
 }
 ```
 
-This replaces the current prose lines. `self_check.py` still prints them for the
-human path; with `--json` it also emits them as `semantic.distribution` /
-`semantic.uniform_column` / `semantic.absent_vocabulary` diagnostics and merges
-them here. A `uniform: true` entry with no matching explanation in
-`concessions[]` is what `concession.readback_uniform_unexplained` exists for.
+`self_check.py` prints these lines for the human path; with `--json` it also emits
+them as `semantic.distribution` / `semantic.uniform_column` /
+`semantic.absent_vocabulary` diagnostics and merges them here. A `uniform: true`
+entry with no matching explanation in `concessions[]` is what
+`concession.readback_uniform_unexplained` exists for.
 
 ### 2.7 `concessions[]`
 
@@ -948,7 +935,7 @@ them here. A `uniform: true` entry with no matching explanation in
 
 `class` is always `"discouraged"`. There is no `"forbidden"` concession: a
 forbidden invariant is never taken, it is escalated as a `blocker.forbidden_*`.
-The two-way split lives in §6.5.
+The two-way split lives in §6.6.
 
 `disclosed` flips to `true` only when the agent has actually said it to the user.
 **A green run carrying an undisclosed concession is the worst state in the
@@ -1055,7 +1042,7 @@ never be merged**. One is a dry run against a temporary database; the other is
 what shipped. Collapsing them would let a Phase B count stand in as evidence the
 product has rows.
 
-`source_state` is D3's separate axis. It is recorded because it is useful and
+`source_state` is a separate axis. It is recorded because it is useful and
 excluded from §5 because staleness is not a build outcome.
 
 ### 2.10 `caps`
@@ -1070,15 +1057,14 @@ excluded from §5 because staleness is not a build outcome.
 }
 ```
 
-Counted from `attempts[]`, never estimated. This is what turns the prose caps at
-`scheduling.md` and `nxd-generate-dp/SKILL.md` into something the agent can check
+Counted from `attempts[]`, never estimated. This is what makes the caps at
+`scheduling.md` and `nxd-generate-dp/SKILL.md` something the agent can check
 rather than self-police.
 
-`remap_per_question: 2` and `regenerate_total: 3` are the repo's existing bounds,
-now countable. **`retry_environmental_total: 3` is new** and exists because §1.4's
-re-emission rule needs a counter to fire on: an environmental retry consumes
-neither a remap nor a regenerate (§6.7), so before this there was no bound at all
-on `kind: "retry"` and no defined moment at which an environment failure became
+`retry_environmental_total: 3` exists because §1.4's re-emission rule needs a
+counter to fire on: an environmental retry consumes neither a remap nor a
+regenerate (§6.7), so without it there is no bound at all on `kind: "retry"` and
+no defined moment at which an environment failure becomes
 `blocker.caps_exhausted`. It counts attempts with `kind: "retry"` and
 `exit: "retry_environmental"`; on exhaustion, `"retry_environmental"` is appended
 to `exhausted[]` and the next occurrence is re-emitted as
@@ -1108,15 +1094,15 @@ consumers must not treat it as evidence.
 
 ### 2.12 JSON Schema
 
-Ships as `scripts/dp_diagnostics.py::BUILD_RECORD_SCHEMA`, emitted by
+Ships as `<nxd-pocket-loop>/scripts/dp_diagnostics.py::BUILD_RECORD_SCHEMA`, emitted by
 `dp_diagnostics.py schema --record`. It is a straight transcription of §2.3–2.11
 with `additionalProperties: false` at every level, `required` on every key named
-above, and `$ref`s to `nxd-diagnostic-v1` for the diagnostic arrays. WS1 owns it;
-a golden record under `evals/tests/fixtures/` must validate against it.
+above, and `$ref`s to `nxd-diagnostic-v1` for the diagnostic arrays. A golden
+record under `evals/tests/fixtures/` validates against it.
 
 ---
 
-## 3. The lock file and the canonical hash (D3)
+## 3. The lock file and the canonical hash
 
 ### 3.1 The two files
 
@@ -1159,7 +1145,7 @@ reformatted on the way in cannot be compared.
 `source_basename`, not a path. The lock deliberately carries **no path to the
 live IR**: the workflow id plus the `…/nxd-pocket/<workflow>/dp-spec.md`
 convention recovers it, and storing a `../`-shaped string inside the closure is
-exactly the pointer this design removes.
+exactly the escaping pointer this design forbids.
 
 ### 3.3 Two hashes, two jobs
 
@@ -1179,7 +1165,7 @@ by construction. That is why Phase C does the byte check and
 ### 3.4 `nxd-dp-spec-canon-v1` — the canonicalization algorithm
 
 Precise enough that two implementers produce the same hash. Implemented once, in
-`scripts/dp_diagnostics.py::canonicalize()`.
+`<nxd-pocket-loop>/scripts/dp_diagnostics.py::canonicalize()`.
 
 **Input:** the raw bytes of a `dp-spec.md`.
 
@@ -1192,16 +1178,15 @@ Precise enough that two implementers produce the same hash. Implemented once, in
    `---`, `text.split("---", 2)`). No frontmatter → exit 2.
 5. `yaml.safe_load` the frontmatter into a mapping.
 6. Split the body with `dp_diagnostics.split_sections`, likewise the one
-   definition: on `## `
-   headings; the heading is lowercased and spaces become underscores; a later
-   duplicate heading overwrites an earlier one; section bodies are `.strip()`ed.
-   **Two consequences of that exact behaviour, stated so nobody
-   "improves" on it:** (i) body text **before the first `## ` heading is dropped**
-   — `split_sections` only buffers once `current is not None` — so a preamble
-   paragraph between the frontmatter and the first section never reaches the
-   canonical form and therefore **never moves the hash**; (ii) only `## ` starts a
-   section, so `### ` subheadings stay inside their parent section's body and are
-   hashed as part of it.
+   definition: on `## ` headings; the heading is lowercased and spaces become
+   underscores; a later duplicate heading overwrites an earlier one; section
+   bodies are `.strip()`ed. **Two consequences of that exact behaviour, stated so
+   nobody "improves" on it:** (i) body text **before the first `## ` heading is
+   dropped** — `split_sections` only buffers once `current is not None` — so a
+   preamble paragraph between the frontmatter and the first section never reaches
+   the canonical form and therefore **never moves the hash**; (ii) only `## `
+   starts a section, so `### ` subheadings stay inside their parent section's body
+   and are hashed as part of it.
 7. For each section body, `yaml.safe_load` it. On `yaml.YAMLError`, the value is
    the **stripped raw string** — the same fallback the validator uses for prose
    sections.
@@ -1213,7 +1198,7 @@ Precise enough that two implementers produce the same hash. Implemented once, in
      **the canonicalizer raises** on a post-coercion duplicate key rather than
      silently dropping a value, because a silent drop changes the hash of a spec
      whose content did not change. Pinned by
-     `evals/tests/test_dp_spec_canonicalization.py` (§3.4's stability guard, WS1).
+     `evals/tests/test_dp_spec_canonicalization.py`.
    - **Lists**: **order is preserved.** Order is semantic — criteria order,
      verdict band precedence, decisions order. Never sort a list.
    - **Strings**: replace every run of Unicode whitespace with a single `U+0020`,
@@ -1253,19 +1238,19 @@ approval — so the two can never both be a *compiled_from*. Stated here so a
 later reader does not discover it and assume it is a bug.
 
 **Stability guard.** The canonicalizer pins `yaml.safe_load` behaviour. A PyYAML
-major bump requires re-verifying the golden fixture. WS1 must ship
-`evals/tests/test_dp_spec_canonicalization.py` with:
+major bump requires re-verifying the golden fixture.
+`evals/tests/test_dp_spec_canonicalization.py` carries:
+
 - the golden hash of the worked example in
   `src/nxd-pocket-loop/reference/dp-spec.md`, pinned as a literal.
-  **Extraction rule (normative — WS3 edits that file in parallel, so "the worked
-  example" must be mechanically identifiable):** the fixture is the content of the
-  **sole fenced block whose info string is exactly `markdown`** in
-  `src/nxd-pocket-loop/reference/dp-spec.md` — today the fence opening at `:460`
-  and closing at `:791`, and the only ```` ```markdown ```` fence in the file
-  (every other fence is ```` ```yaml ```` or ```` ```bash ````). The test asserts
-  **exactly one** such fence exists and fails loudly if a second appears, rather
-  than silently hashing the first. Do not key on line numbers; WS3's edits move
-  them;
+  **Extraction rule (normative):** the fixture is the content of the **sole
+  fenced block whose info string is exactly `markdown`** in
+  `src/nxd-pocket-loop/reference/dp-spec.md` — the only ```` ```markdown ````
+  fence in the file (every other fence is ```` ```yaml ```` or ```` ```bash ````).
+  The test asserts **exactly one** such fence exists and fails loudly if a second
+  appears, rather than silently hashing the first. Never key on line numbers;
+  edits move them. Changing a byte of the worked example means updating the
+  golden hash in the same commit;
 - a **must-not-change** table (CRLF, trailing spaces, re-wrapped block scalar,
   reordered mapping keys, added comment, `0.25` → `0.250`);
 - a **must-change** table (reordered criteria list, changed weight, changed
@@ -1308,7 +1293,7 @@ sha256 (`closure.resolved_ref_missing`).
 
 ---
 
-## 4. The closure layout after this change (D1)
+## 4. The closure layout
 
 ### 4.1 Layout
 
@@ -1328,39 +1313,37 @@ sha256 (`closure.resolved_ref_missing`).
     ├── requirements.txt       GENERATED
     ├── data/…                 GENERATED / landed
     ├── prompts/…              COPIED     mirrors the IR's relative prompt_ref paths
-    ├── contracts/<name>.md    GENERATED (LLM prose) — deferred-model contracts, unchanged
+    ├── contracts/<name>.md    GENERATED (LLM prose) — deferred-model contracts
     ├── .gitignore             GENERATED  when a source carries live credentials
-    ├── SENSITIVE              GENERATED  when a source carries live credentials
-    └── CONTEXT.md             ← DELETED. Does not exist.
+    └── SENSITIVE              GENERATED  when a source carries live credentials
 ```
 
 Nothing under `closure/` is hand-authored. `dp-spec.md` is the only file a user
-edits, and it is outside. The pre-approval policy gate keeps its bright line
-unchanged — "nothing under `closure/`" — because the byte copy happens **after**
-approval, at generation.
+edits, and it is outside. The pre-approval policy gate's bright line — "nothing
+under `closure/`" — holds, because the byte copy happens **after** approval, at
+generation.
 
-### 4.2 Where CONTEXT.md's eight sections went
+### 4.2 Where each kind of context lives
 
-| CONTEXT.md section | New home |
+| Kind of context | Home |
 |---|---|
-| 1. Intent | `dp-spec.approved.md` `## intent` |
-| 2. Population & sample rule | `dp-spec.approved.md` `## population` + the `decisions` row |
-| 3. Per-field inference & determinism caveats | `dp-spec.approved.md` `## models[].fields[].derivation` + `## decisions` (`provenance`) |
-| 4. Required-capture fields | **plan half**: new `models[].fields[].required_capture: true` in the spec (WS3). **outcome half** (observed missing rows): `build-record.evidence.required_capture` |
-| 5. Derived-model contract for models still to build | `contracts/<name>.md` (unchanged) + new `models[].deferred: true` in the spec (WS3) |
-| 6. Reopen recipe | generated `closure/README.md` |
-| 7. Credentials | generated `closure/README.md` credentials block; key names come from `sources[].credential_keys` |
-| 8. Known blockers | `build-record.blockers[]` |
+| Intent | `dp-spec.approved.md` `## intent` |
+| Population & sample rule | `dp-spec.approved.md` `## population` + the `decisions` row |
+| Per-field inference & determinism caveats | `dp-spec.approved.md` `## models[].fields[].derivation` + `## decisions` (`provenance`) |
+| Required-capture fields — **plan** half | `dp-spec.approved.md` `models[].fields[].required_capture: true` |
+| Required-capture fields — **outcome** half (observed missing rows) | `build-record.evidence.required_capture` |
+| Derived-model contract for models still to build | `contracts/<name>.md`, plus `models[].deferred: true` in the spec |
+| Reopen recipe | generated `closure/README.md` |
+| Credentials (key **names** only) | generated `closure/README.md` credentials block; names come from `sources[].credential_keys` |
+| Known blockers | `build-record.blockers[]` |
 
-`closure/README.md` is generated, template-filled, and carries **only** items 6
-and 7 — roughly 20 lines. It is not CONTEXT.md under a new name: it has no plan
-sections, no outcomes, no rulings, and nothing to hand-copy. Phase C gates its
-existence because the reopen recipe is the one thing a cold reader needs that is
-neither plan nor outcome.
+`closure/README.md` is generated, template-filled, and carries **only** the reopen
+recipe and the credentials block — roughly 20 lines. It has no plan sections, no
+outcomes, no rulings, and nothing to hand-copy. Phase C gates its existence
+because the reopen recipe is the one thing a cold reader needs that is neither
+plan nor outcome.
 
-### 4.3 What Phase C checks instead of CONTEXT.md
-
-Replacing the single `CONTEXT.md exists` check:
+### 4.3 What Phase C checks
 
 | # | Check | Code on failure |
 |---|---|---|
@@ -1372,17 +1355,17 @@ Replacing the single `CONTEXT.md exists` check:
 | C6 | `build_record.compiled_from == lock.spec_hash` | `closure.build_record_hash_mismatch` |
 | C7 | `README.md` exists at the closure root | `closure.readme_missing` |
 | C8 | every `lock.resolved_refs[].closure_path` exists with a matching sha256 | `closure.resolved_ref_missing` |
-| C9 | escape scan: no `../…​.md` reference. Scan list becomes `README.md`, `dp-spec.approved.md`, `spec.py`, `models.py`, `transform/main.py`, `contracts/*` | `closure.escaping_reference` |
-| C10 | credential guard files — **unchanged** | `closure.gitignore_missing`, `closure.sensitive_missing`, `closure.gitignore_not_naming_profile` |
+| C9 | escape scan: no `../…​.md` reference. Scan list: `README.md`, `dp-spec.approved.md`, `spec.py`, `models.py`, `transform/main.py`, `contracts/*` | `closure.escaping_reference` |
+| C10 | credential guard files | `closure.gitignore_missing`, `closure.sensitive_missing`, `closure.gitignore_not_naming_profile` |
 | C11 | informational: names the `lock verify` command | `closure.canonical_hash_deferred` |
 
 The snapshot **is** scanned by C9. A `../`-rooted markdown reference inside the
 approved spec is a real dangling pointer, and the snapshot is where it would
-land. No carve-outs are needed anywhere: the escape scan works unchanged because
-the IR is *copied* rather than *pointed at*. `dp-spec.lock.json` and
-`build-record.json` are JSON and are not in the scan list.
+land. No carve-outs are needed anywhere: the escape scan works because the IR is
+*copied* rather than *pointed at*. `dp-spec.lock.json` and `build-record.json`
+are JSON and are not in the scan list.
 
-Phase C's success line becomes exactly (frozen string, §9):
+Phase C's success line is exactly (frozen string, §9):
 
 ```
 phase C ok — approved spec snapshot + lock present, no closure-escaping contract references
@@ -1390,7 +1373,7 @@ phase C ok — approved spec snapshot + lock present, no closure-escaping contra
 
 ---
 
-## 5. The materialization predicate (D5)
+## 5. The materialization predicate
 
 `materialized` is **not** a status field on the spec. Adding one would put an
 outcome back into the IR. It is a predicate computed over the lock, the build
@@ -1420,8 +1403,7 @@ def materialized(lock, record, live_spec_hash=None) -> bool:
 and merging it would make a correctly-built product read as broken because its
 input is a day old.
 
-The `s0_spec` clause is only satisfiable because `record init` is its producer
-(§2.2). Every stage named in this predicate has exactly one writer — `s0_spec`:
+Every stage named in this predicate has exactly one writer — `s0_spec`:
 `record init`; `s1`–`s3`: `self_check.py --record`; `s4`–`s8`: `record append`
 from a `tool: "loop"` report. A stage with no writer would pin `materialized()` at
 `false` forever and stick §5.1 at `in_progress` for a green, published product.
@@ -1441,13 +1423,25 @@ Computed by `dp_diagnostics.py materialized --record … [--spec …]`, returned
 | `needs_user` | any blocker with `disposition: "blocked"` | | **ask** |
 | `plan_moved` | `live_spec_hash != lock.spec_hash` | the plan changed after the build | **regenerate** |
 | `code_wrong` | hashes match, an **offline** stage (`s0`–`s3`) failed | never environmental | **self-heal** |
-| `unsettled` | hashes match, offline green, a stage ≥ `s4` failed with no `supervisor_reported` evidence | fail-closed | treat as `code_wrong` |
-| `environment_suspect` | hashes match, offline green, every failing diagnostic at stage ≥ `s5` is `owner: environment` **and** `origin: supervisor_reported` per the §1.8.1 relay criterion | the closure is **not** known-bad | **retry** |
+| `unsettled` | hashes match, offline green, a stage ≥ `s4` failed without qualifying supervisor evidence | fail-closed | treat as `code_wrong` |
+| `environment_suspect` | hashes match, offline green, **every** failing stage ≥ `s5` carries at least one error diagnostic and **all** of that stage's error diagnostics are `owner: environment` **and** `origin: supervisor_reported` per the §1.8.1 relay criterion | the closure is **not** known-bad | **retry** |
 | `undisclosed_concession` | otherwise green, some `disclosed: false` | the worst state — reads as materialized | **disclose, then re-evaluate** |
 | `awaiting_answer` | otherwise green, `s8_answer` failed | build is green, the answer is wrong | **refine** |
 | `in_progress` | any required stage `not_reached` and nothing failed | | continue |
 
 Order of evaluation is the table's order; the first matching state is reported.
+
+**`environment_suspect` is decided PER FAILING STAGE, not over a flattened list.**
+Every failing stage must **contribute** its own supervisor-authored evidence; a
+stage that failed with an empty `diagnostics` list contributes nothing and
+therefore disqualifies the whole run from `environment_suspect`, landing it in
+`unsettled`. Evaluating a flattened list of every failing stage's diagnostics
+instead would let a silent stage ride on a noisy one's evidence: a pure code bug
+at `s4_pin` with no diagnostics attached, alongside a genuine environmental
+failure at `s6_run`, would be reported as environmental and retried. Silence is
+not evidence, and a stage nobody can vouch for must never read as environmental.
+`_stage_is_environmental()` in `dp_diagnostics.py` is the per-stage test, and
+`test_build_record_schema.py` pins both directions.
 
 **`needs_user` outranks `plan_moved` deliberately.** The two co-occur on the
 commonest path there is: a build-time blocker is written back into
@@ -1460,37 +1454,36 @@ divergence is never hidden — only deprioritized.
 
 ### 5.2 The label
 
-Call it **`materialized`**. **Never `correct`.** The repo is already blunt about
-why: *"SELF-CHECK OK means the closure is structurally sound and the transform
-ran, nothing more"* and *"never let a green exit stand in for 'the numbers are
-right'"*. `materialized` means the approved plan was compiled, the compiled
-artifact ran, and it published. It says nothing about whether the numbers are
-right.
+Call it **`materialized`**. **Never `correct`.** `materialized` means the approved
+plan was compiled, the compiled artifact ran, and it published. It says nothing
+about whether the numbers are right. SELF-CHECK OK means the closure is
+structurally sound and the transform ran, nothing more; never let a green exit
+stand in for "the numbers are right".
 
 ---
 
-## 6. The stage ladder and the failure taxonomy (D6, D7)
+## 6. The stage ladder and the failure taxonomy
 
 ### 6.1 The ladder
 
 The vocabulary and the offline set are in §1.2. Classify a failure by **which
-stage failed**, never by parsing exception text. The stages already differ in
-what they have access to; that difference is the classifier.
+stage failed**, never by parsing exception text. The stages differ in what they
+have access to; that difference is the classifier.
 
 ### 6.2 Stages 0–3 are offline and deterministic
 
 A failure there is **never environmental**. Phase B in particular is the sharpest
-instrument in the repo for "a poorly generated DP that won't do its work":
-*"Phase B executes for real, so what it reports is what will happen."* A stage-2
-failure is unambiguously the code.
+instrument available for "a poorly generated DP that won't do its work": Phase B
+executes for real, so what it reports is what will happen. A stage-2 failure is
+unambiguously the code.
 
-### 6.3 The three caveats — written down, not discovered later
+### 6.3 The three caveats
 
-1. **Stage 4 masquerades as environment.** Phase A *"cannot execute the
-   builders… A closure can pass Phase A in full and still fail when the
-   supervisor pins it."* A `build_data_product` failure is **not** presumptive
-   evidence of a bad environment. `pin.build_failed` therefore ships with
-   `owner: "agent"` in the registry, by construction rather than by evidence.
+1. **Stage 4 masquerades as environment.** Phase A cannot execute the builders. A
+   closure can pass Phase A in full and still fail when the supervisor pins it. A
+   `build_data_product` failure is **not** presumptive evidence of a bad
+   environment. `pin.build_failed` therefore ships with `owner: "agent"` in the
+   registry, by construction rather than by evidence.
 2. **Phase B covers only `transform/main.py`.** A green Phase B says nothing
    about `spec.py` or `models.py`, and its printed `unverified:` list is its own
    declared blind spot for dynamic constructs. Those lines are emitted as
@@ -1498,8 +1491,8 @@ failure is unambiguously the code.
    rather than in a scrollback.
 3. **Stage 8 failures produce a fully green build.** The distribution read-back
    exists precisely to make them visible — a uniform classification column is the
-   tell — and it is non-gating today and stays non-gating. What changes is that
-   the build record **records and surfaces** it, adjacent to concessions (§2.6).
+   tell. It is non-gating; the build record records and surfaces it, adjacent to
+   concessions (§2.6).
 
 ### 6.4 Classification fails closed
 
@@ -1567,7 +1560,7 @@ consumes `caps.retry_environmental_total`, and never a remap or a regenerate. An
 
 ---
 
-## 7. The middleman presentation rules (D11)
+## 7. The middleman presentation rules
 
 The builder agent is the middleman. The user does not need to know any of these
 internals.
@@ -1672,18 +1665,18 @@ Never "that's an environment problem". Stage 4 masquerades as environment
 
 ---
 
-## 8. Elicitation and UI prerequisites (D4)
+## 8. Elicitation and UI prerequisites
 
 The spec is an **elicitation contract**: from the user's point of view it
 enforces getting enough information to successfully build a DP.
-`validate_dp_spec.py` already encodes the conditional requirements — criteria ⇒
+`validate_dp_spec.py` encodes the conditional requirements — criteria ⇒
 verdicts; judgments ⇒ `rubric_version`; every gate ⇒ an `unknown:` rule; every
 derived model ⇒ grain + key; every ruling-bearing section ⇒ a `decisions` row.
-That is a progressive-disclosure form spec, already written.
+That is a progressive-disclosure form spec.
 
 **The UI is rendered by the agent harness (e.g. Claude Desktop), not by the
 supervisor.** The supervisor cannot do UI. Nothing in this section requires a
-supervisor change. What we owe the harness is three things.
+supervisor change. What the harness is owed is three things.
 
 ### 8.1 (a) Field-addressed diagnostics
 
@@ -1696,7 +1689,7 @@ number field for `spec.criteria.bad_weight`.
 ### 8.2 (b) A machine-readable schema
 
 ```
-python3 scripts/dp_diagnostics.py schema --json
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py schema --json
 ```
 
 emits:
@@ -1722,12 +1715,12 @@ emits:
 }
 ```
 
-**The vocabularies are emitted from the Python constants, never re-typed.** To
-make that structural rather than aspirational, `REQUIRED_SECTIONS`,
-`KNOWN_SECTIONS`, `MODEL_KINDS`, `SOURCE_TYPES`, `DECISION_STATUS`,
-`DECISION_PROVENANCE`, `PRODUCED_BY`, `RERUNS`, `DISPOSITIONS` and
-`STATUS_VALUES` **move into `scripts/dp_diagnostics.py`**, and
-`validate_dp_spec.py` imports them. One definition, two consumers, no drift.
+**The vocabularies are emitted from the Python constants, never re-typed.** That
+is structural rather than aspirational: `REQUIRED_SECTIONS`, `KNOWN_SECTIONS`,
+`MODEL_KINDS`, `SOURCE_TYPES`, `DECISION_STATUS`, `DECISION_PROVENANCE`,
+`PRODUCED_BY`, `RERUNS`, `DISPOSITIONS` and `STATUS_VALUES` live in
+`<nxd-pocket-loop>/scripts/dp_diagnostics.py`, and `validate_dp_spec.py` imports them. One
+definition, two consumers, no drift.
 
 ### 8.3 (c) A canonical emitter
 
@@ -1735,8 +1728,8 @@ Needed for the hash anyway (§3.4); the same component serves form round-trip an
 readable diffs.
 
 ```
-python3 scripts/dp_diagnostics.py canonicalize <spec.md>   # canonical JSON to stdout
-python3 scripts/dp_diagnostics.py emit <canonical.json>    # markdown to stdout
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py canonicalize <spec.md>   # canonical JSON to stdout
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py emit <canonical.json>    # markdown to stdout
 ```
 
 Law: `canonicalize(emit(canonicalize(x))) == canonicalize(x)`.
@@ -1749,12 +1742,12 @@ silently correcting their values.
 
 ### 8.4 `provenance` as a rendering property, and the pre-fill trap
 
-`provenance` becomes a rendering property: an agent-filled field renders as
+`provenance` is a rendering property: an agent-filled field renders as
 **"proposed, unconfirmed"**, and the user confirming it is real evidence they saw
 it. Approval moves `status`; it never moves `provenance`.
 
-**THE TRAP, WRITTEN DOWN EXPLICITLY.** `dp-spec.md` already forbids making the
-user re-type into a template: *"Translate it; do not ask them to re-type it."* A
+**THE TRAP, WRITTEN DOWN EXPLICITLY.** `dp-spec.md` forbids making the user
+re-type into a template: *"Translate it; do not ask them to re-type it."* A
 form-first UI regresses to forty empty fields — exactly the failure the IR was
 designed to avoid.
 
@@ -1765,17 +1758,17 @@ designed to avoid.
 
 Mechanization, so this is a rule and not an aspiration: **a blank is illegal in a
 rendered form.** A field the agent has no basis for does not appear as an empty
-control — it becomes an `open_questions` entry. `validate_dp_spec.py` gains
-`spec.prefill.empty_required_field` (`warning`), which fires when a required
-field is *present but empty* rather than either filled (with `provenance`) or
-carried as an open question.
+control — it becomes an `open_questions` entry.
+`spec.prefill.empty_required_field` (`warning`) fires when a required field is
+*present but empty* rather than either filled (with `provenance`) or carried as
+an open question.
 
 ---
 
-## 9. Frozen strings — the cross-workstream contract
+## 9. Frozen strings — the cross-file contract
 
-Five agents write these literals into five different files. They must match
-exactly. Nothing here may be paraphrased, pluralized or reordered.
+These literals appear in several files at once and must match exactly. Nothing
+here may be paraphrased, pluralized or reordered.
 
 **Closure filenames**
 `dp-spec.approved.md` · `dp-spec.lock.json` · `build-record.json` · `README.md`
@@ -1791,84 +1784,77 @@ exactly. Nothing here may be paraphrased, pluralized or reordered.
 **Report `tool` values** (closed enum, §1.8)
 `validate_dp_spec` · `self_check` · `dp_diagnostics` · `loop`
 
-**New reference files**
-`src/nxd-pocket-loop/reference/build-record.md` (WS3)
-`src/nxd-generate-dp/reference/closure-record.md` (WS4)
-`src/nxd-pocket-loop/reference/failure-handling.md` (WS5)
-
-**Deleted file** — must appear in no `src/` or `docs/` file after integration:
-`CONTEXT.md`, `reference/context-doc.md`
-
-**One carve-out, and only one:** `docs/architecture/dp-spec-authoritative.md` —
-this note. A design note whose subject is *"`CONTEXT.md` is retired"* cannot
-avoid naming it, and it is the historical record of why the file went away.
-`test_no_context_doc.py` excludes this path **by exact filename** and nothing
-else; the other file under `docs/` (`nexty-pocket.md`, WS3) is in scope and must
-be clean. Without the carve-out the test fails on integration against the very
-document that specified it.
+**Reference files**
+`src/nxd-pocket-loop/reference/build-record.md` — the reader-facing normative doc
+for §1, §2, §5 and §6.
+`src/nxd-pocket-loop/reference/failure-handling.md` — the loop's operating
+procedure over it (the ladder, fail-closed classification, typed exits, R1–R8).
+`src/nxd-generate-dp/reference/closure-record.md` — how the generator emits the
+record surfaces (byte copy, `prompt_ref` mirroring, lock write, `record init`,
+the `README.md` and `contracts/<name>.md` templates).
 
 **The verify-before-build closure file list** — must read identically in
-`nxd-generate-dp/SKILL.md` (WS4), `scheduling.md` (WS5),
-`handoff-export.md` (WS5), `nxd-review-closure/SKILL.md` (WS5) and the eval
-checkers (WS1):
+`nxd-generate-dp/SKILL.md`, `scheduling.md`, `handoff-export.md`,
+`nxd-review-closure/SKILL.md` and the eval checkers, and is pinned by
+`test_closure_layout_gate.py`:
 
 > `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
 > `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
 > `build-record.json`, `README.md`, the connector companion artifact — and,
 > for a credentialed source, `SENSITIVE` and `.gitignore`
 
-**`self_check.py` stdout lines** (WS2). Changed:
-
-```
-phase C ok — approved spec snapshot + lock present, no closure-escaping contract references
-```
-
-Unchanged, and must stay byte-exact — the deterministic-check wiring and the
-scenario checkers key on them:
+**`self_check.py` stdout lines** — byte-exact; the deterministic-check wiring and
+every scenario checker key on them:
 
 ```
 phase A ok — …
 phase B ok — …
+phase C ok — approved spec snapshot + lock present, no closure-escaping contract references
 phase D ok — …
 SELF-CHECK OK — Phases A (structural), B (transform dry-run), C (context-completeness), D (policy boundary) all passed.
 ```
 
-**Note the deliberate lie in that literal.** Phase C's *meaning* changes here —
-it now verifies the byte-copied spec snapshot, the lock, and the build record,
-not a `CONTEXT.md`'s completeness — but its *label* stays
-`C (context-completeness)` because the string is byte-exact load-bearing. WS2
-MUST leave a comment at the emitting line in `scripts/self_check.py` saying so,
-or a later reader will helpfully "fix" the stale label and silently break every
-checker that keys on it. Accuracy of the label loses to stability of the
-contract; the comment is what keeps that trade visible.
+**Note the deliberate lie in that last literal.** Phase C verifies the byte-copied
+spec snapshot, the lock, and the build record — not a context document's
+completeness — but its *label* stays `C (context-completeness)` because the
+string is byte-exact load-bearing. A comment at the emitting line in
+`scripts/self_check.py` says so, or a later reader will helpfully "fix" the label
+and silently break every checker that keys on it. Accuracy of the label loses to
+stability of the contract; the comment is what keeps that trade visible.
 
-**CLI surface** (WS1), all with `--json` and exit codes `0` ok / `1` findings /
+**CLI surface**, all with `--json` and exit codes `0` ok / `1` findings /
 `2` could not read:
 
 ```
-python3 scripts/dp_diagnostics.py hash        <spec.md>
-python3 scripts/dp_diagnostics.py canonicalize <spec.md>
-python3 scripts/dp_diagnostics.py emit        <canonical.json>
-python3 scripts/dp_diagnostics.py schema      [--json|--diagnostic|--record]
-python3 scripts/dp_diagnostics.py lock write  <spec.md> <closure-dir>
-python3 scripts/dp_diagnostics.py lock verify <closure-dir> [--spec <spec.md>]
-python3 scripts/dp_diagnostics.py record init   --record <path> --lock <path> [--spec-report <report.json>]
-python3 scripts/dp_diagnostics.py record append --record <path> --stage <id> --from <report.json>
-python3 scripts/dp_diagnostics.py record query  --record <path>
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py hash        <spec.md>
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py canonicalize <spec.md>
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py emit        <canonical.json>
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py schema      [--json|--diagnostic|--record]
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock write  <spec.md> <closure-dir>
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock verify <closure-dir> [--spec <spec.md>]
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record init   --record <path> --lock <path> [--spec-report <report.json>]
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record append --record <path> [--stage <id>] --from <report.json>
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record query  --record <path>
        [--stage …] [--owner …] [--severity …] [--code …] [--unresolved] [--attempt N]
-python3 scripts/dp_diagnostics.py materialized --record <path> [--lock <path>] [--spec <path>]
+python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py materialized --record <path> [--lock <path>] [--spec <path>]
 python3 scripts/self_check.py [--json] [--record build-record.json]
 ```
 
+`record append` has two mutually exclusive routes, and mixing them is refused
+with exit 2 rather than silently dropped: `--stage <id> --from <report.json>`
+merges a stage's report, and `--evidence` writes a record-level
+`evidence` sub-block (§2.9). `--evidence` takes no `--stage`, because an evidence
+sub-block is not attached to a stage.
+
 Style constraint: stdlib-only Python (PyYAML is already a dependency of
 `validate_dp_spec.py` and may be used there), `argparse`, `--json`, meaningful
-exit codes — consistent with the existing `scripts/`.
+exit codes.
 
 **CONSTRAINT-1 (the one that breaks the design if missed).** `self_check.py` is
 **copied into the closure and run there**. It can **never** import
-`dp_diagnostics.py`. WS2 inlines a minimal literal vocabulary (a `dict` and
-`json.dumps`) and WS1 ships `evals/tests/test_self_check_diagnostic_vocab.py`
-asserting that every code and stage literal in `scripts/self_check.py` exists in
+`dp_diagnostics.py`. It inlines a minimal literal vocabulary (a `dict` and
+`json.dumps`), and `evals/tests/test_self_check_diagnostic_vocab.py` asserts that
+every code and stage literal in `scripts/self_check.py` exists in
 `dp_diagnostics.CODES`. Any attempt to share code by import is wrong.
 
 **CONSTRAINT-2.** `self_check.py`'s **default** (no-flag) stdout must remain
@@ -1883,246 +1869,45 @@ python fence (pinned by `test_self_check_sync.py`), that fence must remain the
 
 ---
 
-## 10. File-by-file change manifest
+## 10. Design boundaries
 
-Five workstreams, disjoint file ownership. **No file appears in two
-workstreams.** All five may proceed in parallel against §9's frozen strings.
+Deliberate limits. Each is a decision, not an oversight.
 
-### WS1 — diagnostics core, the validator, and all of `evals/`
-
-**Owns:** `scripts/validate_dp_spec.py`; `scripts/dp_diagnostics.py` (NEW);
-everything under `evals/` **except** `evals/tests/test_self_check_sync.py` and
-`evals/tests/test_policy_boundary_phase_d.py` (WS2).
-
-The blanket `evals/` ownership includes `evals/private/`, which was checked and
-holds only a `README` with no `CONTEXT.md` references — so nothing customer-specific
-is in scope and the AGENTS.md safety rule ("private evals stay under
-`evals/private/`; nothing customer-specific in public evals") is unaffected.
-
-| File | Edit |
-|---|---|
-| `scripts/dp_diagnostics.py` **NEW** | The shared module. `Diagnostic` dataclass; `CODES` registry (§1.5, complete); `DIAGNOSTIC_SCHEMA`, `BUILD_RECORD_SCHEMA`, `LOCK_SCHEMA`; the spec vocabularies moved out of `validate_dp_spec.py` (§8.2); `canonicalize()` / `spec_hash()` / `emit()` (§3.4, §8.3); the lock writer/verifier (§3.2, §3.5); the `BuildRecord` reader/writer with INVARIANT-D2 enforcement (§2.5); `materialized()` (§5); the redaction pass (§1.7); the full CLI (§9). |
-| `scripts/validate_dp_spec.py` | Import vocabularies **and `split_frontmatter` / `split_sections`** from `dp_diagnostics` — import, never copy (§1.5.1). Replace `Report.errors/warnings: list[str]` with `list[Diagnostic]`; every `report.error(...)` / `report.warn(...)` call site takes a `code` + identity-based `path` per §1.5/§1.6 — one code per existing check, no check dropped, **verified by `test_validator_code_coverage.py` in both directions** (§1.5.1). Mind the two many-to-one codes and their `evidence.reason` enums (§1.5.1 (i)). `--json` emits `nxd-diagnostic-report-v1` with `tool: "validate_dp_spec"` and `spec_hash`. Human output keeps `WARN`/`ERROR` lines but prefixes the code. Add `spec.prefill.empty_required_field` (§8.4). Exit codes unchanged. |
-| `evals/public/coauthor-supplied-rubric/fixtures/check_coauthored_closure.py:38-46` | **BREAKS (hard).** `REQUIRED` tuple: drop `"CONTEXT.md"`, add `"dp-spec.approved.md"`, `"dp-spec.lock.json"`, `"build-record.json"`, `"README.md"`. |
-| `evals/public/coauthor-executable-policy-readback/fixtures/check_executable_policy.py:44-52` | **BREAKS (hard).** Same `REQUIRED` edit. Do not touch its ordering output — `test_executable_policy_gate.py`'s 30 tests grade that and are otherwise safe. |
-| `evals/tests/test_generation_subagent_gate.py:194-200` | **BREAKS (hard).** Assert the §9 verify-before-build list against `scheduling.md` instead of `"CONTEXT.md"`. |
-| `evals/tests/test_resume_first_gate.py:32,104-116` | **BREAKS (hard, `FileNotFoundError`).** Repoint `GENERATE_DP_CONTEXT_DOC` from `reference/context-doc.md` to `src/nxd-generate-dp/reference/closure-record.md` (WS4's new file, §9). |
-| `evals/public/country-income-trajectory/checks.json:22,38,46,66` | **BREAKS (soft).** "an `nxd_decisions` row or a CONTEXT.md statement" → "an `nxd_decisions` row or a `dp-spec.approved.md` `decisions:` entry"; the file-set enumeration at :66 → §9 list. |
-| `evals/public/worldbank-live/checks.json:71` | **BREAKS (soft).** "FAIL if CONTEXT.md is missing" → the snapshot disclosure now lives in `dp-spec.approved.md` `## sources.scope` / `## population.excludes`; FAIL if `dp-spec.approved.md` or `build-record.json` is missing. |
-| `evals/public/treasury-yield-curve/checks.json:72` | **BREAKS (soft).** File-set enumeration → §9 list. |
-| `evals/public/coauthor-executable-policy-readback/checks.json:67` | **BREAKS (soft).** "not in CONTEXT.md's description" → "not in `dp-spec.approved.md`". |
-| `evals/public/pocket-loop-export-handoff/fixtures/check_pocket_loop.py:50-55` | **BREAKS (soft).** CONTEXT.md soft-signal comment/set → the new soft set. |
-| `.../coauthor-supplied-rubric/prompt.md:44`, `.../coauthor-executable-policy-readback/prompt.md:96`, `.../pocket-loop-export-handoff/prompt.md:19` | **BREAKS (silent).** Prompts that tell the agent to emit `CONTEXT.md` would keep producing it. Remove the instruction. |
-| `evals/tests/test_dp_diagnostics_schema.py` **NEW** | JSON Schemas are valid; every registry code has stage/severity/owner/control; no duplicates; the code list is pinned as a frozen snapshot (a rename fails the test). Also pins the closed `tool` enum of §1.8 (`validate_dp_spec` · `self_check` · `dp_diagnostics` · `loop`) and the stages each value may carry. |
-| `evals/tests/test_validator_code_coverage.py` **NEW** | §1.5.1 (iii). AST-walks `scripts/validate_dp_spec.py`: every `report.error(` / `report.warn(` call site passes `code=`; every such literal is in `CODES` with `stage == "s0_spec"`; **and** every `spec.*` code in `CODES` is emitted by ≥1 call site. This is what keeps "one code per existing check, no check dropped" true by construction rather than by review. |
-| `evals/tests/test_build_record_s0_producer.py` **NEW** | `record init` fills `stages.s0_spec` (never `not_reached` on a fresh record); it validates the **snapshot**, not the live IR; `--spec-report` with a `spec_hash` ≠ `lock.spec_hash` exits 2; `record append --stage s0_spec` is rejected (§2.2). |
-| `evals/tests/test_dp_spec_canonicalization.py` **NEW** | The §3.4 golden hash + must-not-change / must-change tables + the idempotence law + **step 9's post-`str()` duplicate-mapping-key raise** (a mapping carrying both `1` and `"1"` raises rather than silently dropping). |
-| `evals/tests/test_build_record_schema.py` **NEW** | A golden record validates; the §5.1 state machine as a truth table; INVARIANT-D2 rejection. **Plus the §2.5 ORDERING RULE, both directions**: a `kind: "heal"`, `exit: "blocked"` attempt with equal hashes alongside a `blockers[]` entry with `written_back: true` is **accepted** and must NOT emit `blocker.spec_edit_required` (the false-accusation case); the same attempt with differing hashes **is** rejected. And the `plan_moved` / `spec_edit_required` disjointness: a live-hash divergence reaches §5.1 only as `plan_moved`. |
-| `evals/tests/test_self_check_diagnostic_vocab.py` **NEW** | CONSTRAINT-1: `self_check.py`'s inlined codes/stages ⊆ `dp_diagnostics.CODES`. |
-| `evals/tests/test_closure_layout_gate.py` **NEW** | The §9 verify-before-build list appears identically in all four skill files. |
-| `evals/tests/test_no_context_doc.py` **NEW** | `CONTEXT.md` and `context-doc.md` appear nowhere under `src/` or `docs/`, with the single exact-filename carve-out for `docs/architecture/dp-spec-authoritative.md` (§9). **Ships `@pytest.mark.skip`**; the coordinator un-skips at integration (it fails until all five land). |
-
-Also **verify (may not need edits)**: `test_deterministic_check.py`,
-`test_deterministic_check_wiring.py`, `test_write_markers_match_emitter.py`,
-`test_export_public_classification_gate.py`, `test_desktop_install_layout.py`.
-`test_static_artifact_lifecycle_gate.py` and `test_executable_policy_gate.py`
-were checked and are **not** broken.
-
-### WS2 — `self_check.py` and its byte-identical twin
-
-**Owns:** `scripts/self_check.py`, `src/nxd-generate-dp/reference/self-check.md`,
-`evals/tests/test_self_check_sync.py`, `evals/tests/test_policy_boundary_phase_d.py`.
-
-These four move as **one atomic commit** — `test_self_check_sync.py` requires the
-script and the fence to be byte-identical, and `test_policy_boundary_phase_d.py`
-slices the fence by literal string.
-
-| Change | Detail |
-|---|---|
-| Diagnostic buffering | Accumulate `nxd-diagnostic-v1` dicts alongside the existing prose. Inline vocabulary — **never import `dp_diagnostics`** (CONSTRAINT-1). |
-| `--json` | Detected by `"--json" in sys.argv` (no argparse — keep the script small and its twin simple). Emits one `nxd-diagnostic-report-v1` object to stdout. Default output is **unchanged prose** (CONSTRAINT-2). |
-| `--record <path>` | Merges `s1_structure`, `s2_transform`, `s3_closure` into `build-record.json` in place. Default off. |
-| Early exit / `not_reached` | Keep exiting on the first failing phase (Phase B cannot run over malformed code), but with `--json` emit the report **before** exiting, with later stages `status: "not_reached"` and a `meta.stage_not_reached` diagnostic. |
-| **Phase C rewrite** | Delete the `CONTEXT.md` existence check. Implement C1–C11 (§4.3). New scan list for C9: `README.md`, `dp-spec.approved.md`, `spec.py`, `models.py`, `transform/main.py`, `contracts/*`. Success line = the §9 frozen string. Credential-guard block unchanged. |
-| Phase A | Emit `struct.unverified` (`info`) per `unverified:` line. Behaviour otherwise unchanged. |
-| Phase B | Emit `runtime.row_count` (`info`) per model instead of only printing. |
-| Phase D | **Do not restructure.** Keep `derrors = []` and `if derrors:` as literals and keep the phase in place (CONSTRAINT-3). Add codes only. |
-| Read-back | Emit `semantic.distribution` / `semantic.uniform_column` / `semantic.absent_vocabulary`; keep printing the prose lines unchanged. |
-| `self-check.md` prose | Update the Phase C description, the phase table, and the `CONTEXT.md` references to the snapshot/lock/record model. **One** `# self_check.py` fence, still the longest (CONSTRAINT-3). |
-
-### WS3 — the IR reference and the build-record reference
-
-**Owns:** `src/nxd-pocket-loop/reference/dp-spec.md`,
-`src/nxd-pocket-loop/reference/build-record.md` (NEW),
-`docs/architecture/nexty-pocket.md`.
-
-| File | Edit |
-|---|---|
-| `reference/dp-spec.md:45-48` | Delete "It is **not** a replacement for `CONTEXT.md`…". Replace with the snapshot/lock model: the IR stays beside; the approved spec is byte-copied in at generation. |
-| `reference/dp-spec.md:50-76` | Rewrite "Where it lives, and why not in the closure": keep both original reasons, add that self-containment is now a hash-checkable snapshot rather than prose discipline, and that Phase C's escape scan needs no carve-outs. Update the tree to §4.1. |
-| `reference/dp-spec.md:371-391` | "What each section compiles to" — drop the three `CONTEXT.md` cells; add rows for `dp-spec.approved.md` and the lock. Keep the table framed as a **review aid, not a rebuild graph** (D3: the fan-in is many-to-many, not a DAG). |
-| `reference/dp-spec.md` `## models` | **New optional model-entry keys**: `deferred: true` (contract carried in `contracts/<name>.md`, not `.promise`d) and `fields[].required_capture: true` (§4.2 rows 4 and 5). Document both; WS1 adds validation. |
-| `reference/dp-spec.md:393-432` | "The validator" — document the new `--json` envelope, the code registry, and the field-addressed path grammar (§1.6). |
-| `reference/dp-spec.md:434-446` | "Approval" — add that approval is what gets byte-copied and hashed; that the hash mechanizes "once approved, the spec is frozen for that build" (previously honour-system); and that a build-time blocker written back into `open_questions` **un-approves** the spec. |
-| `reference/dp-spec.md` worked example | **Do not change a byte** unless you also update WS1's golden hash. If the example must change, coordinate. |
-| `reference/build-record.md` **NEW** | The normative reader-facing doc for §1, §2, §5, §6. Opens with `## Contents` (over 100 lines). Covers: the unified diagnostic record; the build record schema field by field; origins; attempts and the caps; the concession split; the stage ladder and the three caveats; the fail-closed rule; the materialization predicate and its states; the `dp_diagnostics.py` CLI. |
-| `docs/architecture/nexty-pocket.md:8,44,76,86-133,150,282-284` | Delete the "Context capture: `CONTEXT.md` and `nxd_decisions`" section; replace with "Spec snapshot, lock and build record", linking here. Update the closure diagram (:44), the skill table (:76), the Phase C row of the self-check table (:150), and the known-gaps note at :282-284 (the CONTEXT/`nxd_decisions` drift gap is **closed** — the ledger is now a projection of a hashed snapshot). |
-
-### WS4 — the generator skill
-
-**Owns:** `src/nxd-generate-dp/SKILL.md`;
-`src/nxd-generate-dp/reference/context-doc.md` (**DELETE**);
-`src/nxd-generate-dp/reference/closure-record.md` (NEW);
-and the four remaining `nxd-generate-dp/reference/` files that mention
-`CONTEXT.md` or link to `context-doc.md`: `adversarial-review.md`,
-`database-source.md`, `policy-gate.md`, `derived-models.md`.
-
-Those four were previously owned by nobody, which would have failed integration:
-§9 freezes `CONTEXT.md` and `context-doc.md` as strings that **must appear in no
-`src/` or `docs/` file**, WS1's `test_no_context_doc.py` enforces exactly that
-when the coordinator un-skips it, and `derived-models.md:379` additionally links
-to a file WS4 deletes — a dangling link the moment WS4 lands. They sit under
-`nxd-generate-dp/reference/` and no other workstream touches them, so adding them
-here preserves the disjoint-ownership rule.
-
-**LINE BUDGET — binding, same as WS5's.** `src/nxd-generate-dp/SKILL.md` is
-**499 lines today** and `validate_skills.py` fails at 501, so WS4 has **one line
-of headroom**. Step 6a's rewrite and the D2/D7 rules below are net-additive, so
-the "push detail into `closure-record.md` and leave a pointer" instruction in the
-table is **not a stylistic preference — it is the only way this workstream
-passes CI.** Budget the detail out before writing it in, and re-check
-`wc -l src/nxd-generate-dp/SKILL.md` before returning.
-
-| File | Edit |
-|---|---|
-| `reference/context-doc.md` | **DELETE.** Its `contracts/<name>.md` template moves to `closure-record.md` — do not lose it. |
-| `reference/closure-record.md` **NEW** | How the generator emits the record surfaces, at ~120 lines with a `## Contents`: the byte-copy procedure; `prompt_ref` mirroring (§3.6); writing the lock; `record init`; the `README.md` template (reopen recipe + credentials block **only** — §4.2); the `contracts/<name>.md` template carried over verbatim. Normative schema lives in WS3's `build-record.md`; **link, do not restate**. |
-| `SKILL.md:64` | Closure-layout comment: `CONTEXT.md` → the four generated record files. |
-| `SKILL.md:117` | "what a later session needs is copied into `CONTEXT.md`" → "the approved spec is byte-copied in as `dp-spec.approved.md` under a lock". |
-| `SKILL.md:413-439` | **Rewrite Step 6a.** Was "`CONTEXT.md`: the in-closure design/process record". Becomes "Snapshot the approved spec and open the build record": copy `dp-spec.md` → `dp-spec.approved.md` byte-for-byte; mirror `prompt_ref` files; `dp_diagnostics.py lock write`; `record init`; render `README.md`. Point at `reference/closure-record.md`. Keep the paragraph that the record does not replace machine-enforced surfaces (`nxd_decisions` + Step-3b asserts still run). |
-| `SKILL.md:441-473` | **Step 7.** Now runs `python3 self_check.py --json --record build-record.json` **and** `python3 scripts/dp_diagnostics.py lock verify <closure>` (§3.5). Update the Phase C description at :456. In the Step 6b adversarial-review paragraph at :443, "record the round in `CONTEXT.md`" → "record the round in `build-record.json` `attempts[]`". |
-| `reference/adversarial-review.md:83-84` | "Record the round in `CONTEXT.md`: each finding's `id`, its adjudication, …" → record the round in `build-record.json` `attempts[]` (`kind: "heal"` for an accepted finding that changed code; the adjudication and its citation go in `diagnosis.summary` / `changed[].what`). Keep the paragraph that follows verbatim — "rulings are landed as reviewable data rather than buried in prose" is *more* true after this change, not less. Must match WS4's own edit to `SKILL.md:443`. |
-| `reference/database-source.md:156` | Never-write-a-credential-value list: `` `SENSITIVE`, `CONTEXT.md`, `README.md`, or chat narration `` → `` `SENSITIVE`, `README.md`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, or chat narration ``. The rule is unchanged and now covers the generated record files; §1.7's mandatory redaction pass is the mechanical half of the same rule. |
-| `reference/policy-gate.md:108` | "carry the approved text verbatim into `CONTEXT.md` and `nxd_decisions`" → "the approved text is carried verbatim by the byte-copied `dp-spec.approved.md`, and lands as data in `nxd_decisions`". The gate itself is untouched — this is the one place the *approved* text was previously hand-copied, and the byte copy is now what carries it. Do not weaken "surface the encoded bands in your return". |
-| `reference/derived-models.md:379` | Dangling link: `[context-doc.md](context-doc.md)` → `[closure-record.md](closure-record.md)`, and reword to point at where `required_capture` now lives — the **plan** half is `models[].fields[].required_capture: true` in the spec (WS3), the **outcome** half is `build-record.evidence.required_capture` (§4.2 row 4). The `listed_uncaptured` / genuinely-absent distinction below it is unchanged. |
-| `SKILL.md:474-490` | **Invariants.** :476 file list → §9. :477 rewrite the self-containment invariant around the snapshot+lock. :478 sample-selection: the rule is stated in the **spec**; observed missing required-capture rows go to `build-record.evidence.required_capture`. :485 delete "what a later session needs is copied into `CONTEXT.md`"; **add the D2 hard rule**: the self-heal loop may change generated code and never the IR; if green is only reachable by changing the plan, stop and escalate `blocker.spec_edit_required`. **Add the forbidden/discouraged split (§6.6)** naming the four existing absolutes as `blocker.forbidden_*`. |
-
-SKILL.md must stay under 500 lines; it is at 500-ish today, so push detail into
-`closure-record.md`.
-
-### WS5 — the loop skill and the reviewer
-
-**Owns:** `src/nxd-pocket-loop/SKILL.md`,
-`src/nxd-pocket-loop/reference/scheduling.md`,
-`src/nxd-pocket-loop/reference/handoff-export.md`,
-`src/nxd-pocket-loop/reference/context-and-resume.md`,
-`src/nxd-pocket-loop/reference/failure-handling.md` (NEW),
-`src/nxd-review-closure/SKILL.md`.
-
-**LINE BUDGET — read this before writing a line.** `src/nxd-pocket-loop/SKILL.md`
-is **exactly 500 lines today**, and `validate_skills.py` fails at 501
-(`line_count > max_lines`, default 500). WS5's edits are net-additive — R1–R8, the
-typed exits, the stage-4 caveats, the countable caps — and WS3 owns
-`reference/build-record.md`, so WS5 had no file to absorb them. It has one now:
-**`reference/failure-handling.md` (NEW, WS5-owned)**. Push the detail there and
-leave pointers in `SKILL.md`; several of the edits below are net-*negative* on
-line count if done that way. Check with `wc -l src/nxd-pocket-loop/SKILL.md`
-before handing off — a 501-line SKILL.md fails CI for every other workstream too.
-
-| File | Edit |
-|---|---|
-| `pocket-loop/SKILL.md:79-87` | The six-tool sentence names `inspect_run` and no step in the pack calls it. State plainly that it is **unbound**: no step calls it, and the build record marks supervisor-side detail `origin: unbound` until a producer exists. Its contract is no longer a guess — §1.8.2 records what a real supervisor returns — but do not treat characterized as wired. |
-| `pocket-loop/SKILL.md:163-205` (Step 1b) | Add: approval is what gets snapshotted and hashed; a build-time blocker is written back into `## open_questions`, which **un-approves** the spec and re-enters this step. The elicitation contract is a loop. |
-| `pocket-loop/SKILL.md:215-269` (Step 3) | Closure file list → §9. Relay rule for the distribution read-back: it is now recorded in `build-record.readback`, still relayed verbatim, still non-gating. |
-| `pocket-loop/SKILL.md:220,259-262` | Replace the `CONTEXT.md` durable-record sentences with the snapshot/lock/record trio. Keep "`../dp-spec.md` included" as the escaping-pointer example — it is still exactly right. |
-| `reference/failure-handling.md` **NEW** | WS5's headroom file, ~120 lines, opens with `## Contents`. Carries the detail the three rows below would otherwise inline: the stage ladder as the loop sees it and the three caveats (§6.3); fail-closed classification and its discriminating test (§6.4); the typed heal exits and the countable caps (§6.7, §2.10); the narration rules R1–R8 and the banned vocabulary (§7). Normative schema stays in WS3's `build-record.md` — **link, do not restate**; this file is the loop's operating procedure over it. |
-| `pocket-loop/SKILL.md:270-300` (Steps 4/4a) | On a build failure: **stage-4 masquerades as environment** (§6.3 caveat 1); classify fail-closed (§6.4); record the attempt. Do not report an environment cause without supervisor-reported evidence. Two or three lines plus a pointer to `reference/failure-handling.md`. |
-| `pocket-loop/SKILL.md:345-366` (Step 6) | Caps are now **counted** from `build-record.attempts[]`, not estimated. Name the typed heal exits (§6.7); their definitions live in `reference/failure-handling.md`. |
-| `pocket-loop/SKILL.md:367-382` | **Narration discipline** — R1 (two classes only), R2 (`owner`, not `severity`, decides) and R5 (never present green as right) belong here in the SKILL; R3–R4 and R6–R8 with their worked examples go to `reference/failure-handling.md`. This is where D11 belongs, but it does not all fit here. |
-| `pocket-loop/SKILL.md:383-483` | Invariants: the D2 hard rule (heal changes code, never the IR); no green claim while an undisclosed concession stands; `materialized`, never `correct`. |
-| `pocket-loop/SKILL.md:493-500` | Add `reference/build-record.md` (WS3's) **and** `reference/failure-handling.md` to the reference-docs list. |
-| `reference/scheduling.md:73-84` | Caps become countable; name `build-record.attempts[]` and `caps`. |
-| `reference/scheduling.md:130` | Subagent context list: `CONTEXT.md` → the generated record files. |
-| `reference/scheduling.md:198-215` | **Verify-before-build list → §9 verbatim** (WS1's `test_generation_subagent_gate.py` asserts against this exact text). |
-| `reference/handoff-export.md:87` | "the `CONTEXT.md` inside the closure carries the full contract" → `dp-spec.approved.md` carries the approved plan; `build-record.json` carries what happened. |
-| `reference/handoff-export.md:121` | Zip contents list → §9 list. |
-| `reference/context-and-resume.md:25` | Durable-key bullet: `CONTEXT.md` → `dp-spec.approved.md` + `dp-spec.lock.json` + `build-record.json` + `README.md`. |
-| `reference/context-and-resume.md:29-35` | "**`CONTEXT.md`** and **`nxd_decisions`**" → "the **approved spec snapshot** and **`nxd_decisions`**". Keep the two-axis `status`/`provenance` paragraph verbatim — it is unaffected and still correct. |
-| `review-closure/SKILL.md:25` | Given-files list → §9. |
-| `review-closure/SKILL.md:50` | "The closure, or its `CONTEXT.md`, states or implies…" → "The closure, or its `dp-spec.approved.md`, …". |
-| `review-closure/SKILL.md:92-96` | **The dangling deferral.** "`CONTEXT.md` section completeness" defers to a check that does not exist. Replace with the checks that now **do** exist: snapshot present, lock present and byte-matching, `build-record.json` present with `compiled_from` matching. Add: the reviewer confirms **both** Step-7 commands ran (`self_check.py` and `lock verify`, §3.5). |
-
-### Serialized integration step (coordinator, not a workstream)
-
-Performed **after** all five land, as one commit, because it touches files owned
-by several workstreams:
-
-1. Bump `.claude-plugin/plugin.json` `version` `0.27.0` → **`0.28.0`** (minor:
-   added capability), mirror into `.claude-plugin/marketplace.json`, and set
-   `metadata.version: 0.28.0` in **every** `src/*/SKILL.md` (AGENTS.md version
-   lockstep).
-2. Un-skip the four cross-workstream tests. **Every test that asserts against a
-   file another workstream owns MUST ship `@pytest.mark.skip(reason="un-skip at
-   integration — asserts against WS<n>-owned files")`**, because it cannot pass
-   until that workstream lands and a red suite mid-fan-out is indistinguishable
-   from a real regression. That is all four, not just the obvious one:
-   `test_no_context_doc.py` (new), `test_closure_layout_gate.py` (new — asserts
-   §9 text in four WS4/WS5 files), `test_resume_first_gate.py` (edited —
-   repointed at WS4's `closure-record.md`), `test_generation_subagent_gate.py`
-   (edited — asserts the §9 list in WS5's `scheduling.md`).
-3. `python3 scripts/validate_skills.py --root .`, `./build-skills.sh`
-   (200-entry cap — the new reference files and deleted `context-doc.md` change
-   the counts), **and `python3 -m pytest evals/tests/ -q`**. All three, and the
-   pytest run happens *after* step 2 — the un-skip is what makes it meaningful.
-   Report the real output; a suite that was never run is not a green suite.
-4. Benchmark: this changes skill behaviour, so run the affected scenarios before
-   and after and record with `evals/benchmark_record.py` into
-   `evals/benchmarks/ledger.md` (AGENTS.md). Affected scenarios:
-   `coauthor-supplied-rubric`, `coauthor-executable-policy-readback`,
-   `pocket-loop-export-handoff`, `country-income-trajectory`, `worldbank-live`,
-   `treasury-yield-curve`.
-
-No changes are needed to `evals/skill-sets.yaml` or the README **Available
-Skills** table — no skill directory is added or removed.
-
----
-
-## 11. What we are explicitly NOT doing
-
-- **No per-section hashing.** Considered and rejected. The "what each section
-  compiles to" table is **many-to-many fan-in, not a DAG** — `nxd_decisions` is
-  fed by population, gates, criteria, verdicts and open questions; a criteria
-  change cascades through `rubric_version` into judgments. With an LLM doing
-  codegen, partial regeneration also risks breaking the `PHYSICAL_MODELS` naming
-  invariant, which spans `models.py`, `spec.py` and the transform. **One
-  whole-spec hash.** The table stays a review aid, never a rebuild graph.
+- **One whole-spec hash; no per-section hashing.** The "what each section compiles
+  to" relation is **many-to-many fan-in, not a DAG** — `nxd_decisions` is fed by
+  population, gates, criteria, verdicts and open questions; a criteria change
+  cascades through `rubric_version` into judgments. With an LLM doing codegen,
+  partial regeneration also risks breaking the `PHYSICAL_MODELS` naming
+  invariant, which spans `models.py`, `spec.py` and the transform. The
+  section-to-artifact table in `reference/dp-spec.md` is a review aid, never a
+  rebuild graph.
 - **No supervisor changes.** Everything here is in-repo. Stage-4 detail,
   per-attempt identity and the supervisor traceback ship as **schema without a
-  bound producer** (`origin: "unbound"`).
-
-  > **SUPERSEDED IN PART — measured 2026-08-01.** This bullet used to say
-  > `inspect_run` "is a name in one sentence of one skill file and nothing else
-  > in the pack" and "do not design around a guess about what it returns." That
-  > was true of the *pack*, not of the *tool*. `inspect_run` has since been run
-  > against a real supervisor in an isolated `--data-dir` and is characterized —
-  > see §1.8.2. The decision not to change the supervisor still stands, and
-  > `unbound` remains correct until a producer is actually wired; what is no
-  > longer true is that its contract is unknown.
-- **The live IR does not move into the closure.** It stays beside. The
-  pre-approval policy gate keeps its bright line ("nothing under `closure/`"),
-  drafting history and rejected options stay out of handoffs, and the byte copy
-  happens after approval.
+  bound producer** (`origin: "unbound"`). `inspect_run` is characterized (§1.8.2)
+  but not wired; `unbound` stays correct until a producer is actually bound.
+- **The live IR stays beside the closure.** The pre-approval policy gate keeps
+  its bright line ("nothing under `closure/`"), drafting history and rejected
+  options stay out of handoffs, and the byte copy happens after approval.
 - **No `materialized` status value on the spec.** `status` stays
   `draft | proposed | approved`. Materialization is a **derived predicate** over
   the lock and the build record (§5). Putting it in the spec would put an outcome
   back into the IR.
-- **No new gate on the distribution read-back.** It stays non-gating. What
-  changes is that it is recorded as data and surfaced next to concessions.
-- **No merging of source-data staleness into materialization.** `transform_state`
+- **The distribution read-back does not gate.** It is recorded as data and
+  surfaced next to concessions; it never fails a run.
+- **Source-data staleness is not part of materialization.** `transform_state`
   freshness is a separate axis, recorded in `evidence.source_state` and excluded
   from the predicate.
-- **No UI in this repo.** We ship the three prerequisites the harness needs
+- **No UI in this repo.** The three prerequisites the harness needs ship
   (field-addressed diagnostics, the machine-readable schema, the canonical
-  emitter) and nothing that renders.
-- **No `errors[]`/`warnings[]` compatibility shim** in `validate_dp_spec.py
-  --json`. Nothing reads it; carrying both shapes invites drift.
+  emitter); nothing that renders.
+- **`validate_dp_spec.py --json` emits one shape.** `nxd-diagnostic-report-v1`,
+  with no legacy-shape fallback — carrying two shapes invites drift.
+
+### Known gaps
+
+- **`phases[]` and `nxd-verification-v1` have no home in the build-record
+  schema.** They are the strongest attribution and s7 evidence available
+  (§1.8.2), and currently ride as ad-hoc `evidence` keys.
+- **`s5_serve` has no attribution producer.** Nothing in the `inspect_run`
+  payload distinguishes post-publish serving, so a serve failure cannot be
+  attributed to `s5_serve` from supervisor-authored evidence.

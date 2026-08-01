@@ -2371,8 +2371,11 @@ def validate_review_round(review_round: Any) -> list[str]:
                 problems.append("user_decision.approved_finding_ids must not contain duplicates")
             elif not set(approved_ids).issubset(finding_ids):
                 problems.append("user_decision.approved_finding_ids reference unknown finding ids")
-        if status != "complete":
-            problems.append("user_decision is only allowed when user approval moves a review to complete")
+        if status not in ("complete", "timed_out"):
+            problems.append(
+                "user_decision is only allowed for a complete review or an "
+                "auditable decision to continue after a timed_out review"
+            )
     elif status == "needs_user":
         # This makes the handoff explicit: a user decision is still needed and
         # cannot be fabricated by an agent as a silent status transition.
@@ -2414,6 +2417,65 @@ def validate_review_round(review_round: Any) -> list[str]:
 # ---------------------------------------------------------------------------
 # Materialization (§5)
 # ---------------------------------------------------------------------------
+
+def _accepted_behavior_finding_ids(review_round: dict) -> set[str]:
+    """Return behavior-affecting claims the lead verified as real.
+
+    They require a user choice even if no mutation has happened.  The reviewer
+    cannot turn an accepted logical claim into permission merely by leaving it
+    ``not_applied`` in a superficially complete round.
+    """
+    accepted_ids = {
+        adjudication.get("finding_id")
+        for adjudication in review_round.get("adjudications") or []
+        if isinstance(adjudication, dict)
+        and adjudication.get("disposition") == "accepted"
+        and isinstance(adjudication.get("finding_id"), str)
+    }
+    return {
+        finding.get("id")
+        for finding in review_round.get("findings") or []
+        if isinstance(finding, dict)
+        and finding.get("id") in accepted_ids
+        and finding.get("classification") == "behavior_affecting"
+        and isinstance(finding.get("id"), str)
+    }
+
+
+def _review_user_decision_blockers(review_round: object) -> list[str]:
+    """Why one review round keeps materialization fail-closed."""
+    if not isinstance(review_round, dict):
+        return ["malformed review round"]
+    status = review_round.get("status")
+    decision = review_round.get("user_decision")
+    blockers: list[str] = []
+    if status == "needs_user":
+        blockers.append("review round is marked needs_user")
+    if status == "timed_out" and decision is None:
+        blockers.append("timed_out review has no auditable user decision to continue")
+    accepted_behavior_ids = _accepted_behavior_finding_ids(review_round)
+    if accepted_behavior_ids and decision is None:
+        blockers.append(
+            "accepted behavior-affecting finding(s) need a user decision: "
+            + ", ".join(sorted(accepted_behavior_ids))
+        )
+    if isinstance(decision, dict):
+        approved_ids = set(decision.get("approved_finding_ids") or [])
+        applied_ids = {
+            finding.get("id")
+            for finding in review_round.get("findings") or []
+            if isinstance(finding, dict)
+            and finding.get("classification") == "behavior_affecting"
+            and finding.get("state") == "applied"
+            and isinstance(finding.get("id"), str)
+        }
+        unapproved_applied = applied_ids - approved_ids
+        if unapproved_applied:
+            blockers.append(
+                "applied behavior-affecting finding(s) lack user approval: "
+                + ", ".join(sorted(unapproved_applied))
+            )
+    return blockers
 
 _REQUIRED_GREEN = (
     "s0_spec",
@@ -2457,9 +2519,8 @@ def materialized(record: dict, lock: dict | None = None, live_spec_hash: str | N
     if any(b.get("disposition") == "blocked" for b in record.get("blockers") or []):
         return False
     if any(
-        review_round.get("status") == "needs_user"
+        _review_user_decision_blockers(review_round)
         for review_round in record.get("review_rounds") or []
-        if isinstance(review_round, dict)
     ):
         return False
     for attempt in record.get("attempts") or []:
@@ -2527,13 +2588,13 @@ def materialization_state(
     if blocked:
         why.append(f"{len(blocked)} blocker(s) are waiting on the user")
 
-    reviews_needing_user = [
-        review_round
+    review_blocks = [
+        blocker
         for review_round in record.get("review_rounds") or []
-        if isinstance(review_round, dict) and review_round.get("status") == "needs_user"
+        for blocker in _review_user_decision_blockers(review_round)
     ]
-    if reviews_needing_user:
-        why.append("review round(s) need a user decision before the build can materialize")
+    if review_blocks:
+        why.extend(review_blocks)
 
     failing = _failing_stages(record)
     offline_failing = [s for s in failing if s in OFFLINE_STAGES]
@@ -2577,7 +2638,7 @@ def materialization_state(
     if materialized(record, lock, live_spec_hash):
         return {"materialized": True, "state": "materialized", "why": why}
 
-    if blocked or reviews_needing_user:
+    if blocked or review_blocks:
         state = "needs_user"
     elif plan_moved:
         state = "plan_moved"
@@ -2972,7 +3033,7 @@ BUILD_RECORD_SCHEMA = {
                     },
                     {
                         "if": {"properties": {"user_decision": {"type": "object"}}},
-                        "then": {"properties": {"status": {"const": "complete"}}},
+                        "then": {"properties": {"status": {"enum": ["complete", "timed_out"]}}},
                     },
                 ],
             },
