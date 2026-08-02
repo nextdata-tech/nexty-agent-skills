@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 import types
 from pathlib import Path
+
+import pytest
 
 
 CHECKER = (Path(__file__).parents[1] / "public" / "pocket-custom-contracts" /
@@ -31,6 +34,7 @@ ASYNC_VERIFIER_ERROR = (
 
 DIAG = (Path(__file__).parents[2] / "src" / "nxd-pocket-loop" / "scripts" /
         "dp_diagnostics.py")
+SELF_CHECK = Path(__file__).parents[2] / "scripts" / "self_check.py"
 
 # The approved IR these fixtures compile from. Its `## expectations` and
 # `## promises` names must match the custom(...) names the generated spec.py
@@ -679,3 +683,63 @@ def test_complete_self_check_scans_nested_verifiers_for_escape_paths(tmp_path: P
     proc = complete_self_check(tmp_path, nested_escape=True)
     assert proc.returncode != 0
     assert "contracts/expectations/accepted.py: references '../../POLICY.md'" in proc.stdout
+
+# --- contract_spec_drift entry parsing ------------------------------------
+#
+# The drift check reads contract names out of dp-spec.approved.md WITHOUT
+# PyYAML (CONSTRAINT-1: self_check.py is copied into the closure and runs
+# there). Two shapes the spec itself teaches will silently poison a naive
+# reader, and both produce the SAME damage: one contract reported missing and
+# the real one reported as "a guarantee the user never approved", pointing the
+# repair loop at deleting something the user approved.
+
+def _drift_names(snapshot: str) -> set[str]:
+    """Run self_check's entry-block parser over a snapshot, standalone."""
+    src = SELF_CHECK.read_text()
+    block = re.search(
+        r"        spec_named = set\(\)\n        section = None\n"
+        r"        block: list\[str\] = \[\]\n\n(        def _flush.*?)"
+        r"\n        for line in snap_bytes.*?block\.append\(line\)",
+        src, re.S)
+    assert block, "the drift parser moved; update this extraction"
+    body = block.group(0)
+    fn = "def parse(snap):\n    spec_named=set()\n    section=None\n    block=[]\n"
+    fn += "\n".join(l[4:] if l.startswith("    ") else l
+                    for l in body.splitlines()[3:])
+    fn = fn.replace('snap_bytes.decode("utf-8", "replace")', "snap")
+    fn = fn.replace("CONTRACT_DIRS", '{"expectations": 1, "promises": 1}')
+    fn += "\n    _flush(block)\n    return spec_named\n"
+    ns: dict = {"re": re}
+    exec(fn, ns)
+    return ns["parse"](snapshot)
+
+
+@pytest.mark.parametrize("label,snapshot,expected", [
+    ("name is the first key",
+     "## expectations\n- name: a\n  rule: x\n", {"a"}),
+    # YAML mapping key order is free and validate_dp_spec.py uses yaml.safe_load,
+    # so nothing makes `name` come first.
+    ("name is NOT the first key",
+     "## expectations\n- authority: user_stated\n  name: a\n", {"a"}),
+    # `fields:` is a nested list of mappings; its `- name:` is a FIELD.
+    ("a nested fields list precedes name",
+     "## expectations\n- authority: u\n  fields:\n    - name: amount\n"
+     "      type: decimal\n  name: amount_positive\n", {"amount_positive"}),
+    # `rule: |` prose may legally begin "name:" and is not a key at all.
+    ("block scalar prose containing 'name:'",
+     "## expectations\n- id: E1\n  rule: |\n    Every row must satisfy:\n"
+     "    name: is prose not a key\n  name: real\n", {"real"}),
+    ("folded scalar opened on the dash line",
+     "## expectations\n- description: >\n    name: prose\n  name: real\n",
+     {"real"}),
+    ("scalar with a chomping indicator",
+     "## expectations\n- rule: |-\n    name: prose\n  name: real\n", {"real"}),
+    ("both contract sections",
+     "## expectations\n- authority: u\n  name: a\n\n## promises\n- name: b\n",
+     {"a", "b"}),
+    ("stops at the next section",
+     "## expectations\n- name: a\n\n## gates\n- name: g1\n", {"a"}),
+])
+def test_drift_parser_reads_the_entry_name(label, snapshot, expected):
+    assert _drift_names(snapshot) == expected, label
+

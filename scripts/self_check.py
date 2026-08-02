@@ -1319,33 +1319,57 @@ if _spec_tree is not None:
     # the closure that no spec section declares is a guarantee the user never
     # approved; one in the spec with no verifier was silently dropped.
     if snap_bytes is not None:
-        # Anchored at column 0, deliberately. `fields:` may itself be a list of
-        # mappings with their own `- name:`, and an unanchored `\s*-\s+name:`
-        # reads a FIELD as a contract — then reports the closure as having
-        # dropped an approved guarantee that never existed, pointing the repair
-        # loop at spec.py, which is the wrong file. A contract entry is always
-        # top-level within its section; anything indented belongs to one.
-        # (No YAML parse here: CONSTRAINT-1 — this file runs inside the closure
-        # and cannot depend on PyYAML.)
-        # Accumulate each entry BLOCK — a column-0 `- ` up to the next column-0
-        # `- ` or `## ` — and take `name:` from anywhere within it. YAML mapping
-        # key order is free and validate_dp_spec.py reads these with
-        # yaml.safe_load, so nothing requires `name` on the `- ` line; assuming
-        # it does made a legal spec look like it declared no contracts at all,
-        # and Phase C then told the agent to DELETE a contract the user had
-        # approved. `fields:` sub-entries stay excluded because they are
-        # indented, so their `- name:` never opens a block.
-        # (No YAML parse here: CONSTRAINT-1 — this file runs inside the closure
-        # and cannot depend on PyYAML.)
+        # Take `name:` from anywhere in an entry, but ONLY at the entry's own
+        # depth. YAML mapping key order is free — validate_dp_spec.py reads
+        # these with yaml.safe_load — so requiring `name` on the `- ` line made
+        # a legal spec parse as declaring no contracts, and Phase C then told
+        # the agent to DELETE a contract the user had approved.
+        #
+        # Depth is load-bearing and CANNOT be recovered after .strip():
+        #   - `fields:` is a nested list of mappings whose `- name:` is a FIELD
+        #   - `rule: |` and `description: |` are block scalars whose PROSE may
+        #     begin "name:" and is not a key at all
+        # Either one, read as the contract's name, produces the same double
+        # drift error this check exists to prevent: one contract reported
+        # missing and the real one reported as never approved.
+        #
+        # No YAML parse here: CONSTRAINT-1 — this file is copied into the
+        # closure and runs there, so it cannot depend on PyYAML.
         spec_named = set()
         section = None
         block: list[str] = []
 
         def _flush(entry):
+            if not entry:
+                return
+            # Base indent of the entry's keys: the column just past "- ".
+            base = len(entry[0]) - len(entry[0].lstrip(" "))
+            key_indent = base + 2
+            scalar_indent = None
             for entry_line in entry:
-                m = re.match(r"(?:-\s+)?name:\s*(\S+)", entry_line.strip())
-                if m:
-                    spec_named.add(m.group(1).strip("\"'"))
+                stripped = entry_line.strip()
+                indent = len(entry_line) - len(entry_line.lstrip(" "))
+                if not stripped:
+                    continue
+                # Inside a block scalar every line is content, never a key.
+                # Content is anything indented deeper than the KEY depth — a
+                # scalar opened on the `- ` line sits at `base`, so comparing
+                # against the opener's own indent would swallow the next key.
+                if scalar_indent is not None:
+                    if indent > key_indent:
+                        continue
+                    scalar_indent = None
+                if indent not in (base, key_indent):
+                    continue            # nested list item or deeper mapping
+                m = re.match(r"(?:-\s+)?([A-Za-z_][\w-]*):\s*(.*)$", stripped)
+                if not m:
+                    continue
+                key, value = m.group(1), m.group(2).strip()
+                if value in ("|", ">", "|-", ">-", "|+", ">+"):
+                    scalar_indent = indent
+                    continue
+                if key == "name" and value:
+                    spec_named.add(value.strip("\"'"))
                     return
 
         for line in snap_bytes.decode("utf-8", "replace").splitlines():
