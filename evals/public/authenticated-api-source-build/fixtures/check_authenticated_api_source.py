@@ -214,6 +214,29 @@ def uses_rest_api_resources(transform_src: str) -> tuple[bool, str]:
     return True, ""
 
 
+def resolve_result_col(checks_cols: list[str]) -> str | None:
+    """The landed scalar status column, whatever spelling the closure produced.
+
+    dlt's snake_case naming convention uses ``__`` as its PATH SEPARATOR, so a
+    payload nesting ``{"result": {"status": ...}}`` lands as ``result__status``
+    — double underscore. An earlier version of this checker accepted only
+    ``result_status`` (single), which dlt never emits, so the flatten check was
+    unsatisfiable on the taught path and failed identically on every arm
+    including the no-skills baseline.
+
+    Shared deliberately between the flatten check and the tri-state check. They
+    were two independent lookups keyed off the same tuple, so one wrong spelling
+    failed both — and the tri-state failure read as a boolean coercion that had
+    never happened. One resolver means a lookup miss can no longer masquerade as
+    a second, unrelated defect.
+    """
+    for c in checks_cols:
+        low = c.lower()
+        if low in ("result", "status") or re.fullmatch(r"result_{1,2}status", low):
+            return c
+    return None
+
+
 def no_hardcoded_base_url_or_path(transform_src: str) -> tuple[bool, str]:
     if "127.0.0.1" in transform_src or "localhost" in transform_src:
         return False, "transform hardcodes the stub host instead of reading secrets['api_source']['base_url']"
@@ -516,9 +539,8 @@ def main() -> int:
 
         # ---- nested field flattened: result must be a flat scalar column --
         checks_cols = col_names(db, checks_table)
-        has_flat_result_col = any(
-            c.lower() in ("result", "status", "result_status") for c in checks_cols
-        )
+        result_col = resolve_result_col(checks_cols)
+        has_flat_result_col = result_col is not None
         has_child_table = any(
             t != checks_table and t.lower().startswith(checks_table.lower())
             for t in tables
@@ -537,7 +559,6 @@ def main() -> int:
         import duckdb  # noqa: PLC0415
 
         con = duckdb.connect(str(db), read_only=True)
-        result_col = next((c for c in checks_cols if c.lower() in ("result", "status", "result_status")), None)
         distinct_results = set()
         if result_col:
             distinct_results = {
@@ -548,9 +569,17 @@ def main() -> int:
         check(
             "landed:tri-state-result-preserved",
             {"unknown", "up", "down"} <= {str(v).lower() for v in distinct_results},
-            f"distinct {result_col!r} values were {distinct_results} — expected "
-            f"up/down/unknown all present; a boolean coercion silently folds "
-            f"'unknown' (an inconclusive probe) into 'down'",
+            # When no column resolved, say so instead of reporting an empty
+            # distinct set: "values were set()" reads as a coercion the closure
+            # performed, which accuses the agent of a defect that never happened.
+            (
+                f"no scalar status column among {checks_cols} — the flatten check "
+                f"above explains why; this check could not run"
+                if result_col is None else
+                f"distinct {result_col!r} values were {distinct_results} — expected "
+                f"up/down/unknown all present; a boolean coercion silently folds "
+                f"'unknown' (an inconclusive probe) into 'down'"
+            ),
         )
 
         # ---- orphaned monitor_id rows must be visible, not silently dropped

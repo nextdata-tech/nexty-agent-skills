@@ -288,13 +288,14 @@ is in [reference/transform-template.md](reference/transform-template.md).
 Contract facts baked into that template — keep every one (each is restated in
 the Invariants, where the full reasoning lives):
 
-- The `duckdb` param MUST be typed `DuckDbOutput` — an untyped param gets a raw
-  context with no `path`/`model_tables`.
+- The `duckdb` param MUST be typed `DuckDbOutput` — untyped gets a raw context with no `path`/`model_tables`.
 - `PHYSICAL_MODELS` names exactly the models passed to `.promise(...)` — base
   and derived. Do **not** iterate `duckdb.model_tables`: it can include
   `.model(...)` views with neither `data/<view>/` nor a physical table.
-- The connector config arrives in `secrets["csv_source"]`; never hard-code an
-  absolute path. Writes go **through the port**
+- The connector config arrives in `secrets["<type>_source"]`, **keyed to the
+  connector this closure declares** (Overview table): `csv_source` is the CSV
+  default, and an api-source closure reading it gets `KeyError: 'csv_source'`.
+  Never hard-code an absolute path. Writes go **through the port**
   (`dlt.destinations.duckdb(credentials=duckdb.path)` + `dataset_name=duckdb.schema`),
   never raw `duckdb.connect(...)`, DDL, or a hardcoded staging path.
 - `write_disposition="replace"` — reruns must be idempotent, not duplicating. An
