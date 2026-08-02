@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -133,12 +134,26 @@ def _probe(command: list[str], roots: list[str]) -> int:
         # claiming a denial we did not observe.
         print(json.dumps({"passed": False, "status": "probe-error"}))
         return 1
-    blocked = proc.returncode != 0
+    # A non-zero exit is NOT sufficient evidence of a denial. `sandbox-exec`
+    # rejects a malformed policy with its own error and never enforces
+    # anything, so treating "failed" as "blocked" would attest isolation that
+    # never applied. Require the kernel's denial signature, and report a
+    # sandbox fault as its own status so it cannot be read as protection.
+    stderr = (proc.stderr or "")
+    if proc.returncode != 0 and re.search(r"^sandbox-exec:", stderr, re.M):
+        print(json.dumps({"passed": False, "status": "sandbox-error"}))
+        return 1
+    denied = proc.returncode != 0 and (
+        "Operation not permitted" in stderr or "not permitted" in stderr.lower())
+    if proc.returncode != 0 and not denied:
+        # Failed for some other reason — a missing binary, a crash. Not evidence.
+        print(json.dumps({"passed": False, "status": "probe-inconclusive"}))
+        return 1
     print(json.dumps({
-        "passed": bool(blocked),
-        "status": "blocked" if blocked else "reachable",
+        "passed": bool(denied),
+        "status": "blocked" if denied else "reachable",
     }))
-    return 0 if blocked else 1
+    return 0 if denied else 1
 
 
 def main(argv: list[str]) -> int:

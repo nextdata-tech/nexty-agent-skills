@@ -1294,8 +1294,14 @@ if _spec_tree is not None:
         if inputs:
             required["csv-source"] = "nxd:local/file/storage:0.1.0"
         for svc, driver in sorted(required.items()):
+            # Stop at the next `- name:`. Without that guard the lazy `.*\n`
+            # walks out of this service's block and adopts a LATER service's
+            # driver, so a service with no `driver:` key at all is reported as
+            # bound to someone else's — naming a line that does not exist and
+            # never emitting profile_service_missing, the accurate code.
             block = re.search(
-                r"- name: %s\n(?:\s+.*\n)*?\s+driver: (\S+)" % re.escape(svc),
+                r"- name: %s\n(?:(?!\s*-\s+name:)\s+.*\n)*?\s+driver: (\S+)"
+                % re.escape(svc),
                 ptext)
             if block is None:
                 # Absence is a fault, not a skip. Phase A only checks that a

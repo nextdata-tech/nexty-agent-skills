@@ -96,6 +96,25 @@ def cell_rows(tag: str, report: dict) -> list[dict]:
     return rows
 
 
+# An operator's home directory is not pack content. Captured stderr routes
+# around every other protection here — the isolation harness deliberately hashes
+# root maps rather than emitting them, and a tool crash still pasted an absolute
+# home path into a committed record. Redact at the writer so the next
+# infrastructure failure cannot repeat it.
+_OPERATOR_PATH_RE = re.compile(r"/(?:Users|home)/[^/\s\"']+")
+
+
+def redact_operator_paths(value):
+    """Replace absolute home directories anywhere in the record, recursively."""
+    if isinstance(value, str):
+        return _OPERATOR_PATH_RE.sub("<operator-home>", value)
+    if isinstance(value, dict):
+        return {k: redact_operator_paths(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_operator_paths(v) for v in value]
+    return value
+
+
 def compact_report(report: dict) -> dict:
     """Strip transcripts / final answers so the record stays small + committable."""
     slim = {k: v for k, v in report.items() if k != "results"}
@@ -106,7 +125,7 @@ def compact_report(report: dict) -> dict:
         metrics.pop("final_answer", None)
         r["metrics"] = metrics
         slim["results"].append(r)
-    return slim
+    return redact_operator_paths(slim)
 
 
 def slugify(text: str) -> str:
