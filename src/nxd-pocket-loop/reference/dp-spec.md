@@ -350,6 +350,29 @@ These sections do **not** replace the Step-3b in-transform asserts, which remain
 the durable derived-row check. A contract states what the user guaranteed; an
 assert proves what the transform actually produced.
 
+#### Not a gate, not a required-capture field
+
+Three nearby constructs, deliberately distinct. Putting a rule in the wrong one
+either double-enforces it or silently loses its outcome half.
+
+| | subject | on a violation |
+|---|---|---|
+| `models[].fields[].required_capture` | one **field's presence** | the row is not trusted; the count lands in `build-record.json` `evidence.required_capture` |
+| `## gates` | an **outcome** | the outcome is blocked, the row is kept; an absent input is `UNKNOWN`, **never** `FAIL` |
+| `## expectations` / `## promises` | a **value or a cross-row invariant** | the load stops before the transform, or publication is blocked after it |
+
+The one to watch is **`required_capture` versus an expectation that says "field
+X is never null" — those are the same assertion, and stating both enforces one
+guarantee twice while only `required_capture` is counted in the build record.**
+A rule about whether a field *arrived* is `required_capture`. A rule about
+whether the value is *acceptable* — an accepted set, a range, a cross-field
+identity, a reconciliation — is a contract.
+
+Do not restate a gate as a contract. A gate deliberately routes absence to
+`UNKNOWN` because absence is not a judgement; a contract deliberately fails on
+bad input. Opposite dispositions toward missing data, so a rule written as both
+contradicts itself.
+
 ### `## gates` (optional)
 
 A gate blocks an outcome without discarding a row. **Every gate must state its
