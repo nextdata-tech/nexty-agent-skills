@@ -20,11 +20,11 @@
     },
     {
       "id": "structured-auth-attributes",
-      "check": "infra-profile.yaml's api-source service carries auth_type: bearer plus its own auth_token attribute as flat KeyValuePairWithPublic entries -- never the whole credential nested under one attribute's value, and never a bare api_source: <token> shortcut. auth_token is public: false; base_url and auth_type are public: true. FAIL if the credential is packed into a single opaque value or if auth_token is marked public: true."
+      "check": "infra-profile.yaml's api-source service carries auth_type: bearer plus its own auth_token attribute as flat KeyValuePairWithPublic entries -- never the whole credential nested under one attribute's value, and never a bare api_source: <token> shortcut. auth_token is public: false; base_url and auth_type are public: true. FAIL if the credential is packed into a single opaque value or if auth_token is marked public: true. This is a property of the LANDED FILE, not of the transcript, and it is enforced by the authoritative DETERMINISTIC CHECK fact (secret:structured-auth-in-profile); grade FROM THAT FACT. A closure whose profile is correct passes even if the agent never displayed the file -- absence from the transcript is not evidence of absence from the closure."
     },
     {
       "id": "sensitivity-artifacts-present",
-      "check": "Because infra-profile.yaml's api-source service carries a populated attributes list (a live credential in plaintext), .gitignore (ignoring infra-profile.yaml by name, never a blanket *) and SENSITIVE (naming the credential's location and keys, never its value) are both present, written in the same step as the credential."
+      "check": "Because infra-profile.yaml's api-source service carries a populated attributes list (a live credential in plaintext), .gitignore (ignoring infra-profile.yaml by name, never a blanket *) and SENSITIVE (naming the credential's location and keys, never its value) are both present, written in the same step as the credential. This is a property of the LANDED FILES, not of the transcript, and it is enforced by the authoritative DETERMINISTIC CHECK fact (secret:sensitivity-artifacts-present); grade FROM THAT FACT rather than from whether the agent echoed the files' contents."
     },
     {
       "id": "rest-connector-not-hand-rolled",
