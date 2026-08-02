@@ -68,7 +68,12 @@ def _phase_e_source() -> str:
 
 
 def _run_phase_e(
-    tmp_path: Path, spec_src: str, transform_src: str, *, expect_exit: int
+    tmp_path: Path,
+    spec_src: str,
+    transform_src: str,
+    *,
+    expect_exit: int,
+    verifiers: dict[str, str] | None = None,
 ) -> str:
     """Execute Phase E standalone against a synthetic closure.
 
@@ -111,6 +116,13 @@ def _run_phase_e(
         f"spec_src = {spec_src!r}\n"
         f"transform_src = {transform_src!r}\n"
     ) + _phase_e_source() + "\n_dump()\n"
+    # Verifiers are read off the filesystem relative to cwd, not injected as a
+    # source string: the scan walks `contracts/` with rglob, so the harness must
+    # materialise real files for the walk to find anything.
+    for rel, src in (verifiers or {}).items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(src, encoding="utf-8")
     script = tmp_path / "_phase_e.py"
     script.write_text(harness, encoding="utf-8")
     proc = subprocess.run(
@@ -865,6 +877,89 @@ def test_phase_e_failure_reports_through_the_real_diagnostic_surface(tmp_path):
     assert "reach.model_sdk_import" in out, (
         f"the denial must be reported by CODE, not prose alone:\n{out}"
     )
+
+
+# ------------------------------------------------------ contract verifiers ---
+# Executable custom contracts made `contracts/**/*.py` a SECOND class of Python
+# the Pocket runtime runs. A verifier that imports a model SDK and calls it is
+# the identical risk Phase E denies in the transform, and before these tests it
+# passed the whole self-check green: Phase C reads those files for escape
+# references, AST shape, inertness and secret literals, but never their imports.
+
+CLEAN_VERIFIER = (
+    "import duckdb\n"
+    "import csv\n"
+    "def verify(con):\n"
+    "    return con.execute('select 1').fetchone()[0] == 1\n"
+)
+
+
+def test_verifier_importing_a_model_sdk_is_denied(tmp_path):
+    """The demonstrated hole: a verifier calling a model, whole run green."""
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=1,
+        verifiers={"contracts/row_count.py":
+                   "import anthropic\n"
+                   "def verify(con):\n"
+                   "    return anthropic.Anthropic().messages.create()\n"},
+    )
+    assert _codes(out) == ["reach.model_sdk_import"]
+    assert "contracts/row_count.py" in out, (
+        f"the finding must name the verifier, not the transform:\n{out}"
+    )
+
+
+def test_verifier_model_sdk_denial_is_not_waived_by_a_declared_api_source(tmp_path):
+    """Unconditional. `network_declared` waives transport, never a model SDK."""
+    out = _run_phase_e(
+        tmp_path, API, CLEAN_CSV_TRANSFORM, expect_exit=1,
+        verifiers={"contracts/expectations/freshness.py": "import openai\n"},
+    )
+    assert _codes(out) == ["reach.model_sdk_import"]
+    assert "contracts/expectations/freshness.py" in out, out
+
+
+def test_clean_verifier_passes(tmp_path):
+    """The other direction: a duckdb/csv verifier must not trip the gate."""
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0,
+        verifiers={"contracts/row_count.py": CLEAN_VERIFIER,
+                   "contracts/promises/__init__.py": "",
+                   "contracts/promises/uniqueness.py": CLEAN_VERIFIER},
+    )
+    assert "phase E ok" in out
+
+
+def test_verifier_transport_import_is_a_recorded_gap(tmp_path):
+    """Verifiers are NOT scanned for transport, and that is a decided gap.
+
+    The transform's `network_declared` waiver is derived from spec.py's connector
+    declaration — a statement about how the TRANSFORM gets its data. Handing it
+    to a post-transform verifier would grant reach the declaration never claimed,
+    so the transport family is left out of the verifier scan entirely rather than
+    inherited. Pinned so that closing it later is a deliberate edit with a test
+    change attached, not a silent one.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0,
+        verifiers={"contracts/row_count.py": "import httpx\n"},
+    )
+    assert "phase E ok" in out
+
+
+def test_a_closure_with_no_contracts_directory_still_passes(tmp_path):
+    """rglob over a missing `contracts/` must not raise — most closures have none."""
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0)
+    assert "phase E ok" in out
+
+
+def test_an_unparseable_verifier_is_skipped_not_crashed(tmp_path):
+    """A syntax error under contracts/ is Phase C's finding, not this gate's."""
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0,
+        verifiers={"contracts/broken.py": "def verify(con:\n"},
+    )
+    assert "phase E ok" in out
 
 
 if __name__ == "__main__":  # pragma: no cover

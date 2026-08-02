@@ -325,8 +325,66 @@ def rowcount(db: Path, table: str) -> int:
     return con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
 
 
-def find_table(tables: list[str], hint: str) -> str | None:
-    return next((t for t in tables if hint in t.lower()), None)
+def declared_models(root: Path) -> dict[str, str]:
+    """Parse the `api-source-endpoints` companion (`<model>=<endpoint path>`)
+    into {endpoint path: model name}. Missing/malformed lines are skipped."""
+    companion = root / "api-source-endpoints"
+    if not companion.is_file():
+        return {}
+    mapping: dict[str, str] = {}
+    for raw in companion.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        model, _, path = line.partition("=")
+        model, path = model.strip(), path.strip()
+        if model and path:
+            mapping[path] = model
+    return mapping
+
+
+def find_table(tables: list[str], hint: str, other_hint: str | None = None) -> str | None:
+    """Fallback resolution when the endpoints companion is absent/malformed.
+
+    Substring-first resolution collides whenever a derived model happens to
+    contain BOTH hints (e.g. `check_monitor_resolution` matches "monitor" and
+    "check", and sorts ahead of both `checks` and `monitors`) — the checker then
+    silently measures one table as if it were the other. Prefer an exact name or
+    plural match over the whole table set, drop dlt bookkeeping tables, exclude
+    candidates that also carry the other hint, and report ambiguity loudly
+    instead of taking whatever sorts first.
+    """
+    candidates = [t for t in tables if not t.lower().startswith("_dlt")]
+    for exact in (hint, hint + "s"):
+        hit = next((t for t in candidates if t.lower() == exact), None)
+        if hit:
+            return hit
+    subset = [t for t in candidates if hint in t.lower()]
+    if other_hint:
+        narrowed = [t for t in subset if other_hint not in t.lower()]
+        if narrowed:
+            subset = narrowed
+    if len(subset) > 1:
+        FAILURES.append(
+            f"landed:table-resolution-ambiguous: hint {hint!r} matches "
+            f"{sorted(subset)} — cannot decide which table to measure"
+        )
+        return None
+    return subset[0] if subset else None
+
+
+def resolve_table(root: Path, tables: list[str], endpoint: str, hint: str,
+                  other_hint: str) -> tuple[str | None, str]:
+    """Resolve the table backing `endpoint` by the model name the closure itself
+    declared, falling back to the hardened substring heuristic."""
+    model = declared_models(root).get(endpoint)
+    if model:
+        hit = next((t for t in tables if t.lower() == model.lower()), None)
+        if hit:
+            return hit, ""
+        return None, (f"api-source-endpoints declares {endpoint} -> model "
+                      f"{model!r}, but no such table landed; tables were {tables}")
+    return find_table(tables, hint, other_hint), str(tables)
 
 
 def main() -> int:
@@ -431,10 +489,12 @@ def main() -> int:
         check("closure:materializes", True)
 
         tables = tables_in(db)
-        monitors_table = find_table(tables, "monitor")
-        checks_table = find_table(tables, "check")
-        check("landed:monitors-table-present", monitors_table is not None, str(tables))
-        check("landed:checks-table-present", checks_table is not None, str(tables))
+        monitors_table, monitors_detail = resolve_table(
+            root, tables, "/v1/monitors", "monitor", "check")
+        checks_table, checks_detail = resolve_table(
+            root, tables, "/v1/checks", "check", "monitor")
+        check("landed:monitors-table-present", monitors_table is not None, monitors_detail)
+        check("landed:checks-table-present", checks_table is not None, checks_detail)
         if not (monitors_table and checks_table):
             print_report()
             return 1
@@ -496,7 +556,11 @@ def main() -> int:
         # ---- orphaned monitor_id rows must be visible, not silently dropped
         # by an inner join --------------------------------------------------
         monitor_cols = col_names(db, monitors_table)
-        monitor_id_col = next((c for c in monitor_cols if "id" in c.lower()), None)
+        # Exact match only: a substring test grabs `check_id`, `_dlt_id` or
+        # `_dlt_load_id` on plenty of plausible schemas and then compares the
+        # wrong key space against the checks table.
+        monitor_id_col = next(
+            (c for c in monitor_cols if c.lower() in ("id", "monitor_id")), None)
         checks_monitor_id_col = next((c for c in checks_cols if "monitor" in c.lower() and "id" in c.lower()), None)
         orphan_visible = False
         orphan_detail = "could not identify a monitor-id column on both tables"

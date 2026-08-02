@@ -221,11 +221,12 @@ inlined literal subset of that module's registry, and
 `evals/tests/test_self_check_diagnostic_vocab.py` is what stops the two drifting.
 Sharing the code by import would be wrong even where it is possible.
 
-**What Phase E cannot see.** It is an *import-level* check over one file. A green
-Phase E means **no *listed* denied module name appears in an `import` statement in
-`transform/main.py`** — nothing stronger. It is not a sandbox, it does not mean
-the transform is offline, and it is not a claim that no model was called.
-Specifically:
+**What Phase E cannot see.** It is an *import-level* check over the closure's
+executed Python: `transform/main.py`, plus every `contracts/**/*.py` verifier for
+the model-SDK family only. A green Phase E means **no *listed* denied module name
+appears in an `import` statement in those files** — nothing stronger. It is not a
+sandbox, it does not mean the transform is offline, and it is not a claim that no
+model was called. Specifically:
 
 - **The deny list is enumerated, so it is not exhaustive.** It names the SDKs an
   author actually reaches for — `anthropic`, `anthropic_bedrock`, `openai`,
@@ -267,9 +268,19 @@ Specifically:
   fixable there. Out of scope, and knowingly so.
 - **Reach behind a wrapper.** A helper module in the closure that opens a
   `socket` and is imported by `transform/main.py` as a local name is invisible:
-  Phase E scans `transform/main.py` and nothing else, and does not follow
+  Phase E scans the transform and the verifiers as *text*, and does not follow
   imports or reason about what a function does. It is a name check, not semantic
   detection.
+- **Contract verifiers are scanned for model SDKs only — not for transport, by
+  decision.** A verifier under `contracts/**/*.py` runs on the Pocket runtime
+  after the data has landed, so a model SDK there is the same risk as one in the
+  transform and is denied identically and unconditionally. Raw transport is *not*
+  checked in verifiers: the `network_declared` waiver is derived from `spec.py`'s
+  connector declaration, which describes how the **transform** gets its data, and
+  handing that waiver to a verifier would grant reach the declaration never
+  claimed. Denying transport in verifiers outright is the other half of the
+  choice and is not taken here. Recorded as a hole rather than half-closed —
+  a verifier importing `httpx` passes Phase E.
 - **`importlib`, `__import__`, or a name built at runtime.** A dynamic import is
   not an `ast.Import` node.
 - **An allowed import used for a denied purpose.** A declared `api-source` is
@@ -1254,6 +1265,45 @@ if not network_declared:
             f"needs to fetch, declare an api-source and go through "
             f"dlt.sources.rest_api (reference/api-source.md).")
 
+# Contract verifiers are the SECOND class of executed Python in the closure, and
+# a verifier that imports a model SDK and calls it is the identical risk this
+# gate exists to deny in the transform. Walked from the filesystem with rglob
+# rather than from spec.py's wiring, matching the unreferenced-file walk later in
+# this script: an unwired-but-present verifier still ships, and the nesting under
+# contracts/expectations/ and contracts/promises/ is covered by the same walk.
+#
+# ONLY the model-SDK denial is applied here, and unconditionally. TRANSPORT_ROOTS
+# is deliberately left out: `network_declared` is computed from spec.py's
+# connector declaration, which is a statement about how the TRANSFORM gets its
+# data. A verifier runs after the data has landed and reads it from the closure's
+# own tables, so it has no claim on that waiver — but denying transport in
+# verifiers outright is a rule this gate has not yet earned evidence for, so the
+# transport family is a recorded gap for verifiers rather than a half-applied
+# rule (see the doc's "What Phase E cannot see").
+#
+# Nothing here executes a verifier, so unlike the transform scan the placement is
+# not ordering-critical — self_check never imports contracts/, only the Pocket
+# runtime does. Phase E is the right home because it keeps the reach domain in
+# one place, not because it runs before Phase B.
+for vpath in sorted(p for p in Path("contracts").rglob("*.py")
+                    if p.name != "__init__.py"):
+    try:
+        v_imports = imported_roots(vpath.read_text(encoding="utf-8"), str(vpath))
+    except (OSError, SyntaxError):
+        # An unreadable or unparseable verifier is Phase C's finding to report,
+        # not this gate's. Silence here means "could not scan", which the doc
+        # records; inventing a reach verdict from a parse failure would be a
+        # verdict this gate has not earned.
+        continue
+    for root in sorted(r for r in MODEL_ROOTS
+                       if any(denied_hit(m, {r}) for m in v_imports)):
+        eerr("reach.model_sdk_import",
+            f"{vpath} imports {root!r} — a model-provider SDK. A contract "
+            f"verifier decides pass/fail from data that has already landed; it "
+            f"never calls a model. A verifier that asks a model is not a "
+            f"check — it re-decides the answer on every run, so the same rows "
+            f"can pass today and fail tomorrow.", str(vpath))
+
 if eerrors:
     say("\nPHASE E FAILED — reach gate (the transform does not call a model):")
     seen = set()
@@ -1271,10 +1321,12 @@ if eerrors:
     finish(1)
 say(f"phase E ok — no denied model-SDK or transport import in "
     f"transform/main.py, and its imports are consistent with the declared "
-    f"connector {sorted(declared_sources) or ['(none)']}. This is an "
-    f"import-level name check over ONE file: no *listed* model-provider SDK — "
-    f"the list is enumerated, not exhaustive — and no undeclared transport "
-    f"from the listed roots. A wrapped socket, a URL passed to a reader, "
+    f"connector {sorted(declared_sources) or ['(none)']}; no model-SDK import "
+    f"in any contracts/**/*.py verifier either. This is an import-level name "
+    f"check over the transform plus the verifiers: no *listed* model-provider "
+    f"SDK — the list is enumerated, not exhaustive — and no undeclared "
+    f"transport from the listed roots in the transform (verifiers are NOT "
+    f"scanned for transport). A wrapped socket, a URL passed to a reader, "
     f"DuckDB httpfs, subprocess, and the mcp client are all invisible or "
     f"permitted here (see 'What Phase E cannot see').")
 
