@@ -333,11 +333,11 @@ clause below is mandatory and each is restated in the Invariants:
 
 **Transform asserts are the durable derived-row check; custom contracts never
 replace them.** A contract states what the **user guaranteed**; an assert proves
-what the **transform produced** — the relationship no verifier sees — over the
-complete derived set before rows are yielded. One helper per derived model, invoked
-between deriving and yielding, each an **invariant over the source-vs-derived
-relationship**: a claim that could be false if the derivation were wrong.
-Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
+what the **transform produced**. One helper per derived model, invoked between
+deriving and yielding, each an **invariant over the source-vs-derived
+relationship** — the thing no verifier sees — over the complete derived set
+before rows are yielded. Restating the transform's own arithmetic proves
+nothing. **Mandatory tiers:**
 
 - **Tier 1 — every derived model, always:** (a) the **declared key is unique**
   over the complete derived set, and (b) the **row count computed from the
@@ -348,11 +348,10 @@ Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
   (`- refund_pairs_total`), in `Decimal`, **per source currency BEFORE any FX
   conversion**.
 
-An itemized exclusion means the derivation **removes** rows or value rather than
-enriching — reclassify it as a removal and apply the removal invariants too.
-Classification totality is never sufficient alone: it can pass while every
-monetary answer is overstated. Raise `RuntimeError` carrying actual-vs-expected.
-Worked code: [reference/derived-models.md](reference/derived-models.md).
+Raise `RuntimeError` carrying actual-vs-expected. An itemized exclusion means a
+**removal**, not an enrichment, and carries extra invariants; classification
+totality alone can pass while every monetary answer is overstated — both, with
+worked code, in [reference/derived-models.md](reference/derived-models.md).
 
 **Other connector types**: Step 3 is identical except the `readers=[...]` body
 and `secrets[...]` key — take those from `reference/` (`file-source.md`,
