@@ -179,12 +179,22 @@ config: RESTAPIConfig = {
         for model in PHYSICAL_MODELS
     ],
 }
-source = rest_api_resources(config)
+# rest_api_resources returns a LIST of DltResource, not a DltSource. Verified
+# against the pinned dlt==1.28.2:
+#     rest_api_resources(config: RESTAPIConfig) -> List[DltResource]
+# It has no `.resources` mapping, so `source.resources[model]` raises
+# `AttributeError: 'list' object has no attribute 'resources'` — and it raises at
+# RUN time, after the config is assembled and the credential has already been
+# used, so the closure looks correct right up until it lands nothing. Index the
+# list by resource name instead.
+#
+# `rest_api_source` DOES return a DltSource whose `.resources` mapping is real.
+# Pick one and stay with it; the two names differ by one word and not by shape.
+resources = {r.name: r for r in rest_api_resources(config)}
 readers = []
 for model in PHYSICAL_MODELS:
     table_name = duckdb.model_tables[model]
-    resource = source.resources[model]
-    readers.append(resource.with_name(table_name))
+    readers.append(resources[model].with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
 ```
 
@@ -201,9 +211,9 @@ without defining it raises `NameError` at runtime.
 
 ## `requirements.txt`
 
-Base pins unchanged. Under current dlt docs, `rest_api_resources` needs no
-additional pin beyond the base `dlt[duckdb]==1.28.2` — reconfirm this holds
-for the pinned `1.28.2` before relying on it. If the chosen `auth_type`
+Base pins unchanged. `rest_api_resources` needs no additional pin beyond the
+base `dlt[duckdb]==1.28.2` — confirmed by import against the pinned version in
+the desktop runtime, not inferred from the dlt docs. If the chosen `auth_type`
 (e.g. `oauth2_client_credentials`) turns out to need an extra dependency,
 add it explicitly rather than assuming it's already covered.
 
