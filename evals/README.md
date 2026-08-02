@@ -480,6 +480,38 @@ Pocket runtime variables). The automatic PR runner deliberately provides none
 of those inputs, so it cannot accidentally turn this environment gate into a
 deterministic scenario error.
 
+**A reference wrapper ships at
+[`evals/tools/source-isolation-wrapper.py`](tools/source-isolation-wrapper.py)**
+(macOS). It enforces the deny list with `sandbox-exec`, so a protected root is
+unreadable at the kernel level rather than by convention — the attestation
+claims the agent *could not* read those paths, and only real denial supports
+that. Point `EVAL_CODEX_WRAPPER` at it, set
+`EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT` to its `sha256`, and list the
+roots in `EVAL_SOURCE_ISOLATION_ROOTS`:
+
+```bash
+export EVAL_SOURCE_ISOLATION_CAPABILITY_ID='nxd-eval-source-isolation-v1'
+export EVAL_CODEX_WRAPPER="$PWD/evals/tools/source-isolation-wrapper.py"
+export EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT="$(shasum -a256 "$EVAL_CODEX_WRAPPER" | cut -d' ' -f1)"
+export EVAL_SOURCE_ISOLATION_ROOTS='{"benchmark_report_history":"…","closure_temp_history":"…","codex_memories":"…/.codex/memories","codex_session_history":"…/.codex/sessions","evaluator_checkout":"…"}'
+python3 evals/run.py --scenario pocket-custom-contracts --agent-backend codex --judge-backend codex
+```
+
+Three traps worth knowing before you spend an afternoon on them:
+
+- **`evaluator_checkout` must be the checkout the run is launched FROM.** In a
+  before/after comparison each arm has its own, and pointing both at one tree
+  lets the other arm's copy of the withheld checker stay readable. The
+  `withheld-custom-contract-checker` probe catches this and refuses to run.
+- **Do not protect the whole temp root.** `run.py` builds the agent's workspace
+  under it, so a blanket deny blocks the run itself. Move prior closures into a
+  dedicated root instead.
+- **A denied read still fails the audit.** For a `root` marker the needle *is*
+  the protected path, and `ls: /path: Operation not permitted` contains it — so
+  an attempt the sandbox correctly refused is indistinguishable from a
+  successful read, and the run errors `access_observed`. That is deliberate: the
+  audit does not guess. Re-run rather than reinterpret.
+
 **Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
 skipped scenarios, so a PR touching it currently gets a green no-op. One more
 skill — `nxd-mesh-analyzer` — has no scenario at all: a scenario for it was

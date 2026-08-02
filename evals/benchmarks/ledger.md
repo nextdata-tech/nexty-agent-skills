@@ -826,6 +826,32 @@ Notes: **No difference is demonstrable, and no Pocket-contract claim is made her
 
 Judge checks: before 7/2/5 (mean 4.7/12), after 2/4/5 (mean 3.7/12). Two-sided exact permutation test on the difference of means: **p=0.80**. Every per-check difference is a single run out of three and none flips consistently, so the apparent 1-check drop is noise at this N, not a regression. The deterministic check is **1/3 in BOTH arms**, failing identically (`pre-build:names the incomplete scale: no evidence before any materialization`). Output tokens 13.0k vs 15.8k mean, which at this N and this variance (3.5k-28.1k within a single arm) says nothing.
 
-**What this run does NOT cover.** `pocket-custom-contracts` — the scenario that exercises the contract work this PR is about — could not be run: it declares `agent_source_isolation` and fails closed without an operator-supplied default-deny wrapper, capability ID, 64-hex profile fingerprint and five protected roots, none of which exist in this environment. It errors with `source-isolation infrastructure invalid: missing source-isolation capability ID` rather than degrading to an unisolated run, which is the harness behaving correctly. The three v0.27.0 entries above measured the PRE-REBASE implementation of this work — a different Phase C gate, a CONTEXT.md-based inventory, and no dp-spec IR sections. **Do not read them as evidence for this branch.** The contract behaviour here is covered by 37 checker tests and a 460-test suite, not by an eval arm.
+**What this run does NOT cover.** `pocket-custom-contracts` — the scenario that exercises the contract work this PR is about — is not measured here. **It has since been run: see the source-isolated entry below, which is the authoritative evidence for this change.** At the time of this run it failed closed without an operator-supplied default-deny wrapper, capability ID, 64-hex profile fingerprint and five protected roots. It errors with `source-isolation infrastructure invalid: missing source-isolation capability ID` rather than degrading to an unisolated run, which is the harness behaving correctly. The three v0.27.0 entries above measured the PRE-REBASE implementation of this work — a different Phase C gate, a CONTEXT.md-based inventory, and no dp-spec IR sections. **Do not read them as evidence for this branch.** The contract behaviour here is covered by 37 checker tests and a 460-test suite, not by an eval arm.
 
 Record: [`records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json`](records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json)
+
+## 2026-08-02 — executable Pocket custom contracts, source-isolated (pocket-custom-contracts) (plugin v0.30.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 17 | 13693 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 1 | 1102 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 14 | 8956 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 26 | 12830 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 24 | 13254 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 22 | 11490 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | FAIL | 4/5 | — | 15 | 8031 | — | gpt-5.6-luna |
+
+Notes: **The scenario this PR exists for now runs, and it separates cleanly.** `pocket-custom-contracts`, source-isolated, agent AND judge on the codex backend (gpt-5.6-luna). Before arm = this branch's harness and scenario with `src/` at origin/main (446369f); after arm = this branch. main does not carry this scenario at all — it ships with this PR — so the before arm necessarily supplies the scenario and varies only the skills, which is the same framing the retracted v0.27.0 isolated entry used.
+
+Judge checks: before **0/5, 0/5, 0/5**; after **5/5, 5/5, 5/5, 4/5** (mean 4.75/5). The deterministic checker goes **0/3 to 4/4**. Fisher exact, two-sided, on both any-check-passed and the deterministic checker: **p=0.029**. Every one of the five checks improves; none regresses.
+
+The before-arm failures are exactly what this change adds, not incidental noise — `FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services; FAIL custom description missing; FAIL custom verifier must u[se ...]`. Without the skill guidance the agent does not produce wired executable contracts at all.
+
+**Isolation evidence.** All 7 default-deny probes reported `blocked` on every run, wrapper path and sha256 identical across arms, raw-stream audit `clean` on all reported runs. Enforcement is macOS `sandbox-exec`, so the denial is kernel-level rather than advisory.
+
+**One after-run was DISCARDED and is not in the table.** Its audit returned `access_observed` for five markers. The isolation held — all 7 probes still blocked — but a `root` marker's needle IS the protected path, and a *denied* access still prints that path (`ls: /path: Operation not permitted`), so an attempt that the sandbox correctly refused is indistinguishable from one that succeeded. The harness fails the run rather than guess, which is the right call; it was replaced rather than reinterpreted. After-arm n=4, not 5, because two runs collided on one report filename — the surviving file is one of them, not a merge.
+
+Efficiency is not compared: the before arm never produces a working closure, so its token and tool counts measure failing early, not doing the work more cheaply.
+
+Record: [`records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json`](records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json)
