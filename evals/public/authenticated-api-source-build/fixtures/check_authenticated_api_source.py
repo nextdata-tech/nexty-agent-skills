@@ -541,9 +541,13 @@ def main() -> int:
         checks_cols = col_names(db, checks_table)
         result_col = resolve_result_col(checks_cols)
         has_flat_result_col = result_col is not None
+        # dlt names a spawned child table with its PATH SEPARATOR: `checks__result`,
+        # double underscore. A bare `startswith(checks_table)` also matches the
+        # closure's own derived models — `checks_enriched` is a legitimate model
+        # this very scenario's questions invite, and reading it as evidence of an
+        # unflattened payload punishes the agent for doing the task.
         has_child_table = any(
-            t != checks_table and t.lower().startswith(checks_table.lower())
-            for t in tables
+            t.lower().startswith(checks_table.lower() + "__") for t in tables
         )
         check(
             "landed:nested-result-flattened",
