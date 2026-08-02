@@ -573,16 +573,22 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
         # count three errors for one problem.
         sections = sorted({sec for sec, entry in contracts
                            if str(entry.get("name") or "") == dupe})
-        where = (" across expectations and promises" if len(sections) > 1
-                 else f" within {sections[0]}" if sections else "")
         for section in sections:
+            # A cross-section collision is reported at BOTH locations on
+            # purpose: a reader in `expectations` has to see it too, and
+            # neither side is the one at fault. Each finding names the OTHER
+            # section so the two are not byte-identical-but-for-the-path —
+            # that is the shape the de-dup above exists to avoid.
+            others = [s for s in sections if s != section]
+            where = (f" — it also appears in {' and '.join(others)}" if others
+                     else f" within {section}")
             report.error(
-                f"duplicate contract name {dupe!r}{where} — the name selects "
+                f"duplicate contract name {dupe!r}{where}. The name selects "
                 f"the generated verifier file, so two contracts sharing one "
                 f"name overwrite each other",
                 code="spec.contract.duplicate_name",
                 path=f"{spec_path(section, dupe)}.name",
-                evidence={"found": [dupe]},
+                evidence={"found": [dupe], "sections": sections},
             )
 
 

@@ -446,3 +446,53 @@ def test_duplicate_contract_name_is_addressed_to_its_own_section(tmp_path):
     # (section, name).
     assert len(dupes) == 1, [d.path for d in dupes]
 
+
+def test_cross_section_duplicate_names_both_sides(tmp_path):
+    """Both locations are reported, and neither message is a copy of the other.
+
+    A collision spanning both sections has no at-fault side — a reader in
+    `expectations` must see it too — so two findings is correct. They must not
+    be byte-identical-but-for-the-path though: each names the OTHER section, so
+    a harness rendering either one is actionable on its own.
+    """
+    import validate_dp_spec
+
+    spec_text = DUPLICATE_PROMISES_SPEC.replace(
+        """## promises
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    First guarantee.
+  rule: |
+    a == b
+""",
+        """## expectations
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    First guarantee.
+  rule: |
+    a == b
+
+## promises
+""",
+    )
+    path = tmp_path / "dp-spec.md"
+    path.write_text(spec_text, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    dupes = [d for d in report.diagnostics
+             if d.code == "spec.contract.duplicate_name"]
+    assert {d.path for d in dupes} == {
+        "spec:expectations[dup-name].name",
+        "spec:promises[dup-name].name",
+    }, [d.path for d in dupes]
+    assert len({d.message for d in dupes}) == 2, "the two findings are identical"
+    by_path = {d.path: d.message for d in dupes}
+    assert "promises" in by_path["spec:expectations[dup-name].name"]
+    assert "expectations" in by_path["spec:promises[dup-name].name"]
+
