@@ -104,6 +104,7 @@ def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
     # Recover the token value and base_url with a permissive line-based read --
     # this is a fixture-authored YAML, not a document we need a real parser for.
     fields: dict[str, str] = {}
+    public_flags: dict[str, str] = {}
     cur_key = None
     for line in text.splitlines():
         m = re.match(r"^\s*-?\s*key:\s*(\S+)", line)
@@ -113,11 +114,23 @@ def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
         m = re.match(r"^\s*value:\s*(.+?)\s*$", line)
         if m and cur_key:
             fields[cur_key] = m.group(1).strip("'\"")
-            cur_key = None
+            continue
+        # `public` may precede or follow `value` within the same entry, so the
+        # key stays current until the next `key:` rather than being cleared by
+        # whichever of the two is seen first.
+        m = re.match(r"^\s*public:\s*(\S+)", line)
+        if m and cur_key:
+            public_flags[cur_key] = m.group(1).strip("'\"").lower()
     if fields.get("auth_token") != VALID_TOKEN:
         return False, f"auth_token attribute does not match the brief's token (got {fields.get('auth_token')!r})", fields
     if "base_url" not in fields:
         return False, "no base_url attribute found", fields
+    # A credential marked public survives export, which is the whole reason the
+    # flag exists. checks.json states this as a FAIL condition and tells the
+    # judge to grade from this fact, so the fact has to actually carry it.
+    if public_flags.get("auth_token") == "true":
+        return False, ("auth_token is marked public: true — the credential would "
+                       "survive export; a secret attribute must be public: false"), fields
     return True, "", fields
 
 
@@ -170,10 +183,19 @@ def auth_is_dispatched_on_auth_type(transform_src: str) -> tuple[bool, str]:
     # file-wide `raise|assert` search passes on that alone and this branch would
     # never fire. Take the source from the first auth_type mention to the config
     # assembly that consumes it.
+    # The end anchor is searched FROM the dispatch, not from offset 0. The
+    # taught template imports RESTAPIConfig on its first line — before any
+    # auth_type — so a search from 0 always lands ahead of `start`, the region
+    # collapses to the 2000-char fallback, and the read-back assert ~1.5k chars
+    # later satisfies the pattern. That is the never-fires bug this scoping
+    # exists to avoid, reintroduced by the anchor.
     start = re.search(r"""auth_type""", transform_src)
-    end = re.search(r"""RESTAPIConfig|["']resources["']\s*:""", transform_src)
-    region = transform_src[start.start():end.start()] if start and end and end.start() > start.start() \
-        else transform_src[start.start():start.start() + 2000] if start else ""
+    if not start:
+        region = ""
+    else:
+        tail = transform_src[start.end():]
+        end = re.search(r"""RESTAPIConfig|["']resources["']\s*:""", tail)
+        region = tail[:end.start()] if end else tail[:2000]
     rejects = bool(re.search(r"\b(raise|assert)\b", region))
     if not rejects:
         return False, ("auth_type is dispatched but no branch rejects an "

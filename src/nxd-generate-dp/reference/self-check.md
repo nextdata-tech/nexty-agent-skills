@@ -243,6 +243,17 @@ Specifically:
   Denying `subprocess` alone would stop the naive spelling and miss the other
   three, which reads as coverage the gate does not have. Recorded as a hole
   rather than half-closed.
+- **The bare stdlib parents `http` and `urllib` are a documented gap, for the
+  same reason.** `http.client` and `urllib.request` are denied, but `import http`
+  emits only `"http"`, which does not match either — and dlt's own dependency
+  chain has already loaded the submodule, so `http.client.HTTPSConnection(…)`
+  works off the parent import alone. Denying the bare roots is not available:
+  `denied_hit` prefix-matches on dot boundaries, so `urllib` would also catch
+  `urllib.parse`, which is pure string manipulation with no network and is used
+  by shipped example transforms (`company_dividends`, `wttr_loader`,
+  `customer_purchases`). A rule that fires on correct closures gets deleted
+  rather than obeyed. Denying `http` alone would close one spelling of two and
+  read as coverage the gate does not have.
 - **`mcp` is an open transport, by decision — and it is the widest hole here.**
   It is not flagged, because `mcp` ships in the fixed desktop venv and is how a
   closure talks to the supervisor; denying it would fail closures doing exactly
