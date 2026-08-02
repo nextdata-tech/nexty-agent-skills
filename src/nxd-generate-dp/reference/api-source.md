@@ -39,8 +39,38 @@ config: RESTAPIConfig = {
         ...
     ],
 }
-source = rest_api_resources(config)
+resources = {r.name: r for r in rest_api_resources(config)}  # returns a LIST
 ```
+
+### Paginator `type` values — copy these exactly
+
+Omitting the paginator and letting dlt auto-detect is the default advice above,
+and it is usually right. When the API needs an explicit one, the `type` value is
+validated against a fixed table, and **the separator is an underscore**. Guessing
+the hyphenated spelling — `page-number` — is the natural mistake and it fails
+with an error that names neither the field nor the fix:
+
+```
+For `DltResource`: Path `.`: field `resources[0]` expects `callable`
+(function or class instance) but got {...}
+```
+
+That message points at `resources[0]` and says "expects callable", so it reads
+as a problem with how the resource list was built rather than one bad string
+three levels down. Enumerated from `dlt==1.28.2`'s own `PAGINATOR_MAP`:
+
+`auto`, `cursor`, `header_cursor`, `header_link`, `json_link`, `json_response`,
+`offset`, `page_number`, `single_page`
+
+```python
+"paginator": {"type": "page_number", "base_page": 1,
+              "page_param": "page", "total_path": "pages"},
+```
+
+`total_path` is the path to the page COUNT in the response envelope — with
+`{"page": 1, "pages": 4, "data": [...]}` that is `"pages"`. Omit it and dlt
+paginates until a page comes back empty, which is correct but costs one extra
+request per resource.
 
 Re-confirm this shape against the pinned `dlt==1.28.2` changelog before
 relying on it in code — it was verified against current dlt docs, not
