@@ -1356,9 +1356,16 @@ say(f"phase E ok — no denied model-SDK import in transform/main.py"
        "transform opens a socket")
     + f"; no model-SDK import in any contracts/**/*.py verifier either. This is "
     f"an import-level name check over the transform plus the verifiers: no "
-    f"*listed* model-provider SDK — the list is enumerated, not exhaustive — "
-    f"and no undeclared transport from the listed roots in the transform "
-    f"(verifiers are NOT scanned for transport). A wrapped socket, a URL passed "
+    f"*listed* model-provider SDK — the list is enumerated, not exhaustive"
+    # Gated for the same reason the head is. Left unconditional, this clause
+    # re-asserted "no undeclared transport" inside the very branch that had just
+    # disclaimed the check: an unreadable spec.py plus `import requests` printed
+    # both sentences at once, and the second one was false.
+    + (" — and no undeclared transport from the listed roots in the transform "
+       "(verifiers are NOT scanned for transport)."
+       if _transport_checked else
+       ". The transport family was not evaluated at all.")
+    + f" A wrapped socket, a URL passed "
     f"to a reader, DuckDB httpfs, subprocess, and the mcp client are all "
     f"invisible or permitted here (see 'What Phase E cannot see').")
 
