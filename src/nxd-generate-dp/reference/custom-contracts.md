@@ -202,15 +202,23 @@ The closure self-check must fail when any custom-contract invariant is broken:
 - a referenced `contracts/**/*.py` file is absent, decorative, outside the
   closure, cannot be parsed, has anything other than one registered verifier,
   or does not invoke `data_product.verify()` under its main guard;
-- a custom contract has no unique name, description, model, or verifier;
+- a custom contract has no literal unique name, no non-empty `.description(...)`,
+  no `.model(...)`, or no verifier;
 - any Pocket source-aligned input is not `.source(_csv)` with `_csv` bound to
-  the exact unlabeled desktop-local `csv-source`, or an input contract is not
-  attached to that declaration;
-- an output contract is not attached to the DuckDB output alongside ordinary
-  `.promise(model)`;
-- the verifier script path escapes the closure or does not export the expected
-  callable; or
-- a contract script or profile carries a secret or absolute external path.
+  the exact unlabeled desktop-local `csv-source`;
+- the DuckDB output port is bound to a service other than `duckdb`;
+- `csv-source-path` is missing, absolute, or escapes the closure, or a
+  `model_paths` entry resolves to no CSV under it;
+- `infra-profile.yaml` omits a service `spec.py` references, binds one to the
+  wrong driver, or is not named `desktop-local`;
+- the verifier script path escapes the closure; or
+- a contract script carries a literal secret.
+
+**What it does NOT check**, so the gap is stated rather than assumed: it does
+not verify *where* a `custom(...)` is attached — a promise wired inside
+`.input(...)`, or an expectation on the output, passes — and it approximates
+"exports the expected callable" by counting `@data_product.on_verify()`
+decorators rather than resolving the symbol.
 
 The self-check remains structural/offline. A pass proves the generated closure
 is parseable and wired, not that a live Desktop contract execution succeeded.

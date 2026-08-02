@@ -689,6 +689,25 @@ _register_table(
          "two custom contracts share a name — they race for one verifier file"),
         ("closure.contract_spec_drift", "error", "agent", "none", False,
          "the closure's custom contracts do not match the approved spec's"),
+        # The Pocket runtime-binding faults below are NOT contract-wiring
+        # faults. They were folded into closure.contract_not_wired at first,
+        # which made a harness render a contract-shaped repair control for an
+        # infra-profile driver typo. The code is what selects that control, so
+        # each error class gets its own.
+        ("closure.profile_service_missing", "error", "agent", "none", False,
+         "infra-profile.yaml omits a service spec.py references"),
+        ("closure.profile_driver_mismatch", "error", "agent", "none", False,
+         "an infra-profile service is bound to the wrong driver"),
+        ("closure.profile_name_mismatch", "error", "agent", "none", False,
+         "infra-profile.yaml metadata.name is not desktop-local"),
+        ("closure.port_storage_mismatch", "error", "agent", "none", False,
+         "the DuckDB output port is bound to the wrong storage service"),
+        ("closure.input_service_mismatch", "error", "agent", "none", False,
+         "a source-aligned input is not bound to the unlabeled csv-source"),
+        ("closure.csv_root_invalid", "error", "agent", "none", False,
+         "csv-source-path is missing, absolute, or escapes the closure"),
+        ("closure.model_path_unresolved", "error", "agent", "none", False,
+         "a model_paths entry is unsafe or resolves to no CSV"),
         ("policy.decisions_not_base_model", "error", "agent", "none", False,
          "nxd_decisions is not a base model"),
         ("policy.decisions_csv_missing", "error", "agent", "none", False,

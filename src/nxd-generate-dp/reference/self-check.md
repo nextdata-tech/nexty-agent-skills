@@ -288,7 +288,11 @@ _codes("error", "agent",
        "closure.contract_verifier_malformed", "closure.contract_verifier_inert",
        "closure.contract_verifier_unreferenced",
        "closure.contract_verifier_secret", "closure.contract_duplicate_name",
-       "closure.contract_spec_drift")
+       "closure.contract_spec_drift",
+       "closure.profile_service_missing", "closure.profile_driver_mismatch",
+       "closure.profile_name_mismatch", "closure.port_storage_mismatch",
+       "closure.input_service_mismatch", "closure.csv_root_invalid",
+       "closure.model_path_unresolved")
 # The one closure.* code the AGENT cannot fix: a snapshot taken from a spec the
 # user never approved is a governance fault, and only the user can approve.
 _codes("error", "user", "closure.lock_status_not_approved")
@@ -1207,14 +1211,14 @@ SECRET_LITERAL = re.compile(
 
 
 def _verify_scripts(tree):
-    """-> ({contract name: verifier path}, unnamed count, duplicate names).
+    """-> (paths by name, unnamed count, duplicate names, {name: (desc, model)}).
 
     `custom("x").model(m).verify(script("p").compute(c))` is one call chain, so
     the verify() that belongs to a given custom() is the INNERMOST one whose
     subtree contains it. Matching on "any verify() in the file" would associate
     the wrong path as soon as a closure declares a second contract.
     """
-    found, unnamed, dupes = {}, 0, []
+    found, unnamed, dupes, meta = {}, 0, [], {}
     verifies = [n for n in ast.walk(tree)
                 if isinstance(n, ast.Call) and call_name(n) == "verify"]
     for node in ast.walk(tree):
@@ -1239,10 +1243,27 @@ def _verify_scripts(tree):
                 if isinstance(sub, ast.Call) and call_name(sub) == "script":
                     path = literal_str(sub.args[0] if sub.args else None)
                     break
+        # .description(...) and .model(...) hang off the same custom() chain.
+        # The reference doc lists both as preflight failures, so check them here
+        # rather than leaving the eval fixture as the only gate that does — a
+        # closure passing Phase C and failing the scenario checker is the split
+        # this file keeps closing.
+        outer = None
+        for cand in ast.walk(tree):
+            if not isinstance(cand, ast.Call):
+                continue
+            if any(c is node for c in spine(cand)) and (
+                    outer is None or len(list(ast.walk(cand))) > len(list(ast.walk(outer)))):
+                outer = cand
+        chain = spine(outer) if outer is not None else [node]
+        has_desc = any(call_name(c) == "description" and c.args
+                       and literal_str(c.args[0]) for c in chain)
+        has_model = any(call_name(c) == "model" and c.args for c in chain)
         if cname in found:
             dupes.append(cname)
         found[cname] = path
-    return found, unnamed, dupes
+        meta[cname] = (has_desc, has_model)
+    return found, unnamed, dupes, meta
 
 
 try:
@@ -1251,7 +1272,7 @@ except SyntaxError:
     _spec_tree = None          # Phase A already reported it; do not double-report
 
 if _spec_tree is not None:
-    contracts, unnamed, dupes = _verify_scripts(_spec_tree)
+    contracts, unnamed, dupes, contract_meta = _verify_scripts(_spec_tree)
 
     if unnamed:
         cerr("closure.contract_not_wired",
@@ -1264,6 +1285,19 @@ if _spec_tree is not None:
              f"the generated verifier file, so one silently overwrites the "
              f"other. Names are unique across expectations AND promises.",
              "spec.py", {"found": d})
+
+    for cname, (has_desc, has_model) in sorted(contract_meta.items()):
+        if not has_desc:
+            cerr("closure.contract_not_wired",
+                 f"spec.py: custom({cname!r}) has no non-empty "
+                 f".description(...). The description is what a later reader "
+                 f"sees when the contract fails.", "spec.py",
+                 {"contract": cname})
+        if not has_model:
+            cerr("closure.contract_not_wired",
+                 f"spec.py: custom({cname!r}) has no .model(...) — a contract "
+                 f"with no subject cannot be attached to an input or output.",
+                 "spec.py", {"contract": cname})
 
     referenced = set()
     for cname, vpath in sorted(contracts.items()):
@@ -1404,7 +1438,7 @@ if _spec_tree is not None:
             continue
         shown = ref if ref is not None else (
             ast.unparse(arg) if arg is not None else "<none>")
-        cerr("closure.contract_not_wired",
+        cerr("closure.input_service_mismatch",
              f"spec.py: Pocket source-aligned inputs currently require "
              f".source(_csv) bound exactly to {CSV_SERVICE}; labeled CSV "
              f"services are transform-only on this runtime. Got {shown!r}.",
@@ -1422,7 +1456,7 @@ if _spec_tree is not None:
         ref = literal_str(inner)
         if isinstance(inner, ast.Name) and inner.id in csv_literals or \
                 ref == CSV_SERVICE:
-            cerr("closure.contract_not_wired",
+            cerr("closure.port_storage_mismatch",
                  f"spec.py: the DuckDB output declaration is bound to the CSV "
                  f"service. .port(\"duckdb\", storage(_duckdb)) must carry the "
                  f"duckdb service.", "spec.py")
@@ -1433,7 +1467,7 @@ if _spec_tree is not None:
     csv_root = None
     csvp = Path("csv-source-path")
     if inputs and not csvp.is_file():
-        cerr("closure.contract_not_wired",
+        cerr("closure.csv_root_invalid",
              "csv-source-path is missing, but spec.py declares a source-aligned "
              "input. It carries the export root every model_paths entry "
              "resolves under.", "csv-source-path")
@@ -1442,7 +1476,7 @@ if _spec_tree is not None:
         parts = Path(raw).parts if raw else ()
         if (not raw or raw.startswith("/") or ".." in parts
                 or any(p in ("", ".") for p in parts)):
-            cerr("closure.contract_not_wired",
+            cerr("closure.csv_root_invalid",
                  f"csv-source-path: custom CSV input requires an existing "
                  f"contained relative export root, got {raw!r}.",
                  "csv-source-path", {"found": raw})
@@ -1464,12 +1498,12 @@ if _spec_tree is not None:
                 if not model or not rel:
                     continue
                 if rel.startswith("/") or ".." in Path(rel).parts:
-                    cerr("closure.contract_not_wired",
+                    cerr("closure.model_path_unresolved",
                          f"spec.py: model_paths[{model!r}] must be a safe "
                          f"relative path, got {rel!r}.", "spec.py",
                          {"found": rel})
                 elif csv_root is not None and not (csv_root / rel).is_file():
-                    cerr("closure.contract_not_wired",
+                    cerr("closure.model_path_unresolved",
                          f"spec.py: model_paths[{model!r}] must resolve to an "
                          f"existing csv-source-path/*.csv file; "
                          f"{csv_root / rel} does not exist.", "spec.py",
@@ -1482,7 +1516,7 @@ if _spec_tree is not None:
     if prof.is_file():
         ptext = prof.read_text()
         if not re.search(r"^metadata:\n\s+name: desktop-local$", ptext, re.M):
-            cerr("closure.contract_not_wired",
+            cerr("closure.profile_name_mismatch",
                  "infra-profile.yaml: metadata.name must be desktop-local to "
                  "match the spec.py infra_profile.", "infra-profile.yaml")
         required = {"duckdb": "nxd:local/duckdb/storage:0.1.0",
@@ -1494,9 +1528,19 @@ if _spec_tree is not None:
                 r"- name: %s\n(?:\s+.*\n)*?\s+driver: (\S+)" % re.escape(svc),
                 ptext)
             if block is None:
-                continue
-            if block.group(1) != driver:
-                cerr("closure.contract_not_wired",
+                # Absence is a fault, not a skip. Phase A only checks that a
+                # /infra-profile/…#/services/<name> ref is well FORMED, never
+                # that the profile declares it, so a closure missing a service
+                # entirely reached the supervisor unreported — which is exactly
+                # the before-arm failure this PR's ledger entry quotes.
+                cerr("closure.profile_service_missing",
+                     f"infra-profile.yaml does not declare the {svc} service, "
+                     f"which spec.py references. The desktop-local profile "
+                     f"needs duckdb, python-compute and — for a source-aligned "
+                     f"input — csv-source.", "infra-profile.yaml",
+                     {"service": svc})
+            elif block.group(1) != driver:
+                cerr("closure.profile_driver_mismatch",
                      f"infra-profile.yaml: {svc} must use {driver}, got "
                      f"{block.group(1)}.", "infra-profile.yaml",
                      {"service": svc, "found": block.group(1)})
@@ -1513,15 +1557,39 @@ if _spec_tree is not None:
         # top-level within its section; anything indented belongs to one.
         # (No YAML parse here: CONSTRAINT-1 — this file runs inside the closure
         # and cannot depend on PyYAML.)
+        # Accumulate each entry BLOCK — a column-0 `- ` up to the next column-0
+        # `- ` or `## ` — and take `name:` from anywhere within it. YAML mapping
+        # key order is free and validate_dp_spec.py reads these with
+        # yaml.safe_load, so nothing requires `name` on the `- ` line; assuming
+        # it does made a legal spec look like it declared no contracts at all,
+        # and Phase C then told the agent to DELETE a contract the user had
+        # approved. `fields:` sub-entries stay excluded because they are
+        # indented, so their `- name:` never opens a block.
+        # (No YAML parse here: CONSTRAINT-1 — this file runs inside the closure
+        # and cannot depend on PyYAML.)
         spec_named = set()
         section = None
-        for line in snap_bytes.decode("utf-8", "replace").splitlines():
-            if line.startswith("## "):
-                section = line[3:].strip().lower()
-            elif section in CONTRACT_DIRS:
-                m = re.match(r"-\s+name:\s*(\S+)", line)
+        block: list[str] = []
+
+        def _flush(entry):
+            for entry_line in entry:
+                m = re.match(r"(?:-\s+)?name:\s*(\S+)", entry_line.strip())
                 if m:
                     spec_named.add(m.group(1).strip("\"'"))
+                    return
+
+        for line in snap_bytes.decode("utf-8", "replace").splitlines():
+            if line.startswith("## "):
+                _flush(block)
+                block = []
+                section = line[3:].strip().lower()
+            elif section in CONTRACT_DIRS:
+                if line.startswith("- "):
+                    _flush(block)
+                    block = [line]
+                elif block:
+                    block.append(line)
+        _flush(block)
         missing = spec_named - set(contracts)
         extra = set(contracts) - spec_named
         if missing:

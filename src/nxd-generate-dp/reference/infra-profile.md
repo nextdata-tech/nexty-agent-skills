@@ -35,8 +35,10 @@ Derived models add nothing here. They are computed inside the transform that
 exists — no extra service, no extra secret, no profile change.
 
 **On the `csv-source` driver id.** Emit `nxd:local/file/storage:0.1.0`, which is
-what the desktop runtime expects for a local-file service and what the
-self-check enforces. Note that it is **not proven that the older
+what the desktop runtime expects for a local-file service. The self-check
+enforces it only for a closure declaring a `source_aligned_input()` — an
+ordinary CSV closure, whose transform reads the export through
+`secrets["csv_source"]`, is not checked on this today. Note that it is **not proven that the older
 `nxd:generic-secrets:1.0.0` stops working**: six `ci_skip` scenarios still carry
 pinned `fixtures/reference-closure/deployment-spec.yaml` files using it, those
 are compiled artifacts the supervisor produces rather than anything authored
