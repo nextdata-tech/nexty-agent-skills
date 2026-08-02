@@ -48,6 +48,8 @@ except ImportError:  # pragma: no cover - environment guard
 
 import dp_diagnostics  # noqa: E402 - after adding the local scripts directory
 from dp_diagnostics import (  # noqa: E402 - after the optional-PyYAML guard, deliberately
+    CONTRACT_AUTHORITY,
+    CONTRACT_PHASE,
     CREDENTIAL_PLACEHOLDERS,
     CREDENTIAL_VALUE_RE,
     DECISION_PROVENANCE,
@@ -85,6 +87,25 @@ REGRAIN_HINT_RE = re.compile(
     r"per[_ -]month|regrain|collapsed?)\b",
     re.IGNORECASE,
 )
+
+# A contract name selects a generated verifier file (contracts/expectations/
+# <name>.py), so it is a filename, not a model identifier: lowercase-hyphenated
+# rather than the snake_case NAME_RE the model sections use.
+CONTRACT_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+
+# A rule that still carries a placeholder is unexecutable. This is the
+# RULE-PREFILL trap in contract form: the agent must ask for the number rather
+# than invent one, so an unfilled threshold is an error and never a default.
+UNBOUND_THRESHOLD_RE = re.compile(
+    r"(<[A-Za-z_][A-Za-z0-9_ -]*>|\bTBD\b|\bTODO\b|\bXXX\b|\{\{[^}]*\}\}|"
+    r"\b(some|any|appropriate|reasonable|suitable) (threshold|value|"
+    r"number|limit|minimum|maximum)\b)",
+    re.IGNORECASE,
+)
+# Deliberately NOT in that set: `NA` / `N/A`. They are real sentinel VALUES a
+# rule legitimately names — `gates` documents them as non-capture sentinels the
+# agent must route to `unknown` rather than fill — so matching them rejected a
+# correct rule for saying the thing the spec asks it to say.
 
 
 def new_report(spec: Path | None = None) -> Report:
@@ -391,6 +412,164 @@ def check_models(data, report: Report) -> list[dict]:
         )
 
     return entries
+
+
+def check_contracts(section: str, data, models: list[dict], report: Report) -> list[dict]:
+    """Validate `## expectations` or `## promises`.
+
+    Both sections carry the same entry shape and differ only in the phase they
+    are allowed to run at, so one checker serves both and `section` decides the
+    phase. The codes are `spec.contract.*` for the same reason: a duplicate name
+    is the same defect whichever section it appears in, and the path already
+    says which section the reader is in.
+    """
+    expected_phase = "pre_transform" if section == "expectations" else "post_transform"
+    model_names = {m.get("name") for m in models if isinstance(m, dict)}
+    entries: list[dict] = []
+
+    for i, contract in enumerate(as_list(data)):
+        where = spec_path(section, entry_identity(contract, i))
+        if not isinstance(contract, dict):
+            report.error(
+                "is not a mapping",
+                code="spec.contract.not_mapping",
+                path=where,
+            )
+            continue
+        entries.append(contract)
+
+        name = contract.get("name")
+        if not name:
+            report.error(
+                "has no 'name' — the name selects the verifier file, so an "
+                "unnamed contract cannot be generated",
+                code="spec.contract.no_name",
+                path=f"{where}.name",
+            )
+        else:
+            if not CONTRACT_NAME_RE.match(str(name)):
+                report.error(
+                    f"name {name!r} is not lowercase-hyphenated",
+                    code="spec.contract.bad_name",
+                    path=f"{where}.name",
+                    evidence={"found": name},
+                )
+
+        authority = contract.get("authority")
+        if not authority:
+            report.error(
+                "has no 'authority' — a contract must say whether the user "
+                "stated it or the agent inferred it, because only the user may "
+                "weaken their own guarantee",
+                code="spec.contract.no_authority",
+                path=f"{where}.authority",
+            )
+        elif authority not in CONTRACT_AUTHORITY:
+            report.error(
+                f"authority {authority!r} is outside {list(CONTRACT_AUTHORITY)}",
+                code="spec.contract.bad_authority",
+                path=f"{where}.authority",
+                evidence={"found": authority},
+            )
+        elif authority == "inferred":
+            report.error(
+                "is 'inferred' — a constraint read off the data belongs in "
+                "models.py and an ordinary .promise(model), not in the spec. "
+                "Only a guarantee the user stated travels as a spec contract; "
+                "replaying an inference back as the user's own promise is the "
+                "confusion these sections exist to prevent",
+                code="spec.contract.inferred_in_spec",
+                path=f"{where}.authority",
+                evidence={"found": authority},
+            )
+
+        if not contract.get("guarantee"):
+            report.error(
+                "has no 'guarantee' — the user's own words for what they are "
+                "promising, kept verbatim so a later reader can tell what was "
+                "agreed from how it was implemented",
+                code="spec.contract.no_guarantee",
+                path=f"{where}.guarantee",
+            )
+
+        rule = contract.get("rule")
+        if not rule:
+            report.error(
+                "has no 'rule' — the executable form of the guarantee. Without "
+                "it the contract is prose and no verifier can be generated",
+                code="spec.contract.no_rule",
+                path=f"{where}.rule",
+            )
+        elif UNBOUND_THRESHOLD_RE.search(str(rule)):
+            report.error(
+                "names a threshold the spec never fixes — a rule with an "
+                "unfilled placeholder cannot be verified. Ask for the number "
+                "rather than choosing one",
+                code="spec.contract.unbound_threshold",
+                path=f"{where}.rule",
+                evidence={"found": str(rule)[:200]},
+            )
+
+        model = contract.get("model")
+        if not model:
+            report.error(
+                "names no 'model' — a contract with no subject cannot be "
+                "attached to an input or an output",
+                code="spec.contract.no_model",
+                path=f"{where}.model",
+            )
+        elif models and str(model) not in model_names:
+            report.error(
+                f"names model {model!r}, which no models entry declares",
+                code="spec.contract.unknown_model",
+                path=f"{where}.model",
+                evidence={"found": model, "declared": sorted(n for n in model_names if n)},
+            )
+
+        phase = contract.get("phase")
+        if phase is None:
+            continue
+        if phase not in CONTRACT_PHASE:
+            report.error(
+                f"phase {phase!r} is outside {list(CONTRACT_PHASE)}",
+                code="spec.contract.bad_phase",
+                path=f"{where}.phase",
+                evidence={"found": phase},
+            )
+        elif phase != expected_phase:
+            report.error(
+                f"is a {section[:-1]} declaring phase {phase!r}; an expectation "
+                f"guards the input before the transform reads it and a promise "
+                f"guards the output after it wrote it, so this must be "
+                f"{expected_phase!r}",
+                code="spec.contract.wrong_phase",
+                path=f"{where}.phase",
+                evidence={"found": phase, "expected": expected_phase},
+            )
+
+    return entries
+
+
+def check_contract_names_unique(contracts: list[dict], report: Report) -> None:
+    """One namespace across both contract sections.
+
+    Deliberately not folded into `check_contracts`: a name collision between an
+    expectation and a promise is invisible to a checker that sees one section at
+    a time, and it is the collision that matters most — both sections generate
+    into `contracts/`, so two contracts sharing a name race for one filename and
+    the second silently overwrites the first.
+    """
+    names = [str(c["name"]) for c in contracts if c.get("name")]
+    dupes = {n for n in names if names.count(n) > 1}
+    if dupes:
+        report.error(
+            f"duplicate contract names across expectations and promises: "
+            f"{sorted(dupes)} — the name selects the generated verifier file, so "
+            f"two contracts sharing one name overwrite each other",
+            code="spec.contract.duplicate_name",
+            path=spec_path("expectations"),
+            evidence={"found": sorted(dupes)},
+        )
 
 
 def check_gates(data, report: Report) -> None:
@@ -1063,6 +1242,14 @@ def validate(path: Path) -> Report:
         check_population(population, report)
 
     models = check_models(parsed.get("models"), report) if "models" in parsed else []
+
+    contracts: list[dict] = []
+    for contract_section in ("expectations", "promises"):
+        if contract_section in parsed:
+            contracts += check_contracts(
+                contract_section, parsed[contract_section], models, report
+            )
+    check_contract_names_unique(contracts, report)
 
     if "gates" in parsed:
         check_gates(parsed["gates"], report)

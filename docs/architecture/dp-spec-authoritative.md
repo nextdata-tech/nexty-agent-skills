@@ -1911,3 +1911,26 @@ Deliberate limits. Each is a decision, not an oversight.
 - **`s5_serve` has no attribution producer.** Nothing in the `inspect_run`
   payload distinguishes post-publish serving, so a serve failure cannot be
   attributed to `s5_serve` from supervisor-authored evidence.
+- **Transform logic is not fully captured by the IR.** The spec carries the
+  *what* — `population` (the filter), `models[].fields[].derivation` (per-field
+  extraction), `models[].grain`/`key` (the Tier-1 assert), `schedule` (the
+  incremental route and cursor). It carries no **join logic, aggregation logic,
+  or order of operations between models**: there is no section stating that a
+  derived model is built by joining A to B on key K and then grouping by G.
+  Where two models can be combined in more than one way, `nxd-generate-dp`
+  chooses at codegen time and the spec never records the choice.
+
+  This weakens the pipeline claim in §0 at its centre. "The closure is a pure
+  function of the IR" holds for everything the IR names, but two regenerations
+  from a byte-identical spec can emit different transforms without moving the
+  spec hash — so a re-run is not reproducible in the way the hash implies, and
+  a review of the spec cannot catch a wrong join. The compile table's warning
+  that the fan-in is "many-to-many rather than a DAG" is a symptom of the same
+  hole.
+
+  Closing it means a transform-logic section (joins, aggregations, and their
+  ordering) with validator coverage, which is a larger change than any single
+  PR that has touched this file so far. Until then, the join a closure
+  implements is reviewable only in `transform/main.py` — that is, in the
+  generated artifact rather than in the approved plan. Tracked as
+  [#142](https://github.com/nextdata-tech/nexty-agent-skills/issues/142).

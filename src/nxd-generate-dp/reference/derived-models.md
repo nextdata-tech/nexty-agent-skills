@@ -1,7 +1,8 @@
 # Authoring derived models and their asserts
 
-Worked code for Step 3a / Step 3b of nxd-generate-dp. The mandatory contract
-clauses live in SKILL.md; this file is the shape they produce.
+Worked code and invariant-selection detail for Step 3a / Step 3b of
+nxd-generate-dp. SKILL.md keeps the mandatory Tier 1/Tier 2 rules; this file
+shows the source-independent checks and concrete failure shapes they require.
 
 ## Contents
 

@@ -289,6 +289,90 @@ halves are counted by the build record and never written back.
   are; how many rows actually arrived without one is an outcome and lands in
   `build-record.json` `evidence.required_capture`. Do not record counts here.
 
+### `## expectations` and `## promises` (optional)
+
+A guarantee the user stated about the data, in a form that executes. An
+**expectation** guards an input before the transform reads it; a **promise**
+guards an output after the transform wrote it. Both compile to a generated
+verifier under `contracts/`, so both sections carry the same entry shape and
+differ only in the phase they run at.
+
+```yaml
+## expectations
+- name: accepted-currency      # lowercase-hyphenated; selects the verifier filename
+  authority: user_stated       # user_stated only — see below
+  model: raw_orders            # a model this spec declares
+  phase: pre_transform         # pre_transform for an expectation
+  fields: [currency]           # optional; what the rule reads
+  guarantee: |
+    Every order is priced in EUR or USD.
+  rule: |
+    currency in ('EUR', 'USD')
+  diagnostic: |
+    Reject the load and name the offending currencies and their row counts.
+
+## promises
+- name: order-total-reconciles
+  authority: user_stated
+  model: order_lines
+  phase: post_transform        # post_transform for a promise
+  guarantee: |
+    Each order's total equals the sum of its line totals.
+  rule: |
+    sum(line_total) grouped by order_id == order_total, per currency, pre-FX
+```
+
+**`authority` is why these sections exist.** `user_stated` is a guarantee the
+user asserted in their own words — theirs to weaken or withdraw, never the
+agent's, which is why a missing `guarantee` or `rule` is `owner: user` and not
+agent-fillable. `inferred` is **rejected**: a constraint the agent read off the
+data or the schema is real, but it belongs in `models.py` and an ordinary
+`.promise(model)`. Replaying an inference back to the user as their own promise
+is precisely the confusion this field prevents.
+
+**`guarantee` is the user's words; `rule` is the executable form.** Keep both.
+The pair is what lets a later reader tell what was agreed from how it was
+implemented — a rule alone cannot be audited against intent, and a guarantee
+alone cannot be run.
+
+**Never invent a threshold.** A rule still carrying a placeholder (`<MIN_ROWS>`,
+`TBD`, "some reasonable minimum") is unexecutable, and the validator rejects it
+rather than letting a generated verifier enforce a number the user never chose.
+Ask for it, or carry the gap as an `open_questions` entry. This is
+[RULE-PREFILL](#rule-prefill--the-trap-this-section-exists-to-name) in contract
+form.
+
+**Names are one namespace across both sections.** The name selects the generated
+verifier's filename, so an expectation and a promise sharing a name would race
+for one file.
+
+These sections do **not** replace the Step-3b in-transform asserts, which remain
+the durable derived-row check. A contract states what the user guaranteed; an
+assert proves what the transform actually produced.
+
+#### Not a gate, not a required-capture field
+
+Three nearby constructs, deliberately distinct. Putting a rule in the wrong one
+either double-enforces it or silently loses its outcome half.
+
+| | subject | on a violation |
+|---|---|---|
+| `models[].fields[].required_capture` | one **field's presence** | the row is not trusted; the count lands in `build-record.json` `evidence.required_capture` |
+| `## gates` | an **outcome** | the outcome is blocked, the row is kept; an absent input is `UNKNOWN`, **never** `FAIL` |
+| `## expectations` / `## promises` | a **value or a cross-row invariant** | the load stops before the transform, or publication is blocked after it |
+
+The one to watch is **`required_capture` versus an expectation that says "field
+X is never null" — those are the same assertion, and stating both enforces one
+guarantee twice while only `required_capture` is counted in the build record.**
+A rule about whether a field *arrived* is `required_capture`. A rule about
+whether the value is *acceptable* — an accepted set, a range, a cross-field
+identity, a reconciliation — is a contract.
+
+Do not restate a gate as a contract. A gate deliberately routes absence to
+`UNKNOWN` because absence is not a judgement; a contract deliberately fails on
+bad input. Opposite dispositions toward missing data, so a rule written as both
+contradicts itself.
+
 ### `## gates` (optional)
 
 A gate blocks an outcome without discarding a row. **Every gate must state its
@@ -493,6 +577,8 @@ discovered it. See [`build-record.md`](build-record.md).
 | `## models` | `models.py`, `.promise(...)`, `PHYSICAL_MODELS`, the Step-1a plan |
 | `## models[].grain` + `.key` | `primary_key()`, the Step-3b Tier-1 uniqueness assert |
 | `## models[].deferred` | `contracts/<name>.md` instead of a `.promise(...)` |
+| `## expectations` | `contracts/expectations/<name>.py`, wired once on the source-aligned input |
+| `## promises` | `contracts/promises/<name>.py`, wired once on the output, alongside the ordinary `.promise(model)` |
 | `## models[].fields[].derivation` | the per-field extraction rule and its determinism caveat |
 | `## gates` | gate columns on the derived model; `UNKNOWN` handling |
 | `## criteria` | the landed `scoring_rubric` reference model |

@@ -27,7 +27,9 @@ author-chosen **source label**: short, lowercase, hyphen-separated (e.g.
 `orders`, `users`, `crm`), unique among instances of *that* type. Reusing a
 label across different types is harmless (`db-source-orders` and
 `api-source-orders` don't collide as service names) but avoid it for
-clarity.
+clarity. **Pocket source-aligned inputs are the exception:** this is a
+transform-service naming rule for labeled CSVs, not permission to bind
+`.input(...).source(_csv_<label>)`; those inputs use the one unlabeled `_csv`.
 
 ## Naming table
 
@@ -46,9 +48,15 @@ must be mirrored here.
 | One API (unchanged) | `api-source` | `api_source` | `api-source-endpoints` | `_api` |
 | 2+ APIs, labeled | `api-source-<label>` | `api_source_<label>` | `api-source-<label>-endpoints` | `_api_<label>` |
 | One CSV (unchanged) | `csv-source` | `csv_source` | `csv-source-path` | `_csv` |
-| 2+ CSVs, labeled | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
+| 2+ CSVs, labeled, transform-only | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
 
-The driver id (`nxd:generic-secrets:1.0.0`) never changes — only the name.
+For CSV instances the driver is `nxd:local/file/storage:0.1.0`; only the
+service name changes. **Runtime boundary:** labeled CSV services may appear in
+`.transform(...).secrets([...])`, but not in Pocket
+`.input(...).source(...)`. Every source-aligned Pocket input, even a
+non-custom one, uses the exact unlabeled `_csv` binding and the one
+`csv-source-path`; multiple input declarations may share it. Other connector
+types retain their documented drivers.
 `attributes` follows the single-instance rule per type: `[]` for
 `csv-source-<label>` / `file-source-<label>` (nothing secret to carry — see
 `reference/file-source.md`); for `db-source-<label>` / `api-source-<label>`,
@@ -163,10 +171,10 @@ it.
 Same shape: swap `db-source-<label>`/`db_source_<label>`/`sql_database` for
 `file-source-<label>`/`file_source_<label>`/the `dlt.sources.filesystem`
 reader, `api-source-<label>`/`api_source_<label>`/`rest_api_resources`, or
-`csv-source-<label>`/`csv_source_<label>`/`read_csv` — each labeled file or
-CSV source also gets its own root directory (`data-<label>/<model>/*.csv`
-instead of the shared `data/`) so two file-based sources' exports never
-overlap on disk.
+`csv-source-<label>`/`csv_source_<label>`/`read_csv` **inside the transform**.
+Labeled CSV roots (`data-<label>/<model>/*.csv`) are transform-only; they do
+not create a labeled Pocket source-aligned input. Multiple source-aligned
+inputs instead share `_csv` and `csv-source-path`.
 
 ## What does NOT change
 

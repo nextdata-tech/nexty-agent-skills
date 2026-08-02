@@ -19,7 +19,7 @@ spec:
       driver: nxd:local/python/compute:0.1.0
       attributes: []
     - name: csv-source
-      driver: nxd:generic-secrets:1.0.0
+      driver: nxd:local/file/storage:0.1.0
       attributes: []
 ```
 
@@ -27,11 +27,33 @@ spec:
   `spec.py` and the `/infra-profile/desktop-local#/...` service refs.
 - Three services, each with `attributes: []`: `duckdb` (local DuckDB storage,
   the output port backend), `python-compute` (local Python compute, runs the
-  transform), `csv-source` (generic-secrets, delivers the CSV export root).
+  transform), `csv-source` (local file storage, both the source-aligned input
+  service and transform secret delivering the CSV export root).
 
 Derived models add nothing here. They are computed inside the transform that
 `python-compute` already runs and land through the `duckdb` port that already
 exists — no extra service, no extra secret, no profile change.
+
+**Other connector types.** Only the third service's *name* changes (the
+connector-types table in the skill's Overview). `csv-source` and `file-source`
+carry no credential and keep `attributes: []`; `db-source` and `api-source`
+populate `attributes` with the real credential — see
+[`database-source.md`](database-source.md) and [`api-source.md`](api-source.md).
+For 2+ instances of one type, emit one service per instance, per
+[`multi-source.md`](multi-source.md).
+
+**On the `csv-source` driver id.** Emit `nxd:local/file/storage:0.1.0`, which is
+what the desktop runtime expects for a local-file service. The self-check
+enforces it only for a closure declaring a `source_aligned_input()` — an
+ordinary CSV closure, whose transform reads the export through
+`secrets["csv_source"]`, is not checked on this today. Note that it is **not proven that the older
+`nxd:generic-secrets:1.0.0` stops working**: six `ci_skip` scenarios still carry
+pinned `fixtures/reference-closure/deployment-spec.yaml` files using it, those
+are compiled artifacts the supervisor produces rather than anything authored
+here, and nothing in this repo has served one since the id changed. Treat the
+new id as the one to write, not as evidence the old one is rejected — and do
+not hand-edit a `deployment-spec.yaml` to "fix" it, because that file is
+supervisor-compiled and hand-authoring it is forbidden.
 
 ## `csv-source-path`
 

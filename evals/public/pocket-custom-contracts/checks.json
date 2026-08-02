@@ -1,0 +1,47 @@
+{
+  "name": "Generate executable Pocket custom contracts",
+  "skills": ["nxd-pocket-loop", "nxd-generate-dp"],
+  "ci_skip": "requires a manually operated default-deny source-isolation wrapper plus operator-resolved protected roots; the automatic PR runner has no such adapter. Run explicitly outside CI with the isolation attestation, wrapper, and roots configured.",
+  "workspace_files": [
+    "dp-spec.approved.md",
+    "spec.py",
+    "infra-profile.yaml",
+    "contracts/**/*.py",
+    "**/dp-spec.approved.md",
+    "**/spec.py",
+    "**/infra-profile.yaml",
+    "**/contracts/**/*.py"
+  ],
+  "deterministic_check": {
+    "script": "check_custom_contracts.py",
+    "deps": []
+  },
+  "agent_source_isolation": {
+    "capability_id": "nxd-eval-source-isolation-v1",
+    "raw_stream_markers": [
+      {"id": "withheld-custom-contract-checker", "needle": "check_custom_contracts.py"},
+      {"id": "source-checks-rubric", "target": "scenario_checks"},
+      {"id": "prior-benchmark-report-history", "root": "benchmark_report_history"},
+      {"id": "prior-closure-temp-history", "root": "closure_temp_history"},
+      {"id": "codex-memories", "root": "codex_memories"},
+      {"id": "codex-session-history", "root": "codex_session_history"},
+      {"id": "evaluator-checkout", "root": "evaluator_checkout"}
+    ],
+    "probes": [
+      {"id": "withheld-custom-contract-checker", "target": "withheld_fixture", "fixture": "check_custom_contracts.py", "command": ["/bin/cat", "{target}"]},
+      {"id": "source-checks-rubric", "target": "scenario_checks", "command": ["/bin/cat", "{target}"]},
+      {"id": "prior-benchmark-report-history", "target": "operator_root", "root": "benchmark_report_history", "command": ["/bin/ls", "{target}"]},
+      {"id": "prior-closure-temp-history", "target": "operator_root", "root": "closure_temp_history", "command": ["/bin/ls", "{target}"]},
+      {"id": "codex-memories", "target": "operator_root", "root": "codex_memories", "command": ["/bin/ls", "{target}"]},
+      {"id": "codex-session-history", "target": "operator_root", "root": "codex_session_history", "command": ["/bin/ls", "{target}"]},
+      {"id": "evaluator-checkout", "target": "operator_root", "root": "evaluator_checkout", "command": ["/bin/ls", "{target}"]}
+    ]
+  },
+  "checks": [
+    {"id": "contract-inventory", "check": "The two user-stated guarantees are carried as `## expectations` / `## promises` entries in the approved dp-spec, each with `authority: user_stated`, and are kept distinct from constraints merely inferred from the CSV (which belong in models.py and an ordinary .promise(model)). The closure's byte copy, dp-spec.approved.md, declares exactly the contracts spec.py wires \u2014 no more, no fewer."},
+    {"id": "csv-input-expectation", "check": "Attach a named custom expectation to a declared source-aligned CSV input with relative model_paths, local-file csv-source, and a per-contract verifier script."},
+    {"id": "duckdb-output-promise", "check": "Attach a distinct named custom promise to the DuckDB output while retaining the ordinary schema promise."},
+    {"id": "verifier-script-shape", "check": "Each referenced verifier has exactly one on_verify registration and an exact data_product.verify() __main__ guard; every custom contract owns one safe relative script path; no decorative contract scripts or secrets."},
+    {"id": "deterministic-check", "check": "The structural custom-contract fixture checker must report ALL CHECKS PASSED."}
+  ]
+}

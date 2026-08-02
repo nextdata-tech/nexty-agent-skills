@@ -567,7 +567,7 @@ def desktop_wiring_errors(spec: str, profile: str, requirements: str) -> list[st
     expected_services = {
         "duckdb": "nxd:local/duckdb/storage:0.1.0",
         "python-compute": "nxd:local/python/compute:0.1.0",
-        "csv-source": "nxd:generic-secrets:1.0.0",
+        "csv-source": "nxd:local/file/storage:0.1.0",
     }
     for name, driver in expected_services.items():
         if services.get(name) != driver:

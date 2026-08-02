@@ -70,8 +70,9 @@ CSV or Parquet first, and proceed with the CSV or file-source connector.
 
 ## Naming
 
-- Infra-profile service: `file-source`, driver `nxd:generic-secrets:1.0.0`
-  (same driver as `csv-source` — it is generic).
+- Infra-profile service: `file-source`, driver `nxd:generic-secrets:1.0.0`.
+  This deliberately differs from CSV: `csv-source` uses
+  `nxd:local/file/storage:0.1.0` on the local Pocket runtime.
 - Transform secrets key: `secrets["file_source"]` — a string, the file-source
   export root (same shape as `csv_source`, just a different key).
 - Companion file: `file-source-path` — one line, the **relative** path from
@@ -132,8 +133,9 @@ float the version.
   `.secrets([_file])` instead of `.secrets([_csv])`. Everything else
   (`.promise`, `.model`, `.port("duckdb", ...)`, no `.semantic_tools()`) is
   identical to the CSV template.
-- `infra-profile.yaml`: the third service is named `file-source` (same
-  driver `nxd:generic-secrets:1.0.0`). Like `csv-source`, it has nothing
+- `infra-profile.yaml`: the third service is named `file-source` with the
+  generic driver `nxd:generic-secrets:1.0.0` (unlike local-file
+  `csv-source`). Like `csv-source`, it has nothing
   secret to deliver — the export root is non-secret topology, covered by
   `file-source-path` — so `attributes` stays `[]`, unlike `db-source` /
   `api-source` which populate it with a live credential (see

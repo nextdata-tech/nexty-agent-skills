@@ -283,7 +283,16 @@ _codes("error", "agent",
        "closure.build_record_hash_mismatch", "closure.readme_missing",
        "closure.resolved_ref_missing", "closure.escaping_reference",
        "closure.gitignore_missing", "closure.sensitive_missing",
-       "closure.gitignore_not_naming_profile")
+       "closure.gitignore_not_naming_profile",
+       "closure.contract_not_wired", "closure.contract_verifier_missing",
+       "closure.contract_verifier_malformed", "closure.contract_verifier_inert",
+       "closure.contract_verifier_unreferenced",
+       "closure.contract_verifier_secret", "closure.contract_duplicate_name",
+       "closure.contract_spec_drift",
+       "closure.profile_service_missing", "closure.profile_driver_mismatch",
+       "closure.profile_name_mismatch", "closure.port_storage_mismatch",
+       "closure.input_service_mismatch", "closure.csv_root_invalid",
+       "closure.model_path_unresolved")
 # The one closure.* code the AGENT cannot fix: a snapshot taken from a spec the
 # user never approved is a governance fault, and only the user can approve.
 _codes("error", "user", "closure.lock_status_not_approved")
@@ -715,6 +724,20 @@ def parse_spec(src, path, var_name, var_kind):
     if ".semantic_tools(" in src:
         bad("struct.semantic_tools_forbidden",
             f"{path}: .semantic_tools(...) is forbidden on desktop", path)
+
+    # A custom contract's verifier is also a script(...).compute(...), so the
+    # transform's rules cannot be applied to every script call in the file. Mark
+    # the verifier scripts first: they are the ones reachable from a custom(...)
+    # contract, and they are exempt from "must point at transform/main.py" and
+    # do not satisfy the transform's own required-call set.
+    verifier_scripts = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or call_name(node) != "verify":
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and call_name(sub) == "script":
+                verifier_scripts.add(id(sub))
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -728,12 +751,21 @@ def parse_spec(src, path, var_name, var_kind):
                     f"{path}: data_product(infra_profile=...) must be the "
                     f"literal \"desktop-local\", got {ip!r}", path)
         elif n == "script":
+            if id(node) in verifier_scripts:
+                # A contract verifier, checked by the Phase C custom-contract
+                # gate against contracts/, not by the transform's path rule.
+                continue
             saw["script"] = True
             if literal_str(node.args[0] if node.args else None) != "transform/main.py":
                 bad("struct.bad_script_path",
                     f"{path}: script() must point at \"transform/main.py\"", path)
         elif n in ("compute", "secrets"):
-            saw[n] = True
+            # Only the TRANSFORM's .compute()/.secrets() satisfy the required
+            # call set. A verifier's .compute(_compute) must not stand in for a
+            # transform that never declared one.
+            if not any(id(sub) in verifier_scripts
+                       for sub in ast.walk(node) if isinstance(sub, ast.Call)):
+                saw[n] = True
         elif n == "port":
             saw["port"] = True
             if literal_str(node.args[0] if node.args else None) != "duckdb":
@@ -752,6 +784,11 @@ def parse_spec(src, path, var_name, var_kind):
                         f"{path}: .promise({arg.id}) — {var_name[arg.id]} is a "
                         f"semantic_view; views are registered with .model(), "
                         f"never promised", path)
+            elif any(call_name(c) == "custom" for c in spine(arg)):
+                # .promise(custom("x")...verify(...)) — a custom contract, not a
+                # models.py name. The root of the chain is the custom() call, so
+                # match on the spine rather than the outermost call.
+                pass  # validated by the Phase C custom-contract gate
             else:
                 unv(f"{path}: .{n}() argument "
                     f"{ast.unparse(arg)} is not a models.py name", path)
@@ -1100,10 +1137,14 @@ for ref in (lock or {}).get("resolved_refs") or []:
 ESCAPE = re.compile(r"\.\.(?:/[^\s\)\"']*)+\.md", re.IGNORECASE)
 scan = ["README.md", "dp-spec.approved.md", "spec.py", "models.py",
         "transform/main.py"]
-scan += [str(p) for p in Path(".").glob("contracts/*")]
+# rglob, not glob: contracts/ now holds expectations/ and promises/ subtrees as
+# well as the flat contracts/<name>.md, and a verifier that points out of the
+# closure escapes just as effectively from one level down.
+scan += [str(p) for p in Path(".").rglob("contracts/*")]
+scan += [str(p) for p in Path(".").rglob("contracts/*/*")]
 for rel in scan:
     p = Path(rel)
-    if not p.exists():
+    if not p.is_file():
         continue
     for m in ESCAPE.findall(p.read_text()):
         cerr("closure.escaping_reference",
@@ -1153,6 +1194,466 @@ if profile.exists():
                  ".gitignore exists but does not ignore infra-profile.yaml — the one "
                  "file that must never be committed. Ignore it by name, never `*`.",
                  ".gitignore")
+
+# C12 — the custom-contract gate. A `## expectations` / `## promises` entry in
+# the approved spec compiles to an executable verifier under contracts/. This
+# proves the compilation happened and produced something that can actually
+# fail: a contract that parses but can never return FAILED is decorative, and a
+# decorative contract is worse than none — it reports a guarantee as enforced
+# while enforcing nothing.
+#
+# The gate is STRUCTURAL and offline. A pass means every declared contract is
+# wired once, names a verifier that exists under contracts/, and that verifier
+# is shaped to run. It does NOT mean the verifier was executed against data.
+CONTRACT_DIRS = {"expectations": "pre_transform", "promises": "post_transform"}
+SECRET_LITERAL = re.compile(
+    r"(?i)\b(api[_-]?key|password|passwd|token|secret)\s*=\s*[\"']")
+
+
+def _verify_scripts(tree):
+    """-> (paths by name, unnamed count, duplicate names, {name: (desc, model)}).
+
+    `custom("x").model(m).verify(script("p").compute(c))` is one call chain, so
+    the verify() that belongs to a given custom() is the INNERMOST one whose
+    subtree contains it. Matching on "any verify() in the file" would associate
+    the wrong path as soon as a closure declares a second contract.
+    """
+    found, unnamed, dupes, meta = {}, 0, [], {}
+    verifies = [n for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and call_name(n) == "verify"]
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or call_name(node) != "custom":
+            continue
+        cname = literal_str(node.args[0] if node.args else None)
+        if cname is None:
+            unnamed += 1
+            continue
+        # Smallest enclosing verify() — by node count, so a nested chain picks
+        # its own and never a sibling contract's.
+        best, best_size = None, None
+        for v in verifies:
+            subtree = list(ast.walk(v))
+            if not any(sub is node for sub in subtree):
+                continue
+            if best_size is None or len(subtree) < best_size:
+                best, best_size = v, len(subtree)
+        path = None
+        if best is not None:
+            for sub in ast.walk(best):
+                if isinstance(sub, ast.Call) and call_name(sub) == "script":
+                    path = literal_str(sub.args[0] if sub.args else None)
+                    break
+        # .description(...) and .model(...) hang off the same custom() chain.
+        # The reference doc lists both as preflight failures, so check them here
+        # rather than leaving the eval fixture as the only gate that does — a
+        # closure passing Phase C and failing the scenario checker is the split
+        # this file keeps closing.
+        outer = None
+        for cand in ast.walk(tree):
+            if not isinstance(cand, ast.Call):
+                continue
+            if any(c is node for c in spine(cand)) and (
+                    outer is None or len(list(ast.walk(cand))) > len(list(ast.walk(outer)))):
+                outer = cand
+        chain = spine(outer) if outer is not None else [node]
+        has_desc = any(call_name(c) == "description" and c.args
+                       and literal_str(c.args[0]) for c in chain)
+        has_model = any(call_name(c) == "model" and c.args for c in chain)
+        if cname in found:
+            dupes.append(cname)
+        found[cname] = path
+        meta[cname] = (has_desc, has_model)
+    return found, unnamed, dupes, meta
+
+
+try:
+    _spec_tree = ast.parse(spec_src, "spec.py")
+except SyntaxError:
+    _spec_tree = None          # Phase A already reported it; do not double-report
+
+if _spec_tree is not None:
+    contracts, unnamed, dupes, contract_meta = _verify_scripts(_spec_tree)
+
+    if unnamed:
+        cerr("closure.contract_not_wired",
+             f"spec.py: {unnamed} custom(...) contract(s) have a non-literal "
+             f"name. The name selects the verifier file, so it must be a string "
+             f"literal.", "spec.py", {"count": unnamed})
+    for d in sorted(set(dupes)):
+        cerr("closure.contract_duplicate_name",
+             f"spec.py: two custom contracts are named {d!r} — the name selects "
+             f"the generated verifier file, so one silently overwrites the "
+             f"other. Names are unique across expectations AND promises.",
+             "spec.py", {"found": d})
+
+    for cname, (has_desc, has_model) in sorted(contract_meta.items()):
+        if not has_desc:
+            cerr("closure.contract_not_wired",
+                 f"spec.py: custom({cname!r}) has no non-empty "
+                 f".description(...). The description is what a later reader "
+                 f"sees when the contract fails.", "spec.py",
+                 {"contract": cname})
+        if not has_model:
+            cerr("closure.contract_not_wired",
+                 f"spec.py: custom({cname!r}) has no .model(...) — a contract "
+                 f"with no subject cannot be attached to an input or output.",
+                 "spec.py", {"contract": cname})
+
+    referenced = set()
+    for cname, vpath in sorted(contracts.items()):
+        if not vpath:
+            cerr("closure.contract_not_wired",
+                 f"spec.py: custom({cname!r}) has no "
+                 f".verify(script(...).compute(_compute)) — a contract with no "
+                 f"verifier declares a guarantee nothing checks.",
+                 "spec.py", {"contract": cname})
+            continue
+        # Containment before touching the path: a verifier resolved outside the
+        # closure is the cross-boundary pointer C9 exists to stop.
+        if vpath.startswith("/") or ".." in Path(vpath).parts or \
+                not vpath.startswith("contracts/"):
+            cerr("closure.contract_not_wired",
+                 f"spec.py: custom({cname!r}) verifier {vpath!r} must stay under "
+                 f"contracts/ inside the closure.", "spec.py",
+                 {"contract": cname, "found": vpath})
+            continue
+        referenced.add(vpath)
+        vp = Path(vpath)
+        if not vp.is_file():
+            cerr("closure.contract_verifier_missing",
+                 f"{vpath}: referenced by custom({cname!r}) but the file does "
+                 f"not exist.", vpath, {"contract": cname})
+            continue
+        vsrc = vp.read_text()
+        try:
+            vtree = ast.parse(vsrc, vpath)
+        except SyntaxError as exc:
+            cerr("closure.contract_verifier_malformed",
+                 f"{vpath}: verifier does not parse ({exc.msg}).", vpath,
+                 {"contract": cname})
+            continue
+
+        verifiers = [n for n in ast.walk(vtree)
+                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and any(call_name(d) == "on_verify"
+                             for d in n.decorator_list
+                             if isinstance(d, ast.Call))]
+        # Report async BEFORE bailing on the count. A file carrying one sync and
+        # one async verifier is both duplicated and unrunnable, and an agent
+        # told only "found 2" deletes the wrong one.
+        if any(isinstance(v, ast.AsyncFunctionDef) for v in verifiers):
+            cerr("closure.contract_verifier_malformed",
+                 f"{vpath}: Pocket custom verifier must be synchronous; the "
+                 f"runtime does not await async verifier functions, so an async "
+                 f"verifier never runs and the contract silently passes.",
+                 vpath, {"contract": cname})
+        if len(verifiers) != 1:
+            cerr("closure.contract_verifier_malformed",
+                 f"{vpath}: needs exactly one @data_product.on_verify() "
+                 f"function, found {len(verifiers)}. script(...) executes the "
+                 f"whole file, so the contract name cannot select among "
+                 f"several.", vpath, {"contract": cname, "found": len(verifiers)})
+            continue
+        if isinstance(verifiers[0], ast.AsyncFunctionDef):
+            continue
+        # vtree.body only — a guard nested inside a function never fires when
+        # script(...) executes the file, so it is not a guard at all.
+        if not any(isinstance(n, ast.If) and "__main__" in ast.dump(n.test)
+                   and any(isinstance(s, ast.Expr)
+                           and isinstance(s.value, ast.Call)
+                           and call_name(s.value) == "verify"
+                           for s in n.body)
+                   for n in vtree.body):
+            cerr("closure.contract_verifier_malformed",
+                 f"{vpath}: needs a module-level main guard — "
+                 f"`if __name__ == \"__main__\": data_product.verify()`. Without "
+                 f"it at module level script(...) imports the file and checks "
+                 f"nothing; a guard nested inside a function never fires.",
+                 vpath, {"contract": cname})
+            continue
+
+        # Inert: a verifier that cannot fail. It must be able to return FAILED,
+        # and that return must sit behind a real (non-constant) condition — an
+        # `if True:` branch reads as a check and is dead code.
+        # Scope both tests to the verifier body, not the whole file: a FAILED
+        # mentioned only in an import or a comment elsewhere does not make this
+        # function able to fail.
+        body_src = ast.unparse(verifiers[0])
+        can_fail = "FAILED" in body_src
+        # ast.IfExp as well as ast.If — `FAILED if violations else PASS` is a
+        # non-literal condition by any reading, and the message says
+        # "non-literal condition", so rejecting the ternary contradicts it.
+        live_branch = any(
+            isinstance(n, (ast.If, ast.IfExp)) and not isinstance(n.test, ast.Constant)
+            for n in ast.walk(verifiers[0]))
+        # A stub BODY is inert; a `pass` deeper inside is not. `except X: pass`
+        # is ordinary error handling, so testing every statement in the function
+        # would reject a working verifier — and the eval checker, which says it
+        # mirrors this predicate, must agree.
+        stub_body = all(
+            isinstance(n, ast.Pass)
+            or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                and n.value.value is Ellipsis)
+            for n in verifiers[0].body)
+        if not can_fail or not live_branch or stub_body or "PASS" not in body_src:
+            cerr("closure.contract_verifier_inert",
+                 f"{vpath}: verifier is inert — require FAILED behind a "
+                 f"non-literal condition and a PASS result, never "
+                 f"pass/ellipsis/dead branches. A contract that always passes "
+                 f"reports the guarantee as enforced while enforcing nothing.",
+                 vpath, {"contract": cname})
+        if SECRET_LITERAL.search(vsrc):
+            cerr("closure.contract_verifier_secret",
+                 f"{vpath}: contains a literal secret-like assignment. "
+                 f"Credentials reach a closure through the infra profile, "
+                 f"never inline in a verifier.", vpath, {"contract": cname})
+
+    # Every file under contracts/*/ must be reachable from spec.py. An
+    # unreferenced verifier is the decorative case in its purest form: it looks
+    # like an enforced guarantee to a reader and never executes.
+    for sub in sorted(CONTRACT_DIRS):
+        d = Path("contracts") / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.py")):
+            if p.name == "__init__.py":
+                continue
+            if str(p) not in referenced:
+                cerr("closure.contract_verifier_unreferenced",
+                     f"{p}: not referenced by any custom(...) in spec.py — a "
+                     f"verifier nothing wires never runs.", str(p))
+
+    # --- the Pocket runtime binding for source-aligned inputs -----------------
+    # These apply to EVERY source_aligned_input(), contract or not: on this
+    # runtime a Pocket input must be the unlabeled csv-source, and the labeled
+    # instances are transform secrets only. A labeled service bound through
+    # .input(...).source(...) does not resolve, so the closure pins clean and
+    # fails at s5/s6 — which is exactly the class of fault an offline gate
+    # should catch first.
+    CSV_SERVICE = "/infra-profile/desktop-local#/services/csv-source"
+    inputs = [n for n in ast.walk(_spec_tree)
+              if isinstance(n, ast.Call) and call_name(n) == "source_aligned_input"]
+    sources = [n for n in ast.walk(_spec_tree)
+               if isinstance(n, ast.Call) and call_name(n) == "source"]
+    csv_literals = {t.id for st in ast.walk(_spec_tree)
+                    if isinstance(st, ast.Assign)
+                    and literal_str(st.value) == CSV_SERVICE
+                    for t in st.targets if isinstance(t, ast.Name)}
+    for s_call in sources:
+        arg = s_call.args[0] if s_call.args else None
+        ref = literal_str(arg)
+        named = isinstance(arg, ast.Name) and arg.id in csv_literals
+        if named or ref == CSV_SERVICE:
+            continue
+        shown = ref if ref is not None else (
+            ast.unparse(arg) if arg is not None else "<none>")
+        cerr("closure.input_service_mismatch",
+             f"spec.py: Pocket source-aligned inputs currently require "
+             f".source(_csv) bound exactly to {CSV_SERVICE}; labeled CSV "
+             f"services are transform-only on this runtime. Got {shown!r}.",
+             "spec.py", {"found": shown})
+
+    # The DuckDB output port must carry the duckdb storage service, not the CSV
+    # one. Swapping them parses and pins, then writes the output nowhere useful.
+    for n in ast.walk(_spec_tree):
+        if not isinstance(n, ast.Call) or call_name(n) != "port":
+            continue
+        if literal_str(n.args[0] if n.args else None) != "duckdb":
+            continue
+        st = n.args[1] if len(n.args) > 1 else None
+        inner = st.args[0] if isinstance(st, ast.Call) and st.args else None
+        ref = literal_str(inner)
+        if isinstance(inner, ast.Name) and inner.id in csv_literals or \
+                ref == CSV_SERVICE:
+            cerr("closure.port_storage_mismatch",
+                 f"spec.py: the DuckDB output declaration is bound to the CSV "
+                 f"service. .port(\"duckdb\", storage(_duckdb)) must carry the "
+                 f"duckdb service.", "spec.py")
+
+    # csv-source-path is the export root every model_paths entry resolves under.
+    # It must be relative and contained: an absolute or ../ root reaches outside
+    # the closure, which is the same escape C9 forbids for contract references.
+    csv_root = None
+    csvp = Path("csv-source-path")
+    if inputs and not csvp.is_file():
+        cerr("closure.csv_root_invalid",
+             "csv-source-path is missing, but spec.py declares a source-aligned "
+             "input. It carries the export root every model_paths entry "
+             "resolves under.", "csv-source-path")
+    elif csvp.is_file():
+        raw = csvp.read_text().strip()
+        parts = Path(raw).parts if raw else ()
+        if (not raw or raw.startswith("/") or ".." in parts
+                or any(p in ("", ".") for p in parts)):
+            cerr("closure.csv_root_invalid",
+                 f"csv-source-path: custom CSV input requires an existing "
+                 f"contained relative export root, got {raw!r}.",
+                 "csv-source-path", {"found": raw})
+        else:
+            csv_root = Path(raw)
+
+    # Each declared model_paths entry must resolve to a real CSV under that root.
+    for n in ast.walk(_spec_tree):
+        if not isinstance(n, ast.Call) or call_name(n) != "config":
+            continue
+        cfg = n.args[0] if n.args else None
+        if not isinstance(cfg, ast.Dict):
+            continue
+        for k, v in zip(cfg.keys, cfg.values):
+            if literal_str(k) != "model_paths" or not isinstance(v, ast.Dict):
+                continue
+            for mk, mv in zip(v.keys, v.values):
+                model, rel = literal_str(mk), literal_str(mv)
+                if not model or not rel:
+                    continue
+                if rel.startswith("/") or ".." in Path(rel).parts:
+                    cerr("closure.model_path_unresolved",
+                         f"spec.py: model_paths[{model!r}] must be a safe "
+                         f"relative path, got {rel!r}.", "spec.py",
+                         {"found": rel})
+                elif csv_root is not None and not (csv_root / rel).is_file():
+                    cerr("closure.model_path_unresolved",
+                         f"spec.py: model_paths[{model!r}] must resolve to an "
+                         f"existing csv-source-path/*.csv file; "
+                         f"{csv_root / rel} does not exist.", "spec.py",
+                         {"found": str(csv_root / rel)})
+
+    # The profile must name the services spec.py references, bound to the
+    # drivers this runtime provides. Binding driver TO service name catches a
+    # swap, which a per-driver presence check cannot.
+    prof = Path("infra-profile.yaml")
+    if prof.is_file():
+        ptext = prof.read_text()
+        if not re.search(r"^metadata:\n\s+name: desktop-local$", ptext, re.M):
+            cerr("closure.profile_name_mismatch",
+                 "infra-profile.yaml: metadata.name must be desktop-local to "
+                 "match the spec.py infra_profile.", "infra-profile.yaml")
+        required = {"duckdb": "nxd:local/duckdb/storage:0.1.0",
+                    "python-compute": "nxd:local/python/compute:0.1.0"}
+        if inputs:
+            required["csv-source"] = "nxd:local/file/storage:0.1.0"
+        for svc, driver in sorted(required.items()):
+            # Stop at the next `- name:`. Without that guard the lazy `.*\n`
+            # walks out of this service's block and adopts a LATER service's
+            # driver, so a service with no `driver:` key at all is reported as
+            # bound to someone else's — naming a line that does not exist and
+            # never emitting profile_service_missing, the accurate code.
+            block = re.search(
+                r"- name: %s\n(?:(?!\s*-\s+name:)\s+.*\n)*?\s+driver: (\S+)"
+                % re.escape(svc),
+                ptext)
+            if block is None:
+                # Absence is a fault, not a skip. Phase A only checks that a
+                # /infra-profile/…#/services/<name> ref is well FORMED, never
+                # that the profile declares it, so a closure missing a service
+                # entirely reached the supervisor unreported — which is exactly
+                # the before-arm failure this PR's ledger entry quotes.
+                cerr("closure.profile_service_missing",
+                     f"infra-profile.yaml does not declare the {svc} service, "
+                     f"which spec.py references. The desktop-local profile "
+                     f"needs duckdb, python-compute and — for a source-aligned "
+                     f"input — csv-source.", "infra-profile.yaml",
+                     {"service": svc})
+            elif block.group(1) != driver:
+                cerr("closure.profile_driver_mismatch",
+                     f"infra-profile.yaml: {svc} must use {driver}, got "
+                     f"{block.group(1)}.", "infra-profile.yaml",
+                     {"service": svc, "found": block.group(1)})
+
+    # The closure's contracts must be exactly the approved spec's. A contract in
+    # the closure that no spec section declares is a guarantee the user never
+    # approved; one in the spec with no verifier was silently dropped.
+    if snap_bytes is not None:
+        # Take `name:` from anywhere in an entry, but ONLY at the entry's own
+        # depth. YAML mapping key order is free — validate_dp_spec.py reads
+        # these with yaml.safe_load — so requiring `name` on the `- ` line made
+        # a legal spec parse as declaring no contracts, and Phase C then told
+        # the agent to DELETE a contract the user had approved.
+        #
+        # Depth is load-bearing and CANNOT be recovered after .strip():
+        #   - `fields:` is a nested list of mappings whose `- name:` is a FIELD
+        #   - `rule: |` and `description: |` are block scalars whose PROSE may
+        #     begin "name:" and is not a key at all
+        # Either one, read as the contract's name, produces the same double
+        # drift error this check exists to prevent: one contract reported
+        # missing and the real one reported as never approved.
+        #
+        # No YAML parse here: CONSTRAINT-1 — this file is copied into the
+        # closure and runs there, so it cannot depend on PyYAML.
+        spec_named = set()
+        section = None
+        block: list[str] = []
+
+        def _flush(entry):
+            if not entry:
+                return
+            # Base indent of the entry's keys: the column just past "- ".
+            base = len(entry[0]) - len(entry[0].lstrip(" "))
+            key_indent = base + 2
+            scalar_indent = None
+            for entry_line in entry:
+                stripped = entry_line.strip()
+                indent = len(entry_line) - len(entry_line.lstrip(" "))
+                if not stripped:
+                    continue
+                # Inside a block scalar every line is content, never a key.
+                # Content is anything indented deeper than the KEY depth — a
+                # scalar opened on the `- ` line sits at `base`, so comparing
+                # against the opener's own indent would swallow the next key.
+                if scalar_indent is not None:
+                    if indent > key_indent:
+                        continue
+                    scalar_indent = None
+                if indent not in (base, key_indent):
+                    continue            # nested list item or deeper mapping
+                m = re.match(r"(?:-\s+)?([A-Za-z_][\w-]*):\s*(.*)$", stripped)
+                if not m:
+                    continue
+                key, value = m.group(1), m.group(2).strip()
+                if value in ("|", ">", "|-", ">-", "|+", ">+"):
+                    scalar_indent = indent
+                    continue
+                # Strip a trailing inline comment. The `## expectations`
+                # template in nxd-pocket-loop/reference/dp-spec.md — the shape
+                # agents copy — annotates `name:` exactly this way, so keeping
+                # the comment made a closure built from the documented example
+                # report BOTH halves of contract drift against itself. Only
+                # outside quotes: a quoted name may legally contain '#'.
+                if value[:1] in ("'", '"'):
+                    close = value.find(value[0], 1)
+                    value = value[:close + 1] if close > 0 else value
+                else:
+                    value = value.split("#", 1)[0].strip()
+                if key == "name" and value:
+                    spec_named.add(value.strip("\"'"))
+                    return
+
+        for line in snap_bytes.decode("utf-8", "replace").splitlines():
+            if line.startswith("## "):
+                _flush(block)
+                block = []
+                section = line[3:].strip().lower()
+            elif section in CONTRACT_DIRS:
+                if line.startswith("- "):
+                    _flush(block)
+                    block = [line]
+                elif block:
+                    block.append(line)
+        _flush(block)
+        missing = spec_named - set(contracts)
+        extra = set(contracts) - spec_named
+        if missing:
+            cerr("closure.contract_spec_drift",
+                 f"dp-spec.approved.md declares contract(s) {sorted(missing)} "
+                 f"that spec.py does not wire — an approved guarantee was "
+                 f"dropped during generation.", "spec.py",
+                 {"missing": sorted(missing)})
+        if extra:
+            cerr("closure.contract_spec_drift",
+                 f"spec.py wires contract(s) {sorted(extra)} that "
+                 f"dp-spec.approved.md does not declare — a guarantee the user "
+                 f"never approved. Contracts originate in the IR.",
+                 "spec.py", {"extra": sorted(extra)})
 
 if cerrors:
     say("\nPHASE C FAILED — closure-record gate (approved spec snapshot, lock, "

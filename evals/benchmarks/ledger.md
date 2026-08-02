@@ -658,6 +658,28 @@ RUBRIC DRIFT, disclosed in full: three checks in incremental-transform-state/che
 
 Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json`](records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json)
 
+## 2026-07-31 — nxd-generate-dp: round-two Pocket CSV runtime contract fixes (plugin v0.27.0)
+
+**SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
+
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline-main-current-rubric | current_pack | api-to-vector-data-product-build | PASS | 6/6 | — | 38 | 31098 | — | gpt-5.6-terra |
+| baseline-main-current-rubric | current_pack | generate-runnable-dp-from-intent | FAIL | 7/16 | — | 15 | 9757 | — | gpt-5.6-terra |
+| baseline-main-current-rubric | current_pack | policy-compliance-failure | PASS | 5/5 | — | 13 | 6020 | — | gpt-5.6-terra |
+| head-initial | current_pack | api-to-vector-data-product-build | FAIL | 4/6 | — | 20 | 18935 | — | gpt-5.6-terra |
+| head-initial | current_pack | generate-runnable-dp-from-intent | FAIL | 15/16 | — | 22 | 10549 | — | gpt-5.6-terra |
+| head-initial | current_pack | pocket-custom-contracts | FAIL | 4/5 | — | 18 | 11161 | — | gpt-5.6-terra |
+| head-initial | current_pack | policy-compliance-failure | PASS | 5/5 | — | 14 | 5620 | — | gpt-5.6-terra |
+| head-path-fixed | current_pack | generate-runnable-dp-from-intent | PASS | 16/16 | — | 18 | 10227 | — | gpt-5.6-terra |
+| head-path-fixed | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 16 | 14823 | — | gpt-5.6-terra |
+| head-api-rerun | current_pack | api-to-vector-data-product-build | ERROR | — | — | — | — | — | gpt-5.6-terra |
+
+Notes: Current-rubric baseline versus round-two review fixes. **The `pocket-custom-contracts` rows are retracted and superseded by the source-isolated 2026-08-02 entry below** because these runs did not prove answer-source isolation; do not cite their Pocket verdicts or efficiency metrics. Non-Pocket rows retain their original status. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.
+
+Record: [`records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json`](records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json)
+
 ## 2026-07-31 — spec-authoritative closures: CONTEXT.md retired for a byte-copied dp-spec.approved.md + lock + generated build-record.json (plugin v0.28.0)
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
@@ -760,3 +782,48 @@ supervisor; World Bank additionally needs outbound access to
 nor `EVAL_POCKET_PYTHON`, and `nxd-desktop-supervisor` is absent. The static
 regression test pins the prompt/checker boundary only. It establishes no
 PASS/FAIL, quality, latency, token, cost, or runtime-connector claim.
+
+## 2026-08-02 — pocket custom contracts rebased onto the spec-authoritative IR (plugin v0.30.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 7/12 | — | 34 | 19426 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 2/12 | — | 7 | 3509 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 5/12 | — | 17 | 16093 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 2/12 | — | 20 | 15766 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 4/12 | — | 27 | 28095 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 5/12 | — | 34 | 3496 | — | gpt-5.6-luna |
+
+Notes: **No difference is demonstrable, and no Pocket-contract claim is made here.** Scenario `coauthor-supplied-rubric`, N=3 per arm, agent AND judge on the codex backend, same harness and rubric in both arms. Arms differ only in `src/`: the before arm is a clean worktree at origin/main (446369f), the after arm is this branch. `build_agent_prompt` was verified to emit a BYTE-IDENTICAL prompt across the two arms for a non-isolated scenario, so the source-isolation harness this branch also carries does not confound the comparison.
+
+Judge checks: before 7/2/5 (mean 4.7/12), after 2/4/5 (mean 3.7/12). Two-sided exact permutation test on the difference of means: **p=0.80**. Every per-check difference is a single run out of three and none flips consistently, so the apparent 1-check drop is noise at this N, not a regression. The deterministic check is **1/3 in BOTH arms**, failing identically (`pre-build:names the incomplete scale: no evidence before any materialization`). Output tokens 13.0k vs 15.8k mean, which at this N and this variance (3.5k-28.1k within a single arm) says nothing.
+
+**What this run does NOT cover.** `pocket-custom-contracts` — the scenario that exercises the contract work this PR is about — is not measured here. **It has since been run: see the source-isolated entry below, which is the authoritative evidence for this change.** At the time of this run it failed closed without an operator-supplied default-deny wrapper, capability ID, 64-hex profile fingerprint and five protected roots. It errors with `source-isolation infrastructure invalid: missing source-isolation capability ID` rather than degrading to an unisolated run, which is the harness behaving correctly. The three v0.27.0 entries above measured the PRE-REBASE implementation of this work — a different Phase C gate, a CONTEXT.md-based inventory, and no dp-spec IR sections. **Do not read them as evidence for this branch.** The contract behaviour here is covered by 37 checker tests and a 460-test suite, not by an eval arm.
+
+Record: [`records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json`](records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json)
+
+## 2026-08-02 — executable Pocket custom contracts, source-isolated (pocket-custom-contracts) (plugin v0.30.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 17 | 13693 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 1 | 1102 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 14 | 8956 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 26 | 12830 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 24 | 13254 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 22 | 11490 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | FAIL | 4/5 | — | 15 | 8031 | — | gpt-5.6-luna |
+
+Notes: **The scenario this PR exists for now runs, and it separates cleanly.** `pocket-custom-contracts`, source-isolated, agent AND judge on the codex backend (gpt-5.6-luna). Before arm = this branch's harness and scenario with `src/` at origin/main (446369f); after arm = this branch. main does not carry this scenario at all — it ships with this PR — so the before arm necessarily supplies the scenario and varies only the skills, which is the same framing the retracted v0.27.0 isolated entry used.
+
+Judge checks: before **0/5, 0/5, 0/5**; after **5/5, 5/5, 5/5, 4/5** (mean 4.75/5). The deterministic checker goes **0/3 to 4/4**. Fisher exact, two-sided, on both any-check-passed and the deterministic checker: **p=0.029**. Every one of the five checks improves; none regresses.
+
+The before-arm failures are exactly what this change adds, not incidental noise — `FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services; FAIL custom description missing; FAIL custom verifier must u[se ...]`. Without the skill guidance the agent does not produce wired executable contracts at all.
+
+**Isolation evidence.** All 7 default-deny probes reported `blocked` on every run, wrapper path and sha256 identical across arms, raw-stream audit `clean` on all reported runs. Enforcement is macOS `sandbox-exec`, so the denial is kernel-level rather than advisory. The probe requires the kernel's denial signature rather than a mere non-zero exit — a malformed Seatbelt policy fails WITHOUT enforcing, and reading that as "blocked" would attest isolation that never applied; it reports `sandbox-error` instead. These runs were re-verified 7/7 under that stricter check.
+
+**One after-run was DISCARDED and is not in the table.** Its audit returned `access_observed` for five markers. The isolation held — all 7 probes still blocked — but a `root` marker's needle IS the protected path, and a *denied* access still prints that path (`ls: /path: Operation not permitted`), so an attempt that the sandbox correctly refused is indistinguishable from one that succeeded. The harness fails the run rather than guess, which is the right call; it was replaced rather than reinterpreted. After-arm n=4, not 5, because two runs collided on one report filename — the surviving file is one of them, not a merge.
+
+Efficiency is not compared: the before arm never produces a working closure, so its token and tool counts measure failing early, not doing the work more cheaply.
+
+Record: [`records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json`](records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json)

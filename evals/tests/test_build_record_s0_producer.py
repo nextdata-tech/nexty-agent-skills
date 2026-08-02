@@ -79,7 +79,13 @@ def test_lock_write_byte_copies_the_spec(workflow):
     )
     lock = json.loads(workflow["lock"].read_text())
     assert lock["schema"] == "nxd-dp-spec-lock-v1"
-    assert lock["compiler_version"]["plugin"] == "0.29.0"
+    # Read the version rather than pinning it: the assertion under test is that
+    # the lock records the compiler that produced it, not which release that
+    # happens to be. A literal here fails every version bump for no defect.
+    plugin_version = json.loads(
+        (REPO / ".claude-plugin" / "plugin.json").read_text()
+    )["version"]
+    assert lock["compiler_version"]["plugin"] == plugin_version
     assert lock["spec_hash"] == dpd.spec_hash(workflow["spec"].read_bytes())
     assert lock["snapshot_sha256"] == dpd.raw_sha256(snapshot.read_bytes())
     assert lock["source_basename"] == "dp-spec.md"

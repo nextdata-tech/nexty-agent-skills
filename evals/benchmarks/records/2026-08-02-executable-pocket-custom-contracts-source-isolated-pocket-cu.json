@@ -1,0 +1,706 @@
+{
+  "date": "2026-08-02",
+  "label": "executable Pocket custom contracts, source-isolated (pocket-custom-contracts)",
+  "notes": "PLACEHOLDER2",
+  "plugin_version": "0.30.0",
+  "reports": {
+    "before-v0.29.0": {
+      "elapsed_s": 397.3,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "pocket-custom-contracts": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "source_isolation_attestation": {
+              "capability_id": "nxd-eval-source-isolation-v1",
+              "profile_fingerprint": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612",
+              "wrapper_path": "/private/tmp/claude-501/-Volumes-PRO-G40-projects-nexty-agent-skills/69e5d0c5-eb46-4466-bb21-ec44eb0e9d84/scratchpad/iso/nxd-eval-isolation-wrapper",
+              "wrapper_sha256": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612"
+            },
+            "source_isolation_probes": [
+              {
+                "id": "withheld-custom-contract-checker",
+                "status": "passed"
+              },
+              {
+                "id": "source-checks-rubric",
+                "status": "passed"
+              },
+              {
+                "id": "prior-benchmark-report-history",
+                "status": "passed"
+              },
+              {
+                "id": "prior-closure-temp-history",
+                "status": "passed"
+              },
+              {
+                "id": "codex-memories",
+                "status": "passed"
+              },
+              {
+                "id": "codex-session-history",
+                "status": "passed"
+              },
+              {
+                "id": "evaluator-checkout",
+                "status": "passed"
+              }
+            ],
+            "is_error": false,
+            "input_tokens": 1464973,
+            "output_tokens": 13693,
+            "reasoning_output_tokens": 2719,
+            "cached_input_tokens": 1380608,
+            "tool_calls": 17,
+            "shell_calls": 16,
+            "sandbox_failures": 0,
+            "shell_successes": 16,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "clean",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services; FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL input expectation/output schema+custom promise placement missing; FAIL custom output promise must retain ordinary promise(model); FAIL custom output promise must be on a DuckDB output port; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/__init__.py; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/currency_allowed.py; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/order_total_reconciliation.py"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": false,
+                "why": "No dp-spec.approved.md is present, and spec.py declares contracts without the required user_stated expectations/promises inventory."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": false,
+                "why": "spec.py contains no declared source-aligned CSV input or attached custom input expectation."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": false,
+                "why": "The DuckDB output lacks the required ordinary schema promise and the harness reports the custom promise placement is invalid."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": false,
+                "why": "Neither verifier contains an on_verify registration or the required data_product.verify() __main__ guard, and the harness flags the contract files as decorative scripts."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": false,
+                "why": "The authoritative deterministic checker exited 1 and reported multiple structural failures."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The closure does not meet any of the required executable custom-contract checks. deterministic check failed: FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services; FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL input expectation/output schema+custom promise placement missing; FAIL custom output promise must retain ordinary promise(model); FAIL custom output promise must be on a DuckDB output port; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/__init__.py; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/currency_allowed.py; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/order_total_reconciliation.py"
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- closure/infra-profile.yaml (360 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source\n      driver: nxd:generic-secrets:1.0.0\n      attributes: []\n\n--- closure/spec.py (1157 bytes) ---\n\"\"\"Desktop Pocket definition for the supplied orders export.\"\"\"\n\nfrom nxd.spec import data_product\nfrom nxd.spec import code, custom, script, storage, data_product_output\nfrom contracts.currency_allowed import verify as currency_allowed_verify\nfrom contracts.order_total_reconciliation import verify as order_total_reconciliation_verify\nfrom models import orders\n\nspec = (\n    data_product(\n        name=\"orders-contracts\",\n        domain=\"commerce\",\n        description=\"Orders export with executable currency and reconciliation contracts.\",\n        version=\"1.0.0\",\n        infra_profile=\"desktop-local\",\n    )\n    .transform(script(\"transform/main.py\").compute(\"/infra-profile/desktop-local#/services/python-compute\").secrets([\"/infra-profile/desktop-local#/services/csv-source\"]))\n    .output(\n        data_product_output()\n        .promise(custom(\"allowed-currencies\").verify(code(currency_allowed_verify)).model(orders))\n        .port(\"duckdb\", storage(\"/infra-profile/desktop-local#/services/duckdb\"))\n        .promise(custom(\"order-total-reconciliation\").verify(code(order_total_reconciliation_verify)).model(orders))\n        .model(orders)\n    )\n)\n\n--- closure/contracts/__init__.py (65 bytes) ---\n\"\"\"Executable custom contracts for the orders Pocket product.\"\"\"\n\n--- closure/contracts/currency_allowed.py (820 bytes) ---\n\"\"\"Verify that every order line uses one of the guaranteed currencies.\"\"\"\n\nfrom __future__ import annotations\n\nfrom typing import Any, Iterable\n\nALLOWED_CURRENCIES = frozenset({\"EUR\", \"USD\"})\n\ndef check(rows: Iterable[dict[str, Any]]) -> list[str]:\n    failures = []\n    for row in rows:\n        currency = row.get(\"currency\")\n        if currency not in ALLOWED_CURRENCIES:\n            failures.append(f\"line_id={row.get('line_id')!r}: currency={currency!r}\")\n    return failures\n\ndef verify(duckdb: Any, models: dict[str, Any] | None = None):\n    from nxd.data_product.context import VerifyResult, VerifyResultEnum\n    failures = check(duckdb.rows(\"orders\"))\n    if failures:\n        return VerifyResult(VerifyResultEnum.FAILED, {\"failures\": failures})\n    return VerifyResult(VerifyResultEnum.PASS, {\"checked\": True})\n\n--- closure/contracts/order_total_reconciliation.py (1332 bytes) ---\n\"\"\"Verify each order total equals the sum of its output line totals.\"\"\"\n\nfrom __future__ import annotations\n\nfrom collections import defaultdict\nfrom decimal import Decimal\nfrom typing import Any, Iterable\n\ndef check(rows: Iterable[dict[str, Any]]) -> list[str]:\n    totals: dict[str, set[Decimal]] = defaultdict(set)\n    line_sums: dict[str, Decimal] = defaultdict(Decimal)\n    for row in rows:\n        order_id = str(row[\"order_id\"])\n        totals[order_id].add(Decimal(str(row[\"order_total\"])))\n        line_sums[order_id] += Decimal(str(row[\"line_total\"]))\n    failures = []\n    for order_id in sorted(totals):\n        if len(totals[order_id]) != 1:\n            failures.append(f\"order_id={order_id!r}: inconsistent order_total values\")\n            continue\n        declared = next(iter(totals[order_id]))\n        actual = line_sums[order_id]\n        if declared != actual:\n            failures.append(f\"order_id={order_id!r}: declared={declared} line_sum={actual}\")\n    return failures\n\ndef verify(duckdb: Any, models: dict[str, Any] | None = None):\n    from nxd.data_product.context import VerifyResult, VerifyResultEnum\n    failures = check(duckdb.rows(\"orders\"))\n    if failures:\n        return VerifyResult(VerifyResultEnum.FAILED, {\"failures\": failures})\n    return VerifyResult(VerifyResultEnum.PASS, {\"checked\": True})\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services\", \"FAIL custom description missing\", \"FAIL custom verifier must use script(...).compute(_compute)\", \"FAIL custom description missing\", \"FAIL custom verifier must use script(...).compute(_compute)\", \"FAIL input expectation/output schema+custom promise placement missing\", \"FAIL custom output promise must retain ordinary promise(model)\", \"FAIL custom output promise must be on a DuckDB output port\", \"FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/__init__.py\", \"FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/currency_allowed.py\", \"FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-7mwhmt6g/workspace/closure/contracts/order_total_reconciliation.py\"], \"passed\": false}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "source_isolation_attestation": {
+              "capability_id": "nxd-eval-source-isolation-v1",
+              "profile_fingerprint": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612",
+              "wrapper_path": "/private/tmp/claude-501/-Volumes-PRO-G40-projects-nexty-agent-skills/69e5d0c5-eb46-4466-bb21-ec44eb0e9d84/scratchpad/iso/nxd-eval-isolation-wrapper",
+              "wrapper_sha256": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612"
+            },
+            "source_isolation_probes": [
+              {
+                "id": "withheld-custom-contract-checker",
+                "status": "passed"
+              },
+              {
+                "id": "source-checks-rubric",
+                "status": "passed"
+              },
+              {
+                "id": "prior-benchmark-report-history",
+                "status": "passed"
+              },
+              {
+                "id": "prior-closure-temp-history",
+                "status": "passed"
+              },
+              {
+                "id": "codex-memories",
+                "status": "passed"
+              },
+              {
+                "id": "codex-session-history",
+                "status": "passed"
+              },
+              {
+                "id": "evaluator-checkout",
+                "status": "passed"
+              }
+            ],
+            "is_error": false,
+            "input_tokens": 165632,
+            "output_tokens": 1102,
+            "reasoning_output_tokens": 322,
+            "cached_input_tokens": 137216,
+            "tool_calls": 1,
+            "shell_calls": 1,
+            "sandbox_failures": 0,
+            "shell_successes": 0,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "clean",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL expected exactly one generated spec.py"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": false,
+                "why": "The agent reported being unable to inspect or generate any files, and the harness confirms no closure files were written."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": false,
+                "why": "No source-aligned CSV input, named custom expectation, relative model paths, or verifier script was created."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": false,
+                "why": "No DuckDB output or distinct custom promise was produced."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": false,
+                "why": "No contract verifier scripts were written or validated."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": false,
+                "why": "The authoritative deterministic check failed with 'expected exactly one generated spec.py'."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent was blocked before inspection or implementation, leaving no required artifacts and a failing deterministic check. deterministic check failed: FAIL expected exactly one generated spec.py"
+          },
+          "facts": [
+            "WORKSPACE FILES: NONE \u2014 the harness looked for dp-spec.approved.md, spec.py, infra-profile.yaml, contracts/**/*.py, **/dp-spec.approved.md, **/spec.py, **/infra-profile.yaml, **/contracts/**/*.py in the agent's workspace after the run and found no such file. Any check about the content of those files must FAIL: they were never written.",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL expected exactly one generated spec.py\"], \"passed\": false}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "source_isolation_attestation": {
+              "capability_id": "nxd-eval-source-isolation-v1",
+              "profile_fingerprint": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612",
+              "wrapper_path": "/private/tmp/claude-501/-Volumes-PRO-G40-projects-nexty-agent-skills/69e5d0c5-eb46-4466-bb21-ec44eb0e9d84/scratchpad/iso/nxd-eval-isolation-wrapper",
+              "wrapper_sha256": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612"
+            },
+            "source_isolation_probes": [
+              {
+                "id": "withheld-custom-contract-checker",
+                "status": "passed"
+              },
+              {
+                "id": "source-checks-rubric",
+                "status": "passed"
+              },
+              {
+                "id": "prior-benchmark-report-history",
+                "status": "passed"
+              },
+              {
+                "id": "prior-closure-temp-history",
+                "status": "passed"
+              },
+              {
+                "id": "codex-memories",
+                "status": "passed"
+              },
+              {
+                "id": "codex-session-history",
+                "status": "passed"
+              },
+              {
+                "id": "evaluator-checkout",
+                "status": "passed"
+              }
+            ],
+            "is_error": false,
+            "input_tokens": 1017288,
+            "output_tokens": 8956,
+            "reasoning_output_tokens": 3095,
+            "cached_input_tokens": 937472,
+            "tool_calls": 14,
+            "shell_calls": 12,
+            "sandbox_failures": 0,
+            "shell_successes": 11,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "clean",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services; FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL input expectation/output schema+custom promise placement missing; FAIL custom output promise must retain ordinary promise(model); FAIL custom output promise must be on a DuckDB output port; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-d0n3i4_c/workspace/closure/contracts/currency_eur_usd.py; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-d0n3i4_c/workspace/closure/contracts/order_total_reconciliation.py"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": false,
+                "why": "No dp-spec.approved.md is present in the authoritative output, and spec.py declares only two custom output promises without the required distinct user-stated expectations/promises inventory."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": false,
+                "why": "The authoritative spec.py has no declared CSV input or source-aligned custom expectation, and the deterministic checker reports the required input expectation placement missing."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": false,
+                "why": "Although spec.py names a DuckDB port, it lacks the required ordinary schema promise and the checker explicitly reports both missing ordinary promise retention and invalid custom promise placement."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": false,
+                "why": "Both verifier files use a CLI main guard rather than an on_verify registration and data_product.verify() guard, and the deterministic checker classifies both as decorative scripts."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": false,
+                "why": "The authoritative deterministic check exited 1 with multiple structural-contract failures rather than reporting ALL CHECKS PASSED."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The closure contains runnable standalone scripts but fails every required Pocket custom-contract structure check. deterministic check failed: FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services; FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL custom description missing; FAIL custom verifier must use script(...).compute(_compute); FAIL input expectation/output schema+custom promise placement missing; FAIL custom output promise must retain ordinary promise(model); FAIL custom output promise must be on a DuckDB output port; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-d0n3i4_c/workspace/closure/contracts/currency_eur_usd.py; FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-d0n3i4_c/workspace/closure/contracts/order_total_reconciliation.py"
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- closure/infra-profile.yaml (233 bytes) ---\napiVersion: infra.nextdata.com/v1alpha1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: duckdb\n    - name: python-compute\n      driver: python\n    - name: csv-source\n      driver: csv\n\n--- closure/spec.py (950 bytes) ---\nfrom nxd.spec import code, custom, data_product, data_product_output, script, storage\n\nfrom contracts.currency_eur_usd import verify as verify_currency\nfrom contracts.order_total_reconciliation import verify as verify_reconciliation\nfrom models import orders\n\n\nproduct = (\n    data_product(\n        name=\"pocket-orders\",\n        domain=\"sales\",\n        version=\"0.1.0-dev\",\n        infra_profile=\"desktop-local\",\n    )\n    .transform(\n        script(\"transform/main.py\")\n        .compute(\"/infra-profile/desktop-local#/services/python-compute\")\n        .secrets([\"/infra-profile/desktop-local#/services/csv-source\"])\n    )\n    .output(\n        data_product_output()\n        .port(\"duckdb\", storage(\"/infra-profile/desktop-local#/services/duckdb\"))\n        .promise(custom(\"currency_eur_usd\").verify(code(verify_currency)).model(orders))\n        .promise(custom(\"order_total_reconciliation\").verify(code(verify_reconciliation)).model(orders))\n    )\n)\n\n--- closure/contracts/currency_eur_usd.py (1124 bytes) ---\n\"\"\"Custom contract: every order line uses EUR or USD.\"\"\"\n\nfrom __future__ import annotations\n\nimport csv\nimport json\nimport sys\nfrom pathlib import Path\nfrom typing import Iterable, Mapping\n\nALLOWED_CURRENCIES = frozenset({\"EUR\", \"USD\"})\n\n\ndef verify(rows: Iterable[Mapping[str, str]], models: dict | None = None) -> dict:\n    \"\"\"Return a deterministic contract result for the supplied order rows.\"\"\"\n    failures = []\n    for row_number, row in enumerate(rows, start=2):\n        currency = row.get(\"currency\", \"\")\n        if currency not in ALLOWED_CURRENCIES:\n            failures.append({\"row\": row_number, \"currency\": currency})\n    return {\n        \"passed\": not failures,\n        \"contract\": \"currency_eur_usd\",\n        \"checked_rows\": row_number if \"row_number\" in locals() else 0,\n        \"failures\": failures,\n    }\n\n\ndef main(path: str) -> int:\n    with Path(path).open(newline=\"\", encoding=\"utf-8\") as handle:\n        result = verify(csv.DictReader(handle))\n    print(json.dumps(result, sort_keys=True))\n    return 0 if result[\"passed\"] else 1\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main(sys.argv[1]))\n\n--- closure/contracts/order_total_reconciliation.py (2311 bytes) ---\n\"\"\"Custom contract: each order total equals the sum of its line totals.\"\"\"\n\nfrom __future__ import annotations\n\nimport csv\nimport json\nimport sys\nfrom collections import defaultdict\nfrom decimal import Decimal, InvalidOperation\nfrom pathlib import Path\nfrom typing import Iterable, Mapping\n\n\ndef verify(rows: Iterable[Mapping[str, str]], models: dict | None = None) -> dict:\n    \"\"\"Reconcile each order independently, retaining currency boundaries.\"\"\"\n    grouped: dict[str, dict[str, object]] = {}\n    failures = []\n    checked_rows = 0\n    for row_number, row in enumerate(rows, start=2):\n        checked_rows += 1\n        order_id = row.get(\"order_id\", \"\")\n        currency = row.get(\"currency\", \"\")\n        try:\n            order_total = Decimal(row[\"order_total\"])\n            line_total = Decimal(row[\"line_total\"])\n        except (KeyError, InvalidOperation) as exc:\n            failures.append({\"row\": row_number, \"error\": str(exc)})\n            continue\n\n        state = grouped.setdefault(\n            order_id,\n            {\"currency\": currency, \"order_total\": order_total, \"line_total\": Decimal(\"0\")},\n        )\n        if state[\"currency\"] != currency or state[\"order_total\"] != order_total:\n            failures.append({\"row\": row_number, \"order_id\": order_id, \"error\": \"inconsistent order header\"})\n        state[\"line_total\"] = state[\"line_total\"] + line_total\n\n    for order_id, state in grouped.items():\n        expected = state[\"order_total\"]\n        actual = state[\"line_total\"]\n        if actual != expected:\n            failures.append(\n                {\n                    \"order_id\": order_id,\n                    \"currency\": state[\"currency\"],\n                    \"order_total\": str(expected),\n                    \"line_total_sum\": str(actual),\n                }\n            )\n    return {\n        \"passed\": not failures,\n        \"contract\": \"order_total_reconciliation\",\n        \"checked_rows\": checked_rows,\n        \"checked_orders\": len(grouped),\n        \"failures\": failures,\n    }\n\n\ndef main(path: str) -> int:\n    with Path(path).open(newline=\"\", encoding=\"utf-8\") as handle:\n        result = verify(csv.DictReader(handle))\n    print(json.dumps(result, sort_keys=True))\n    return 0 if result[\"passed\"] else 1\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main(sys.argv[1]))\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services\", \"FAIL custom description missing\", \"FAIL custom verifier must use script(...).compute(_compute)\", \"FAIL custom description missing\", \"FAIL custom verifier must use script(...).compute(_compute)\", \"FAIL input expectation/output schema+custom promise placement missing\", \"FAIL custom output promise must retain ordinary promise(model)\", \"FAIL custom output promise must be on a DuckDB output port\", \"FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-d0n3i4_c/workspace/closure/contracts/currency_eur_usd.py\", \"FAIL decorative script /var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-d0n3i4_c/workspace/closure/contracts/order_total_reconciliation.py\"], \"passed\": false}"
+          ]
+        }
+      ]
+    },
+    "after-v0.30.0": {
+      "elapsed_s": 405.1,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "pocket-custom-contracts": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "source_isolation_attestation": {
+              "capability_id": "nxd-eval-source-isolation-v1",
+              "profile_fingerprint": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612",
+              "wrapper_path": "/private/tmp/claude-501/-Volumes-PRO-G40-projects-nexty-agent-skills/69e5d0c5-eb46-4466-bb21-ec44eb0e9d84/scratchpad/iso/nxd-eval-isolation-wrapper",
+              "wrapper_sha256": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612"
+            },
+            "source_isolation_probes": [
+              {
+                "id": "withheld-custom-contract-checker",
+                "status": "passed"
+              },
+              {
+                "id": "source-checks-rubric",
+                "status": "passed"
+              },
+              {
+                "id": "prior-benchmark-report-history",
+                "status": "passed"
+              },
+              {
+                "id": "prior-closure-temp-history",
+                "status": "passed"
+              },
+              {
+                "id": "codex-memories",
+                "status": "passed"
+              },
+              {
+                "id": "codex-session-history",
+                "status": "passed"
+              },
+              {
+                "id": "evaluator-checkout",
+                "status": "passed"
+              }
+            ],
+            "is_error": false,
+            "input_tokens": 1895393,
+            "output_tokens": 12830,
+            "reasoning_output_tokens": 1970,
+            "cached_input_tokens": 1797376,
+            "tool_calls": 26,
+            "shell_calls": 24,
+            "sandbox_failures": 0,
+            "shell_successes": 22,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "clean",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": true,
+                "why": "The approved spec records exactly two user_stated expectation/promise contracts, and spec.py wires exactly those two while retaining the ordinary orders schema promise."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": true,
+                "why": "spec.py attaches accepted-currency to the source-aligned orders CSV input with relative orders/orders.csv model_paths, csv-source, and its own relative verifier script."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": true,
+                "why": "spec.py retains .promise(orders) and separately attaches the order-total-reconciles custom promise to the DuckDB output."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": true,
+                "why": "Both quoted verifier files have one @data_product.on_verify registration, the exact __main__ data_product.verify() guard, and one safe relative script path per declared custom contract."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": true,
+                "why": "The authoritative deterministic checker exited 0 with passed=true and no failures."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All success checks pass."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- nxd-pocket/pocket-custom-contracts/closure/dp-spec.approved.md (1792 bytes) ---\n---\ndp_spec_version: 1\nname: pocket_custom_contracts\nworkflow: pocket-custom-contracts\nstatus: approved\n---\n\n## intent\n\nValidate supplied orders data with two executable custom contracts and expose the orders as a desktop Pocket closure.\n\n## questions\n\n- Which input currencies are accepted?\n- Does each order total reconcile to the sum of its line totals?\n\n## sources\n\n- type: csv\n  location: orders.csv\n  scope: The supplied orders CSV.\n  credential_keys: []\n\n## population\n\npopulation: |\n  Every row in the supplied orders CSV.\nsample_rule: null\nexcludes: |\n  None.\n\n## models\n\n- name: orders\n  kind: base\n  grain: |\n    One row per order line.\n  key: [line_id]\n  answers: [accepted_currency, order_reconciliation]\n  description: |\n    One order line from the supplied export.\n  fields:\n    - name: line_id\n      type: string\n      role: primary_key\n    - name: order_id\n      type: string\n      role: dimension\n    - name: currency\n      type: string\n      role: dimension\n    - name: order_total\n      type: decimal(18,2)\n      role: dimension\n    - name: line_total\n      type: decimal(18,2)\n      role: dimension\n\n## expectations\n\n- name: accepted-currency\n  authority: user_stated\n  model: orders\n  phase: pre_transform\n  fields: [currency]\n  guarantee: |\n    Every input currency is EUR or USD.\n  rule: |\n    currency in ('EUR', 'USD')\n  diagnostic: |\n    Reject the load and report the offending currencies and row counts.\n\n## promises\n\n- name: order-total-reconciles\n  authority: user_stated\n  model: orders\n  phase: post_transform\n  fields: [order_id, currency, order_total, line_total]\n  guarantee: |\n    After transform, each order total reconciles to its output line totals.\n  rule: |\n    For each order_id and currency, the distinct order_total equals the sum of line_total.\n\n\n--- nxd-pocket/pocket-custom-contracts/closure/infra-profile.yaml (363 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- nxd-pocket/pocket-custom-contracts/closure/spec.py (1601 bytes) ---\n\"\"\"Desktop Pocket definition for the supplied orders export.\"\"\"\n\nfrom nxd.spec import (\n    custom,\n    data_product,\n    data_product_output,\n    script,\n    simple_sensor,\n    source_aligned_input,\n    storage,\n)\n\nfrom models import orders\n\n_csv = \"/infra-profile/desktop-local#/services/csv-source\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\n_output = (\n    data_product_output()\n    .promise(orders)\n    .promise(\n        custom(\"order-total-reconciles\")\n        .description(\"User-stated: after transform, each order total reconciles to its output line totals.\")\n        .model(orders)\n        .verify(script(\"contracts/promises/order-total-reconciles.py\").compute(_compute))\n    )\n    .port(\"duckdb\", storage(_duckdb))\n)\n\nspec = (\n    data_product(\n        name=\"pocket_custom_contracts\",\n        domain=\"desktop.local\",\n        version=\"0.0.1\",\n        infra_profile=\"desktop-local\",\n    )\n    .input(\n        \"orders-source\",\n        source_aligned_input()\n        .source(_csv)\n        .config({\"model_paths\": {\"orders\": \"orders/orders.csv\"}})\n        .expectation(\n            custom(\"accepted-currency\")\n            .description(\"User-stated: every input currency is EUR or USD.\")\n            .model(orders)\n            .verify(script(\"contracts/expectations/accepted-currency.py\").compute(_compute))\n        ),\n    )\n    .transform(\n        script(\"transform/main.py\")\n        .compute(_compute)\n        .secrets([_csv])\n        .when(simple_sensor(startup=False, when=\"any\"))\n    )\n    .output(_output)\n)\n\n--- nxd-pocket/pocket-custom-contracts/closure/contracts/expectations/accepted-currency.py (1017 bytes) ---\n\"\"\"Executable input expectation for the accepted currency guarantee.\"\"\"\n\nimport csv\n\nfrom nxd import data_product\nfrom nxd.core.context import LocalFileInput, Model, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(orders_source: LocalFileInput, models: dict[str, Model]) -> VerifyResult:\n    del models\n    path = orders_source.path_for(\"orders\")\n    counts: dict[str, int] = {}\n    with path.open(newline=\"\") as handle:\n        for row in csv.DictReader(handle):\n            currency = (row.get(\"currency\") or \"\").strip()\n            counts[currency] = counts.get(currency, 0) + 1\n    invalid = {value: count for value, count in counts.items() if value not in {\"EUR\", \"USD\"}}\n    context = {\"model\": \"orders\", \"checked_field\": \"currency\", \"row_count\": sum(counts.values()), \"invalid_currencies\": invalid}\n    if invalid:\n        return VerifyResult(VerifyResultEnum.FAILED, context)\n    return VerifyResult(VerifyResultEnum.PASS, context)\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n\n--- nxd-pocket/pocket-custom-contracts/closure/contracts/promises/order-total-reconciles.py (1559 bytes) ---\n\"\"\"Executable output promise for per-order total reconciliation.\"\"\"\n\nfrom decimal import Decimal\n\nimport duckdb\n\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput, Model, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(duckdb_output: DuckDbOutput, models: dict[str, Model]) -> VerifyResult:\n    del models\n    table = duckdb_output.full_table_name(\"orders\")\n    connection = duckdb.connect(duckdb_output.path, read_only=True)\n    try:\n        rows = connection.execute(\n            f\"SELECT order_id, currency, MIN(order_total), MAX(order_total), SUM(line_total) \"\n            f\"FROM {table} GROUP BY order_id, currency\"\n        ).fetchall()\n    finally:\n        connection.close()\n    mismatches = []\n    for order_id, currency, minimum, maximum, line_sum in rows:\n        reported_min = Decimal(str(minimum))\n        reported_max = Decimal(str(maximum))\n        computed = Decimal(str(line_sum))\n        if reported_min != reported_max or reported_min != computed:\n            mismatches.append({\n                \"order_id\": order_id,\n                \"currency\": currency,\n                \"reported_min\": str(reported_min),\n                \"reported_max\": str(reported_max),\n                \"line_sum\": str(computed),\n            })\n    context = {\"model\": \"orders\", \"groups_checked\": len(rows), \"mismatches\": mismatches}\n    if mismatches:\n        return VerifyResult(VerifyResultEnum.FAILED, context)\n    return VerifyResult(VerifyResultEnum.PASS, context)\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "source_isolation_attestation": {
+              "capability_id": "nxd-eval-source-isolation-v1",
+              "profile_fingerprint": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612",
+              "wrapper_path": "/private/tmp/claude-501/-Volumes-PRO-G40-projects-nexty-agent-skills/69e5d0c5-eb46-4466-bb21-ec44eb0e9d84/scratchpad/iso/nxd-eval-isolation-wrapper",
+              "wrapper_sha256": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612"
+            },
+            "source_isolation_probes": [
+              {
+                "id": "withheld-custom-contract-checker",
+                "status": "passed"
+              },
+              {
+                "id": "source-checks-rubric",
+                "status": "passed"
+              },
+              {
+                "id": "prior-benchmark-report-history",
+                "status": "passed"
+              },
+              {
+                "id": "prior-closure-temp-history",
+                "status": "passed"
+              },
+              {
+                "id": "codex-memories",
+                "status": "passed"
+              },
+              {
+                "id": "codex-session-history",
+                "status": "passed"
+              },
+              {
+                "id": "evaluator-checkout",
+                "status": "passed"
+              }
+            ],
+            "is_error": false,
+            "input_tokens": 1897644,
+            "output_tokens": 13254,
+            "reasoning_output_tokens": 3080,
+            "cached_input_tokens": 1778944,
+            "tool_calls": 24,
+            "shell_calls": 22,
+            "sandbox_failures": 0,
+            "shell_successes": 21,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "clean",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": true,
+                "why": "The approved spec contains exactly the two user-stated contracts with `authority: user_stated`, while `spec.py` wires exactly those two custom contracts and retains the ordinary `orders` promise."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": true,
+                "why": "`spec.py` declares a source-aligned `orders-source` CSV input with relative `model_paths`, local `csv-source`, and the named accepted-currency verifier."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": true,
+                "why": "The DuckDB output retains `.promise(orders)` and separately attaches the named `order-total-reconciles` custom promise."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": true,
+                "why": "Each quoted verifier has one `@data_product.on_verify()` registration, the exact `if __name__ == \"__main__\": data_product.verify()` guard, and a distinct safe relative contract path."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": true,
+                "why": "The authoritative deterministic checker exited 0 with `passed: true` and no failures."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All specified custom-contract structure and deterministic validation checks pass."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- nxd-pocket/pocket-custom-contracts/closure/dp-spec.approved.md (1741 bytes) ---\n---\ndp_spec_version: 1\nname: orders_quality\nworkflow: pocket-custom-contracts\nstatus: approved\n---\n\n## intent\n\nLoad the supplied order-line export into a queryable desktop Pocket data product with executable checks for the user-guaranteed currency set and order-total reconciliation.\n\n## questions\n\n- Which order lines were supplied, and what are their order totals and currencies?\n- Does each order total equal the sum of its output line totals?\n\n## sources\n\n- type: csv\n  location: ./orders.csv\n  scope: |\n    The complete supplied orders.csv export.\n  credential_keys: []\n\n## population\n\npopulation: |\n  Every row in the supplied orders.csv export.\nsample_rule: null\nexcludes: |\n  None.\n\n## models\n\n- name: orders\n  kind: base\n  grain: |\n    One row per supplied order line.\n  key: [line_id]\n  answers: [q1, q2]\n  description: |\n    Supplied order-line facts with reported order totals and line totals.\n\n## expectations\n\n- name: accepted-currency\n  authority: user_stated\n  model: orders\n  phase: pre_transform\n  fields: [currency]\n  guarantee: |\n    Every input currency is EUR or USD.\n  rule: |\n    currency in ('EUR', 'USD')\n  diagnostic: |\n    Reject the load and report invalid currency values with counts.\n\n## promises\n\n- name: order-total-reconciles\n  authority: user_stated\n  model: orders\n  phase: post_transform\n  fields: [order_id, currency, order_total, line_total]\n  guarantee: |\n    After transform, each order total reconciles to its output line totals.\n  rule: |\n    For every order_id, reported order_total equals the sum of line_total values in the output, within the stored decimal values.\n  diagnostic: |\n    Block publication and report the order_id, reported total, line-total sum, and difference for each mismatch.\n\n--- nxd-pocket/pocket-custom-contracts/closure/infra-profile.yaml (363 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- nxd-pocket/pocket-custom-contracts/closure/spec.py (1587 bytes) ---\n\"\"\"Desktop Pocket data product for the supplied orders export.\"\"\"\n\nfrom nxd.spec import (\n    code,\n    custom,\n    data_product,\n    data_product_output,\n    script,\n    simple_sensor,\n    source_aligned_input,\n    storage,\n)\n\nfrom models import orders\n\n_csv = \"/infra-profile/desktop-local#/services/csv-source\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\n_output = (\n    data_product_output()\n    .promise(orders)\n    .promise(\n        custom(\"order-total-reconciles\")\n        .description(\"User-stated: each order total reconciles to its output line totals.\")\n        .model(orders)\n        .verify(script(\"contracts/promises/order-total-reconciles.py\").compute(_compute))\n    )\n    .port(\"duckdb\", storage(_duckdb))\n)\n\nspec = (\n    data_product(\n        name=\"orders_quality\",\n        domain=\"desktop.local\",\n        version=\"0.0.1\",\n        infra_profile=\"desktop-local\",\n    )\n    .input(\n        \"orders-source\",\n        source_aligned_input()\n        .source(_csv)\n        .config({\"model_paths\": {\"orders\": \"orders/orders.csv\"}})\n        .expectation(\n            custom(\"accepted-currency\")\n            .description(\"User-stated: every input currency is EUR or USD.\")\n            .model(orders)\n            .verify(script(\"contracts/expectations/accepted-currency.py\").compute(_compute))\n        ),\n    )\n    .transform(\n        script(\"transform/main.py\")\n        .compute(_compute)\n        .secrets([_csv])\n        .when(simple_sensor(startup=False, when=\"any\"))\n    )\n    .output(_output)\n)\n\n--- nxd-pocket/pocket-custom-contracts/closure/contracts/expectations/accepted-currency.py (1028 bytes) ---\n\"\"\"Input expectation for the user-guaranteed currency set.\"\"\"\n\nimport csv\n\nfrom nxd import data_product\nfrom nxd.core.context import LocalFileInput\nfrom nxd.data_product.context import VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(source: LocalFileInput) -> VerifyResult:\n    invalid: dict[str, int] = {}\n    rows = 0\n    with open(source.path_for(\"orders\"), newline=\"\", encoding=\"utf-8\") as handle:\n        for row in csv.DictReader(handle):\n            rows += 1\n            currency = row.get(\"currency\", \"\")\n            if currency not in {\"EUR\", \"USD\"}:\n                invalid[currency] = invalid.get(currency, 0) + 1\n\n    if invalid:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"invalid\": invalid},\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"rows_checked\": rows},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n\n--- nxd-pocket/pocket-custom-contracts/closure/contracts/promises/order-total-reconciles.py (1802 bytes) ---\n\"\"\"Output promise for per-order total reconciliation.\"\"\"\n\nfrom decimal import Decimal\n\nimport duckdb\n\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput\nfrom nxd.data_product.context import VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(output: DuckDbOutput) -> VerifyResult:\n    table = output.full_table_name(\"orders\")\n    connection = duckdb.connect(output.path, read_only=True)\n    try:\n        rows = connection.execute(\n            f\"\"\"\n            SELECT order_id, MAX(order_total), SUM(line_total), COUNT(*)\n            FROM {table}\n            GROUP BY order_id\n            \"\"\"\n        ).fetchall()\n    finally:\n        connection.close()\n\n    mismatches = []\n    for order_id, reported, line_sum, line_count in rows:\n        reported_decimal = Decimal(str(reported))\n        line_sum_decimal = Decimal(str(line_sum))\n        if reported_decimal != line_sum_decimal:\n            mismatches.append(\n                {\n                    \"order_id\": order_id,\n                    \"reported_total\": str(reported_decimal),\n                    \"line_total_sum\": str(line_sum_decimal),\n                    \"difference\": str(reported_decimal - line_sum_decimal),\n                    \"line_count\": line_count,\n                }\n            )\n\n    if mismatches:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\n                \"contract\": \"order-total-reconciles\",\n                \"model\": \"orders\",\n                \"mismatches\": mismatches,\n            },\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\n            \"contract\": \"order-total-reconciles\",\n            \"model\": \"orders\",\n            \"orders_checked\": len(rows),\n        },\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "source_isolation_attestation": {
+              "capability_id": "nxd-eval-source-isolation-v1",
+              "profile_fingerprint": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612",
+              "wrapper_path": "/private/tmp/claude-501/-Volumes-PRO-G40-projects-nexty-agent-skills/69e5d0c5-eb46-4466-bb21-ec44eb0e9d84/scratchpad/iso/nxd-eval-isolation-wrapper",
+              "wrapper_sha256": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612"
+            },
+            "source_isolation_probes": [
+              {
+                "id": "withheld-custom-contract-checker",
+                "status": "passed"
+              },
+              {
+                "id": "source-checks-rubric",
+                "status": "passed"
+              },
+              {
+                "id": "prior-benchmark-report-history",
+                "status": "passed"
+              },
+              {
+                "id": "prior-closure-temp-history",
+                "status": "passed"
+              },
+              {
+                "id": "codex-memories",
+                "status": "passed"
+              },
+              {
+                "id": "codex-session-history",
+                "status": "passed"
+              },
+              {
+                "id": "evaluator-checkout",
+                "status": "passed"
+              }
+            ],
+            "is_error": false,
+            "input_tokens": 1755283,
+            "output_tokens": 11490,
+            "reasoning_output_tokens": 2598,
+            "cached_input_tokens": 1635328,
+            "tool_calls": 22,
+            "shell_calls": 21,
+            "sandbox_failures": 0,
+            "shell_successes": 17,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "clean",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": true,
+                "why": "The approved spec records exactly the two guarantees under expectations/promises with authority user_stated, and spec.py wires exactly those two custom contracts alongside the ordinary orders promise."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": true,
+                "why": "spec.py attaches accepted-currency to the source-aligned orders-source input using the csv-source service, relative orders/orders.csv model path, and its verifier script."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": true,
+                "why": "spec.py retains .promise(orders) and separately attaches the order-total-reconciles custom promise to the DuckDB-backed output."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": true,
+                "why": "Each quoted verifier has one synchronous @data_product.on_verify registration, a top-level exact data_product.verify() main guard, and a distinct relative contract path."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": true,
+                "why": "The harness-authoritative deterministic check exited 0 with passed true and no failures."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All required custom-contract structure and deterministic validation checks pass."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- nxd-pocket/pocket-custom-contracts/closure/dp-spec.approved.md (1253 bytes) ---\n---\ndp_spec_version: 1\nname: pocket_custom_contracts\nworkflow: pocket-custom-contracts\nstatus: approved\n---\n\n## intent\n\nLoad the supplied order-line export into a desktop Pocket data product with executable contracts for the two user-stated guarantees.\n\n## questions\n\n- Are all input currencies EUR or USD?\n- Do output line totals reconcile to each order's reported order total?\n\n## sources\n\n- type: csv\n  location: orders.csv\n  scope: The supplied orders CSV, preserved byte-for-byte.\n\n## population\n\nAll rows in the supplied orders CSV.\n\n## models\n\n- name: orders\n  kind: base\n  grain: one order line\n  key: line_id\n  description: One row per order line from the supplied export\n\n## expectations\n\n- name: accepted-currency\n  model: orders\n  phase: pre_transform\n  authority: user_stated\n  guarantee: Every input currency is EUR or USD.\n  rule: Reject any source row whose currency is not EUR or USD.\n  fields: [currency]\n\n## promises\n\n- name: order-total-reconciles\n  model: orders\n  phase: post_transform\n  authority: user_stated\n  guarantee: After transform, each order total reconciles to its output line totals.\n  rule: For each order_id, the output sum of line_total equals the reported order_total.\n  fields: [order_id, order_total, line_total]\n\n--- nxd-pocket/pocket-custom-contracts/closure/infra-profile.yaml (363 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- nxd-pocket/pocket-custom-contracts/closure/spec.py (1669 bytes) ---\n\"\"\"Desktop Pocket closure with two executable custom contracts.\"\"\"\n\nfrom nxd.spec import (\n    code,\n    custom,\n    data_product,\n    data_product_output,\n    script,\n    source_aligned_input,\n    storage,\n)\n\nfrom models import orders\n\n_csv = \"/infra-profile/desktop-local#/services/csv-source\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\nspec = (\n    data_product(\n        name=\"pocket_custom_contracts\",\n        domain=\"desktop.local\",\n        version=\"0.0.1\",\n        infra_profile=\"desktop-local\",\n    )\n    .input(\n        \"orders-source\",\n        source_aligned_input()\n        .source(_csv)\n        .config({\"model_paths\": {\"orders\": \"orders/orders.csv\"}})\n        .expectation(\n            custom(\"accepted-currency\")\n            .description(\"User-stated: every input currency is EUR or USD.\")\n            .model(orders)\n            .verify(\n                script(\"contracts/expectations/accepted-currency.py\")\n                .compute(_compute)\n            )\n        ),\n    )\n    .transform(script(\"transform/main.py\").compute(_compute).secrets([_csv]))\n    .output(\n        data_product_output()\n        .promise(orders)\n        .promise(\n            custom(\"order-total-reconciles\")\n            .description(\n                \"User-stated: after transform, each order total reconciles \"\n                \"to its output line totals.\"\n            )\n            .model(orders)\n            .verify(\n                script(\"contracts/promises/order-total-reconciles.py\")\n                .compute(_compute)\n            )\n        )\n        .port(\"duckdb\", storage(_duckdb))\n    )\n)\n\n--- nxd-pocket/pocket-custom-contracts/closure/contracts/expectations/accepted-currency.py (1010 bytes) ---\n\"\"\"Input expectation: accept only the user-guaranteed currencies.\"\"\"\n\nimport csv\n\nfrom nxd import data_product\nfrom nxd.core.context import LocalFileInput\nfrom nxd.data_product.context import VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(orders_source: LocalFileInput, models) -> VerifyResult:\n    invalid = []\n    with open(orders_source.path_for(\"orders\"), newline=\"\") as handle:\n        for row_number, row in enumerate(csv.DictReader(handle), start=2):\n            if row.get(\"currency\") not in {\"EUR\", \"USD\"}:\n                invalid.append({\"row\": row_number, \"currency\": row.get(\"currency\")})\n\n    if invalid:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"invalid\": invalid},\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"accepted\": [\"EUR\", \"USD\"]},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n\n--- nxd-pocket/pocket-custom-contracts/closure/contracts/promises/order-total-reconciles.py (1386 bytes) ---\n\"\"\"Output promise: reconcile each order total to its output line totals.\"\"\"\n\nfrom decimal import Decimal\n\nimport duckdb\n\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput\nfrom nxd.data_product.context import VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(output: DuckDbOutput, models) -> VerifyResult:\n    table = output.full_table_name(\"orders\")\n    mismatches = []\n    with duckdb.connect(output.path, read_only=True) as connection:\n        rows = connection.execute(\n            f\"SELECT order_id, MAX(order_total), SUM(line_total) FROM {table} \"\n            \"GROUP BY order_id\"\n        ).fetchall()\n    for order_id, reported, line_sum in rows:\n        if Decimal(str(reported)) != Decimal(str(line_sum)):\n            mismatches.append(\n                {\n                    \"order_id\": order_id,\n                    \"order_total\": str(reported),\n                    \"line_total_sum\": str(line_sum),\n                }\n            )\n\n    if mismatches:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\"contract\": \"order-total-reconciles\", \"model\": \"orders\", \"mismatches\": mismatches},\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"order-total-reconciles\", \"model\": \"orders\", \"orders_checked\": len(rows)},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "source_isolation_attestation": {
+              "capability_id": "nxd-eval-source-isolation-v1",
+              "profile_fingerprint": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612",
+              "wrapper_path": "/private/tmp/claude-501/-Volumes-PRO-G40-projects-nexty-agent-skills/69e5d0c5-eb46-4466-bb21-ec44eb0e9d84/scratchpad/iso/nxd-eval-isolation-wrapper",
+              "wrapper_sha256": "b3afef37c8aad49cb97853d29cf4c81b04a871da21c3bf0057a2c128d63c1612"
+            },
+            "source_isolation_probes": [
+              {
+                "id": "withheld-custom-contract-checker",
+                "status": "passed"
+              },
+              {
+                "id": "source-checks-rubric",
+                "status": "passed"
+              },
+              {
+                "id": "prior-benchmark-report-history",
+                "status": "passed"
+              },
+              {
+                "id": "prior-closure-temp-history",
+                "status": "passed"
+              },
+              {
+                "id": "codex-memories",
+                "status": "passed"
+              },
+              {
+                "id": "codex-session-history",
+                "status": "passed"
+              },
+              {
+                "id": "evaluator-checkout",
+                "status": "passed"
+              }
+            ],
+            "is_error": false,
+            "input_tokens": 875387,
+            "output_tokens": 8031,
+            "reasoning_output_tokens": 1715,
+            "cached_input_tokens": 808960,
+            "tool_calls": 15,
+            "shell_calls": 14,
+            "sandbox_failures": 0,
+            "shell_successes": 14,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "clean",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": false,
+                "why": "The closure wires exactly two custom contracts and includes the CSV copy, but no dp-spec.approved.md is present to record the two user-stated guarantees with authority: user_stated."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": true,
+                "why": "spec.py declares a source-aligned CSV input using the csv-source service and relative model_paths, with accepted-currency wired to its verifier script."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": true,
+                "why": "spec.py retains .promise(orders) and adds the distinct order-total-reconciles custom promise on the DuckDB output."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": true,
+                "why": "Each of the two referenced relative verifier scripts has exactly one @data_product.on_verify() registration and the exact data_product.verify() __main__ guard."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": true,
+                "why": "The authoritative deterministic checker exited 0 with passed: true and no failures."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "All executable-contract checks pass, but the required approved dp-spec contract inventory is missing."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- closure/infra-profile.yaml (363 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- closure/spec.py (1448 bytes) ---\n\"\"\"Desktop Pocket data-product specification.\"\"\"\nfrom nxd.spec import custom, data_product, data_product_output, script, storage\nfrom nxd.spec import source_aligned_input\n\nfrom models import orders\n\n_csv = \"/infra-profile/desktop-local#/services/csv-source\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\n_output = (\n    data_product_output()\n    .promise(orders)\n    .promise(\n        custom(\"order-total-reconciles\")\n        .description(\"User-stated: each order total equals its output line-total sum.\")\n        .model(orders)\n        .verify(script(\"contracts/promises/order-total-reconciles.py\").compute(_compute))\n    )\n    .port(\"duckdb\", storage(_duckdb))\n)\n\nspec = (\n    data_product(\n        name=\"pocket-custom-contracts\",\n        domain=\"desktop.local\",\n        version=\"0.0.1\",\n        infra_profile=\"desktop-local\",\n    )\n    .input(\n        \"orders-source\",\n        source_aligned_input()\n        .source(_csv)\n        .config({\"model_paths\": {\"orders\": \"orders/orders.csv\"}})\n        .expectation(\n            custom(\"accepted-currency\")\n            .description(\"User-stated: every input currency is EUR or USD.\")\n            .model(orders)\n            .verify(script(\"contracts/expectations/accepted-currency.py\").compute(_compute))\n        ),\n    )\n    .transform(script(\"transform/main.py\").compute(_compute).secrets([_csv]))\n    .output(_output)\n)\n\n--- closure/contracts/expectations/accepted-currency.py (1043 bytes) ---\n\"\"\"Input expectation: reject currencies outside the user-stated set.\"\"\"\nimport csv\n\nfrom nxd import data_product\nfrom nxd.core.context import LocalFileInput, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(source: LocalFileInput, models: dict) -> VerifyResult:\n    allowed = {\"EUR\", \"USD\"}\n    invalid = set()\n    checked = 0\n    with source.path_for(\"orders\").open(newline=\"\") as handle:\n        for row in csv.DictReader(handle):\n            checked += 1\n            currency = row.get(\"currency\", \"\")\n            if currency not in allowed:\n                invalid.add(currency or \"<blank>\")\n    if invalid:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"invalid_currencies\": sorted(invalid), \"rows_checked\": checked},\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"rows_checked\": checked},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n\n--- closure/contracts/promises/order-total-reconciles.py (1426 bytes) ---\n\"\"\"Output promise: reconcile each order total to its output line totals.\"\"\"\nfrom decimal import Decimal\n\nimport duckdb\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(output: DuckDbOutput, models: dict) -> VerifyResult:\n    table = output.full_table_name(\"orders\")\n    connection = duckdb.connect(output.path, read_only=True)\n    try:\n        rows = connection.execute(\n            f\"SELECT order_id, MIN(order_total), SUM(line_total) \"\n            f\"FROM {table} GROUP BY order_id ORDER BY order_id\"\n        ).fetchall()\n    finally:\n        connection.close()\n\n    mismatches = []\n    for order_id, reported, line_sum in rows:\n        reported_decimal = Decimal(str(reported))\n        line_sum_decimal = Decimal(str(line_sum))\n        if reported_decimal != line_sum_decimal:\n            mismatches.append({\n                \"order_id\": order_id,\n                \"order_total\": str(reported_decimal),\n                \"line_total_sum\": str(line_sum_decimal),\n            })\n    context = {\n        \"contract\": \"order-total-reconciles\",\n        \"model\": \"orders\",\n        \"orders_checked\": len(rows),\n        \"mismatches\": mismatches,\n    }\n    if mismatches:\n        return VerifyResult(VerifyResultEnum.FAILED, context)\n    return VerifyResult(VerifyResultEnum.PASS, context)\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    }
+  }
+}

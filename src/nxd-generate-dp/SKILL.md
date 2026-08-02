@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.29.0
+  version: 0.30.0
 ---
 
 # nxd-generate-dp skill
@@ -329,15 +329,15 @@ clause below is mandatory and each is restated in the Invariants:
 - **Deterministic**, and confined to the fixed venv (`pandas`, `duckdb`, stdlib);
   `requirements.txt` is **never installed at runtime**.
 
-### Step 3b — In-memory asserts: the only durable data-quality check
+### Step 3b — In-memory asserts: the durable derived-row check
 
-**Desktop has no other execution point for data quality.** The local driver's
-verify is a no-op and contract verification runs only platform-side, so an assert
-inside the transform is the whole quality story — running over the complete
-derived set before the rows are yielded. One helper per derived model, invoked
-between deriving and yielding, each an **invariant over the source-vs-derived
-relationship**: a claim that could be false if the derivation were wrong.
-Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
+**Transform asserts are the durable derived-row check; custom contracts never
+replace them.** A contract states what the **user guaranteed**; an assert proves
+what the **transform produced**. One helper per derived model, invoked between
+deriving and yielding, each an **invariant over the source-vs-derived
+relationship** — the thing no verifier sees — over the complete derived set
+before rows are yielded. Restating the transform's own arithmetic proves
+nothing. **Mandatory tiers:**
 
 - **Tier 1 — every derived model, always:** (a) the **declared key is unique**
   over the complete derived set, and (b) the **row count computed from the
@@ -348,11 +348,10 @@ Restating the transform's own arithmetic proves nothing. **Mandatory tiers:**
   (`- refund_pairs_total`), in `Decimal`, **per source currency BEFORE any FX
   conversion**.
 
-An itemized exclusion means the derivation **removes** rows or value rather than
-enriching — reclassify it as a removal and apply the removal invariants too.
-Classification totality is never sufficient alone: it can pass while every
-monetary answer is overstated. Raise `RuntimeError` carrying actual-vs-expected.
-Worked code: [reference/derived-models.md](reference/derived-models.md).
+Raise `RuntimeError` carrying actual-vs-expected. An itemized exclusion means a
+**removal**, not an enrichment, and carries extra invariants; classification
+totality alone can pass while every monetary answer is overstated — both, with
+worked code, in [reference/derived-models.md](reference/derived-models.md).
 
 **Other connector types**: Step 3 is identical except the `readers=[...]` body
 and `secrets[...]` key — take those from `reference/` (`file-source.md`,
@@ -364,7 +363,9 @@ and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 deployment YAML: it declares the infra profile, wires the transform to compute,
 promises every physical model — base and derived — on the DuckDB port, and
 registers each query-time view. Bind the three service references by relative
-infra-profile path (resolved against `infra-profile.yaml`, Step 5). Worked
+infra-profile path (resolved against `infra-profile.yaml`, Step 5). A spec
+declaring `## expectations` / `## promises` wires each one here too
+([reference/custom-contracts.md](reference/custom-contracts.md)); worked
 `spec.py`: [reference/models-example.md](reference/models-example.md).
 
 Contract facts baked into that shape — keep every one:
@@ -396,15 +397,13 @@ The desktop closure ships its own infra profile declaring the three local
 services the spec references (`duckdb`, `python-compute`, `csv-source`). Emit it
 **verbatim** from [reference/infra-profile.md](reference/infra-profile.md);
 `metadata.name` is `desktop-local` and MUST match `infra_profile=` in `spec.py`.
-The `generic-secrets` `csv-source` service delivers the **relative**
-`csv-source-path` into `secrets[...]` (an absolute path escapes the pinned
-snapshot and fails).
+The `csv-source` service (driver `nxd:local/file/storage:0.1.0`) delivers the
+**relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the
+pinned snapshot and fails).
 
-**Other connector types**: only the third service's *name* changes (Overview
-table). `csv-source`/`file-source` carry no credential (`attributes: []`);
-`db-source`/`api-source` populate `attributes` with the real credential
-(`reference/database-source.md` / `api-source.md`); 2+ of a type → one service
-per instance (`reference/multi-source.md`). Derived models change neither file.
+**Other connector types** change only the third service's name and its
+`attributes` — the rules, and what derived models do not change, are in
+[reference/infra-profile.md](reference/infra-profile.md).
 
 ### Step 6 — `requirements.txt`: the proven pins
 
@@ -475,7 +474,8 @@ an exact fixture count. Without credentials, report it **not run**.
 
 ## Invariants — NEVER violate these
 
-- **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore` (the companion artifact is per the connector-types table in Overview; the credential guards are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time.
+- **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore` (the companion artifact is per the connector-types table in Overview; the credential guards are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. Add one `contracts/expectations/<name>.py` or `contracts/promises/<name>.py` per contract the approved spec declares in `## expectations` / `## promises` — no more, no fewer.
+- **Custom contracts are executable, not decorative** — each compiles to a verifier that must be able to FAIL, and a custom promise never replaces the ordinary `.promise(model)`. Never invent one the spec does not declare; wiring is Step 4 and [reference/custom-contracts.md](reference/custom-contracts.md).
 - **Self-contained closure — no cross-boundary contract pointers** (Step 6a): the approved `dp-spec.md` is byte-copied in as `dp-spec.approved.md` and bound by `dp-spec.lock.json`, so everything a later session needs to continue the work lives INSIDE the closure and self-containment is hash-checkable rather than a discipline anyone has to remember. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in the approved spec, as `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure, `../dp-spec.md` included. Phase C fails a missing snapshot, lock, `build-record.json` or `README.md`, a snapshot whose bytes no longer match the lock, and any closure-escaping contract reference.
 - **Sample-selection is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in the spec's `population:` (and so travels in `dp-spec.approved.md`), reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends. A deterministic-but-arbitrary sample (e.g. "the oldest N") that silently excludes the rows a later step needs is a defect even though it reruns identically. A source field a downstream model or step depends on (a URL a later evaluation needs, a key a later join needs) is a **required-capture** field — declared in the plan as `models[].fields[].required_capture: true`, with the rows that actually lacked it recorded as an outcome in `build-record.json` `evidence.required_capture`, because a missing required field disables the downstream step without erroring.
 - **The naming invariant**: each physical model name == `models.py` `semantic_model` arg == `spec.py` `.promise` == `PHYSICAL_MODELS` == `main.<name>`, unquoted lowercase snake_case; additionally `==` the connector's per-model reference (`data/<name>/`, see "THE NAMING INVARIANT" table) for base models only. `PHYSICAL_MODELS` is landed tables (base + derived), NOT the `data/` listing. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.

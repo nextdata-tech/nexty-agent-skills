@@ -52,6 +52,37 @@ from typing import Protocol
 # up the judge prompt; the head is enough to see what the agent inspected.
 TOOL_RESULT_HEAD_CHARS = 1500
 
+
+def source_access_audit(
+    raw_stdout: str, markers: list[tuple[str, str]] | None, *, incomplete: bool = False
+) -> dict:
+    """Return private, normalized evidence of attempted withheld-source access.
+
+    Audit the unrendered stream before trace truncation. The runner supplies
+    normalized IDs; raw needles and matched text never enter metrics or judges.
+    """
+    if not markers:
+        return {"status": "incomplete" if incomplete else "not_required", "matched_marker_ids": []}
+    matched = [marker_id for marker_id, needle in markers if needle in raw_stdout]
+    return {
+        "status": "incomplete" if incomplete else "access_observed" if matched else "clean",
+        "matched_marker_ids": matched,
+    }
+
+
+def timeout_stdout(exc: subprocess.TimeoutExpired) -> str:
+    """Return any partial stdout without assuming the subprocess text mode.
+
+    Python may attach bytes even with ``text=True``; a timeout never provides a
+    complete stream, so callers must pair this with ``incomplete=True``.
+    """
+    raw = getattr(exc, "stdout", None)
+    if raw is None:
+        raw = getattr(exc, "output", None)
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw if isinstance(raw, str) else ""
+
 # Multi-turn scenarios instruct the agent to emit this marker when it is
 # stopping to wait on a user answer. No structural signal in the CLI's result
 # event distinguishes "asked and waiting" from "task complete" — both report the
@@ -288,6 +319,8 @@ class AgentBackend(Protocol):
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
         followup_turns: list[FollowupTurn] | None = None,
+        source_audit_markers: list[tuple[str, str]] | None = None,
+        executable: str | None = None,
     ) -> tuple[bool, str, dict]:
         """Return ``(ok, trace, metrics)``.
 
@@ -427,6 +460,8 @@ class ClaudeBackend:
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
         followup_turns: list[FollowupTurn] | None = None,
+        source_audit_markers: list[tuple[str, str]] | None = None,
+        executable: str | None = None,
     ) -> tuple[bool, str, dict]:
         # Multi-turn takes a separate, persistent-process implementation. The
         # single-turn path below is left byte-for-byte as it was so a scenario
@@ -438,8 +473,9 @@ class ClaudeBackend:
                 env_overrides=env_overrides, path_prepend=path_prepend,
                 skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
                 followup_turns=followup_turns,
+                source_audit_markers=source_audit_markers,
             )
-        cmd = ["claude", "-p", prompt] + self._agent_command(
+        cmd = [executable or "claude", "-p", prompt] + self._agent_command(
             ws, model, extra_dirs=extra_dirs, effort=effort,
             skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
         )
@@ -450,8 +486,11 @@ class ClaudeBackend:
                 cmd, cwd=ws, capture_output=True, text=True, timeout=timeout_s,
                 env=env,
             )
-        except subprocess.TimeoutExpired:
-            return False, "", {"error": f"agent timed out after {timeout_s}s"}
+        except subprocess.TimeoutExpired as exc:
+            return False, "", {"error": f"agent timed out after {timeout_s}s",
+                               "source_access_audit": source_access_audit(
+                                   timeout_stdout(exc), source_audit_markers, incomplete=True
+                               )}
         if proc.returncode != 0:
             # The CLI reports some fatal errors on stdout, not stderr — an
             # expired OAuth session is the common one. Reporting stderr alone
@@ -459,13 +498,17 @@ class ClaudeBackend:
             # is indistinguishable from a crash and sends the reader hunting in
             # the wrong place. Fall back to stdout when stderr is empty.
             detail = proc.stderr.strip() or proc.stdout.strip() or "(no output)"
-            return False, "", {
-                "error": f"claude exited {proc.returncode}: {detail[-2000:]}"
-            }
+            return False, "", {"error": f"claude exited {proc.returncode}: {detail[-2000:]}",
+                                "source_access_audit": source_access_audit(proc.stdout, source_audit_markers)}
 
+        # Audit the complete raw backend stream before deriving a readable
+        # trace, whose tool outputs are intentionally truncated for judging.
+        audit = source_access_audit(proc.stdout, source_audit_markers)
         trace, metrics = self._trace_from_stream(proc.stdout)
         if not trace and not metrics.get("final_answer"):
-            return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}"}
+            return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}",
+                                "source_access_audit": source_access_audit(proc.stdout, source_audit_markers)}
+        metrics["source_access_audit"] = audit
         return not metrics.get("is_error", False), trace, metrics
 
     # -- agent (multi-turn) ---------------------------------------------------
@@ -483,6 +526,7 @@ class ClaudeBackend:
         skill_pack_dir: Path | None,
         allowed_tools: str | None,
         followup_turns: list[FollowupTurn],
+        source_audit_markers: list[tuple[str, str]] | None,
     ) -> tuple[bool, str, dict]:
         """Drive one conversation over a single long-lived CLI process.
 
@@ -528,9 +572,14 @@ class ClaudeBackend:
         # The consuming loop takes lines off the queue, which empties it, so
         # the text has to be kept here to stay reachable from the error paths.
         stdout_chunks: list[str] = []
+        # This is intentionally unbounded for the duration of a single eval
+        # conversation.  Source-isolation evidence must inspect the complete
+        # raw stream, not the rendered or diagnostic-tail transcript.
+        raw_stdout_chunks: list[str] = []
 
         def _drain_stdout() -> None:
             for line in proc.stdout:  # type: ignore[union-attr]
+                raw_stdout_chunks.append(line)
                 stdout_chunks.append(line)
                 if len(stdout_chunks) > 2000:
                     del stdout_chunks[:1000]
@@ -591,6 +640,9 @@ class ClaudeBackend:
             # they travel in metrics where the judge never sees them.
             partial = "\n".join(t for t, _ in segments).strip()
             meta: dict = {"error": f"{error}: {detail[-2000:]}" if detail else error}
+            meta["source_access_audit"] = source_access_audit(
+                "".join(raw_stdout_chunks), source_audit_markers
+            )
             if partial:
                 meta["partial_trace"] = partial[-PARTIAL_TRACE_CHARS:]
                 meta["partial_segments"] = len(segments)
@@ -730,11 +782,17 @@ class ClaudeBackend:
             "awaited_input_turns": awaited_input_turns,
             "exit_code": returncode,
             "killed_on_close": killed_on_close,
+            "source_access_audit": source_access_audit(
+                "".join(raw_stdout_chunks), source_audit_markers
+            ),
         })
         if not trace and not metrics.get("final_answer"):
             detail = _failure_detail()
             return False, "", {
-                "error": f"empty stream output (exit {returncode}): {detail[-2000:]}"
+                "error": f"empty stream output (exit {returncode}): {detail[-2000:]}",
+                "source_access_audit": source_access_audit(
+                    "".join(raw_stdout_chunks), source_audit_markers
+                ),
             }
         # A nonzero exit fails the run exactly as it does on the single-turn
         # path. A CLI that emits its result events and then dies with a fatal
@@ -943,6 +1001,8 @@ class CodexBackend:
         skill_pack_dir: Path | None = None,
         allowed_tools: str | None = None,
         followup_turns: list[FollowupTurn] | None = None,
+        source_audit_markers: list[tuple[str, str]] | None = None,
+        executable: str | None = None,
     ) -> tuple[bool, str, dict]:
         if followup_turns:
             # Loud, not silent. Running turn 1 and returning would produce a
@@ -963,7 +1023,7 @@ class CodexBackend:
         # the prompt, because Codex cannot load a plugin dir. Accepting the arg
         # keeps the AgentBackend interface uniform across providers.
         cmd = [
-            "codex", "exec",
+            executable or "codex", "exec",
             "--json",
             "--model", model,
             "--sandbox", CODEX_AGENT_SANDBOX,
@@ -991,21 +1051,27 @@ class CodexBackend:
                 cmd, cwd=ws, input=prompt, capture_output=True, text=True,
                 timeout=timeout_s, env=env,
             )
-        except subprocess.TimeoutExpired:
-            return False, "", {"error": f"agent timed out after {timeout_s}s"}
+        except subprocess.TimeoutExpired as exc:
+            return False, "", {"error": f"agent timed out after {timeout_s}s",
+                               "source_access_audit": source_access_audit(
+                                   timeout_stdout(exc), source_audit_markers, incomplete=True
+                               )}
         if proc.returncode != 0:
             # Same stdout-vs-stderr fallback as the Claude paths. No Codex
             # stdout-only failure is known today, but a CLI that dies with an
             # empty stderr reports as a bare "codex exited 1:" either way, and
             # the fallback costs nothing when stderr is populated.
             detail = proc.stderr.strip() or proc.stdout.strip() or "(no output)"
-            return False, "", {
-                "error": f"codex exited {proc.returncode}: {detail[-2000:]}"
-            }
+            return False, "", {"error": f"codex exited {proc.returncode}: {detail[-2000:]}",
+                                "source_access_audit": source_access_audit(proc.stdout, source_audit_markers)}
 
+        # Do not let the trace parser's truncation decide isolation evidence.
+        audit = source_access_audit(proc.stdout, source_audit_markers)
         trace, metrics = self._trace_from_stream(proc.stdout)
         if not trace and not metrics.get("final_answer"):
-            return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}"}
+            return False, "", {"error": f"empty stream output: {proc.stdout[-2000:]}",
+                                "source_access_audit": source_access_audit(proc.stdout, source_audit_markers)}
+        metrics["source_access_audit"] = audit
         return not metrics.get("is_error", False), trace, metrics
 
     @staticmethod
