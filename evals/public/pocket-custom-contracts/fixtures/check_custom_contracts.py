@@ -14,14 +14,16 @@ from pathlib import Path
 # The boundary is SPLIT on purpose. `api_key`/`password`/`passwd`/`secret` allow
 # any identifier prefix, because `db_password`, `openai_api_key` and `MY_SECRET`
 # are the idiomatic spellings and a uniform leading \b missed all three.
-# `token` is narrower: bare `token`, plus the prefixes that actually denote a
-# credential (`access_token`, `auth_token`, `refresh_token`, `bearer_token`,
-# `session_token`). It is NOT widened wholesale, because `csrf_token` is a
-# request nonce and failing a closure over it would be wrong. Non-assignments
-# (`password_columns`, `token_fields`, `tokenizer`) match under no arm.
+# `token` is narrower: bare `token`, plus the prefixes that denote a credential
+# — and those take a prefix of their own, since `oauth_token` differs from
+# `auth_token` only by a leading letter. It is NOT widened wholesale, because
+# `csrf_token` is a request nonce and failing a closure over it would be wrong.
+# Non-assignments (`password_columns`, `token_fields`, `tokenizer`) match under
+# no arm.
 SECRET_LITERAL = re.compile(
     r"(?i)(?:(?:^|[^A-Za-z0-9])[A-Za-z0-9_]*(api[_-]?key|password|passwd|secret)"
-    r"|(?:^|[^A-Za-z0-9])(?:access|auth|refresh|bearer|session)[_-]?token"
+    r"|[A-Za-z0-9_]*(?:access|auth|refresh|bearer|session|oauth|api|jwt|id"
+    r"|github|gitlab|slack)[_-]token"
     r"|\btoken)\s*=\s*[\"']")
 
 

@@ -828,7 +828,7 @@ Efficiency is not compared: the before arm never produces a working closure, so 
 
 Record: [`records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json`](records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json)
 
-## 2026-08-02 — validate_dp_spec: duplicate-contract diagnostics field-addressed (plugin v0.30.0)
+## 2026-08-02 — validate_dp_spec: duplicate-contract diagnostics field-addressed (plugin v0.30.1)
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
 |---|---|---|---|---|---|---|---|---|---|
