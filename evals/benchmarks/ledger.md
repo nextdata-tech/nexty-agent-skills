@@ -660,6 +660,9 @@ Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-w
 
 ## 2026-07-30 — nxd-generate-dp: executable Pocket custom contracts (plugin v0.27.0)
 
+**SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
+
+
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
 |---|---|---|---|---|---|---|---|---|---|
 | before-v0.26.2 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 17 | 10382 | — | gpt-5.6-terra |
@@ -670,6 +673,9 @@ Notes: **RETRACTED for Pocket correctness and efficiency claims.** These runs di
 Record: [`records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json`](records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json)
 
 ## 2026-07-31 — nxd-generate-dp: round-two Pocket CSV runtime contract fixes (plugin v0.27.0)
+
+**SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
+
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
 |---|---|---|---|---|---|---|---|---|---|
@@ -689,6 +695,9 @@ Notes: Current-rubric baseline versus round-two review fixes. **The `pocket-cust
 Record: [`records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json`](records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json)
 
 ## 2026-07-31 — nxd-generate-dp: source-isolated Pocket custom contracts (plugin v0.27.0)
+
+**SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
+
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
 |---|---|---|---|---|---|---|---|---|---|
@@ -801,3 +810,22 @@ supervisor; World Bank additionally needs outbound access to
 nor `EVAL_POCKET_PYTHON`, and `nxd-desktop-supervisor` is absent. The static
 regression test pins the prompt/checker boundary only. It establishes no
 PASS/FAIL, quality, latency, token, cost, or runtime-connector claim.
+
+## 2026-08-02 — pocket custom contracts rebased onto the spec-authoritative IR (plugin v0.30.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 7/12 | — | 34 | 19426 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 2/12 | — | 7 | 3509 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 5/12 | — | 17 | 16093 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 2/12 | — | 20 | 15766 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 4/12 | — | 27 | 28095 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 5/12 | — | 34 | 3496 | — | gpt-5.6-luna |
+
+Notes: **No difference is demonstrable, and no Pocket-contract claim is made here.** Scenario `coauthor-supplied-rubric`, N=3 per arm, agent AND judge on the codex backend, same harness and rubric in both arms. Arms differ only in `src/`: the before arm is a clean worktree at origin/main (446369f), the after arm is this branch. `build_agent_prompt` was verified to emit a BYTE-IDENTICAL prompt across the two arms for a non-isolated scenario, so the source-isolation harness this branch also carries does not confound the comparison.
+
+Judge checks: before 7/2/5 (mean 4.7/12), after 2/4/5 (mean 3.7/12). Two-sided exact permutation test on the difference of means: **p=0.80**. Every per-check difference is a single run out of three and none flips consistently, so the apparent 1-check drop is noise at this N, not a regression. The deterministic check is **1/3 in BOTH arms**, failing identically (`pre-build:names the incomplete scale: no evidence before any materialization`). Output tokens 13.0k vs 15.8k mean, which at this N and this variance (3.5k-28.1k within a single arm) says nothing.
+
+**What this run does NOT cover.** `pocket-custom-contracts` — the scenario that exercises the contract work this PR is about — could not be run: it declares `agent_source_isolation` and fails closed without an operator-supplied default-deny wrapper, capability ID, 64-hex profile fingerprint and five protected roots, none of which exist in this environment. It errors with `source-isolation infrastructure invalid: missing source-isolation capability ID` rather than degrading to an unisolated run, which is the harness behaving correctly. The three v0.27.0 entries above measured the PRE-REBASE implementation of this work — a different Phase C gate, a CONTEXT.md-based inventory, and no dp-spec IR sections. **Do not read them as evidence for this branch.** The contract behaviour here is covered by 37 checker tests and a 460-test suite, not by an eval arm.
+
+Record: [`records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json`](records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json)
