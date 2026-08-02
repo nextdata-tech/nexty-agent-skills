@@ -1290,7 +1290,7 @@ def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> Non
 
 
 @contextlib.contextmanager
-def http_stub_server(scenario_dir: Path, ws: Path, spec: dict):
+def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
     """Start a scenario-supplied in-process HTTP stub for the run's duration.
 
     Runs the fixture module's own ``start``/``stop`` callables IN this process
@@ -1325,6 +1325,30 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict):
         endpoint_file = ws / str(spec.get("endpoint_file", "ENDPOINT_URL"))
         endpoint_file.parent.mkdir(parents=True, exist_ok=True)
         endpoint_file.write_text(base_url + "\n", encoding="utf-8")
+
+        # The stub is useless unless the AGENT can reach it, and the agent's
+        # sandbox is not this process's. Codex's default `workspace-write`
+        # implements isolation with a network namespace, so the agent's curl gets
+        # `Failed to connect to 127.0.0.1` while this process talks to the same
+        # port happily — verified, not theorised.
+        #
+        # Left unchecked, that produces the worst possible outcome: the run
+        # completes, every data-dependent check fails for want of data, and the
+        # report reads as a skill regression. The scenario is unrunnable under
+        # that sandbox, so say so here rather than grading a run that never had
+        # a source. CI already exports EVAL_CODEX_AGENT_SANDBOX=danger-full-access
+        # (`.github/workflows/evals.yml`); a local run needs the same.
+        if agent_backend_name == "codex" and os.environ.get(
+                "EVAL_CODEX_AGENT_SANDBOX", "").strip() in ("", "workspace-write"):
+            raise RuntimeError(
+                f"scenario needs a runner-started HTTP stub at {base_url}, but the "
+                "codex agent sandbox is 'workspace-write', which blocks loopback "
+                "network from the agent's shell. The agent would see connection "
+                "refused and every data-dependent check would fail as though the "
+                "skills regressed. Re-run with "
+                "EVAL_CODEX_AGENT_SANDBOX=danger-full-access (what CI uses), or "
+                "with --agent-backend claude."
+            )
         yield base_url
     finally:
         stop_fn(server, thread)
@@ -2344,7 +2368,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 # http_stub_server(). No extra interpreter/subprocess: the stub
                 # is stdlib-only and runs in this process.
                 try:
-                    with http_stub_server(scenario_dir, ws, http_stub_spec):
+                    with http_stub_server(scenario_dir, ws, http_stub_spec,
+                                          agent_backend.name):
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
                             extra_dirs=extra_dirs, effort=args.agent_effort,

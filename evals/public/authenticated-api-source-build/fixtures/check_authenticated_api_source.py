@@ -265,6 +265,29 @@ def main() -> int:
     root: Path = args.root
     fixtures: Path = args.fixtures
 
+    # The closure does NOT necessarily land at the workspace root. nxd-pocket-loop
+    # documents `…/nxd-pocket/<workflow>/closure/` (SKILL.md "Author dp-spec.md"),
+    # with the IR beside it — so an agent following the skill correctly writes
+    # transform/main.py several directories down. A checker hardcoding
+    # `<root>/transform/main.py` fails a correct closure and reports it as a
+    # missing one, which is worse than not checking: it is a false accusation
+    # aimed at the agent rather than at the checker.
+    #
+    # Resolve by SEARCH, anchored on the file that defines a closure. Prefer the
+    # workspace root when it is itself a closure (the flat layout other scenarios
+    # use), else take the shallowest match so a nested scratch copy cannot win
+    # over the real one.
+    def _find_closure(base: Path) -> Path:
+        if (base / "transform" / "main.py").is_file():
+            return base
+        found = sorted(
+            (p.parent.parent for p in base.rglob("transform/main.py")),
+            key=lambda p: (len(p.relative_to(base).parts), str(p)),
+        )
+        return found[0] if found else base
+
+    root = _find_closure(root)
+
     # ---- structural: closure exists -------------------------------------
     transform_path = root / "transform" / "main.py"
     if not check("closure:transform-exists", transform_path.is_file(), str(transform_path)):
