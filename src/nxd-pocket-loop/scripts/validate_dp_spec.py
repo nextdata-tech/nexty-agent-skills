@@ -574,6 +574,11 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
         sections = sorted({sec for sec, entry in contracts
                            if str(entry.get("name") or "") == dupe})
         for section in sections:
+            # Identity via entry_identity, like every other contract finding —
+            # it already resolves `name` first, so a hand-built path is one
+            # more place the addressing convention can drift.
+            entry = next(e for sec, e in contracts
+                         if sec == section and str(e.get("name") or "") == dupe)
             # A cross-section collision is reported at BOTH locations on
             # purpose: a reader in `expectations` has to see it too, and
             # neither side is the one at fault. Each finding names the OTHER
@@ -598,7 +603,7 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
                 f"the generated verifier file, so two contracts sharing one "
                 f"name overwrite each other",
                 code="spec.contract.duplicate_name",
-                path=f"{spec_path(section, dupe)}.name",
+                path=f"{spec_path(section, entry_identity(entry, 0))}.name",
                 evidence={"found": [dupe], "sections": sections},
             )
 

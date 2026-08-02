@@ -799,6 +799,13 @@ def test_secret_literal_regex_matches_self_check_exactly():
         # ...but `token` is NOT widened wholesale: csrf_token is a request
         # nonce, and failing a closure over it would be wrong.
         ('csrf_token = "abc"', False),
+        # `-` is a word boundary, so the bare arm has to exclude it too or the
+        # hyphenated spelling escapes the carve-out its sibling gets.
+        ('csrf-token = "abc"', False),
+        # Each credential prefix is BOUNDED: unbounded, `id` let these in.
+        ('valid_token = "v"', False),
+        ('uuid_token = "u"', False),
+        ('grid_token = "g"', False),
         # Still not matched: the secret word must be what is ASSIGNED, not a
         # prefix of some other identifier.
         ('password_columns = [1]', False),

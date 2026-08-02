@@ -1209,17 +1209,17 @@ CONTRACT_DIRS = {"expectations": "pre_transform", "promises": "post_transform"}
 # The boundary is SPLIT on purpose. `api_key`/`password`/`passwd`/`secret` allow
 # any identifier prefix, because `db_password`, `openai_api_key` and `MY_SECRET`
 # are the idiomatic spellings and a uniform leading \b missed all three.
-# `token` is narrower: bare `token`, plus the prefixes that denote a credential
-# — and those take a prefix of their own, since `oauth_token` differs from
-# `auth_token` only by a leading letter. It is NOT widened wholesale, because
-# `csrf_token` is a request nonce and failing a closure over it would be wrong.
-# Non-assignments (`password_columns`, `token_fields`, `tokenizer`) match under
-# no arm.
+# `token` is narrower and each credential prefix is BOUNDED: an unbounded one
+# let `valid_token`, `uuid_token` and `grid_token` in through `id`. The bare
+# arm excludes `-` as well as word characters, because `\b` treats a hyphen as
+# a boundary and `csrf-token` would otherwise escape the carve-out that
+# `csrf_token` gets. Non-assignments (`password_columns`, `token_fields`,
+# `tokenizer`) match under no arm.
 SECRET_LITERAL = re.compile(
     r"(?i)(?:(?:^|[^A-Za-z0-9])[A-Za-z0-9_]*(api[_-]?key|password|passwd|secret)"
-    r"|[A-Za-z0-9_]*(?:access|auth|refresh|bearer|session|oauth|api|jwt|id"
+    r"|(?:^|[^A-Za-z0-9])(?:access|auth|oauth|refresh|bearer|session|api|jwt|id"
     r"|github|gitlab|slack)[_-]token"
-    r"|\btoken)\s*=\s*[\"']")
+    r"|(?:^|[^A-Za-z0-9_-])token)\s*=\s*[\"']")
 
 
 def _verify_scripts(tree):
