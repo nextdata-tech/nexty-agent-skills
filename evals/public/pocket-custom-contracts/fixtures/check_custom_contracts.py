@@ -238,7 +238,16 @@ def check(root: Path):
             not isinstance(branch.test, ast.Constant)
             for branch in ast.walk(verifier)
             if isinstance(branch, (ast.If, ast.IfExp)))
-        inert = not verifier or any(isinstance(n, ast.Pass) or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and n.value.value is Ellipsis) for n in ast.walk(verifier)) or "FAILED" not in verifier_source or "PASS" not in verifier_source or not conditional_failed
+        # A stub body — `def verify(): pass` / `...` — is inert. Walking the
+        # WHOLE function instead false-positives on `except KeyError: pass`,
+        # which is ordinary error handling, and self_check.py does not reject
+        # it; the gates must not disagree.
+        stub_body = bool(verifier) and all(
+            isinstance(n, ast.Pass)
+            or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                and n.value.value is Ellipsis)
+            for n in verifier.body)
+        inert = not verifier or stub_body or "FAILED" not in verifier_source or "PASS" not in verifier_source or not conditional_failed
         if registered != 1 or not has_main_guard(t) or inert: errors.append(f"bad verifier {rel}")
         if any(isinstance(f, ast.AsyncFunctionDef) for f in verifiers):
             errors.append("Pocket custom verifier must be synchronous; the runtime does not await async verifier functions")

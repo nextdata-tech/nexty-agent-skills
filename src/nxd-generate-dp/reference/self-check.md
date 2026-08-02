@@ -1386,7 +1386,16 @@ if _spec_tree is not None:
         live_branch = any(
             isinstance(n, (ast.If, ast.IfExp)) and not isinstance(n.test, ast.Constant)
             for n in ast.walk(verifiers[0]))
-        if not can_fail or not live_branch or "PASS" not in body_src:
+        # A stub BODY is inert; a `pass` deeper inside is not. `except X: pass`
+        # is ordinary error handling, so testing every statement in the function
+        # would reject a working verifier — and the eval checker, which says it
+        # mirrors this predicate, must agree.
+        stub_body = all(
+            isinstance(n, ast.Pass)
+            or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                and n.value.value is Ellipsis)
+            for n in verifiers[0].body)
+        if not can_fail or not live_branch or stub_body or "PASS" not in body_src:
             cerr("closure.contract_verifier_inert",
                  f"{vpath}: verifier is inert — require FAILED behind a "
                  f"non-literal condition and a PASS result, never "
@@ -1604,6 +1613,17 @@ if _spec_tree is not None:
                 if value in ("|", ">", "|-", ">-", "|+", ">+"):
                     scalar_indent = indent
                     continue
+                # Strip a trailing inline comment. The `## expectations`
+                # template in nxd-pocket-loop/reference/dp-spec.md — the shape
+                # agents copy — annotates `name:` exactly this way, so keeping
+                # the comment made a closure built from the documented example
+                # report BOTH halves of contract drift against itself. Only
+                # outside quotes: a quoted name may legally contain '#'.
+                if value[:1] in ("'", '"'):
+                    close = value.find(value[0], 1)
+                    value = value[:close + 1] if close > 0 else value
+                else:
+                    value = value.split("#", 1)[0].strip()
                 if key == "name" and value:
                     spec_named.add(value.strip("\"'"))
                     return

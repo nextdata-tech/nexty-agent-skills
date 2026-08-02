@@ -387,7 +387,9 @@ Contract facts baked into that shape — keep every one:
   without it. `.semantic_tools()` emits a kernel RPC port needing a live RPC
   driver — a k8s artifact with no local equivalent: a port nothing serves.
 
-**Other connector types**: only the variable name and service path change; for 2+ of one type, `.secrets([...])` takes one labeled variable per instance (`reference/multi-source.md`).
+**Other connector types**: only the variable name and service path change; for
+2+ of one type, `.secrets([...])` takes one labeled variable per instance
+(`reference/multi-source.md`).
 
 ### Step 5 — `infra-profile.yaml`: the desktop-local profile (emitted prerequisite)
 
@@ -399,11 +401,9 @@ The `csv-source` service (driver `nxd:local/file/storage:0.1.0`) delivers the
 **relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the
 pinned snapshot and fails).
 
-**Other connector types**: only the third service's *name* changes (Overview
-table). `csv-source`/`file-source` carry no credential (`attributes: []`);
-`db-source`/`api-source` populate `attributes` with the real credential
-(`reference/database-source.md` / `api-source.md`); 2+ of a type → one service
-per instance (`reference/multi-source.md`). Derived models change neither file.
+**Other connector types** change only the third service's name and its
+`attributes` — the rules, and what derived models do not change, are in
+[reference/infra-profile.md](reference/infra-profile.md).
 
 ### Step 6 — `requirements.txt`: the proven pins
 

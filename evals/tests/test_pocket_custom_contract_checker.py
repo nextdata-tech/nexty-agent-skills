@@ -739,6 +739,13 @@ def _drift_names(snapshot: str) -> set[str]:
      {"a", "b"}),
     ("stops at the next section",
      "## expectations\n- name: a\n\n## gates\n- name: g1\n", {"a"}),
+    # The dp-spec.md template annotates `name:` exactly this way, so a closure
+    # built from the DOCUMENTED example must not drift against itself.
+    ("inline comment after the name, as the reference doc writes it",
+     "## expectations\n- name: accepted-currency      # selects the verifier "
+     "filename\n  authority: user_stated\n", {"accepted-currency"}),
+    ("a quoted name may contain '#'",
+     "## expectations\n- name: \"has#hash\"  # trailing comment\n", {"has#hash"}),
 ])
 def test_drift_parser_reads_the_entry_name(label, snapshot, expected):
     assert _drift_names(snapshot) == expected, label
