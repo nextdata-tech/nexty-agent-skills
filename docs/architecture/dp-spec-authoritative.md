@@ -391,7 +391,8 @@ Denying every transport on the strength of a parse failure is a verdict the gate
 has not earned, so it warns and skips the transport branch — while the
 model-SDK denial, which no connector type waives, still applies.
 
-**What it is not.** An import-level name check over one file, with an enumerated
+**What it is not.** An import-level name check — `transform/main.py`, plus a
+model-SDK-only scan of `contracts/**/*.py` — with an enumerated
 list. A wrapped socket, a URL handed to `pandas.read_json`, DuckDB `httpfs`,
 `subprocess`, dynamic import, and the permitted `mcp` client are all invisible to
 it, and the connector declaration it keys on is agent-authored — so it catches
@@ -1854,7 +1855,8 @@ phase A ok — …
 phase B ok — …
 phase C ok — approved spec snapshot + lock present, no closure-escaping contract references
 phase D ok — …
-SELF-CHECK OK — Phases A (structural), B (transform dry-run), C (context-completeness), D (policy boundary) all passed.
+phase E ok — no denied model-SDK import in transform/main.py, …
+SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), B (transform dry-run), C (context-completeness), D (policy boundary) all passed.
 ```
 
 **Note the deliberate lie in that last literal.** Phase C verifies the byte-copied

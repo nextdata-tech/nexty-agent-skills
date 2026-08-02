@@ -688,7 +688,8 @@ say(f"phase A ok — {len(base_names)} semantic_model, "
 # socket are stdlib. A closure can call a model today; nothing structural stops
 # it. This is the structure.
 #
-# Static, import-level, one file. Two families of finding:
+# Static, import-level. transform/main.py for both families below, plus a
+# model-SDK-only scan of contracts/**/*.py. Two families of finding:
 #   (a) CONNECTOR-SHAPE MISMATCH — an import contradicting the connector type
 #       spec.py declares. A closure that declares csv-source and imports
 #       dlt.sources.rest_api reads its input from somewhere its own declaration
@@ -979,16 +980,28 @@ if eerrors:
     # would be a record that contradicts itself.
     close_stage("s1_structure", "failed", errors=len(seen))
     finish(1)
-say(f"phase E ok — no denied model-SDK or transport import in "
-    f"transform/main.py, and its imports are consistent with the declared "
-    f"connector {sorted(declared_sources) or ['(none)']}; no model-SDK import "
-    f"in any contracts/**/*.py verifier either. This is an import-level name "
-    f"check over the transform plus the verifiers: no *listed* model-provider "
-    f"SDK — the list is enumerated, not exhaustive — and no undeclared "
-    f"transport from the listed roots in the transform (verifiers are NOT "
-    f"scanned for transport). A wrapped socket, a URL passed to a reader, "
-    f"DuckDB httpfs, subprocess, and the mcp client are all invisible or "
-    f"permitted here (see 'What Phase E cannot see').")
+# When spec.py carried no readable service ref, `network_declared` was granted
+# above rather than derived — an unreadable declaration is not evidence of a
+# non-network one. That is the right default, but the success line must not then
+# claim a transport check it never performed: `import requests` in the transform
+# passes silently under it, and a reader who was told "no transport import"
+# would have been told something false.
+_transport_checked = saw_service_ref
+say(f"phase E ok — no denied model-SDK import in transform/main.py"
+    + (f", no undeclared transport there, and its imports are consistent with "
+       f"the declared connector {sorted(declared_sources) or ['(none)']}"
+       if _transport_checked else
+       ", and no model-SDK import in any verifier. TRANSPORT WAS NOT CHECKED: "
+       "spec.py declared no readable service ref, so the transport family was "
+       "waived rather than tested — this line is silent on whether the "
+       "transform opens a socket")
+    + f"; no model-SDK import in any contracts/**/*.py verifier either. This is "
+    f"an import-level name check over the transform plus the verifiers: no "
+    f"*listed* model-provider SDK — the list is enumerated, not exhaustive — "
+    f"and no undeclared transport from the listed roots in the transform "
+    f"(verifiers are NOT scanned for transport). A wrapped socket, a URL passed "
+    f"to a reader, DuckDB httpfs, subprocess, and the mcp client are all "
+    f"invisible or permitted here (see 'What Phase E cannot see').")
 
 # ---------------------------------------------------------------- Phase B ---
 # Dry-run of transform/main.py against a scratch DuckDB. This one EXECUTES.
@@ -1958,8 +1971,9 @@ say("phase D ok — rulings land as editable data with status + provenance, "
 # trade visible instead of inviting a helpful rename that breaks every checker.
 say("SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), "
     "B (transform dry-run), C (context-completeness), D (policy boundary) all "
-    "passed. Phase E is import-level over transform/main.py only: it does not "
-    "make the transform offline (see 'What Phase E cannot see').")
+    "passed. Phase E is import-level over transform/main.py plus a "
+    "model-SDK scan of contracts/**/*.py: it does not make the transform "
+    "offline (see 'What Phase E cannot see').")
 
 # Distribution read-back. NOT a gate — it never fails the run. It prints the
 # value counts of every classification-shaped string column of every derived
