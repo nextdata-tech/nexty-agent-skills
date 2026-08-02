@@ -86,6 +86,8 @@ STATUS_VALUES = ("draft", "proposed", "approved")
 
 REQUIRED_SECTIONS = ("intent", "questions", "sources", "population", "models")
 KNOWN_SECTIONS = REQUIRED_SECTIONS + (
+    "expectations",
+    "promises",
     "gates",
     "criteria",
     "verdicts",
@@ -98,6 +100,21 @@ KNOWN_SECTIONS = REQUIRED_SECTIONS + (
 
 MODEL_KINDS = ("base", "derived", "view", "reference")
 SOURCE_TYPES = ("csv", "file", "database", "api")
+
+# A contract's authority is the whole reason these sections exist. `user_stated`
+# is a guarantee the user asserted in their own words; it is theirs to weaken or
+# withdraw, never the agent's, which is why every `user_stated` contract is
+# owner: user and not agent_fillable. `inferred` is a constraint the agent read
+# off the data or the schema — real, but it belongs in models.py and an ordinary
+# .promise(model), not here. Recording the difference is what stops a profiling
+# artefact from being replayed back to the user as their own promise.
+CONTRACT_AUTHORITY = ("user_stated", "inferred")
+
+# Where a contract runs. An expectation guards the input before the transform
+# reads it; a promise guards the output after the transform wrote it. The phase
+# is not a preference — it decides whether a violation stops the build before
+# any derived row exists or blocks publication of rows already computed.
+CONTRACT_PHASE = ("pre_transform", "post_transform")
 
 DECISION_STATUS = ("confirmed", "proposed", "blocked")
 DECISION_PROVENANCE = (
@@ -145,6 +162,8 @@ REQUIRED_ENTRY_FIELDS = {
     "gates": ("rule", "unknown"),
     "decisions": ("status", "provenance", "ruling"),
     "open_questions": ("question",),
+    "expectations": ("name", "authority", "model", "guarantee", "rule"),
+    "promises": ("name", "authority", "model", "guarantee", "rule"),
 }
 
 
@@ -390,6 +409,37 @@ _register_table(
          "two models share a name"),
         ("spec.model.unmotivated", "warning", "agent", "list", True,
          "a derived model names no question in answers"),
+        ("spec.contract.not_mapping", "error", "agent", "mapping", True,
+         "a contract entry is not a mapping"),
+        ("spec.contract.no_name", "error", "agent", "text", True,
+         "a contract has no name"),
+        ("spec.contract.bad_name", "error", "agent", "text", True,
+         "a contract name is not lowercase-hyphenated"),
+        ("spec.contract.duplicate_name", "error", "agent", "text", True,
+         "two contracts share a name — the name selects the verifier file"),
+        ("spec.contract.no_authority", "error", "agent", "enum", True,
+         "a contract does not say whether the user stated it or the agent "
+         "inferred it"),
+        ("spec.contract.bad_authority", "error", "agent", "enum", True,
+         "contract authority is outside the vocabulary"),
+        ("spec.contract.inferred_in_spec", "error", "agent", "enum", True,
+         "an inferred constraint is claimed as a spec contract — it belongs in "
+         "models.py and an ordinary .promise(model)"),
+        ("spec.contract.no_guarantee", "error", "user", "long_text", False,
+         "a contract has no guarantee in the user's own words"),
+        ("spec.contract.no_rule", "error", "user", "long_text", False,
+         "a contract has no executable rule"),
+        ("spec.contract.no_model", "error", "agent", "text", True,
+         "a contract names no model"),
+        ("spec.contract.unknown_model", "error", "agent", "text", True,
+         "a contract names a model no models entry declares"),
+        ("spec.contract.bad_phase", "error", "agent", "enum", True,
+         "contract phase is outside the vocabulary"),
+        ("spec.contract.wrong_phase", "error", "agent", "enum", True,
+         "an expectation is not pre_transform, or a promise is not "
+         "post_transform"),
+        ("spec.contract.unbound_threshold", "error", "user", "text", False,
+         "a contract rule names a threshold the spec never fixes"),
         ("spec.gate.not_mapping", "error", "agent", "mapping", True,
          "a gate entry is not a mapping"),
         ("spec.gate.no_rule", "error", "user", "long_text", False,
@@ -3275,6 +3325,12 @@ _SECTION_SHAPES = {
     "sources": ("list_of_mappings", "where the rows come from, and their scope"),
     "population": ("mapping", "the full row set, the sample rule, the excludes"),
     "models": ("list_of_mappings", "every promised model, its grain and its key"),
+    "expectations": ("list_of_mappings",
+                     "guarantees the user stated about the input, verified "
+                     "before the transform reads it"),
+    "promises": ("list_of_mappings",
+                 "guarantees the user stated about the output, verified after "
+                 "the transform wrote it"),
     "gates": ("list_of_mappings", "pass/fail rules, each with an unknown: rule"),
     "criteria": ("list_of_mappings", "weighted criteria with a fully anchored scale"),
     "verdicts": ("mapping", "the verdict vocabulary, its bands and precedence"),
