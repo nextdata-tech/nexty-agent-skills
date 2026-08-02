@@ -29,6 +29,120 @@ ASYNC_VERIFIER_ERROR = (
     "async verifier functions"
 )
 
+DIAG = (Path(__file__).parents[2] / "src" / "nxd-pocket-loop" / "scripts" /
+        "dp_diagnostics.py")
+
+# The approved IR these fixtures compile from. Its `## expectations` and
+# `## promises` names must match the custom(...) names the generated spec.py
+# wires, or Phase C reports contract drift — which is the point of that check.
+EXPECTATIONS_BLOCK = """## expectations
+
+- name: accepted-currency
+  authority: user_stated
+  model: orders
+  phase: pre_transform
+  guarantee: |
+    Every order is priced in EUR or USD.
+  rule: |
+    currency in ('EUR', 'USD')
+
+"""
+
+_FIXTURE_SPEC_TEMPLATE = """---
+dp_spec_version: 1
+name: orders
+workflow: orders
+status: approved
+---
+
+## intent
+
+Reconcile order totals against their line totals.
+
+## questions
+
+- q1: Does every order total equal the sum of its line totals?
+
+## sources
+
+- label: orders
+  type: csv
+  location: data/orders
+  scope: |
+    Every exported order line.
+
+## population
+
+population: |
+  Every order line in the export.
+sample_rule: null
+excludes: |
+  Nothing.
+
+## models
+
+- name: orders
+  kind: base
+  grain: |
+    One row per order line.
+  key: [line_id]
+  answers: [q1]
+  description: |
+    Order lines as exported.
+
+{expectations}## promises
+
+- name: order-total-reconciles
+  authority: user_stated
+  model: orders
+  phase: post_transform
+  guarantee: |
+    Each order total equals the sum of its line totals.
+  rule: |
+    sum(line_total) grouped by order_id == order_total
+
+## decisions
+
+- decision_id: d1
+  status: confirmed
+  provenance: user_confirmed
+  ruling: |
+    The full export is taken every run.
+  applies_to: population
+  detail: |
+    The user asked for every order line.
+"""
+
+FIXTURE_SPEC = _FIXTURE_SPEC_TEMPLATE.format(expectations=EXPECTATIONS_BLOCK)
+FIXTURE_SPEC_OUTPUT_ONLY = _FIXTURE_SPEC_TEMPLATE.format(expectations="")
+
+
+def _write_closure_record(root: Path, *, spec_text: str = FIXTURE_SPEC) -> None:
+    """Give the fixture the closure record Phase C requires.
+
+    Built with the real producers rather than hand-written JSON: a hand-rolled
+    lock would test the fixture's idea of the format instead of the one
+    `dp_diagnostics.py` actually writes.
+    """
+    spec = root.parent / f"{root.name}-dp-spec.md"
+    spec.write_text(spec_text, encoding="utf-8")
+    lock = subprocess.run(
+        [sys.executable, str(DIAG), "lock", "write", str(spec), str(root)],
+        capture_output=True, text=True,
+    )
+    assert lock.returncode == 0, lock.stderr
+    record = subprocess.run(
+        [sys.executable, str(DIAG), "record", "init",
+         "--record", str(root / "build-record.json"),
+         "--lock", str(root / "dp-spec.lock.json")],
+        capture_output=True, text=True,
+    )
+    assert record.returncode == 0, record.stderr
+    (root / "README.md").write_text(
+        "# orders\n\n## Reopen\n\nRun the loop against dp-spec.md.\n",
+        encoding="utf-8",
+    )
+
 
 def input_verifier_source(*, async_verifier=False, nonliteral_secret_fields=False,
                           literal_secret=False, mixed_decorated=False) -> str:
@@ -361,7 +475,14 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
                         mixed_decorated=False):
     """Phase A must not mistake verifier script paths for transform executors."""
     write_closure(tmp_path)
-    (tmp_path / "CONTEXT.md").write_text("# context\n")
+    # The approved IR must declare exactly the contracts spec.py wires: the
+    # variants below that drop the input expectation drop it from the plan too,
+    # otherwise Phase C correctly reports the missing one as contract drift.
+    _write_closure_record(
+        tmp_path,
+        spec_text=(FIXTURE_SPEC_OUTPUT_ONLY
+                   if (output_only or without_input_custom) else FIXTURE_SPEC),
+    )
     (tmp_path / "data" / "orders").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data" / "orders" / "orders.csv").write_text(
         "line_id,order_id,currency,order_total,line_total\no-1-1,o-1,EUR,10.00,10.00\n"

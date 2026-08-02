@@ -1074,6 +1074,15 @@ if _spec_tree is not None:
                      and any(call_name(d) == "on_verify"
                              for d in n.decorator_list
                              if isinstance(d, ast.Call))]
+        # Report async BEFORE bailing on the count. A file carrying one sync and
+        # one async verifier is both duplicated and unrunnable, and an agent
+        # told only "found 2" deletes the wrong one.
+        if any(isinstance(v, ast.AsyncFunctionDef) for v in verifiers):
+            cerr("closure.contract_verifier_malformed",
+                 f"{vpath}: Pocket custom verifier must be synchronous; the "
+                 f"runtime does not await async verifier functions, so an async "
+                 f"verifier never runs and the contract silently passes.",
+                 vpath, {"contract": cname})
         if len(verifiers) != 1:
             cerr("closure.contract_verifier_malformed",
                  f"{vpath}: needs exactly one @data_product.on_verify() "
@@ -1082,21 +1091,20 @@ if _spec_tree is not None:
                  f"several.", vpath, {"contract": cname, "found": len(verifiers)})
             continue
         if isinstance(verifiers[0], ast.AsyncFunctionDef):
-            cerr("closure.contract_verifier_malformed",
-                 f"{vpath}: the verifier is `async def`. Pocket does not await "
-                 f"verifier functions, so an async verifier never runs and the "
-                 f"contract silently passes.", vpath, {"contract": cname})
             continue
+        # vtree.body only — a guard nested inside a function never fires when
+        # script(...) executes the file, so it is not a guard at all.
         if not any(isinstance(n, ast.If) and "__main__" in ast.dump(n.test)
                    and any(isinstance(s, ast.Expr)
                            and isinstance(s.value, ast.Call)
                            and call_name(s.value) == "verify"
-                           for s in ast.walk(n))
+                           for s in n.body)
                    for n in vtree.body):
             cerr("closure.contract_verifier_malformed",
-                 f"{vpath}: needs a module-level "
-                 f"`if __name__ == \"__main__\": data_product.verify()` guard — "
-                 f"without it script(...) imports the file and checks nothing.",
+                 f"{vpath}: needs a module-level main guard — "
+                 f"`if __name__ == \"__main__\": data_product.verify()`. Without "
+                 f"it at module level script(...) imports the file and checks "
+                 f"nothing; a guard nested inside a function never fires.",
                  vpath, {"contract": cname})
             continue
 
@@ -1110,10 +1118,10 @@ if _spec_tree is not None:
             for n in ast.walk(verifiers[0]))
         if not can_fail or not live_branch or "PASS" not in vsrc:
             cerr("closure.contract_verifier_inert",
-                 f"{vpath}: the verifier can never fail — it must return "
-                 f"VerifyResultEnum.FAILED behind a real condition and PASS "
-                 f"otherwise. A contract that always passes reports the "
-                 f"guarantee as enforced while enforcing nothing.",
+                 f"{vpath}: verifier is inert — require FAILED behind a "
+                 f"non-literal condition and a PASS result, never "
+                 f"pass/ellipsis/dead branches. A contract that always passes "
+                 f"reports the guarantee as enforced while enforcing nothing.",
                  vpath, {"contract": cname})
         if SECRET_LITERAL.search(vsrc):
             cerr("closure.contract_verifier_secret",
@@ -1135,6 +1143,127 @@ if _spec_tree is not None:
                 cerr("closure.contract_verifier_unreferenced",
                      f"{p}: not referenced by any custom(...) in spec.py — a "
                      f"verifier nothing wires never runs.", str(p))
+
+    # --- the Pocket runtime binding for source-aligned inputs -----------------
+    # These apply to EVERY source_aligned_input(), contract or not: on this
+    # runtime a Pocket input must be the unlabeled csv-source, and the labeled
+    # instances are transform secrets only. A labeled service bound through
+    # .input(...).source(...) does not resolve, so the closure pins clean and
+    # fails at s5/s6 — which is exactly the class of fault an offline gate
+    # should catch first.
+    CSV_SERVICE = "/infra-profile/desktop-local#/services/csv-source"
+    inputs = [n for n in ast.walk(_spec_tree)
+              if isinstance(n, ast.Call) and call_name(n) == "source_aligned_input"]
+    sources = [n for n in ast.walk(_spec_tree)
+               if isinstance(n, ast.Call) and call_name(n) == "source"]
+    csv_literals = {t.id for st in ast.walk(_spec_tree)
+                    if isinstance(st, ast.Assign)
+                    and literal_str(st.value) == CSV_SERVICE
+                    for t in st.targets if isinstance(t, ast.Name)}
+    for s_call in sources:
+        arg = s_call.args[0] if s_call.args else None
+        ref = literal_str(arg)
+        named = isinstance(arg, ast.Name) and arg.id in csv_literals
+        if named or ref == CSV_SERVICE:
+            continue
+        shown = ref if ref is not None else (
+            ast.unparse(arg) if arg is not None else "<none>")
+        cerr("closure.contract_not_wired",
+             f"spec.py: Pocket source-aligned inputs currently require "
+             f".source(_csv) bound exactly to {CSV_SERVICE}; labeled CSV "
+             f"services are transform-only on this runtime. Got {shown!r}.",
+             "spec.py", {"found": shown})
+
+    # The DuckDB output port must carry the duckdb storage service, not the CSV
+    # one. Swapping them parses and pins, then writes the output nowhere useful.
+    for n in ast.walk(_spec_tree):
+        if not isinstance(n, ast.Call) or call_name(n) != "port":
+            continue
+        if literal_str(n.args[0] if n.args else None) != "duckdb":
+            continue
+        st = n.args[1] if len(n.args) > 1 else None
+        inner = st.args[0] if isinstance(st, ast.Call) and st.args else None
+        ref = literal_str(inner)
+        if isinstance(inner, ast.Name) and inner.id in csv_literals or \
+                ref == CSV_SERVICE:
+            cerr("closure.contract_not_wired",
+                 f"spec.py: the DuckDB output declaration is bound to the CSV "
+                 f"service. .port(\"duckdb\", storage(_duckdb)) must carry the "
+                 f"duckdb service.", "spec.py")
+
+    # csv-source-path is the export root every model_paths entry resolves under.
+    # It must be relative and contained: an absolute or ../ root reaches outside
+    # the closure, which is the same escape C9 forbids for contract references.
+    csv_root = None
+    csvp = Path("csv-source-path")
+    if inputs and not csvp.is_file():
+        cerr("closure.contract_not_wired",
+             "csv-source-path is missing, but spec.py declares a source-aligned "
+             "input. It carries the export root every model_paths entry "
+             "resolves under.", "csv-source-path")
+    elif csvp.is_file():
+        raw = csvp.read_text().strip()
+        parts = Path(raw).parts if raw else ()
+        if (not raw or raw.startswith("/") or ".." in parts
+                or any(p in ("", ".") for p in parts)):
+            cerr("closure.contract_not_wired",
+                 f"csv-source-path: custom CSV input requires an existing "
+                 f"contained relative export root, got {raw!r}.",
+                 "csv-source-path", {"found": raw})
+        else:
+            csv_root = Path(raw)
+
+    # Each declared model_paths entry must resolve to a real CSV under that root.
+    for n in ast.walk(_spec_tree):
+        if not isinstance(n, ast.Call) or call_name(n) != "config":
+            continue
+        cfg = n.args[0] if n.args else None
+        if not isinstance(cfg, ast.Dict):
+            continue
+        for k, v in zip(cfg.keys, cfg.values):
+            if literal_str(k) != "model_paths" or not isinstance(v, ast.Dict):
+                continue
+            for mk, mv in zip(v.keys, v.values):
+                model, rel = literal_str(mk), literal_str(mv)
+                if not model or not rel:
+                    continue
+                if rel.startswith("/") or ".." in Path(rel).parts:
+                    cerr("closure.contract_not_wired",
+                         f"spec.py: model_paths[{model!r}] must be a safe "
+                         f"relative path, got {rel!r}.", "spec.py",
+                         {"found": rel})
+                elif csv_root is not None and not (csv_root / rel).is_file():
+                    cerr("closure.contract_not_wired",
+                         f"spec.py: model_paths[{model!r}] must resolve to an "
+                         f"existing csv-source-path/*.csv file; "
+                         f"{csv_root / rel} does not exist.", "spec.py",
+                         {"found": str(csv_root / rel)})
+
+    # The profile must name the services spec.py references, bound to the
+    # drivers this runtime provides. Binding driver TO service name catches a
+    # swap, which a per-driver presence check cannot.
+    prof = Path("infra-profile.yaml")
+    if prof.is_file():
+        ptext = prof.read_text()
+        if not re.search(r"^metadata:\n\s+name: desktop-local$", ptext, re.M):
+            cerr("closure.contract_not_wired",
+                 "infra-profile.yaml: metadata.name must be desktop-local to "
+                 "match the spec.py infra_profile.", "infra-profile.yaml")
+        required = {"duckdb": "nxd:local/duckdb/storage:0.1.0",
+                    "python-compute": "nxd:local/python/compute:0.1.0"}
+        if inputs:
+            required["csv-source"] = "nxd:local/file/storage:0.1.0"
+        for svc, driver in sorted(required.items()):
+            block = re.search(
+                r"- name: %s\n(?:\s+.*\n)*?\s+driver: (\S+)" % re.escape(svc),
+                ptext)
+            if block is None:
+                continue
+            if block.group(1) != driver:
+                cerr("closure.contract_not_wired",
+                     f"infra-profile.yaml: {svc} must use {driver}, got "
+                     f"{block.group(1)}.", "infra-profile.yaml",
+                     {"service": svc, "found": block.group(1)})
 
     # The closure's contracts must be exactly the approved spec's. A contract in
     # the closure that no spec section declares is a guarantee the user never
