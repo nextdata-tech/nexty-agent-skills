@@ -782,11 +782,17 @@ network_declared = bool(declared_sources & {"api-source", "db-source"}) \
     or not saw_service_ref
 
 # (a) Import fingerprints that contradict a declared connector type. Keyed on the
-# dlt verticals, because those are the ones this skill's own reference docs tell
-# the author to use: rest_api for api-source (reference/api-source.md:29,145),
-# sql_database for db-source (reference/database-source.md:30,167), filesystem
-# for csv/file-source. An import of one while declaring only the others is a
-# shape mismatch: the closure reads from a source its spec does not name.
+# two NETWORK-shaped dlt verticals this skill's own reference docs tell the author
+# to use: rest_api for api-source (reference/api-source.md), sql_database for
+# db-source (reference/database-source.md). An import of one while declaring only
+# the other is a shape mismatch: the closure reads from a source its spec does not
+# name.
+#
+# `dlt.sources.filesystem` is deliberately NOT a third entry, and that is a
+# recorded gap rather than an oversight: a filesystem import in an api/db closure
+# reads local files the spec never declared, but it is far more likely to be
+# incidental than a rest_api import is, and firing on it would fire on correct
+# closures. Listed in the doc's "What Phase E cannot see" with the other holes.
 SHAPE = {
     "dlt.sources.rest_api": ("api-source",
                              "a REST API source"),
@@ -892,7 +898,13 @@ def denied_hit(mod, roots):
 
 t_imports = imported_roots(transform_src, "transform/main.py")
 
-for mod, (needs, human) in SHAPE.items():
+# Gated on `saw_service_ref` for the same reason the transport family is: when
+# spec.py carried no readable declaration, `declared_sources` is empty, so
+# `needs not in declared_sources` is trivially true and the closure would be
+# denied on the strength of a parse failure — while the message asserted
+# "spec.py declares <no connector service>", the very thing the warning one line
+# earlier says the gate could not determine. A verdict this gate has not earned.
+for mod, (needs, human) in (SHAPE.items() if saw_service_ref else ()):
     if any(denied_hit(m, {mod}) for m in t_imports) and \
             needs not in declared_sources:
         eerr("reach.connector_shape_mismatch",
@@ -919,9 +931,10 @@ if not network_declared:
                        if any(denied_hit(m, {r}) for m in t_imports)):
         eerr("reach.undeclared_transport",
             f"transform/main.py imports {root!r} — raw network transport — and "
-            f"spec.py declares "
-            f"{sorted(declared_sources) or 'no connector service'}, none of "
-            f"which reaches the network. A CSV or file closure reads what the "
+            + (f"spec.py declares {sorted(declared_sources)}, none of which "
+               f"reaches the network. " if declared_sources else
+               "spec.py declares no connector service at all. ")
+            + f"A CSV or file closure reads what the "
             f"connector already exported to data/. If this closure really "
             f"needs to fetch, declare an api-source and go through "
             f"dlt.sources.rest_api (reference/api-source.md).")
@@ -991,7 +1004,7 @@ say(f"phase E ok — no denied model-SDK import in transform/main.py"
     + (f", no undeclared transport there, and its imports are consistent with "
        f"the declared connector {sorted(declared_sources) or ['(none)']}"
        if _transport_checked else
-       ", and no model-SDK import in any verifier. TRANSPORT WAS NOT CHECKED: "
+       ". TRANSPORT WAS NOT CHECKED: "
        "spec.py declared no readable service ref, so the transport family was "
        "waived rather than tested — this line is silent on whether the "
        "transform opens a socket")

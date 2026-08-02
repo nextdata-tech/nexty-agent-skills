@@ -618,7 +618,7 @@ _register_table(
     "s1_structure",
     (
         ("reach.model_sdk_import", "error", "agent", "none", False,
-         "transform/main.py imports a model-provider SDK — inference belongs in "
+         "transform/main.py or a contracts/ verifier imports a model-provider SDK — inference belongs in "
          "the authoring session and lands as data"),
         ("reach.undeclared_transport", "error", "agent", "none", False,
          "transform/main.py imports raw network transport but spec.py declares "

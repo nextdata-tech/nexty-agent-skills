@@ -1290,6 +1290,16 @@ def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> Non
 
 
 @contextlib.contextmanager
+class HttpStubSetupError(RuntimeError):
+    """A fault in bringing the stub up — not a fault in the agent run.
+
+    The two must stay distinguishable: `run_agent` executes INSIDE the stub's
+    `with` block, so a bare `except RuntimeError` there records a skill or
+    backend failure as "http stub setup failed" and points the operator at the
+    fixture instead of the thing that broke.
+    """
+
+
 def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
     """Start a scenario-supplied in-process HTTP stub for the run's duration.
 
@@ -1305,7 +1315,7 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     module_name = str(spec.get("module", "")).removesuffix(".py")
     module_path = fixtures_dir / f"{module_name}.py"
     if not module_path.is_file():
-        raise RuntimeError(f"http_stub module not found: {module_path}")
+        raise HttpStubSetupError(f"http_stub module not found: {module_path}")
 
     import importlib.util
 
@@ -1313,7 +1323,7 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         f"_eval_http_stub_{module_name}", module_path
     )
     if mod_spec is None or mod_spec.loader is None:
-        raise RuntimeError(f"could not load http_stub module: {module_path}")
+        raise HttpStubSetupError(f"could not load http_stub module: {module_path}")
     module = importlib.util.module_from_spec(mod_spec)
     mod_spec.loader.exec_module(module)
 
@@ -1340,7 +1350,7 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         # (`.github/workflows/evals.yml`); a local run needs the same.
         if agent_backend_name == "codex" and os.environ.get(
                 "EVAL_CODEX_AGENT_SANDBOX", "").strip() in ("", "workspace-write"):
-            raise RuntimeError(
+            raise HttpStubSetupError(
                 f"scenario needs a runner-started HTTP stub at {base_url}, but the "
                 "codex agent sandbox is 'workspace-write', which blocks loopback "
                 "network from the agent's shell. The agent would see connection "
@@ -2375,7 +2385,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             extra_dirs=extra_dirs, effort=args.agent_effort,
                             skill_pack_dir=plugin_dir, **turn_kwargs,
                         )
-                except RuntimeError as exc:
+                except HttpStubSetupError as exc:
                     res.error = f"http stub setup failed: {exc}"
                     return res
             else:
