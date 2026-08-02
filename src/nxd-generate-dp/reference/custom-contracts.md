@@ -10,29 +10,50 @@
 
 ## What belongs in a custom contract
 
-Keep **inferred schema constraints** separate from **explicit user-stated
-guarantees**. A type, nullability, key, or enum inferred from profiling belongs
-in `models.py` and ordinary `.promise(model)` / source-model checks. It must not
-be relabelled as a user guarantee.
+**The contract inventory is not yours to author.** It lives in the approved
+`dp-spec.md`, in its `## expectations` and `## promises` sections, and this
+skill *compiles* it. Codegen never invents a guarantee and never edits the IR:
+a contract that appears in the closure but in no spec section is a guarantee
+the user never approved, and Phase C rejects it as
+`closure.contract_spec_drift`. See
+[`dp-spec.md`](../../nxd-pocket-loop/reference/dp-spec.md) for the entry shape;
+what follows is how each entry becomes code.
 
-Conversely, every explicit must, must-not, cross-field, aggregate,
-reconciliation, freshness, or accepted-set invariant is a named custom
-contract, even where it partly overlaps an inferred schema constraint. Preserve
-the user's wording and give the contract a stable lowercase-hyphenated name.
-Examples: `order-total-reconciles`, `accepted-currency`,
-`no-future-order-date`, `daily-row-floor`.
+Each entry already carries what generation needs:
 
-Before generating, inventory every contract in `CONTEXT.md` with:
+| spec key | what it decides here |
+|---|---|
+| `name` | the verifier filename — `contracts/expectations/<name>.py` |
+| `model` | which model the verifier reads |
+| `phase` | `pre_transform` → an input expectation; `post_transform` → an output promise |
+| `guarantee` | the user's words; the contract's `.description(...)` |
+| `rule` | the executable body |
+| `fields` | which columns the rule reads |
 
-- name and verbatim or faithfully quoted guarantee;
-- kind (`input_expectation` or `output_promise`), model, fields, and phase;
-- source of authority (`user_stated`, never `inferred` for a custom contract);
-- executable rule, failure diagnostic, and whether the closure can actually
-  run it.
+The section a contract sits in decides the kind. An `## expectations` entry is
+an input expectation; a `## promises` entry is an output promise. Do not infer
+the kind from the wording of the rule.
 
-Do not invent a quality rule merely because a field looks suspicious. Ask for
-the missing threshold, accepted set, time zone, tolerance, or reconciliation
-population when it changes pass/fail.
+**A contract never replaces a Step-3b assert.** They check different things: a
+contract checks what the user guaranteed about a value, an assert checks the
+source-vs-derived relationship, which no verifier can see. Dropping an assert
+because a contract covers the same column removes the only check that would
+catch a wrong derivation. Contract names are unique across **both** sections —
+the name selects the verifier filename, so a collision silently overwrites.
+
+**Authority is already settled by the spec.** The validator rejects
+`authority: inferred`, so every contract reaching codegen is `user_stated`. A
+type, nullability, key or enum you inferred from profiling is a real constraint
+but is **not** a contract: it belongs in `models.py` and an ordinary
+`.promise(model)`. Do not promote one into `contracts/` — that relabels your own
+inference as the user's guarantee.
+
+If a guarantee is missing a threshold, accepted set, time zone, tolerance or
+reconciliation population, that gap belongs back in the spec as an
+`open_questions` entry, not filled in here. The validator already rejects a
+rule carrying an unfilled placeholder
+(`spec.contract.unbound_threshold`); do not work around it by choosing a number
+at codegen time.
 
 ## CSV-first support boundary
 
@@ -57,12 +78,13 @@ to an input.
 
 An output promise may be generated for another connector only when the actual
 output storage and contract compute context are known to support the verifier.
-State that runtime dependency in `CONTEXT.md`; otherwise explain the gap rather
-than claiming the promise will execute.
+That runtime dependency is a ruling: land it as a `## decisions` row in the
+spec, with `provenance: agent_authored`, so it travels as reviewable data.
+Otherwise explain the gap rather than claiming the promise will execute.
 
 ## Generated layout and public DSL wiring
 
-Add one script per named contract, only when its inventory entry is nonempty:
+Add one script per contract the spec declares — no more, no fewer:
 
 ```
 contracts/
