@@ -17,8 +17,15 @@ Two modes, both required by ``evals/run.py``:
 Enforcement is macOS ``sandbox-exec`` (Seatbelt), not an env var or a PATH
 trick: the harness's guarantee is that the agent COULD NOT read the protected
 roots, and only kernel-level denial supports that claim. The policy denies
-read access to each configured root and to this wrapper's own config, and
-allows everything else, so the agent still runs normally inside its workspace.
+read access to each configured root and allows everything else, so the agent
+still runs normally inside its workspace.
+
+Note what is NOT protected: this wrapper's own file and the root mapping in
+``EVAL_SOURCE_ISOLATION_ROOTS`` stay readable, so an agent could in principle
+enumerate the protected paths. That is deliberate — knowing a path exists is
+not the same as reading what is under it, and the harness pins the wrapper by
+sha256 so tampering shows up in the attestation. Protect the wrapper itself
+only if a scenario's threat model needs it.
 
 Protected roots come from EVAL_SOURCE_ISOLATION_ROOTS (JSON object of
 name -> absolute path), the same variable run.py reads, so the wrapper and the

@@ -98,10 +98,14 @@ CONTRACT_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 # than invent one, so an unfilled threshold is an error and never a default.
 UNBOUND_THRESHOLD_RE = re.compile(
     r"(<[A-Za-z_][A-Za-z0-9_ -]*>|\bTBD\b|\bTODO\b|\bXXX\b|\{\{[^}]*\}\}|"
-    r"\bN/?A\b|\b(some|any|appropriate|reasonable|suitable) (threshold|value|"
+    r"\b(some|any|appropriate|reasonable|suitable) (threshold|value|"
     r"number|limit|minimum|maximum)\b)",
     re.IGNORECASE,
 )
+# Deliberately NOT in that set: `NA` / `N/A`. They are real sentinel VALUES a
+# rule legitimately names — `gates` documents them as non-capture sentinels the
+# agent must route to `unknown` rather than fill — so matching them rejected a
+# correct rule for saying the thing the spec asks it to say.
 
 
 def new_report(spec: Path | None = None) -> Report:

@@ -34,6 +34,17 @@ Derived models add nothing here. They are computed inside the transform that
 `python-compute` already runs and land through the `duckdb` port that already
 exists — no extra service, no extra secret, no profile change.
 
+**On the `csv-source` driver id.** Emit `nxd:local/file/storage:0.1.0`, which is
+what the desktop runtime expects for a local-file service and what the
+self-check enforces. Note that it is **not proven that the older
+`nxd:generic-secrets:1.0.0` stops working**: six `ci_skip` scenarios still carry
+pinned `fixtures/reference-closure/deployment-spec.yaml` files using it, those
+are compiled artifacts the supervisor produces rather than anything authored
+here, and nothing in this repo has served one since the id changed. Treat the
+new id as the one to write, not as evidence the old one is rejected — and do
+not hand-edit a `deployment-spec.yaml` to "fix" it, because that file is
+supervisor-compiled and hand-authoring it is forbidden.
+
 ## `csv-source-path`
 
 The closure also carries `csv-source-path` — one line, the **relative** path
