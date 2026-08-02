@@ -1,0 +1,36 @@
+{
+  "date": "2026-08-01",
+  "label": "nxd-pocket-loop / nxd-generate-dp: explicit built-in Desktop subagent dispatch",
+  "notes": "Observational Desktop evidence, not a run.py benchmark. The disposable synthetic skill desktop-subagent-probe:run-probe contained explicit dispatch prose and no custom agent definition. Claude Desktop visibly dispatched one built-in Explore subagent and returned the requested synthetic JSON. This proves one instruction-following dispatch path only; it does not measure correctness, latency, tokens, cost, review quality, cancellation, deadline persistence, or multi-question governed-query availability.",
+  "plugin_version": "0.29.0",
+  "reports": {
+    "desktop-synthetic-probe": {
+      "evidence_kind": "manual_claude_desktop_observation",
+      "agent_model": "Claude Desktop built-in Explore",
+      "results": [
+        {
+          "skill_set": "disposable synthetic skill",
+          "scenario": "desktop-subagent-probe:run-probe",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": null,
+            "tool_calls": null,
+            "output_tokens": null,
+            "total_cost_usd": null
+          },
+          "verdict": {
+            "overall_pass": true,
+            "checks": [
+              {
+                "id": "explicit-skill-dispatches-built-in-subagent",
+                "pass": true,
+                "why": "Desktop showed one built-in Explore subagent invoked from explicit skill instructions, with no custom/plugin agent definition, and it returned the requested synthetic JSON."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

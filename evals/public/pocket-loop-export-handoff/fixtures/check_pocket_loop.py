@@ -49,8 +49,10 @@ MAX_ATTEMPTS = 80
 
 # The exported bundle must carry at least these closure members for a recipient
 # to rebuild.  Matched by basename/suffix against the (optionally top-level-
-# prefixed) zip entries.  requirements.txt and CONTEXT.md are expected too but
-# treated as soft signals: the round-trip re-serve is the real completeness gate.
+# prefixed) zip entries.  requirements.txt and the generated record files
+# (dp-spec.approved.md, dp-spec.lock.json, build-record.json, README.md) are
+# expected too but treated as soft signals: the round-trip re-serve is the real
+# completeness gate.
 CORE_MEMBERS = ("spec.py", "models.py", "transform/main.py", "infra-profile.yaml")
 
 

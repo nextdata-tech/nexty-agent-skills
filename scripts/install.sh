@@ -207,12 +207,31 @@ copy_skill_tree() {  # copy_skill_tree <src-skill-dir> <dst-skill-dir>
   run "rsync -a --delete $(rsync_excludes) '$src/' '$dst/'"
 }
 
+write_pocket_version_stamp() {  # write_pocket_version_stamp <installed-skill-dir>
+  local skill_dir="$1" stamp="$1/.nexty-plugin-version.json"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\033[35m[dry-run]\033[0m write %s from plugin.json\n' "$stamp" >&2
+    return 0
+  fi
+  python3 - "$PLUGIN_JSON" "$stamp" <<'PY'
+import json,sys
+src,dst=sys.argv[1:]
+plugin=json.load(open(src, encoding="utf-8"))
+if plugin.get("name") != "nexty-agent-skills" or not isinstance(plugin.get("version"), str):
+    raise SystemExit("plugin.json does not carry the authoritative Nexty version")
+with open(dst, "w", encoding="utf-8") as fh:
+    json.dump({"name": plugin["name"], "version": plugin["version"]}, fh)
+    fh.write("\n")
+PY
+}
+
 install_code() {
   local dest; dest="$(cc_dest)"
   info "installing skills -> $dest ($SCOPE)"
   run "mkdir -p '$dest'"
   while IFS= read -r s; do
     copy_skill_tree "$SRC_DIR/$s" "$dest/$s"
+    [[ "$s" == "nxd-pocket-loop" ]] && write_pocket_version_stamp "$dest/$s"
     ok "code: $s"
   done < <(selected_skills)
   info "Claude Code: skills installed. Restart Claude Code or start it in a project to use them."

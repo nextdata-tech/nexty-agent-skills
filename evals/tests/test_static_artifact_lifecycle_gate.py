@@ -16,6 +16,11 @@ POCKET = ROOT / "src" / "nxd-pocket-loop"
 SCENARIO = ROOT / "evals" / "public" / "dp-static-artifact-lifecycle"
 
 
+def test_pocket_reference_index_includes_catalog_resources():
+    text = (POCKET / "SKILL.md").read_text()
+    assert "[catalog resources](reference/catalog-resources.md)" in text
+
+
 def test_renamed_static_skill_is_the_only_shipped_identity():
     assert ARTIFACT.is_dir()
     assert not (ROOT / "src" / ("nxd-" + "artifact")).exists()

@@ -32,6 +32,10 @@ Work autonomously. No user is available to confirm a ruling, which does not
 make confirmation optional — consult the skills for what to do with a ruling
 you cannot get confirmed.
 
+Follow the closure contract's boundary: keep stable source and analysis scope
+in the approved plan, and leave generated build outcomes in
+`build-record.json`; do not retrofit runtime facts into the approved plan.
+
 ## Success checks
 
 The eval grades the landed data product, not the narration of it: whether the

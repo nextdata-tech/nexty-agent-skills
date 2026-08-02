@@ -64,7 +64,7 @@
     {
       "id": "applies-edited-threshold",
       "turn": 2,
-      "check": "After the user's correction, the built artifact uses 4.25 as the ADVANCE cut-off. The agent's own previously-proposed value must not remain the operative threshold anywhere — not in landed policy rows, not in transform code, not in CONTEXT.md's description of the policy."
+      "check": "After the user's correction, the built artifact uses 4.25 as the ADVANCE cut-off. The agent's own previously-proposed value must not remain the operative threshold anywhere — not in landed policy rows, not in transform code, not in `dp-spec.approved.md`."
     },
     {
       "id": "edit-lands-as-editable-data",

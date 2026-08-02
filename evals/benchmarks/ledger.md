@@ -657,3 +657,106 @@ ROUND-TRIP PROVENANCE (moved here out of the shipped doc, which should not carry
 RUBRIC DRIFT, disclosed in full: three checks in incremental-transform-state/checks.json were reworded across this branch -- state-bag-addressed-via-for-model, verification-can-detect-a-missing-write, readback-avoids-module-shadowing-and-first-run-io -- plus uses-transform-state-kwarg, so the before arm ran against pre-rewrite text for all four. TWO of the four pass conditions tightened, not one: uses-transform-state-kwarg and verification-can-detect-a-missing-write both gained the SELECT max(<cursor>) read-back as a banned alternative. A FIFTH rewording is in a DIFFERENT file this paragraph previously omitted -- incremental-multi-model/checks.json's own uses-transform-state-kwarg, tightened the same way in 6bdb3b0 so the sibling scenario stops grading the rule more loosely. No previously-passing solution changes verdict, since no run in either arm reconstructed its cursor that way, and none of the four checks ever REQUIRED the banned shape. But the arms were not judged against byte-identical check text, and one condition is narrower on the after side.
 
 Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json`](records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json)
+
+## 2026-07-31 — spec-authoritative closures: CONTEXT.md retired for a byte-copied dp-spec.approved.md + lock + generated build-record.json (plugin v0.28.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.27.0 | current_pack | coauthor-executable-policy-readback | FAIL | 13/15 | 22 | 18 | 41478 | 2.20 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 8716 | 0.43 | sonnet |
+| before-v0.27.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| before-v0.27.0 | current_pack | coauthor-executable-policy-readback | FAIL | 13/15 | 28 | 24 | 46823 | 2.45 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 9/12 | 12 | 10 | 22438 | 0.93 | sonnet |
+| before-v0.27.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| before-v0.27.0 | current_pack | coauthor-executable-policy-readback | FAIL | 12/15 | 52 | 48 | 83001 | 5.16 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 9/12 | 13 | 11 | 21521 | 0.95 | sonnet |
+| before-v0.27.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| after-v0.28.0 | current_pack | coauthor-executable-policy-readback | FAIL | 14/15 | 33 | 29 | 69452 | 3.56 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 5323 | 0.36 | sonnet |
+| after-v0.28.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| after-v0.28.0 | current_pack | coauthor-executable-policy-readback | FAIL | 13/15 | 96 | 92 | 96275 | 9.39 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 12200 | 0.60 | sonnet |
+| after-v0.28.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| after-v0.28.0 | current_pack | coauthor-executable-policy-readback | FAIL | 12/15 | 26 | 22 | 68390 | 3.14 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 4079 | 0.33 | sonnet |
+| after-v0.28.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+
+Notes: ARMS. before = c03ca60 (this branch's merge base, v0.27.0 — the last commit before the design note and the implementation); after = the worktree-ir-spec working tree at v0.28.0. HARNESS IDENTICAL: evals/run.py, evals/eval_backends.py and evals/benchmark_record.py were copied from the branch into the before worktree, and so were all three scenario directories, so both arms ran the same runner and were judged against byte-identical prompt.md / checks.json / deterministic-checker text. N=3 per arm; agent sonnet, judge opus, default efforts. NO CELL FLIPPED VERDICT — every coauthor-* cell is FAIL in both arms, because each scenario's check list contains at least one check that fails on both sides. The movement is inside the check counts and the deterministic checker, and that is all this entry claims. SCOPE, STATED FIRST: pocket-loop-export-handoff produced NO signal in either arm. It ERRORs at 'pocket preflight failed' in all 6 runs because this container has no nxd-desktop-supervisor binary; the preflight is memoized per runner process, so the other two cells still ran. That is infrastructure, identical on both sides, and it means the one scenario that exercises the export handoff end to end — the surface this change most directly rewrites — is UNBENCHMARKED. Anyone re-running should do so on a host with the supervisor. WHAT MOVED. coauthor-supplied-rubric deterministic check: 1/3 passed before, 3/3 after. Both before-arm failures are the ORDERING rule ('pre-build:proposes verdict mapping: no evidence before any materialization', first write at trace lines 112 and 113), not a missing-file failure — the before arm wrote its plan out before the read-back reached the user. Judge checks on that scenario: policy-will-land-as-data 3/3 fail before, 0/3 after; readback-before-any-write 2/3 fail before, 0/3 after; proposes-verdict-mapping 1/3 before, 0/3 after. THE ONE REGRESSION: provenance-addressed 0/3 fail before, 2/3 fail AFTER — the after arm twice omitted the 'LISTED - URL NOT CAPTURED' provenance handling from the read-back. That is a real move in the wrong direction, in the same scenario the rest of this paragraph improves, and at N=3 nothing here distinguishes a rewrite that crowded it out from noise. coauthor-executable-policy-readback: 13/15, 13/15, 12/15 before vs 14/15, 13/15, 12/15 after; deterministic 0/3 in both arms; edit-lands-as-editable-data 2/3 fail before vs 1/3 after; card-precedes-materialization 1/3 in both; flags-unreachable-c5-bottom-band fails 3/3 in BOTH arms — pre-existing, and untouched by this change. CONFOUND I EXPECTED AND DID NOT FIND: the copied-in checkers assert the NEW closure contract (dp-spec.approved.md), so the before arm could have failed by construction. It did not separate the arms — 'missing dp-spec.approved.md' fired exactly once per arm (before-1, after-1), because these scenarios stop at the read-back and mostly never build a closure at all, so that file-presence check is reached rarely and symmetrically. The before arm's other deterministic failures are one ordering failure and one INFRASTRUCTURE failure (before-2: uv could not fetch duckdb from PyPI, 'invalid peer certificate: UnknownIssuer' — the same proxy fault this ledger's 2026-05 entry records; it cost that cell its deterministic verdict and nothing else). EFFICIENCY, and it is not free: coauthor-executable-policy-readback output tokens went 41478/46823/83001 (mean 57.1k) to 69452/96275/68390 (mean 78.0k), +37%, with cost 2.20/2.45/5.16 to 3.56/9.39/3.14. Turns went 22/28/52 to 33/96/26 — the 96-turn run is a single outlier and the medians (28 vs 33) are close, but the token rise holds across all three after runs, so the richer closure contract does cost more agent work on the scenario that actually builds one. coauthor-supplied-rubric went the other way: 8716/22438/21521 (mean 17.6k) to 5323/12200/4079 (mean 7.2k), turns 6/12/13 to 6/7/6. Per evals/README, single-run metric deltas under ~20% are noise; at N=3 with one outlier per arm, read the check counts as the finding and the token figures as a direction, not a measurement. SCOPE OF THE CODE CHANGE MEASURED HERE: the arms differ by the whole spec-authoritative change set, not by the validator crash fix alone — validate_dp_spec.py's split-frontmatter drift (a raw traceback on unparseable frontmatter) is fixed in the after arm but is not on any path these scenarios exercise, so no row here measures it; evals/tests/test_validator_code_coverage.py and test_build_record_s0_producer.py do.
+
+Record: [`records/2026-07-31-spec-authoritative-closures-context-md-retired-for-a-byte-co.json`](records/2026-07-31-spec-authoritative-closures-context-md-retired-for-a-byte-co.json)
+
+## 2026-08-01 — nxd-pocket-loop / nxd-generate-dp: explicit built-in Desktop subagent dispatch (plugin v0.29.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| desktop-synthetic-probe | disposable synthetic skill | desktop-subagent-probe:run-probe | OBSERVED | 1/1 | — | — | — | — | Claude Desktop built-in Explore |
+
+Notes: Observational evidence, not a `run.py` before/after benchmark. A disposable synthetic skill containing explicit built-in-subagent dispatch prose — and **no** custom/plugin agent definition — was invoked in Claude Desktop. Desktop visibly dispatched one built-in Explore subagent and returned the requested synthetic JSON. This establishes one instruction-following dispatch path only. It makes **no** correctness, latency, token, cost, review-quality, cancellation, deadline-persistence, or multi-question governed-query availability conclusion; the shipped source-contract tests cover the intended boundaries, and a full production closure Desktop E2E remains required.
+
+Record: [`records/2026-08-01-explicit-built-in-desktop-subagent-dispatch.json`](records/2026-08-01-explicit-built-in-desktop-subagent-dispatch.json)
+
+## 2026-07-31 — pocket-loop: non-capture sentinel routed to gate unknown (N=10/arm re-test of the reported provenance regression) (plugin v0.28.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 7/12 | 13 | 11 | 19346 | 0.93 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 11 | 9 | 15555 | 0.81 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 6991 | 0.40 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 10961 | 0.47 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 6965 | 0.40 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 5152 | 0.37 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 15 | 13 | 15844 | 0.90 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 11 | 9 | 27055 | 1.06 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 6830 | 0.40 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9105 | 0.44 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 7237 | 0.40 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9871 | 0.45 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 9234 | 0.50 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 8 | 6 | 8393 | 0.55 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 10 | 8 | 18628 | 0.90 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 9/12 | 9 | 7 | 8342 | 0.61 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 8619 | 0.43 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9897 | 0.46 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 13 | 11 | 15501 | 0.83 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 8153 | 0.43 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 6208 | 0.39 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 5917 | 0.38 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 9543 | 0.44 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 7229 | 0.42 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 6615 | 0.41 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 10 | 8 | 17139 | 0.85 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 8973 | 0.44 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 9109 | 0.47 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 7258 | 0.40 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9003 | 0.43 | sonnet |
+
+Notes: PURPOSE: settle the provenance-addressed regression the 2026-07-31 N=3 entry flagged as the top open item, then measure a fix. THREE ARMS, N=10 EACH, same scenario coauthor-supplied-rubric, agent sonnet / judge opus, identical harness: run.py, eval_backends.py, benchmark_record.py, skill-sets.yaml and the whole coauthor-supplied-rubric directory were copied from this branch into a detached c03ca60 worktree, verified byte-identical with diff -r, so the arms differ only in src/ skills. before-v0.27.0 = c03ca60. after-v0.28.0 = this branch before today's edit. fixed-v0.28.0 = after + the sentinel guidance. HEADLINE, AND IT IS NEGATIVE: THE REPORTED REGRESSION WAS AN ARTIFACT OF N=3. provenance-addressed fails 3/10 in the before arm, not the 0/3 the prior entry recorded; its true rate was always about a third and the original three samples happened to draw three passes. before 3/10 vs after 5/10 gives Fisher exact p=0.65 — no regression is demonstrable, and the prior entry's own caveat that N=3 could not separate signal from noise was correct. THE FIX AND WHAT IT IS WORTH: the failures are one repeated semantic error, not a formatting miss — the agent collapses evidence-not-captured into evidence-absent, routing the literal string LISTED - URL NOT CAPTURED to a hard G1 FAIL instead of UNKNOWN, and in one run chaining it to REJECT, overriding the user's own stated NEEDS_MORE_INFO cap. The scenario prompt states that cap explicitly, so those runs contradict a user instruction. Guidance was added in two places (reference/dp-spec.md gates section, SKILL.md Step 1b) telling the agent that a present non-empty sentinel encoding non-capture is an unknown, not a failing value. after 5/10 vs fixed 3/10, p=0.65: DIRECTIONALLY BETTER, NOT DEMONSTRATED. At an interim N=9 the fixed arm read 2/9 and looked stronger; the tenth run moved it to 3/10, which is exactly the instability this entry exists to warn about. Do not cite this fix as proven. WHY IT SHIPS ANYWAY: the validator already rejects unknown: FAIL via spec.gate.unknown_is_fail, so a spec cannot declare the wrong rule — but it cannot tell that LISTED - URL NOT CAPTURED means uncaptured, so a spec that misclassifies a sentinel validates clean and is still wrong. The gap is real and mechanically uncatchable whatever the eval says; the measurement only fails to prove the prose closes it. WHAT ELSE MOVED, unprompted by the fix: unknown-gate-addressed fails 4/10 before and 0/10 after — a genuine v0.28.0 improvement the N=3 entry missed entirely. Overall PASS count 2/10 before, 2/10 after, 4/10 fixed. Efficiency on this scenario went the right way: mean output tokens 12380 before, 10388 after, 8699 fixed; mean turns 8.6 / 7.8 / 6.5. STILL FAILING AND NOT ADDRESSED HERE: readback-before-any-write 4/10 before, 4/10 after, 2/10 fixed — a gate-ordering rule, invisible at N=3 (0/3), and its own investigation. SCOPE: this entry measures one scenario. pocket-loop-export-handoff remains UNBENCHMARKED — it still ERRORs at pocket preflight with no nxd-desktop-supervisor in this container, and stages s4-s8 remain unexecuted against a real supervisor.
+
+Record: [`records/2026-07-31-pocket-loop-non-capture-sentinel-routed-to-gate-unknown-n-10.json`](records/2026-07-31-pocket-loop-non-capture-sentinel-routed-to-gate-unknown-n-10.json)
+
+## 2026-08-02 — closure-contract eval retargets: runtime observations in build records (rubric alignment, plugin v0.29.0)
+
+**No before/after run table — rubric drift, not a measured skill change.**
+`worldbank-live`'s `context-discloses-as-of-fetch` now distinguishes stable
+live-source scope from fetch-specific runtime evidence:
+`dp-spec.approved.md` must say that the data is a live-source snapshot and that
+rebuilds can revise it, while the observed upstream `lastupdated` must appear
+in `build-record.json` under `evidence.source_state`. This prevents a timestamp
+from one fetch being frozen into the approved plan. The same CONTEXT.md
+retirement retargets `treasury-yield-curve`'s closure file-set check and the
+three `country-income-trajectory` disclosure checks
+(`year-subset-selection-disclosed`, `aggregate-exclusion-ruling-landed`, and
+`current-classification-scope-disclosed`) to the approved-spec / generated-
+record closure contract. Those vendored-source checks have no runtime
+`lastupdated` observation: their source or analysis scope remains plan content,
+while generated build outcomes remain in `build-record.json`. These changes
+narrow or relocate accepted closure shapes, so historical and future runs are
+not judged by byte-identical rubric text.
+
+No live evaluation was run. `worldbank-live`, `treasury-yield-curve`, and
+`country-income-trajectory` are `ci_skip` because they require a live desktop
+supervisor; World Bank additionally needs outbound access to
+`api.worldbank.org`. This environment has neither `EVAL_POCKET_SUPERVISOR_DIR`
+nor `EVAL_POCKET_PYTHON`, and `nxd-desktop-supervisor` is absent. The static
+regression test pins the prompt/checker boundary only. It establishes no
+PASS/FAIL, quality, latency, token, cost, or runtime-connector claim.

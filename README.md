@@ -166,6 +166,7 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 scripts/install.sh --code                       # global Claude Code install (default)
 scripts/install.sh --code --project             # current project only
 scripts/install.sh --code --skills "nxd-setup nxd-data-product-builder"
+scripts/install.sh --code --skills "nxd-pocket-loop nxd-generate-dp" # generator + its runtime helper skill
 scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
 scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
 scripts/install.sh --all                        # every target
@@ -176,6 +177,9 @@ scripts/install.sh --code --dry-run             # print actions, change nothing
 
 Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
 `-y/--yes`, `--verbose`.
+
+When selecting `nxd-generate-dp`, include `nxd-pocket-loop`: the generator
+uses its installed validator, lock writer, and build-record helpers at runtime.
 
 #### How the Claude Desktop / Cowork install works
 

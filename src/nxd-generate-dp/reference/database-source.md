@@ -153,9 +153,14 @@ missing while a populated `attributes` list is present.
    user's host). Skip it silently there — the two files above are mandatory on
    every surface.
 
-**Never write a credential value into `SENSITIVE`, `CONTEXT.md`, `README.md`,
-or chat narration.** Keys and file paths only. These artifacts exist so the
-credential's location is discoverable without the credential being copied.
+**Never write a credential value into `SENSITIVE`, `README.md`,
+`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, or chat
+narration.** Keys and file paths only. These artifacts exist so the credential's
+location is discoverable without the credential being copied. The generated
+record files are covered by the same rule and by a mandatory redaction pass —
+every diagnostic's `message` and `evidence` is run through the validator's own
+credential-value pattern before it is written, because a check that prints the
+secret it found turns a contained file leak into a transcript leak.
 
 ## `transform/main.py` diff from the CSV template
 

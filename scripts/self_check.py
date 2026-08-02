@@ -1,7 +1,197 @@
 # self_check.py
-import ast, re, sys, tempfile, types
+import ast, hashlib, json, re, sys, tempfile, time, traceback, types
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# ------------------------------------------------------------ diagnostics ---
+# Every phase emits the same record shape ("nxd-diagnostic-v1") alongside the
+# prose it has always printed. Two output paths, and they do not mix:
+#   * default  — stdout is byte-for-byte what it was. evals/run.py's
+#                deterministic check and every scenario checker key on those
+#                lines, so a stray print here breaks graders, not just readers.
+#   * --json   — ONE "nxd-diagnostic-report-v1" object on stdout and nothing
+#                else, so it can be piped straight into a build record.
+#
+# This file is COPIED INTO THE CLOSURE and run there with a bare interpreter, so
+# it can never import the Pocket diagnostics helper. The table below is an inlined
+# literal subset of that module's registry; evals/tests/
+# test_self_check_diagnostic_vocab.py is what keeps the two from drifting.
+# severity and owner come from the table and are never chosen per call site:
+# `owner` is the field that decides whether a human hears about a diagnostic at
+# all, so a producer that could pick it could silence a blocker.
+CODES = {}
+def _codes(severity, owner, *codes):
+    CODES.update({c: (severity, owner) for c in codes})
+
+_codes("error", "agent",
+       "struct.import_not_public_dsl", "struct.model_name_not_literal",
+       "struct.model_no_description", "struct.view_empty_schema",
+       "struct.view_field_not_metric_field", "struct.unknown_dtype",
+       "struct.unknown_agg", "struct.agg_expression_forbidden",
+       "struct.metric_in_model", "struct.metric_first_arg_not_agg",
+       "struct.bad_kwarg", "struct.join_to_model_kwarg",
+       "struct.primary_key_takes_no_args", "struct.metric_of_and_column",
+       "struct.description_unreachable", "struct.role_no_description",
+       "struct.join_target_missing", "struct.no_primary_key",
+       "struct.semantic_tools_forbidden", "struct.bad_infra_profile",
+       "struct.bad_script_path", "struct.missing_call", "struct.port_not_duckdb",
+       "struct.port_no_storage", "struct.promise_of_view",
+       "struct.malformed_service_ref",
+       "struct.naming_invariant_promised_vs_models",
+       "struct.naming_invariant_promised_vs_physical",
+       "struct.base_models_vs_data_dirs")
+_codes("info", "agent", "struct.unverified")
+_codes("error", "agent",
+       "runtime.import_failed", "runtime.transform_raised",
+       "runtime.assert_failed", "runtime.base_models_mismatch",
+       "runtime.transform_incomplete", "runtime.model_table_missing")
+_codes("info", "agent", "runtime.row_count")
+_codes("error", "agent",
+       "closure.spec_snapshot_missing", "closure.lock_missing",
+       "closure.lock_unparseable", "closure.lock_snapshot_byte_mismatch",
+       "closure.build_record_missing", "closure.build_record_invalid",
+       "closure.build_record_hash_mismatch", "closure.readme_missing",
+       "closure.resolved_ref_missing", "closure.escaping_reference",
+       "closure.gitignore_missing", "closure.sensitive_missing",
+       "closure.gitignore_not_naming_profile")
+# The one closure.* code the AGENT cannot fix: a snapshot taken from a spec the
+# user never approved is a governance fault, and only the user can approve.
+_codes("error", "user", "closure.lock_status_not_approved")
+_codes("info", "agent", "closure.canonical_hash_deferred")
+_codes("error", "agent",
+       "policy.decisions_not_base_model", "policy.decisions_csv_missing",
+       "policy.decisions_column_missing", "policy.decisions_value_out_of_vocab",
+       "policy.literal_duplicates_landed_value")
+_codes("info", "agent", "semantic.distribution")
+_codes("warning", "agent", "semantic.uniform_column", "semantic.absent_vocabulary")
+_codes("info", "agent", "meta.stage_not_reached")
+
+JSON_MODE = "--json" in sys.argv
+RECORD_PATH = None
+if "--record" in sys.argv:                 # no argparse: the closure's copy of
+    _i = sys.argv.index("--record")        # this script stays small and its
+    RECORD_PATH = (sys.argv[_i + 1]        # byte-identical twin stays readable
+                   if _i + 1 < len(sys.argv) else "build-record.json")
+
+DIAGS = []
+STAGE_STATE = {"s1_structure": None, "s2_transform": None, "s3_closure": None}
+STAGE_DETAIL = {"s1_structure": {}, "s2_transform": {}, "s3_closure": {}}
+STAGE_AT = {}
+READBACK = {"distribution": [], "absent": []}
+ROW_COUNTS = []
+
+# Same pattern the spec validator uses. A check that prints the secret it found
+# turns a contained file leak into a transcript leak, and a JSON report is more
+# copyable than a scrollback, not less — so message AND evidence go through it.
+CREDENTIAL_VALUE_RE = re.compile(
+    r"\b(password|passwd|secret|api[_-]?key|token|bearer|private[_-]?key)\b"
+    r"\s*[:=]\s*\S+", re.IGNORECASE)
+
+def redact(x):
+    if isinstance(x, str):
+        return CREDENTIAL_VALUE_RE.sub(lambda m: f"{m.group(1)}=<redacted>", x)
+    if isinstance(x, dict):
+        return {k: redact(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [redact(v) for v in x]
+    return x
+
+def say(*a, **k):
+    """Prose stdout. Silent under --json so the report is the whole of stdout."""
+    if not JSON_MODE:
+        print(*a, **k)
+
+def cpath(at):
+    return f"closure:{at}" if at else ""
+
+def diag(stage, code, message, *, path="", evidence=None, fix=None):
+    sev, owner = CODES[code]
+    d = {"schema": "nxd-diagnostic-v1", "stage": stage, "code": code,
+         "severity": sev, "owner": owner, "origin": "tool_computed",
+         "path": path, "message": redact(message),
+         "evidence": redact(evidence or {})}
+    if fix:
+        d["fix"] = fix
+    DIAGS.append(d)
+    return d
+
+def close_stage(stage, state, **detail):
+    STAGE_STATE[stage] = state
+    STAGE_AT[stage] = int(time.time() * 1000)
+    STAGE_DETAIL[stage] = detail
+
+def merge_record(path, stages):
+    """Merge stages 1-3 into an existing build-record.json, in place.
+
+    The record is created by `dp_diagnostics.py record init` BEFORE this script
+    runs — Phase C gates its presence — so a missing record is a real fault and
+    is reported rather than papered over by writing a fresh one here.
+    """
+    p = Path(path)
+    try:
+        rec = json.loads(p.read_text())
+    except Exception as exc:
+        say(f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
+            "stages 1-3 NOT merged. Re-run generator lock/record setup with its "
+            "resolved pocket_helper_dir before self_check.py.")
+        return
+    rec.setdefault("stages", {}).update(stages)
+    if READBACK["distribution"] or READBACK["absent"]:
+        rec["readback"] = READBACK
+    if ROW_COUNTS:
+        # Kept under its own key forever. Merging it with published_row_counts
+        # would let a scratch-database dry run stand in as evidence that the
+        # shipped product has rows.
+        rec.setdefault("evidence", {})["phase_b_row_counts"] = {
+            "origin": "agent_observed",
+            "note": "scratch DuckDB dry run — NOT the published product",
+            "models": ROW_COUNTS}
+    p.write_text(json.dumps(rec, indent=2) + "\n")
+
+def finish(exit_code):
+    """Every exit goes through here, including a failing phase.
+
+    Phases still stop at the first failure — Phase B cannot run over malformed
+    code — but the report is emitted BEFORE exiting, with the phases that never
+    ran carried as `not_reached`. `not_reached` is a distinct status from
+    `passed`: a phase that produced no signal at all did not agree with you.
+    """
+    stages = {}
+    for ordinal, s in ((1, "s1_structure"), (2, "s2_transform"),
+                       (3, "s3_closure")):
+        if STAGE_STATE[s] is None:
+            diag(s, "meta.stage_not_reached",
+                 f"{s} did not run and produced no signal at all — an earlier "
+                 f"phase failed, or the closure could not be read.")
+        ds = [d for d in DIAGS if d["stage"] == s]
+        if STAGE_STATE[s] is None:
+            status = "not_reached"
+        elif STAGE_STATE[s] == "failed":
+            status = "failed"
+        elif any(d["severity"] == "warning" for d in ds):
+            status = "passed_with_warnings"
+        else:
+            status = "passed"
+        stages[s] = {"status": status, "ordinal": ordinal,
+                     "at_unix_ms": STAGE_AT.get(s), "origin": "tool_computed",
+                     "diagnostics": ds, "detail": STAGE_DETAIL[s]}
+    if RECORD_PATH:
+        merge_record(RECORD_PATH, stages)
+    if JSON_MODE:
+        counts = {"error": 0, "warning": 0, "info": 0}
+        for d in DIAGS:
+            counts[d["severity"]] += 1
+        try:
+            spec_hash = json.loads(
+                Path("dp-spec.lock.json").read_text()).get("spec_hash")
+        except Exception:
+            spec_hash = None
+        print(json.dumps({"schema": "nxd-diagnostic-report-v1",
+                          "tool": "self_check", "target": str(Path.cwd()),
+                          "ok": exit_code == 0, "counts": counts,
+                          "spec_hash": spec_hash, "diagnostics": DIAGS},
+                         indent=2))
+    sys.exit(exit_code)
 
 # ---------------------------------------------------------------- Phase A ---
 # Structural check of models.py + spec.py against the pinned nxd.spec surface
@@ -27,8 +217,17 @@ KWARGS = {                      # role builder -> allowed keyword names
 }
 SNAKE = re.compile(r"^[a-z][a-z0-9_]*$")
 
-errors, unverified = [], []
-def bad(msg): errors.append(msg)
+errors, unverified, unverified_at = [], [], []
+def bad(code, msg, at=""):
+    errors.append(msg)
+    diag("s1_structure", code, msg, path=cpath(at))
+
+def unv(msg, at=""):
+    """A construct this static pass cannot see. Recorded, never a failure —
+    the printed list is the honest scope boundary, and it belongs in the build
+    record rather than in a scrollback nobody keeps."""
+    unverified.append(msg)
+    unverified_at.append(at)
 
 def call_name(node):
     """Dotted or bare name of a Call's func, or None."""
@@ -74,21 +273,25 @@ def check_kwargs(call, name, where):
     allowed = KWARGS[name]
     for kw in call.keywords:
         if kw.arg is None:
-            unverified.append(f"{where}: **spread into {name}()")
+            unv(f"{where}: **spread into {name}()", where)
             continue
         if kw.arg in allowed:
             continue
         if name == "join" and kw.arg == "to_model":
-            bad(f"{where}: join() takes to=, not to_model=")
+            bad("struct.join_to_model_kwarg",
+                f"{where}: join() takes to=, not to_model=", where)
         else:
-            bad(f"{where}: {name}() has no keyword '{kw.arg}' "
-                f"(allowed: {sorted(allowed) or 'none'})")
+            bad("struct.bad_kwarg",
+                f"{where}: {name}() has no keyword '{kw.arg}' "
+                f"(allowed: {sorted(allowed) or 'none'})", where)
     if name == "primary_key" and call.args:
-        bad(f"{where}: primary_key() takes no arguments")
+        bad("struct.primary_key_takes_no_args",
+            f"{where}: primary_key() takes no arguments", where)
     if name == "metric":
         if any(k.arg == "of" for k in call.keywords) and \
            any(k.arg == "column" for k in call.keywords):
-            bad(f"{where}: metric() takes of= or column=, never both")
+            bad("struct.metric_of_and_column",
+                f"{where}: metric() takes of= or column=, never both", where)
     # Annotation reach, both graded as failures. A description on the WRAPPER
     # is an attribute description: it lands in data_model and never reaches
     # describe_models, so the author believes they documented the concept and
@@ -115,21 +318,24 @@ def check_kwargs(call, name, where):
             remedy = ("move it inside dimension(...) / metric(...)"
                       if describable else
                       "primary_key()/join() take no description — drop it")
-            bad(f"{where}: description= on {name}() never reaches "
-                f"describe_models and the role carries none — {remedy}")
+            bad("struct.description_unreachable",
+                f"{where}: description= on {name}() never reaches "
+                f"describe_models and the role carries none — {remedy}", where)
     if name in ("dimension", "metric") and not any(
             k.arg == "description" and desc_str(k.value)
             for k in call.keywords):
-        bad(f"{where}: {name}() has no description= — it reaches "
-            f"describe_models as a bare name the agent cannot choose on")
+        bad("struct.role_no_description",
+            f"{where}: {name}() has no description= — it reaches "
+            f"describe_models as a bare name the agent cannot choose on", where)
 
 def check_dtype(node, where):
     """A call in dtype position must be a known data-type constructor."""
     n = call_name(node)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         if n not in DTYPES:
-            bad(f"{where}: unknown data type '{n}()' — not in the pinned "
-                f"nxd.spec.data_types surface")
+            bad("struct.unknown_dtype",
+                f"{where}: unknown data type '{n}()' — not in the pinned "
+                f"nxd.spec.data_types surface", where)
 
 def walk_roles(node, where, *, in_view):
     """Validate every role/dtype/Agg reference inside one schema entry."""
@@ -137,18 +343,20 @@ def walk_roles(node, where, *, in_view):
         if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) \
                 and sub.value.id == "Agg":
             if sub.attr not in AGGS:
-                bad(f"{where}: Agg.{sub.attr} is not a member "
-                    f"(allowed: {sorted(AGGS)})")
+                bad("struct.unknown_agg",
+                    f"{where}: Agg.{sub.attr} is not a member "
+                    f"(allowed: {sorted(AGGS)})", where)
             elif sub.attr == "EXPRESSION":
                 # A real API member, but out of scope for this generation path:
                 # its SQL lives in the output PORT model's expressions={...} map,
                 # which the desktop closure does not author. Reaching for it here
                 # is always an attempt to dodge a derivation — the ruling belongs
                 # in the transform as a physical column or row.
-                bad(f"{where}: Agg.EXPRESSION is outside this generation path — "
+                bad("struct.agg_expression_forbidden",
+                    f"{where}: Agg.EXPRESSION is outside this generation path — "
                     f"materialize the ruling as a physical column in the "
                     f"transform and aggregate that column with a normal Agg "
-                    f"(see reference/derivation-plan.md)")
+                    f"(see reference/derivation-plan.md)", where)
         if not isinstance(sub, ast.Call):
             continue
         n = call_name(sub)
@@ -156,14 +364,16 @@ def walk_roles(node, where, *, in_view):
             check_kwargs(sub, n, where)
         if n == "metric":
             if not in_view:
-                bad(f"{where}: metric() inside a semantic_model schema — "
+                bad("struct.metric_in_model",
+                    f"{where}: metric() inside a semantic_model schema — "
                     f"metrics are consume-time only, declare them as "
-                    f"metric_field(metric(...)) on a semantic_view")
+                    f"metric_field(metric(...)) on a semantic_view", where)
             if sub.args and not (isinstance(sub.args[0], ast.Attribute)
                                  and isinstance(sub.args[0].value, ast.Name)
                                  and sub.args[0].value.id == "Agg"):
-                bad(f"{where}: metric()'s first argument must be an Agg "
-                    f"member (e.g. Agg.SUM), not a bare value")
+                bad("struct.metric_first_arg_not_agg",
+                    f"{where}: metric()'s first argument must be an Agg "
+                    f"member (e.g. Agg.SUM), not a bare value", where)
 
 def parse_models(src, path):
     """-> ({var: name}, {var: kind}, {name: joins}, {name: has_pk})"""
@@ -173,8 +383,9 @@ def parse_models(src, path):
         if isinstance(imp, ast.ImportFrom) and (imp.module or "").startswith("nxd"):
             head = imp.module.split(".")
             if not (head[:2] == ["nxd", "spec"] and len(head) <= 3):
-                bad(f"{path}: import from '{imp.module}' — public DSL only "
-                    f"(nxd.spec / nxd.spec.data_types)")
+                bad("struct.import_not_public_dsl",
+                    f"{path}: import from '{imp.module}' — public DSL only "
+                    f"(nxd.spec / nxd.spec.data_types)", path)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
@@ -197,8 +408,9 @@ def parse_models(src, path):
         model = literal_str(name_node) if name_node is not None else None
         if model is None or not SNAKE.match(model):
             shown = ast.unparse(name_node) if name_node is not None else "<none>"
-            bad(f"{path}: {kind}() name must be a lowercase snake_case string "
-                f"literal, got {shown}")
+            bad("struct.model_name_not_literal",
+                f"{path}: {kind}() name must be a lowercase snake_case string "
+                f"literal, got {shown}", path)
             continue
         var_name[target.id], var_kind[target.id] = model, kind
         joins.setdefault(model, []); has_pk[model] = False
@@ -211,35 +423,40 @@ def parse_models(src, path):
                     and desc_str(c.args[0]) for c in chain)
                 or any(k.arg == "description" and desc_str(k.value)
                        for k in root.keywords)):
-            bad(f"{path}: semantic_model('{model}') declares no description "
-                f"— both list_models and describe_model show it to the agent")
+            bad("struct.model_no_description",
+                f"{path}: semantic_model('{model}') declares no description "
+                f"— both list_models and describe_model show it to the agent",
+                f"{path}:{model}")
         in_view = kind == "semantic_view"
         for call in chain:
             if call_name(call) not in ("schema", "fields") or not call.args:
                 continue
             schema = call.args[0]
             if not isinstance(schema, ast.Dict):
-                unverified.append(f"{model}: .schema() argument is not a dict literal")
+                unv(f"{model}: .schema() argument is not a dict literal",
+                    f"{path}:{model}")
                 continue
             if in_view and not schema.keys:
-                bad(f"{path}: semantic_view('{model}') has an empty schema — "
-                    f"this raises at build time")
+                bad("struct.view_empty_schema",
+                    f"{path}: semantic_view('{model}') has an empty schema — "
+                    f"this raises at build time", f"{path}:{model}")
             for k, v in zip(schema.keys, schema.values):
                 col = literal_str(k) or "<dynamic>"
                 where = f"{path}:{model}.{col}"
                 if k is None:
-                    unverified.append(f"{model}: ** spread in .schema()")
+                    unv(f"{model}: ** spread in .schema()", f"{path}:{model}")
                     continue
                 entry_calls = ([v] if isinstance(v, ast.Call)
                                else list(v.elts) if isinstance(v, ast.Tuple) else [])
                 if not entry_calls and not isinstance(v, ast.Tuple):
-                    unverified.append(f"{where}: schema value is "
-                                      f"{type(v).__name__}, not a call or tuple")
+                    unv(f"{where}: schema value is "
+                        f"{type(v).__name__}, not a call or tuple", where)
                     continue
                 top = call_name(v) if isinstance(v, ast.Call) else None
                 if in_view and isinstance(v, ast.Call) and top != "metric_field":
-                    bad(f"{where}: a semantic_view field must be "
-                        f"metric_field(...), got {top}()")
+                    bad("struct.view_field_not_metric_field",
+                        f"{where}: a semantic_view field must be "
+                        f"metric_field(...), got {top}()", where)
                 if top in ("field", "metric_field") and v.args:
                     check_dtype(v.args[0], where)
                 elif top in DTYPES or (top and isinstance(v, ast.Call)
@@ -266,7 +483,8 @@ def parse_spec(src, path, var_name, var_kind):
                                              "script": False, "compute": False,
                                              "secrets": False, "port": False}
     if ".semantic_tools(" in src:
-        bad(f"{path}: .semantic_tools(...) is forbidden on desktop")
+        bad("struct.semantic_tools_forbidden",
+            f"{path}: .semantic_tools(...) is forbidden on desktop", path)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -276,43 +494,49 @@ def parse_spec(src, path, var_name, var_kind):
             ip = next((literal_str(k.value) for k in node.keywords
                        if k.arg == "infra_profile"), None)
             if ip != "desktop-local":
-                bad(f"{path}: data_product(infra_profile=...) must be the "
-                    f"literal \"desktop-local\", got {ip!r}")
+                bad("struct.bad_infra_profile",
+                    f"{path}: data_product(infra_profile=...) must be the "
+                    f"literal \"desktop-local\", got {ip!r}", path)
         elif n == "script":
             saw["script"] = True
             if literal_str(node.args[0] if node.args else None) != "transform/main.py":
-                bad(f"{path}: script() must point at \"transform/main.py\"")
+                bad("struct.bad_script_path",
+                    f"{path}: script() must point at \"transform/main.py\"", path)
         elif n in ("compute", "secrets"):
             saw[n] = True
         elif n == "port":
             saw["port"] = True
             if literal_str(node.args[0] if node.args else None) != "duckdb":
-                bad(f"{path}: the output port must be named \"duckdb\"")
+                bad("struct.port_not_duckdb",
+                    f"{path}: the output port must be named \"duckdb\"", path)
             if len(node.args) < 2 or call_name(node.args[1]) != "storage":
-                bad(f"{path}: .port(\"duckdb\", ...) second argument must be "
-                    f"a storage(...) call")
+                bad("struct.port_no_storage",
+                    f"{path}: .port(\"duckdb\", ...) second argument must be "
+                    f"a storage(...) call", path)
         elif n in ("promise", "model") and node.args:
             arg = node.args[0]
             if isinstance(arg, ast.Name) and arg.id in var_name:
                 (promised if n == "promise" else modelled).add(var_name[arg.id])
                 if n == "promise" and var_kind[arg.id] == "semantic_view":
-                    bad(f"{path}: .promise({arg.id}) — {var_name[arg.id]} is a "
+                    bad("struct.promise_of_view",
+                        f"{path}: .promise({arg.id}) — {var_name[arg.id]} is a "
                         f"semantic_view; views are registered with .model(), "
-                        f"never promised")
+                        f"never promised", path)
             else:
-                unverified.append(f"{path}: .{n}() argument "
-                                  f"{ast.unparse(arg)} is not a models.py name")
+                unv(f"{path}: .{n}() argument "
+                    f"{ast.unparse(arg)} is not a models.py name", path)
     for key, msg in [("data_product", "no data_product(...) call"),
                      ("script", "no script(...) call"),
                      ("compute", "script() has no .compute(...)"),
                      ("secrets", "script() has no .secrets([...])"),
                      ("port", "no .port(...) call")]:
         if not saw[key]:
-            bad(f"{path}: {msg}")
+            bad("struct.missing_call", f"{path}: {msg}", path)
     for ref in re.findall(r'"(/infra-profile/[^"]*)"', src):
         if not re.fullmatch(r"/infra-profile/desktop-local#/services/[a-z0-9-]+", ref):
-            bad(f"{path}: malformed service reference {ref!r} — expected "
-                f"/infra-profile/desktop-local#/services/<name>")
+            bad("struct.malformed_service_ref",
+                f"{path}: malformed service reference {ref!r} — expected "
+                f"/infra-profile/desktop-local#/services/<name>", path)
     return promised, modelled
 
 def model_constants(src):
@@ -325,13 +549,21 @@ def model_constants(src):
             try:
                 out[node.targets[0].id] = list(ast.literal_eval(node.value))
             except ValueError:
-                unverified.append(f"transform/main.py: {node.targets[0].id} "
-                                  f"is not a literal")
+                unv(f"transform/main.py: {node.targets[0].id} "
+                    f"is not a literal", "transform/main.py")
     return out
 
-models_src = Path("models.py").read_text()
-spec_src = Path("spec.py").read_text()
-transform_src = Path("transform/main.py").read_text()
+# Exit 2 = could not read, distinct from exit 1 = found something. A traceback
+# here reads as a broken checker; the closure is simply not where we are.
+try:
+    models_src = Path("models.py").read_text()
+    spec_src = Path("spec.py").read_text()
+    transform_src = Path("transform/main.py").read_text()
+except OSError as exc:
+    print(f"CANNOT READ — {exc}. Run self_check.py from the CLOSURE ROOT: "
+          f"models.py, spec.py and transform/main.py must all be present.",
+          file=sys.stderr)
+    finish(2)
 
 var_name, var_kind, joins, has_pk = parse_models(models_src, "models.py")
 promised, modelled = parse_spec(spec_src, "spec.py", var_name, var_kind)
@@ -340,43 +572,76 @@ base_names = {n for v, n in var_name.items() if var_kind[v] == "semantic_model"}
 for model, edges in joins.items():
     for tgt, where in edges:
         if tgt not in base_names:
-            bad(f"{where}: join(to=\"{tgt}\") — no semantic_model of that name "
-                f"in models.py")
+            bad("struct.join_target_missing",
+                f"{where}: join(to=\"{tgt}\") — no semantic_model of that name "
+                f"in models.py", where)
 for model in base_names:
     if not has_pk[model]:
-        bad(f"models.py: semantic_model('{model}') declares no primary_key()")
+        bad("struct.no_primary_key",
+            f"models.py: semantic_model('{model}') declares no primary_key()",
+            f"models.py:{model}")
 
 consts = model_constants(transform_src)
 physical = set(consts.get("PHYSICAL_MODELS", []))
 if promised != base_names:
-    bad(f"naming invariant: semantic_model names {sorted(base_names)} != "
-        f"promised names {sorted(promised)}")
+    bad("struct.naming_invariant_promised_vs_models",
+        f"naming invariant: semantic_model names {sorted(base_names)} != "
+        f"promised names {sorted(promised)}", "spec.py")
 if physical and promised != physical:
-    bad(f"naming invariant: promised names {sorted(promised)} != "
-        f"PHYSICAL_MODELS {sorted(physical)}")
+    bad("struct.naming_invariant_promised_vs_physical",
+        f"naming invariant: promised names {sorted(promised)} != "
+        f"PHYSICAL_MODELS {sorted(physical)}", "transform/main.py")
 if "BASE_MODELS" in consts:
     dirs = {d.name for d in Path("data").iterdir() if d.is_dir()}
     if set(consts["BASE_MODELS"]) != dirs:
-        bad(f"BASE_MODELS {sorted(consts['BASE_MODELS'])} != data/ directories "
-            f"{sorted(dirs)}")
+        bad("struct.base_models_vs_data_dirs",
+            f"BASE_MODELS {sorted(consts['BASE_MODELS'])} != data/ directories "
+            f"{sorted(dirs)}", "transform/main.py")
 
-for u in unverified:
-    print(f"unverified: {u}")
+for u, at in zip(unverified, unverified_at):
+    say(f"unverified: {u}")
+    diag("s1_structure", "struct.unverified", f"unverified: {u}", path=cpath(at))
 if errors:
-    print("\nPHASE A FAILED — structural check of models.py / spec.py:")
+    say("\nPHASE A FAILED — structural check of models.py / spec.py:")
     for e in errors:
-        print(f"  - {e}")
-    sys.exit(1)
-print(f"phase A ok — {len(base_names)} semantic_model, "
-      f"{len(modelled - base_names)} semantic_view, "
-      f"{len(unverified)} unverified entries")
+        say(f"  - {e}")
+    close_stage("s1_structure", "failed",
+                errors=len(errors), unverified=len(unverified))
+    finish(1)
+close_stage("s1_structure", "passed",
+            models_counted=len(base_names), unverified=len(unverified))
+say(f"phase A ok — {len(base_names)} semantic_model, "
+    f"{len(modelled - base_names)} semantic_view, "
+    f"{len(unverified)} unverified entries")
 
 # ---------------------------------------------------------------- Phase B ---
 # Dry-run of transform/main.py against a scratch DuckDB. This one EXECUTES.
+# Everything it reports is what will happen on the supervisor, so a failure
+# here is unambiguously the generated code — never the environment. There is
+# no kernel and no network in this phase to blame.
 
 @dataclass
 class DuckDbOutput:
     path: str; schema: str; model_tables: dict; models: dict = field(default_factory=dict)
+
+berrors, btracebacks = [], []
+def berr(code, msg, at="", ev=None, tb=""):
+    berrors.append(msg)
+    btracebacks.append(tb)
+    ev = dict(ev or {})
+    if tb:
+        ev["traceback"] = tb
+    diag("s2_transform", code, msg, path=cpath(at), evidence=ev)
+
+def fail_b():
+    say("\nPHASE B FAILED — transform dry-run (this EXECUTED: what it reports "
+        "is what will happen):")
+    for e, tb in zip(berrors, btracebacks):
+        say(f"  - {e}")
+        if tb:
+            say("".join(f"      {ln}\n" for ln in tb.strip().splitlines()), end="")
+    close_stage("s2_transform", "failed", errors=len(berrors))
+    finish(1)
 
 nxd = types.ModuleType("nxd"); core = types.ModuleType("nxd.core")
 ctx = types.ModuleType("nxd.core.context"); ctx.DuckDbOutput = DuckDbOutput; dp = types.SimpleNamespace(
@@ -385,64 +650,244 @@ nxd.data_product, nxd.core, core.context = dp, core, ctx
 sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": ctx})
 
 sys.path.insert(0, ".")
-from transform.main import BASE_MODELS, PHYSICAL_MODELS, ingest  # noqa: E402
+try:
+    from transform.main import BASE_MODELS, PHYSICAL_MODELS, ingest  # noqa: E402
+except Exception as exc:
+    berr("runtime.import_failed",
+         f"transform/main.py: import failed — {type(exc).__name__}: {exc}",
+         "transform/main.py", tb=traceback.format_exc())
+    fail_b()
 
 DIRS = [d.name for d in sorted(Path("data").iterdir()) if d.is_dir()]
 # Only BASE models are backed by data/. Derived models are landed by the
 # transform and appear in PHYSICAL_MODELS with no directory of their own.
-assert set(BASE_MODELS) == set(DIRS), "base models must match data/"
-assert set(BASE_MODELS) <= set(PHYSICAL_MODELS), "base models must be promised"
+if set(BASE_MODELS) != set(DIRS):
+    berr("runtime.base_models_mismatch",
+         f"base models must match data/: BASE_MODELS {sorted(set(BASE_MODELS))} "
+         f"!= data/ directories {sorted(set(DIRS))}", "transform/main.py",
+         {"expected": sorted(set(DIRS)), "actual": sorted(set(BASE_MODELS))})
+if not set(BASE_MODELS) <= set(PHYSICAL_MODELS):
+    berr("runtime.base_models_mismatch",
+         f"base models must be promised: "
+         f"{sorted(set(BASE_MODELS) - set(PHYSICAL_MODELS))} are in BASE_MODELS "
+         f"but not in PHYSICAL_MODELS", "transform/main.py")
+if berrors:
+    fail_b()
 run = Path(tempfile.mkdtemp())
 # model_tables comes from PHYSICAL_MODELS, never the data/ listing: a map built
 # from directories KeyErrors the moment a derived model resolves its table name.
 out = DuckDbOutput(path=str(run / "data.duckdb"), schema="main",
                    model_tables={m: m for m in PHYSICAL_MODELS})
-ingest(duckdb=out, secrets={"csv_source": str(Path("data").resolve())})
+try:
+    ingest(duckdb=out, secrets={"csv_source": str(Path("data").resolve())})
+except AssertionError as exc:
+    # A fired assert is the transform's OWN invariant rejecting the data it
+    # produced. That is the check working, not the check being wrong.
+    berr("runtime.assert_failed",
+         f"transform/main.py: an assert fired during the dry run — {exc}",
+         "transform/main.py", tb=traceback.format_exc())
+except Exception as exc:
+    berr("runtime.transform_raised",
+         f"transform/main.py: {type(exc).__name__}: {exc}",
+         "transform/main.py", tb=traceback.format_exc())
+if berrors:
+    fail_b()
 import duckdb
 con = duckdb.connect(out.path, read_only=True)
 for m in PHYSICAL_MODELS:  # unquoted main.<name> — the invariant, physically
-    print(m, con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0])
-assert (run / ".transform-complete").exists()
-print(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
-      f"STRUCTURALLY against the pinned nxd v0.41.139 DSL surface (not "
-      f"executed — no nxd wheel installable here); {len(unverified)} "
-      f"unverified entries listed above. A spec fault only the real wheel or "
-      f"the supervisor's spec compilation can raise still reaches handoff.")
+    try:
+        n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
+    except Exception as exc:
+        berr("runtime.model_table_missing",
+             f"main.{m} is promised but is not queryable after the transform — "
+             f"{type(exc).__name__}: {exc}", "transform/main.py", {"model": m})
+        continue
+    say(m, n_rows)
+    ROW_COUNTS.append({"table": m, "row_count": n_rows})
+    diag("s2_transform", "runtime.row_count", f"{m}: {n_rows} rows",
+         path=cpath(f"transform/main.py:{m}"),
+         evidence={"model": m, "count": n_rows})
+if not (run / ".transform-complete").exists():
+    berr("runtime.transform_incomplete",
+         "the transform returned without writing .transform-complete — it did "
+         "not finish", "transform/main.py")
+if berrors:
+    fail_b()
+close_stage("s2_transform", "passed",
+            models_counted=len(PHYSICAL_MODELS), unverified=len(unverified))
+say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
+    f"STRUCTURALLY against the pinned nxd v0.41.139 DSL surface (not "
+    f"executed — no nxd wheel installable here); {len(unverified)} "
+    f"unverified entries listed above. A spec fault only the real wheel or "
+    f"the supervisor's spec compilation can raise still reaches handoff.")
 
 # ---------------------------------------------------------------- Phase C ---
-# Context-completeness gate (Step 6a). The closure must be a SUFFICIENT handoff:
-# CONTEXT.md present, and no closure file points at a contract/design doc OUTSIDE
-# the closure. A structurally valid closure can still be uncontinuable if the
-# rubric for a promised derived model lives in ../../some-doc.md.
+# Closure-record gate (Step 6a). The closure must be a SUFFICIENT handoff, and
+# after this change that is a HASH-CHECKABLE property rather than a prose
+# discipline: the approved spec is byte-copied in as dp-spec.approved.md, the
+# lock carries its hash and the compiler version, and build-record.json says
+# which spec the closure was compiled from. A structurally valid closure can
+# still be uncontinuable if the plan it was built from lives in ../../some-doc.md
+# — copied, never pointed at, is what removes that failure mode.
 cerrors = []
-if not Path("CONTEXT.md").exists():
-    cerrors.append("CONTEXT.md is missing from the closure root — a cold reader "
-                   "cannot continue the work (intent, sample rule, inference "
-                   "caveats, deferred-model contract, reopen recipe). See "
-                   "reference/context-doc.md.")
+def cerr(code, msg, at="", ev=None):
+    cerrors.append(msg)
+    diag("s3_closure", code, msg, path=cpath(at), evidence=ev)
 
-# Any closure file that references a design/contract doc by a path escaping the
-# closure (a ../-rooted markdown reference) is a dangling cross-boundary pointer.
-# Scan the human/author-facing text files, not data.
+# C11 first, so it is in the report whatever else happens: Phase C compares the
+# snapshot's BYTES, which is sufficient inside the closure (the bytes are the
+# ones the canonical hash was computed from) and needs nothing but hashlib. The
+# CANONICAL hash — the one that answers "did the plan change?" — needs PyYAML
+# and the live IR, both of which are outside the closure.
+diag("s3_closure", "closure.canonical_hash_deferred",
+     "Phase C checked the snapshot's raw bytes against dp-spec.lock.json. The "
+     "canonical (semantic) hash and the comparison against the live dp-spec.md "
+     "are NOT checked here — re-run generator canonical lock verification with its "
+     "resolved pocket_helper_dir for that.",
+     path=cpath("dp-spec.lock.json"))
+
+# C1 / C2 — the approved plan and its lock must both be in the closure.
+snap = Path("dp-spec.approved.md")
+snap_bytes = snap.read_bytes() if snap.exists() else None
+if snap_bytes is None:
+    cerr("closure.spec_snapshot_missing",
+         "dp-spec.approved.md is missing from the closure root — the closure "
+         "carries no copy of the approved plan it was compiled from, so a cold "
+         "reader cannot tell what it was supposed to build. Byte-copy the "
+         "approved dp-spec.md in at generation (Step 6a).", "dp-spec.approved.md")
+lock = None
+lockp = Path("dp-spec.lock.json")
+if not lockp.exists():
+    cerr("closure.lock_missing",
+         "dp-spec.lock.json is missing from the closure root — without it the "
+         "snapshot is an unattributed copy: no hash, no compiler version, "
+         "nothing to check it against. Run `dp_diagnostics.py lock write`.",
+         "dp-spec.lock.json")
+else:
+    try:
+        lock = json.loads(lockp.read_text())
+        if not isinstance(lock, dict):
+            raise ValueError("not a JSON object")
+        if lock.get("schema") != "nxd-dp-spec-lock-v1":
+            raise ValueError(f"schema is {lock.get('schema')!r}, expected "
+                             f"'nxd-dp-spec-lock-v1'")
+    except Exception as exc:
+        lock = None
+        cerr("closure.lock_unparseable",
+             f"dp-spec.lock.json could not be read as a lock file — "
+             f"{type(exc).__name__}: {exc}", "dp-spec.lock.json")
+
+# C3 — tamper check. The snapshot is EVIDENCE; evidence edited after it was
+# written is not evidence. This is the mechanical half of "once approved, the
+# spec is frozen for that build", which used to be honour-system.
+if lock is not None and snap_bytes is not None:
+    got = hashlib.sha256(snap_bytes).hexdigest()
+    want = lock.get("snapshot_sha256")
+    if got != want:
+        cerr("closure.lock_snapshot_byte_mismatch",
+             f"dp-spec.approved.md does not match dp-spec.lock.json "
+             f"snapshot_sha256 — the in-closure copy was edited after it was "
+             f"written. The plan a build was compiled from is not editable "
+             f"in place: change the live dp-spec.md, re-approve, regenerate.",
+             "dp-spec.approved.md", {"expected": want, "actual": got})
+
+# C4 — a snapshot of an unapproved spec is a build nobody signed off.
+if lock is not None and lock.get("spec_status_at_copy") != "approved":
+    cerr("closure.lock_status_not_approved",
+         f"dp-spec.lock.json records spec_status_at_copy="
+         f"{lock.get('spec_status_at_copy')!r} — the closure was generated from "
+         f"a spec that was not approved. Approval is what gets copied and "
+         f"hashed; without it nothing here was signed off.", "dp-spec.lock.json",
+         {"expected": "approved", "actual": lock.get("spec_status_at_copy")})
+
+# C5 / C6 — the build record exists and names the SAME plan as the lock. It is
+# generated (`dp_diagnostics.py record init`), never hand-authored, and it must
+# exist before this phase runs because this phase is one of its writers.
+record = None
+recp = Path("build-record.json")
+if not recp.exists():
+    cerr("closure.build_record_missing",
+         "build-record.json is missing from the closure root — outcomes "
+         "(attempts, concessions, blockers, read-back) have nowhere to land, "
+         "so a green run would be indistinguishable from a green run that "
+         "conceded something. Run `dp_diagnostics.py record init` at "
+         "generation, before self_check.py.", "build-record.json")
+else:
+    try:
+        record = json.loads(recp.read_text())
+        if not isinstance(record, dict):
+            raise ValueError("not a JSON object")
+        if record.get("schema") != "nxd-build-record-v1":
+            raise ValueError(f"schema is {record.get('schema')!r}, expected "
+                             f"'nxd-build-record-v1'")
+    except Exception as exc:
+        record = None
+        cerr("closure.build_record_invalid",
+             f"build-record.json could not be read as a build record — "
+             f"{type(exc).__name__}: {exc}", "build-record.json")
+if lock is not None and record is not None and \
+        record.get("compiled_from") != lock.get("spec_hash"):
+    cerr("closure.build_record_hash_mismatch",
+         f"build-record.json compiled_from does not equal dp-spec.lock.json "
+         f"spec_hash — the record describes a build of a DIFFERENT plan than "
+         f"the one snapshotted here. Regenerate rather than reconciling by "
+         f"hand.", "build-record.json",
+         {"expected": lock.get("spec_hash"),
+          "actual": record.get("compiled_from")})
+
+# C7 — the reopen recipe. It is the one thing a cold reader needs that is
+# neither plan (the snapshot) nor outcome (the record).
+if not Path("README.md").exists():
+    cerr("closure.readme_missing",
+         "README.md is missing from the closure root — it carries the reopen "
+         "recipe and the credential key names, and nothing else does.",
+         "README.md")
+
+# C8 — prompt_ref files are relative to the LIVE IR, so a byte copy would carry
+# a path resolving outside the closure. They are mirrored in at snapshot time
+# and recorded in the lock; here we check the mirror actually landed.
+for ref in (lock or {}).get("resolved_refs") or []:
+    rel = (ref or {}).get("closure_path") or ""
+    rp = Path(rel) if rel else None
+    if not rel or not rp.exists():
+        cerr("closure.resolved_ref_missing",
+             f"dp-spec.approved.md references {(ref or {}).get('spec_ref')!r} "
+             f"and the lock says it was mirrored to {rel!r}, but that file is "
+             f"not in the closure — the snapshot points at nothing.", rel)
+        continue
+    got = hashlib.sha256(rp.read_bytes()).hexdigest()
+    if got != ref.get("sha256"):
+        cerr("closure.resolved_ref_missing",
+             f"{rel} does not match the sha256 recorded in dp-spec.lock.json — "
+             f"the mirrored copy was edited after it was written.", rel,
+             {"expected": ref.get("sha256"), "actual": got})
+
+# C9 — escape scan. Any closure file that references a design/contract doc by a
+# path escaping the closure (a ../-rooted markdown reference) is a dangling
+# cross-boundary pointer. The snapshot IS scanned: a ../-rooted reference inside
+# the approved plan is exactly the dangling pointer this design removes, and no
+# carve-out is needed anywhere because the IR is COPIED rather than pointed at.
 ESCAPE = re.compile(r"\.\.(?:/[^\s\)\"']*)+\.md", re.IGNORECASE)
-scan = ["CONTEXT.md", "README.md", "spec.py", "models.py", "transform/main.py"]
+scan = ["README.md", "dp-spec.approved.md", "spec.py", "models.py",
+        "transform/main.py"]
 scan += [str(p) for p in Path(".").glob("contracts/*")]
 for rel in scan:
     p = Path(rel)
     if not p.exists():
         continue
     for m in ESCAPE.findall(p.read_text()):
-        cerrors.append(f"{rel}: references '{m}' — a contract/design path that "
-                       f"escapes the closure. Materialize it inside the closure "
-                       f"(CONTEXT.md / contracts/<name>.md / inert derived model), "
-                       f"never a ../ pointer.")
+        cerr("closure.escaping_reference",
+             f"{rel}: references '{m}' — a contract/design path that escapes "
+             f"the closure. Materialize it inside the closure "
+             f"(dp-spec.approved.md / contracts/<name>.md / inert derived "
+             f"model), never a ../ pointer.", rel, {"found": m})
 
-# Sensitivity artifacts. The trigger is STRUCTURAL: a *-source service carrying
-# a populated `attributes:` list holds a live credential in plaintext. A CSV or
-# file source keeps `attributes: []` and is exempt, so this cannot false-positive
-# on a healthy local closure. Names the missing FILES only — never reads or
-# echoes an attribute value, because a check that prints the secret it found
-# turns a contained file leak into a transcript leak.
+# C10 — sensitivity artifacts. The trigger is STRUCTURAL: a *-source service
+# carrying a populated `attributes:` list holds a live credential in plaintext.
+# A CSV or file source keeps `attributes: []` and is exempt, so this cannot
+# false-positive on a healthy local closure. Names the missing FILES only —
+# never reads or echoes an attribute value, because a check that prints the
+# secret it found turns a contained file leak into a transcript leak.
 profile = Path("infra-profile.yaml")
 if profile.exists():
     text = profile.read_text()
@@ -460,27 +905,34 @@ if profile.exists():
         or re.search(r"^\s*attributes:\s*\[\s*[^\s\]]", text, re.MULTILINE) is not None
     )
     if has_secret:
-        for name, why in (
-            (".gitignore", "git will happily commit infra-profile.yaml without it"),
-            ("SENSITIVE", "a cold reader gets no warning before opening the closure"),
+        for name, code, why in (
+            (".gitignore", "closure.gitignore_missing",
+             "git will happily commit infra-profile.yaml without it"),
+            ("SENSITIVE", "closure.sensitive_missing",
+             "a cold reader gets no warning before opening the closure"),
         ):
             if not Path(name).exists():
-                cerrors.append(
-                    f"{name} is missing, but infra-profile.yaml carries a populated "
-                    f"`attributes:` list (a live credential in plaintext) — {why}. "
-                    f"See reference/database-source.md, 'Sensitivity artifacts'.")
+                cerr(code,
+                     f"{name} is missing, but infra-profile.yaml carries a populated "
+                     f"`attributes:` list (a live credential in plaintext) — {why}. "
+                     f"See reference/database-source.md, 'Sensitivity artifacts'.",
+                     name)
         gi = Path(".gitignore")
         if gi.exists() and "infra-profile.yaml" not in gi.read_text():
-            cerrors.append(
-                ".gitignore exists but does not ignore infra-profile.yaml — the one "
-                "file that must never be committed. Ignore it by name, never `*`.")
+            cerr("closure.gitignore_not_naming_profile",
+                 ".gitignore exists but does not ignore infra-profile.yaml — the one "
+                 "file that must never be committed. Ignore it by name, never `*`.",
+                 ".gitignore")
 
 if cerrors:
-    print("\nPHASE C FAILED — context-completeness gate:")
+    say("\nPHASE C FAILED — closure-record gate (approved spec snapshot, lock, "
+        "build record):")
     for e in cerrors:
-        print(f"  - {e}")
-    sys.exit(1)
-print("phase C ok — CONTEXT.md present, no closure-escaping contract references")
+        say(f"  - {e}")
+    close_stage("s3_closure", "failed", errors=len(cerrors))
+    finish(1)
+say("phase C ok — approved spec snapshot + lock present, no closure-escaping "
+    "contract references")
 
 # ---------------------------------------------------------------- Phase D ---
 # Policy-boundary gate. A ruling is landed data the user can edit, never a
@@ -497,7 +949,21 @@ print("phase C ok — CONTEXT.md present, no closure-escaping contract reference
 #       transform/main.py — a duplicated threshold silently diverges from the
 #       row that claims to be editable.
 # Ground truth is the closure's own landed data, so this needs no fixture.
+# Phase D shares stage s3_closure with Phase C: both are offline, both are
+# agent-owned, both self-heal. The code and the path tell them apart.
 derrors = []
+dcodes = []
+def derr(code, msg, at=""):
+    """Buffer a Phase D finding WITH its code, in-block.
+
+    Deliberately self-contained: evals/tests/test_policy_boundary_phase_d.py
+    slices this phase out between the derrors initialiser and the reporting
+    branch and runs it standalone, so anything Phase D calls must be defined
+    between those two lines. Diagnostics are built in the reporting block below,
+    which is outside the slice.
+    """
+    dcodes.append((code, at))
+    derrors.append(msg)
 
 # Use the values Phase B IMPORTED, not the statically-parsed ones: the template
 # writes PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS, which is an expression
@@ -505,17 +971,20 @@ derrors = []
 # keyed on it would silently never fire.
 if "nxd_decisions" in set(PHYSICAL_MODELS):
     if "nxd_decisions" not in set(BASE_MODELS):
-        derrors.append(
+        derr("policy.decisions_not_base_model",
             "nxd_decisions is promised but is not in BASE_MODELS — it is being "
             "generated in the transform. A ledger built from a Python literal "
             "describes the code instead of driving it: editing a row changes "
             "nothing. Write data/nxd_decisions/nxd_decisions.csv and land it "
-            "like any other base model (reference/derivation-plan.md).")
+            "like any other base model (reference/derivation-plan.md).",
+            "transform/main.py")
     else:
         led = Path("data/nxd_decisions/nxd_decisions.csv")
         if not led.exists():
-            derrors.append("nxd_decisions is in BASE_MODELS but "
-                           "data/nxd_decisions/nxd_decisions.csv is missing.")
+            derr("policy.decisions_csv_missing",
+                 "nxd_decisions is in BASE_MODELS but "
+                 "data/nxd_decisions/nxd_decisions.csv is missing.",
+                 "data/nxd_decisions/nxd_decisions.csv")
         else:
             import csv as _csv
             with led.open(newline="") as fh:
@@ -536,17 +1005,19 @@ if "nxd_decisions" in set(PHYSICAL_MODELS):
             }
             for lcol, (okvals, why) in LEDGER_VOCAB.items():
                 if lrows and lcol not in lrows[0]:
-                    derrors.append(
+                    derr("policy.decisions_column_missing",
                         f"nxd_decisions.csv has no {lcol!r} column (found "
                         f"{sorted(lrows[0])}). {why}. Allowed values are "
-                        f"{sorted(okvals)} (reference/derivation-plan.md).")
+                        f"{sorted(okvals)} (reference/derivation-plan.md).",
+                        f"data/nxd_decisions/nxd_decisions.csv:{lcol}")
                     continue
                 badv = {(r[lcol] or "").strip() for r in lrows} - okvals
                 if badv:
-                    derrors.append(
+                    derr("policy.decisions_value_out_of_vocab",
                         f"nxd_decisions.{lcol} has {sorted(badv)}; allowed "
                         f"values are {sorted(okvals)}. The vocabulary is fixed: "
-                        f"a value outside it is not queryable as a class.")
+                        f"a value outside it is not queryable as a class.",
+                        f"data/nxd_decisions/nxd_decisions.csv:{lcol}")
 
 # (b) A policy value that is landed AND hardcoded is a divergence waiting to
 # happen. Only scan CSVs whose model name looks like landed policy, and only
@@ -588,21 +1059,35 @@ for pcsv in sorted(Path("data").rglob("*.csv")):
             distinctive = len(v) >= 4 or (
                 v.replace(".", "", 1).isdigit() and len(v) >= 2)
             if distinctive and v in tlits:
-                derrors.append(
+                derr("policy.literal_duplicates_landed_value",
                     f"{pcsv}: value {v!r} (column '{col}') is landed AND "
                     f"appears as a literal in transform/main.py. The "
                     f"transform must READ it from the row; a copy diverges "
-                    f"from the row the user edits.")
+                    f"from the row the user edits.", f"{pcsv}:{col}")
 
 if derrors:
-    print("\nPHASE D FAILED — policy boundary (rulings are data, not code):")
-    for e in dict.fromkeys(derrors):
-        print(f"  - {e}")
-    sys.exit(1)
-print("phase D ok — rulings land as editable data with status + provenance, "
-      "not transform literals")
-print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
-      "C (context-completeness), D (policy boundary) all passed.")
+    say("\nPHASE D FAILED — policy boundary (rulings are data, not code):")
+    seen = set()
+    for (dcode, dat), e in zip(dcodes, derrors):
+        if e in seen:
+            continue
+        seen.add(e)
+        say(f"  - {e}")
+        diag("s3_closure", dcode, e, path=cpath(dat))
+    close_stage("s3_closure", "failed", errors=len(seen))
+    finish(1)
+close_stage("s3_closure", "passed", scanned=len(scan))
+say("phase D ok — rulings land as editable data with status + provenance, "
+    "not transform literals")
+# FROZEN STRING — do NOT "fix" the stale label. Phase C's MEANING changed with
+# this design (it now verifies the byte-copied spec snapshot, the lock and the
+# build record, not the completeness of a hand-written context document) but its
+# LABEL stays "C (context-completeness)" because run.py's deterministic-check wiring
+# and every scenario checker key on this line byte-for-byte. Accuracy of the
+# label loses to stability of the contract; this comment is what keeps the
+# trade visible instead of inviting a helpful rename that breaks every checker.
+say("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
+    "C (context-completeness), D (policy boundary) all passed.")
 
 # Distribution read-back. NOT a gate — it never fails the run. It prints the
 # value counts of every classification-shaped string column of every derived
@@ -611,7 +1096,9 @@ print("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
 # judgement that would make this unreliable. A column qualifies on shape alone —
 # it must actually GROUP (few distinct values, and fewer than one per row), which
 # excludes keys and free text without naming either. Relay these counts to the
-# user before the build (see nxd-pocket-loop Step 3).
+# user before the build (see nxd-pocket-loop Step 3). It is also the designated
+# stage-8 predictor: a green build that answers wrongly shows up here first, so
+# it is recorded as DATA in build-record.readback, not only printed.
 for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
     n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     cols = [r[0] for r in con.execute(
@@ -623,8 +1110,33 @@ for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
         if not (len(rows) <= 12 and len(rows) * 2 <= n_rows):
             continue  # a key or free text, not a classification
         counts = ", ".join(f"{v!r}={n}" for v, n in rows)
-        flag = "  <- UNIFORM: this column does not discriminate" if len(rows) == 1 else ""
-        print(f"distribution {m}.{c}: {counts}{flag}")
+        uniform = len(rows) == 1
+        flag = "  <- UNIFORM: this column does not discriminate" if uniform else ""
+        say(f"distribution {m}.{c}: {counts}{flag}")
+        values = [{"value": v, "count": n} for v, n in rows]
+        READBACK["distribution"].append(
+            {"model": m, "column": c, "values": values, "uniform": uniform,
+             "origin": "tool_computed"})
+        # Evidence keys are the ones dp_diagnostics._merge_readback reads back
+        # (model / column / values / uniform). Renaming one here silently
+        # empties the build record's readback block.
+        diag("s2_transform", "semantic.distribution",
+             f"distribution {m}.{c}: {counts}",
+             path=cpath(f"transform/main.py:{m}.{c}"),
+             evidence={"model": m, "column": c, "values": values,
+                       "uniform": uniform})
+        if uniform:
+            diag("s2_transform", "semantic.uniform_column",
+                 f"{m}.{c} has one value across {n_rows} rows — a column built "
+                 f"to distinguish rows that does not discriminate. A gate that "
+                 f"passes every row is not a gate.",
+                 path=cpath(f"transform/main.py:{m}.{c}"),
+                 evidence={"model": m, "column": c, "values": values,
+                           "uniform": True},
+                 fix="State it to the user before the build. Do not silently "
+                     "repair it: a gate that cannot fail is a ruling you "
+                     "authored, so it lands in nxd_decisions or goes back as a "
+                     "question.")
 
 # Declared-but-absent read-back. The dual of UNIFORM, and equally unconditional:
 # a vocabulary the closure LANDS (verdict labels, statuses, buckets) whose value
@@ -658,5 +1170,16 @@ for vcsv in sorted(Path("data").rglob("*.csv")):
         declared = {(r[col] or "").strip() for r in vrows} - {""}
         missing = sorted(d for d in declared if d not in produced)
         if missing and len(declared) <= 12:
-            print(f"ABSENT {vcsv.parent.name}.{col}: declared {missing} — "
-                  f"never produced in any derived column")
+            say(f"ABSENT {vcsv.parent.name}.{col}: declared {missing} — "
+                f"never produced in any derived column")
+            READBACK["absent"].append(
+                {"source": vcsv.parent.name, "column": col,
+                 "declared_missing": missing, "origin": "tool_computed"})
+            diag("s2_transform", "semantic.absent_vocabulary",
+                 f"ABSENT {vcsv.parent.name}.{col}: declared {missing} — never "
+                 f"produced in any derived column",
+                 path=cpath(f"{vcsv}:{col}"),
+                 evidence={"source": vcsv.parent.name, "column": col,
+                           "declared_missing": missing})
+
+finish(0)
