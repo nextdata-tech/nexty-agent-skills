@@ -786,6 +786,87 @@ def test_reach_codes_are_registered_in_the_shared_vocabulary():
         assert dpd.CODES[code]["owner"] == "agent", code
 
 
+def test_phase_e_codes_are_registered_in_the_scripts_own_table():
+    """Every ``reach.*`` code Phase E emits must be in self_check.py's ``CODES``.
+
+    This is a SECOND registry. ``dp_diagnostics.CODES`` (asserted above) is the
+    shared one; the script carries its own inlined copy, and ``diag()`` opens
+    with the unguarded ``sev, owner = CODES[code]``. A code missing from the
+    inlined table raises ``KeyError`` the first time the phase reports — so a
+    denied closure crashes with a traceback instead of exiting through
+    ``finish(1)``, and under the ``--json --record`` invocation SKILL.md
+    commands it emits no report and merges nothing into the build record. The
+    gate would block only by accident, on exactly the runs it exists for.
+
+    The whole-file harness above cannot catch this: it stubs ``diag``, and the
+    stub does not consult ``CODES``.
+    """
+    body = _script_body()
+    registered = set()
+    for sev, owner, block in re.findall(
+        r'_codes\(\s*"(\w+)",\s*"(\w+)",(.*?)\)\n', body, re.S
+    ):
+        registered |= set(re.findall(r'"([a-z_]+\.[a-z_]+)"', block))
+
+    emitted = set(
+        re.findall(r'(?:diag\(\s*"[^"]+",\s*|eerr\(\s*)"(reach\.[a-z_]+)"', body)
+    )
+    assert emitted, "found no reach.* emission sites — did Phase E move?"
+
+    missing = emitted - registered
+    assert not missing, (
+        f"Phase E emits {sorted(missing)}, which self_check.py's own CODES table "
+        f"does not register. diag() would raise KeyError and kill the run."
+    )
+
+
+def test_phase_e_failure_reports_through_the_real_diagnostic_surface(tmp_path):
+    """Drive a denied closure through the REAL ``diag``/``finish``, not stubs.
+
+    Every other test here runs Phase E under a harness that substitutes the
+    reporting functions. That keeps them fast and hermetic, and it is also how a
+    ``KeyError`` in the real ``diag()`` survived 45 passing tests: the failure
+    path was never executed against the code that actually ships.
+
+    So this one splices Phase E onto the script's REAL preamble — the actual
+    ``CODES`` table, the actual ``diag``, ``close_stage`` and ``finish`` — and
+    drives a denied closure through it. Only the two source strings Phase E
+    reads are injected; nothing about the reporting path is stubbed.
+
+    Building a whole closure instead would drag in every file Phase A demands
+    (``models.py``, ``data/``, a parseable spec) and would fail in Phase A long
+    before reaching the seam under test.
+    """
+    body = _script_body()
+    # Everything up to the Phase A banner: imports, the CODES table, redact,
+    # say, cpath, diag, close_stage, finish. Splicing further would drag in
+    # Phase A's own file reads, which fail on a closure that has no models.py
+    # and would stop the run before it reached the seam under test.
+    reporting_surface = body[: body.index("# ------------------------------"
+                                          "---------------------------------- "
+                                          "Phase A ---")]
+    harness = (
+        reporting_surface
+        + f"spec_src = {CSV!r}\n"
+        + f"transform_src = {CLEAN_CSV_TRANSFORM + 'import anthropic' + chr(10)!r}\n"
+        + _phase_e_source()
+    )
+    script = tmp_path / "_phase_e_real.py"
+    script.write_text(harness, encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, str(script), "--json"],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+    out = proc.stdout + proc.stderr
+    assert "Traceback" not in out, f"the reporting surface itself crashed:\n{out}"
+    assert "KeyError" not in out, f"a reach.* code is unregistered:\n{out}"
+    assert proc.returncode == 1, f"a denied closure must exit 1, got {proc.returncode}:\n{out}"
+    assert "reach.model_sdk_import" in out, (
+        f"the denial must be reported by CODE, not prose alone:\n{out}"
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     import pytest
 

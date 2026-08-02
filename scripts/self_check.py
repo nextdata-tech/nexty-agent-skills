@@ -74,6 +74,13 @@ _codes("error", "agent",
 _codes("info", "agent", "semantic.distribution")
 _codes("warning", "agent", "semantic.uniform_column", "semantic.absent_vocabulary")
 _codes("info", "agent", "meta.stage_not_reached")
+# Phase E, the reach gate. Severities and owners match dp_diagnostics.py and
+# dp-spec-authoritative.md; a code that reports here but is absent from this
+# table raises KeyError inside diag() and takes the whole self-check with it.
+_codes("error", "agent",
+       "reach.model_sdk_import", "reach.undeclared_transport",
+       "reach.connector_shape_mismatch")
+_codes("warning", "agent", "reach.connector_undeclared")
 
 JSON_MODE = "--json" in sys.argv
 RECORD_PATH = None
