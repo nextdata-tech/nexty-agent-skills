@@ -796,6 +796,10 @@ def test_secret_literal_regex_matches_self_check_exactly():
         ('oauth_token = "x"', True),
         ('api_token = "x"', True),
         ('github_token = "ghp_x"', True),
+        # `secret`/`private` are credential words in the _key arm; they belong
+        # in the _token arm too.
+        ('secret_token = "x"', True),
+        ('private_token = "x"', True),
         # ...but `token` is NOT widened wholesale: csrf_token is a request
         # nonce, and failing a closure over it would be wrong.
         ('csrf_token = "abc"', False),

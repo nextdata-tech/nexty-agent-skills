@@ -26,11 +26,11 @@ from pathlib import Path
 #      `csrf-token` would otherwise escape the carve-out `csrf_token` gets.
 # Non-assignments (`password_columns`, `token_fields`, `tokenizer`) match none.
 SECRET_LITERAL = re.compile(
-    r"(?i)(?:(?:^|[^A-Za-z0-9])[A-Za-z0-9_]*(api[_-]?key|password|passwd|secret)"
+    r"(?i)(?:(?:^|[^A-Za-z0-9])[A-Za-z0-9_]*(?:api[_-]?key|password|passwd|secret)"
     r"|(?:^|[^A-Za-z0-9])(?:secret|private|signing|encryption"
     r"|aws[_-]?secret[_-]?access)[_-]key"
     r"|(?:^|[^A-Za-z0-9])(?:access|auth|oauth|refresh|bearer|session|api|jwt|id"
-    r"|github|gitlab|slack)[_-]token"
+    r"|secret|private|github|gitlab|slack)[_-]token"
     r"|(?:^|[^A-Za-z0-9_-])token)\s*=\s*[\"']")
 
 

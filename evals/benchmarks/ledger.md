@@ -839,7 +839,11 @@ This entry exists because `src/nxd-pocket-loop/scripts/validate_dp_spec.py` is
 shipped skill code and its OUTPUT changed — `spec.contract.duplicate_name` moves
 from `path: spec:expectations` to `spec:<section>[<name>].name`, its message no
 longer names a section the document may not contain, and a same-section
-collision emits one finding rather than one per colliding entry. A pocket-loop
+collision emits one finding per distinct rendered path. The finding COUNT also
+moves, in the other direction from what a de-dup implies: the base emitted one
+diagnostic for all duplicate names combined (`found: [a, b]`), so two distinct
+duplicated names now produce two findings rather than one, and a cross-section
+collision two rather than one. A pocket-loop
 agent reads those fields, so the change is not invisible even though no closure
 it generates changes.
 

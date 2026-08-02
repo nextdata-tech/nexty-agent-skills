@@ -579,8 +579,19 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
             # it resolves the entry's identity the same way check_contracts
             # does (`id` first, then `name`), so a hand-built path is one more
             # place the addressing convention can drift.
-            entry = next(e for sec, e in contracts
-                         if sec == section and str(e.get("name") or "") == dupe)
+            colliding = [e for sec, e in contracts
+                         if sec == section and str(e.get("name") or "") == dupe]
+            # De-dupe on the RENDERED PATH, not on (section, name). Entries
+            # carrying distinct `id`s render distinct paths, so collapsing them
+            # would silently drop a real collision site — a UI would highlight
+            # one of two colliding entries and leave the reader to find the
+            # other. Entries with no `id` all render the same path and DO
+            # collapse, which is the byte-identical case the collapse is for.
+            seen_paths = {}
+            for candidate in colliding:
+                seen_paths.setdefault(
+                    f"{spec_path(section, entry_identity(candidate, 0))}.name",
+                    candidate)
             # A cross-section collision is reported at BOTH locations on
             # purpose: a reader in `expectations` has to see it too, and
             # neither side is the one at fault. Each finding names the OTHER
@@ -591,8 +602,7 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
             # cross-section half let a repair pass rename one entry, read both
             # findings as addressed, and still ship two copies in the other
             # section — a wasted round trip.
-            here = sum(1 for sec, e in contracts
-                       if sec == section and str(e.get("name") or "") == dupe)
+            here = len(colliding)
             others = [s for s in sections if s != section]
             clauses = []
             if here > 1:
@@ -600,14 +610,15 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
             if others:
                 clauses.append(f"also appears in {' and '.join(others)}")
             where = f" — it {' and '.join(clauses)}" if clauses else ""
-            report.error(
-                f"duplicate contract name {dupe!r}{where}. The name selects "
-                f"the generated verifier file, so two contracts sharing one "
-                f"name overwrite each other",
-                code="spec.contract.duplicate_name",
-                path=f"{spec_path(section, entry_identity(entry, 0))}.name",
-                evidence={"found": [dupe], "sections": sections},
-            )
+            for site in sorted(seen_paths):
+                report.error(
+                    f"duplicate contract name {dupe!r}{where}. The name selects "
+                    f"the generated verifier file, so two contracts sharing one "
+                    f"name overwrite each other",
+                    code="spec.contract.duplicate_name",
+                    path=site,
+                    evidence={"found": [dupe], "sections": sections},
+                )
 
 
 def check_gates(data, report: Report) -> None:

@@ -534,3 +534,33 @@ def test_within_and_across_section_duplication_reports_both_facts(tmp_path):
     assert "2 times in promises" in promises, promises
     assert "also appears in expectations" in promises, promises
 
+
+def test_entries_with_distinct_ids_each_get_their_own_finding(tmp_path):
+    """De-dup is on the RENDERED PATH, not on (section, name).
+
+    `entry_identity` prefers `id`, so two colliding entries carrying distinct
+    ids render distinct paths. Collapsing them would drop a real collision
+    site — a UI would highlight one of the two and leave the reader to find the
+    other by hand. Entries with no `id` render the same path and still collapse.
+    """
+    import validate_dp_spec
+
+    spec_text = DUPLICATE_PROMISES_SPEC.replace(
+        "- name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    First guarantee.",
+        "- id: c-1\n  name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    First guarantee.",
+    ).replace(
+        "- name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    Second guarantee.",
+        "- id: c-2\n  name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    Second guarantee.",
+    )
+    path = tmp_path / "dp-spec.md"
+    path.write_text(spec_text, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    paths = {d.path for d in report.diagnostics
+             if d.code == "spec.contract.duplicate_name"}
+    assert paths == {"spec:promises[c-1].name", "spec:promises[c-2].name"}, paths
+
