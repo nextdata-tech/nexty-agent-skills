@@ -741,9 +741,6 @@ class ClaudeBackend:
                 if saw_result:
                     break
 
-            # Preserve the ordering invariant for persistent Claude sessions:
-            # inspect each complete raw turn before parsing/rendering it.
-            source_access_audit("".join(lines), source_audit_markers)
             seg_trace, seg_metrics = self._trace_from_stream("".join(lines))
             segments.append((seg_trace, seg_metrics))
             if awaiting_input(seg_metrics.get("final_answer", "")):
