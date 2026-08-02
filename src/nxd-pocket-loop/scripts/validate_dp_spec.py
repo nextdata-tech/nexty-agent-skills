@@ -579,9 +579,20 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
             # neither side is the one at fault. Each finding names the OTHER
             # section so the two are not byte-identical-but-for-the-path —
             # that is the shape the de-dup above exists to avoid.
+            # ADDITIVE, not exclusive: a name can be duplicated within a
+            # section AND collide across sections at once. Reporting only the
+            # cross-section half let a repair pass rename one entry, read both
+            # findings as addressed, and still ship two copies in the other
+            # section — a wasted round trip.
+            here = sum(1 for sec, e in contracts
+                       if sec == section and str(e.get("name") or "") == dupe)
             others = [s for s in sections if s != section]
-            where = (f" — it also appears in {' and '.join(others)}" if others
-                     else f" within {section}")
+            clauses = []
+            if here > 1:
+                clauses.append(f"appears {here} times in {section}")
+            if others:
+                clauses.append(f"also appears in {' and '.join(others)}")
+            where = f" — it {' and '.join(clauses)}" if clauses else ""
             report.error(
                 f"duplicate contract name {dupe!r}{where}. The name selects "
                 f"the generated verifier file, so two contracts sharing one "

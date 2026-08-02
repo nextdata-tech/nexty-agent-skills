@@ -496,3 +496,41 @@ def test_cross_section_duplicate_names_both_sides(tmp_path):
     assert "promises" in by_path["spec:expectations[dup-name].name"]
     assert "expectations" in by_path["spec:promises[dup-name].name"]
 
+
+def test_within_and_across_section_duplication_reports_both_facts(tmp_path):
+    """A name can collide inside a section AND across sections at once.
+
+    Reporting only the cross-section half let a repair pass rename one entry,
+    read both findings as addressed, and still ship two copies in the other
+    section.
+    """
+    import validate_dp_spec
+
+    spec_text = DUPLICATE_PROMISES_SPEC.replace(
+        """## promises
+
+- name: dup-name""",
+        """## expectations
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    Cross-section copy.
+  rule: |
+    e == f
+
+## promises
+
+- name: dup-name""",
+    )
+    path = tmp_path / "dp-spec.md"
+    path.write_text(spec_text, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    by_path = {d.path: d.message for d in report.diagnostics
+               if d.code == "spec.contract.duplicate_name"}
+    promises = by_path["spec:promises[dup-name].name"]
+    assert "2 times in promises" in promises, promises
+    assert "also appears in expectations" in promises, promises
+

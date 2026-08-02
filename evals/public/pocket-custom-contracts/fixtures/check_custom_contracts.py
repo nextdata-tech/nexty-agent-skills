@@ -11,8 +11,15 @@ from pathlib import Path
 # and the missing \b made `csrf_token` match here but not there (this failed,
 # Phase C passed). Either way a closure passes one gate and fails the other,
 # which is worse than either gate alone.
+# The boundary is SPLIT on purpose. `api_key`/`password`/`passwd`/`secret`
+# allow any identifier prefix, because `db_password`, `openai_api_key` and
+# `MY_SECRET` are the idiomatic spellings and a uniform leading \b missed all
+# three. `token` keeps its \b: `csrf_token` is not a credential, and widening
+# it would fail closures over a name that is not a secret. Non-assignments
+# (`password_columns`, `token_fields`, `tokenizer`) match under neither arm.
 SECRET_LITERAL = re.compile(
-    r"(?i)\b(api[_-]?key|password|passwd|token|secret)\s*=\s*[\"']")
+    r"(?i)(?:(?:^|[^A-Za-z0-9])[A-Za-z0-9_]*(api[_-]?key|password|passwd|secret)"
+    r"|\btoken)\s*=\s*[\"']")
 
 
 def calls(node):

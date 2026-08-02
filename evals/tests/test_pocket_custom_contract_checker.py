@@ -781,8 +781,19 @@ def test_secret_literal_regex_matches_self_check_exactly():
         ('passwd = "hunter2"', True),
         ('api_key = "x"', True),
         ('token = "t"', True),
-        ('csrf_token = "abc"', False),      # no word boundary before `token`
-        ('password_columns = [1]', False),  # not a literal assignment
+        # Prefixed spellings are the IDIOMATIC ones and must not escape: a
+        # leading \\b missed every one of these.
+        ('db_password = "x"', True),
+        ('openai_api_key = "sk-live"', True),
+        ('MY_SECRET = "s"', True),
+        ('self.password = "p"', True),
+        # `token` keeps its \\b — csrf_token is a request nonce, not a credential.
+        ('csrf_token = "abc"', False),
+        # Still not matched: the secret word must be what is ASSIGNED, not a
+        # prefix of some other identifier.
+        ('password_columns = [1]', False),
+        ('token_fields = []', False),
+        ('tokenizer = "x"', False),
     ]:
         assert bool(checker.SECRET_LITERAL.search(sample)) is expected, sample
 
