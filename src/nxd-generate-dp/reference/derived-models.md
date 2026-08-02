@@ -376,9 +376,11 @@ portfolio", and capped the candidate. The source said the portfolio exists and
 the URL was not captured; the closure scored it as though the candidate had
 none. That is an extraction gap converted into negative evidence about a person.
 
-Two absence kinds, and they are not interchangeable —
-[context-doc.md](context-doc.md) already names the distinction as
-**required-capture**, this is the scoring-side consequence:
+Two absence kinds, and they are not interchangeable. The upstream half of the
+distinction is **required-capture** — declared in the plan as
+`models[].fields[].required_capture: true` and observed, row by row, in
+`build-record.json` `evidence.required_capture`
+([closure-record.md](closure-record.md)). This is its scoring-side consequence:
 
 | Kind | Source says | Meaning | Recoverable |
 |---|---|---|---|

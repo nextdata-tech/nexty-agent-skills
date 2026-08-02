@@ -1,5 +1,13 @@
 # Adversarial review round: dispatch, and adjudicating what comes back
 
+## Contents
+
+- [When to dispatch](#when-to-dispatch)
+- [Dispatching](#dispatching)
+- [Adjudicate every finding](#adjudicate-every-finding--this-is-the-point)
+- [Relay and authorization](#relay-and-authorization)
+- [Land the adjudication](#land-the-adjudication)
+
 The self-check is structural. It parses `models.py` and `spec.py`, holds the
 naming invariant, dry-runs the transform, and checks the policy boundary. It
 cannot know whether the closure ANSWERS THE REQUEST — `self-check.md` says so
@@ -22,25 +30,49 @@ After the closure is authored and its derived models carry their asserts
 (Step 3b), **before** Step 7. Reviewing before the self-check means a fix does
 not invalidate a green self-check; reviewing after it would force a second run.
 
-Skip the round for a closure with no derived models, no judgement calls, and a
+Do not dispatch for a closure with no derived models, no judgement calls, and a
 single question — there is nothing for it to find and it still costs a full
-round.
+round. That means no `review_rounds[]` entry is created; **`skipped` is not a
+review status**. The only statuses are `complete`, `timed_out`, and
+`needs_user`.
 
 ## Dispatching
 
-Give the reviewer subagent both halves:
+Explicitly dispatch **one built-in read-only subagent**; never add, select, or
+rely on a custom/plugin agent definition. Give it both halves:
 
 1. **The closure path.**
 2. **The original request, verbatim** — every question asked, and any procedure
    supplied. Not your summary of it.
 
+Those are the **only** dispatch inputs. In particular, never pass
+`pocket_helper_dir`: the reviewer is read-only and does not execute the Pocket
+helpers; it inspects their recorded evidence inside the closure.
+
 The second is load-bearing. The defects this round targets are OMISSIONS, so a
 reviewer holding only the artifact will pass a well-formed closure that answers
 the wrong question. Dispatching without the request wastes the round.
 
-Read-only tools. Placeholder credentials only — the same credential boundary as
-the generate subagent. The reviewer never edits, never builds, never runs the
-transform.
+The dispatch instruction says **return claims only**. Read-only tools and
+placeholder credentials only — the same credential boundary as the generate
+subagent. The reviewer never edits, builds, serves, runs the transform, or
+starts a user conversation.
+
+The dispatcher starts a **120000 ms elapsed-time deadline** at dispatch; this
+is never a cap on findings. At the deadline it persists one terminal
+`review_rounds[]` entry with `status: timed_out`, `budget_ms: 120000`, elapsed
+time, and every partial claim received by then — no delayed collection and no
+finding-count cap. Adjudicate and relay those partial claims normally. If the
+client cannot cancel or collect the child at the deadline, still persist that
+`timed_out` entry with what was collected (possibly none), do not build or
+serve, and stop the workflow as `needs_user` until the user explicitly chooses
+whether to continue. Record that choice as `user_decision` with its user-message
+citation and `approved_finding_ids` (an empty list means the user chose to
+continue without approving any returned finding); the review status remains
+truthfully `timed_out`. An empty timeout is not a clean review. Use
+`status: complete` only for a returned, adjudicated round; use
+`status: needs_user` only for a round carrying at least one finding awaiting
+the user's decision.
 
 ## Adjudicate every finding — this is the point
 
@@ -50,10 +82,10 @@ you will damage a good closure to satisfy a fabricated critique; if you ignore
 them all the round is theatre. Neither is acceptable, and the difference between
 them is adjudication.
 
-For each finding, decide and record one of:
+For each finding, first decide and record one of:
 
 - **`accepted`** — you verified it against the closure and the request, and it
-  holds. Fix it.
+  holds. This is an assessment, not permission to fix it.
 - **`rejected`** — you verified it does NOT hold. Cite the evidence that
   refutes it: `file:line`, or the request text. **"I checked and it is fine" is
   not a rejection.** A rejection without a citation is a shrug, and it is
@@ -68,6 +100,18 @@ reviewer did not open. Check the artifact, not the claim about it.
 
 Do not argue with a finding you have not verified, and do not fix one either.
 
+## Relay and authorization
+
+Relay **every** finding to the user before mutation: ID, severity, claim,
+evidence, adjudication/citation, proposed effect, classification and applied
+state. All review findings default to behavior-affecting because this role hunts
+logical and semantic defects; they remain `needs_user` until the user explicitly
+approves their IDs. Rejected and out-of-scope claims are still relayed but change
+nothing. The only automatic exception is a syntax, mechanical, or procedural
+`structural_note` backed by evidence that the spec hash, model/field set, grain,
+row inclusion, values, aggregations, thresholds, verdicts and assertions remain
+unchanged.
+
 ## Bouncing back for a ruling
 
 If you accept a HIGH finding whose fix needs a NEW decision the user has not
@@ -80,13 +124,16 @@ because it looks settled.
 
 ## Land the adjudication
 
-Record the round in `CONTEXT.md`: each finding's `id`, its adjudication, the
-citation for a rejection, and what changed for an acceptance.
+Record the round in `build-record.json` `review_rounds[]`, not `attempts[]`:
+deadline and elapsed time, completeness/status, every original claim,
+adjudication, classification, user decision, proposed effect and applied files.
+Only an explicitly authorized mutation is also recorded as its normal heal
+attempt. This keeps pending, rejected, denied and timed-out findings auditable.
 
 This follows the pack's existing stance that rulings are landed as reviewable
 data rather than buried in prose. It also makes the round auditable — a later
 reader can see what was challenged and why it was kept, and a reviewer of the
 NEXT revision does not re-raise a finding that was already refuted.
 
-A round that returned no findings is recorded too. "Reviewed, nothing found" is
-information; a missing section is ambiguous between clean and skipped.
+A completed round that returned no findings is recorded too. "Reviewed, nothing
+found" is information; a missing or timed-out section is not a clean review.

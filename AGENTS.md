@@ -18,6 +18,14 @@ pack-level invariants CI cannot check on its own.
 - `evals/skill-sets.yaml` — named skill packs used by the eval harness.
 - `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip.
 - `.github/workflows/release.yml` — publishes those zips on a `v*` tag.
+- `experiments/<name>/` — self-contained prototypes. **Not part of the shipped
+  pack**: nothing under `src/` imports them, `build-skills.sh` does not package
+  them, and `validate_skills.py` does not scan them, so the versioning and
+  pack-completeness rules below do not apply to changes confined here. Each
+  carries its own docs — start with
+  `experiments/field-mapper/ARCHITECTURE.md`. An experiment that graduates moves
+  its code under `src/` and its architecture doc to `docs/architecture/`; until
+  then treat `experiments/` as a staging area, never as a dependency.
 
 ## Versioning (single source of truth)
 

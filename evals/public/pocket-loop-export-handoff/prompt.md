@@ -16,7 +16,7 @@ Use this loop:
    `nxd-semantic-data-product`.
 2. Generate a complete runnable local DuckDB + dlt closure with
    `nxd-generate-dp` — `spec.py`, `models.py`, `infra-profile.yaml`,
-   `transform/main.py`, `requirements.txt`, `CONTEXT.md`, and the `data/`
+   `transform/main.py`, `requirements.txt`, and the `data/`
    export. Do not hand-write `deployment-spec.yaml`, `manifest.yaml`, or
    `models.yaml`; the supervisor compiles those from `spec.py` at serve time.
    Land the closure at a durable directory you name and state.

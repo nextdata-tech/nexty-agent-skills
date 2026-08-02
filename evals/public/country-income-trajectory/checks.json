@@ -19,7 +19,7 @@
     },
     {
       "id": "year-subset-selection-disclosed",
-      "check": "The long GDP model spans the full year range the source carries (1960\u20132025). If the closure instead lands a hand-picked subset \u2014 only 2023, only the last five years \u2014 that is a sample-selection ruling and must travel as one: an `nxd_decisions` row or a CONTEXT.md statement naming the cut and why. FAIL an undisclosed subset. A disclosed, reasoned subset passes; a full-range landing passes with nothing to disclose."
+      "check": "The long GDP model spans the full year range the source carries (1960\u20132025). If the closure instead lands a hand-picked subset \u2014 only 2023, only the last five years \u2014 that is a sample-selection ruling and must travel as one: an `nxd_decisions` row or a `dp-spec.approved.md` `decisions:` entry naming the cut and why. FAIL an undisclosed subset. A disclosed, reasoned subset passes; a full-range landing passes with nothing to disclose."
     },
     {
       "id": "trailing-empty-column-not-a-year",
@@ -35,7 +35,7 @@
     },
     {
       "id": "aggregate-exclusion-ruling-landed",
-      "check": "\"An empty Region means this row is a regional/income aggregate, not a country, and must be excluded from totals\" is an inference the file never documents. It is landed as a row in the closure's `nxd_decisions` model with `status=\"proposed\"` and `provenance=\"agent_authored\"` (columns decision_id, status, provenance, ruling, applies_to, detail), the `detail` naming the evidence \u2014 the 47 blank-Region rows and sample names. FAIL if it exists only as a code comment, only in `CONTEXT.md` prose, or in a `DECISIONS.md` (the skill forbids that file). Grade the DISCLOSURE, not the ruling: excluding aggregates is correct, but the source does not state the rule, so it must travel as reviewable data."
+      "check": "\"An empty Region means this row is a regional/income aggregate, not a country, and must be excluded from totals\" is an inference the file never documents. It is landed as a row in the closure's `nxd_decisions` model with `status=\"proposed\"` and `provenance=\"agent_authored\"` (columns decision_id, status, provenance, ruling, applies_to, detail), the `detail` naming the evidence \u2014 the 47 blank-Region rows and sample names. FAIL if it exists only as a code comment, only in `dp-spec.approved.md` prose, or in a `DECISIONS.md` (the skill forbids that file). Grade the DISCLOSURE, not the ruling: excluding aggregates is correct, but the source does not state the rule, so it must travel as reviewable data."
     },
     {
       "id": "reference-data-not-hardcoded",
@@ -43,7 +43,7 @@
     },
     {
       "id": "current-classification-scope-disclosed",
-      "check": "The snapshot carries only the CURRENT income classification, one row per country, so a GDP observation from 1985 is being labelled with that country's present-day group. The closure detects and states this limitation \u2014 in `CONTEXT.md` and/or an `nxd_decisions` row \u2014 so a consumer knows the trajectory is grouped by today's classification, not each year's. FAIL only if no such disclosure exists anywhere in the closure. Do NOT fail the answer's phrasing: the prompt itself asks \"how has total GDP moved over time for each income group\", and echoing that wording is not the defect. Do NOT require an as-of / SCD-2 join: the historical classification series (OGHIST) is not vendored and cannot be built from these two files, so demanding one would be wrong. An agent that invents historical classifications to fill the gap FAILS."
+      "check": "The snapshot carries only the CURRENT income classification, one row per country, so a GDP observation from 1985 is being labelled with that country's present-day group. The closure detects and states this limitation \u2014 in `dp-spec.approved.md` and/or an `nxd_decisions` row \u2014 so a consumer knows the trajectory is grouped by today's classification, not each year's. FAIL only if no such disclosure exists anywhere in the closure. Do NOT fail the answer's phrasing: the prompt itself asks \"how has total GDP moved over time for each income group\", and echoing that wording is not the defect. Do NOT require an as-of / SCD-2 join: the historical classification series (OGHIST) is not vendored and cannot be built from these two files, so demanding one would be wrong. An agent that invents historical classifications to fill the gap FAILS."
     },
     {
       "id": "tier2-measure-reconciliation-with-named-exclusion",
@@ -63,7 +63,7 @@
     },
     {
       "id": "closure-file-set-and-sources-pristine",
-      "check": "The closure is `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `CONTEXT.md`, and a relative `csv-source-path`; FAIL a hand-written `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`. The vendored `data/` tree is ONE CSV export root containing two model directories \u2014 the ordinary single-instance `csv-source` shape \u2014 so do NOT demand the multi-source labeled layout (`csv-source-<label>`, per-label data roots); FAIL only two same-type service entries colliding on one unlabeled name. Both supplied CSVs are landed byte-unchanged \u2014 no preamble stripped on disk, no BOM re-saved away, no aggregate rows deleted from countries.csv, no re-export to a tidier shape; cleanup happens in derived models downstream of pristine sources."
+      "check": "The closure is `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, and a relative `csv-source-path`; FAIL a hand-written `deployment-spec.yaml`, `manifest.yaml`, or `models.yaml`. The vendored `data/` tree is ONE CSV export root containing two model directories \u2014 the ordinary single-instance `csv-source` shape \u2014 so do NOT demand the multi-source labeled layout (`csv-source-<label>`, per-label data roots); FAIL only two same-type service entries colliding on one unlabeled name. Both supplied CSVs are landed byte-unchanged \u2014 no preamble stripped on disk, no BOM re-saved away, no aggregate rows deleted from countries.csv, no re-export to a tidier shape; cleanup happens in derived models downstream of pristine sources."
     },
     {
       "id": "model-naming-invariant",

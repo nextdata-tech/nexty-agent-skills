@@ -67,7 +67,7 @@ re-`describe_models` before mapping again — never map against a remembered cat
 
 ## Bounded-loop caps
 
-The loop is bounded at both levels. Keep BOTH bounded and report
+The loop is bounded at every level. Keep them all bounded and report
 non-convergence rather than looping forever or giving up silently:
 
 - **Query-level remap** (cheapest) — the model is right but the selection was
@@ -79,9 +79,25 @@ non-convergence rather than looping forever or giving up silently:
   query tweak: go back to Step 2/3, have `nxd-generate-dp` materialize the
   ruling, rebuild through MCP with the **same** workflow id. Cap at **~3
   regenerate cycles total**.
+- **Environmental retry** — a failure the closure cannot fix, evidenced by a
+  supervisor-reported error. Cap at **~3 retries**. It consumes neither of the
+  bounds above, which is exactly why it needs one of its own: without it an
+  environment fault could retry forever and never reach the user.
+
+**These caps are counted, not estimated.** Every attempt — generate, regenerate,
+remap, heal, retry — is appended to the closure's `build-record.json`
+`attempts[]` before the re-run, and `caps` in that record carries the bounds
+alongside `regenerates_used`, `remaps_used` and `retries_used`. Read them instead
+of keeping a tally in your head:
+
+```bash
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record query --record <closure>/build-record.json --unresolved
+```
 
 If the loop does not converge within the caps, report what you tried, what the
-product currently declares, and where the gap is.
+product currently declares, and where the gap is. What the user hears about a
+failed attempt — and what they never hear — is in
+[failure-handling.md](failure-handling.md).
 
 ## One data product in flight
 
@@ -101,17 +117,22 @@ primitive and returns the same product.
 Independent, read-only work in the loop MAY be dispatched to parallel subagents
 so their intermediate reads stay out of the main conversation. This is
 **permitted, not required** — a single-source, single-question loop needs none
-of it. Fan out only when the work is genuinely independent:
+of it. These are explicit instructions to dispatch **built-in** subagents; do
+not add, select, or rely on a custom/plugin agent definition. Fan out only when
+the work is genuinely independent:
 
 - **Step 2, multi-source profiling** — when a data product draws on several
   sources, each source's profile (`schema.json`) is independent. Profiling them
   concurrently keeps each source's sample reads out of the main thread. Carry
   every source's label forward on the model it produces, exactly as the
   single-thread path would.
-- **Step 5, multi-question answering** — independent questions that map to
-  their own selections can be answered concurrently against the **already-served**
-  endpoint. Each subagent runs `describe_models` + `run_semantic_query` against
-  the same endpoint/bearer and returns its rows; the main thread presents them.
+- **Step 5, multi-question answering** — dispatch a built-in read-only query
+  subagent for each independent question *only when* the governed
+  `describe_models` and `run_semantic_query` MCP tools are available directly
+  to that child. Do not pass an endpoint or bearer in its prompt, return, or
+  narration. If those tools are not available to the child, the main thread
+  runs the governed queries sequentially and presents the rows; it never falls
+  back to raw SQL, pandas, or shell aggregation.
 
 Two hard boundaries on fan-out:
 
@@ -127,7 +148,9 @@ Two hard boundaries on fan-out:
 
 Profiling (Step 2) and code generation (Step 3) are the loop's heaviest context
 consumers: source sample reads, model inference, and authoring `spec.py` /
-`models.py` / `transform/main.py` / `CONTEXT.md`. None of that touches the
+`models.py` / `transform/main.py` plus the generated record files
+(`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`,
+`README.md`). None of that touches the
 supervisor — it is pure file authoring against a durable closure directory — so
 it MAY run in an isolated subagent whose intermediate reads never enter the main
 conversation. The main thread keeps the things it alone can do: the **policy
@@ -145,17 +168,18 @@ closure, or a long codegen.
 as one unit.** A gap discovered after generation would otherwise re-run the
 expensive profiling on every bounce:
 
-1. **Profile subagent (Step 2, read-only).** Runs `nxd-semantic-data-product`
-   inference: profiles each source into `schema.json`, derives the semantic
-   model, and — crucially — surfaces any way the source data makes the user's
-   supplied procedure ambiguous or under-determined. It returns the inferred
-   model, the per-source schemas (each with its label), and a `gap_found` field
-   naming any policy gap the profile exposed. It writes no closure and asks the
-   user nothing. A **file** source (CSV/JSON/JSONL/Parquet) profiles freely here;
-   a **live database/API** source is profiled on the main thread or from the
-   user's description only (table/endpoint list, sample shape) — never fan out a
-   profile that would need a live credential to connect (same credential boundary
-   as generation, below).
+1. **Profile subagent (Step 2, read-only).** Dispatch a built-in read-only
+   subagent for a **file** source (CSV/JSON/JSONL/Parquet), giving it only the
+   source path and the `nxd-semantic-data-product` inference instructions. It
+   profiles each source into `schema.json`, derives the semantic model, and —
+   crucially — surfaces any way the source data makes the user's supplied
+   procedure ambiguous or under-determined. It returns the inferred model, the
+   per-source schemas (each with its label), and a `gap_found` field naming any
+   policy gap the profile exposed. It writes no closure, does not transform the
+   source, and asks the user nothing. A live database/API source is profiled on
+   the main thread or from the user's description only (table/endpoint list,
+   sample shape) — never fan out a profile that would need a live credential to
+   connect (same credential boundary as generation, below).
 2. **Main thread: the policy read-back.** With the profile in hand, run the
    Step 1a read-back for any result-changing gap — including one the profile
    surfaced — and wait for the user's approval. This user turn is the
@@ -168,6 +192,8 @@ expensive profiling on every bounce:
    approved element ambiguous or conditional — it stops and returns `gap_found`
    rather than guessing; the main thread does a fresh read-back and re-dispatches
    **generation only**, against the **same** workflow id and closure directory.
+   It also receives `pocket_helper_dir`, the main thread's resolved absolute
+   Pocket helper directory; it does not rediscover that path.
 
 Scope each subagent's context to the work at hand: the dispatch names the
 connector type(s) in play so the generate subagent loads only the matching
@@ -200,14 +226,20 @@ would re-inflate the context this split exists to save). Its return is
 
 **The main thread verifies before it builds.** Never pass a subagent-returned
 path to `build_data_product` unverified: confirm the path resolves on the
-supervisor's **host** surface and that `spec.py`, `models.py`,
-`infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `CONTEXT.md`, the
-connector companion artifact (a file source's `data/` export, or the db/API
-mapping file) — and, for a credentialed source, `SENSITIVE` and `.gitignore` —
-all exist under it. `infra-profile.yaml` matters most: it is the file host-side
-credential injection writes into, so a closure missing it passes a naive check
-and then fails the build. A path that does not resolve host-side, or is missing a
-required file, is a handoff failure, not a build input.
+supervisor's **host** surface and that
+`spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
+`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
+`build-record.json`, `README.md`, the connector companion artifact — and,
+for a credentialed source, `SENSITIVE` and `.gitignore`
+— all exist under it. The connector companion artifact is a file source's `data/`
+export, or the db/API mapping file. `infra-profile.yaml` matters most: it is the
+file host-side credential injection writes into, so a closure missing it passes a
+naive check and then fails the build. The three generated record files matter
+next: `dp-spec.approved.md` is the byte copy of the approved plan the closure was
+compiled from, `dp-spec.lock.json` carries its hash, and `build-record.json`
+carries what happened — without them nothing downstream can tell whether the
+closure still matches the plan. A path that does not resolve host-side, or is
+missing a required file, is a handoff failure, not a build input.
 
 **Credential boundary — a live credential never enters a subagent.** For a
 database or REST API source the closure carries a real credential in

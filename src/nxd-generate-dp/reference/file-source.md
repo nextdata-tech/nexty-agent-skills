@@ -23,6 +23,26 @@ the file-source root, `data/<model>/*.<ext>`. **One format per model
 subdirectory** — if a directory mixes formats or has none, stop and surface
 it; do not guess which format the model intends.
 
+### The two normal export shapes (all file connectors, CSV included)
+
+A supplied export arrives in one of two shapes, and both are NORMAL:
+
+- **One subdirectory per model** — `<root>/<model>/*.<ext>` lands at
+  `data/<model>/`, the model named by the directory.
+- **Flat files at the export root** — one base model per file, named from the
+  **snake_cased filename** (`Card Txns 2024.csv` → `card_txns_2024`), landed at
+  `data/<model>/<file>.<ext>` as an **EXACT BYTE COPY**.
+
+Read the headers either way, and never merge files, rename a header, add a
+column, or reshape a row while landing.
+
+**Stop and surface it** — do not guess — only for a genuinely ambiguous shape:
+
+- nesting more than one level deep,
+- a directory mixing formats,
+- two files whose names snake_case to the **same** model name (including a
+  collision with the reserved `nxd_decisions`).
+
 ## The JSON-vs-JSONL distinction
 
 These are different shapes and need different handling:

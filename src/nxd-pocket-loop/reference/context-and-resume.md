@@ -3,6 +3,7 @@
 ## Contents
 
 - [What persists, what dies](#what-persists-what-dies)
+- [Is the closure still the plan? — the mechanical check](#is-the-closure-still-the-plan--the-mechanical-check)
 - [Reattach playbook — resume first](#reattach-playbook--resume-first)
 - [When resume is not possible — rebuild fallback](#when-resume-is-not-possible--rebuild-fallback)
 - [Credential recovery for SENSITIVE closures](#credential-recovery-for-sensitive-closures)
@@ -20,16 +21,22 @@ Draw the line clearly, because the recovery path depends on it:
 
 **Durable (survives the session):**
 
-- The **closure directory** at `…/nxd-pocket/<workflow>/` on the file-writing
-  surface — the source copy, `spec.py`, `models.py`, `transform/`, and
-  `CONTEXT.md`. This is the one key a later session always has.
+- The **closure directory** at `…/nxd-pocket/<workflow>/closure/` on the file-writing
+  surface — the source copy, `spec.py`, `models.py`, `transform/`, and the four
+  generated record files: `dp-spec.approved.md`, `dp-spec.lock.json`,
+  `build-record.json` and `README.md`. This is the one key a later session always
+  has.
+- The **live `dp-spec.md`**, *beside* the closure at
+  `…/nxd-pocket/<workflow>/dp-spec.md` — the hand-edited plan, with its drafting
+  history, rejected options and open questions. It is upstream of the closure,
+  not a file inside it.
 - The supervisor's **published catalog** — every workflow ever built and
   published on this machine, queryable without booting anything via
   `list_data_products`.
-- **`CONTEXT.md`** and **`nxd_decisions`** inside the closure — the prose record
-  and the machine-queryable ruling ledger. The ledger classifies every ruling on
-  two axes, `status` (settled?) and `provenance` (authored by whom?), so a
-  resuming session can query which rulings a *previous* session authored instead
+- The **approved spec snapshot** and **`nxd_decisions`** inside the closure — the
+  frozen plan and the machine-queryable ruling ledger. The ledger classifies every
+  ruling on two axes, `status` (settled?) and `provenance` (authored by whom?), so
+  a resuming session can query which rulings a *previous* session authored instead
   of inheriting them as though the user had supplied them.
 
 **Ephemeral (dies with the session):**
@@ -38,6 +45,50 @@ Draw the line clearly, because the recovery path depends on it:
   session, kept only in memory, and never persisted. A remembered endpoint
   without a live token is worthless, and no tool re-mints a token for a token you
   already hold — you re-acquire the pair by resuming.
+
+## Is the closure still the plan? — the mechanical check
+
+A later session does **not** read prose to work out where things stand. The
+closure carries its own answer, and the check is two commands.
+
+| file at the closure root | what it is |
+|---|---|
+| `dp-spec.approved.md` | a byte copy of the approved `dp-spec.md` this closure was compiled from |
+| `dp-spec.lock.json` | that copy's canonical hash, the compiler version, the resolved prompt refs |
+| `build-record.json` | what happened: stages, attempts, concessions, blockers, the read-back |
+
+```bash
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec <workflow>/dp-spec.md
+python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" materialized --record <closure>/build-record.json \
+    --lock <closure>/dp-spec.lock.json --spec <workflow>/dp-spec.md
+```
+
+`lock verify` answers *"is this closure's snapshot intact, and does the live
+`dp-spec.md` still hash to it?"* `materialized` answers *"was the approved plan
+compiled, run and published, with nothing still open?"* — and when the answer is
+no, it names **which** no. That name is the next move:
+
+| result | what it means | do |
+|---|---|---|
+| `materialized: true` | the approved plan compiled, ran and published | **resume** — reattach below; there is nothing to rebuild |
+| `needs_user` | a blocker is still open in the record | **ask** the one smallest question, then regenerate |
+| `plan_moved` | the live `dp-spec.md` no longer hashes to the lock | **regenerate** — this closure was built from an older plan |
+| `code_wrong` | the plan matches and an offline check failed | **heal the code** — an offline failure is never environmental |
+| `unsettled` | the plan matches, a later stage failed, no supervisor-reported evidence | **treat it as `code_wrong`** — fail closed |
+| `environment_suspect` | every failing diagnostic is a supervisor-reported environment fault | **retry** — the closure is not known-bad |
+| `undisclosed_concession` | otherwise green, but something the user was never told | **tell them**, then re-evaluate |
+| `awaiting_answer` | green build, wrong answer | **refine** (Step 6) |
+| `in_progress` | a required stage was never reached | **continue** where it stopped |
+
+Two rules hang off this table. **`plan_moved` is a regenerate, never a heal** —
+the closure is not broken, it is stale, and editing generated code to match a
+moved plan is the one thing a compiler must never do. And **none of these names
+are said out loud**: the user hears "I'm reattaching to it", "the plan changed
+since I built this, so I'm rebuilding it", or "I need one thing from you"
+([failure-handling.md](failure-handling.md)).
+
+`materialized` also never means *correct*. It means the approved plan compiled,
+ran and published — nothing about whether the numbers are right.
 
 ## Reattach playbook — resume first
 
@@ -135,6 +186,10 @@ durable catalog cannot reconstruct:
   detect a changed model), and
 - open remap / regenerate TODOs, one row each, never blocking — mirror the
   append-a-TODO discipline in `state-and-resume.md`.
+
+Do not restate attempts, caps, concessions or blockers here: `build-record.json`
+already carries them, mechanically and per attempt, and a second hand-written
+copy is exactly the drift this design removed.
 
 Never write the bearer token to this or any file. It is a tool parameter only.
 
