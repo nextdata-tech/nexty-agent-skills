@@ -32,7 +32,7 @@
     },
     {
       "id": "auth-dispatch-builds-structured-auth-dict",
-      "check": "transform/main.py assembles dlt's structured client.auth dict ({'type': 'bearer', 'token': ...}) from the flat secrets['api_source'] fields at runtime, the same way the skill's auth_type dispatch is documented -- never passing the flat auth_token straight through as an opaque auth value, and never hardcoding 'bearer' as the only path with no auth_type branch at all if the skill's general dispatch shape was meant to be followed."
+      "check": "transform/main.py assembles dlt's structured client.auth dict ({'type': 'bearer', 'token': ...}) from the flat secrets['api_source'] fields at runtime, DISPATCHING on auth_type rather than hardcoding one scheme -- never passing the flat auth_token straight through as an opaque auth value, and never writing only the branch this profile happens to need with no auth_type read at all. An auth_type the transform cannot serve must raise at transform time. Supporting a SUBSET of schemes is fine; not reading the field is not. This is a property of the LANDED SOURCE and is enforced by the authoritative DETERMINISTIC CHECK fact (secret:auth-dispatched-on-auth-type); grade FROM THAT FACT rather than from whether the agent echoed the transform."
     },
     {
       "id": "data-selector-or-envelope-handled",

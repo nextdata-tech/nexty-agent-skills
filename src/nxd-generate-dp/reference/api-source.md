@@ -171,6 +171,16 @@ elif auth_type == "oauth2_client_credentials":
         "client_id": api_secrets["auth_client_id"],
         "client_secret": api_secrets["auth_client_secret"],
     }
+elif auth_type is not None:
+    # Do NOT drop this branch, and do not collapse the dispatch to whichever
+    # single scheme today's profile uses. An unhandled auth_type means the
+    # closure cannot authenticate; raising here says so at transform time
+    # instead of sending a wrong-scheme request and reading the 401 as a
+    # credential problem.
+    raise ValueError(
+        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"add a branch above, or fix the infra-profile attribute"
+    )
 
 config: RESTAPIConfig = {
     "client": client_config,
@@ -204,6 +214,29 @@ dispatch assembles dlt's structured `auth` dict from the flat secret
 fields, the same way `_build_connection_string` in `database-source.md`
 assembles a connection string from flat `db_source` fields — never pass a
 flat secret value straight through as `auth`.
+
+**Keep the dispatch, and end it with an explicit `else: raise`.** Writing only
+the branch this closure happens to need — `client_config["auth"] = {"type":
+"bearer", ...}` with no `auth_type` read at all — is the natural shortcut, and
+it is wrong for a reason that is invisible on the day it is written: the profile
+still carries `auth_type` as an attribute, so the closure claims to be
+configured by it while ignoring it. Change the profile to `http_basic` and the
+transform keeps sending a bearer header built from a field that is now absent —
+a `KeyError` if you are lucky, and a silent 401 loop against the wrong scheme if
+you are not. The credential is the one input a closure cannot re-derive, so the
+branch that reads it must fail loudly on a value it does not handle:
+
+```python
+else:
+    raise ValueError(
+        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"add a branch above, or fix the infra-profile attribute"
+    )
+```
+
+An `auth_type` the transform does not handle is a closure that cannot
+authenticate. Discovering that as a raise at transform time beats discovering it
+as an HTTP 401 whose body is someone else's error page.
 `_load_api_source_endpoints` is **not** a dlt or stdlib function — the author
 must write it, parsing the `api-source-endpoints` companion file's
 `<model>=<endpoint path>` lines into a dict. A transform that calls it

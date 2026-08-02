@@ -131,6 +131,57 @@ def sensitivity_artifacts_present(root: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def auth_is_dispatched_on_auth_type(transform_src: str) -> tuple[bool, str]:
+    """The transform must READ auth_type and branch on it, not hardcode one scheme.
+
+    The natural shortcut is to write only the branch today's profile needs —
+    ``client_config["auth"] = {"type": "bearer", ...}`` with no ``auth_type``
+    read at all. It works, which is why nothing catches it: the profile still
+    carries ``auth_type`` as an attribute, so the closure claims to be
+    configured by a field it ignores. Flip the profile to ``http_basic`` and the
+    transform keeps sending a bearer header built from a now-absent field.
+
+    Graded here rather than by the judge because it is a property of the landed
+    source, and a judge reading a transcript can only see it if the agent
+    happened to echo the file.
+
+    Deliberately structural, not a string match on ``"bearer"``: a closure may
+    legitimately support one scheme, so long as it DISPATCHES — reads the field,
+    and rejects a value it cannot serve. Hardcoding is the finding; supporting a
+    subset is not.
+    """
+    reads = bool(re.search(r"""\[["']auth_type["']\]|\.get\(\s*["']auth_type["']""",
+                           transform_src))
+    if not reads:
+        return False, ('transform never reads secrets["api_source"]["auth_type"] — '
+                       "the auth dict is hardcoded to one scheme while the profile "
+                       "carries auth_type as a configurable attribute")
+    branches = bool(re.search(r"\bif\b[^\n]*auth_type|\belif\b[^\n]*auth_type",
+                              transform_src))
+    if not branches:
+        return False, ("auth_type is read but never branched on — the value is "
+                       "fetched and ignored, which is the hardcoded case wearing "
+                       "a read")
+    # An unhandled auth_type must fail loudly. Without this the closure silently
+    # sends no auth (or the wrong scheme) and the 401 reads as a bad credential.
+    #
+    # Scoped to the dispatch's own region, not the whole file: every transform
+    # this pack generates carries a read-back assert near the end, so a
+    # file-wide `raise|assert` search passes on that alone and this branch would
+    # never fire. Take the source from the first auth_type mention to the config
+    # assembly that consumes it.
+    start = re.search(r"""auth_type""", transform_src)
+    end = re.search(r"""RESTAPIConfig|["']resources["']\s*:""", transform_src)
+    region = transform_src[start.start():end.start()] if start and end and end.start() > start.start() \
+        else transform_src[start.start():start.start() + 2000] if start else ""
+    rejects = bool(re.search(r"\b(raise|assert)\b", region))
+    if not rejects:
+        return False, ("auth_type is dispatched but no branch rejects an "
+                       "unsupported value — an auth_type the transform cannot "
+                       "serve should raise at transform time, not surface as a 401")
+    return True, ""
+
+
 def uses_rest_api_resources(transform_src: str) -> tuple[bool, str]:
     """The transform must go through dlt's REST connector, not a hand-rolled
     requests/urllib loop fed to dlt as a plain generator."""
@@ -315,6 +366,9 @@ def main() -> int:
     check("secret:sensitivity-artifacts-present", ok, detail)
 
     # ---- ingestion mechanism ------------------------------------------------
+    ok, detail = auth_is_dispatched_on_auth_type(transform_src)
+    check("secret:auth-dispatched-on-auth-type", ok, detail)
+
     ok, detail = uses_rest_api_resources(transform_src)
     check("ingestion:rest-api-resources-used", ok, detail)
 
