@@ -436,4 +436,13 @@ def test_duplicate_contract_name_is_addressed_to_its_own_section(tmp_path):
     for d in dupes:
         assert d.path.startswith("spec:promises["), d.path
         assert "expectations" not in d.path, d.path
+        # The message must not name a section the document does not contain.
+        assert "across expectations and promises" not in d.message, d.message
+        assert d.evidence.get("found") == ["dup-name"], d.evidence
+
+    # ONE finding per section the name appears in — not one per colliding entry.
+    # Emitting a diagnostic per entry makes report.counts() report N errors for
+    # one problem, all byte-identical because the path is keyed on
+    # (section, name).
+    assert len(dupes) == 1, [d.path for d in dupes]
 

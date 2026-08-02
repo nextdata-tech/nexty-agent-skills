@@ -567,16 +567,22 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
     names = [str(c["name"]) for _, c in contracts if c.get("name")]
     dupes = sorted({n for n in names if names.count(n) > 1})
     for dupe in dupes:
-        for section, entry in contracts:
-            if str(entry.get("name") or "") != dupe:
-                continue
+        # One finding per SECTION the name appears in, not per entry: the path
+        # is keyed on (section, name), so a three-way collision inside one
+        # section would otherwise emit three byte-identical diagnostics and
+        # count three errors for one problem.
+        sections = sorted({sec for sec, entry in contracts
+                           if str(entry.get("name") or "") == dupe})
+        where = (" across expectations and promises" if len(sections) > 1
+                 else f" within {sections[0]}" if sections else "")
+        for section in sections:
             report.error(
-                f"duplicate contract name {dupe!r} across expectations and "
-                f"promises — the name selects the generated verifier file, so "
-                f"two contracts sharing one name overwrite each other",
+                f"duplicate contract name {dupe!r}{where} — the name selects "
+                f"the generated verifier file, so two contracts sharing one "
+                f"name overwrite each other",
                 code="spec.contract.duplicate_name",
                 path=f"{spec_path(section, dupe)}.name",
-                evidence={"found": dupes},
+                evidence={"found": [dupe]},
             )
 
 
