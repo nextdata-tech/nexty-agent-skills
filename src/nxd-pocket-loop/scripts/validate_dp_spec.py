@@ -550,7 +550,8 @@ def check_contracts(section: str, data, models: list[dict], report: Report) -> l
     return entries
 
 
-def check_contract_names_unique(contracts: list[dict], report: Report) -> None:
+def check_contract_names_unique(contracts: list[tuple[str, dict]],
+                                report: Report) -> None:
     """One namespace across both contract sections.
 
     Deliberately not folded into `check_contracts`: a name collision between an
@@ -558,18 +559,66 @@ def check_contract_names_unique(contracts: list[dict], report: Report) -> None:
     a time, and it is the collision that matters most — both sections generate
     into `contracts/`, so two contracts sharing a name race for one filename and
     the second silently overwrites the first.
+
+    Takes (section, entry) pairs so each finding is FIELD-ADDRESSED to where the
+    collision actually is. Reporting every duplicate at `spec:expectations`
+    pointed a harness at a section a promises-only spec does not even have.
     """
-    names = [str(c["name"]) for c in contracts if c.get("name")]
-    dupes = {n for n in names if names.count(n) > 1}
-    if dupes:
-        report.error(
-            f"duplicate contract names across expectations and promises: "
-            f"{sorted(dupes)} — the name selects the generated verifier file, so "
-            f"two contracts sharing one name overwrite each other",
-            code="spec.contract.duplicate_name",
-            path=spec_path("expectations"),
-            evidence={"found": sorted(dupes)},
-        )
+    names = [str(c["name"]) for _, c in contracts if c.get("name")]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    for dupe in dupes:
+        # One finding per (section, name) PAIR, not per entry: a three-way
+        # collision inside one section would otherwise emit three
+        # byte-identical diagnostics and count three errors for one problem.
+        # (The rendered path goes through entry_identity, which prefers a
+        # per-entry `id` when one is present.)
+        sections = sorted({sec for sec, entry in contracts
+                           if str(entry.get("name") or "") == dupe})
+        for section in sections:
+            # Identity via entry_identity, like every other contract finding:
+            # it resolves the entry's identity the same way check_contracts
+            # does (`id` first, then `name`), so a hand-built path is one more
+            # place the addressing convention can drift.
+            colliding = [e for sec, e in contracts
+                         if sec == section and str(e.get("name") or "") == dupe]
+            # De-dupe on the RENDERED PATH, not on (section, name). Entries
+            # carrying distinct `id`s render distinct paths, so collapsing them
+            # would silently drop a real collision site — a UI would highlight
+            # one of two colliding entries and leave the reader to find the
+            # other. Entries with no `id` all render the same path and DO
+            # collapse, which is the byte-identical case the collapse is for.
+            seen_paths = {}
+            for candidate in colliding:
+                seen_paths.setdefault(
+                    f"{spec_path(section, entry_identity(candidate, 0))}.name",
+                    candidate)
+            # A cross-section collision is reported at BOTH locations on
+            # purpose: a reader in `expectations` has to see it too, and
+            # neither side is the one at fault. Each finding names the OTHER
+            # section so the two are not byte-identical-but-for-the-path —
+            # that is the shape the de-dup above exists to avoid.
+            # ADDITIVE, not exclusive: a name can be duplicated within a
+            # section AND collide across sections at once. Reporting only the
+            # cross-section half let a repair pass rename one entry, read both
+            # findings as addressed, and still ship two copies in the other
+            # section — a wasted round trip.
+            here = len(colliding)
+            others = [s for s in sections if s != section]
+            clauses = []
+            if here > 1:
+                clauses.append(f"appears {here} times in {section}")
+            if others:
+                clauses.append(f"also appears in {' and '.join(others)}")
+            where = f" — it {' and '.join(clauses)}" if clauses else ""
+            for site in sorted(seen_paths):
+                report.error(
+                    f"duplicate contract name {dupe!r}{where}. The name selects "
+                    f"the generated verifier file, so two contracts sharing one "
+                    f"name overwrite each other",
+                    code="spec.contract.duplicate_name",
+                    path=site,
+                    evidence={"found": [dupe], "sections": sections},
+                )
 
 
 def check_gates(data, report: Report) -> None:
@@ -1243,12 +1292,15 @@ def validate(path: Path) -> Report:
 
     models = check_models(parsed.get("models"), report) if "models" in parsed else []
 
-    contracts: list[dict] = []
+    contracts: list[tuple[str, dict]] = []
     for contract_section in ("expectations", "promises"):
         if contract_section in parsed:
-            contracts += check_contracts(
-                contract_section, parsed[contract_section], models, report
-            )
+            contracts += [
+                (contract_section, entry)
+                for entry in check_contracts(
+                    contract_section, parsed[contract_section], models, report
+                )
+            ]
     check_contract_names_unique(contracts, report)
 
     if "gates" in parsed:

@@ -976,8 +976,27 @@ if profile.exists():
 # wired once, names a verifier that exists under contracts/, and that verifier
 # is shaped to run. It does NOT mean the verifier was executed against data.
 CONTRACT_DIRS = {"expectations": "pre_transform", "promises": "post_transform"}
+# Three arms, each bounded at an identifier boundary.
+#   1. the credential word as a SUFFIX, with any prefix — `db_password`,
+#      `openai_api_key`, `MY_SECRET`. A uniform leading \b missed all three.
+#   2. the credential word as a PREFIX of `_key` — `SECRET_KEY`, `private_key`,
+#      `aws_secret_access_key`. Arm 1 only sees suffixes, so these escaped it,
+#      and `SECRET_KEY = "..."` is about as idiomatic as a Python secret gets.
+#      Deliberately NOT bare `*_key`: `sort_key`, `primary_key` and `cache_key`
+#      are not credentials.
+#   3. `token`, narrowest of the three: bare, or behind a prefix that denotes a
+#      credential. Each prefix is bounded — unbounded, `id` let `valid_token`,
+#      `uuid_token` and `grid_token` in. The bare arm excludes `-` as well as
+#      word characters, because \b treats a hyphen as a boundary and
+#      `csrf-token` would otherwise escape the carve-out `csrf_token` gets.
+# Non-assignments (`password_columns`, `token_fields`, `tokenizer`) match none.
 SECRET_LITERAL = re.compile(
-    r"(?i)\b(api[_-]?key|password|passwd|token|secret)\s*=\s*[\"']")
+    r"(?i)(?:(?:^|[^A-Za-z0-9])[A-Za-z0-9_]*(?:api[_-]?key|password|passwd|secret)"
+    r"|(?:^|[^A-Za-z0-9])(?:secret|private|signing|encryption"
+    r"|aws[_-]?secret[_-]?access)[_-]key"
+    r"|(?:^|[^A-Za-z0-9])(?:access|auth|oauth|refresh|bearer|session|api|jwt|id"
+    r"|secret|private|github|gitlab|slack)[_-]token"
+    r"|(?:^|[^A-Za-z0-9_-])token)\s*=\s*[\"']")
 
 
 def _verify_scripts(tree):

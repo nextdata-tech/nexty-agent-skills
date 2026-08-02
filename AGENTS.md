@@ -74,6 +74,16 @@ When a PR changes a skill's behavior (not pure packaging/typo fixes), benchmark
 it and commit the evidence: run the relevant eval scenario(s) before and after
 (`evals/run.py --report ...`), then record the comparison with
 `evals/benchmark_record.py`, which appends to `evals/benchmarks/ledger.md`.
+
+**When no scenario can distinguish the change**, still add a ledger entry, but
+hand-author it with an empty table row and say plainly why there is no arm — a
+diagnostic's `path` or message moving, for instance, changes shipped output no
+public scenario exercises. Manufacturing a scenario to produce a number for
+such a change makes the ledger less trustworthy, not more: its value is that a
+reader can assume every figure in it means something. Name the tests carrying
+the evidence instead, and prefer tests verified to fail against the previous
+implementation.
+
 The ledger is the repo's before/after history of skill quality and efficiency
 (judge checks, turns, tool calls, tokens) — see "Benchmarking a skill change"
 in `evals/README.md`.

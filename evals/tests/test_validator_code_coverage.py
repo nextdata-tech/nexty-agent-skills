@@ -354,3 +354,213 @@ def test_missing_pyyaml_exits_two_without_a_spec_diagnostic(tmp_path, monkeypatc
     with pytest.raises(dp_diagnostics.DependencyError) as exc:
         validate_dp_spec.validate(path)
     assert exc.value.code == "environment.dependency_missing"
+
+DUPLICATE_PROMISES_SPEC = """---
+dp_spec_version: 1
+name: orders
+workflow: orders
+status: draft
+---
+
+## intent
+
+Track orders.
+
+## questions
+
+- q1: How do totals reconcile?
+
+## sources
+
+- label: orders
+  type: csv
+  location: data/orders
+  scope: |
+    All rows.
+
+## population
+
+population: |
+  All orders.
+sample_rule: null
+excludes: |
+  Nothing.
+
+## models
+
+- name: orders
+  kind: base
+  grain: |
+    One row per order line.
+  key: [line_id]
+  answers: [q1]
+  description: |
+    Order lines.
+
+## promises
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    First guarantee.
+  rule: |
+    a == b
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    Second guarantee.
+  rule: |
+    c == d
+"""
+
+
+def test_duplicate_contract_name_is_addressed_to_its_own_section(tmp_path):
+    """A promises-only collision must not be reported at `spec:expectations`.
+
+    The duplicate check spans both sections deliberately — a cross-section
+    collision is invisible to a per-section checker — but the finding still has
+    to name where the collision IS. Addressing every duplicate to
+    `spec:expectations` pointed a harness at a section this spec does not have.
+    """
+    import validate_dp_spec
+
+    path = tmp_path / "dp-spec.md"
+    path.write_text(DUPLICATE_PROMISES_SPEC, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    dupes = [d for d in report.diagnostics
+             if d.code == "spec.contract.duplicate_name"]
+    assert dupes, "the duplicate name was not reported at all"
+    for d in dupes:
+        assert d.path.startswith("spec:promises["), d.path
+        assert "expectations" not in d.path, d.path
+        # The message must not name a section the document does not contain.
+        assert "across expectations and promises" not in d.message, d.message
+        assert d.evidence.get("found") == ["dup-name"], d.evidence
+
+    # ONE finding per section the name appears in — not one per colliding entry.
+    # Emitting a diagnostic per entry makes report.counts() report N errors for
+    # one problem, all byte-identical because the path is keyed on
+    # (section, name).
+    assert len(dupes) == 1, [d.path for d in dupes]
+
+
+def test_cross_section_duplicate_names_both_sides(tmp_path):
+    """Both locations are reported, and neither message is a copy of the other.
+
+    A collision spanning both sections has no at-fault side — a reader in
+    `expectations` must see it too — so two findings is correct. They must not
+    be byte-identical-but-for-the-path though: each names the OTHER section, so
+    a harness rendering either one is actionable on its own.
+    """
+    import validate_dp_spec
+
+    spec_text = DUPLICATE_PROMISES_SPEC.replace(
+        """## promises
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    First guarantee.
+  rule: |
+    a == b
+""",
+        """## expectations
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    First guarantee.
+  rule: |
+    a == b
+
+## promises
+""",
+    )
+    path = tmp_path / "dp-spec.md"
+    path.write_text(spec_text, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    dupes = [d for d in report.diagnostics
+             if d.code == "spec.contract.duplicate_name"]
+    assert {d.path for d in dupes} == {
+        "spec:expectations[dup-name].name",
+        "spec:promises[dup-name].name",
+    }, [d.path for d in dupes]
+    assert len({d.message for d in dupes}) == 2, "the two findings are identical"
+    by_path = {d.path: d.message for d in dupes}
+    assert "promises" in by_path["spec:expectations[dup-name].name"]
+    assert "expectations" in by_path["spec:promises[dup-name].name"]
+
+
+def test_within_and_across_section_duplication_reports_both_facts(tmp_path):
+    """A name can collide inside a section AND across sections at once.
+
+    Reporting only the cross-section half let a repair pass rename one entry,
+    read both findings as addressed, and still ship two copies in the other
+    section.
+    """
+    import validate_dp_spec
+
+    spec_text = DUPLICATE_PROMISES_SPEC.replace(
+        """## promises
+
+- name: dup-name""",
+        """## expectations
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    Cross-section copy.
+  rule: |
+    e == f
+
+## promises
+
+- name: dup-name""",
+    )
+    path = tmp_path / "dp-spec.md"
+    path.write_text(spec_text, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    by_path = {d.path: d.message for d in report.diagnostics
+               if d.code == "spec.contract.duplicate_name"}
+    promises = by_path["spec:promises[dup-name].name"]
+    assert "2 times in promises" in promises, promises
+    assert "also appears in expectations" in promises, promises
+
+
+def test_entries_with_distinct_ids_each_get_their_own_finding(tmp_path):
+    """De-dup is on the RENDERED PATH, not on (section, name).
+
+    `entry_identity` prefers `id`, so two colliding entries carrying distinct
+    ids render distinct paths. Collapsing them would drop a real collision
+    site — a UI would highlight one of the two and leave the reader to find the
+    other by hand. Entries with no `id` render the same path and still collapse.
+    """
+    import validate_dp_spec
+
+    spec_text = DUPLICATE_PROMISES_SPEC.replace(
+        "- name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    First guarantee.",
+        "- id: c-1\n  name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    First guarantee.",
+    ).replace(
+        "- name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    Second guarantee.",
+        "- id: c-2\n  name: dup-name\n  authority: user_stated\n  model: orders\n"
+        "  guarantee: |\n    Second guarantee.",
+    )
+    path = tmp_path / "dp-spec.md"
+    path.write_text(spec_text, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    paths = {d.path for d in report.diagnostics
+             if d.code == "spec.contract.duplicate_name"}
+    assert paths == {"spec:promises[c-1].name", "spec:promises[c-2].name"}, paths
+

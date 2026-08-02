@@ -827,3 +827,37 @@ The before-arm failures are exactly what this change adds, not incidental noise 
 Efficiency is not compared: the before arm never produces a working closure, so its token and tool counts measure failing early, not doing the work more cheaply.
 
 Record: [`records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json`](records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json)
+
+## 2026-08-02 — validate_dp_spec: duplicate-contract diagnostics field-addressed (plugin v0.30.1)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+Notes: **No eval arm, deliberately, and no behaviour claim is made from one.**
+This entry exists because `src/nxd-pocket-loop/scripts/validate_dp_spec.py` is
+shipped skill code and its OUTPUT changed — `spec.contract.duplicate_name` moves
+from `path: spec:expectations` to `spec:<section>[<name>].name`, its message no
+longer names a section the document may not contain, and a same-section
+collision emits one finding per distinct rendered path. The finding COUNT also
+moves, in the other direction from what a de-dup implies: the base emitted one
+diagnostic for all duplicate names combined (`found: [a, b]`), so two distinct
+duplicated names now produce two findings rather than one, and a cross-section
+collision two rather than one. A pocket-loop
+agent reads those fields, so the change is not invisible even though no closure
+it generates changes.
+
+It is not benchmarkable: no public scenario authors a spec with a duplicate
+contract name, so every arm would be byte-identical and the comparison would
+measure nothing. Manufacturing a scenario to produce a number for a diagnostic
+bugfix would make the ledger less honest, not more. The evidence is four unit
+tests in `evals/tests/test_validator_code_coverage.py` and
+`test_pocket_custom_contract_checker.py`, each **verified to fail against the
+previous implementation** rather than assumed to — including the secret-regex
+parity test, which parses `SECRET_LITERAL` out of `scripts/self_check.py` and
+compares compiled patterns, so the eval checker and Phase C cannot drift again.
+
+Recorded per AGENTS.md's "changes a skill's behavior" rule, read strictly. The
+v0.30.0 entry above makes the same argument for the contract work itself —
+coverage resting on the test suite rather than on an eval arm — and this is the
+narrower case of it.

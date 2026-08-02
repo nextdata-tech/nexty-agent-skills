@@ -1,6 +1,7 @@
 """Exercise the public custom-contract checker with valid and broken closures."""
 from __future__ import annotations
 
+import ast
 import importlib.util
 import re
 import subprocess
@@ -749,4 +750,79 @@ def _drift_names(snapshot: str) -> set[str]:
 ])
 def test_drift_parser_reads_the_entry_name(label, snapshot, expected):
     assert _drift_names(snapshot) == expected, label
+
+def _secret_literal_stmt() -> str:
+    """The `SECRET_LITERAL = re.compile(...)` statement out of self_check.py."""
+    tree = ast.parse(SELF_CHECK.read_text())
+    for node in tree.body:
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "SECRET_LITERAL"
+                        for t in node.targets)):
+            return "import re\n" + ast.unparse(node)
+    raise AssertionError("SECRET_LITERAL is no longer a module-level assignment")
+
+
+def test_secret_literal_regex_matches_self_check_exactly():
+    """The eval checker and Phase C must agree on what a literal secret is.
+
+    Restating the pattern drifted in BOTH directions: `passwd` was missing from
+    the checker (Phase C failed a closure this passed) and the absent `\\b` made
+    `csrf_token` match here but not there (this failed a closure Phase C
+    passed). Either way a closure passes one gate and fails the other.
+    """
+    # Compare the compiled patterns, not the source text: the shipped literal
+    # contains an escaped quote, which no simple extraction survives.
+    ns: dict = {}
+    exec(compile(ast.parse(_secret_literal_stmt()), "<self_check>", "exec"), ns)
+    assert checker.SECRET_LITERAL.pattern == ns["SECRET_LITERAL"].pattern, (
+        "the eval checker's secret regex has drifted from self_check.py's"
+    )
+    for sample, expected in [
+        ('passwd = "hunter2"', True),
+        ('api_key = "x"', True),
+        ('token = "t"', True),
+        # Prefixed spellings are the IDIOMATIC ones and must not escape: a
+        # leading \\b missed every one of these.
+        ('db_password = "x"', True),
+        ('openai_api_key = "sk-live"', True),
+        ('MY_SECRET = "s"', True),
+        ('self.password = "p"', True),
+        # Credential-bearing token prefixes are caught by name...
+        ('access_token = "a"', True),
+        ('auth_token = "a"', True),
+        ('refresh_token = "a"', True),
+        # oauth_token differs from auth_token by ONE leading letter; api_token
+        # is the mirror of api_key, which arm 1 already catches with a prefix.
+        ('oauth_token = "x"', True),
+        ('api_token = "x"', True),
+        ('github_token = "ghp_x"', True),
+        # `secret`/`private` are credential words in the _key arm; they belong
+        # in the _token arm too.
+        ('secret_token = "x"', True),
+        ('private_token = "x"', True),
+        # ...but `token` is NOT widened wholesale: csrf_token is a request
+        # nonce, and failing a closure over it would be wrong.
+        ('csrf_token = "abc"', False),
+        # `-` is a word boundary, so the bare arm has to exclude it too or the
+        # hyphenated spelling escapes the carve-out its sibling gets.
+        ('csrf-token = "abc"', False),
+        # Each credential prefix is BOUNDED: unbounded, `id` let these in.
+        ('valid_token = "v"', False),
+        ('uuid_token = "u"', False),
+        ('grid_token = "g"', False),
+        # The credential word as a PREFIX of `_key` — arm 1 only sees suffixes.
+        ('SECRET_KEY = "abc"', True),
+        ('private_key = "abc"', True),
+        ('aws_secret_access_key = "abc"', True),
+        # ...but NOT every `*_key`: these are ordinary identifiers.
+        ('sort_key = "x"', False),
+        ('primary_key = "id"', False),
+        ('cache_key = "k"', False),
+        # Still not matched: the secret word must be what is ASSIGNED, not a
+        # prefix of some other identifier.
+        ('password_columns = [1]', False),
+        ('token_fields = []', False),
+        ('tokenizer = "x"', False),
+    ]:
+        assert bool(checker.SECRET_LITERAL.search(sample)) is expected, sample
 

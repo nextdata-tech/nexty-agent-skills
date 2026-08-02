@@ -332,6 +332,15 @@ genuine "before" for a scenario that is new in your PR, run it from a worktree
 of `main` with the scenario (and `evals/run.py`, for identical metrics) copied
 in: `git worktree add /tmp/before origin/main && cp -R evals/public/<scenario>
 /tmp/before/evals/public/ && cp evals/run.py /tmp/before/evals/`.
+**When no scenario can distinguish the change** — a diagnostic's `path` or
+message moving, say — there is nothing to run, and `benchmark_record.py` has no
+report to consume. Hand-author the ledger entry instead: keep the table row
+empty, say plainly why there is no arm, and name the tests carrying the evidence
+(preferring ones verified to fail against the previous implementation). Do not
+manufacture a scenario to produce a number; the ledger's value is that a reader
+can assume every figure in it means something. See the AGENTS.md benchmarking
+paragraph, which is the contract this mirrors.
+
 Because agent runs are nondeterministic, treat single-run metric deltas under
 ~20% as noise — repeat the run (or use `--cache-dir` only for judge iteration,
 never for before/after comparisons, since a cache hit replays the old

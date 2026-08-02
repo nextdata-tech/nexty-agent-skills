@@ -6,6 +6,34 @@ import ast
 import re
 from pathlib import Path
 
+# Byte-identical to scripts/self_check.py's SECRET_LITERAL. Restating it drifted
+# in BOTH directions: `passwd` was missing here (Phase C failed, this passed)
+# and the missing \b made `csrf_token` match here but not there (this failed,
+# Phase C passed). Either way a closure passes one gate and fails the other,
+# which is worse than either gate alone.
+# Three arms, each bounded at an identifier boundary.
+#   1. the credential word as a SUFFIX, with any prefix — `db_password`,
+#      `openai_api_key`, `MY_SECRET`. A uniform leading \b missed all three.
+#   2. the credential word as a PREFIX of `_key` — `SECRET_KEY`, `private_key`,
+#      `aws_secret_access_key`. Arm 1 only sees suffixes, so these escaped it,
+#      and `SECRET_KEY = "..."` is about as idiomatic as a Python secret gets.
+#      Deliberately NOT bare `*_key`: `sort_key`, `primary_key` and `cache_key`
+#      are not credentials.
+#   3. `token`, narrowest of the three: bare, or behind a prefix that denotes a
+#      credential. Each prefix is bounded — unbounded, `id` let `valid_token`,
+#      `uuid_token` and `grid_token` in. The bare arm excludes `-` as well as
+#      word characters, because \b treats a hyphen as a boundary and
+#      `csrf-token` would otherwise escape the carve-out `csrf_token` gets.
+# Non-assignments (`password_columns`, `token_fields`, `tokenizer`) match none.
+SECRET_LITERAL = re.compile(
+    r"(?i)(?:(?:^|[^A-Za-z0-9])[A-Za-z0-9_]*(?:api[_-]?key|password|passwd|secret)"
+    r"|(?:^|[^A-Za-z0-9])(?:secret|private|signing|encryption"
+    r"|aws[_-]?secret[_-]?access)[_-]key"
+    r"|(?:^|[^A-Za-z0-9])(?:access|auth|oauth|refresh|bearer|session|api|jwt|id"
+    r"|secret|private|github|gitlab|slack)[_-]token"
+    r"|(?:^|[^A-Za-z0-9_-])token)\s*=\s*[\"']")
+
+
 def calls(node):
     out = []
     while isinstance(node, ast.Call):
@@ -251,7 +279,7 @@ def check(root: Path):
         if registered != 1 or not has_main_guard(t) or inert: errors.append(f"bad verifier {rel}")
         if any(isinstance(f, ast.AsyncFunctionDef) for f in verifiers):
             errors.append("Pocket custom verifier must be synchronous; the runtime does not await async verifier functions")
-        if re.search(r'(?i)(api[_-]?key|password|token|secret)\s*=\s*["\']', source): errors.append(f"secret-like assignment in {rel}")
+        if SECRET_LITERAL.search(source): errors.append(f"secret-like assignment in {rel}")
     for p in (specs[0].parent / "contracts").rglob("*.py") if (specs[0].parent / "contracts").exists() else []:
         if str(p.relative_to(specs[0].parent)) not in scripts: errors.append(f"decorative script {p}")
     for p in [specs[0], profile]:
