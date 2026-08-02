@@ -825,8 +825,31 @@ MODEL_ROOTS = {
     "litellm", "huggingface_hub", "langchain_anthropic", "langchain_openai",
     "llama_index",
 }
-TRANSPORT_ROOTS = {"httpx", "requests", "aiohttp", "urllib.request", "urllib3",
-                   "socket", "http.client"}
+# Raw transport. Denied only when no network-shaped connector is declared, so a
+# legitimate api-source/db-source closure is unaffected by every entry here.
+#
+# The second group is the one a first pass misses. `requests` and `httpx` are the
+# spellings someone writes when they are not thinking about this gate; the
+# layers UNDER them are what a dlt-shaped closure reaches for without inventing
+# anything. `dlt.sources.helpers.requests` in particular is not an evasion — it
+# is dlt's own re-export, the spelling its docs teach, and it has `.post`. A
+# deny list that stops `import requests` while permitting the library's
+# documented alias for the same object is a list that only catches the naive
+# author, which is not what this gate claims to be.
+#
+# Still enumerated, still not a proof. `anyio`/`asyncio` are here because their
+# open_*_connection primitives are transport by any reading, not because the
+# modules are otherwise suspicious — a closure importing asyncio for unrelated
+# reasons in a csv-source transform is already doing something worth a look.
+TRANSPORT_ROOTS = {
+    # what an author writes directly
+    "httpx", "requests", "aiohttp", "urllib.request", "urllib3",
+    "socket", "http.client",
+    # the layers underneath, reachable without naming any of the above
+    "httpcore", "h11", "anyio", "asyncio",
+    # dlt's own re-exports — the spelling its documentation teaches
+    "dlt.sources.helpers.requests", "dlt.sources.helpers.rest_client",
+}
 
 def imported_roots(src, path):
     """Every dotted module name transform/main.py imports, statically.

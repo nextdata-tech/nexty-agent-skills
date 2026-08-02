@@ -357,6 +357,55 @@ def test_stdlib_transport_roots_are_denied(tmp_path):
         assert root in out, imp
 
 
+def test_transport_layers_beneath_the_obvious_spellings_are_denied(tmp_path):
+    """The roots a dlt-shaped closure reaches without naming httpx or requests.
+
+    A first version of this list stopped ``import requests`` and ``import httpx``
+    — the spellings someone writes when they are NOT thinking about the gate —
+    while permitting every layer underneath them. That version was a check on
+    naivety rather than on reach.
+
+    ``dlt.sources.helpers.requests`` is the sharp one, and it is asserted here
+    rather than argued about: it is dlt's own re-export of the same object, it
+    has ``.post``, and it is the spelling dlt's documentation teaches. Denying
+    ``requests`` while permitting the library's documented alias for it is not a
+    smaller gate, it is a gate with a hole shaped exactly like the connector
+    library this pack tells authors to use.
+    """
+    for imp, root in (
+        ("import httpcore\n", "httpcore"),
+        ("import h11\n", "h11"),
+        ("import anyio\n", "anyio"),
+        ("import asyncio\n", "asyncio"),
+        ("from dlt.sources.helpers import requests as dreq\n",
+         "dlt.sources.helpers.requests"),
+        ("from dlt.sources.helpers.rest_client import RESTClient\n",
+         "dlt.sources.helpers.rest_client"),
+    ):
+        out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + imp, expect_exit=1)
+        assert "PHASE E FAILED" in out, imp
+        assert root in out, imp
+        assert _codes(out) == ["reach.undeclared_transport"], imp
+
+
+def test_the_deeper_transport_roots_are_still_waived_by_a_declared_source(tmp_path):
+    """Widening the list must not cost the waiver.
+
+    The whole reason the transport family is waivable is that a legitimate
+    api-source closure reaches the network by design. If widening the list broke
+    that, the gate would start failing correct closures — and a rule that blocks
+    correct work gets deleted rather than obeyed, which is a worse outcome than
+    the hole it closed.
+    """
+    for imp in (
+        "import httpcore\n",
+        "from dlt.sources.helpers import requests as dreq\n",
+        "from dlt.sources.helpers.rest_client import RESTClient\n",
+    ):
+        out = _run_phase_e(tmp_path, API, CLEAN_CSV_TRANSFORM + imp, expect_exit=0)
+        assert "phase E ok" in out, imp
+
+
 def test_transport_is_waived_for_a_declared_api_source(tmp_path):
     """dlt's REST source IS httpx and requests.
 
