@@ -363,7 +363,9 @@ and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 deployment YAML: it declares the infra profile, wires the transform to compute,
 promises every physical model — base and derived — on the DuckDB port, and
 registers each query-time view. Bind the three service references by relative
-infra-profile path (resolved against `infra-profile.yaml`, Step 5). Worked
+infra-profile path (resolved against `infra-profile.yaml`, Step 5). A spec
+declaring `## expectations` / `## promises` wires each one here too
+([reference/custom-contracts.md](reference/custom-contracts.md)); worked
 `spec.py`: [reference/models-example.md](reference/models-example.md).
 
 Contract facts baked into that shape — keep every one:
@@ -385,9 +387,7 @@ Contract facts baked into that shape — keep every one:
   without it. `.semantic_tools()` emits a kernel RPC port needing a live RPC
   driver — a k8s artifact with no local equivalent: a port nothing serves.
 
-**Other connector types**: only the variable name and service path change; for
-2+ of one type, `.secrets([...])` takes one labeled variable per instance
-(`reference/multi-source.md`).
+**Other connector types**: only the variable name and service path change; for 2+ of one type, `.secrets([...])` takes one labeled variable per instance (`reference/multi-source.md`).
 
 ### Step 5 — `infra-profile.yaml`: the desktop-local profile (emitted prerequisite)
 
@@ -475,7 +475,7 @@ an exact fixture count. Without credentials, report it **not run**.
 ## Invariants — NEVER violate these
 
 - **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore` (the companion artifact is per the connector-types table in Overview; the credential guards are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. Add one `contracts/expectations/<name>.py` or `contracts/promises/<name>.py` per contract the approved spec declares in `## expectations` / `## promises` — no more, no fewer.
-- **Custom contracts are executable, not decorative** — each compiles to a verifier that must be able to FAIL, wired as `custom(...).verify(script(...).compute(_compute))`: expectations on the source-aligned input, promises on the DuckDB output **alongside the ordinary `.promise(model)`**. Never invent one the spec does not declare — [reference/custom-contracts.md](reference/custom-contracts.md).
+- **Custom contracts are executable, not decorative** — each compiles to a verifier that must be able to FAIL, and a custom promise never replaces the ordinary `.promise(model)`. Never invent one the spec does not declare; wiring is Step 4 and [reference/custom-contracts.md](reference/custom-contracts.md).
 - **Self-contained closure — no cross-boundary contract pointers** (Step 6a): the approved `dp-spec.md` is byte-copied in as `dp-spec.approved.md` and bound by `dp-spec.lock.json`, so everything a later session needs to continue the work lives INSIDE the closure and self-containment is hash-checkable rather than a discipline anyone has to remember. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in the approved spec, as `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure, `../dp-spec.md` included. Phase C fails a missing snapshot, lock, `build-record.json` or `README.md`, a snapshot whose bytes no longer match the lock, and any closure-escaping contract reference.
 - **Sample-selection is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in the spec's `population:` (and so travels in `dp-spec.approved.md`), reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends. A deterministic-but-arbitrary sample (e.g. "the oldest N") that silently excludes the rows a later step needs is a defect even though it reruns identically. A source field a downstream model or step depends on (a URL a later evaluation needs, a key a later join needs) is a **required-capture** field — declared in the plan as `models[].fields[].required_capture: true`, with the rows that actually lacked it recorded as an outcome in `build-record.json` `evidence.required_capture`, because a missing required field disables the downstream step without erroring.
 - **The naming invariant**: each physical model name == `models.py` `semantic_model` arg == `spec.py` `.promise` == `PHYSICAL_MODELS` == `main.<name>`, unquoted lowercase snake_case; additionally `==` the connector's per-model reference (`data/<name>/`, see "THE NAMING INVARIANT" table) for base models only. `PHYSICAL_MODELS` is landed tables (base + derived), NOT the `data/` listing. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.

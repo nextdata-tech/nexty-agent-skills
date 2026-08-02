@@ -25,7 +25,7 @@ Each entry already carries what generation needs:
 |---|---|
 | `name` | the verifier filename — `contracts/expectations/<name>.py` |
 | `model` | which model the verifier reads |
-| `phase` | `pre_transform` → an input expectation; `post_transform` → an output promise |
+| `phase` | restates the section's phase — `pre_transform` in `## expectations`, `post_transform` in `## promises`. Optional, and a cross-check only: the SECTION decides the kind, and a `phase` contradicting its section is an error, not a reclassification |
 | `guarantee` | the user's words; the contract's `.description(...)` |
 | `rule` | the executable body |
 | `fields` | which columns the rule reads |

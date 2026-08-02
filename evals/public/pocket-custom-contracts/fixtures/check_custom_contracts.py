@@ -204,12 +204,16 @@ def check(root: Path):
         registered = len(verifiers)
         source = p.read_text(); verifier = next(iter(verifiers), None)
         verifier_source = ast.unparse(verifier) if verifier else ""
+        # ast.IfExp as well as ast.If, and the FAILED may be assigned rather than
+        # returned: `status = FAILED if violations else PASS` is a non-literal
+        # condition producing a failure, which is what this is testing for.
+        # Must stay in step with scripts/self_check.py — a closure that passes
+        # one gate and fails the other is worse than either gate alone.
         conditional_failed = verifier and any(
-            not isinstance(branch.test, ast.Constant) and any(
-                isinstance(result, ast.Return) and result.value is not None and
-                "VerifyResultEnum.FAILED" in ast.unparse(result.value)
-                for result in ast.walk(branch))
-            for branch in ast.walk(verifier) if isinstance(branch, ast.If))
+            not isinstance(branch.test, ast.Constant)
+            and "VerifyResultEnum.FAILED" in ast.unparse(branch)
+            for branch in ast.walk(verifier)
+            if isinstance(branch, (ast.If, ast.IfExp)))
         inert = not verifier or any(isinstance(n, ast.Pass) or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and n.value.value is Ellipsis) for n in ast.walk(verifier)) or "VerifyResultEnum.FAILED" not in verifier_source or "VerifyResultEnum.PASS" not in verifier_source or not conditional_failed
         if registered != 1 or not has_main_guard(t) or inert: errors.append(f"bad verifier {rel}")
         if any(isinstance(f, ast.AsyncFunctionDef) for f in verifiers):

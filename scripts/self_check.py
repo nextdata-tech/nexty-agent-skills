@@ -1111,12 +1111,18 @@ if _spec_tree is not None:
         # Inert: a verifier that cannot fail. It must be able to return FAILED,
         # and that return must sit behind a real (non-constant) condition — an
         # `if True:` branch reads as a check and is dead code.
-        body = ast.dump(verifiers[0])
-        can_fail = "FAILED" in vsrc
+        # Scope both tests to the verifier body, not the whole file: a FAILED
+        # mentioned only in an import or a comment elsewhere does not make this
+        # function able to fail.
+        body_src = ast.unparse(verifiers[0])
+        can_fail = "FAILED" in body_src
+        # ast.IfExp as well as ast.If — `FAILED if violations else PASS` is a
+        # non-literal condition by any reading, and the message says
+        # "non-literal condition", so rejecting the ternary contradicts it.
         live_branch = any(
-            isinstance(n, ast.If) and not isinstance(n.test, ast.Constant)
+            isinstance(n, (ast.If, ast.IfExp)) and not isinstance(n.test, ast.Constant)
             for n in ast.walk(verifiers[0]))
-        if not can_fail or not live_branch or "PASS" not in vsrc:
+        if not can_fail or not live_branch or "PASS" not in body_src:
             cerr("closure.contract_verifier_inert",
                  f"{vpath}: verifier is inert — require FAILED behind a "
                  f"non-literal condition and a PASS result, never "
@@ -1269,13 +1275,21 @@ if _spec_tree is not None:
     # the closure that no spec section declares is a guarantee the user never
     # approved; one in the spec with no verifier was silently dropped.
     if snap_bytes is not None:
+        # Anchored at column 0, deliberately. `fields:` may itself be a list of
+        # mappings with their own `- name:`, and an unanchored `\s*-\s+name:`
+        # reads a FIELD as a contract — then reports the closure as having
+        # dropped an approved guarantee that never existed, pointing the repair
+        # loop at spec.py, which is the wrong file. A contract entry is always
+        # top-level within its section; anything indented belongs to one.
+        # (No YAML parse here: CONSTRAINT-1 — this file runs inside the closure
+        # and cannot depend on PyYAML.)
         spec_named = set()
         section = None
         for line in snap_bytes.decode("utf-8", "replace").splitlines():
             if line.startswith("## "):
                 section = line[3:].strip().lower()
             elif section in CONTRACT_DIRS:
-                m = re.match(r"\s*-\s+name:\s*(\S+)", line)
+                m = re.match(r"-\s+name:\s*(\S+)", line)
                 if m:
                     spec_named.add(m.group(1).strip("\"'"))
         missing = spec_named - set(contracts)
