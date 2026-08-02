@@ -550,7 +550,8 @@ def check_contracts(section: str, data, models: list[dict], report: Report) -> l
     return entries
 
 
-def check_contract_names_unique(contracts: list[dict], report: Report) -> None:
+def check_contract_names_unique(contracts: list[tuple[str, dict]],
+                                report: Report) -> None:
     """One namespace across both contract sections.
 
     Deliberately not folded into `check_contracts`: a name collision between an
@@ -558,18 +559,25 @@ def check_contract_names_unique(contracts: list[dict], report: Report) -> None:
     a time, and it is the collision that matters most — both sections generate
     into `contracts/`, so two contracts sharing a name race for one filename and
     the second silently overwrites the first.
+
+    Takes (section, entry) pairs so each finding is FIELD-ADDRESSED to where the
+    collision actually is. Reporting every duplicate at `spec:expectations`
+    pointed a harness at a section a promises-only spec does not even have.
     """
-    names = [str(c["name"]) for c in contracts if c.get("name")]
-    dupes = {n for n in names if names.count(n) > 1}
-    if dupes:
-        report.error(
-            f"duplicate contract names across expectations and promises: "
-            f"{sorted(dupes)} — the name selects the generated verifier file, so "
-            f"two contracts sharing one name overwrite each other",
-            code="spec.contract.duplicate_name",
-            path=spec_path("expectations"),
-            evidence={"found": sorted(dupes)},
-        )
+    names = [str(c["name"]) for _, c in contracts if c.get("name")]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    for dupe in dupes:
+        for section, entry in contracts:
+            if str(entry.get("name") or "") != dupe:
+                continue
+            report.error(
+                f"duplicate contract name {dupe!r} across expectations and "
+                f"promises — the name selects the generated verifier file, so "
+                f"two contracts sharing one name overwrite each other",
+                code="spec.contract.duplicate_name",
+                path=f"{spec_path(section, dupe)}.name",
+                evidence={"found": dupes},
+            )
 
 
 def check_gates(data, report: Report) -> None:
@@ -1243,12 +1251,15 @@ def validate(path: Path) -> Report:
 
     models = check_models(parsed.get("models"), report) if "models" in parsed else []
 
-    contracts: list[dict] = []
+    contracts: list[tuple[str, dict]] = []
     for contract_section in ("expectations", "promises"):
         if contract_section in parsed:
-            contracts += check_contracts(
-                contract_section, parsed[contract_section], models, report
-            )
+            contracts += [
+                (contract_section, entry)
+                for entry in check_contracts(
+                    contract_section, parsed[contract_section], models, report
+                )
+            ]
     check_contract_names_unique(contracts, report)
 
     if "gates" in parsed:

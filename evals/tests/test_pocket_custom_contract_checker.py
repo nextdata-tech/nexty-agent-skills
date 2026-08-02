@@ -1,6 +1,7 @@
 """Exercise the public custom-contract checker with valid and broken closures."""
 from __future__ import annotations
 
+import ast
 import importlib.util
 import re
 import subprocess
@@ -749,4 +750,39 @@ def _drift_names(snapshot: str) -> set[str]:
 ])
 def test_drift_parser_reads_the_entry_name(label, snapshot, expected):
     assert _drift_names(snapshot) == expected, label
+
+def _secret_literal_stmt() -> str:
+    """The `SECRET_LITERAL = re.compile(...)` statement out of self_check.py."""
+    tree = ast.parse(SELF_CHECK.read_text())
+    for node in tree.body:
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "SECRET_LITERAL"
+                        for t in node.targets)):
+            return "import re\n" + ast.unparse(node)
+    raise AssertionError("SECRET_LITERAL is no longer a module-level assignment")
+
+
+def test_secret_literal_regex_matches_self_check_exactly():
+    """The eval checker and Phase C must agree on what a literal secret is.
+
+    Restating the pattern drifted in BOTH directions: `passwd` was missing from
+    the checker (Phase C failed a closure this passed) and the absent `\\b` made
+    `csrf_token` match here but not there (this failed a closure Phase C
+    passed). Either way a closure passes one gate and fails the other.
+    """
+    # Compare the compiled patterns, not the source text: the shipped literal
+    # contains an escaped quote, which no simple extraction survives.
+    ns: dict = {}
+    exec(compile(ast.parse(_secret_literal_stmt()), "<self_check>", "exec"), ns)
+    assert checker.SECRET_LITERAL.pattern == ns["SECRET_LITERAL"].pattern, (
+        "the eval checker's secret regex has drifted from self_check.py's"
+    )
+    for sample, expected in [
+        ('passwd = "hunter2"', True),
+        ('api_key = "x"', True),
+        ('token = "t"', True),
+        ('csrf_token = "abc"', False),      # no word boundary before `token`
+        ('password_columns = [1]', False),  # not a literal assignment
+    ]:
+        assert bool(checker.SECRET_LITERAL.search(sample)) is expected, sample
 

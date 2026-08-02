@@ -354,3 +354,86 @@ def test_missing_pyyaml_exits_two_without_a_spec_diagnostic(tmp_path, monkeypatc
     with pytest.raises(dp_diagnostics.DependencyError) as exc:
         validate_dp_spec.validate(path)
     assert exc.value.code == "environment.dependency_missing"
+
+DUPLICATE_PROMISES_SPEC = """---
+dp_spec_version: 1
+name: orders
+workflow: orders
+status: draft
+---
+
+## intent
+
+Track orders.
+
+## questions
+
+- q1: How do totals reconcile?
+
+## sources
+
+- label: orders
+  type: csv
+  location: data/orders
+  scope: |
+    All rows.
+
+## population
+
+population: |
+  All orders.
+sample_rule: null
+excludes: |
+  Nothing.
+
+## models
+
+- name: orders
+  kind: base
+  grain: |
+    One row per order line.
+  key: [line_id]
+  answers: [q1]
+  description: |
+    Order lines.
+
+## promises
+
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    First guarantee.
+  rule: |
+    a == b
+- name: dup-name
+  authority: user_stated
+  model: orders
+  guarantee: |
+    Second guarantee.
+  rule: |
+    c == d
+"""
+
+
+def test_duplicate_contract_name_is_addressed_to_its_own_section(tmp_path):
+    """A promises-only collision must not be reported at `spec:expectations`.
+
+    The duplicate check spans both sections deliberately — a cross-section
+    collision is invisible to a per-section checker — but the finding still has
+    to name where the collision IS. Addressing every duplicate to
+    `spec:expectations` pointed a harness at a section this spec does not have.
+    """
+    import validate_dp_spec
+
+    path = tmp_path / "dp-spec.md"
+    path.write_text(DUPLICATE_PROMISES_SPEC, encoding="utf-8")
+    report = validate_dp_spec.validate(path)
+
+    dupes = [d for d in report.diagnostics
+             if d.code == "spec.contract.duplicate_name"]
+    assert dupes, "the duplicate name was not reported at all"
+    for d in dupes:
+        assert d.path.startswith("spec:promises["), d.path
+        assert "expectations" not in d.path, d.path
+

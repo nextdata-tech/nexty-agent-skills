@@ -6,6 +6,15 @@ import ast
 import re
 from pathlib import Path
 
+# Byte-identical to scripts/self_check.py's SECRET_LITERAL. Restating it drifted
+# in BOTH directions: `passwd` was missing here (Phase C failed, this passed)
+# and the missing \b made `csrf_token` match here but not there (this failed,
+# Phase C passed). Either way a closure passes one gate and fails the other,
+# which is worse than either gate alone.
+SECRET_LITERAL = re.compile(
+    r"(?i)\b(api[_-]?key|password|passwd|token|secret)\s*=\s*[\"']")
+
+
 def calls(node):
     out = []
     while isinstance(node, ast.Call):
@@ -251,7 +260,7 @@ def check(root: Path):
         if registered != 1 or not has_main_guard(t) or inert: errors.append(f"bad verifier {rel}")
         if any(isinstance(f, ast.AsyncFunctionDef) for f in verifiers):
             errors.append("Pocket custom verifier must be synchronous; the runtime does not await async verifier functions")
-        if re.search(r'(?i)(api[_-]?key|password|token|secret)\s*=\s*["\']', source): errors.append(f"secret-like assignment in {rel}")
+        if SECRET_LITERAL.search(source): errors.append(f"secret-like assignment in {rel}")
     for p in (specs[0].parent / "contracts").rglob("*.py") if (specs[0].parent / "contracts").exists() else []:
         if str(p.relative_to(specs[0].parent)) not in scripts: errors.append(f"decorative script {p}")
     for p in [specs[0], profile]:
