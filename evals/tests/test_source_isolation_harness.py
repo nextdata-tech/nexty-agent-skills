@@ -375,3 +375,53 @@ def test_incomplete_timeout_audit_is_an_infrastructure_error(tmp_path, monkeypat
     result = run.run_one(run.SkillSet("s", "d", []), scenario, _args(wrapper))
     assert not result.ok
     assert "source-access audit is incomplete" in result.error
+
+def test_resolved_roots_reach_the_wrapper(tmp_path, monkeypatch):
+    """Roots supplied by flag must be exported, not just used harness-side.
+
+    The wrapper reads its deny list ONLY from EVAL_SOURCE_ISOLATION_ROOTS. When
+    roots arrive via --source-isolation-root and the harness does not export the
+    resolved map, the wrapper denies nothing while the harness believes the root
+    is protected — the probe would then pass for the wrong reason. The other
+    fixtures here use a wrapper that ignores roots entirely, so nothing else in
+    this file can catch that.
+    """
+    run = _load_run()
+    scenario = _scenario(tmp_path)
+    protected = tmp_path / "protected-root"
+    protected.mkdir()
+
+    # A wrapper that PROVES it received the root map: it reports blocked only
+    # when the expected root is present in its own environment.
+    wrapper = tmp_path / "root-checking-codex"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--eval-source-isolation-probe\" ]; then\n"
+        "  case \"$EVAL_SOURCE_ISOLATION_ROOTS\" in\n"
+        f"    *{protected.name}*) ;;\n"
+        "    *) echo '{\"passed\": false, \"status\": \"no-roots-configured\"}'; exit 1 ;;\n"
+        "  esac\n"
+        "  echo '{\"passed\": true, \"status\": \"blocked\"}'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 9\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+    agent = _StubAgent({"status": "clean", "matched_marker_ids": []})
+    _install(run, monkeypatch, agent)
+    monkeypatch.delenv("EVAL_SOURCE_ISOLATION_ROOTS", raising=False)
+
+    result = run.run_one(
+        run.SkillSet("s", "d", []), scenario,
+        _args(wrapper, source_isolation_roots=[
+            f"{name}={protected}" for name in (
+                "benchmark_report_history", "closure_temp_history",
+                "codex_memories", "codex_session_history", "evaluator_checkout",
+            )
+        ]),
+    )
+    assert "no-roots-configured" not in (result.error or "")
+    assert "source-isolation infrastructure invalid" not in (result.error or ""), result.error
+

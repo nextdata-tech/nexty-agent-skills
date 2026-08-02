@@ -1938,6 +1938,10 @@ def _source_isolation_probes(isolation: SourceIsolation, scenario_dir: Path) -> 
     env.update({
         "EVAL_SOURCE_ISOLATION_CAPABILITY_ID": isolation.capability_id,
         "EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT": isolation.profile_fingerprint,
+        # The resolved map, so a root supplied via --source-isolation-root is
+        # the same set the wrapper denies. Probing a root the sandbox does not
+        # know about would report "blocked" for the wrong reason.
+        "EVAL_SOURCE_ISOLATION_ROOTS": json.dumps(roots),
     })
     evidence: list[dict[str, str]] = []
     for probe in isolation.probes:
@@ -2164,6 +2168,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             {
                 "EVAL_SOURCE_ISOLATION_CAPABILITY_ID": isolation.capability_id,
                 "EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT": isolation.profile_fingerprint,
+                # Export the RESOLVED root map, not just whatever the operator
+                # happened to put in the environment. Roots may arrive via
+                # --source-isolation-root, and the wrapper reads them only from
+                # this variable — so without this the flag declares a root the
+                # harness probes but the sandbox never denies.
+                "EVAL_SOURCE_ISOLATION_ROOTS": json.dumps(dict(isolation.roots)),
             }
             if isolation is not None else {}
         )

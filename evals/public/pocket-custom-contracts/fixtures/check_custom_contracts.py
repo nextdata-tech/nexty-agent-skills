@@ -61,6 +61,25 @@ def check(root: Path):
         for value in [node.value]
         if isinstance(value, ast.Constant) and isinstance(value.value, str)
     }
+    # Builders hoisted into a variable — `_in = source_aligned_input()...` then
+    # `.input("orders", _in)` — must be inspected too. Without this the whole
+    # CSV-input gate silently skips (`expectations` comes back empty and the
+    # loop `continue`s), so a closure with an absolute model path and a
+    # non-csv-source binding prints ALL CHECKS PASSED while self_check.py, which
+    # walks the whole tree, rejects it.
+    builders = {
+        target.id: node.value
+        for node in tree.body if isinstance(node, ast.Assign)
+        for target in node.targets if isinstance(target, ast.Name)
+        if isinstance(node.value, ast.Call)
+    }
+
+    def resolve(node):
+        """A call expression, following one level of single-assignment hoisting."""
+        if isinstance(node, ast.Name):
+            return builders.get(node.id, node)
+        return node
+
     profile = specs[0].parent / "infra-profile.yaml"
     profile_text = profile.read_text() if profile.is_file() else ""
     required_services = {
@@ -128,7 +147,7 @@ def check(root: Path):
     for n in ast.walk(tree):
         if name(n) != "input" or len(n.args) < 2:
             continue
-        chain = calls(n.args[1])
+        chain = calls(resolve(n.args[1]))
         expectations = [c for c in chain if name(c) == "expectation" and c.args
                         and any(name(part) == "custom" for part in calls(c.args[0]))]
         if not expectations:
@@ -175,7 +194,7 @@ def check(root: Path):
     for n in ast.walk(tree):
         if name(n) != "output" or not n.args:
             continue
-        chain = calls(n.args[0])
+        chain = calls(resolve(n.args[0]))
         custom_promises = [c for c in chain if name(c) == "promise" and c.args
                            and any(name(part) == "custom" for part in calls(c.args[0]))]
         if not custom_promises:
@@ -188,10 +207,15 @@ def check(root: Path):
                            and isinstance(promise.args[0], ast.Name)}
         if not set(custom_models) <= ordinary_models:
             errors.append("custom output promise must retain ordinary promise(model)")
+        # Check the BINDING, not just the variable name: `_duckdb` pointing at
+        # the csv-source ref is exactly the swap self_check.py rejects, and a
+        # name-only check would pass a closure that gate fails.
         if not any(name(port) == "port" and len(port.args) >= 2
                    and isinstance(port.args[0], ast.Constant) and port.args[0].value == "duckdb"
                    and name(port.args[1]) == "storage" and port.args[1].args
-                   and isinstance(port.args[1].args[0], ast.Name) and port.args[1].args[0].id == "_duckdb"
+                   and isinstance(port.args[1].args[0], ast.Name)
+                   and bindings.get(port.args[1].args[0].id)
+                   == "/infra-profile/desktop-local#/services/duckdb"
                    for port in chain):
             errors.append("custom output promise must be on a DuckDB output port")
     for rel in scripts:
@@ -204,17 +228,17 @@ def check(root: Path):
         registered = len(verifiers)
         source = p.read_text(); verifier = next(iter(verifiers), None)
         verifier_source = ast.unparse(verifier) if verifier else ""
-        # ast.IfExp as well as ast.If, and the FAILED may be assigned rather than
-        # returned: `status = FAILED if violations else PASS` is a non-literal
-        # condition producing a failure, which is what this is testing for.
-        # Must stay in step with scripts/self_check.py — a closure that passes
+        # Deliberately the SAME predicate as scripts/self_check.py: a non-literal
+        # If/IfExp anywhere in the function, with FAILED present in the body —
+        # NOT "FAILED lexically inside the branch". The stricter form rejects the
+        # inverted guard clause (`if not violations: return PASS` / bare
+        # `return FAILED`), which self_check accepts, and a closure that passes
         # one gate and fails the other is worse than either gate alone.
         conditional_failed = verifier and any(
             not isinstance(branch.test, ast.Constant)
-            and "VerifyResultEnum.FAILED" in ast.unparse(branch)
             for branch in ast.walk(verifier)
             if isinstance(branch, (ast.If, ast.IfExp)))
-        inert = not verifier or any(isinstance(n, ast.Pass) or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and n.value.value is Ellipsis) for n in ast.walk(verifier)) or "VerifyResultEnum.FAILED" not in verifier_source or "VerifyResultEnum.PASS" not in verifier_source or not conditional_failed
+        inert = not verifier or any(isinstance(n, ast.Pass) or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and n.value.value is Ellipsis) for n in ast.walk(verifier)) or "FAILED" not in verifier_source or "PASS" not in verifier_source or not conditional_failed
         if registered != 1 or not has_main_guard(t) or inert: errors.append(f"bad verifier {rel}")
         if any(isinstance(f, ast.AsyncFunctionDef) for f in verifiers):
             errors.append("Pocket custom verifier must be synchronous; the runtime does not await async verifier functions")

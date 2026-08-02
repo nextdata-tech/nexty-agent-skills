@@ -28,8 +28,10 @@ sha256 so tampering shows up in the attestation. Protect the wrapper itself
 only if a scenario's threat model needs it.
 
 Protected roots come from EVAL_SOURCE_ISOLATION_ROOTS (JSON object of
-name -> absolute path), the same variable run.py reads, so the wrapper and the
-harness cannot disagree about what is protected.
+name -> absolute path). `run.py` exports its RESOLVED root map into this
+variable for both the probes and the agent, so a root supplied with
+``--source-isolation-root`` is denied here too and the wrapper cannot disagree
+with the harness about what is protected.
 """
 from __future__ import annotations
 
