@@ -1289,7 +1289,6 @@ def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> Non
     raise TimeoutError(f"MCP server did not come up within {timeout_s}s at {endpoint}")
 
 
-@contextlib.contextmanager
 class HttpStubSetupError(RuntimeError):
     """A fault in bringing the stub up — not a fault in the agent run.
 
@@ -1300,6 +1299,7 @@ class HttpStubSetupError(RuntimeError):
     """
 
 
+@contextlib.contextmanager
 def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
     """Start a scenario-supplied in-process HTTP stub for the run's duration.
 
