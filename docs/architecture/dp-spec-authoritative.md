@@ -1932,4 +1932,5 @@ Deliberate limits. Each is a decision, not an oversight.
   ordering) with validator coverage, which is a larger change than any single
   PR that has touched this file so far. Until then, the join a closure
   implements is reviewable only in `transform/main.py` — that is, in the
-  generated artifact rather than in the approved plan.
+  generated artifact rather than in the approved plan. Tracked as
+  [#142](https://github.com/nextdata-tech/nexty-agent-skills/issues/142).
