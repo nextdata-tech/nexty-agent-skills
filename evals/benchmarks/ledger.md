@@ -733,3 +733,30 @@ Record: [`records/2026-08-01-explicit-built-in-desktop-subagent-dispatch.json`](
 Notes: PURPOSE: settle the provenance-addressed regression the 2026-07-31 N=3 entry flagged as the top open item, then measure a fix. THREE ARMS, N=10 EACH, same scenario coauthor-supplied-rubric, agent sonnet / judge opus, identical harness: run.py, eval_backends.py, benchmark_record.py, skill-sets.yaml and the whole coauthor-supplied-rubric directory were copied from this branch into a detached c03ca60 worktree, verified byte-identical with diff -r, so the arms differ only in src/ skills. before-v0.27.0 = c03ca60. after-v0.28.0 = this branch before today's edit. fixed-v0.28.0 = after + the sentinel guidance. HEADLINE, AND IT IS NEGATIVE: THE REPORTED REGRESSION WAS AN ARTIFACT OF N=3. provenance-addressed fails 3/10 in the before arm, not the 0/3 the prior entry recorded; its true rate was always about a third and the original three samples happened to draw three passes. before 3/10 vs after 5/10 gives Fisher exact p=0.65 — no regression is demonstrable, and the prior entry's own caveat that N=3 could not separate signal from noise was correct. THE FIX AND WHAT IT IS WORTH: the failures are one repeated semantic error, not a formatting miss — the agent collapses evidence-not-captured into evidence-absent, routing the literal string LISTED - URL NOT CAPTURED to a hard G1 FAIL instead of UNKNOWN, and in one run chaining it to REJECT, overriding the user's own stated NEEDS_MORE_INFO cap. The scenario prompt states that cap explicitly, so those runs contradict a user instruction. Guidance was added in two places (reference/dp-spec.md gates section, SKILL.md Step 1b) telling the agent that a present non-empty sentinel encoding non-capture is an unknown, not a failing value. after 5/10 vs fixed 3/10, p=0.65: DIRECTIONALLY BETTER, NOT DEMONSTRATED. At an interim N=9 the fixed arm read 2/9 and looked stronger; the tenth run moved it to 3/10, which is exactly the instability this entry exists to warn about. Do not cite this fix as proven. WHY IT SHIPS ANYWAY: the validator already rejects unknown: FAIL via spec.gate.unknown_is_fail, so a spec cannot declare the wrong rule — but it cannot tell that LISTED - URL NOT CAPTURED means uncaptured, so a spec that misclassifies a sentinel validates clean and is still wrong. The gap is real and mechanically uncatchable whatever the eval says; the measurement only fails to prove the prose closes it. WHAT ELSE MOVED, unprompted by the fix: unknown-gate-addressed fails 4/10 before and 0/10 after — a genuine v0.28.0 improvement the N=3 entry missed entirely. Overall PASS count 2/10 before, 2/10 after, 4/10 fixed. Efficiency on this scenario went the right way: mean output tokens 12380 before, 10388 after, 8699 fixed; mean turns 8.6 / 7.8 / 6.5. STILL FAILING AND NOT ADDRESSED HERE: readback-before-any-write 4/10 before, 4/10 after, 2/10 fixed — a gate-ordering rule, invisible at N=3 (0/3), and its own investigation. SCOPE: this entry measures one scenario. pocket-loop-export-handoff remains UNBENCHMARKED — it still ERRORs at pocket preflight with no nxd-desktop-supervisor in this container, and stages s4-s8 remain unexecuted against a real supervisor.
 
 Record: [`records/2026-07-31-pocket-loop-non-capture-sentinel-routed-to-gate-unknown-n-10.json`](records/2026-07-31-pocket-loop-non-capture-sentinel-routed-to-gate-unknown-n-10.json)
+
+## 2026-08-02 — closure-contract eval retargets: runtime observations in build records (rubric alignment, plugin v0.29.0)
+
+**No before/after run table — rubric drift, not a measured skill change.**
+`worldbank-live`'s `context-discloses-as-of-fetch` now distinguishes stable
+live-source scope from fetch-specific runtime evidence:
+`dp-spec.approved.md` must say that the data is a live-source snapshot and that
+rebuilds can revise it, while the observed upstream `lastupdated` must appear
+in `build-record.json` under `evidence.source_state`. This prevents a timestamp
+from one fetch being frozen into the approved plan. The same CONTEXT.md
+retirement retargets `treasury-yield-curve`'s closure file-set check and the
+three `country-income-trajectory` disclosure checks
+(`year-subset-selection-disclosed`, `aggregate-exclusion-ruling-landed`, and
+`current-classification-scope-disclosed`) to the approved-spec / generated-
+record closure contract. Those vendored-source checks have no runtime
+`lastupdated` observation: their source or analysis scope remains plan content,
+while generated build outcomes remain in `build-record.json`. These changes
+narrow or relocate accepted closure shapes, so historical and future runs are
+not judged by byte-identical rubric text.
+
+No live evaluation was run. `worldbank-live`, `treasury-yield-curve`, and
+`country-income-trajectory` are `ci_skip` because they require a live desktop
+supervisor; World Bank additionally needs outbound access to
+`api.worldbank.org`. This environment has neither `EVAL_POCKET_SUPERVISOR_DIR`
+nor `EVAL_POCKET_PYTHON`, and `nxd-desktop-supervisor` is absent. The static
+regression test pins the prompt/checker boundary only. It establishes no
+PASS/FAIL, quality, latency, token, cost, or runtime-connector claim.

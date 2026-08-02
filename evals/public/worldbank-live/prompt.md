@@ -33,6 +33,11 @@ the ruling optional.
 Inspect the live payloads before you author anything. The traps in this
 scenario are in the responses, not in this brief.
 
+The API is a live source: describe that stable scope and rebuild behavior in
+the approved spec, but record the `lastupdated` value observed for this fetch
+in `build-record.json` under `evidence.source_state`. Do not freeze a
+fetch-specific timestamp into the approved spec.
+
 ## Success checks
 
 The eval grades the landed data product, not the narration of it: whether the

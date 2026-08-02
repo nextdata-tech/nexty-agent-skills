@@ -1514,22 +1514,28 @@ def emit(obj: dict) -> str:
 # The lock file (§3.2, §3.5, §3.6)
 # ---------------------------------------------------------------------------
 
+PACKAGED_VERSION_STAMP = ".nexty-plugin-version.json"
+
+
 def _plugin_version(root: Path | None = None) -> str:
-    """Read the nearest authoritative plugin version. Never write it."""
+    """Read the nearest trusted package version. Never write it."""
     start = (root or Path(__file__)).resolve()
     if start.is_file():
         start = start.parent
     for candidate in (start, *start.parents):
-        manifest = candidate / ".claude-plugin" / "plugin.json"
-        try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict) or payload.get("name") != "nexty-agent-skills":
-            continue
-        version = payload.get("version")
-        if isinstance(version, str) and version:
-            return version
+        for metadata in (
+            candidate / PACKAGED_VERSION_STAMP,
+            candidate / ".claude-plugin" / "plugin.json",
+        ):
+            try:
+                payload = json.loads(metadata.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict) or payload.get("name") != "nexty-agent-skills":
+                continue
+            version = payload.get("version")
+            if isinstance(version, str) and version:
+                return version
     return "unknown"
 
 
@@ -1562,6 +1568,16 @@ def write_lock(
     report = Report("dp_diagnostics", target=str(closure))
     raw = spec.read_bytes()
     fm, _ = split_frontmatter(raw.decode("utf-8").replace("\r\n", "\n"))
+    if fm.get("status") != "approved":
+        report.error(
+            f"the spec status is {fm.get('status')!r}, not 'approved' — approve "
+            "the plan before snapshotting it into a closure",
+            code="closure.lock_status_not_approved",
+            path="spec:frontmatter.status",
+            evidence={"expected": "approved", "found": fm.get("status")},
+            stage="s3_closure",
+        )
+        return {}, report
 
     closure.mkdir(parents=True, exist_ok=True)
     snapshot = closure / CLOSURE_SNAPSHOT

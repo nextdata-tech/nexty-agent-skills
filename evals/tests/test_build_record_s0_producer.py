@@ -89,6 +89,20 @@ def test_lock_write_byte_copies_the_spec(workflow):
     )
 
 
+def test_lock_write_rejects_an_unapproved_spec_without_creating_artifacts(tmp_path):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(_spec_text().replace("status: approved", "status: proposed", 1), encoding="utf-8")
+    closure = tmp_path / "closure"
+
+    result = _run(str(DIAG), "lock", "write", str(spec), str(closure), "--json")
+
+    assert result.returncode == 1
+    diagnostics = json.loads(result.stdout)["diagnostics"]
+    assert [d["code"] for d in diagnostics] == ["closure.lock_status_not_approved"]
+    assert diagnostics[0]["evidence"] == {"expected": "approved", "found": "proposed"}
+    assert not closure.exists()
+
+
 def test_plugin_version_is_unknown_without_a_manifest(tmp_path):
     assert dpd._plugin_version(tmp_path) == "unknown"
 
@@ -97,6 +111,14 @@ def test_plugin_version_rejects_a_foreign_manifest(tmp_path):
     manifest = tmp_path / ".claude-plugin"
     manifest.mkdir()
     (manifest / "plugin.json").write_text(
+        json.dumps({"name": "another-plugin", "version": "9.9.9"}),
+        encoding="utf-8",
+    )
+    assert dpd._plugin_version(tmp_path) == "unknown"
+
+
+def test_plugin_version_rejects_a_foreign_standalone_stamp(tmp_path):
+    (tmp_path / dpd.PACKAGED_VERSION_STAMP).write_text(
         json.dumps({"name": "another-plugin", "version": "9.9.9"}),
         encoding="utf-8",
     )

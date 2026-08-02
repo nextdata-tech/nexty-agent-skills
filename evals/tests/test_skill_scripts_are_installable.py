@@ -43,6 +43,7 @@ SRC = REPO / "src"
 DELIVERED_BY_EMBEDDING = {"self_check.py"}
 
 HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py")
+VERSION_STAMP = ".nexty-plugin-version.json"
 SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
 WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
 BOOTSTRAP = re.compile(r"```bash\n(POCKET_HELPER_DIR=.*?test -n \"\$POCKET_HELPER_DIR\")\n```", re.S)
@@ -148,6 +149,25 @@ def _assert_helpers_run(skill_dir: Path) -> None:
     assert payload["counts"]["error"] == 0
 
 
+def _lock_plugin_version(skill_dir: Path) -> str:
+    """Exercise the installed diagnostic script, not the source import."""
+    spec = skill_dir.parent / "approved-dp-spec.md"
+    spec.write_text(
+        "---\ndp_spec_version: 1\nname: install_test\nworkflow: install-test\n"
+        "status: approved\n---\n\n## intent\n\nInstalled helper version test.\n",
+        encoding="utf-8",
+    )
+    closure = skill_dir.parent / "closure"
+    result = subprocess.run(
+        [sys.executable, str(skill_dir / "scripts" / "dp_diagnostics.py"), "lock", "write",
+         str(spec), str(closure), "--json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)["compiler_version"]["plugin"]
+
+
 def _bootstrap_resolves(home: Path, cwd: Path) -> Path:
     """Run the documented resolver, not a reimplementation of it."""
     text = (SRC / "nxd-pocket-loop" / "reference" / "scripts-bootstrap.md").read_text()
@@ -199,6 +219,11 @@ def test_code_install_includes_and_invokes_pocket_helpers(tmp_path: Path):
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
     _assert_helpers_run(skill_dir)
+    version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+    assert json.loads((skill_dir / VERSION_STAMP).read_text()) == {
+        "name": "nexty-agent-skills", "version": version
+    }
+    assert _lock_plugin_version(skill_dir) == version
 
 
 @pytest.mark.parametrize("layout", ("src/nxd-pocket-loop", "skills/nxd-pocket-loop"))
@@ -228,6 +253,7 @@ def test_desktop_cache_install_includes_and_invokes_pocket_helpers(tmp_path: Pat
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
     _assert_helpers_run(skill_dir)
+    assert _lock_plugin_version(skill_dir) == version
 
 
 def test_desktop_zip_includes_and_invokes_pocket_helpers(tmp_path: Path):
