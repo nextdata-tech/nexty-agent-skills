@@ -567,16 +567,18 @@ def check_contract_names_unique(contracts: list[tuple[str, dict]],
     names = [str(c["name"]) for _, c in contracts if c.get("name")]
     dupes = sorted({n for n in names if names.count(n) > 1})
     for dupe in dupes:
-        # One finding per SECTION the name appears in, not per entry: the path
-        # is keyed on (section, name), so a three-way collision inside one
-        # section would otherwise emit three byte-identical diagnostics and
-        # count three errors for one problem.
+        # One finding per (section, name) PAIR, not per entry: a three-way
+        # collision inside one section would otherwise emit three
+        # byte-identical diagnostics and count three errors for one problem.
+        # (The rendered path goes through entry_identity, which prefers a
+        # per-entry `id` when one is present.)
         sections = sorted({sec for sec, entry in contracts
                            if str(entry.get("name") or "") == dupe})
         for section in sections:
-            # Identity via entry_identity, like every other contract finding —
-            # it already resolves `name` first, so a hand-built path is one
-            # more place the addressing convention can drift.
+            # Identity via entry_identity, like every other contract finding:
+            # it resolves the entry's identity the same way check_contracts
+            # does (`id` first, then `name`), so a hand-built path is one more
+            # place the addressing convention can drift.
             entry = next(e for sec, e in contracts
                          if sec == section and str(e.get("name") or "") == dupe)
             # A cross-section collision is reported at BOTH locations on

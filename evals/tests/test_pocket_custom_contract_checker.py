@@ -806,6 +806,14 @@ def test_secret_literal_regex_matches_self_check_exactly():
         ('valid_token = "v"', False),
         ('uuid_token = "u"', False),
         ('grid_token = "g"', False),
+        # The credential word as a PREFIX of `_key` — arm 1 only sees suffixes.
+        ('SECRET_KEY = "abc"', True),
+        ('private_key = "abc"', True),
+        ('aws_secret_access_key = "abc"', True),
+        # ...but NOT every `*_key`: these are ordinary identifiers.
+        ('sort_key = "x"', False),
+        ('primary_key = "id"', False),
+        ('cache_key = "k"', False),
         # Still not matched: the secret word must be what is ASSIGNED, not a
         # prefix of some other identifier.
         ('password_columns = [1]', False),

@@ -83,6 +83,7 @@ such a change makes the ledger less trustworthy, not more: its value is that a
 reader can assume every figure in it means something. Name the tests carrying
 the evidence instead, and prefer tests verified to fail against the previous
 implementation.
+
 The ledger is the repo's before/after history of skill quality and efficiency
 (judge checks, turns, tool calls, tokens) — see "Benchmarking a skill change"
 in `evals/README.md`.
