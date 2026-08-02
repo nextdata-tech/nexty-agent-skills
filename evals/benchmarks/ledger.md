@@ -658,20 +658,6 @@ RUBRIC DRIFT, disclosed in full: three checks in incremental-transform-state/che
 
 Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json`](records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json)
 
-## 2026-07-30 — nxd-generate-dp: executable Pocket custom contracts (plugin v0.27.0)
-
-**SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
-
-
-| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
-|---|---|---|---|---|---|---|---|---|---|
-| before-v0.26.2 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 17 | 10382 | — | gpt-5.6-terra |
-| after-v0.27.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 16 | 8271 | — | gpt-5.6-terra |
-
-Notes: **RETRACTED for Pocket correctness and efficiency claims.** These runs did not prove that the agent was isolated from the checker, rubric, prior reports/closures, session history, memories, and evaluator checkout. Preserve these rows as history, but do not cite their verdict or tool/token comparison. The source-isolated 2026-07-31 replacement record below supersedes them.
-
-Record: [`records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json`](records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.json)
-
 ## 2026-07-31 — nxd-generate-dp: round-two Pocket CSV runtime contract fixes (plugin v0.27.0)
 
 **SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
@@ -690,23 +676,9 @@ Record: [`records/2026-07-30-nxd-generate-dp-executable-pocket-custom-contracts.
 | head-path-fixed | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 16 | 14823 | — | gpt-5.6-terra |
 | head-api-rerun | current_pack | api-to-vector-data-product-build | ERROR | — | — | — | — | — | gpt-5.6-terra |
 
-Notes: Current-rubric baseline versus round-two review fixes. **The `pocket-custom-contracts` rows are retracted and superseded by the source-isolated 2026-07-31 record below** because these runs did not prove answer-source isolation; do not cite their Pocket verdicts or efficiency metrics. Non-Pocket rows retain their original status. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.
+Notes: Current-rubric baseline versus round-two review fixes. **The `pocket-custom-contracts` rows are retracted and superseded by the source-isolated 2026-08-02 entry below** because these runs did not prove answer-source isolation; do not cite their Pocket verdicts or efficiency metrics. Non-Pocket rows retain their original status. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.
 
 Record: [`records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json`](records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json)
-
-## 2026-07-31 — nxd-generate-dp: source-isolated Pocket custom contracts (plugin v0.27.0)
-
-**SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
-
-
-| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
-|---|---|---|---|---|---|---|---|---|---|
-| baseline-origin-main | current_pack | pocket-custom-contracts | FAIL | 1/5 | — | — | — | — | gpt-5.6-terra |
-| head-pr138 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | — | — | — | gpt-5.6-terra |
-
-Notes: Correctness-only replacement evidence. Under the same current harness, rubric, protected prompt, checker, wrapper/profile, model, and effort, uncached origin/main failed 1/5 while PR #138 passed 5/5; both had 7/7 blocked-source probes and clean raw audits. Tool, token, elapsed-time, and cost figures are intentionally not compared. This supersedes the Pocket claims in the 2026-07-30 executable-contract record and the Pocket cells in the 2026-07-31 round-two record because those runs did not prove answer-source isolation.
-
-Record: [`records/2026-07-31-nxd-generate-dp-source-isolated-pocket-custom-contracts.json`](records/2026-07-31-nxd-generate-dp-source-isolated-pocket-custom-contracts.json)
 
 ## 2026-07-31 — spec-authoritative closures: CONTEXT.md retired for a byte-copied dp-spec.approved.md + lock + generated build-record.json (plugin v0.28.0)
 
