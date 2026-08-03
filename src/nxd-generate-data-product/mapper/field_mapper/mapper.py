@@ -1183,7 +1183,7 @@ def _validate_response(
         )
         out[name] = ValidatedCell(
             field=name,
-            value=raw_value if not violations else raw_value,
+            value=raw_value,
             value_status=(ValueStatus.OK.value if not violations else ValueStatus.VALIDATION_FAILED.value),
             needs_review=bool(violations),
             attempt_count=1,

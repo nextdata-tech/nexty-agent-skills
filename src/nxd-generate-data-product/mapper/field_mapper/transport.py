@@ -54,6 +54,7 @@ from .errors import FieldMapperError
 from .errors import ModelNotFoundError
 from .errors import RunCancelledError
 from .errors import SchemaRejectedError
+from .errors import SystemicError
 from .errors import TransportExhaustedError
 from .media import MediaInput
 from .media import build_media_content_block
@@ -1520,7 +1521,14 @@ class Client:
         """
         anthropic = self._anthropic
 
-        if isinstance(exc, FieldMapperError):
+        # SystemicError only, not the taxonomy root. `FieldMapperError` is the
+        # base of every typed failure including `CellError`, so catching it here
+        # re-raised per-attempt failures past the retry loop that exists to
+        # absorb them — `ClaudeCliProvider.dispatch` raises
+        # `TransportExhaustedError` (a CellError) for subprocess timeout,
+        # non-zero exit and unparseable output, which made
+        # `max_transport_retries` inert on that provider entirely.
+        if isinstance(exc, SystemicError):
             raise exc
 
         auth_error = getattr(anthropic, "AuthenticationError", ())

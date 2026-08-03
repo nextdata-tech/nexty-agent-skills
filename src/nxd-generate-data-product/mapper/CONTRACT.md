@@ -38,11 +38,7 @@ deliberately absent here — they live in the landed mapper spec, versioned by
 
 ## 1. Module layout
 
-Imported as `nxd.experimental.field_mapper`, from the installed `nxd` package.
-The modules below are not carried in this skill's zip — the runtime provides
-them. This tree is the harness's source of truth, at
-`src/nxd-generate-data-product/mapper/field_mapper/` in the skills repo, and the
-package copy is generated from it.
+All under `src/nxd-generate-data-product/mapper/field_mapper/`.
 
 ```
 field_mapper/
@@ -458,7 +454,12 @@ Run before landing; any failure blocks (§4).
    cell. No orphans in either direction.
 2. **Evidence completeness.** Every `ok` cell has ≥ the spec's minimum evidence
    atoms; every evidence row's `(target_row_key, field)` resolves to an existing
-   proposal.
+   proposal. **A human override is exempt**: `min_evidence` is a floor on what
+   the MODEL must cite, and an override is `ok` because a person stated it, not
+   because a model cleared the harness's checks. Applying the floor there would
+   block the build on an override of a cell the model never proposed — the case
+   §6 exists to support — and contradict the unconditional precedence §6 grants
+   an override.
 3. **Value-hash agreement.** The sidecar's `value_hash` equals the hash
    recomputed from the wide row's value. Catches the class where the projection
    and the provenance drift.
@@ -752,34 +753,13 @@ stand — each states why it does not gate use of the shipped harness.
    `bound_input_snapshot_id` and `bound_mapper_spec_id` make it impossible for a
    review to silently attach to the wrong value.
 
-6. **Harness packaging and version stamping. DECIDED: shipped inside the `nxd`
-   package.** A closure that maps imports `nxd.experimental.field_mapper` from
-   the package the runtime already installs. Nothing is copied.
-
-   This supersedes an earlier decision to vendor the harness out of the
-   installed skill directory into the closure root. That route never ran on the
-   platform: the desktop supervisor stages only `transform/main.py` into its
-   isolated data directory, so a vendored `field_mapper/` was absent at
-   execution and every build died on `ModuleNotFoundError` after passing every
-   static gate.
-
-   **Do not vendor a copy.** The consent gate triggers on the dotted import
-   path, matched on dot boundaries, so a closure that copies the package
-   somewhere and writes a bare `import field_mapper` does not fire Phase G and
-   is never asked for a grant. Phase E does not catch it either — the harness's
-   `import anthropic` is function-local inside `transport.py` and invisible to
-   an AST walk over the transform. Both gates go green on an unconsented
-   mapping. That residual is recorded in
-   `reference/self-check.md` § "What Phase G cannot see" alongside the
-   `importlib` and inlined-source routes.
-
-   Drift is still not silent: `harness_version` is an input to
-   `mapper_spec_id`, so a release that changes the harness moves every spec id,
-   existing grants stop binding, and the consent gate demands fresh ones. The
-   version appears in the ledger and in the spec-hash input list for the same
-   reason. Because the harness now travels with the package rather than with
-   each closure, that re-consent lands on an `nxd` upgrade and applies to every
-   mapper closure at once.
+6. **Harness packaging and version stamping. DECIDED: vendored from the skill,
+   no wheel.** A closure that maps copies `mapper/field_mapper/` out of the
+   installed `nxd-generate-data-product` skill directory to its own root. Drift between
+   closures is not silent: `harness_version` is an input to `mapper_spec_id`, so
+   vendoring a newer harness moves every spec id, the existing grants stop
+   binding, and the consent gate demands fresh ones. The version appears in the
+   ledger and in the spec-hash input list for the same reason.
 
 7. **Does the grant bind the model snapshot? DECIDED: the alias, as the spec
    names it.** A snapshot rollover behind an alias is a platform property no
