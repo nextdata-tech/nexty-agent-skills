@@ -500,11 +500,14 @@ def merge_record(path, stages):
     try:
         rec = json.loads(p.read_text(encoding="utf-8"))
     except Exception as exc:
-        record_notice(
+        message = (
             f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
             "stages 1-3 NOT merged. Re-run generator lock/record setup with its "
             "resolved job_helper_dir before self_check.py.")
-        return
+        record_notice(message)
+        diag("s3_closure", "closure.build_record_merge_failed", message,
+             path=cpath(path), evidence={"record": path})
+        return False
     rec.setdefault("stages", {}).update(stages)
     if READBACK["distribution"] or READBACK["absent"]:
         rec["readback"] = READBACK
@@ -532,7 +535,8 @@ def merge_record(path, stages):
         record_notice(message)
         diag("s3_closure", "closure.build_record_merge_failed", message,
              path=cpath(path), evidence={"record": path})
-        return
+        return False
+    return True
 
 def finish(exit_code):
     """Every exit goes through here, including a failing phase.
@@ -561,8 +565,13 @@ def finish(exit_code):
         stages[s] = {"status": status, "ordinal": ordinal,
                      "at_unix_ms": STAGE_AT.get(s), "origin": "tool_computed",
                      "diagnostics": ds, "detail": STAGE_DETAIL[s]}
-    if RECORD_PATH:
-        merge_record(RECORD_PATH, stages)
+    if RECORD_PATH and not merge_record(RECORD_PATH, stages):
+        # The record could not carry this failure, so preserve it in the
+        # report and make the process verdict fail as well.
+        stages["s3_closure"]["status"] = "failed"
+        stages["s3_closure"]["diagnostics"] = [
+            d for d in DIAGS if d["stage"] == "s3_closure"]
+        exit_code = max(exit_code, 1)
     if JSON_MODE:
         counts = {"error": 0, "warning": 0, "info": 0}
         for d in DIAGS:

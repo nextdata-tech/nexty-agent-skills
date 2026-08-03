@@ -1092,7 +1092,7 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         f"this scan cannot parse, so they were never checked for a codec"
     )
     binary_mode = re.compile(
-        r"(?:^\s*|,\s*|mode\s*=\s*)[\"'][^\"']*b[^\"']*[\"']"
+        r"(?:,\s*|mode\s*=\s*)[\"'][rwxa+]*b[rwxa+]*[\"']"
     )
     # Binary handles do not decode text and therefore must not name a text codec.
     unpinned = [c.strip() for c in calls
@@ -1125,6 +1125,16 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     )
     assert "closure.build_record_merge_failed" in merge_record, (
         "merge_record's write failure is missing from the JSON diagnostics"
+    )
+    finish = body[body.index("def finish"):body.index("# ---------------------------------------------------------------- Phase A")]
+    assert "if RECORD_PATH and not merge_record(RECORD_PATH, stages):" in finish, (
+        "finish() does not observe a failed record merge"
+    )
+    assert 'stages["s3_closure"]["status"] = "failed"' in finish, (
+        "a failed record merge does not fail the closure stage"
+    )
+    assert "exit_code = max(exit_code, 1)" in finish, (
+        "a failed record merge can still produce a green process verdict"
     )
     record_notice = body[body.index("def record_notice"):body.index("def cpath")]
     assert "print(message, file=sys.stderr)" in record_notice, (
