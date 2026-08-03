@@ -672,9 +672,13 @@ _register_table(
         ("grant.invalid", "error", "agent", "none", False,
          "a grant does not parse, is rejected by the harness, or carries the "
          "'<derived>' fixture placeholder instead of a real spec hash"),
+        ("grant.vendored_harness", "error", "agent", "none", False,
+         "a module imports a copy of the field-mapper harness vendored into "
+         "the closure root — the pre-package contract, which no longer runs on "
+         "the platform and answers for its own spec hash"),
         ("grant.spec_unreadable", "error", "agent", "none", False,
          "the transform maps but no spec JSON was found under contracts/, or "
-         "the vendored harness could not compute its bound mapper_spec_id"),
+         "the harness could not compute its bound mapper_spec_id"),
         ("grant.ungated_map", "error", "agent", "none", False,
          "the transform imports the harness but never references map_inputs — "
          "the only entry point that checks the grant before reading source "

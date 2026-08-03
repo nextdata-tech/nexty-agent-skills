@@ -93,7 +93,7 @@ _codes("error", "user",
        "grant.missing", "grant.spec_mismatch", "grant.expired")
 _codes("error", "agent",
        "grant.invalid", "grant.spec_unreadable", "grant.ungated_map",
-       "grant.verifier_maps")
+       "grant.verifier_maps", "grant.vendored_harness")
 _codes("warning", "agent", "grant.unbound")
 
 JSON_MODE = "--json" in sys.argv
@@ -1164,6 +1164,37 @@ mapper_import_file, mapper_import = next(
      for m in sorted(mods) if denied_hit(m, {MAPPER_ROOT})),
     (None, None))
 
+# The pre-package spelling. The harness used to be COPIED into the closure root
+# and imported as a top-level `field_mapper`, and that was the sanctioned
+# contract, so every closure authored before it moved into `nxd` has this shape
+# on disk. Left unmatched it is the worst case this gate has: the import
+# resolves at Phase B (the closure root is on sys.path), the transform maps for
+# real against the env-fallback key, and the gate says "no consent obligation"
+# on the way past. Phase E does not cover it either — the harness's
+# `import anthropic` is function-local and invisible to its AST walk.
+#
+# Denied by name rather than sent through the grant oracle: a vendored copy is
+# not a thing to consent to, it is a thing to delete. A grant cannot make it
+# right, because the vendored harness answers for its own spec hash.
+LEGACY_MAPPER_ROOT = "field_mapper"
+legacy_file, legacy_import = next(
+    ((rel, m) for rel, (mods, _s) in sorted(t_modules.items())
+     for m in sorted(mods) if denied_hit(m, {LEGACY_MAPPER_ROOT})),
+    (None, None))
+if legacy_file:
+    gerr("grant.vendored_harness",
+         f"{legacy_file} imports '{legacy_import}' — a copy of the field-mapper "
+         f"harness vendored into the closure. That was the contract before the "
+         f"harness shipped inside the nxd package, and it no longer runs on the "
+         f"platform: the supervisor stages only transform/main.py, so the "
+         f"vendored package is absent at execution. It also answers for its own "
+         f"spec hash, so no grant bound to it means anything.",
+         legacy_file,
+         fix="delete the vendored field_mapper/ directory and import "
+             "`nxd.experimental.field_mapper` instead; the grant's "
+             "mapper_spec_id must then be recomputed with "
+             "`python -m nxd.experimental.field_mapper spec-id <spec.json>`")
+
 # The verifier scan is UNCONDITIONAL and not grant-waivable — a grant authorizes
 # mapping in a transform, never in a contract verifier. This closes a hole Phase
 # E structurally cannot: its verifier scan checks MODEL_ROOTS only, and the
@@ -1539,15 +1570,24 @@ nxd.data_product, nxd.core, core.context = dp, core, ctx
 # dependency rather than a shadowed one.
 sys.path.insert(0, ".")
 import importlib.util                    # noqa: E402 — only this shim needs it
-try:
-    _real_nxd = importlib.util.find_spec("nxd") if "nxd" not in sys.modules else None
-except (ImportError, ValueError):
-    # A broken or partially-installed `nxd` must not take the dry run down
-    # before it starts; falling through leaves the stub path-less, which is the
-    # pre-existing behaviour.
-    _real_nxd = None
-if _real_nxd is not None and _real_nxd.submodule_search_locations:
-    nxd.__path__ = list(_real_nxd.submodule_search_locations)
+_real_path = None
+if "nxd" in sys.modules:
+    # Already imported: read the live module's own path rather than calling
+    # find_spec, which raises ValueError on an entry with no __spec__. Giving up
+    # here would overwrite a provably-importable package with the path-less stub
+    # two lines below — reintroducing the exact shadowing this shim exists to
+    # remove, in the one case where the real package was known to be present.
+    _real_path = getattr(sys.modules["nxd"], "__path__", None)
+else:
+    try:
+        _spec = importlib.util.find_spec("nxd")
+    except (ImportError, ValueError):
+        # A broken or partially-installed `nxd` must not take the dry run down
+        # before it starts; a path-less stub is the pre-existing behaviour.
+        _spec = None
+    _real_path = _spec.submodule_search_locations if _spec is not None else None
+if _real_path:
+    nxd.__path__ = list(_real_path)
 sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": ctx})
 try:
     from transform.main import BASE_MODELS, PHYSICAL_MODELS, ingest  # noqa: E402

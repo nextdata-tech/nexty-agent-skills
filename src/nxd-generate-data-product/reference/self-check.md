@@ -332,13 +332,21 @@ so in as many words. `field_mapper` is deliberately **not** in Phase E's
 answer different questions. Green Phase G means a binding consent artifact
 exists. Specifically not:
 
-- **The hash is computed by the artifact being audited.** Phase G subprocesses
-  the *vendored* `python -m field_mapper spec-id` rather than reimplementing the
-  binding, because two copies of a consent rule is how a gate ends up enforcing
-  something other than what it claims. The price is self-attestation: a closure
-  that edited its own `field_mapper/spec.py` can mint any id. Phase G catches
-  the closure that **drifted** — the spec edited after the user said yes, which
-  is the common failure — never the one that **lied**.
+- **The hash is computed by the harness, not by this gate.** Phase G
+  subprocesses `python -m nxd.experimental.field_mapper spec-id` rather than
+  reimplementing the binding, because two copies of a consent rule is how a
+  gate ends up enforcing something other than what it claims. The copy that
+  answers here is the copy the transform imports under Phase B, so the binding
+  and the mapping cannot disagree with each other. **That consistency is not
+  integrity.** The oracle runs as a subprocess with the closure root on
+  `sys.path`, so a closure that ships its own `nxd/experimental/field_mapper/`
+  at its root shadows the installed package in BOTH places and answers for its
+  own spec under whatever rule it likes. Self-attestation survived the harness
+  moving out of the closure; it now takes a directory rather than an edit.
+  What also remains is spec authorship: the gate binds whatever spec the
+  closure presents. Phase G catches the closure that **drifted** — the spec
+  edited after the user said yes, which is the common failure — never the one
+  that **lied** by minting its own spec/grant pair.
 - **Binding is to the specs on disk, not to the spec the call passes.** Phase G
   hashes every spec-shaped JSON under `contracts/` and demands a grant for each;
   nothing inspects which spec path the transform actually hands to `map_inputs`.
@@ -357,9 +365,16 @@ exists. Specifically not:
   `helpers/util.py`, with the transform doing `import helpers.util` — does not
   fire the gate. Unlike the routes below, that is an ordinary refactor rather
   than a closure that lied, which makes it the one hole here a careful author
-  could reach by accident. A renamed vendor directory, an
-  `importlib.import_module("field_mapper")`, or `transport.py`'s body pasted
-  inline never fires this gate either. Such a closure passes **Phase E as well**: the
+  could reach by accident. An
+  `importlib.import_module("nxd.experimental.field_mapper")`,
+  `transport.py`'s body pasted inline, or a **copy of the harness placed in the
+  closure and imported under a different name** — a vendored `field_mapper/` at
+  the root with `import field_mapper`, which matches no dot-boundary prefix of
+  the installed path — never fires this gate either. That last route is worth
+  naming because it used to be the *sanctioned* one: before the harness shipped
+  inside `nxd`, vendoring was how a closure reached it. `mapper/CONTRACT.md`
+  now says not to, and the skill no longer carries a copy to vendor, but
+  nothing here detects one. Such a closure passes **Phase E as well**: the
   harness's `import anthropic` is function-local inside `transport.py`, and
   Phase E walks only the transform and the verifiers, not the packages they
   import. Both gates green is not proof that no unconsented mapping happened.

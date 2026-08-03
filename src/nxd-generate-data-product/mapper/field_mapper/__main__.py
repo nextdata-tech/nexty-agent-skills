@@ -4,10 +4,10 @@ Run one mapper spec over sample inputs and print the resulting long-form rows,
 the resolver's wide projection, and a summary of issues counted by
 `value_status`.
 
-    python -m field_mapper run     samples/01-row-scores --dry-run
-    python -m field_mapper preflight samples/01-row-scores
-    python -m field_mapper canary  samples/01-row-scores --dry-run --canary 1
-    python -m field_mapper verify  samples/                 # the whole suite
+    python -m nxd.experimental.field_mapper run     samples/01-row-scores --dry-run
+    python -m nxd.experimental.field_mapper preflight samples/01-row-scores
+    python -m nxd.experimental.field_mapper canary  samples/01-row-scores --dry-run --canary 1
+    python -m nxd.experimental.field_mapper verify  samples/                 # the whole suite
 
 Two execution modes, and the distinction is load-bearing:
 
@@ -1855,7 +1855,7 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="field_mapper",
+        prog="python -m nxd.experimental.field_mapper",
         description=(
             "Run one mapper spec over sample inputs; print long-form rows, the "
             "wide projection, and issue counts by value_status."

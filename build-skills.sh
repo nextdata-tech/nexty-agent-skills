@@ -34,8 +34,12 @@ EXCLUDES=(
   # second one at worst. This tree stays the harness's source of truth — the
   # package copy is generated from it — but a Desktop user's installed skill has
   # no use for it. `mapper/CONTRACT.md` and `mapper/samples/` DO ship: the
-  # contract is normative documentation, and the fixtures are what
-  # `reference/field-mapper.md` points at when explaining evidence modes.
+  # contract is the normative record of the harness's behaviour (record schemas,
+  # value_status semantics, the blocking rules), and it describes the fixtures
+  # case by case, so shipping the prose without the cases it cites would leave a
+  # reader unable to check any claim in it. The runtime's own copy of the
+  # fixtures answers "is this harness intact?"; these answer "what is this
+  # harness supposed to do?", which is what a closure author needs.
   # Its e2e proof needs an nxd monorepo checkout a Desktop user cannot have,
   # and its run ledgers / live-API credentials must never leave the machine.
   # zip reads the filesystem, not git, so gitignored artifacts need excluding

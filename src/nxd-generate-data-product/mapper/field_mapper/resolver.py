@@ -330,12 +330,25 @@ class Resolution:
         for item in self.effective:
             cell = (item.target_row_key, item.field)
             if item.value_status is ValueStatus.OK:
-                have = counts.get(cell, 0)
-                want = self.min_evidence_for(item.field)
-                if have < want:
-                    raise BijectionError(
-                        f"cell {cell!r} is ok with {have} evidence atom(s); the spec requires at least {want}"
-                    )
+                # A human override carries no evidence obligation: it is `ok`
+                # because a person stated it, not because a model cleared the
+                # harness's checks, and `min_evidence` is a floor on what the
+                # MODEL must cite. Applying it to an override blocks the whole
+                # build on a cell the model never proposed — the case `resolve`
+                # explicitly supports via a null-bound review — and contradicts
+                # the unconditional precedence CONTRACT §6 grants an override.
+                #
+                # Exempted INSIDE this branch, never by narrowing the branch
+                # itself: an override is still `ok` with a non-null value, so
+                # falling through to the `elif` below would raise a structural
+                # error instead. The two checks answer different questions.
+                if item.effective_source is not EffectiveSource.HUMAN_OVERRIDE:
+                    have = counts.get(cell, 0)
+                    want = self.min_evidence_for(item.field)
+                    if have < want:
+                        raise BijectionError(
+                            f"cell {cell!r} is ok with {have} evidence atom(s); the spec requires at least {want}"
+                        )
             elif item.value is not None:
                 raise BijectionError(
                     f"cell {cell!r} has status {item.value_status.value} but a "
