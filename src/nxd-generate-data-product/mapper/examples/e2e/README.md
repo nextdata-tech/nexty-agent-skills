@@ -1,8 +1,6 @@
 # End-to-end proof
 
-Two runnable files, proving two different things. `transform_main_mockup.py`
-(one level up) shows the shape of a transform and **does not run**; both of
-these do.
+Two runnable files, proving two different things.
 
 | file | proves |
 |---|---|
@@ -179,7 +177,9 @@ fixture.
 - **Publication is not atomic.** Two `pipeline.run` calls; a crash between them
   leaves landed inputs with no judgements. CONTRACT §7.7 wants a fault-injection
   test. It does not exist.
-- **The durable-review half never executes.** `resolve()` runs, but with an
-  empty review set — `cmd_resolve` is still a stub (REVIEW.md CV-3), so
-  override, staleness, and re-binding are unexercised here.
+- **The durable-review half never executes here.** `resolve()` runs, but with an
+  empty review set, so override, staleness, and re-binding are unexercised by
+  this script. `python -m field_mapper resolve` covers them: it re-resolves from
+  the landed CSVs without re-inferring, which is where a changed `reviews.csv`
+  shows confirmations applying or coming unbound with a `stale_reason`.
 - **No platform integration.** No cluster, no driver, no real output port.

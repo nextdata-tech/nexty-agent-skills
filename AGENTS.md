@@ -22,10 +22,11 @@ pack-level invariants CI cannot check on its own.
   pack**: nothing under `src/` imports them, `build-skills.sh` does not package
   them, and `validate_skills.py` does not scan them, so the versioning and
   pack-completeness rules below do not apply to changes confined here. Each
-  carries its own docs — start with
-  `experiments/field-mapper/ARCHITECTURE.md`. An experiment that graduates moves
-  its code under `src/` and its architecture doc to `docs/architecture/`; until
-  then treat `experiments/` as a staging area, never as a dependency.
+  carries its own docs. An experiment that graduates moves its code under `src/`
+  and its architecture doc to `docs/architecture/`; until then treat
+  `experiments/` as a staging area, never as a dependency. The worked example of
+  a graduation is the field mapper: code at `src/nxd-generate-data-product/mapper/`,
+  design record at `docs/architecture/field-mapper.md`.
 
 ## Versioning (single source of truth)
 

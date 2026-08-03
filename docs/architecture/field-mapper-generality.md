@@ -90,7 +90,7 @@ family its own spec vocabulary anticipates. That gap between what `spec.py`
 can declare and what `mapper.py` can dispatch is the sharpest single finding
 here: the spec language is more general than the primitive's implementation,
 which is the good direction (spec-level fork, not redesign), but the
-ARCHITECTURE claim "one harness serves both whiteboard cases" is currently
+`field-mapper.md` claim "one harness serves both whiteboard cases" is currently
 true only for the judgement case and single-row extraction.
 
 ### S4. PDF page transcription as a stage-1 mapper — the live decision — BREAKS as specced
@@ -119,7 +119,7 @@ again).
 Stage 2's `input_snapshot_id` includes `normalize_text(landed_text)`
 (mapper.py:`snapshot_projection`, deliberately — "a re-extraction genuinely
 changes what was read"). Stage-1 proposals are replace-loaded and unreviewed
-cells re-infer on every rebuild (ARCHITECTURE: "No-cache survives intact").
+cells re-infer on every rebuild (`field-mapper.md`: "No-cache survives intact").
 The model has no determinism knob (temperature is rejected by design;
 thinking is on by default). So every rebuild re-transcribes, whitespace
 normalization absorbs some jitter but not word-level variance, and any
@@ -309,9 +309,9 @@ that the primitive composes further than expected.
 800 cells need review; the reviewer's address for a row is a 32-char content
 hash, and a review row requires hand-carrying three bound hashes. At
 fixture scale this is fine; at production scale the review surface — not
-inference — is the bottleneck, and CV-2's lesson (any human-readable
-aliasing layer silently reintroduces ordinal identity unless it shares
-`map_inputs`' canonical ordering) says the fix must be generated, not
+inference — is the bottleneck. Any human-readable aliasing layer silently
+reintroduces ordinal identity unless it shares `map_inputs`' canonical
+ordering, so the fix must be generated, not
 ad hoc: the resolver should emit the review queue (readable identity
 columns + pre-filled bound hashes, reviewer edits verdict/override only).
 That is a projection of data the `Resolution` bundle already holds — an

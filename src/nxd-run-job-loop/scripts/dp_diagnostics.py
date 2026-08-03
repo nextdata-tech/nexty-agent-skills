@@ -643,6 +643,61 @@ _register(
             "transport check was skipped rather than guessed",
 )
 
+# --- domain `grant.` — stage s1_structure (Phase G) --------------------------
+# The consent gate: a closure that vendors the field-mapper harness maps only
+# under a grant binding each mapper spec found in the closure. Statically it
+# binds the specs on disk, never the path the transform hands `map_inputs` —
+# see "What Phase G cannot see". Filed under s1_structure for
+# Phase E's reason plus one of its own: Phase B EXECUTES the transform, and a
+# mapper transform with an environment-resolvable key makes live model calls
+# there. A consent verdict delivered after that is a report about consent
+# already spent.
+#
+# The owner split is the unusual part. Three codes are owner: user, because
+# consent is not a code defect — the agent cannot author a grant on the user's
+# behalf, cannot decide that a drifted rubric is still acceptable, and cannot
+# extend an expiry. The remaining four are agent-fixable closure defects.
+_register_table(
+    "s1_structure",
+    (
+        ("grant.missing", "error", "user", "confirm", False,
+         "a transform module imports the field-mapper harness and a spec is present, "
+         "but contracts/ carries no consent grant"),
+        ("grant.spec_mismatch", "error", "user", "confirm", False,
+         "no grant binds the hash of a spec found under contracts/, or the "
+         "bound grant names different models — the rubric changed since "
+         "consent was given"),
+        ("grant.expired", "error", "user", "confirm", False,
+         "the grant binding this spec is past its expires_at — consent lapsed"),
+        ("grant.invalid", "error", "agent", "none", False,
+         "a grant does not parse, is rejected by the harness, or carries the "
+         "'<derived>' fixture placeholder instead of a real spec hash"),
+        ("grant.spec_unreadable", "error", "agent", "none", False,
+         "the transform maps but no spec JSON was found under contracts/, or "
+         "the vendored harness could not compute its bound mapper_spec_id"),
+        ("grant.ungated_map", "error", "agent", "none", False,
+         "the transform imports the harness but never references map_inputs — "
+         "the only entry point that checks the grant before reading source "
+         "content or resolving a key"),
+        ("grant.verifier_maps", "error", "agent", "none", False,
+         "a contracts/ verifier imports the field-mapper harness — a verifier "
+         "that re-decides pass/fail via a model is not a check, and no grant "
+         "authorizes mapping there"),
+    ),
+)
+
+# Not an error: a grant binding no spec in this closure authorizes nothing and
+# fails nothing. It warns because a stale consent artifact left on disk is what
+# a later reader mistakes for coverage it does not provide.
+_register(
+    "grant.unbound",
+    stage="s1_structure",
+    severity="warning",
+    owner="agent",
+    summary="a consent grant in contracts/ binds no spec in this closure — "
+            "stale consent left behind",
+)
+
 # --- domain `runtime.` — stages s2_transform, s6_run -------------------------
 _register_table(
     "s2_transform",

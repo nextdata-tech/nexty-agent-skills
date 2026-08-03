@@ -1,6 +1,6 @@
 # Field-mapper acceptance fixtures
 
-Eight fixtures. Together they are the acceptance suite for the Layer-1 contract in
+Thirteen fixtures. Together they are the acceptance suite for the Layer-1 contract in
 [`../CONTRACT.md`](../CONTRACT.md) — not a demo directory. Each one declares, in
 `expect.json`, the outcome it proves; `verify` runs them all and fails when
 reality diverges.
@@ -55,6 +55,11 @@ a different and stronger claim than "the status is `validation_failed`".
 | 06 | `06-validation-failure` | Range enforcement, value discard, review precedence | no |
 | 07 | `07-media-direct` | An image has no substring surface, and the harness says so up front | no |
 | 08 | `08-pdf-document` | A real 2-page PDF: right answers, zero verifiable citations | no |
+| 09 | `09-unfalsifiable-evidence` | **Negative** — a media-direct spec demanding evidence is refused before any model call | **yes** |
+| 10 | `10-cross-field-check` | A cross-field arithmetic check catches a misread every per-field check passes | no |
+| 11 | `11-consistent-misread` | **Adversarial** — a *consistent* misread defeats the cross-field check | no |
+| 12 | `12-corroboration` | A stable single-model misread is caught by a second model and never lands | no |
+| 13 | `13-citations` | The citations twin of 08: API-returned spans make the same quotes verifiable | no |
 
 ### 01 — `01-row-scores`: the normal row-input case
 
@@ -307,15 +312,17 @@ Being precise about the boundary, because a green suite invites over-reading:
   fault-injection between table resources to prove dlt/DuckDB multi-table
   publication is atomic rather than assuming it. No fixture here lands through
   dlt at all.
-- **It does not test scale.** Six fixtures, at most two inputs each. Concurrency,
-  rate-limit interaction with the budget check, the mid-run coverage stop, and
-  the heartbeat are all unexercised (CONTRACT.md open question 2).
-- **It does not test PDF extraction.** Every fixture supplies landed text
-  directly. Stage 1 of design §5 — extracting canonical text with page and
-  character offsets — has no implementation, and `evidence_unverified` therefore
-  occurs ONLY on the media-direct paths (fixtures 07 and 08), where no landed
-  text exists to check against. It never occurs on a landed-text fixture,
-  which is the distinction that matters (CONTRACT.md open question 4).
+- **It does not test scale.** Thirteen fixtures, at most two inputs each.
+  Concurrency, rate-limit interaction with the budget check, the mid-run
+  coverage stop, and the heartbeat are all unexercised (CONTRACT.md open
+  question 2).
+- **It does not extract PDF text locally, by design.** A PDF goes to the model
+  as a document content block; the API returns the spans it read when the spec
+  sets `evidence_mode: citations` (fixture 13). No fixture extracts canonical
+  text locally, so `verified` — the substring check against landed text — never
+  applies to a PDF. On a media-direct PDF with no citations, evidence stays
+  `evidence_unverified` (fixtures 07 and 08), which is the distinction that
+  matters.
 - **It does not judge quality.** No fixture asserts that a score is *correct*.
   The suite checks coverage, evidence anchoring, range and enum validity, key
   uniqueness, and review binding. Whether a 5 is the right answer is a human
@@ -409,10 +416,11 @@ whitespace and case only, never character folding, and deliberately so ("never
 fuzzy").
 
 So even with a local extractor, a model-returned quote is **not byte-identical**
-to a local extraction of the same document. That is Fable's H-4 finding
-(`REVIEW.md`) appearing in real output rather than in a constructed fixture, and it
-means the two-stage design needs its normalisation calibrated against real
-extractor output before the substring check can be trusted on PDFs.
+to a local extraction of the same document — here in real output rather than in
+a constructed fixture. The two-stage design would need its normalisation
+calibrated against real extractor output before a substring check could be
+trusted on PDFs, which is one reason the citations path (fixture 13), where the
+API returns spans it extracted itself, is the supported route for PDF evidence.
 
 **Cost, measured.** 5,612 input tokens for a 1,870-byte, 2-page PDF. That is the
 per-page pricing at work (1,500–3,000 text tokens/page plus image tokens, since
@@ -420,7 +428,7 @@ every page is rasterised) and it confirms `_PDF_TOKENS_PER_KB` — a *byte*-base
 heuristic — is wrong by orders of magnitude for PDFs.
 
 **What this fixture does not cover.** Paging (2 pages, against a 600-page ceiling
-and documents that fail earlier when dense); the citations path, which would return
-API-extracted `cited_text` and make these quotes verifiable at the cost of
-structured output; scanned PDFs, which have no text layer and are not citable at
-all; and `url`/`file_id` source forms.
+and documents that fail earlier when dense); the citations path, which returns
+API-extracted `cited_text` and makes these quotes verifiable at the cost of
+structured output — fixture 13 covers it; scanned PDFs, which have no text layer
+and are not citable at all; and `url`/`file_id` source forms.

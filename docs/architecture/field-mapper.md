@@ -2,9 +2,12 @@
 
 Layer-1 harness for LLM inference from inside a data-product transform.
 
-Status: **prototype**. Acceptance suite passes 13/13. Proven end to end as a
-real nxd transform (dlt → duckdb → mapper → gate → dlt), but not adopted for
-production use: two items still gate that; see [Blocked](#blocked-on) below.
+Status: **shipped** as part of the `nxd-generate-data-product` skill, at
+`src/nxd-generate-data-product/mapper/`. Vendored per closure and gated by the generate-dp
+self-check's Phase G consent gate. Acceptance suite passes 13/13, and it is
+proven end to end as a real nxd transform (dlt → duckdb → mapper → gate → dlt).
+What it deliberately does not cover is in
+[Documented limits](#documented-limits) below.
 
 Design of record: vault note `designs/ai-dp-gen/19 - Data field mapper harness
 (in-transform inference)`. This file documents what the code actually does.
@@ -36,7 +39,7 @@ already carries vocabulary for that case — `source_locators` (`spec.py:207`),
 `ordinal_suffix`, duplicate policies — which the dispatch loop and wire schema
 cannot execute. The spec language is more general than the implementation.
 
-See [GENERALITY.md](GENERALITY.md) for the 13-scenario stress test. The
+See [field-mapper-generality.md](field-mapper-generality.md) for the 13-scenario stress test. The
 extension that closes this gap — `identity_source: output` plus a row-array
 output mode — is designed but not built.
 
@@ -180,7 +183,7 @@ no-op — and not for *append*, which is the more common per-row no-op.
 
 This is not a bug: population scope is exactly right for cross-row specs, where a
 new input legitimately invalidates every verdict. It is a semantics the spec
-should declare and currently cannot. See GENERALITY.md extension 2
+should declare and currently cannot. See `field-mapper-generality.md` extension 2
 (`snapshot_scope: row | population`).
 
 ---
@@ -368,6 +371,71 @@ mapping. Neither addresses injection.
 - API key resolution: `secrets` dict first, env fallback for the CLI. The key is
   never logged and never appears in the ledger.
 
+## Vendoring into a closure
+
+The harness is not published as a wheel; it is **vendored from the skill**
+(CONTRACT.md open question 6). A closure that wants to map copies
+`<skill-dir>/mapper/field_mapper/` to its own root, and the generate-dp
+self-check's **Phase G** enforces consent on the result. Version drift between
+closures is re-consented by design: `harness_version` is an input to
+`mapper_spec_id`, so vendoring a newer harness moves every spec id and Phase G
+demands fresh grants. The layout is not a suggestion; two parts of it are load-bearing.
+
+```
+<closure>/
+  field_mapper/          # the vendored package, at the CLOSURE ROOT
+  contracts/
+    <name>_spec.json     # the MapperSpec — hashable, therefore consentable
+    <name>_grant.json    # the consent grant, binding that spec's id
+  transform/main.py      # imports field_mapper, calls map_inputs
+```
+
+**At the closure root, never under `contracts/`.** Phase E rglobs
+`contracts/**/*.py` and parses every file for model-SDK imports. `transport.py`
+contains `import anthropic` — function-local, but a function-local import is
+still an `ast.Import` node that `ast.walk` finds. A package vendored under
+`contracts/` therefore dies in Phase E: correctly, but very confusingly.
+
+**Author the grant against the harness, not by hand.** The `mapper_spec_id` is
+the hash of the spec *with its compiled wire schema and harness version stamped
+in*, not of the JSON sitting on disk. Get it from the harness:
+
+```
+python -m field_mapper spec-id contracts/<name>_spec.json
+```
+
+Paste that id into the grant's `mapper_spec_id`. A hand-computed hash — or the
+`"<derived>"` placeholder the `samples/` fixtures use — binds nothing: Phase G
+rejects `<derived>` by name, because a grant carrying it authorizes whatever
+spec it is handed. `python -m field_mapper grant-check <spec> <grant>` applies
+the same statically decidable checks Phase G subprocesses (hash, primary and
+corroboration model, expiry); Phase G additionally rejects the `<derived>`
+placeholder by name before ever calling it, so on that one input the two answers
+differ.
+
+**Editing the spec revokes the grant, deliberately.** Change the instruction, a
+threshold, the target fields or the model and the id moves, the grant stops
+binding, and Phase G fails the closure until the user consents again. That is
+the mechanism, not a rough edge.
+
+**Self-checking a mapper closure can spend money.** Phase B *executes* the
+transform against a scratch DuckDB, and the key resolver falls back to the
+environment — so with `ANTHROPIC_API_KEY` set, a self-check makes live calls.
+Phase G runs before Phase B precisely so that spend can only happen under a
+binding grant.
+
+What Phase G checks: a grant exists; it binds the hash of each spec it found
+under `contracts/` — not, and it cannot, the spec path the transform actually
+passes to `map_inputs`, which is the limit recorded below; it names
+the same primary and corroboration models; it has not expired; the transform
+reaches the harness through `map_inputs` (the only entry point that calls
+`Grant.check`) rather than `transport.Client` directly; and no `contracts/`
+verifier imports the harness at all. What it does **not** check is in
+`self-check.md` § "What Phase G cannot see" — the short version is that the hash
+is computed by the very package being audited, and that per-run field coverage
+and spend ceilings are enforced inside the harness at call time, by no static
+gate.
+
 ## Ledger
 
 Append-only JSONL under a run-scoped dir. Stores input **hashes** and controlled
@@ -381,48 +449,59 @@ experiments require live calls.
 
 ---
 
-## Blocked on
+## Documented limits
 
-Proven as a transform, not adopted as one. Two open items gate that:
+What the harness does **not** cover, stated so it is never mistaken for covered.
 
-1. **PDF text extractor.** Stage 1 needs canonical text with page and character
-   offsets. Nothing in the pinned venv extracts PDF text, and adding `anthropic`
-   does not solve it.
+1. **A consistent misread survives every check** (fixture 11). A wrong reading
+   that also satisfies the cross-field arithmetic, quoted from a span that really
+   exists, lands `ok` with a `verified` citation. Closing this needs a second
+   reader, which is what `corroboration_model` is for (fixture 12) — it is
+   opt-in, not the default.
 
-   "Make stage 1 just another mapper spec" was proposed to avoid the dependency
-   and **rejected** (GENERALITY.md S4). The non-circularity claim is formally
+2. **Prompt injection in source content** (fixture 03). The attack survives
+   verbatim in landed text, which is the design's answer: a human can inspect it.
+   Nothing here neutralizes it.
+
+3. **The consent gate binds the specs on disk, not the spec the call passes.**
+   Phase G hashes every spec-shaped JSON under `contracts/` and demands a grant
+   for each; it never inspects which spec path the transform hands to
+   `map_inputs`. At run time `Grant.check` still compares the running spec's hash
+   against the grant it is handed, which catches drift — never a closure that
+   minted its own spec/grant pair.
+
+4. **PDF page counting is stdlib-only.** `count_pdf_pages` returns `None` for
+   encrypted or object-stream-compressed PDFs, so the *cost estimator* degrades
+   to unpriceable on those. The mapping path is unaffected. Evidence for PDFs is
+   handled by `evidence_mode` (CONTRACT.md open question 4), not by adding a PDF
+   library.
+
+   The rejected alternative is worth keeping: "make stage 1 just another mapper
+   spec" was proposed to avoid a PDF dependency and **rejected**
+   (`field-mapper-generality.md` S4). The non-circularity claim is formally
    correct — stage 2 sees only landed text — but three mechanisms defeat it:
    stage 1 is exactly the model-discovered-cardinality 1:N case the wire schema
    forbids, and pre-splitting pages to fix that needs the PDF library the idea
    existed to avoid; nondeterministic transcription is replace-loaded into
-   stage 2's snapshot, so one token of drift stales every downstream review;
-   and an *instructed omission* attacks the canonical text itself, leaving
-   nothing for a human to inspect (unlike fixture 03, where the attack survives
-   verbatim in landed text).
+   stage 2's snapshot, so one token of drift stales every downstream review; and
+   an *instructed omission* attacks the canonical text itself, leaving nothing
+   for a human to inspect (unlike fixture 03, where the attack survives verbatim
+   in landed text).
 
-   Defensible form: `pypdf` scoped to page splitting and counting **only** +
-   per-page model transcription as a mapper + pinned write-once landing. Confines
-   the model-asserted surface to per-page fidelity and bounds each call under
-   `max_tokens`.
+5. **Concurrency policy is unresolved** (CONTRACT.md open question 2). The
+   shipped transport is serial — correct, and slow.
 
-2. **Where `mapper_reviews` physically lives.** It must survive
-   `write_disposition="replace"` and be human-editable. The batch-CSV convention
-   satisfies both, but puts durable human state inside the closure's `data/` dir
-   with no protection against regeneration wiping it. The reviewer's edit surface
-   is undecided.
-
-Also unresolved: threshold defaults, concurrency/rate-limit policy, what
-`needs_review` is (a dimension value in shipped skills, a status in
-`nxd_decisions`, a boolean here — three incompatible models), harness packaging
-and version stamping, and whether the grant binds the model alias or the exact
-snapshot.
+6. **`needs_review` is modelled as a boolean here** (CONTRACT.md open question 3)
+   while shipped skills treat it as a dimension value and `nxd_decisions` treats
+   it as a status. The boolean is internal; the reviewer-facing surface is the
+   `value_status` dimension, pending an upstream vocabulary decision.
 
 ---
 
 ## Out of scope
 
 Stated so the design declines these rather than appearing to cover them.
-Derived in GENERALITY.md.
+Derived in `field-mapper-generality.md`.
 
 - **Ungrounded enrichment** — any field whose truth is not a function of the
   landed inputs ("is this vendor still in business?"). Every load-bearing
@@ -451,14 +530,14 @@ whole population. Partitioning (each partition a complete population with its ow
 snapshot, gate, and landing) is the only path. A resume-from-ledger cache would
 be the no-cache violation the design correctly refuses.
 
-## Upstream reconciliation
+## Reconciliation with the decisions ledger
 
-Two commits landed after the design was written and touch this machinery:
+Two changes landed after the design was written and touch this machinery:
 
-- **#128** made `provenance` a required second axis on `nxd_decisions`
+- `provenance` became a required second axis on `nxd_decisions`
   (`user_confirmed | agent_authored | source_derived | deferred`), orthogonal to
   `status`. Phase D fails a ledger missing either. Unsettled: whether a
-  `human_override` review flips the spec-level row's provenance — #128 says
-  provenance never moves, but an override *is* genuinely user-authored.
-- **#127** rewrote `derived-models.md` (per-criterion score explainability and
+  `human_override` review flips the spec-level row's provenance — the rule is
+  that provenance never moves, but an override *is* genuinely user-authored.
+- `derived-models.md` was rewritten (per-criterion score explainability and
   absence semantics), which the §14 amendment diff must be rebased onto.

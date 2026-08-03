@@ -1853,11 +1853,18 @@ every scenario checker key on them:
 ```
 phase A ok — …
 phase E ok — no denied model-SDK import in transform/main.py, …
+phase G ok — no transform module imports the field-mapper harness, …
 phase B ok — …
 phase C ok — approved spec snapshot + lock present, no closure-escaping contract references
 phase D ok — …
 SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), B (transform dry-run), C (context-completeness), D (policy boundary) all passed.
 ```
+
+**Phase G is deliberately absent from the `SELF-CHECK OK` enumeration**, for the
+same reason the label below is stale: that string is keyed on byte-for-byte by
+`run.py` and every scenario checker, so adding a phase to it is a breaking change
+to a contract that has nothing to do with consent. Phase G reports on its own
+`phase G ok` line.
 
 **Note the deliberate lie in that last literal.** Phase C verifies the byte-copied
 spec snapshot, the lock, and the build record — not a context document's

@@ -8,8 +8,14 @@ must not be able to bypass it. A gate that lives in the CLI is not a gate.
 **This is a userland convention, not an enforceable security boundary.** Nothing
 in the spec or runtime can refuse a mapper — a determined caller can import
 `transport` directly. Saying so plainly here is deliberate: describing this as a
-security control would be false, and the Phase-D self-check is what actually
-fails a closure that maps without a matching grant.
+security control would be false. What backs it from outside is the **Phase G
+consent gate** in the generate-dp self-check, which fails a closure that vendors
+this package without a grant binding its spec hash. That gate is static and
+import-level — it proves a binding consent artifact exists before the transform
+executes, and it is blind to a closure that renames the package or pastes
+`transport`'s body inline. Per-run field coverage, document classes and spend
+ceilings stay with this class's `check()` and `RunBudget` at run time; Phase G
+watches no individual call.
 
 Pure stdlib.
 """
@@ -27,9 +33,11 @@ from .spec import MapperSpec
 
 __all__ = ["Grant", "PII_CATEGORIES"]
 
-#: Declared PII exposure. Not enforced by inspection — the grant records what
-#: the *user consented to*, and the Phase-D check compares it against what the
-#: closure actually reads.
+#: Declared PII exposure. Recorded consent metadata, never enforced by
+#: inspection: nothing anywhere reads the closure's source and compares it
+#: against this category. Phase G validates the value is in this vocabulary and
+#: that a grant carrying it binds the spec; it does not — and no check does —
+#: verify that what the transform actually sends matches what is declared here.
 PII_CATEGORIES: frozenset[str] = frozenset(
     {"none", "pseudonymous", "personal", "sensitive"}
 )

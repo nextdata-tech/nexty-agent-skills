@@ -890,7 +890,8 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
         ),
         # from_spec, not TransportConfig(effort=...): the latter drops spec.model,
         # so preflight priced a haiku run at Opus rates AND reported
-        # pricing_is_approximate=False. CV-5's shape at a second call site.
+        # pricing_is_approximate=False. The same defect had already been fixed
+        # once at another call site; this is the second.
         config=TransportConfig.from_spec(spec),
     )
     _print_header("Cost estimate (offline heuristic)")
@@ -1462,6 +1463,131 @@ def _check_trailing_json_parser() -> list[str]:
     return problems
 
 
+def _bind_spec(path: Path) -> MapperSpec:
+    """Load a spec.json and bind it exactly the way a run will.
+
+    The binding sequence is the load-bearing part, not the load. `Fixture.load`
+    compiles the wire schema into the spec and stamps `harness_version` BEFORE
+    reading `mapper_spec_id`, because that is the hash `map_inputs` re-derives
+    at the gate (CONTRACT.md §5 step 3). A hash taken from the unbound spec is a
+    different 32-hex string that binds nothing — it would produce a grant that
+    passes an offline check and is then refused at run time, which is the worst
+    of both. This helper exists so the two CLI subcommands below and
+    `Fixture.load` cannot drift on that sequence.
+    """
+    spec = MapperSpec.load(path)
+    bound = spec.with_wire_schema(compile_schema(spec))
+    if not bound.harness_version:
+        bound = _stamp_harness_version(bound)
+    return bound
+
+
+def cmd_spec_id(spec_path: Path) -> int:
+    """Print the bound `mapper_spec_id` for one spec.json, as JSON.
+
+    The oracle a consent gate needs: "what id must a grant carry to authorize
+    this spec?" JSON rather than a bare hash because the caller also needs the
+    model names to explain a mismatch, and a machine reading one line of stdout
+    should not have to guess whether an error arrived on it.
+    """
+    bound = _bind_spec(spec_path)
+    print(
+        json.dumps(
+            {
+                "mapper_spec_id": bound.mapper_spec_id,
+                "model": bound.model,
+                "corroboration_model": bound.corroboration_model,
+                "harness_version": bound.harness_version,
+            },
+            sort_keys=True,
+        )
+    )
+    return EXIT_OK
+
+
+#: How `grant-check` classifies what `Grant.check` reports.
+#
+# `Grant.check` raises ONE `GrantError` listing every problem at once — good for
+# a human fixing a grant, unusable for a caller that must file a distinct
+# diagnostic code per failure kind. Rather than re-implement the rules here (two
+# copies of a consent rule is how a gate ends up enforcing something other than
+# what it claims), this maps the message text back onto kinds. The coupling to
+# `grant.py`'s wording is real, and nothing in this package pins it — `pins`
+# covers spec-id stability, canonical-form coverage and the systemic-error gate,
+# not this mapping. What actually exercises three of the four kinds are the
+# generate-dp eval tests (expired, model-mismatch and wrong-hash paths through
+# the consent gate); "corroboration model mismatch" is pinned by nothing. A
+# reworded problem that stops matching degrades to the generic `invalid` kind,
+# never to silence.
+_GRANT_PROBLEM_KINDS = (
+    ("spec hash mismatch", "spec_mismatch"),
+    ("corroboration model mismatch", "corroboration_mismatch"),
+    ("model mismatch", "model_mismatch"),
+    ("grant expired", "expired"),
+)
+
+
+def cmd_grant_check(spec_path: Path, grant_path: Path) -> int:
+    """Check a grant against a spec, statically, and report as JSON.
+
+    No runtime arguments are passed to `Grant.check`: `input_fields` and
+    `document_classes` are properties of a RUN, not of a closure sitting on
+    disk, so an offline caller can only exercise the statically decidable
+    subset — hash, model, corroboration model, expiry. That is a real limit and
+    the caller must say so; it is not a bug to be papered over by inventing
+    inputs.
+
+    Exit is always 0 when the check RAN. A non-zero exit would conflate "the
+    grant does not authorize this spec" (a verdict) with "this could not be
+    checked" (no verdict), and the caller needs to tell those apart.
+    """
+    try:
+        bound = _bind_spec(spec_path)
+        raw = json.loads(grant_path.read_text(encoding="utf-8"))
+        # `"<derived>"` is the samples-only escape hatch (see `Fixture.load`).
+        # It is NOT substituted here: a closure whose grant says `<derived>`
+        # authorizes whatever spec it is handed, which is the absence of a
+        # binding. Let it flow through as the literal it is and fail the hash.
+        grant = Grant.from_dict(raw)
+    except (OSError, json.JSONDecodeError, FieldMapperError) as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "problems": [{"kind": "invalid", "message": str(exc)}],
+                },
+                sort_keys=True,
+            )
+        )
+        return EXIT_OK
+
+    try:
+        grant.check(bound)
+    except GrantError as exc:
+        problems = []
+        for line in str(exc).splitlines():
+            line = line.strip().lstrip("- ").strip()
+            if not line or line.startswith("consent grant does not authorize"):
+                continue
+            kind = next(
+                (k for prefix, k in _GRANT_PROBLEM_KINDS if line.startswith(prefix)),
+                "invalid",
+            )
+            problems.append({"kind": kind, "message": line})
+        if not problems:
+            problems = [{"kind": "invalid", "message": str(exc)}]
+        print(json.dumps({"ok": False, "problems": problems}, sort_keys=True))
+        return EXIT_OK
+
+    print(
+        json.dumps(
+            {"ok": True, "problems": [], "mapper_spec_id": bound.mapper_spec_id},
+            sort_keys=True,
+        )
+    )
+    return EXIT_OK
+
+
 def cmd_pins(root: Path, args: argparse.Namespace) -> int:
     """Check spec-hash stability and canonical-form coverage.
 
@@ -1531,6 +1657,26 @@ def cmd_pins(root: Path, args: argparse.Namespace) -> int:
     for name in sorted(set(_SPEC_ID_PINS) - set(observed)):
         problems.append(f"{name}: pinned but no such fixture")
         print(f"  FAIL {name}: pinned but no such fixture — stale pin")
+
+    # `spec-id` is the oracle an external consent gate calls to learn which hash
+    # a grant must carry. It reaches the hash through `_bind_spec` rather than
+    # `Fixture.load`, so the two binding paths can silently diverge — and the
+    # symptom would be a grant that passes the offline gate and is then refused
+    # by `map_inputs` at run time, with both sides reporting confidently. Pin
+    # the agreement rather than trusting that the shared helper stays shared.
+    for path in fixtures:
+        if path.name not in observed:
+            continue
+        standalone = _bind_spec(path / SPEC_FILE).mapper_spec_id
+        if standalone != observed[path.name]:
+            problems.append(f"{path.name}: spec-id disagrees with Fixture.load")
+            print(
+                f"  FAIL {path.name}: `spec-id` derives {standalone}, "
+                f"Fixture.load derives {observed[path.name]} — a grant authored "
+                f"against the CLI would be refused at the run gate"
+            )
+    if not problems:
+        print("  ok   spec-id: the CLI oracle agrees with the run-gate binding")
 
     print()
     if problems:
@@ -1828,12 +1974,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("preflight", "canary", "run", "resolve", "verify", "pins"),
+        choices=(
+            "preflight", "canary", "run", "resolve", "verify", "pins",
+            "spec-id", "grant-check",
+        ),
     )
     parser.add_argument(
         "target",
         nargs="?",
-        help="fixture directory (or the samples root, for `verify`)",
+        help=(
+            "fixture directory (or the samples root, for `verify`; a spec.json "
+            "path for `spec-id` and `grant-check`)"
+        ),
+    )
+    parser.add_argument(
+        "grant",
+        nargs="?",
+        help="grant.json path — `grant-check` only",
     )
     parser.add_argument(
         "--dry-run",
@@ -1893,6 +2050,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_verify(target if target.is_dir() else default_root, args)
         if args.command == "pins":
             return cmd_pins(target if target.is_dir() else default_root, args)
+        # `spec-id` and `grant-check` take FILE paths, not a fixture directory,
+        # and deliberately do not go through `Fixture.load`: a closure carries a
+        # spec and a grant under contracts/ with no inputs.json, no recorded.json
+        # and no expect.json, so requiring a fixture would make the consent
+        # oracle unusable on the only artifacts a closure actually has.
+        if args.command == "spec-id":
+            if not args.target:
+                print("spec-id needs a spec.json path", file=sys.stderr)
+                return EXIT_USAGE
+            return cmd_spec_id(Path(args.target))
+        if args.command == "grant-check":
+            if not args.target or not args.grant:
+                print(
+                    "grant-check needs a spec.json and a grant.json path",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+            return cmd_grant_check(Path(args.target), Path(args.grant))
 
         fixture = Fixture.load(target)
         if args.command == "preflight":

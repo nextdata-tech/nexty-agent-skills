@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import re
+import shutil
 import subprocess
 import sys
 import types
@@ -17,6 +19,10 @@ CHECKER = (Path(__file__).parents[1] / "public" / "desktop-custom-contracts" /
 spec = importlib.util.spec_from_file_location("custom_contract_checker", CHECKER)
 checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
+
+REPO = Path(__file__).parents[2]
+MAPPER_SRC = REPO / "src" / "nxd-generate-data-product" / "mapper" / "field_mapper"
+MAPPER_SAMPLE = REPO / "src" / "nxd-generate-data-product" / "mapper" / "samples" / "01-row-scores"
 
 RUNNER = Path(__file__).parents[1] / "run.py"
 runner_spec = importlib.util.spec_from_file_location("eval_runner_desktop_custom", RUNNER)
@@ -478,7 +484,9 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
                         async_verifier=False, nonliteral_secret_fields=False,
                         literal_secret=False,
                         mixed_decorated=False,
-                        model_sdk_verifier=False):
+                        model_sdk_verifier=False,
+                        vendor_mapper=False, mapper_grant=False,
+                        root_module_mapper=False):
     """Phase A must not mistake verifier script paths for transform executors."""
     write_closure(tmp_path)
     # The approved IR must declare exactly the contracts spec.py wires: the
@@ -603,7 +611,87 @@ if __name__ == "__main__":
     if nested_escape:
         verifier_path = tmp_path / "contracts" / "expectations" / "accepted.py"
         verifier_path.write_text(verifier_path.read_text() + "\n# See ../../POLICY.md\n")
+    if vendor_mapper:
+        # The REAL harness, vendored the way a mapper closure vendors it, and
+        # the real sample spec under contracts/. Phase G subprocesses this copy
+        # as its oracle, so a stub would test nothing.
+        shutil.copytree(MAPPER_SRC, tmp_path / "field_mapper", dirs_exist_ok=True)
+        shutil.copy(MAPPER_SAMPLE / "spec.json", tmp_path / "contracts" / "mapper_spec.json")
+        main = tmp_path / "transform" / "main.py"
+        main.write_text("from field_mapper import map_inputs\n" + main.read_text()
+                        + "\ndef _mapper_entry():\n    return map_inputs\n")
+    if root_module_mapper:
+        # The same vendored harness, but the import sits in a CLOSURE-ROOT
+        # module and transform/main.py only imports that. Runtime-viable
+        # precisely because the vendoring contract puts the closure root on
+        # sys.path — that is how `import field_mapper` resolves at all — so this
+        # maps for real under Phase B.
+        shutil.copytree(MAPPER_SRC, tmp_path / "field_mapper", dirs_exist_ok=True)
+        shutil.copy(MAPPER_SAMPLE / "spec.json", tmp_path / "contracts" / "mapper_spec.json")
+        (tmp_path / "glue.py").write_text(
+            "from field_mapper import map_inputs\n\n\n"
+            "def run():\n    return map_inputs\n")
+        main = tmp_path / "transform" / "main.py"
+        main.write_text("import glue\n" + main.read_text()
+                        + "\ndef _mapper_entry():\n    return glue.run()\n")
+    if mapper_grant:
+        idproc = subprocess.run(
+            [sys.executable, "-m", "field_mapper", "spec-id", "contracts/mapper_spec.json"],
+            cwd=tmp_path, text=True, capture_output=True)
+        assert idproc.returncode == 0, idproc.stderr
+        doc = json.loads((MAPPER_SAMPLE / "grant.json").read_text())
+        doc["mapper_spec_id"] = json.loads(idproc.stdout)["mapper_spec_id"]
+        (tmp_path / "contracts" / "mapper_grant.json").write_text(
+            json.dumps(doc, indent=2), encoding="utf-8")
     return subprocess.run([sys.executable, str(Path(__file__).parents[2] / "scripts" / "self_check.py")], cwd=tmp_path, text=True, capture_output=True)
+
+
+def test_real_self_check_denies_ungranted_mapper_before_phase_b(tmp_path: Path) -> None:
+    """The whole real script, on a vendored mapper with no grant.
+
+    The extracted-block tests run Phase G against a stubbed diag/finish; only
+    this one proves the gate stops the run inside the shipped script, and that
+    it stops it BEFORE Phase B imports the transform and spends.
+    """
+    proc = complete_self_check(tmp_path / "full", vendor_mapper=True)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 1, out
+    assert "PHASE G FAILED" in proc.stdout, out
+    assert "no consent grant" in proc.stdout, out
+    assert "phase B ok" not in proc.stdout, out
+    assert "PHASE B FAILED" not in proc.stdout, out
+
+
+def test_real_self_check_denies_a_mapper_imported_from_a_closure_root_module(
+        tmp_path: Path) -> None:
+    """A root module holding the import is still this closure mapping.
+
+    The transform/-only scan let this through green: `glue.py` beside models.py
+    holds `from field_mapper import map_inputs`, transform/main.py does
+    `import glue`, and the gate reported no consent obligation while Phase B
+    went on to execute it. Unlike the renamed-vendor-dir and inlined-transport
+    routes — which are closures that LIED — factoring a helper out to the root
+    is an ordinary refactor, so the gate has to cover it rather than record it
+    as a limit.
+    """
+    proc = complete_self_check(tmp_path / "full", root_module_mapper=True)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 1, out
+    assert "PHASE G FAILED" in proc.stdout, out
+    assert "no consent grant" in proc.stdout, out
+    assert "glue.py" in proc.stdout, out
+    # The point of the placement, not just the verdict: denied before the
+    # transform is imported and the mapping is paid for.
+    assert "phase B ok" not in proc.stdout, out
+    assert "PHASE B FAILED" not in proc.stdout, out
+
+
+def test_real_self_check_green_with_matching_grant(tmp_path: Path) -> None:
+    """A gate that can only deny is indistinguishable from one that is broken."""
+    proc = complete_self_check(tmp_path / "full", vendor_mapper=True, mapper_grant=True)
+    out = proc.stdout + proc.stderr
+    assert "phase G ok" in proc.stdout, out
+    assert "SELF-CHECK OK" in proc.stdout, out
 
 
 def test_complete_self_check_accepts_exact_unlabeled_source_aligned_input(tmp_path: Path) -> None:
