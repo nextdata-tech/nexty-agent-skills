@@ -28,6 +28,21 @@ itself produces**, so no fixed CSV can be authored ahead of it. It brings real
 cost: a vendored package in the closure, a consent grant the user must author,
 and live model calls during the self-check.
 
+> **A vendored closure does not run on the platform path yet.** The supervisor
+> stages only `transform/main.py` into its isolated data directory, not the rest
+> of the closure, so a vendored `field_mapper/` is absent at execution and the
+> transform dies on `ModuleNotFoundError: No module named 'field_mapper'`.
+> `requirements.txt` names installable packages, which is how production expects
+> the harness to arrive.
+>
+> Everything below is still correct and worth doing — the self-check runs the
+> harness from the closure and Phase G gates it there — but the mapping itself
+> currently only executes where the closure root is importable, which is the
+> self-check and the `mapper/examples/e2e/` proofs, not a dispatched build. This
+> was found by running a real build end to end, not inferred. Until the harness
+> ships inside the `nxd` package the supervisor already installs, treat a mapper
+> closure as gate-verifiable but not publishable.
+
 ## Vendoring it into a closure
 
 The harness is **not a wheel**. Copy it out of this installed skill:

@@ -61,3 +61,21 @@ proves nothing.
 The root glob is deliberately non-recursive, so a root *subpackage* still evades
 the gate; that residual is recorded in the "What Phase G cannot see" section
 rather than left for a reader to discover.
+
+Beyond the tests, the gate was exercised **live in Claude Desktop** against a
+closure a real agent built from these skills, rather than a fixture. Deny
+reached `grant.missing` with `owner: user` and `s2_transform: not_reached`;
+editing one sentence of the spec moved the bound hash and the stale grant was
+refused; and both indirection routes — a helper under `transform/` and one at
+the closure root — were denied by name. The agent asked for the grant's
+parameters and declined to author one when consent was withheld, which is the
+behaviour the three `owner: user` codes exist to require and the one no static
+test can establish.
+
+That run also found what the tests could not: a closure built exactly as the
+shipped guidance describes passes all three static phases and then fails at
+Phase B with `ModuleNotFoundError: No module named 'field_mapper'`, because the
+supervisor stages only `transform/main.py` and never the vendored package. The
+gate is correct; the vendoring path is not yet runnable on the platform. Both
+`reference/field-mapper.md` and the SKILL.md bullet now say so, and moving the
+harness into the `nxd` package the supervisor already installs is the follow-up.
