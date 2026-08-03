@@ -30,7 +30,18 @@ _PREFIX_FRAGMENTS = {"EVAL_MCP_"}
 
 
 def _names_read_by_runner() -> set[str]:
-    """``EVAL_*`` names ``run.py`` passes to os.environ."""
+    """``EVAL_*`` names that *appear* anywhere in ``run.py``.
+
+    A deliberate superset of the names it actually reads: comments and error
+    strings count too. That errs toward over-requiring documentation, which is
+    the safe direction here — a documented name that is never read costs a stale
+    doc line, while an undocumented name that *is* read costs a silent
+    misconfiguration.
+
+    The regex cannot see a name assembled by concatenation, which is why
+    ``_PREFIX_FRAGMENTS`` exempts the ``EVAL_MCP_`` stem. A second such prefix
+    would fail this test spuriously rather than being handled; add it there.
+    """
     text = RUN_PY.read_text(encoding="utf-8")
     found = {
         name

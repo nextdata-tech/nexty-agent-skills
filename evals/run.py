@@ -143,6 +143,13 @@ DEFAULT_JUDGE_TIMEOUT_S = 300
 # It stays here because it is a *scenario* constraint, not a provider default;
 # it is applied only on the Claude backend (see run_one), the only provider that
 # has a per-tool allowlist to narrow.
+# Naming rule for the two prefixes this file mixes, so a future sweep has one to
+# follow: JOB_ names the *loop* — the scenario shape this harness drives, matching
+# the nxd-run-job-loop skill and the job-loop-* scenarios. DESKTOP_/desktop names
+# the *runtime* being driven — the supervisor, its binaries, its env vars and its
+# opt-in marker, none of which this repo owns. NXD_JOB_CHECK_TMPDIR pointing at
+# .desktop-check-tmp is therefore correct, not a straggler: the loop's checker
+# writes into the runtime's scratch dir.
 JOB_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
@@ -694,7 +701,7 @@ def _desktop_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str
     missing = [name for name in binaries if not (supervisor_dir / name).is_file()]
     if missing or not Path(python).is_file():
         raise RuntimeError(
-            f"desktop runtime missing binaries={missing} or Python={python!r}"
+            f"Desktop runtime missing binaries={missing} or Python={python!r}"
         )
     # The supervisor finds its kernel-host sibling from its *real* executable
     # path, so tiny exec wrappers preserve that contract while exposing only the
@@ -893,7 +900,7 @@ def desktop_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str
                 if answer.get("error") != "" or not answer.get("rows"):
                     raise RuntimeError(f"query response invalid: {probe.stdout[-800:]}")
                 _JOB_PREFLIGHT_ENDPOINT = endpoint
-                print(f"desktop preflight OK: semantic_endpoint={endpoint}",
+                print(f"Desktop preflight OK: semantic_endpoint={endpoint}",
                       file=sys.stderr, flush=True)
             except (OSError, subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError) as exc:
                 _JOB_PREFLIGHT_ERROR = str(exc)
@@ -1027,7 +1034,7 @@ def desktop_facts_infrastructure_error(facts: list[str]) -> str | None:
             try:
                 error = json.loads(fact[len(prefix):]).get("infrastructure_error")
             except json.JSONDecodeError:
-                return "desktop verifier facts were malformed"
+                return "Desktop verifier facts were malformed"
             return str(error) if error else None
     return None
 
@@ -2212,7 +2219,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         if preflight_error:
             # Deliberately stable: callers distinguish this infrastructure
             # error from an agent FAIL without parsing build-specific details.
-            res.error = "desktop preflight failed"
+            res.error = "Desktop preflight failed"
             res.metrics["desktop_preflight_error"] = preflight_error
             return res
         preflight_metrics["desktop_preflight"] = "passed"
@@ -2331,7 +2338,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         scenario_dir, Path(tmp)
                     )
                 except RuntimeError as exc:
-                    res.error = f"desktop runtime setup failed: {exc}"
+                    res.error = f"Desktop runtime setup failed: {exc}"
                     return res
                 # Both the agent forcing-function checker and the pristine
                 # harness verifier place snapshot state under the workspace so
@@ -2485,7 +2492,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     verifier_infrastructure_error = desktop_facts_infrastructure_error(facts)
     if verifier_infrastructure_error:
-        res.error = f"desktop harness infrastructure failure: {verifier_infrastructure_error}"
+        res.error = f"Desktop harness infrastructure failure: {verifier_infrastructure_error}"
         return res
 
     det_infrastructure_error = deterministic_check_infrastructure_error(facts)
@@ -2507,7 +2514,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         res.verdict["overall_pass"] = False
         prior = str(res.verdict.get("summary", ""))
         res.verdict["summary"] = (
-            f"{prior} desktop verifier did not pass; the cell is mechanically failed."
+            f"{prior} Desktop verifier did not pass; the cell is mechanically failed."
         ).strip()
     if det_status == "failed":
         # The checker computes the answer from ground truth; it is the hard

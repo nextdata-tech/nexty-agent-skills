@@ -1257,6 +1257,35 @@ two *path* contracts against supervisor source before renaming them; a command n
 fixture is the same kind of external contract and got no such check. Fictional example
 commands in fixtures are worth an audit of their own — this PR only fixes the one it touched.
 
+### 8. The two-prefix rule, stated rather than churned
+
+The sweep landed `JOB_` on `run.py`'s module constants and `desktop` on everything they
+touch, which reads as an unfinished rename — sharpest at `NXD_JOB_CHECK_TMPDIR` pointing
+at `.desktop-check-tmp`. There *is* a rule, it was just never written down: **`JOB_` names
+the loop** (the scenario shape this harness drives, matching `nxd-run-job-loop` and the
+`job-loop-*` scenarios), **`desktop` names the runtime being driven** (the supervisor, its
+binaries, env vars and opt-in marker — none of which this repo owns). Under it that tmpdir
+line is correct: the loop's checker writes into the runtime's scratch dir.
+
+Stated as a comment at the constants rather than renaming them. Renaming would churn
+surfaces that are already merged and reviewed to buy symmetry, and the prefixes are
+load-bearing in opposite directions — `EVAL_DESKTOP_*` is an operator-facing contract §5
+settled deliberately, while `JOB_*` names this repo's own shape. Neither new test covers
+prefix choice, and neither should: the failure it guards against is a *reader* mis-inferring
+the pattern, which a comment fixes and an assertion cannot.
+
+Also in this round: sentence-initial lowercase `desktop` in eight `run.py` strings that
+reach benchmark reports and the judge (two beyond those reported), and `Nexty desktop` —
+a proper-noun frame with a common noun inside it, left over from `Nexty Pocket`. The frame
+is dropped rather than capitalized, matching how the rest of the sweep says "the local
+desktop path" and how the supervisor repo itself writes "NXD desktop".
+
+One test docstring was corrected rather than its code: `_names_read_by_runner()` claimed to
+return names `run.py` "passes to os.environ" when it regexes the whole file. The superset is
+deliberate and safe — over-requiring documentation costs a stale line, under-requiring costs
+a silent misconfiguration — but the docstring hid that a concatenated name is invisible to
+it, which is exactly what the next person needs to know.
+
 **The lesson is mechanical, not incidental.** A rename sweep is text-substitution over
 file *contents*; every contract whose other half is a *filename*, a directory name, an
 environment variable read by a human following setup docs, or a path on a user's disk is

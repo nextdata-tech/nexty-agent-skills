@@ -1,6 +1,6 @@
 # The spec is authoritative — architecture
 
-How a Nexty desktop data product goes from user intent to a running, queryable
+How a local desktop data product goes from user intent to a running, queryable
 closure, and how the pipeline records what it did. This note is normative: it
 specifies shapes, names and literals, because several independent producers must
 agree on them exactly.

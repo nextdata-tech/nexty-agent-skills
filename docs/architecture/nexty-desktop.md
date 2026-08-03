@@ -1,8 +1,8 @@
-# Nexty desktop — architecture
+# The local desktop path — architecture
 
 ## Contents
 
-- What Nexty desktop is
+- What the local desktop path is
 - End-to-end flow
 - The skills (subskills) and what each owns
 - Context capture: the spec snapshot, the lock, the build record, and `nxd_decisions`
@@ -12,9 +12,9 @@
 - Known coverage gaps
 - Where things live
 
-## What Nexty desktop is
+## What the local desktop path is
 
-Nexty desktop is the **local, no-Kubernetes** path for turning a natural-language
+The local desktop path is the **no-Kubernetes** route for turning a natural-language
 question plus a local data source (CSVs, another local file, a live database, or
 a REST API) into a running, queryable data product on a **local desktop
 supervisor** — then answering questions against it and refining wrong answers
@@ -26,7 +26,7 @@ reached through the `nxd-desktop` MCP server in Claude Desktop/Cowork).
 It is one of two AI-assisted data-product paths in this repo (see the
 top-level `README.md`): the **platform/k8s path** (`nxd-build-data-product`,
 `nxd-build-semantic-data-product`'s platform flow, `nxd-query-data-product`) targets a
-deployed Nextdata OS mesh; Nexty desktop targets a single local machine and
+deployed Nextdata OS mesh; the desktop path targets a single local machine and
 never talks to a mesh.
 
 ## End-to-end flow
@@ -170,7 +170,7 @@ is no longer a second prose copy to diverge from.
 
 Unlike the platform flow (which relies on the kernel's own build-time
 validation plus the acceptance test in `nxd-build-semantic-data-product`),
-Nexty desktop closures get a **static, pre-handoff self-check** because the
+Desktop closures get a **static, pre-handoff self-check** because the
 `nxd` wheel is not installable in the authoring environment — nothing can be
 imported and exercised for real before the supervisor pins it. That script
 (shipped as source in `src/nxd-generate-data-product/reference/self-check.md`, run from
