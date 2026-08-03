@@ -173,9 +173,9 @@ validation plus the acceptance test in `nxd-build-semantic-data-product`),
 Desktop closures get a **static, pre-handoff self-check** because the
 `nxd` wheel is not installable in the authoring environment — nothing can be
 imported and exercised for real before the supervisor pins it. That script
-(shipped as source in `src/nxd-generate-data-product/reference/self-check.md`, run from
-the closure root at Step 7) is the mandatory deterministic gate before any
-handoff. It has four phases plus two non-blocking read-backs:
+(shipped at `src/nxd-run-job-loop/scripts/self_check.py`, copied into and run
+from the closure root at Step 7) is the mandatory deterministic gate before
+any handoff. It has four phases plus two non-blocking read-backs:
 
 | Phase | What it checks | How | Blocking? |
 |---|---|---|---|
@@ -246,8 +246,9 @@ already references are frozen pre-migration history.
 
 `evals/tests/` is plain pytest — it does not run an agent. It exists because a
 gate that is only prose, or only exercised inside a nondeterministic agent
-eval, can silently stop firing. Each test extracts the **actual shipped
-script** (from `self-check.md` or a scenario's `fixtures/`) and runs it
+eval, can silently stop firing. Each test reads the **actual shipped
+script** (from `nxd-run-job-loop/scripts/self_check.py` or a scenario's
+`fixtures/`) and runs it
 directly against synthetic inputs designed to hit the exact failure the gate
 was written for:
 
@@ -334,7 +335,8 @@ one, and an unbacked "the environment was bad" claim cannot reach
 - `src/nxd-build-semantic-data-product/SKILL.md` + `reference/` — inference (shared)
   and the platform `.semantic_tools()` flow (not used by desktop).
 - `src/nxd-generate-data-product/SKILL.md` + `reference/` — the desktop closure
-  generator, including `reference/self-check.md` (the script above).
+  generator, including `reference/self-check.md` (the self-check contract and
+  operating guidance; the executable is shipped by nxd-run-job-loop).
 - `examples/job-loop-demo/RUNBOOK.md` — a manual live-QA script for driving the
   loop inside Claude Desktop/Cowork against a real supervisor, focused on
   environment-specific quirks the automated eval can't reach (skill

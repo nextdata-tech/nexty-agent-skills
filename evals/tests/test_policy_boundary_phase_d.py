@@ -6,9 +6,9 @@ real generated closure anyway: `nxd_decisions` built from a Python literal in
 elsewhere in the same file. A row reading "EDITABLE." was not editable, and the
 prose and the code had already silently diverged.
 
-These tests extract the shipped script from `reference/self-check.md` and run
-Phase D's three branches directly, because the failure mode being guarded is a
-check that exists but never fires. The first version of Phase D keyed on the
+These tests read the shipped script from `nxd-run-job-loop/scripts/self_check.py`
+and run Phase D's three branches directly, because the failure mode being
+guarded is a check that exists but never fires. The first version of Phase D keyed on the
 statically-parsed `PHYSICAL_MODELS`, which the shipped transform template writes
 as `BASE_MODELS + DERIVED_MODELS` — an expression, not a literal — so it silently
 passed the very closure it was written for. That is what these tests pin.
@@ -17,16 +17,13 @@ passed the very closure it was written for. That is what these tests pin.
 from __future__ import annotations
 
 import ast
-import re
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 EVALS_DIR = Path(__file__).resolve().parents[1]
-SELF_CHECK_MD = (
-    EVALS_DIR.parent / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
-)
+SELF_CHECK = EVALS_DIR.parent / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
 
 
 PHASE_D_BEGIN = "# === PHASE-D-BEGIN ==="
@@ -34,16 +31,8 @@ PHASE_D_END = "# === PHASE-D-END ==="
 
 
 def _script_body() -> str:
-    """The single ``# self_check.py`` fence — the source the agent runs.
-
-    Selected by its ``# self_check.py`` header, not by being the longest fence.
-    Length is not an identity: the doc is free to grow a longer example block,
-    and picking by size would silently start testing it.
-    """
-    blocks = re.findall(r"```python\n(.*?)```", SELF_CHECK_MD.read_text(), re.S)
-    bodies = [b for b in blocks if b.lstrip().startswith("# self_check.py")]
-    assert len(bodies) == 1, f"expected one self_check.py fence, found {len(bodies)}"
-    return bodies[0]
+    """The shipped ``self_check.py`` source the agent copies into the closure."""
+    return SELF_CHECK.read_text(encoding="utf-8")
 
 
 def _phase_d_source() -> str:
@@ -51,7 +40,7 @@ def _phase_d_source() -> str:
 
     Anchors rather than content-matching, because the content moved out from
     under the old heuristic. It cut between the first ``derrors = []`` and the
-    first ``if derrors:`` inside the longest fence — which silently selects the
+    first ``if derrors:`` inside the script — which silently selects the
     wrong region as soon as either token appears earlier (a comment mentioning
     it) or a sibling phase grows the same shape. Phase E did exactly that: it
     added a second ``eerrors``/``if eerrors:`` pair. A mis-sliced block does not
@@ -114,7 +103,7 @@ def test_phase_d_anchors_are_present():
     body = _script_body()
     for anchor in (PHASE_D_BEGIN, PHASE_D_END):
         assert body.count(anchor) == 1, (
-            f"expected exactly one {anchor!r} in the self_check.py fence, found "
+            f"expected exactly one {anchor!r} in self_check.py, found "
             f"{body.count(anchor)} — evals/tests/test_policy_boundary_phase_d.py "
             f"slices the Phase D block by these markers"
         )

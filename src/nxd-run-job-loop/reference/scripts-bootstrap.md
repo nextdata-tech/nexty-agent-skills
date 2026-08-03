@@ -28,7 +28,10 @@ roots += list(claude.glob("*/*/cowork_plugins/cache/nexty/nexty-agent-skills/*/s
 roots += list(claude.glob("skills-plugin/*/*/*/skills/nxd-run-job-loop"))
 for root in roots:
     skill = root / "SKILL.md"
-    if (root / "scripts/dp_diagnostics.py").is_file() and (root / "scripts/validate_dp_spec.py").is_file() and skill.is_file():
+    if ((root / "scripts/dp_diagnostics.py").is_file()
+            and (root / "scripts/validate_dp_spec.py").is_file()
+            and (root / "scripts/self_check.py").is_file()
+            and skill.is_file()):
         print(root.resolve())
         break
 else:

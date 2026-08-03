@@ -33,9 +33,7 @@ import sys
 from pathlib import Path
 
 EVALS_DIR = Path(__file__).resolve().parents[1]
-SELF_CHECK_MD = (
-    EVALS_DIR.parent / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
-)
+SELF_CHECK = EVALS_DIR.parent / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
 
 CSV = '_csv = "/infra-profile/desktop-local#/services/csv-source"\n'
 FILE = '_f = "/infra-profile/desktop-local#/services/file-source"\n'
@@ -54,12 +52,8 @@ CLEAN_CSV_TRANSFORM = (
 
 
 def _script_body() -> str:
-    """The single ``# self_check.py`` fence, same source the agent runs."""
-    blocks = re.findall(r"```python\n(.*?)```",
-                        SELF_CHECK_MD.read_text(encoding="utf-8"), re.S)
-    bodies = [b for b in blocks if b.lstrip().startswith("# self_check.py")]
-    assert len(bodies) == 1, f"expected one self_check.py fence, found {len(bodies)}"
-    return bodies[0]
+    """The shipped ``self_check.py`` source the agent copies into the closure."""
+    return SELF_CHECK.read_text(encoding="utf-8")
 
 
 def _phase_e_source() -> str:

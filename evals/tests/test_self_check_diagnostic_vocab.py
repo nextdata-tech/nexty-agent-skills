@@ -1,6 +1,6 @@
 """CONSTRAINT-1: `self_check.py` inlines its vocabulary and must not drift.
 
-`scripts/self_check.py` is copied INTO a closure and run there, so it can never
+`src/nxd-run-job-loop/scripts/self_check.py` is copied INTO a closure and run there, so it can never
 import `dp_diagnostics.py` — the closure has no `scripts/` beside it. It carries
 a literal `dict` and `json.dumps` instead. That is the right trade, and it has
 one cost: two copies of the vocabulary that can drift apart silently.
@@ -19,13 +19,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = REPO / "scripts"
-SELF_CHECK = SCRIPTS / "self_check.py"
 
-# `dp_diagnostics.py` ships INSIDE the skill tree so the installer carries it;
-# `self_check.py` stays at the repo root because it is copied into the closure
-# and run there, never installed. Two locations, deliberately.
 SKILL_SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
+SELF_CHECK = SKILL_SCRIPTS / "self_check.py"
 
 if str(SKILL_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SKILL_SCRIPTS))

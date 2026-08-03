@@ -575,7 +575,7 @@ field. Three name a script; the fourth names the agent:
 | `tool` | who writes the report | stages it may carry |
 |---|---|---|
 | `validate_dp_spec` | `<nxd-run-job-loop>/scripts/validate_dp_spec.py --json` | `s0_spec` |
-| `self_check` | `scripts/self_check.py --json` | `s1_structure`, `s2_transform`, `s3_closure` |
+| `self_check` | `self_check.py --json` at the closure root | `s1_structure`, `s2_transform`, `s3_closure` |
 | `dp_diagnostics` | `<nxd-run-job-loop>/scripts/dp_diagnostics.py` (`lock verify`, `materialized`) | any |
 | `loop` | **the agent**, hand-constructed from tool results | `s4_pin` … `s8_answer` |
 
@@ -1870,7 +1870,7 @@ to a contract that has nothing to do with consent. Phase G reports on its own
 spec snapshot, the lock, and the build record — not a context document's
 completeness — but its *label* stays `C (context-completeness)` because the
 string is byte-exact load-bearing. A comment at the emitting line in
-`scripts/self_check.py` says so, or a later reader will helpfully "fix" the label
+`src/nxd-run-job-loop/scripts/self_check.py` says so, or a later reader will helpfully "fix" the label
 and silently break every checker that keys on it. Accuracy of the label loses to
 stability of the contract; the comment is what keeps that trade visible.
 
@@ -1889,7 +1889,7 @@ python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py record append --record <pat
 python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py record query  --record <path>
        [--stage …] [--owner …] [--severity …] [--code …] [--unresolved] [--attempt N]
 python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py materialized --record <path> [--lock <path>] [--spec <path>]
-python3 scripts/self_check.py [--json] [--record build-record.json]
+python3 self_check.py [--json] [--record build-record.json]  # closure root; copied from the installed job-loop helper
 ```
 
 `record append` has two mutually exclusive routes, and mixing them is refused
@@ -1902,22 +1902,30 @@ Style constraint: stdlib-only Python (PyYAML is already a dependency of
 `validate_dp_spec.py` and may be used there), `argparse`, `--json`, meaningful
 exit codes.
 
-**CONSTRAINT-1 (the one that breaks the design if missed).** `self_check.py` is
-**copied into the closure and run there**. It can **never** import
-`dp_diagnostics.py`. It inlines a minimal literal vocabulary (a `dict` and
-`json.dumps`), and `evals/tests/test_self_check_diagnostic_vocab.py` asserts that
-every code and stage literal in `scripts/self_check.py` exists in
-`dp_diagnostics.CODES`. Any attempt to share code by import is wrong.
+**CONSTRAINT-1 (the one that breaks the design if missed).** The shipped
+`src/nxd-run-job-loop/scripts/self_check.py` is **copied into the closure and
+run there with a bare interpreter**. It can **never** import
+`dp_diagnostics.py`, even though both files live in the installed job-loop
+skill. It inlines a minimal literal vocabulary (a `dict` and `json.dumps`),
+and `evals/tests/test_self_check_diagnostic_vocab.py` asserts that every code
+and stage literal in the shipped script exists in `dp_diagnostics.CODES`. The
+generator copies the shipped file with `$JOB_HELPER_DIR/scripts/self_check.py`;
+the closure-root `self_check.py` is the runtime entrypoint. Any attempt to
+share code by import is wrong.
 
 **CONSTRAINT-2.** `self_check.py`'s **default** (no-flag) stdout must remain
 prose and must keep the four `ok` lines above, because `evals/run.py`'s
 deterministic-check fact and every scenario checker key on stdout. `--json`
 changes nothing about the default path.
 
-**CONSTRAINT-3.** `self-check.md` must keep **exactly one** `# self_check.py`
-python fence (pinned by `test_self_check_sync.py`), that fence must remain the
-**longest** python fence in the file, and it must keep the literals
-`derrors = []` and `if derrors:` (sliced by `test_policy_boundary_phase_d.py`).
+**CONSTRAINT-3.** The shipped
+`src/nxd-run-job-loop/scripts/self_check.py` must retain the literal anchors
+`derrors = []` and `if derrors:`, plus the `PHASE-D-BEGIN` and
+`PHASE-D-END` markers (all pinned by `test_policy_boundary_phase_d.py`). The
+test slices the real Phase D source between those markers and checks that the
+two literal anchors remain in the shipped file; the reference document
+contains the phase prose and runtime guidance, not an embedded executable
+fence.
 
 ---
 

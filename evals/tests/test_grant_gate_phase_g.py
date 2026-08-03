@@ -46,9 +46,7 @@ from pathlib import Path
 
 EVALS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = EVALS_DIR.parent
-SELF_CHECK_MD = (
-    REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
-)
+SELF_CHECK = REPO_ROOT / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
 REAL_MAPPER = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "field_mapper"
 REAL_SAMPLE = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "samples" / "01-row-scores"
 
@@ -69,11 +67,8 @@ MAPPER_TRANSFORM = (
 
 
 def _script_body() -> str:
-    """The single ``# self_check.py`` fence, same source the agent runs."""
-    blocks = re.findall(r"```python\n(.*?)```", SELF_CHECK_MD.read_text(), re.S)
-    bodies = [b for b in blocks if b.lstrip().startswith("# self_check.py")]
-    assert len(bodies) == 1, f"expected one self_check.py fence, found {len(bodies)}"
-    return bodies[0]
+    """The shipped ``self_check.py`` source the agent copies into the closure."""
+    return SELF_CHECK.read_text(encoding="utf-8")
 
 
 def _phase_g_source() -> str:
