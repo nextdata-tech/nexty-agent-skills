@@ -962,6 +962,27 @@ def test_an_unparseable_verifier_is_skipped_not_crashed(tmp_path):
     assert "phase E ok" in out
 
 
+def test_a_non_utf8_verifier_is_skipped_not_crashed(tmp_path):
+    """The same for a verifier this gate cannot DECODE, not just cannot parse.
+
+    ``UnicodeDecodeError`` subclasses ``ValueError``, not ``OSError``, so a
+    verifier that is valid Python under a non-UTF-8 coding declaration escaped
+    the handler above and took the whole self-check with it: a bare traceback,
+    no ``reach.*`` code, no ``close_stage``, no record merge — the one failure
+    mode the rest of this script is written to avoid.
+
+    Written as bytes directly rather than through the ``verifiers`` dict,
+    because that dict writes text and cannot express the defect.
+    """
+    (tmp_path / "contracts" / "promises").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "contracts" / "promises" / "legacy.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\nTHRESHOLD = '\xe9'\n"
+    )
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0)
+    assert "Traceback" not in out, out
+    assert "phase E ok" in out
+
+
 if __name__ == "__main__":  # pragma: no cover
     import pytest
 

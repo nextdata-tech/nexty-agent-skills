@@ -1309,7 +1309,13 @@ for vpath in sorted(p for p in Path("contracts").rglob("*.py")
                     if p.name != "__init__.py"):
     try:
         v_imports = imported_roots(vpath.read_text(encoding="utf-8"), str(vpath))
-    except (OSError, SyntaxError):
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        # UnicodeDecodeError subclasses ValueError, not OSError, so a verifier
+        # that is valid Python under a non-UTF-8 coding declaration escaped this
+        # handler and took the whole self-check with it — a bare traceback, no
+        # reach.* code, no close_stage, no record merge. Exactly the failure mode
+        # the rest of this script is written to avoid.
+        #
         # An unreadable or unparseable verifier is Phase C's finding to report,
         # not this gate's. Silence here means "could not scan", which the doc
         # records; inventing a reach verdict from a parse failure would be a

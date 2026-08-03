@@ -934,6 +934,7 @@ recorded in the PR description as harness faults and should not be read as skill
 signal.
 
 ## 2026-08-03 — v0.32.0 — pack-wide: skill names standardized to imperative action phrases (NEX-830)
+## 2026-08-03 — auth dispatch on an unauthenticated API; non-UTF-8 verifier (plugin v0.31.1)
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1022,3 +1023,37 @@ well enough to prove the edited descriptions still win their skill the same disp
 v0.16.0 entry above measured routing at n=4/n=5 and called it directional at best. If a
 routing regression is going to hide anywhere in this PR, it is in those two descriptions and
 not in the renames.
+Notes: **No eval arm, deliberately.** Both defects need an input no public
+scenario produces, and manufacturing one to yield a number would put a figure in
+this ledger that measures the fixture rather than the change.
+
+The first is shipped guidance, not code. `reference/api-source.md` contradicted
+itself: the canonical transform template ends the auth dispatch with `elif
+auth_type is not None:`, while a prose section fifty lines below instructed
+authors to end it with a bare `else: raise` and supplied a snippet to paste.
+`auth_type` is documented as present only when the API requires authentication,
+and the template reads it with `.get("auth_type")`, so an unauthenticated
+api-source closure has `auth_type is None` — which the `elif` lets through and a
+bare `else` turns into a transform-time raise naming a profile attribute that is
+legitimately absent. `authenticated-api-source-build`, the only api-source
+scenario, authenticates; no arm reaches the None case. The three dispatch
+surfaces now agree, and the deterministic check
+`secret:auth-dispatched-on-auth-type` was confirmed by execution to still pass a
+closure written from the corrected guidance and still fail one with the terminal
+branch removed.
+
+The second is shipped script behaviour. Phase E's contract-verifier scan caught
+`(OSError, SyntaxError)`, but `UnicodeDecodeError` subclasses `ValueError`, so a
+verifier that is valid Python under a non-UTF-8 coding declaration escaped the
+handler and killed the self-check with a bare traceback — no `reach.*` code, no
+`close_stage`, no record merge, which is the one failure mode the rest of the
+script is written to avoid. No scenario ships a latin-1 verifier.
+
+Evidence is `evals/tests/test_reach_gate_phase_e.py::test_a_non_utf8_verifier_is_skipped_not_crashed`,
+**verified to fail against the previous implementation** rather than assumed to:
+run against `origin/main`'s fence the same closure exits 1 with the
+`UnicodeDecodeError` traceback; against this change it exits 0 and prints `phase
+E ok`. The fixture is written as bytes because the existing `verifiers` harness
+writes text and cannot express the defect.
+
+Both findings came from review of the merged #141, not from a run.
