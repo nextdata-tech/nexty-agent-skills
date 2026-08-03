@@ -90,12 +90,20 @@ def test_a_cross_skill_call_names_the_owning_skill():
 
 
 def test_self_check_copy_names_the_owning_skill():
-    """The copy source uses the installed helper path; the run stays closure-local."""
+    """The copy source uses the installed helper path; the run stays closure-local.
+
+    The guard deliberately does NOT also require ``scripts/`` on the line. That
+    spelling only ever appears because the resolved path contains it, so
+    demanding it would make this test self-selecting: a copy written as
+    ``cp ../../self_check.py <closure>/`` — a relative reach out of the closure,
+    which is the copy most likely to be wrong — would never enter the guard and
+    would pass in silence.
+    """
     offenders = []
     for doc in _skill_docs():
         rel = doc.relative_to(SRC)
         for line_no, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
-            if "cp " in line and "self_check.py" in line and "scripts/" in line:
+            if "cp " in line and "self_check.py" in line:
                 if '"$JOB_HELPER_DIR/scripts/self_check.py"' not in line:
                     offenders.append(f"{rel}:{line_no}: {line.strip()}")
     assert not offenders, (

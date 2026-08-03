@@ -422,18 +422,21 @@ rubric CSV is legitimately independent too.
 
 ## The script
 
-Run from the closure root:
-
-```bash
-uv run --python 3.12 --with "dlt[duckdb]==1.28.2" --with "duckdb==1.5.4" \
-  --with "pandas==2.3.3" python self_check.py
-```
-
-The shipped file is `nxd-run-job-loop/scripts/self_check.py` in the installed skill tree. Copy that file into the closure, then run it from the closure root:
+The shipped file is `nxd-run-job-loop/scripts/self_check.py` in the installed
+skill tree. Copy it into the closure first — there is nothing to run until you
+do — then run it from the closure root:
 
 ```bash
 cp "$JOB_HELPER_DIR/scripts/self_check.py" <closure>/self_check.py
 cd <closure> && python3 self_check.py --json --record build-record.json
+```
+
+If `dlt`, `duckdb` and `pandas` are not already on the interpreter that Phase B
+will import the transform under, pin them for the run instead:
+
+```bash
+uv run --python 3.12 --with "dlt[duckdb]==1.28.2" --with "duckdb==1.5.4" \
+  --with "pandas==2.3.3" python self_check.py
 ```
 
 That shipped file is now the single source of truth for the self-check runtime behaviour; this reference keeps the phases, boundaries, report contract and failure-reading guidance, not a second executable copy.
