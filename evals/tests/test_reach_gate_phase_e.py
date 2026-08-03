@@ -1067,8 +1067,9 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # assertion can only catch sites someone already thought of. The invariant
     # is that NO text-file read or write in this script depends on the locale
     # codec, so it is asserted as one.
-    # Matches every read/open/write_text call and requires each to name a codec, rather
-    # than matching one spelling of "unpinned". A regex keyed on empty parens
+    # Matches every read/open/write_text call and requires each text-mode call
+    # to name a codec rather than matching one spelling of "unpinned". A regex
+    # keyed on empty parens
     # `read_text()` misses the three ways this defect actually came back:
     # `read_text(errors="replace")` (a policy but no codec — the exact Phase C
     # half-fix documented above), a bare `open(p)` with no `newline=""` for the
@@ -1090,7 +1091,12 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         f"{len(sites) - len(calls)} file I/O call(s) have an argument list "
         f"this scan cannot parse, so they were never checked for a codec"
     )
-    unpinned = [c.strip() for c in calls if "encoding=" not in c]
+    binary_mode = re.compile(
+        r"(?:^\s*|,\s*|mode\s*=\s*)[\"'][^\"']*b[^\"']*[\"']"
+    )
+    # Binary handles do not decode text and therefore must not name a text codec.
+    unpinned = [c.strip() for c in calls
+                if "encoding=" not in c and not binary_mode.search(c)]
     assert not unpinned, (
         "these file I/O calls depend on the host's locale codec rather than "
         "the file:\n  "
@@ -1105,9 +1111,20 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     assert "could not be written" in merge_record, (
         "merge_record's write failure is not reported through say()"
     )
-    assert "record may be partially written" in merge_record, (
-        "merge_record's write failure claims the record is intact even after "
-        "write_text may have truncated it"
+    assert "tmp = p.with_name(p.name + \".tmp\")" in merge_record, (
+        "merge_record writes directly to the record, so a failed write can "
+        "leave it truncated"
+    )
+    assert "tmp.replace(p)" in merge_record, (
+        "merge_record does not atomically replace the record after a complete "
+        "temporary write"
+    )
+    assert "the previous record is unchanged" in merge_record, (
+        "merge_record's write failure message does not describe the atomic "
+        "replacement guarantee"
+    )
+    assert "closure.build_record_merge_failed" in merge_record, (
+        "merge_record's write failure is missing from the JSON diagnostics"
     )
     record_notice = body[body.index("def record_notice"):body.index("def cpath")]
     assert "print(message, file=sys.stderr)" in record_notice, (

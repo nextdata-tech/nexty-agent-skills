@@ -50,7 +50,8 @@ _codes("error", "agent",
        "closure.spec_snapshot_missing", "closure.lock_missing",
        "closure.lock_unparseable", "closure.lock_snapshot_byte_mismatch",
        "closure.build_record_missing", "closure.build_record_invalid",
-       "closure.build_record_hash_mismatch", "closure.readme_missing",
+       "closure.build_record_hash_mismatch", "closure.build_record_merge_failed",
+       "closure.readme_missing",
        "closure.resolved_ref_missing", "closure.escaping_reference",
        "closure.gitignore_missing", "closure.sensitive_missing",
        "closure.gitignore_not_naming_profile",
@@ -169,13 +170,22 @@ def merge_record(path, stages):
             "origin": "agent_observed",
             "note": "scratch DuckDB dry run — NOT the published product",
             "models": ROW_COUNTS}
+    tmp = p.with_name(p.name + ".tmp")
     try:
-        p.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        tmp.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(p)
     except OSError as exc:
-        record_notice(
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        message = (
             f"record: {path} could not be written ({type(exc).__name__}: {exc}) — "
-            "the record may be partially written. Re-run generator lock/record "
+            "the previous record is unchanged. Re-run generator lock/record "
             "setup with its resolved pocket_helper_dir before self_check.py.")
+        record_notice(message)
+        diag("s3_closure", "closure.build_record_merge_failed", message,
+             path=cpath(path), evidence={"record": path})
         return
 
 def finish(exit_code):
