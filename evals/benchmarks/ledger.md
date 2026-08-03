@@ -1052,8 +1052,12 @@ Guarding only Phase E moved the traceback rather than removing it: the C9
 escaping-reference scan rglobs `contracts/*` and read them unguarded, and Phase
 C's verifier read had the same hole — while Phase E's handler defers an
 undecodable verifier to "Phase C's finding to report", which Phase C could not do
-while dying on the same read. All three are closed. No scenario ships a latin-1
-verifier.
+while dying on the same read. All three are closed, and all three now read UTF-8
+explicitly: Phase C's guard initially left its read on the LOCALE codec while its
+own diagnostic asserted UTF-8, which breaks the deferral in both directions — a
+cp1252 host decodes bytes Phase E rejected and reports nothing, and an ASCII
+locale fails a valid UTF-8 file over an em dash in a comment. No scenario ships a
+latin-1 verifier.
 
 Evidence is two tests in `evals/tests/test_reach_gate_phase_e.py`, both
 **verified to fail against the previous implementation** rather than assumed to.

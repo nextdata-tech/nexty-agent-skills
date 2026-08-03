@@ -1497,7 +1497,14 @@ if _spec_tree is not None:
                  f"not exist.", vpath, {"contract": cname})
             continue
         try:
-            vsrc = vp.read_text()
+            # Pinned to UTF-8, not the locale codec. Phase E reads this same
+            # file as UTF-8 and defers an undecodable one to here, so reading it
+            # under a different codec breaks the deferral in both directions: on
+            # a cp1252 host Phase C decodes bytes Phase E rejected and reports
+            # nothing, and under an ASCII locale it rejects a file that is valid
+            # UTF-8 — failing the closure over an em dash in a comment, with a
+            # message telling the author to write UTF-8 that they already wrote.
+            vsrc = vp.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             # Phase E defers an undecodable verifier to "Phase C's finding to
             # report" — so Phase C has to survive long enough to report it.

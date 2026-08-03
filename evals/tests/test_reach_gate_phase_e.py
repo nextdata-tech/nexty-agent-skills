@@ -1018,9 +1018,23 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         "traceback, after Phase E has already cleared it"
     )
 
-    assert "except UnicodeDecodeError as exc:" in body, (
+    # Anchored to Phase C's own region, like the C9 check above. A file-wide
+    # substring search is satisfied by any handler anywhere in ~2000 lines: move
+    # the guard off this read, spell one the same way elsewhere, and the test
+    # still reports green while the deferral it protects is broken again. That
+    # is the same never-fires shape this file exists to document.
+    pc = body[body.index('cerr("closure.contract_verifier_missing"'):]
+    pc = pc[:pc.index("closure.contract_verifier_malformed") + 400]
+    assert "except UnicodeDecodeError as exc:" in pc, (
         "Phase C's verifier read is unguarded — Phase E defers an undecodable "
         "verifier to Phase C, so Phase C must survive to report it"
+    )
+    pc_read = re.search(r"vsrc = vp\.read_text\((.*?)\)", pc)
+    assert pc_read is not None, "Phase C's verifier read moved"
+    assert 'encoding="utf-8"' in pc_read.group(1), (
+        "Phase C reads the verifier under the LOCALE codec while its diagnostic "
+        "claims UTF-8 — on a cp1252 host it silently accepts bytes Phase E "
+        "rejected, and under an ASCII locale it fails a valid UTF-8 file"
     )
 
 
