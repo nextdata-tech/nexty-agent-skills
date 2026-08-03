@@ -1002,13 +1002,27 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     reported green against a script that still crashed.
     """
     body = _script_body()
-    reads = re.findall(r"read_text\((.*?)\)", body)
-    assert reads, "no read_text calls found — did the script move?"
 
-    # Every read_text in the script must either declare an error policy or sit
-    # inside a handler that catches UnicodeDecodeError. The two that matter are
-    # keyed on their surrounding context, since a bare read_text() elsewhere
-    # (spec.py, models.py) fails the closure loudly and correctly.
+    # The opening read of models.py/spec.py/transform/main.py is the fourth site
+    # of the same class, and it is asserted first because it is the one a reader
+    # is most likely to assume is safe. An earlier version of this comment
+    # claimed a bare read_text() there "fails the closure loudly and correctly";
+    # it does not. `except OSError` misses UnicodeDecodeError, so a latin-1
+    # models.py exited 1 with a bare traceback — "found something", by that
+    # block's own definition, when nothing had been read. Exit 2 is the code it
+    # reserves for "could not read".
+    opening = body[body.index('models_src = Path("models.py")'):]
+    opening = opening[:opening.index("finish(2)") + 20]
+    assert "except (OSError, UnicodeDecodeError) as exc:" in opening, (
+        "the opening closure read catches OSError only — a non-UTF-8 models.py "
+        "escapes as a traceback and exits 1, the code this block reserves for "
+        "'found something', rather than 2 for 'could not read'"
+    )
+
+    # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
+    # the reads Phase E's deferral depends on. This test is not a whole-file
+    # sweep, and saying so keeps a later reader from trusting a coverage claim
+    # this file does not make.
     c9 = body[body.index('rglob("contracts/*")'):]
     c9_read = re.search(r"ESCAPE\.findall\(p\.read_text\((.*?)\)\)", c9)
     assert c9_read is not None, "C9's escaping-reference read moved"

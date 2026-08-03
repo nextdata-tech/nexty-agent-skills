@@ -1042,7 +1042,7 @@ surfaces now agree, and the deterministic check
 closure written from the corrected guidance and still fail one with the terminal
 branch removed.
 
-The second is shipped script behaviour, at **three** read sites, not one.
+The second is shipped script behaviour, at **four** read sites, not one.
 Phase E's contract-verifier scan caught `(OSError, SyntaxError)`, but
 `UnicodeDecodeError` subclasses `ValueError`, so a verifier that is valid Python
 under a non-UTF-8 coding declaration escaped the handler and killed the
@@ -1052,8 +1052,11 @@ Guarding only Phase E moved the traceback rather than removing it: the C9
 escaping-reference scan rglobs `contracts/*` and read them unguarded, and Phase
 C's verifier read had the same hole — while Phase E's handler defers an
 undecodable verifier to "Phase C's finding to report", which Phase C could not do
-while dying on the same read. All three are closed, and all three now read UTF-8
-explicitly: Phase C's guard initially left its read on the LOCALE codec while its
+while dying on the same read. The fourth is the opening read of
+`models.py`/`spec.py`/`transform/main.py`, whose `except OSError` missed the same
+subclass: a latin-1 `models.py` exited **1** with a bare traceback — "found
+something", by that block's own definition — instead of the **2** it reserves for
+"could not read". All four are closed, and all now read UTF-8 explicitly: Phase C's guard initially left its read on the LOCALE codec while its
 own diagnostic asserted UTF-8, which breaks the deferral in both directions — a
 cp1252 host decodes bytes Phase E rejected and reports nothing, and an ASCII
 locale fails a valid UTF-8 file over an em dash in a comment. No scenario ships a

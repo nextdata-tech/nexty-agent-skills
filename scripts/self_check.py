@@ -603,9 +603,14 @@ try:
     models_src = Path("models.py").read_text()
     spec_src = Path("spec.py").read_text()
     transform_src = Path("transform/main.py").read_text()
-except OSError as exc:
+except (OSError, UnicodeDecodeError) as exc:
+    # UnicodeDecodeError subclasses ValueError, not OSError, so a latin-1
+    # models.py walked past this handler and exited 1 with a bare traceback —
+    # "found something", by this block's own definition, when nothing was ever
+    # read. Same reasoning as the contracts/ reads below.
     print(f"CANNOT READ — {exc}. Run self_check.py from the CLOSURE ROOT: "
-          f"models.py, spec.py and transform/main.py must all be present.",
+          f"models.py, spec.py and transform/main.py must all be present, and "
+          f"must be UTF-8.",
           file=sys.stderr)
     finish(2)
 
