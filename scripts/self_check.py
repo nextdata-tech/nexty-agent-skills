@@ -600,9 +600,9 @@ def model_constants(src):
 # Exit 2 = could not read, distinct from exit 1 = found something. A traceback
 # here reads as a broken checker; the closure is simply not where we are.
 try:
-    models_src = Path("models.py").read_text()
-    spec_src = Path("spec.py").read_text()
-    transform_src = Path("transform/main.py").read_text()
+    models_src = Path("models.py").read_text(encoding="utf-8")
+    spec_src = Path("spec.py").read_text(encoding="utf-8")
+    transform_src = Path("transform/main.py").read_text(encoding="utf-8")
 except (OSError, UnicodeDecodeError) as exc:
     # UnicodeDecodeError subclasses ValueError, not OSError, so a latin-1
     # models.py walked past this handler and exited 1 with a bare traceback —
@@ -1922,7 +1922,7 @@ if "nxd_decisions" in set(PHYSICAL_MODELS):
                  "data/nxd_decisions/nxd_decisions.csv")
         else:
             import csv as _csv
-            with led.open(newline="") as fh:
+            with led.open(newline="", encoding="utf-8", errors="replace") as fh:
                 lrows = list(_csv.DictReader(fh))
             # status and provenance are checked INDEPENDENTLY: they are separate
             # axes, so a missing provenance column must not skip status
@@ -1978,7 +1978,7 @@ for pcsv in sorted(Path("data").rglob("*.csv")):
     if not any(h in pcsv.parent.name.lower() for h in POLICY_HINT):
         continue
     import csv as _csv
-    with pcsv.open(newline="") as fh:
+    with pcsv.open(newline="", encoding="utf-8", errors="replace") as fh:
         prows = list(_csv.DictReader(fh))
     if not prows:
         continue
@@ -2102,7 +2102,7 @@ for vcsv in sorted(Path("data").rglob("*.csv")):
     if vcsv.parent.name == "nxd_decisions":
         continue
     import csv as _csv
-    with vcsv.open(newline="") as fh:
+    with vcsv.open(newline="", encoding="utf-8", errors="replace") as fh:
         vrows = list(_csv.DictReader(fh))
     for col in (vrows[0] if vrows else {}):
         if not any(h in col.lower() for h in VOCAB_HINT):

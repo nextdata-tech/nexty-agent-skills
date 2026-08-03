@@ -1042,7 +1042,7 @@ surfaces now agree, and the deterministic check
 closure written from the corrected guidance and still fail one with the terminal
 branch removed.
 
-The second is shipped script behaviour, at **four** read sites, not one.
+The second is shipped script behaviour, at **seven** read sites, not one.
 Phase E's contract-verifier scan caught `(OSError, SyntaxError)`, but
 `UnicodeDecodeError` subclasses `ValueError`, so a verifier that is valid Python
 under a non-UTF-8 coding declaration escaped the handler and killed the
@@ -1056,7 +1056,11 @@ while dying on the same read. The fourth is the opening read of
 `models.py`/`spec.py`/`transform/main.py`, whose `except OSError` missed the same
 subclass: a latin-1 `models.py` exited **1** with a bare traceback — "found
 something", by that block's own definition — instead of the **2** it reserves for
-"could not read". All four are closed, and all now read UTF-8 explicitly: Phase C's guard initially left its read on the LOCALE codec while its
+"could not read". The last three are the landed CSVs, and they are the reads
+most likely to meet a non-UTF-8 byte in practice: a latin-1 verifier is a rare
+hand-written artifact, but a CSV exported from Excel as cp1252 is routine, and
+`csv.DictReader` over one raised the same bare traceback partway through grading.
+All seven are closed, and all now name their codec explicitly: Phase C's guard initially left its read on the LOCALE codec while its
 own diagnostic asserted UTF-8, which breaks the deferral in both directions — a
 cp1252 host decodes bytes Phase E rejected and reports nothing, and an ASCII
 locale fails a valid UTF-8 file over an em dash in a comment. No scenario ships a

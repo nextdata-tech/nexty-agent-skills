@@ -1018,6 +1018,35 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         "escapes as a traceback and exits 1, the code this block reserves for "
         "'found something', rather than 2 for 'could not read'"
     )
+    # Catching the error is half of it. An earlier revision of this test
+    # asserted the handler and not the codec, and the fix that followed caught
+    # UnicodeDecodeError while still reading under the LOCALE encoding — so the
+    # guard printed "must be UTF-8" about a decode it had not performed in
+    # UTF-8. On a cp1252 host that message is simply false; under an ASCII
+    # locale it fires on a file that is already UTF-8.
+    for name in ("models.py", "spec.py", "transform/main.py"):
+        m = re.search(rf'Path\("{re.escape(name)}"\)\.read_text\((.*?)\)', opening)
+        assert m is not None, f"the opening read of {name} moved"
+        assert 'encoding="utf-8"' in m.group(1), (
+            f"{name} is read under the locale codec while the handler below "
+            f"tells the author it must be UTF-8"
+        )
+
+    # The landed CSVs, which are the reads most likely to meet a non-UTF-8 byte
+    # in practice: a latin-1 verifier is a rare hand-written artifact, but a CSV
+    # exported from Excel as cp1252 is routine. csv.DictReader over one raises
+    # UnicodeDecodeError, and with no top-level handler in this script that is
+    # the same bare traceback — no code, no close_stage, no record merge.
+    # errors="replace" for the C9 reason: a replacement character cannot
+    # manufacture or hide a vocabulary match, and skipping the file would make
+    # an undecodable CSV the one place a mismatch hides.
+    csv_opens = re.findall(r"\.open\(newline=\"\"(.*?)\)", body)
+    assert csv_opens, "the landed-CSV reads moved"
+    for args in csv_opens:
+        assert "errors=" in args, (
+            "a landed CSV is read with no error policy — a cp1252 export kills "
+            "the script with a bare traceback partway through grading"
+        )
 
     # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
     # the reads Phase E's deferral depends on. This test is not a whole-file
