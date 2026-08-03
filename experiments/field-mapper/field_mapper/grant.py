@@ -2,7 +2,7 @@
 
 Split out of `__main__.py` for one reason: the check must happen **before** any
 source content or credential is read, and an in-process caller
-(`nxd-pocket-loop` invoking `map()` directly, which is the stated Layer-1 use)
+(`nxd-run-job-loop` invoking `map()` directly, which is the stated Layer-1 use)
 must not be able to bypass it. A gate that lives in the CLI is not a gate.
 
 **This is a userland convention, not an enforceable security boundary.** Nothing

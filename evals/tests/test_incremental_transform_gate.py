@@ -470,8 +470,8 @@ def test_incremental_doc_mentions_sidecar_only_to_forbid_it():
                 )
 
 
-def test_no_cron_framing_on_pocket():
-    """Pocket has no scheduler; runs happen because the user asks.
+def test_no_cron_framing_on_desktop():
+    """desktop has no scheduler; runs happen because the user asks.
 
     Scheduler phrasing is banned as GUIDANCE. The incremental doc is allowed to
     quote it inside its own do-not, so strip the prohibition sentence first.
@@ -482,12 +482,12 @@ def test_no_cron_framing_on_pocket():
     text = re.sub(r"do not write guidance.*?framing is", "", text)
     for phrase in ("each scheduled run", "every scheduled run", "nightly run"):
         assert phrase not in text, (
-            f"{phrase!r} implies a scheduler Pocket does not have — the correct "
+            f"{phrase!r} implies a scheduler desktop does not have — the correct "
             "framing is 'the next run'"
         )
     # The doc must positively state the no-cron fact, not merely avoid the words.
     assert "no cron" in text, (
-        "the doc must state outright that Pocket has no cron"
+        "the doc must state outright that desktop has no cron"
     )
 
 

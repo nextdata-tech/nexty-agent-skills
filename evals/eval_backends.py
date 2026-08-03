@@ -419,7 +419,7 @@ class ClaudeBackend:
             # in and confound the no_skills baseline.
             "--setting-sources", "project",
             # Scenarios that measure behaviour under a restricted tool surface
-            # (e.g. pocket-loop, which withholds WebFetch) pass their own list.
+            # (e.g. job-loop, which withholds WebFetch) pass their own list.
             "--allowedTools", allowed_tools or CLAUDE_AGENT_ALLOWED_TOOLS,
             "--add-dir", str(ws),
         ]
@@ -533,7 +533,7 @@ class ClaudeBackend:
         One ``Popen`` per scenario, fed one JSON user message per turn on stdin.
         A live process is used rather than re-invoking the CLI per turn because
         the process-level flags (``--add-dir``, ``--plugin-dir``) are set once on
-        a process that never restarts, and because a Pocket cell's supervisor
+        a process that never restarts, and because a desktop cell's supervisor
         children stay under a single process lineage for the caller's cleanup
         guard to sweep — which it does once, after this method returns.
 

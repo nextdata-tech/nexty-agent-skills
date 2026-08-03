@@ -72,7 +72,7 @@ CSV or Parquet first, and proceed with the CSV or file-source connector.
 
 - Infra-profile service: `file-source`, driver `nxd:generic-secrets:1.0.0`.
   This deliberately differs from CSV: `csv-source` uses
-  `nxd:local/file/storage:0.1.0` on the local Pocket runtime.
+  `nxd:local/file/storage:0.1.0` on the local desktop runtime.
 - Transform secrets key: `secrets["file_source"]` — a string, the file-source
   export root (same shape as `csv_source`, just a different key).
 - Companion file: `file-source-path` — one line, the **relative** path from

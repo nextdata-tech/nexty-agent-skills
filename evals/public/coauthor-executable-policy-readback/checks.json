@@ -2,7 +2,7 @@
   "name": "Read back an executable policy, then honour an edit to it",
   "skills": [
     "nxd-generate-data-product",
-    "nxd-pocket-loop"
+    "nxd-run-job-loop"
   ],
   "ci_skip": "scripts a follow-up turn; the automatic PR gate runs the codex backend, which cannot drive multi-turn. Run with --agent-backend claude.",
   "turns": [

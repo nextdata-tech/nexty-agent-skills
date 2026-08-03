@@ -59,7 +59,7 @@ materialized. For each question:
    - "…where…" or "…but only…" no longer settles it by itself — the query
      grammar ships ANDed `filters[]`, so a scoping clause may be a query-time
      filter. Route it through the **Omission Test** (stated canonically in the
-     **nxd-pocket-loop** skill, `reference/query-grammar.md`):
+     **nxd-run-job-loop** skill, `reference/query-grammar.md`):
      if a consumer querying with **no filters** would get a *wrong* number, it is
      a standing ruling and a derived model must produce the column; if they would
      get a merely *broader* number, it is a per-question filter — derive nothing.
@@ -131,7 +131,7 @@ A derived model needs a real reason to exist. If a question is answerable by a
 metric over an existing column grouped by an existing column — optionally scoped
 by ANDed `filters[]`, `order_by[]` and `limit` — do **not** derive anything: add
 the view and stop. The **Omission Test** is the rule that decides this; it is
-stated once in the **nxd-pocket-loop** skill, `reference/query-grammar.md`.
+stated once in the **nxd-run-job-loop** skill, `reference/query-grammar.md`.
 A scoping constraint the grammar cannot express is still not a reason to derive
 a single-use column — that reference lists the sanctioned patterns.
 

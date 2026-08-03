@@ -80,7 +80,7 @@ schema churn is visible as a cost line, not a mystery latency.
 
 **`grant.py` split out of `__main__.py`.** §9 of the design requires the grant
 check to happen **before** source content or credentials are read. If that check
-lives in the CLI, an in-process caller (`nxd-pocket-loop` invoking `map()`
+lives in the CLI, an in-process caller (`nxd-run-job-loop` invoking `map()`
 directly, which is the stated Layer-1 use) bypasses it entirely. It is a library
 gate, not a CLI gate.
 
@@ -92,7 +92,7 @@ does not" boundary erodes at the first new error type.
 
 ### Public surface
 
-Layer 2 (generated code, skills, pocket-loop closures) may import **only** these:
+Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 
 | Symbol | Module | Purpose |
 |---|---|---|
@@ -291,7 +291,7 @@ Rules that hold for every non-`ok` status:
 - **Excluded mechanically from default metrics.** Metric views filter
   `value_status = 'ok'`; a coverage metric reports the non-`ok` share alongside
   any headline number, exactly as `needs_review` share is reported for
-  classification (`nxd-pocket-loop/SKILL.md`). A metric that silently averages
+  classification (`nxd-run-job-loop/SKILL.md`). A metric that silently averages
   over non-`ok` rows is a contract violation.
 - **`needs_review` is derived, never model-asserted.** The model has no input to
   it. It is computed by `validate.py` from status + spec requiredness. See open

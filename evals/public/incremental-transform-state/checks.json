@@ -1,5 +1,5 @@
 {
-  "name": "Incremental Load of an Append-Only Source on Pocket",
+  "name": "Incremental Load of an Append-Only Source on the desktop runtime",
   "skills": [
     "nxd-generate-data-product"
   ],
@@ -34,7 +34,7 @@
     },
     {
       "id": "no-false-rollback-assumption",
-      "check": "The agent does NOT claim or rely on a failed run rolling back rows already written by pipeline.run(...). On desktop the local DuckDB storage driver has no transaction, so dlt's writes are immediate and permanent while the transform_state bag is only committed when the run succeeds. Credit an agent that validates the batch BEFORE the write for this reason, or that explicitly notes rows and cursor do not share fate. An agent that asserts 'a raise commits neither the rows nor the cursor' fails this check."
+      "check": "The agent does NOT claim or rely on a failed run rolling back rows already written by pipeline.run(...). On the desktop runtime the local DuckDB storage driver has no transaction, so dlt's writes are immediate and permanent while the transform_state bag is only committed when the run succeeds. Credit an agent that validates the batch BEFORE the write for this reason, or that explicitly notes rows and cursor do not share fate. An agent that asserts 'a raise commits neither the rows nor the cursor' fails this check."
     },
     {
       "id": "append-paired-with-cursor-not-bare",
@@ -58,7 +58,7 @@
     },
     {
       "id": "no-when-dag-no-databricks-sidecar",
-      "check": "The agent does NOT propose a .when(...) per-model DAG for the desktop/Pocket local driver, and does NOT reference NXD_TRANSFORM_STATE_SIDECAR_PATH or any Databricks-only transform-state sidecar mechanism."
+      "check": "The agent does NOT propose a .when(...) per-model DAG for the local DuckDB storage driver, and does NOT reference NXD_TRANSFORM_STATE_SIDECAR_PATH or any Databricks-only transform-state sidecar mechanism."
     },
     {
       "id": "preserves-transform-contract",
@@ -66,7 +66,7 @@
     },
     {
       "id": "no-scheduler-framing",
-      "check": "The agent does NOT explain the behavior in terms of a schedule or cron (e.g. 'each scheduled run', 'nightly'). Pocket has no scheduler; re-runs are user-initiated refine cycles on the same workflow."
+      "check": "The agent does NOT explain the behavior in terms of a schedule or cron (e.g. 'each scheduled run', 'nightly'). The desktop runtime has no scheduler; re-runs are user-initiated refine cycles on the same workflow."
     }
   ]
 }

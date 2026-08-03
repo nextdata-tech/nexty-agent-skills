@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.32.1
+  version: 0.33.0
 ---
 
 # nxd Data Product Query
@@ -389,8 +389,8 @@ first (**Step 0**), then install dependencies into a throwaway venv (Windows:
 `py -3 -m venv` + `.\...\Scripts\pip.exe`):
 
 ```bash
-python3 -m venv .nxd-data-product-query-venv
-.nxd-data-product-query-venv/bin/pip install -r "$WORKDIR/scripts/requirements.txt"
+python3 -m venv .nxd-query-data-product-venv
+.nxd-query-data-product-venv/bin/pip install -r "$WORKDIR/scripts/requirements.txt"
 ```
 
 | Script | Purpose |

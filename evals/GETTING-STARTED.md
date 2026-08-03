@@ -120,14 +120,14 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `pharma-mesh-query-hard` | semantic MCP server (Tier 2) |
 | `pharma-mesh-query-loop` | semantic MCP server (Tier 2) |
 | `semantic-intent-validation` | semantic MCP server (Tier 2) |
-| `pocket-loop-serve-query-refine` | live desktop supervisor (Tier 3) |
-| `pocket-loop-export-handoff` | live desktop supervisor (Tier 3) |
+| `job-loop-serve-query-refine` | live desktop supervisor (Tier 3) |
+| `job-loop-export-handoff` | live desktop supervisor (Tier 3) |
 | `country-income-trajectory` | live desktop supervisor (Tier 3) |
 | `incremental-multi-model` | live desktop supervisor (Tier 3) |
 | `treasury-yield-curve` | live desktop supervisor (Tier 3) |
 | `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
 | `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
-| `pocket-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |
+| `desktop-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |
 
 Full detail on scenarios, authoring, the baseline, and CI gating:
 [`evals/README.md`](README.md).
@@ -275,13 +275,13 @@ Fixture format and the cross-DP mesh model: [`evals/mcp/README.md`](mcp/README.m
 
 ---
 
-## Tier 3 — pocket-loop (2 scenarios)
+## Tier 3 — job-loop (2 scenarios)
 
 Needs a live desktop supervisor that CI cannot provision.
 
 ```sh
-export EVAL_POCKET_SUPERVISOR_DIR=/path/to/supervisor
-export EVAL_POCKET_PYTHON=/path/to/python
+export EVAL_DESKTOP_SUPERVISOR_DIR=/path/to/supervisor
+export EVAL_DESKTOP_PYTHON=/path/to/python
 export NXD_DESKTOP_REPO_ROOT=/path/to/desktop/repo
 ```
 
@@ -314,15 +314,15 @@ Set by you:
 | `EVAL_MCP_PYTHON` | 2 | interpreter carrying the matched nxd wheel set |
 | `SNOWFLAKE_*` | 2 | lower-env connection (env only, never written to disk) |
 | `EVAL_MCP_CAN_SEE_PII=1` | 2 | bypass the governed PII mask — debugging the executor only |
-| `EVAL_POCKET_SUPERVISOR_DIR` | 3 | desktop supervisor location |
-| `EVAL_POCKET_PYTHON` | 3 | interpreter for the supervisor |
-| `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by pocket-loop fixtures |
+| `EVAL_DESKTOP_SUPERVISOR_DIR` | 3 | desktop supervisor location |
+| `EVAL_DESKTOP_PYTHON` | 3 | interpreter for the supervisor |
+| `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by job-loop fixtures |
 | `NXD_EVAL_JUDGE_RETEST=1` | 1 | opt-in judge test-retest pass |
 | `NXD_CA_BUNDLE` | 1/2 | per-cluster TLS trust store; unset = system store |
 | `NXD_SKILL_PYTHON` | — | interpreter for skill-invoked subprocesses |
 
 Injected by `run.py` — **never set these by hand**: `EVAL_MCP_ENDPOINT`,
-`EVAL_MCP_DP`, `EVAL_MCP_TOOL_COUNT`, `NXD_POCKET_CHECK_TMPDIR`.
+`EVAL_MCP_DP`, `EVAL_MCP_TOOL_COUNT`, `NXD_JOB_CHECK_TMPDIR`.
 
 ---
 

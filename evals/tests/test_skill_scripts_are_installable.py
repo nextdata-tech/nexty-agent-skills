@@ -46,7 +46,7 @@ HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py")
 VERSION_STAMP = ".nexty-plugin-version.json"
 SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
 WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
-BOOTSTRAP = re.compile(r"```bash\n(POCKET_HELPER_DIR=.*?test -n \"\$POCKET_HELPER_DIR\")\n```", re.S)
+BOOTSTRAP = re.compile(r"```bash\n(JOB_HELPER_DIR=.*?test -n \"\$JOB_HELPER_DIR\")\n```", re.S)
 
 
 def _skill_docs() -> list[Path]:
@@ -68,11 +68,11 @@ def test_every_referenced_script_ships_inside_a_skill_tree():
     )
 
 
-def test_the_two_spec_scripts_live_in_the_pocket_loop_skill():
+def test_the_two_spec_scripts_live_in_the_job_loop_skill():
     """Pin the home explicitly — a silent move back to the root is the bug."""
-    home = SRC / "nxd-pocket-loop" / "scripts"
+    home = SRC / "nxd-run-job-loop" / "scripts"
     for name in ("dp_diagnostics.py", "validate_dp_spec.py"):
-        assert (home / name).is_file(), f"{name} must ship at src/nxd-pocket-loop/scripts/"
+        assert (home / name).is_file(), f"{name} must ship at src/nxd-run-job-loop/scripts/"
         assert not (REPO / "scripts" / name).exists(), (
             f"{name} is back at the repo root, where no installer copies it"
         )
@@ -96,20 +96,20 @@ def test_a_cross_skill_call_names_the_owning_skill():
         rel = doc.relative_to(SRC)
         for line_no, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
             if "python3" in line and any(name in line and "scripts/" in line for name in HELPERS):
-                if "$POCKET_HELPER_DIR/scripts/" not in line:
+                if "$JOB_HELPER_DIR/scripts/" not in line:
                     offenders.append(f"{rel}:{line_no}: {line.strip()}")
     assert not offenders, (
-        "helper call sites must use the resolved POCKET_HELPER_DIR path, not a path "
+        "helper call sites must use the resolved JOB_HELPER_DIR path, not a path "
         f"relative to a repository, workflow, or closure: {offenders}"
     )
 
 
-def test_generator_selective_install_names_its_pocket_loop_dependency():
+def test_generator_selective_install_names_its_job_loop_dependency():
     generator = (SRC / "nxd-generate-data-product" / "SKILL.md").read_text(encoding="utf-8")
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "Selective-install dependency" in generator
     assert "selective install must include both skills" in generator
-    assert "nxd-pocket-loop nxd-generate-data-product" in readme
+    assert "nxd-run-job-loop nxd-generate-data-product" in readme
 
 
 def _assert_helpers_run(skill_dir: Path) -> None:
@@ -131,7 +131,7 @@ def _assert_helpers_run(skill_dir: Path) -> None:
     assert json.loads(schema.stdout)["schema"] == "nxd-dp-spec-schema-v1"
 
     examples = WORKED_SPEC.findall(
-        (SRC / "nxd-pocket-loop" / "reference" / "dp-spec.md").read_text(encoding="utf-8")
+        (SRC / "nxd-run-job-loop" / "reference" / "dp-spec.md").read_text(encoding="utf-8")
     )
     assert len(examples) == 1
     worked_spec = skill_dir.parent / "worked-dp-spec.md"
@@ -170,12 +170,12 @@ def _lock_plugin_version(skill_dir: Path) -> str:
 
 def _bootstrap_resolves(home: Path, cwd: Path) -> Path:
     """Run the documented resolver, not a reimplementation of it."""
-    text = (SRC / "nxd-pocket-loop" / "reference" / "scripts-bootstrap.md").read_text()
+    text = (SRC / "nxd-run-job-loop" / "reference" / "scripts-bootstrap.md").read_text()
     match = BOOTSTRAP.search(text)
     assert match, "scripts-bootstrap.md must retain one executable resolver block"
     env = os.environ | {"HOME": str(home)}
     result = subprocess.run(
-        ["bash", "-c", match.group(1) + '\nprintf "%s\\n" "$POCKET_HELPER_DIR"'],
+        ["bash", "-c", match.group(1) + '\nprintf "%s\\n" "$JOB_HELPER_DIR"'],
         cwd=cwd,
         env=env,
         capture_output=True,
@@ -186,9 +186,9 @@ def _bootstrap_resolves(home: Path, cwd: Path) -> Path:
 
 
 def test_bootstrap_resolver_has_no_hardcoded_plugin_version():
-    text = (SRC / "nxd-pocket-loop" / "reference" / "scripts-bootstrap.md").read_text()
+    text = (SRC / "nxd-run-job-loop" / "reference" / "scripts-bootstrap.md").read_text()
     assert not re.search(r"version\s*=\s*['\"]\d+\.\d+\.\d+['\"]", text)
-    assert "nexty-agent-skills/*/skills/nxd-pocket-loop" in text
+    assert "nexty-agent-skills/*/skills/nxd-run-job-loop" in text
 
 
 def _install(target: str, home: Path, *args: str) -> None:
@@ -202,7 +202,7 @@ def _install(target: str, home: Path, *args: str) -> None:
         uname.chmod(0o755)
         env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
     subprocess.run(
-        ["bash", "scripts/install.sh", f"--{target}", "--skills", "nxd-pocket-loop",
+        ["bash", "scripts/install.sh", f"--{target}", "--skills", "nxd-run-job-loop",
          "--no-validate", "--no-submodule", "--yes", *args],
         cwd=REPO,
         env=env,
@@ -212,9 +212,9 @@ def _install(target: str, home: Path, *args: str) -> None:
     )
 
 
-def test_code_install_includes_and_invokes_pocket_helpers(tmp_path: Path):
+def test_code_install_includes_and_invokes_desktop_helpers(tmp_path: Path):
     _install("code", tmp_path)
-    skill_dir = tmp_path / ".claude" / "skills" / "nxd-pocket-loop"
+    skill_dir = tmp_path / ".claude" / "skills" / "nxd-run-job-loop"
     outside = tmp_path / "outside-code"
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
@@ -226,19 +226,19 @@ def test_code_install_includes_and_invokes_pocket_helpers(tmp_path: Path):
     assert _lock_plugin_version(skill_dir) == version
 
 
-@pytest.mark.parametrize("layout", ("src/nxd-pocket-loop", "skills/nxd-pocket-loop"))
-def test_claude_code_plugin_install_layout_resolves_pocket_helpers(
+@pytest.mark.parametrize("layout", ("src/nxd-run-job-loop", "skills/nxd-run-job-loop"))
+def test_claude_code_plugin_install_layout_resolves_desktop_helpers(
     tmp_path: Path, layout: str
 ):
     skill_dir = tmp_path / ".claude" / "plugins" / "nexty-agent-skills" / layout
-    shutil.copytree(SRC / "nxd-pocket-loop", skill_dir)
+    shutil.copytree(SRC / "nxd-run-job-loop", skill_dir)
     outside = tmp_path / "outside-plugin"
     outside.mkdir()
 
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
 
 
-def test_desktop_cache_install_includes_and_invokes_pocket_helpers(tmp_path: Path):
+def test_desktop_cache_install_includes_and_invokes_desktop_helpers(tmp_path: Path):
     account, device = "test-account", "test-device"
     support = tmp_path / "Library" / "Application Support" / "Claude"
     (support / "local-agent-mode-sessions" / account / device / "cowork_plugins").mkdir(parents=True)
@@ -248,7 +248,7 @@ def test_desktop_cache_install_includes_and_invokes_pocket_helpers(tmp_path: Pat
     _install("desktop", tmp_path)
     version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
     cache = support / "local-agent-mode-sessions" / account / device / "cowork_plugins" / "cache"
-    skill_dir = cache / "nexty" / "nexty-agent-skills" / version / "skills" / "nxd-pocket-loop"
+    skill_dir = cache / "nexty" / "nexty-agent-skills" / version / "skills" / "nxd-run-job-loop"
     outside = tmp_path / "outside-cowork"
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
@@ -256,9 +256,9 @@ def test_desktop_cache_install_includes_and_invokes_pocket_helpers(tmp_path: Pat
     assert _lock_plugin_version(skill_dir) == version
 
 
-def test_desktop_zip_includes_and_invokes_pocket_helpers(tmp_path: Path):
+def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
     subprocess.run(["bash", "build-skills.sh"], cwd=REPO, check=True, capture_output=True, text=True)
-    archive = REPO / "build" / "nxd-pocket-loop.zip"
+    archive = REPO / "build" / "nxd-run-job-loop.zip"
     assert archive.is_file()
     with zipfile.ZipFile(archive) as zf:
         assert "scripts/dp_diagnostics.py" in zf.namelist()
@@ -266,7 +266,7 @@ def test_desktop_zip_includes_and_invokes_pocket_helpers(tmp_path: Path):
         assert "scripts/requirements.txt" in zf.namelist()
         skill_dir = (
             tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
-            / "skills-plugin" / "test-account" / "test-device" / "test-session" / "skills" / "nxd-pocket-loop"
+            / "skills-plugin" / "test-account" / "test-device" / "test-session" / "skills" / "nxd-run-job-loop"
         )
         zf.extractall(skill_dir)
     outside = tmp_path / "outside-zip"

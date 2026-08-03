@@ -1,6 +1,6 @@
 # The spec is authoritative — architecture
 
-How a Nexty Pocket data product goes from user intent to a running, queryable
+How a local desktop data product goes from user intent to a running, queryable
 closure, and how the pipeline records what it did. This note is normative: it
 specifies shapes, names and literals, because several independent producers must
 agree on them exactly.
@@ -151,7 +151,7 @@ Grammar: `<domain> "." <slug> [ "." <slug> ]`, lowercase, `[a-z0-9_]` segments.
 Stable forever: a code is never renamed or repurposed; a changed meaning is a new
 code. Unknown codes fail the shared validator.
 
-The registry is **`<nxd-pocket-loop>/scripts/dp_diagnostics.py::CODES`**, a mapping
+The registry is **`<nxd-run-job-loop>/scripts/dp_diagnostics.py::CODES`**, a mapping
 `code -> {stage, severity, owner, control, agent_fillable, summary}`. Producers
 supply `code` plus per-instance `path`/`message`/`evidence`.
 
@@ -319,7 +319,7 @@ erase the evidence that it leaked. Fail closed, and let the user hear it (§7).
 
 **(iii) `evals/tests/test_validator_code_coverage.py` makes this mechanical.**
 
-- every `report.error(` / `report.warn(` call site in `<nxd-pocket-loop>/scripts/validate_dp_spec.py`
+- every `report.error(` / `report.warn(` call site in `<nxd-run-job-loop>/scripts/validate_dp_spec.py`
   passes a `code=` argument (AST walk over the `Call` nodes — a call site with no
   `code=` fails the test);
 - every such literal is a key in `dp_diagnostics.CODES` whose registry `stage` is
@@ -574,9 +574,9 @@ field. Three name a script; the fourth names the agent:
 
 | `tool` | who writes the report | stages it may carry |
 |---|---|---|
-| `validate_dp_spec` | `<nxd-pocket-loop>/scripts/validate_dp_spec.py --json` | `s0_spec` |
+| `validate_dp_spec` | `<nxd-run-job-loop>/scripts/validate_dp_spec.py --json` | `s0_spec` |
 | `self_check` | `scripts/self_check.py --json` | `s1_structure`, `s2_transform`, `s3_closure` |
-| `dp_diagnostics` | `<nxd-pocket-loop>/scripts/dp_diagnostics.py` (`lock verify`, `materialized`) | any |
+| `dp_diagnostics` | `<nxd-run-job-loop>/scripts/dp_diagnostics.py` (`lock verify`, `materialized`) | any |
 | `loop` | **the agent**, hand-constructed from tool results | `s4_pin` … `s8_answer` |
 
 `loop` exists because stages 4–8 have no script producer — the agent observes a
@@ -703,8 +703,8 @@ grows a home for them.
 
 ### 1.9 JSON Schema (normative)
 
-Ships as `<nxd-pocket-loop>/scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is emitted by
-`python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py schema --diagnostic`.
+Ships as `<nxd-run-job-loop>/scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is emitted by
+`python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py schema --diagnostic`.
 
 ```json
 {
@@ -740,7 +740,7 @@ Ships as `<nxd-pocket-loop>/scripts/dp_diagnostics.py::DIAGNOSTIC_SCHEMA` and is
 - **Generated, never hand-authored.** No template, no prose sections to fill.
 - **Travels with the closure** — it is what a cold reader and the export handoff
   read to learn what actually happened.
-- Written and updated by `<nxd-pocket-loop>/scripts/dp_diagnostics.py record …` and, for stages
+- Written and updated by `<nxd-run-job-loop>/scripts/dp_diagnostics.py record …` and, for stages
   1–3 only, by `self_check.py --record build-record.json`.
 
 It carries **outcomes only**. The plan lives in the byte-copied spec snapshot;
@@ -766,7 +766,7 @@ against an **approved, validated** spec, so the validator has necessarily been
 run against exactly the bytes being snapshotted.
 
 ```
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record init \
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py record init \
     --record <closure>/build-record.json \
     --lock   <closure>/dp-spec.lock.json \
     [--spec-report <report.json>]
@@ -932,7 +932,7 @@ of what it thought was wrong and what it did about it. `diagnosis.code`,
 `diagnosis.path`, both hashes, `rerun` and `exit` are mechanical and checkable;
 the two prose fields are not, and a consumer must not treat them as evidence. The
 `origin` field stays at entry granularity for schema simplicity; this paragraph is
-the disclosure, and `src/nxd-pocket-loop/reference/build-record.md` repeats it.
+the disclosure, and `src/nxd-run-job-loop/reference/build-record.md` repeats it.
 
 ### 2.6 `readback` — the distribution read-back as DATA
 
@@ -1138,7 +1138,7 @@ consumers must not treat it as evidence.
 
 ### 2.12 JSON Schema
 
-Ships as `<nxd-pocket-loop>/scripts/dp_diagnostics.py::BUILD_RECORD_SCHEMA`, emitted by
+Ships as `<nxd-run-job-loop>/scripts/dp_diagnostics.py::BUILD_RECORD_SCHEMA`, emitted by
 `dp_diagnostics.py schema --record`. It is a straight transcription of §2.3–2.11
 with `additionalProperties: false` at every level, `required` on every key named
 above, and `$ref`s to `nxd-diagnostic-v1` for the diagnostic arrays. A golden
@@ -1187,7 +1187,7 @@ reformatted on the way in cannot be compared.
 ```
 
 `source_basename`, not a path. The lock deliberately carries **no path to the
-live IR**: the workflow id plus the `…/nxd-pocket/<workflow>/dp-spec.md`
+live IR**: the workflow id plus the `…/nxd-jobs/<workflow>/dp-spec.md`
 convention recovers it, and storing a `../`-shaped string inside the closure is
 exactly the escaping pointer this design forbids.
 
@@ -1209,7 +1209,7 @@ by construction. That is why Phase C does the byte check and
 ### 3.4 `nxd-dp-spec-canon-v1` — the canonicalization algorithm
 
 Precise enough that two implementers produce the same hash. Implemented once, in
-`<nxd-pocket-loop>/scripts/dp_diagnostics.py::canonicalize()`.
+`<nxd-run-job-loop>/scripts/dp_diagnostics.py::canonicalize()`.
 
 **Input:** the raw bytes of a `dp-spec.md`.
 
@@ -1286,10 +1286,10 @@ major bump requires re-verifying the golden fixture.
 `evals/tests/test_dp_spec_canonicalization.py` carries:
 
 - the golden hash of the worked example in
-  `src/nxd-pocket-loop/reference/dp-spec.md`, pinned as a literal.
+  `src/nxd-run-job-loop/reference/dp-spec.md`, pinned as a literal.
   **Extraction rule (normative):** the fixture is the content of the **sole
   fenced block whose info string is exactly `markdown`** in
-  `src/nxd-pocket-loop/reference/dp-spec.md` — the only ```` ```markdown ````
+  `src/nxd-run-job-loop/reference/dp-spec.md` — the only ```` ```markdown ````
   fence in the file (every other fence is ```` ```yaml ```` or ```` ```bash ````).
   The test asserts **exactly one** such fence exists and fails loudly if a second
   appears, rather than silently hashing the first. Never key on line numbers;
@@ -1342,7 +1342,7 @@ sha256 (`closure.resolved_ref_missing`).
 ### 4.1 Layout
 
 ```
-…/nxd-pocket/<workflow>/
+…/nxd-jobs/<workflow>/
 ├── dp-spec.md                 HAND-EDITED. The live IR. Beside, never inside.
 ├── prompts/…                  HAND-EDITED. Referenced by judgments[].prompt_ref.
 └── closure/                   ← build_data_product points here
@@ -1733,7 +1733,7 @@ number field for `spec.criteria.bad_weight`.
 ### 8.2 (b) A machine-readable schema
 
 ```
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py schema --json
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py schema --json
 ```
 
 emits:
@@ -1763,7 +1763,7 @@ emits:
 is structural rather than aspirational: `REQUIRED_SECTIONS`, `KNOWN_SECTIONS`,
 `MODEL_KINDS`, `SOURCE_TYPES`, `DECISION_STATUS`, `DECISION_PROVENANCE`,
 `PRODUCED_BY`, `RERUNS`, `DISPOSITIONS` and `STATUS_VALUES` live in
-`<nxd-pocket-loop>/scripts/dp_diagnostics.py`, and `validate_dp_spec.py` imports them. One
+`<nxd-run-job-loop>/scripts/dp_diagnostics.py`, and `validate_dp_spec.py` imports them. One
 definition, two consumers, no drift.
 
 ### 8.3 (c) A canonical emitter
@@ -1772,8 +1772,8 @@ Needed for the hash anyway (§3.4); the same component serves form round-trip an
 readable diffs.
 
 ```
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py canonicalize <spec.md>   # canonical JSON to stdout
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py emit <canonical.json>    # markdown to stdout
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py canonicalize <spec.md>   # canonical JSON to stdout
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py emit <canonical.json>    # markdown to stdout
 ```
 
 Law: `canonicalize(emit(canonicalize(x))) == canonicalize(x)`.
@@ -1829,9 +1829,9 @@ here may be paraphrased, pluralized or reordered.
 `validate_dp_spec` · `self_check` · `dp_diagnostics` · `loop`
 
 **Reference files**
-`src/nxd-pocket-loop/reference/build-record.md` — the reader-facing normative doc
+`src/nxd-run-job-loop/reference/build-record.md` — the reader-facing normative doc
 for §1, §2, §5 and §6.
-`src/nxd-pocket-loop/reference/failure-handling.md` — the loop's operating
+`src/nxd-run-job-loop/reference/failure-handling.md` — the loop's operating
 procedure over it (the ladder, fail-closed classification, typed exits, R1–R8).
 `src/nxd-generate-data-product/reference/closure-record.md` — how the generator emits the
 record surfaces (byte copy, `prompt_ref` mirroring, lock write, `record init`,
@@ -1871,17 +1871,17 @@ stability of the contract; the comment is what keeps that trade visible.
 `2` could not read:
 
 ```
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py hash        <spec.md>
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py canonicalize <spec.md>
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py emit        <canonical.json>
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py schema      [--json|--diagnostic|--record]
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock write  <spec.md> <closure-dir>
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py lock verify <closure-dir> [--spec <spec.md>]
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record init   --record <path> --lock <path> [--spec-report <report.json>]
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record append --record <path> [--stage <id>] --from <report.json>
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py record query  --record <path>
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py hash        <spec.md>
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py canonicalize <spec.md>
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py emit        <canonical.json>
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py schema      [--json|--diagnostic|--record]
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py lock write  <spec.md> <closure-dir>
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py lock verify <closure-dir> [--spec <spec.md>]
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py record init   --record <path> --lock <path> [--spec-report <report.json>]
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py record append --record <path> [--stage <id>] --from <report.json>
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py record query  --record <path>
        [--stage …] [--owner …] [--severity …] [--code …] [--unresolved] [--attempt N]
-python3 <nxd-pocket-loop>/scripts/dp_diagnostics.py materialized --record <path> [--lock <path>] [--spec <path>]
+python3 <nxd-run-job-loop>/scripts/dp_diagnostics.py materialized --record <path> [--lock <path>] [--spec <path>]
 python3 scripts/self_check.py [--json] [--record build-record.json]
 ```
 

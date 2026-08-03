@@ -51,7 +51,7 @@ the source](#the-evidence-citation-obligation).
 The judging is a **teach-time, agent-side materialization act** — structurally
 the same as eliciting reference data from the user, except the source of the
 ruling is the agent reading evidence rather than the user typing it. The
-orchestrating agent (running **nxd-pocket-loop**) reads the entity facts and
+orchestrating agent (running **nxd-run-job-loop**) reads the entity facts and
 **writes the judgement rows as CSV** into the closure's export, before the build
 runs.
 
@@ -229,7 +229,7 @@ batch file is written once and never edited.
 A new batch is a legitimate **input change**, not drift: the build over a
 superset of judgement files is a different, still-deterministic build. The
 incremental discipline (which entities a new batch covers) lives in
-**nxd-pocket-loop** — this file only fixes the landing shape.
+**nxd-run-job-loop** — this file only fixes the landing shape.
 
 ## judged_by and human override
 

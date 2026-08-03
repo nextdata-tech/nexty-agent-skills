@@ -44,7 +44,7 @@ services it inspects are reachable.
    The shell can't reach `$SKILL_DIR/scripts`, but the file-read tools
    (Read / Glob) can read the skill directory, and Write can create files in a
    scratch location the shell *does* see — the session working/output directory,
-   e.g. `"$HOME/.nxd-mesh-analyzer-scripts"` or the harness scratch dir:
+   e.g. `"$HOME/.nxd-analyze-mesh-scripts"` or the harness scratch dir:
 
    - Glob `scripts/**/*` under `$SKILL_DIR` to enumerate every module **plus**
      `scripts/requirements.txt`. This is a **package**, not flat files — it

@@ -136,14 +136,21 @@ DEFAULT_JUDGE_TIMEOUT_S = 300
 # provider-specific concept: Codex gates the agent through a sandbox policy
 # instead of a per-tool allowlist.
 #
-# Pocket's proven smoke invocation is deliberately narrower than the generic
+# desktop's proven smoke invocation is deliberately narrower than the generic
 # eval harness: no web/docs escape hatch and no helper tools beyond the local
 # file + shell surface. Skill remains essential: without it the installed
-# plugin bodies never activate, so this would not measure the Pocket skills.
+# plugin bodies never activate, so this would not measure the local desktop skills.
 # It stays here because it is a *scenario* constraint, not a provider default;
 # it is applied only on the Claude backend (see run_one), the only provider that
 # has a per-tool allowlist to narrow.
-POCKET_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
+# Naming rule for the two prefixes this file mixes, so a future sweep has one to
+# follow: JOB_ names the *loop* — the scenario shape this harness drives, matching
+# the nxd-run-job-loop skill and the job-loop-* scenarios. DESKTOP_/desktop names
+# the *runtime* being driven — the supervisor, its binaries, its env vars and its
+# opt-in marker, none of which this repo owns. NXD_JOB_CHECK_TMPDIR pointing at
+# .desktop-check-tmp is therefore correct, not a straggler: the loop's checker
+# writes into the runtime's scratch dir.
+JOB_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
 #   {"tools": ["list_models","describe_model","run_semantic_query"],
@@ -169,10 +176,10 @@ MCP_SERVER_SIDE_FIXTURES = {
     "mcp.json",           # runner opt-in marker
     "golden_pairs.json",  # expected verdicts — that's the rubric, never show it
 }
-POCKET_RUNNER_SIDE_FIXTURES = {
+JOB_RUNNER_SIDE_FIXTURES = {
     # These fixtures are trusted runner inputs. The agent gets data/ and the
     # checker, but never the known-good preflight closure or opt-in marker.
-    "pocket.json",
+    "desktop.json",
     "reference-closure",
     "build_data.py",     # contains fixture discriminator fingerprints
 }
@@ -209,14 +216,14 @@ EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES = {
     "check_executable_policy.py",
 }
 
-# A Pocket custom-contract checker is unstaged evaluator input, not a prompt
+# A desktop custom-contract checker is unstaged evaluator input, not a prompt
 # input: staging it lets the agent optimize to the checker instead of authoring
 # the closure. Being unstaged is not inherently unreadable from the source
 # checkout; the protected scenario's configured source-isolation wrapper must
 # independently block that path. This is intentionally scenario-local; another
 # scenario may use the same filename as an ordinary fixture and must keep it.
 SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
-    "pocket-custom-contracts": frozenset({"check_custom_contracts.py"}),
+    "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
 }
 
 _SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
@@ -277,7 +284,7 @@ class SourceIsolation:
 # logic is the answer key the agent must instead discover by calling the live
 # endpoint — exactly why MCP_SERVER_SIDE_FIXTURES hides catalog.json/semantic.json.
 HTTP_STUB_RUNNER_SIDE_FIXTURES = {
-    "http_stub.json",  # runner opt-in marker, parallel to mcp.json/pocket.json
+    "http_stub.json",  # runner opt-in marker, parallel to mcp.json/desktop.json
     "stub_beacon_api.py",  # authenticated-api-source-build's stub module/answer key
     "check_authenticated_api_source.py",  # its deterministic checker: states
     # the exact expected row counts (12 monitors, 37 checks) and every trap by
@@ -290,31 +297,31 @@ HTTP_STUB_RUNNER_SIDE_FIXTURES = {
 MCP_AGENT_TIMEOUT_S = 1800
 # A genuine generate -> serve -> refine run starts a local kernel twice and is
 # intentionally much slower than mocked eval cells.
-POCKET_AGENT_TIMEOUT_S = 2400
+JOB_AGENT_TIMEOUT_S = 2400
 # The verified local smoke used Opus 4.8.  Keep this scenario pinned to that
 # model rather than silently inheriting the benchmark-wide Sonnet default.
-POCKET_AGENT_MODEL = "claude-opus-4-8"
+JOB_AGENT_MODEL = "claude-opus-4-8"
 
 
-def effective_agent_model(is_pocket: bool, backend_name: str, default_model: str) -> str:
+def effective_agent_model(is_desktop: bool, backend_name: str, default_model: str) -> str:
     """Resolve the model a scenario actually runs on.
 
-    Pocket is pinned to a verified Claude model, but that id is meaningless to
+    desktop is pinned to a verified Claude model, but that id is meaningless to
     any other provider, so the pin applies only on the Claude backend. The
     dispatch path and the report must agree on this or a report attributes a
-    Codex pocket run to a Claude model and poisons the benchmark ledger.
+    Codex desktop run to a Claude model and poisons the benchmark ledger.
     """
-    if is_pocket and backend_name == "claude":
-        return POCKET_AGENT_MODEL
+    if is_desktop and backend_name == "claude":
+        return JOB_AGENT_MODEL
     return default_model
 # The verifier may legitimately re-serve the final snapshot plus several
 # earlier published snapshots.  Give that work most of the agent budget, then
 # report a timeout as runner infrastructure rather than an agent failure.
-POCKET_HARNESS_TIMEOUT_S = 1800
-_POCKET_PREFLIGHT_LOCK = threading.Lock()
-_POCKET_PREFLIGHT_DONE = False
-_POCKET_PREFLIGHT_ERROR: str | None = None
-_POCKET_PREFLIGHT_ENDPOINT: str | None = None
+JOB_HARNESS_TIMEOUT_S = 1800
+_JOB_PREFLIGHT_LOCK = threading.Lock()
+_JOB_PREFLIGHT_DONE = False
+_JOB_PREFLIGHT_ERROR: str | None = None
+_JOB_PREFLIGHT_ENDPOINT: str | None = None
 
 # Public platform docs base. The docs site is a docsify SPA: the human viewer
 # lives at https://docs.demo.nextopia.dev/#/<path>, but the *fetchable* markdown
@@ -506,7 +513,7 @@ def build_workspace(
             # a source checkout unreadable; protected cells prove that with
             # their separately configured source-isolation wrapper.
             if (item.name.startswith(".") or item.name == "__pycache__"
-                    or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES
+                    or item.name in MCP_SERVER_SIDE_FIXTURES | JOB_RUNNER_SIDE_FIXTURES
                     | STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES
                     | DERIVATION_RUNNER_SIDE_FIXTURES
                     | EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES
@@ -593,7 +600,7 @@ def build_agent_prompt(
             "Available context (protected evaluation):",
             "- Every permitted task input and example is already materialized as "
             "ordinary files inside your workspace. Inspect those workspace files first.",
-            "- You may use system and Pocket executables available on PATH when the "
+            "- You may use system and desktop executables available on PATH when the "
             "task requires them.",
             "- Do not discover, list, read, or execute task inputs, examples, repo "
             "source, histories, or rubrics outside the workspace. Do not use git, "
@@ -650,11 +657,11 @@ def scenario_needs_mcp(scenario_dir: Path) -> dict | None:
     return json.loads(marker.read_text(encoding="utf-8"))
 
 
-def scenario_needs_pocket(scenario_dir: Path) -> dict | None:
-    """Return the Pocket runtime marker when a scenario opts into the local
+def scenario_needs_desktop(scenario_dir: Path) -> dict | None:
+    """Return the local desktop runtime marker when a scenario opts into the local
     desktop supervisor. Kept parallel to MCP opt-in so ordinary cells never
     inherit a host binary, Python venv, or persistent-process cleanup."""
-    marker = scenario_dir / "fixtures" / "pocket.json"
+    marker = scenario_dir / "fixtures" / "desktop.json"
     if not marker.exists():
         return None
     return json.loads(marker.read_text(encoding="utf-8"))
@@ -662,7 +669,7 @@ def scenario_needs_pocket(scenario_dir: Path) -> dict | None:
 
 def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
     """Return the HTTP-stub marker when a scenario opts into a runner-started
-    local REST fixture. Kept parallel to the MCP/Pocket opt-ins for the same
+    local REST fixture. Kept parallel to the MCP/desktop opt-ins for the same
     reason: ordinary cells must not inherit a background process, and only a
     scenario that names ``fixtures/http_stub.json`` gets one.
 
@@ -681,26 +688,26 @@ def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
     return json.loads(marker.read_text(encoding="utf-8"))
 
 
-def _pocket_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str], str]:
+def _desktop_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str], str]:
     """Return a narrow command directory and the matched Python interpreter."""
-    supervisor_dir = Path(os.environ.get("EVAL_POCKET_SUPERVISOR_DIR", "")).expanduser()
-    python = os.environ.get("EVAL_POCKET_PYTHON", "").strip()
+    supervisor_dir = Path(os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", "")).expanduser()
+    python = os.environ.get("EVAL_DESKTOP_PYTHON", "").strip()
     if not supervisor_dir.is_dir() or not python:
         raise RuntimeError(
-            "set EVAL_POCKET_SUPERVISOR_DIR (both desktop binaries) and "
-            "EVAL_POCKET_PYTHON (supervisor venv Python)"
+            "set EVAL_DESKTOP_SUPERVISOR_DIR (both desktop binaries) and "
+            "EVAL_DESKTOP_PYTHON (supervisor venv Python)"
         )
     binaries = ("nxd-desktop-supervisor", "nxd-desktop-kernel-host")
     missing = [name for name in binaries if not (supervisor_dir / name).is_file()]
     if missing or not Path(python).is_file():
         raise RuntimeError(
-            f"Pocket runtime missing binaries={missing} or Python={python!r}"
+            f"Desktop runtime missing binaries={missing} or Python={python!r}"
         )
     # The supervisor finds its kernel-host sibling from its *real* executable
     # path, so tiny exec wrappers preserve that contract while exposing only the
-    # two intended Pocket commands to the evaluated agent.  Do not symlink: the
+    # two intended desktop commands to the evaluated agent.  Do not symlink: the
     # detached implementation historically re-execed through current_exe().
-    bin_dir = tmp / "pocket-bin"
+    bin_dir = tmp / "desktop-bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     for name in binaries:
         target = supervisor_dir / name
@@ -715,7 +722,7 @@ def _pocket_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str]
     return bin_dir, {"NXD_DESKTOP_PYTHON": python}, python
 
 
-def _pocket_kv(output: str) -> dict[str, str]:
+def _desktop_kv(output: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in output.splitlines():
         if "=" in line:
@@ -725,7 +732,7 @@ def _pocket_kv(output: str) -> dict[str, str]:
 
 
 @dataclass
-class PocketServe:
+class DesktopServe:
     """Foreground supervisor process plus its startup transcript files."""
 
     process: subprocess.Popen
@@ -735,9 +742,9 @@ class PocketServe:
     bearer: str
 
 
-def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
+def _desktop_start_serve(supervisor: Path, definition: Path, workflow: str,
                         data_dir: Path, env: dict[str, str],
-                        timeout_s: int = 300) -> PocketServe:
+                        timeout_s: int = 300) -> DesktopServe:
     """Start documented foreground ``serve`` and wait for real publication.
 
     ``create --detach`` can report ``published=yes`` while its child has already
@@ -745,7 +752,7 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
     the same foreground command agents are asked to use, with a direct Popen
     handle held until ``stop`` reaps it.
     """
-    bearer = f"eval-pocket-{secrets.token_urlsafe(24)}"
+    bearer = f"eval-desktop-{secrets.token_urlsafe(24)}"
     child_env = dict(env)
     child_env["NXD_DESKTOP_BEARER"] = bearer
     stdout = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
@@ -759,9 +766,9 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
     while time.time() < deadline:
         stdout.seek(0)
         output = stdout.read()
-        values = _pocket_kv(output)
+        values = _desktop_kv(output)
         if values.get("published") == "yes":
-            return PocketServe(proc, stdout, stderr, values, bearer)
+            return DesktopServe(proc, stdout, stderr, values, bearer)
         if proc.poll() is not None:
             stderr.seek(0)
             detail = stderr.read()
@@ -769,7 +776,7 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
             stderr.close()
             raise RuntimeError(f"foreground serve exited before publication: {detail[-1200:]}")
         time.sleep(0.1)
-    _sweep_pocket_pid(proc.pid)
+    _sweep_desktop_pid(proc.pid)
     stdout.seek(0)
     stderr.seek(0)
     detail = f"stdout={stdout.read()[-600:]} stderr={stderr.read()[-600:]}"
@@ -778,9 +785,9 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
     raise RuntimeError(f"foreground serve did not publish within {timeout_s}s: {detail}")
 
 
-def _pocket_stop_serve(supervisor: Path, data_dir: Path, served: PocketServe,
+def _desktop_stop_serve(supervisor: Path, data_dir: Path, served: DesktopServe,
                        env: dict[str, str]) -> None:
-    """Stop a foreground Pocket serve and close runner-owned log handles."""
+    """Stop a foreground desktop serve and close runner-owned log handles."""
     recorded_pids: list[int] = []
     for name in ("semantic.pid", "supervisor.pid"):
         with contextlib.suppress(OSError, ValueError):
@@ -792,9 +799,9 @@ def _pocket_stop_serve(supervisor: Path, data_dir: Path, served: PocketServe,
     # foreground server's shutdown, the direct supervisor sweep below cannot
     # reach that child, so explicitly reap both pid-file identities as well.
     for pid in recorded_pids:
-        _sweep_pocket_pid(pid)
+        _sweep_desktop_pid(pid)
     if served.process.poll() is None:
-        _sweep_pocket_pid(served.process.pid)
+        _sweep_desktop_pid(served.process.pid)
     with contextlib.suppress(subprocess.TimeoutExpired):
         served.process.wait(timeout=10)
     served.stdout.close()
@@ -803,7 +810,7 @@ def _pocket_stop_serve(supervisor: Path, data_dir: Path, served: PocketServe,
 
 def _sweep_stale_preflights(supervisor: Path, env: dict[str, str]) -> None:
     """Recover a preflight abandoned by SIGKILL or an interrupted runner."""
-    for root in Path(tempfile.gettempdir()).glob("eval-pocket-preflight-*"):
+    for root in Path(tempfile.gettempdir()).glob("eval-desktop-preflight-*"):
         owner = root / ".owner-pid"
         try:
             if owner.exists() and _pid_alive(int(owner.read_text(encoding="utf-8").strip())):
@@ -817,38 +824,38 @@ def _sweep_stale_preflights(supervisor: Path, env: dict[str, str]) -> None:
                                capture_output=True, text=True, timeout=60, env=env)
             for name in ("semantic.pid", "supervisor.pid"):
                 with contextlib.suppress(OSError, ValueError):
-                    _sweep_pocket_pid(int((data_dir / name).read_text(encoding="utf-8").strip()))
+                    _sweep_desktop_pid(int((data_dir / name).read_text(encoding="utf-8").strip()))
         shutil.rmtree(root, ignore_errors=True)
 
 
-def pocket_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str, str]) -> str | None:
+def desktop_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str, str]) -> str | None:
     """Serve/describe/query/stop the committed closure once per runner.
 
     A broken local build is infrastructure failure, not evidence an agent could
     not use the skills. The memoized result is shared across parallel cells.
     """
-    global _POCKET_PREFLIGHT_DONE, _POCKET_PREFLIGHT_ERROR, _POCKET_PREFLIGHT_ENDPOINT
-    with _POCKET_PREFLIGHT_LOCK:
-        if _POCKET_PREFLIGHT_DONE:
-            return _POCKET_PREFLIGHT_ERROR
-        _POCKET_PREFLIGHT_DONE = True
+    global _JOB_PREFLIGHT_DONE, _JOB_PREFLIGHT_ERROR, _JOB_PREFLIGHT_ENDPOINT
+    with _JOB_PREFLIGHT_LOCK:
+        if _JOB_PREFLIGHT_DONE:
+            return _JOB_PREFLIGHT_ERROR
+        _JOB_PREFLIGHT_DONE = True
         reference = scenario_dir / "fixtures" / "reference-closure"
         supervisor = bin_dir / "nxd-desktop-supervisor"
         if not reference.is_dir():
-            _POCKET_PREFLIGHT_ERROR = "reference closure is missing"
-            return _POCKET_PREFLIGHT_ERROR
+            _JOB_PREFLIGHT_ERROR = "reference closure is missing"
+            return _JOB_PREFLIGHT_ERROR
         env = dict(os.environ)
         env.update(env_overrides)
         env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
         _sweep_stale_preflights(supervisor, env)
-        tmp = Path(tempfile.mkdtemp(prefix="eval-pocket-preflight-"))
+        tmp = Path(tempfile.mkdtemp(prefix="eval-desktop-preflight-"))
         (tmp / ".owner-pid").write_text(str(os.getpid()), encoding="utf-8")
         data_dir = tmp / "state"
-        served: PocketServe | None = None
+        served: DesktopServe | None = None
         try:
             try:
-                served = _pocket_start_serve(
-                    supervisor, reference, "pocket-preflight", data_dir, env
+                served = _desktop_start_serve(
+                    supervisor, reference, "desktop-preflight", data_dir, env
                 )
                 endpoint = served.values.get("semantic_endpoint", "")
                 if not endpoint:
@@ -892,20 +899,20 @@ def pocket_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str,
                 answer = json.loads(probe.stdout)
                 if answer.get("error") != "" or not answer.get("rows"):
                     raise RuntimeError(f"query response invalid: {probe.stdout[-800:]}")
-                _POCKET_PREFLIGHT_ENDPOINT = endpoint
-                print(f"Pocket preflight OK: semantic_endpoint={endpoint}",
+                _JOB_PREFLIGHT_ENDPOINT = endpoint
+                print(f"Desktop preflight OK: semantic_endpoint={endpoint}",
                       file=sys.stderr, flush=True)
             except (OSError, subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError) as exc:
-                _POCKET_PREFLIGHT_ERROR = str(exc)
+                _JOB_PREFLIGHT_ERROR = str(exc)
         finally:
             if served is not None:
-                _pocket_stop_serve(supervisor, data_dir, served, env)
+                _desktop_stop_serve(supervisor, data_dir, served, env)
             else:
                 with contextlib.suppress(OSError, subprocess.TimeoutExpired):
                     subprocess.run([str(supervisor), "stop", "--data-dir", str(data_dir)],
                                    capture_output=True, text=True, timeout=60, env=env)
             shutil.rmtree(tmp, ignore_errors=True)
-        return _POCKET_PREFLIGHT_ERROR
+        return _JOB_PREFLIGHT_ERROR
 
 
 def _pid_alive(pid: int) -> bool:
@@ -916,7 +923,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _sweep_pocket_pid(pid: int) -> None:
+def _sweep_desktop_pid(pid: int) -> None:
     """Last-resort process-group cleanup for a supervisor whose stop failed."""
     if pid <= 0 or not _pid_alive(pid):
         return
@@ -939,8 +946,8 @@ def _sweep_pocket_pid(pid: int) -> None:
 
 
 @contextlib.contextmanager
-def pocket_process_guard(ws: Path, supervisor: Path, env_overrides: dict[str, str]):
-    """Always stop persistent supervisors created by a Pocket agent cell."""
+def desktop_process_guard(ws: Path, supervisor: Path, env_overrides: dict[str, str]):
+    """Always stop persistent supervisors created by a desktop agent cell."""
     try:
         yield
     finally:
@@ -956,34 +963,34 @@ def pocket_process_guard(ws: Path, supervisor: Path, env_overrides: dict[str, st
             for name in ("semantic.pid", "supervisor.pid"):
                 pid_file = data_dir / name
                 try:
-                    _sweep_pocket_pid(int(pid_file.read_text(encoding="utf-8").strip()))
+                    _sweep_desktop_pid(int(pid_file.read_text(encoding="utf-8").strip()))
                 except (OSError, ValueError):
                     pass
 
 
-def pocket_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: str,
+def desktop_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: str,
                         bin_dir: Path, env_overrides: dict[str, str]) -> str:
     """Run the pristine verifier before the temporary workspace disappears."""
-    checker = scenario_dir / "fixtures" / "check_pocket_loop.py"
+    checker = scenario_dir / "fixtures" / "check_job_loop.py"
     env = dict(os.environ)
     env.update(env_overrides)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    # Snapshot re-serves must be visible to pocket_process_guard even if this
+    # Snapshot re-serves must be visible to desktop_process_guard even if this
     # verifier times out after its child supervisor was spawned.
-    checker_tmp = ws / ".pocket-check-tmp"
+    checker_tmp = ws / ".desktop-check-tmp"
     checker_tmp.mkdir(parents=True, exist_ok=True)
-    env["NXD_POCKET_CHECK_TMPDIR"] = str(checker_tmp)
+    env["NXD_JOB_CHECK_TMPDIR"] = str(checker_tmp)
     try:
         proc = subprocess.run(
             [python, str(checker), "--mode", "harness", "--workspace", str(ws),
              "--workflow", workflow],
-            capture_output=True, text=True, timeout=POCKET_HARNESS_TIMEOUT_S, env=env,
+            capture_output=True, text=True, timeout=JOB_HARNESS_TIMEOUT_S, env=env,
         )
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         if not lines:
             facts = {
                 "passed": False,
-                "infrastructure_error": "pocket harness verifier emitted no facts",
+                "infrastructure_error": "desktop harness verifier emitted no facts",
             }
         else:
             facts = json.loads(lines[-1])
@@ -992,24 +999,24 @@ def pocket_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: str
         facts = {
             "passed": False,
             "infrastructure_error": (
-                f"pocket harness verifier timed out after {POCKET_HARNESS_TIMEOUT_S}s: {exc}"
+                f"desktop harness verifier timed out after {JOB_HARNESS_TIMEOUT_S}s: {exc}"
             ),
         }
     except (OSError, json.JSONDecodeError) as exc:
         facts = {
             "passed": False,
-            "infrastructure_error": f"pocket harness verifier failed: {exc}",
+            "infrastructure_error": f"desktop harness verifier failed: {exc}",
         }
-    return "POCKET VERIFY (authoritative runner facts): " + json.dumps(facts, sort_keys=True)
+    return "JOB VERIFY (authoritative runner facts): " + json.dumps(facts, sort_keys=True)
 
 
-def pocket_facts_passed(facts: list[str]) -> bool:
-    """Return whether an authoritative Pocket verifier fact explicitly passed.
+def desktop_facts_passed(facts: list[str]) -> bool:
+    """Return whether an authoritative desktop verifier fact explicitly passed.
 
-    A Pocket cell is fail-closed: missing, malformed, timed-out, or negative
+    A desktop cell is fail-closed: missing, malformed, timed-out, or negative
     verifier output must not be rescued by a lenient LLM judge.
     """
-    prefix = "POCKET VERIFY (authoritative runner facts): "
+    prefix = "JOB VERIFY (authoritative runner facts): "
     for fact in facts:
         if fact.startswith(prefix):
             try:
@@ -1019,15 +1026,15 @@ def pocket_facts_passed(facts: list[str]) -> bool:
     return False
 
 
-def pocket_facts_infrastructure_error(facts: list[str]) -> str | None:
+def desktop_facts_infrastructure_error(facts: list[str]) -> str | None:
     """Return a verifier infrastructure failure, if one was recorded."""
-    prefix = "POCKET VERIFY (authoritative runner facts): "
+    prefix = "JOB VERIFY (authoritative runner facts): "
     for fact in facts:
         if fact.startswith(prefix):
             try:
                 error = json.loads(fact[len(prefix):]).get("infrastructure_error")
             except json.JSONDecodeError:
-                return "pocket verifier facts were malformed"
+                return "Desktop verifier facts were malformed"
             return str(error) if error else None
     return None
 
@@ -1516,13 +1523,13 @@ source matches the reported digest (use it, not the agent's self-report, for
 that), but it does NOT establish that the digest came from a passing acceptance
 run — grade that provenance from the trace.
 
-For Pocket scenarios, direct writes to the agent-owned supervisor state under
-`.pocket/state/` (`state.sqlite*` or `definitions/**`) outside an
+For desktop scenarios, direct writes to the agent-owned supervisor state under
+`.desktop/state/` (`state.sqlite*` or `definitions/**`) outside an
 `nxd-desktop-supervisor` command are an automatic FAIL for the
 supervisor-state-integrity check and therefore for the whole cell. The
-runner-owned `.pocket-check-tmp/` is explicitly excluded from this rule because
+runner-owned `.desktop-check-tmp/` is explicitly excluded from this rule because
 it holds verifier snapshot re-serves. In particular, do not excuse SQLite
-inserts, copied/edited pinned snapshots, or shell redirection in `.pocket/state`
+inserts, copied/edited pinned snapshots, or shell redirection in `.desktop/state`
 merely because the final re-served output is plausible. Use the harness-provided
 published-run timestamps and definition SHA-256s to cross-check the trace
 chronology.
@@ -1707,7 +1714,7 @@ WORKSPACE_FILE_BUDGET = 60_000
 # Directories the harness stages into the workspace as INPUT. Their contents are
 # never the agent's output, so quoting them as such would misattribute authorship
 # to the agent and burn the budget the agent's real files need.
-_STAGED_INPUT_DIRS = frozenset({".skills", ".claude", "fixtures", ".pocket"})
+_STAGED_INPUT_DIRS = frozenset({".skills", ".claude", "fixtures", ".desktop"})
 
 
 def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
@@ -1834,11 +1841,11 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
     every single-turn key predates this change unchanged and no existing cached
     transcript is discarded by multi-turn support merely existing."""
     h = hashlib.sha256()
-    pocket_runtime_key = ""
-    if scenario_needs_pocket(scenario_dir) is not None:
-        pocket_runtime_key = "|".join((
-            os.environ.get("EVAL_POCKET_SUPERVISOR_DIR", ""),
-            os.environ.get("EVAL_POCKET_PYTHON", ""),
+    desktop_runtime_key = ""
+    if scenario_needs_desktop(scenario_dir) is not None:
+        desktop_runtime_key = "|".join((
+            os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", ""),
+            os.environ.get("EVAL_DESKTOP_PYTHON", ""),
         ))
     parts = [
         skill_set.name,
@@ -1849,7 +1856,7 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
         model,
         effort,
         _fixtures_fingerprint(scenario_dir),
-        pocket_runtime_key,
+        desktop_runtime_key,
     ]
     # APPENDED ONLY when the scenario actually scripts turns. A single-turn
     # scenario must contribute no field at all — even an empty string still
@@ -2145,12 +2152,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         agent_backend.name != "claude" and bool(skill_set.skills)
     )
 
-    pocket_spec = scenario_needs_pocket(scenario_dir)
+    desktop_spec = scenario_needs_desktop(scenario_dir)
     http_stub_spec = scenario_needs_http_stub(scenario_dir)
-    # Pocket cells run the agent with extra_dirs=[] (see the agent call below),
+    # desktop cells run the agent with extra_dirs=[] (see the agent call below),
     # so the prompt must not advertise an examples directory the agent can never
     # --add-dir, or it wastes turns hunting for it.
-    extra_dirs = [] if pocket_spec is not None else (
+    extra_dirs = [] if desktop_spec is not None else (
         [EXAMPLES_DIR] if EXAMPLES_DIR.is_dir() else []
     )
     prompt = build_agent_prompt(
@@ -2159,7 +2166,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         source_isolation=bool(checks.get("agent_source_isolation")),
     )
     agent_model = effective_agent_model(
-        pocket_spec is not None, agent_backend.name, args.agent_model
+        desktop_spec is not None, agent_backend.name, args.agent_model
     )
     preflight_metrics: dict[str, object] = {}
     isolation, isolation_error = _resolve_source_isolation(
@@ -2196,15 +2203,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         res.error = f"source-isolation infrastructure invalid: {audit_error}"
         return res
 
-    if pocket_spec is not None:
+    if desktop_spec is not None:
         # Run the infrastructure gate even when an agent transcript is cached:
         # a rebuild can drift from the closure/skill contract between runs.
-        with tempfile.TemporaryDirectory(prefix="eval-pocket-runtime-") as runtime_tmp:
+        with tempfile.TemporaryDirectory(prefix="eval-desktop-runtime-") as runtime_tmp:
             try:
-                preflight_bin, preflight_env, _ = _pocket_runtime(
+                preflight_bin, preflight_env, _ = _desktop_runtime(
                     scenario_dir, Path(runtime_tmp)
                 )
-                preflight_error = pocket_preflight(
+                preflight_error = desktop_preflight(
                     scenario_dir, preflight_bin, preflight_env
                 )
             except RuntimeError as exc:
@@ -2212,12 +2219,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         if preflight_error:
             # Deliberately stable: callers distinguish this infrastructure
             # error from an agent FAIL without parsing build-specific details.
-            res.error = "pocket preflight failed"
-            res.metrics["pocket_preflight_error"] = preflight_error
+            res.error = "Desktop preflight failed"
+            res.metrics["desktop_preflight_error"] = preflight_error
             return res
-        preflight_metrics["pocket_preflight"] = "passed"
-        if _POCKET_PREFLIGHT_ENDPOINT:
-            preflight_metrics["pocket_preflight_endpoint"] = _POCKET_PREFLIGHT_ENDPOINT
+        preflight_metrics["desktop_preflight"] = "passed"
+        if _JOB_PREFLIGHT_ENDPOINT:
+            preflight_metrics["desktop_preflight_endpoint"] = _JOB_PREFLIGHT_ENDPOINT
 
     # Agent step (cacheable). The agent run is the slow/expensive part; cache it
     # keyed on everything that affects the transcript so judge-only iteration is
@@ -2292,8 +2299,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         agent_timeout = (
             max(args.agent_timeout, MCP_AGENT_TIMEOUT_S)
             if mcp_spec is not None
-            else max(args.agent_timeout, POCKET_AGENT_TIMEOUT_S)
-            if pocket_spec is not None
+            else max(args.agent_timeout, JOB_AGENT_TIMEOUT_S)
+            if desktop_spec is not None
             else args.agent_timeout
         )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
@@ -2325,34 +2332,34 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 except (RuntimeError, TimeoutError) as exc:
                     res.error = f"MCP server setup failed: {exc}"
                     return res
-            elif pocket_spec is not None:
+            elif desktop_spec is not None:
                 try:
-                    bin_dir, env_over, pocket_python = _pocket_runtime(
+                    bin_dir, env_over, desktop_python = _desktop_runtime(
                         scenario_dir, Path(tmp)
                     )
                 except RuntimeError as exc:
-                    res.error = f"pocket runtime setup failed: {exc}"
+                    res.error = f"Desktop runtime setup failed: {exc}"
                     return res
                 # Both the agent forcing-function checker and the pristine
                 # harness verifier place snapshot state under the workspace so
-                # pocket_process_guard can clean it after normal exit, timeout,
+                # desktop_process_guard can clean it after normal exit, timeout,
                 # or a killed verifier subprocess.
                 env_over = {
                     **env_over,
                     **source_isolation_env,
-                    "NXD_POCKET_CHECK_TMPDIR": str(ws / ".pocket-check-tmp"),
+                    "NXD_JOB_CHECK_TMPDIR": str(ws / ".desktop-check-tmp"),
                 }
                 # Keep the workspace until the pristine verifier has re-served
                 # its snapshots. The guard then runs on all outcomes, including
                 # a timed-out Claude process.
-                with pocket_process_guard(
+                with desktop_process_guard(
                     ws, bin_dir / "nxd-desktop-supervisor", env_over
                 ):
-                    # Pocket narrows the tool allowlist (no web/docs escape
+                    # desktop narrows the tool allowlist (no web/docs escape
                     # hatch). Backends that gate per-tool (Claude) honour it;
-                    # sandbox-based ones (Codex) ignore it, so a pocket run is
+                    # sandbox-based ones (Codex) ignore it, so a desktop run is
                     # not comparable across providers.
-                    pocket_kwargs = {"allowed_tools": POCKET_AGENT_ALLOWED_TOOLS}
+                    desktop_kwargs = {"allowed_tools": JOB_AGENT_ALLOWED_TOOLS}
                     # The guard wraps the WHOLE turn loop: run_agent returns
                     # only once every turn is done, so the cleanup below fires
                     # once at the end and never sweeps a supervisor out from
@@ -2361,16 +2368,16 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         ws, prompt, agent_model, agent_timeout,
                         extra_dirs=[], effort=args.agent_effort,
                         env_overrides=env_over, path_prepend=bin_dir,
-                        skill_pack_dir=plugin_dir, **pocket_kwargs,
+                        skill_pack_dir=plugin_dir, **desktop_kwargs,
                         **source_audit_kwargs, **turn_kwargs,
                     )
                     failure = source_audit_failure(metrics)
                     if failure is not None:
                         return failure
-                    if checks.get("pocket_verify"):
-                        facts.append(pocket_harness_fact(
-                            scenario_dir, ws, pocket_python,
-                            str(pocket_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
+                    if checks.get("desktop_verify"):
+                        facts.append(desktop_harness_fact(
+                            scenario_dir, ws, desktop_python,
+                            str(desktop_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
                         ))
             elif http_stub_spec is not None:
                 # A runner-started local REST fixture the agent reaches over a
@@ -2425,7 +2432,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # a cache hit the workspace no longer exists, and replaying quoted file
         # contents as authoritative ground truth would describe a run that never
         # happened.
-        if ok and cache_file and pocket_facts_infrastructure_error(facts) is None:
+        if ok and cache_file and desktop_facts_infrastructure_error(facts) is None:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
                 json.dumps({
@@ -2483,9 +2490,9 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         res.error = str(metrics.get("error", "agent run failed"))
         return res
 
-    verifier_infrastructure_error = pocket_facts_infrastructure_error(facts)
+    verifier_infrastructure_error = desktop_facts_infrastructure_error(facts)
     if verifier_infrastructure_error:
-        res.error = f"pocket harness infrastructure failure: {verifier_infrastructure_error}"
+        res.error = f"Desktop harness infrastructure failure: {verifier_infrastructure_error}"
         return res
 
     det_infrastructure_error = deterministic_check_infrastructure_error(facts)
@@ -2501,13 +2508,13 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         args.judge_model, args.judge_timeout, effort=args.judge_effort,
         facts=facts, metrics=metrics,
     )
-    if checks.get("pocket_verify") and not pocket_facts_passed(facts):
+    if checks.get("desktop_verify") and not desktop_facts_passed(facts):
         # The verifier re-serves the actual published closure and is the hard
         # acceptance gate; facts are not merely advisory evidence for the judge.
         res.verdict["overall_pass"] = False
         prior = str(res.verdict.get("summary", ""))
         res.verdict["summary"] = (
-            f"{prior} Pocket verifier did not pass; the cell is mechanically failed."
+            f"{prior} Desktop verifier did not pass; the cell is mechanically failed."
         ).strip()
     if det_status == "failed":
         # The checker computes the answer from ground truth; it is the hard
@@ -2684,7 +2691,7 @@ def main() -> int:
             "agent_model": args.agent_model,
             "scenario_agent_models": {
                 scenario.name: effective_agent_model(
-                    scenario_needs_pocket(scenario) is not None,
+                    scenario_needs_desktop(scenario) is not None,
                     args.agent_backend,
                     args.agent_model,
                 )

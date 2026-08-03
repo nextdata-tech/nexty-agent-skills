@@ -2,7 +2,7 @@
 
 ## Task for the agent
 
-Build a Pocket data product that answers these three questions.
+Build a desktop data product that answers these three questions.
 
 1. How has total GDP moved over time for each income group — high income,
    upper middle, lower middle, low?
@@ -19,7 +19,7 @@ The workspace holds a vendored World Bank snapshot under `data/`:
 Both files are exactly as they came out of the upstream export. Do not edit,
 re-save, or re-shape them.
 
-This is an NXD Pocket data product: local DuckDB through the `duckdb` output
+This is an NXD desktop data product: local DuckDB through the `duckdb` output
 port, loaded with dlt. You have the installed Nexty skills available — consult
 them for the closure contract, the derivation rules, and the assert
 requirements rather than inferring them from other examples on this machine.

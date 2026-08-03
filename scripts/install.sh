@@ -207,7 +207,7 @@ copy_skill_tree() {  # copy_skill_tree <src-skill-dir> <dst-skill-dir>
   run "rsync -a --delete $(rsync_excludes) '$src/' '$dst/'"
 }
 
-write_pocket_version_stamp() {  # write_pocket_version_stamp <installed-skill-dir>
+write_desktop_version_stamp() {  # write_desktop_version_stamp <installed-skill-dir>
   local skill_dir="$1" stamp="$1/.nexty-plugin-version.json"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '\033[35m[dry-run]\033[0m write %s from plugin.json\n' "$stamp" >&2
@@ -231,7 +231,7 @@ install_code() {
   run "mkdir -p '$dest'"
   while IFS= read -r s; do
     copy_skill_tree "$SRC_DIR/$s" "$dest/$s"
-    [[ "$s" == "nxd-pocket-loop" ]] && write_pocket_version_stamp "$dest/$s"
+    [[ "$s" == "nxd-run-job-loop" ]] && write_desktop_version_stamp "$dest/$s"
     ok "code: $s"
   done < <(selected_skills)
   info "Claude Code: skills installed. Restart Claude Code or start it in a project to use them."

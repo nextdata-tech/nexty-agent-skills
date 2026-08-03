@@ -25,7 +25,7 @@ verdict, a gate outcome, or which rows land**:
 - a gate whose UNKNOWN / missing / inferred value could change the outcome;
 - evidence with no provenance rule, or no missing-evidence rule.
 
-`"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"` detects every one of these mechanically over the
+`"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"` detects every one of these mechanically over the
 IR, which is why the read-back is a structured file rather than a paragraph.
 
 **A fully specified procedure** still gets read back and confirmed, but expect
@@ -49,8 +49,8 @@ your own recommended defaults.
 ## The read-back artifact
 
 `dp-spec.md` — the user-editable IR, written beside the closure and validated
-with `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"`. Schema and authoring modes:
-**nxd-pocket-loop**'s `reference/dp-spec.md`.
+with `"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"`. Schema and authoring modes:
+**nxd-run-job-loop**'s `reference/dp-spec.md`.
 
 It must **enumerate**, in the user's vocabulary and understandable without
 reading generated code:
@@ -83,7 +83,7 @@ never authorship.
 
 ## Invoked directly
 
-Without an **nxd-pocket-loop** handoff, **return to `nxd-pocket-loop`
+Without an **nxd-run-job-loop** handoff, **return to `nxd-run-job-loop`
 immediately**. Do not run a local read-back, materialize a closure, or serve:
 that skill owns the user-facing read-back and approval.
 
@@ -115,4 +115,4 @@ a placeholder in the `attributes`, return `credential_slots` (key names only,
 never a value), and report the connectivity dry-run as **not run** — the
 orchestrator injects the real value host-side.
 
-Dispatch/return contract: **nxd-pocket-loop**'s `reference/scheduling.md`.
+Dispatch/return contract: **nxd-run-job-loop**'s `reference/scheduling.md`.

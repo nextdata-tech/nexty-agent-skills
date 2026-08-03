@@ -95,14 +95,14 @@ def bad(name: str, detail: str) -> None:
     FAILURES.append((name, detail))
 
 
-def pocket_python() -> Path | None:
+def desktop_python() -> Path | None:
     """The provisioned venv interpreter that has nxd importable.
 
-    EVAL_POCKET_PYTHON is what the harness sets; the desktop setup script
+    EVAL_DESKTOP_PYTHON is what the harness sets; the desktop setup script
     provisions the same interpreter at ~/.nxd/desktop-venv. Either is fine —
     what matters is that it is NOT a bare python3.
     """
-    env_python = os.environ.get("EVAL_POCKET_PYTHON", "").strip()
+    env_python = os.environ.get("EVAL_DESKTOP_PYTHON", "").strip()
     if env_python and Path(env_python).is_file():
         return Path(env_python)
     fallback = Path.home() / ".nxd" / "desktop-venv" / "bin" / "python"
@@ -111,7 +111,7 @@ def pocket_python() -> Path | None:
 
 def supervisor_binary() -> Path | None:
     """Locate the desktop supervisor the same way the harness does."""
-    env_dir = os.environ.get("EVAL_POCKET_SUPERVISOR_DIR", "").strip()
+    env_dir = os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", "").strip()
     if env_dir:
         candidate = Path(env_dir).expanduser() / "nxd-desktop-supervisor"
         if candidate.is_file():
@@ -131,7 +131,7 @@ def build_env() -> dict[str, str]:
     """
     env = dict(os.environ)
     if not env.get("NXD_DESKTOP_PYTHON"):
-        venv_python = pocket_python()
+        venv_python = desktop_python()
         if venv_python is not None:
             env["NXD_DESKTOP_PYTHON"] = str(venv_python)
     return env
@@ -239,7 +239,7 @@ def main() -> int:
     if supervisor is None:
         print("FAIL determinism-harness")
         print("  no nxd-desktop-supervisor found "
-              "(set EVAL_POCKET_SUPERVISOR_DIR or put it on PATH)")
+              "(set EVAL_DESKTOP_SUPERVISOR_DIR or put it on PATH)")
         return 1
 
     work = Path(tempfile.mkdtemp(prefix="nxd-determinism-"))

@@ -153,7 +153,7 @@ Two properties worth knowing:
 Only 6 of 30 public scenarios use this today
 (`coauthor-executable-policy-readback`, `coauthor-supplied-rubric`,
 `derive-models-from-questions`, `dp-static-artifact-lifecycle`,
-`pocket-custom-contracts`, `treasury-yield-curve`). It is the strongest signal available — prefer it
+`desktop-custom-contracts`, `treasury-yield-curve`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)
@@ -278,7 +278,7 @@ absolute pass rate; the valid within-provider comparison is still
 `no_skills` vs `current_pack` vs `candidate_pack` on the **same** backend.
 
 **Tool restriction is also provider-shaped.** Scenarios that deliberately narrow
-the agent's tool surface (pocket-loop withholds `WebFetch`/`TodoWrite` to measure
+the agent's tool surface (job-loop withholds `WebFetch`/`TodoWrite` to measure
 behaviour without a web escape hatch) pass an `allowed_tools` list. Claude gates
 per-tool and honours it exactly; Codex gates with a sandbox policy and ignores
 the list, so it cannot reproduce the same restriction. A tool-restricted scenario
@@ -462,8 +462,8 @@ Twelve scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
-| `pocket-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
-| `pocket-loop-export-handoff` | needs a live desktop supervisor (`EVAL_POCKET_SUPERVISOR_DIR`) |
+| `job-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_DESKTOP_SUPERVISOR_DIR`) |
+| `job-loop-export-handoff` | needs a live desktop supervisor (`EVAL_DESKTOP_SUPERVISOR_DIR`) |
 | `treasury-yield-curve` | same |
 | `country-income-trajectory` | same |
 | `incremental-multi-model` | same |
@@ -473,19 +473,19 @@ Twelve scenarios are currently skipped:
 | `pharma-mesh-query-loop` | same |
 | `semantic-intent-validation` | same |
 | `coauthor-executable-policy-readback` | scripts a follow-up turn; the PR gate runs `codex`, which cannot drive multi-turn |
-| `pocket-custom-contracts` | requires the manually operated default-deny source-isolation wrapper and operator-resolved protected roots; the automatic PR runner does not provision either |
+| `desktop-custom-contracts` | requires the manually operated default-deny source-isolation wrapper and operator-resolved protected roots; the automatic PR runner does not provision either |
 
 `coauthor-executable-policy-readback` is the provider-limit entry: it runs
 unattended on `--agent-backend claude` and needs the manual entry point only
-because the automatic gate defaults to `codex`. `pocket-custom-contracts` is
+because the automatic gate defaults to `codex`. `desktop-custom-contracts` is
 different: it is wrapper-only on the Codex backend and must be run manually
 with the default-deny source-isolation attestation and protected-root mapping.
-The protected manual path is `evals/run.py --scenario pocket-custom-contracts
+The protected manual path is `evals/run.py --scenario desktop-custom-contracts
 --agent-backend codex`, with `EVAL_CODEX_WRAPPER`,
 `EVAL_SOURCE_ISOLATION_CAPABILITY_ID`,
 `EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT`, and
 `EVAL_SOURCE_ISOLATION_ROOTS` configured by the operator (alongside the normal
-Pocket runtime variables). The automatic PR runner deliberately provides none
+desktop runtime variables). The automatic PR runner deliberately provides none
 of those inputs, so it cannot accidentally turn this environment gate into a
 deterministic scenario error.
 
@@ -503,7 +503,7 @@ export EVAL_SOURCE_ISOLATION_CAPABILITY_ID='nxd-eval-source-isolation-v1'
 export EVAL_CODEX_WRAPPER="$PWD/evals/tools/source-isolation-wrapper.py"
 export EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT="$(shasum -a256 "$EVAL_CODEX_WRAPPER" | cut -d' ' -f1)"
 export EVAL_SOURCE_ISOLATION_ROOTS='{"benchmark_report_history":"…","closure_temp_history":"…","codex_memories":"…/.codex/memories","codex_session_history":"…/.codex/sessions","evaluator_checkout":"…"}'
-python3 evals/run.py --scenario pocket-custom-contracts --agent-backend codex --judge-backend codex
+python3 evals/run.py --scenario desktop-custom-contracts --agent-backend codex --judge-backend codex
 ```
 
 Three traps worth knowing before you spend an afternoon on them:
@@ -527,11 +527,11 @@ skill — `nxd-analyze-mesh` — has no scenario at all: a scenario for it was
 authored but withdrawn because its fixture rewarded *not* following the skill,
 so it detected nothing (see the git history for
 `infra-profile-source-discovery`). `nxd-review-closure` is a third: no
-scenario's `skills` list names it, because it is dispatched as a subagent from
-`nxd-generate-data-product` Step 6b rather than invoked directly — what a scenario can
-observe is its EFFECT on the landed closure, which is what the
-`no_review_control` arm in `skill-sets.yaml` measures. Three of sixteen skills
-are therefore unguarded by CI. A green eval check on those PRs means "nothing
+scenario's `skills` list names it, because it is dispatched as a subagent
+from `nxd-generate-data-product` Step 6b rather than invoked directly — what
+a scenario can observe is its EFFECT on the landed closure, which is what the
+`no_review_control` arm in `skill-sets.yaml` measures. Three of seventeen
+skills are therefore unguarded by CI. A green eval check on those PRs means "nothing
 ran", not "nothing regressed".
 
 The three scenarios these gaps used to include — `nxd-add-policies`,

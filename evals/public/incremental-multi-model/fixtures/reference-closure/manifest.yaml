@@ -1,6 +1,6 @@
 domain: desktop.local
 inputs: {}
-name: pocket loop reference closure
+name: job loop reference closure
 executor:
   driver: nxd:local/python/compute:0.1.0
   secrets:

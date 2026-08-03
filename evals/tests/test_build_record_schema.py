@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
+SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 if str(SCRIPTS) not in sys.path:

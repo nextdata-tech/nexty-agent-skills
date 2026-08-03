@@ -20,7 +20,7 @@ skill_sets:
       - "src/nxd-debug-data-product"
       - "src/nxd-build-semantic-data-product"
       - "src/nxd-run-evals"
-      - "src/nxd-pocket-loop"
+      - "src/nxd-run-job-loop"
       - "src/nxd-generate-data-product"
       - "src/nxd-render-static-artifact"
 
@@ -55,7 +55,7 @@ skill_sets:
       - "src/nxd-debug-data-product"
       - "src/nxd-build-semantic-data-product"
       - "src/nxd-run-evals"
-      - "src/nxd-pocket-loop"
+      - "src/nxd-run-job-loop"
       - "src/nxd-generate-data-product"
       - "src/nxd-render-static-artifact"
 
@@ -78,6 +78,6 @@ skill_sets:
       - "src/nxd-debug-data-product"
       - "src/nxd-build-semantic-data-product"
       - "src/nxd-run-evals"
-      - "src/nxd-pocket-loop"
+      - "src/nxd-run-job-loop"
       - "src/nxd-generate-data-product"
       - "src/nxd-render-static-artifact"

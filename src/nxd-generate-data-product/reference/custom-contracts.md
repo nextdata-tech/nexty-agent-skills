@@ -1,4 +1,4 @@
-# Explicit custom contracts in desktop Pocket closures
+# Explicit custom contracts in desktop closures
 
 ## Contents
 
@@ -16,7 +16,7 @@ skill *compiles* it. Codegen never invents a guarantee and never edits the IR:
 a contract that appears in the closure but in no spec section is a guarantee
 the user never approved, and Phase C rejects it as
 `closure.contract_spec_drift`. See
-[`dp-spec.md`](../../nxd-pocket-loop/reference/dp-spec.md) for the entry shape;
+[`dp-spec.md`](../../nxd-run-job-loop/reference/dp-spec.md) for the entry shape;
 what follows is how each entry becomes code.
 
 Each entry already carries what generation needs:
@@ -57,8 +57,8 @@ at codegen time.
 
 ## CSV-first support boundary
 
-Pocket supports executable **custom input expectations only for a declared
-CSV source-aligned input**. Every Pocket source-aligned input — custom or not
+The local desktop runtime supports executable **custom input expectations only for a declared
+CSV source-aligned input**. Every desktop source-aligned input — custom or not
 — must use `.source(_csv)`, where `_csv` binds exactly to
 `/infra-profile/desktop-local#/services/csv-source`. That unlabeled service
 uses `nxd:local/file/storage:0.1.0` and is also the transform secret via
@@ -72,7 +72,7 @@ not receive a DLT loader or connection context.
 
 For a true database or API source, do not pretend the same local runtime can
 run a custom input expectation. Explain that input custom verification is not
-supported on the CSV-first Pocket path and either obtain a CSV export or omit
+supported on the CSV-first desktop path and either obtain a CSV export or omit
 the executable expectation. Never emit a decorative script that is not wired
 to an input.
 
@@ -169,7 +169,7 @@ path inside a verifier.
 
 ## Verification scripts
 
-Verifier entrypoints must be synchronous `def` functions. Pocket does not await
+Verifier entrypoints must be synchronous `def` functions. The desktop runtime does not await
 an `async def` verifier, so the closure self-check rejects coroutine entrypoints.
 
 Each script has exactly one `@data_product.on_verify()` verifier and ends with
@@ -204,7 +204,7 @@ The closure self-check must fail when any custom-contract invariant is broken:
   or does not invoke `data_product.verify()` under its main guard;
 - a custom contract has no literal unique name, no non-empty `.description(...)`,
   no `.model(...)`, or no verifier;
-- any Pocket source-aligned input is not `.source(_csv)` with `_csv` bound to
+- any desktop source-aligned input is not `.source(_csv)` with `_csv` bound to
   the exact unlabeled desktop-local `csv-source`;
 - the DuckDB output port is bound to a service other than `duckdb`;
 - `csv-source-path` is missing, absolute, or escapes the closure, or a

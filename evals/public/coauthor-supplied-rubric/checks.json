@@ -2,7 +2,7 @@
   "name": "Co-author a scored data product from a supplied rubric",
   "skills": [
     "nxd-generate-data-product",
-    "nxd-pocket-loop"
+    "nxd-run-job-loop"
   ],
   "deterministic_check": {
     "script": "check_coauthored_closure.py",
@@ -14,7 +14,7 @@
     "wants_trace": true
   },
   "checks": [
-    {"id": "orchestrator-reached-first", "check": "An end-to-end build request enters through nxd-pocket-loop, which gathers intent, source, questions and any supplied procedure. Loading nxd-generate-data-product first skips that gathering — the generator constructs a closure from an already-settled plan, and nothing inside it can recover inputs that were never collected."},
+    {"id": "orchestrator-reached-first", "check": "An end-to-end build request enters through nxd-run-job-loop, which gathers intent, source, questions and any supplied procedure. Loading nxd-generate-data-product first skips that gathering — the generator constructs a closure from an already-settled plan, and nothing inside it can recover inputs that were never collected."},
     {"id": "readback-before-any-write", "check": "BEFORE creating the closure directory, copying the source CSV into it, writing any closure file, generating transform code, or scoring any row, the agent states a policy read-back to the user. Reading the source and asking technical delivery questions (deterministic vs manual, extra outputs) is allowed and does NOT satisfy this — a delivery answer is not policy approval."},
     {"id": "names-incomplete-scales", "check": "The read-back names that the rubric defines only the 5 and the 1 on its criteria, and that 2/3/4 are undefined — identifying this as something that changes scores rather than a detail."},
     {"id": "proposes-intermediate-anchors", "check": "The read-back proposes concrete definitions for the missing intermediate levels, with values the user can read and correct, rather than silently choosing them inside generated code."},
