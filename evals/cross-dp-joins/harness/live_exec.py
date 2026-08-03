@@ -28,7 +28,7 @@ from typing import Any
 _SKILL_SCRIPTS = (
     Path(__file__).resolve().parents[3]
     / "src"
-    / "nxd-data-product-query"
+    / "nxd-query-data-product"
     / "scripts"
 )
 if str(_SKILL_SCRIPTS) not in sys.path:

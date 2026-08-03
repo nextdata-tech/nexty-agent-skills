@@ -21,7 +21,7 @@ command -v nxd-desktop-kernel-host       # must resolve to the SAME dir
 
 Install the `nxd-pocket-loop` skill from THIS worktree
 (`src/nxd-pocket-loop/`), so we iterate on the preflight fixes. Also install its
-dependencies: `nxd-semantic-data-product` and `nxd-generate-dp`.
+dependencies: `nxd-build-semantic-data-product` and `nxd-generate-data-product`.
 
 ## Drive the loop (in Claude Desktop / Cowork)
 

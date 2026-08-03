@@ -932,3 +932,93 @@ its `monitors` table; and a child-table guard reading a sibling derived model
 `checks_enriched` as evidence the nested payload was never flattened. Those are
 recorded in the PR description as harness faults and should not be read as skill
 signal.
+
+## 2026-08-03 — v0.32.0 — pack-wide: skill names standardized to imperative action phrases (NEX-830)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+**No before/after run table — this change has no behavioural arm, by construction.**
+Fifteen skill directories were renamed and every reference to them rewritten; not one
+word of skill *instruction* changed. The eval harness selects skills by path from
+`skill-sets.yaml`, and both arms would load the same seventeen skills carrying byte-identical
+bodies. A table here would compare a pack against itself and report the difference as
+scenario noise.
+
+The renames (`nxd-` + imperative verb + spelled-out object):
+
+| old | new |
+|---|---|
+| `nxd-adding-inputs` | `nxd-add-inputs` |
+| `nxd-adding-outputs` | `nxd-add-outputs` |
+| `nxd-adding-policy` | `nxd-add-policies` |
+| `nxd-adding-expectations-promises` | `nxd-add-expectations-and-promises` |
+| `nxd-complying-with-failing-policy` | `nxd-fix-policy-failures` |
+| `nxd-data-product-builder` | `nxd-build-data-product` |
+| `nxd-data-product-query` | `nxd-query-data-product` |
+| `nxd-debugging-data-products` | `nxd-debug-data-product` |
+| `nxd-eval-harness` | `nxd-run-evals` |
+| `nxd-generate-dp` | `nxd-generate-data-product` |
+| `nxd-mesh-analyzer` | `nxd-analyze-mesh` |
+| `nxd-policies` | `nxd-toggle-policies` |
+| `nxd-semantic-data-product` | `nxd-build-semantic-data-product` |
+| `nxd-setup` | `nxd-setup-cli` |
+| `nxd-dp-static-artifact` | `nxd-render-static-artifact` |
+
+`nxd-review-closure` already conformed. `nxd-pocket-loop` is deliberately untouched: it
+carries a product codename whose removal is a separate change, and folding it in here would
+mix a naming convention with a product decision.
+
+**The claim that needs evidence is not "the skills got better" but "nothing dangles."**
+A skill `name` is a storage key: it is the directory name, the frontmatter `name`, the token
+other skills dispatch on in prose, and the value eval configs select by. A rename that misses
+any one surface produces a skill that silently never loads. The evidence is therefore
+completeness, and it is mechanical:
+
+- `scripts/validate_skills.py` passes. Every `name:` equals its directory name — the check
+  that would fail first if a frontmatter edit had been missed.
+- `./build-skills.sh` packages all 17 `ok`, each under the 200-entry cap.
+- Version surfaces agree at 0.32.0 across `plugin.json`, `marketplace.json` and all 17
+  `SKILL.md`. Minor, not patch: renaming storage keys breaks trigger-matching for anyone on
+  an installed 0.31.0 pack.
+- `current_pack` in `skill-sets.yaml` lists all 17 directories, and every `skills[]` entry
+  across `evals/public/*/checks.json` resolves to a real directory — 0 dangling.
+- `python3 -m pytest evals/tests` — 540 passed. This is the load-bearing check for the one
+  failure mode a text substitution cannot cover: a skill name assembled at runtime rather
+  than written literally, which no grep would have found.
+- A grep for surviving old names outside `evals/benchmarks/` returns nothing.
+
+**Two substitution hazards were live and are recorded because they were nearly missed.**
+`nxd-setup` is a proper prefix of the eval scenario `nxd-setup-headless-auth`, and
+`nxd-policies` of the new `nxd-add-policies`; an unbounded replace would have rewritten the
+scenario id to `nxd-setup-cli-headless-auth` and corrupted a frozen record. The rewrite
+matched on a trailing name-character boundary and applied longest-name-first. Both are
+verified after the fact: the scenario id survives intact in `evals/README.md` and
+`benchmark_record.py`, and no `nxd-setup-cli-headless` string exists anywhere.
+
+**`nxd-policies` → `nxd-toggle-policies`, not `nxd-manage-policies`.** Pluralizing
+`nxd-adding-policy` to `nxd-add-policies` put the two names one weak verb apart, and these
+are exactly the pair a router must separate: one authors and activates a policy contract on
+a data product, the other drives the CLI's list/activate/deactivate. `toggle` names the
+second concretely enough that the description is not doing the disambiguation alone.
+
+**Two descriptions had to be shortened to stay under the 1024-char cap** — the longer names
+pushed `nxd-generate-data-product` to 1027 and `nxd-pocket-loop` to 1037. Both were trimmed
+by removing a repeated skill reference and a restatement, not by dropping trigger keywords;
+they now sit at 980 and 1014. Worth noting for whoever edits next: `nxd-query-data-product`
+is at 1022 of 1024, so any name appearing in it is effectively frozen.
+
+**`evals/benchmarks/ledger.md` and `records/` were excluded from the rewrite on purpose.**
+They record runs that happened against skills named `nxd-generate-dp` and `nxd-setup`.
+Rewriting them would assert those runs occurred under names that did not exist at the time,
+which costs more than the inconsistency is worth — the ledger's value is that its figures and
+labels mean what they say. Old names below this entry are correct history, not stale text.
+The follow-up `nxd-pocket-loop` change should hold the same line.
+
+**What this entry cannot tell you.** Skill *descriptions* drive model routing, and two were
+edited here. The trims were conservative, but no scenario in `evals/public/` isolates routing
+well enough to prove the edited descriptions still win their skill the same dispatches — the
+v0.16.0 entry above measured routing at n=4/n=5 and called it directional at best. If a
+routing regression is going to hide anywhere in this PR, it is in those two descriptions and
+not in the renames.

@@ -29,7 +29,7 @@ FILE_LIST = (
 )
 
 CARRIERS = (
-    SRC / "nxd-generate-dp" / "SKILL.md",
+    SRC / "nxd-generate-data-product" / "SKILL.md",
     SRC / "nxd-pocket-loop" / "reference" / "scheduling.md",
     SRC / "nxd-pocket-loop" / "reference" / "handoff-export.md",
     SRC / "nxd-review-closure" / "SKILL.md",
@@ -63,7 +63,7 @@ def test_the_file_list_appears_verbatim(path):
 
 @pytest.mark.parametrize("name", GENERATED_CLOSURE_FILES)
 def test_the_generated_record_files_are_named_in_the_generator(name):
-    text = (SRC / "nxd-generate-dp" / "SKILL.md").read_text(encoding="utf-8")
+    text = (SRC / "nxd-generate-data-product" / "SKILL.md").read_text(encoding="utf-8")
     assert name in text, f"the generator never mentions emitting {name}"
 
 

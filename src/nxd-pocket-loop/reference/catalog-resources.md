@@ -155,7 +155,7 @@ refuses to union on your behalf.
 
 ## Static artifact lifecycle
 
-After build or resume, `nxd-dp-static-artifact` reads `current`, then the exact
+After build or resume, `nxd-render-static-artifact` reads `current`, then the exact
 release `verified.json` and `outputs`, validates one matching release bundle,
 and writes a self-contained HTML file before `describe_models` or any query.
 It fails whole on a missing or mismatched read.

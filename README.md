@@ -165,8 +165,8 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 ```bash
 scripts/install.sh --code                       # global Claude Code install (default)
 scripts/install.sh --code --project             # current project only
-scripts/install.sh --code --skills "nxd-setup nxd-data-product-builder"
-scripts/install.sh --code --skills "nxd-pocket-loop nxd-generate-dp" # generator + its runtime helper skill
+scripts/install.sh --code --skills "nxd-setup-cli nxd-build-data-product"
+scripts/install.sh --code --skills "nxd-pocket-loop nxd-generate-data-product" # generator + its runtime helper skill
 scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
 scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
 scripts/install.sh --all                        # every target
@@ -178,7 +178,7 @@ scripts/install.sh --code --dry-run             # print actions, change nothing
 Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
 `-y/--yes`, `--verbose`.
 
-When selecting `nxd-generate-dp`, include `nxd-pocket-loop`: the generator
+When selecting `nxd-generate-data-product`, include `nxd-pocket-loop`: the generator
 uses its installed validator, lock writer, and build-record helpers at runtime.
 
 #### How the Claude Desktop / Cowork install works
@@ -244,37 +244,37 @@ rm -rf .agents .claude/skills skills-lock.json
 
 | Skill | Description |
 |-------|-------------|
-| `nxd-setup` | Install, configure, and authenticate the nxd CLI |
-| `nxd-data-product-builder` | Create, bootstrap, scaffold, refine, and validate a Nextdata OS Python data product — interactive interview or spec-from-document (replaces the former `nexty-bootstrap` wizard) |
-| `nxd-adding-inputs` | Add or repair inputs, input semantic models, transform parameters, and input expectations |
-| `nxd-adding-outputs` | Add or repair output models, output ports, storage mappings, transform output parameters, and output promises |
-| `nxd-adding-expectations-promises` | Add or repair input expectations and output promises |
-| `nxd-adding-policy` | Add contracts and activate computational policies with current CLI syntax |
-| `nxd-complying-with-failing-policy` | Diagnose policy violations and update the data product to comply |
-| `nxd-debugging-data-products` | Diagnose failed data products from describe/logs/init logs/verify output |
-| `nxd-data-product-query` | Query a deployed data product — discovery via the MCP gateway; reads via SQL / file fetch / vector similarity / MCP-RPC (REST only for credential leasing) |
-| `nxd-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
-| `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
-| `nxd-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
-| `nxd-eval-harness` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
-| `nxd-generate-dp` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
+| `nxd-setup-cli` | Install, configure, and authenticate the nxd CLI |
+| `nxd-build-data-product` | Create, bootstrap, scaffold, refine, and validate a Nextdata OS Python data product — interactive interview or spec-from-document (replaces the former `nexty-bootstrap` wizard) |
+| `nxd-add-inputs` | Add or repair inputs, input semantic models, transform parameters, and input expectations |
+| `nxd-add-outputs` | Add or repair output models, output ports, storage mappings, transform output parameters, and output promises |
+| `nxd-add-expectations-and-promises` | Add or repair input expectations and output promises |
+| `nxd-add-policies` | Add contracts and activate computational policies with current CLI syntax |
+| `nxd-fix-policy-failures` | Diagnose policy violations and update the data product to comply |
+| `nxd-debug-data-product` | Diagnose failed data products from describe/logs/init logs/verify output |
+| `nxd-query-data-product` | Query a deployed data product — discovery via the MCP gateway; reads via SQL / file fetch / vector similarity / MCP-RPC (REST only for credential leasing) |
+| `nxd-analyze-mesh` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
+| `nxd-toggle-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
+| `nxd-build-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
+| `nxd-run-evals` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
+| `nxd-generate-data-product` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
 | `nxd-pocket-loop` | Drive the local Nexty Pocket loop end to end — infer a semantic model, generate a runnable data product, serve it on the local desktop supervisor, answer natural-language questions against it, and refine wrong answers back into a regenerate |
 | `nxd-review-closure` | Review an authored closure adversarially against the original request — hunt the logical and semantic defects a structural self-check cannot see (an unanswerable question, a capability dismissed rather than researched, an aggregation wrong for its grain, a silently-resolved ruling, an assert that restates its own arithmetic) and return them as claims the builder must adjudicate |
-| `nxd-dp-static-artifact` | Render one published data-product release as a self-contained offline HTML artifact from its verified read-only catalog resources |
+| `nxd-render-static-artifact` | Render one published data-product release as a self-contained offline HTML artifact from its verified read-only catalog resources |
 
 ## Usage
 
 Start Claude Code in any project and invoke a skill:
 
 ```
-/nxd-setup                  # Set up the nxd CLI
-/nxd-data-product-builder   # Build / bootstrap a new data product
-/nxd-adding-inputs          # Add inputs to an existing data product
-/nxd-adding-outputs         # Add output ports and promises
-/nxd-debugging-data-products # Debug a failed deployed data product
-/nxd-data-product-query     # Query output ports from deployed data products
-/nxd-mesh-analyzer          # Discover candidate data products from an infra profile
-/nxd-policies               # List, activate, and deactivate policies
+/nxd-setup-cli                  # Set up the nxd CLI
+/nxd-build-data-product   # Build / bootstrap a new data product
+/nxd-add-inputs          # Add inputs to an existing data product
+/nxd-add-outputs         # Add output ports and promises
+/nxd-debug-data-product # Debug a failed deployed data product
+/nxd-query-data-product     # Query output ports from deployed data products
+/nxd-analyze-mesh          # Discover candidate data products from an infra profile
+/nxd-toggle-policies               # List, activate, and deactivate policies
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.
@@ -394,12 +394,12 @@ Use the Nexty skills to build a Nextdata OS Python data product from this requir
 
 ~/src/nexty-agent-skills/example-input/jira-data-product.md
 
-Use nxd-data-product-builder as the main skill. Use supporting workflow skills when needed:
-- nxd-setup
-- nxd-adding-inputs
-- nxd-adding-outputs
-- nxd-adding-expectations-promises
-- nxd-debugging-data-products
+Use nxd-build-data-product as the main skill. Use supporting workflow skills when needed:
+- nxd-setup-cli
+- nxd-add-inputs
+- nxd-add-outputs
+- nxd-add-expectations-and-promises
+- nxd-debug-data-product
 
 Important:
 - Build inside the current directory.
@@ -485,12 +485,12 @@ python3 scripts/validate_skills.py
 This creates one ZIP per skill at the repository root, for example:
 
 ```text
-nxd-data-product-builder.zip
-nxd-setup.zip
-nxd-adding-inputs.zip
-nxd-adding-outputs.zip
-nxd-adding-expectations-promises.zip
-nxd-debugging-data-products.zip
+nxd-build-data-product.zip
+nxd-setup-cli.zip
+nxd-add-inputs.zip
+nxd-add-outputs.zip
+nxd-add-expectations-and-promises.zip
+nxd-debug-data-product.zip
 ```
 
 #### 2. Install the ZIPs in Claude Desktop
@@ -509,12 +509,12 @@ In Claude Desktop:
 
 For a full data product build test, install at least:
 
-- `nxd-data-product-builder.zip`
-- `nxd-setup.zip`
-- `nxd-adding-inputs.zip`
-- `nxd-adding-outputs.zip`
-- `nxd-adding-expectations-promises.zip`
-- `nxd-debugging-data-products.zip`
+- `nxd-build-data-product.zip`
+- `nxd-setup-cli.zip`
+- `nxd-add-inputs.zip`
+- `nxd-add-outputs.zip`
+- `nxd-add-expectations-and-promises.zip`
+- `nxd-debug-data-product.zip`
 
 If your organization uses Team or Enterprise skill provisioning, an admin can upload the ZIPs once through organization settings instead of every user uploading them individually.
 
@@ -531,12 +531,12 @@ Then paste this prompt:
 ```text
 Use the Nexty skills to build a Nextdata OS Python data product from the attached requirement.
 
-Use nxd-data-product-builder as the main skill. Use supporting workflow skills when needed:
-- nxd-setup
-- nxd-adding-inputs
-- nxd-adding-outputs
-- nxd-adding-expectations-promises
-- nxd-debugging-data-products
+Use nxd-build-data-product as the main skill. Use supporting workflow skills when needed:
+- nxd-setup-cli
+- nxd-add-inputs
+- nxd-add-outputs
+- nxd-add-expectations-and-promises
+- nxd-debug-data-product
 
 Important:
 - If you cannot write to a real local filesystem path, say that clearly before generating files.

@@ -56,8 +56,8 @@ placeholder automatically, without being named. You do not enumerate secrets,
 and you do not need to know which attributes are sensitive — anything not proven
 public is redacted by default.
 
-`nxd-generate-dp` marks each connector attribute by sensitivity (see
-`nxd-generate-dp`'s `reference/database-source.md` and `reference/api-source.md`):
+`nxd-generate-data-product` marks each connector attribute by sensitivity (see
+`nxd-generate-data-product`'s `reference/database-source.md` and `reference/api-source.md`):
 credentials and identity (`password`, `user`, tokens/keys) are `public: false`,
 while non-secret topology/config (`host`, `port`, `database`, `schema`,
 `base_url`, `auth_type`, `region`) is `public: true`. So an export of a

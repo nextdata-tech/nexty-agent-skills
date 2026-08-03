@@ -39,7 +39,7 @@ test -n "$POCKET_HELPER_DIR"
 ```
 
 Pass this absolute value as `pocket_helper_dir` whenever Step 3 invokes
-`nxd-generate-dp`, including a generation-subagent handoff. The generator must
+`nxd-generate-data-product`, including a generation-subagent handoff. The generator must
 use that exact path; it must not resolve a second copy.
 
 The helpers require PyYAML, declared in

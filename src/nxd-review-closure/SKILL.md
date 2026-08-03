@@ -1,13 +1,13 @@
 ---
 name: nxd-review-closure
-description: ADVERSARIAL REVIEWER for a data-product closure that has already been authored. Reads the closure AND the original request, then hunts for LOGICAL and SEMANTIC defects the structural self-check cannot see - a question the closure cannot answer, a platform capability dismissed instead of researched, a metric whose aggregation is wrong for its grain, a judgement resolved silently in code, an assert that restates the transform's own arithmetic and so can never fail. Returns CLAIMS, never verdicts - the builder adjudicates each one against the closure and may reject it with a citation. Use when a closure has been authored and before nxd-generate-dp runs its Step 7 self-check, dispatched as a read-only subagent holding both the closure path and the verbatim request. Not a structural checker - file set, naming invariant, imports and port name belong to that self-check.
+description: ADVERSARIAL REVIEWER for a data-product closure that has already been authored. Reads the closure AND the original request, then hunts for LOGICAL and SEMANTIC defects the structural self-check cannot see - a question the closure cannot answer, a platform capability dismissed instead of researched, a metric whose aggregation is wrong for its grain, a judgement resolved silently in code, an assert that restates the transform's own arithmetic and so can never fail. Returns CLAIMS, never verdicts - the builder adjudicates each one against the closure and may reject it with a citation. Use when a closure has been authored and before nxd-generate-data-product runs its Step 7 self-check, dispatched as a read-only subagent holding both the closure path and the verbatim request. Not a structural checker - file set, naming invariant, imports and port name belong to that self-check.
 allowed-tools:
   - Read
   - Glob
   - Grep
 metadata:
   author: nextdata
-  version: 0.31.0
+  version: 0.32.0
 ---
 
 # Review a generated closure — adversarially
@@ -100,7 +100,7 @@ must come from an INDEPENDENT read of the source.
 
 ## What is NOT yours
 
-`nxd-generate-dp` Step 7 owns all of this and duplicating it wastes the round:
+`nxd-generate-data-product` Step 7 owns all of this and duplicating it wastes the round:
 
 file set, the naming invariant across the four surfaces, `PHYSICAL_MODELS`
 membership, import discipline, the port name, `write_disposition`, the presence

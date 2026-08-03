@@ -1,7 +1,7 @@
 {
   "name": "Pharma Semantic Mesh — Adversarial Queries (strict MCP)",
   "skills": [
-    "nxd-data-product-query"
+    "nxd-query-data-product"
   ],
   "ci_skip": "needs a live semantic MCP server (EVAL_MCP_PYTHON with the nxd semantic compiler) reaching lower-env Snowflake; CI cannot provision it. Run locally or via workflow_dispatch",
   "checks": [

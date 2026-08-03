@@ -184,7 +184,7 @@ run_validation() {
 
 ensure_submodule() {
   [[ "$DO_SUBMODULE" -eq 1 ]] || return 0
-  local probe="$SRC_DIR/nxd-data-product-builder/reference/nextdata-public-examples/data_products"
+  local probe="$SRC_DIR/nxd-build-data-product/reference/nextdata-public-examples/data_products"
   if [[ -d "$probe" ]] && [[ -n "$(ls -A "$probe" 2>/dev/null)" ]]; then
     dbg "submodule already populated"
     return 0
@@ -192,7 +192,7 @@ ensure_submodule() {
   info "initializing examples submodule"
   run "git -C '$ROOT' submodule update --init --recursive"
   if [[ ! -d "$probe" ]] || [[ -z "$(ls -A "$probe" 2>/dev/null)" ]]; then
-    warn "nxd-data-product-builder will ship without bundled examples (submodule empty)"
+    warn "nxd-build-data-product will ship without bundled examples (submodule empty)"
   fi
 }
 

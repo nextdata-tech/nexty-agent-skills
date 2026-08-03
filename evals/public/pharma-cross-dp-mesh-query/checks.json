@@ -1,7 +1,7 @@
 {
   "name": "Query a Pharma Semantic Mesh Across Data Products (governed gateway)",
   "skills": [
-    "nxd-data-product-query"
+    "nxd-query-data-product"
   ],
   "ci_skip": "needs a live semantic MCP server (EVAL_MCP_PYTHON with the nxd semantic compiler) reaching lower-env Snowflake; CI cannot provision it. Run locally or via workflow_dispatch",
   "checks": [
@@ -15,7 +15,7 @@
     },
     {
       "id": "governed-mcp-toolchain",
-      "check": "The agent reaches the tools via the nxd-data-product-query skill's governed MCP toolchain (mcp_call over the discovered gateway endpoint), not by inventing a SQL connection or reading fixtures. It NEVER authors a raw SQL string passed to a SQL tool — the cross-DP join is compiled server-side by run_semantic_query."
+      "check": "The agent reaches the tools via the nxd-query-data-product skill's governed MCP toolchain (mcp_call over the discovered gateway endpoint), not by inventing a SQL connection or reading fixtures. It NEVER authors a raw SQL string passed to a SQL tool — the cross-DP join is compiled server-side by run_semantic_query."
     },
     {
       "id": "q1-subject-count",

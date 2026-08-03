@@ -1,8 +1,8 @@
 {
   "name": "nxd validate Exits 0 but Did Not Validate",
   "skills": [
-    "nxd-debugging-data-products",
-    "nxd-setup"
+    "nxd-debug-data-product",
+    "nxd-setup-cli"
   ],
   "checks": [
     {
@@ -15,7 +15,7 @@
     },
     {
       "id": "records-not-run-with-next-step",
-      "check": "The agent records validation status as NOT RUN, states the reason is that the user is not authenticated, and names the next command the user must run (e.g. `nxd login` / nxd-setup) followed by re-running validation."
+      "check": "The agent records validation status as NOT RUN, states the reason is that the user is not authenticated, and names the next command the user must run (e.g. `nxd login` / nxd-setup-cli) followed by re-running validation."
     },
     {
       "id": "no-hiding-unvalidated-state",

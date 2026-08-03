@@ -51,7 +51,7 @@ BUILD_FIRST = """\
 the whole thing: deterministic transform vs manual, repo browsing, extra output.
 [tool_use:Read] {"file_path": "/tmp/src/applicants.csv"}
 [assistant] Going with the recommended defaults for the other two.
-[tool_use:Skill] {"name": "nxd-generate-dp"}
+[tool_use:Skill] {"name": "nxd-generate-data-product"}
 [assistant] Templates in hand. Let me set up the closure directory, copy the
 source CSV in, and capture how dlt normalizes the headers.
 [tool_use:Bash] {"command": "mkdir -p ws/data/applicants", "description": "scaffold"}
@@ -132,19 +132,19 @@ def test_routing_check_fails_when_generator_is_reached_first(tmp_path):
     """Skill SELECTION is graded, not just what happens inside a skill.
 
     The observed failure was a routing decision: both skills attached, only
-    nxd-generate-dp loaded, because "I want a data product" matched the
+    nxd-generate-data-product loaded, because "I want a data product" matched the
     generator's trigger. That choice happens before any skill body runs, so no
     rule inside a skill can compensate for it.
     """
     trace = (
-        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-generate-dp", '
+        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-generate-data-product", '
         '"args": "Build a local desktop data product that screens..."}\n'
-        "[tool_result] Launching skill: nxd-eval-pack:nxd-generate-dp\n"
+        "[tool_result] Launching skill: nxd-eval-pack:nxd-generate-data-product\n"
     )
     proc = _run_checker(tmp_path, trace)
     assert proc.returncode != 0, proc.stdout
     assert "FAIL routing:orchestrator-first" in proc.stdout
-    assert "nxd-generate-dp" in proc.stdout
+    assert "nxd-generate-data-product" in proc.stdout
 
 
 def test_routing_check_passes_when_orchestrator_is_reached_first(tmp_path):

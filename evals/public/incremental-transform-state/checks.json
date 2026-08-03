@@ -1,7 +1,7 @@
 {
   "name": "Incremental Load of an Append-Only Source on Pocket",
   "skills": [
-    "nxd-generate-dp"
+    "nxd-generate-data-product"
   ],
   "checks": [
     {

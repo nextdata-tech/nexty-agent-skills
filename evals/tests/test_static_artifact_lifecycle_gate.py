@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / "src" / "nxd-dp-static-artifact"
+ARTIFACT = ROOT / "src" / "nxd-render-static-artifact"
 POCKET = ROOT / "src" / "nxd-pocket-loop"
 SCENARIO = ROOT / "evals" / "public" / "dp-static-artifact-lifecycle"
 
@@ -25,7 +25,7 @@ def test_renamed_static_skill_is_the_only_shipped_identity():
     assert ARTIFACT.is_dir()
     assert not (ROOT / "src" / ("nxd-" + "artifact")).exists()
     text = (ARTIFACT / "SKILL.md").read_text()
-    assert "name: nxd-dp-static-artifact" in text
+    assert "name: nxd-render-static-artifact" in text
     # Assert the lockstep invariant, not a literal — every release bumps all
     # skills together, so pinning the number here would break on each bump for
     # a reason unrelated to what this test guards.
@@ -193,7 +193,7 @@ def test_pocket_renders_before_describe_and_query_and_rerenders_after_rebuild():
     step_4a = text[artifact:describe]
 
     # The step invokes the artifact skill, before describe/query.
-    assert "nxd-dp-static-artifact" in step_4a
+    assert "nxd-render-static-artifact" in step_4a
     assert re.search(r"before\s+`describe_models`", step_4a)
     # Both transports are named as acceptable sources for the read.
     assert "bridge tools" in step_4a
@@ -241,7 +241,7 @@ def test_offline_fixture_checker_mechanizes_page_contract():
     assert result.returncode == 0, result.stderr + result.stdout
     assert "STATIC ARTIFACT GATE PASSED" in result.stdout
     checks = (SCENARIO / "checks.json").read_text()
-    assert '"nxd-dp-static-artifact"' in checks and '"nxd-pocket-loop"' in checks
+    assert '"nxd-render-static-artifact"' in checks and '"nxd-pocket-loop"' in checks
 
 
 def test_deterministic_checker_stays_runner_side():

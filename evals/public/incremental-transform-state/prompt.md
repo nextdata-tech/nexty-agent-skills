@@ -1,7 +1,7 @@
 # Scenario: Incremental Load of an Append-Only Source on Pocket
 
 The workspace contains a working Pocket data-product closure under
-`data_product/`, built by the default nxd-generate-dp path:
+`data_product/`, built by the default nxd-generate-data-product path:
 
 - `spec.py` / `models.py` — promises one physical model, `events`, on the
   `duckdb` port, plus an `event_metrics` view.

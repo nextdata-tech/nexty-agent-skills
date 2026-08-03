@@ -1,6 +1,6 @@
 """A minimal fake ``nxd`` CLI for MCP eval scenarios.
 
-The nxd-data-product-query skill discovers DP MCP endpoints by shelling out to
+The nxd-query-data-product skill discovers DP MCP endpoints by shelling out to
 ``nxd mcp health --format json`` (see scripts/mcp_gateway.py). In the eval there
 is no real mesh, so run.py starts the semantic HTTP MCP server itself and points
 this stub at it: ``nxd mcp health`` returns a single ``data_products`` row whose

@@ -10,7 +10,7 @@ loosely matches a question) and **PII dimensions** that don't fit every grain.
 ## Task for the agent
 
 Answer the analyst's questions below **using the governed semantic protocol** of
-the `nxd-data-product-query` skill: discover the catalog via `list_models` /
+the `nxd-query-data-product` skill: discover the catalog via `list_models` /
 `describe_model`, build a concept-name selection, run the intent gate, and call
 `run_semantic_query` (never author raw SQL). For each question, restate what
 you'll run in plain language before executing, and clarify rather than guess when

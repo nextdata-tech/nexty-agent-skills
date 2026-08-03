@@ -24,8 +24,8 @@ skill authors is compiled, run, and served entirely by
 reached through the `nxd-desktop` MCP server in Claude Desktop/Cowork).
 
 It is one of two AI-assisted data-product paths in this repo (see the
-top-level `README.md`): the **platform/k8s path** (`nxd-data-product-builder`,
-`nxd-semantic-data-product`'s platform flow, `nxd-data-product-query`) targets a
+top-level `README.md`): the **platform/k8s path** (`nxd-build-data-product`,
+`nxd-build-semantic-data-product`'s platform flow, `nxd-query-data-product`) targets a
 deployed Nextdata OS mesh; Nexty Pocket targets a single local machine and
 never talks to a mesh.
 
@@ -36,10 +36,10 @@ intent + source + questions           (nxd-pocket-loop, Step 1)
       │  gather intent/source/questions/procedure;
       │  policy read-back gate fires here if a supplied rubric has a gap
       ▼
-infer the semantic model                (nxd-semantic-data-product, inference mode)
+infer the semantic model                (nxd-build-semantic-data-product, inference mode)
       │  profile source → schema.json → grains/dimensions/metrics/joins/PII
       ▼
-generate the runnable closure           (nxd-generate-dp)
+generate the runnable closure           (nxd-generate-data-product)
       │  spec.py + models.py + infra-profile.yaml + transform/main.py +
       │  requirements.txt + dp-spec.approved.md + dp-spec.lock.json +
       │  build-record.json + README.md + connector artifact
@@ -62,7 +62,7 @@ answer, quantify any review bucket, state the ruling behind the number
 routing decision (deployed DP vs. existing local product vs.
 resume-an-existing-workflow vs. new build vs. trivial arithmetic), and the one
 hard gate (the policy read-back). It is also the entry point for a direct "build
-me a data product" request — arriving straight at `nxd-generate-dp` skips that
+me a data product" request — arriving straight at `nxd-generate-data-product` skips that
 gathering and its own gate fires as a backstop. Two concerns it used to inline
 now live in `src/nxd-pocket-loop/reference/`: **task scheduling** (routing, step
 order, caps, subagent fan-out) in `scheduling.md`, and **context** (resume-first
@@ -73,16 +73,16 @@ reattach, rebuild fallback, the session ledger) in `context-and-resume.md`.
 | Skill | Role in the Pocket loop | Not responsible for |
 |---|---|---|
 | **`nxd-pocket-loop`** | Entry point and orchestrator. Gathers intent/source/questions/procedure, runs the policy read-back, sequences Steps 2–6, does the NL→selection translation and answer presentation, bounds query-remap/regenerate cycles. | Inference logic and closure authoring — it invokes the two skills below rather than re-teaching either. |
-| **`nxd-semantic-data-product`** (inference mode) | Profiles a materialized local source (`nxd-mesh-analyzer`'s profiler → `schema.json`) and derives the semantic vocabulary — grains/primary keys, dimensions, metrics, joins, PII flags — from the profile **and** the user's questions. Owns the public semantic role grammar (`primary_key()`, `dimension()`, `metric()`, `join()`). | Placing those roles into the desktop closure shape, or generating `spec.py`/`transform/main.py` — that's `nxd-generate-dp`. This skill also has a separate **platform flow** (Snowflake/k8s `.semantic_tools()`) that Pocket does not use. |
-| **`nxd-generate-dp`** | Construction specialist. Takes the settled plan (intent + inferred model + connector config) and emits the complete Python-only closure: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, the generated record files (`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`), plus the connector-specific artifact (CSV/file/database/API). Owns the naming invariant, derived-model rules, the in-transform asserts (Step 3b), and the Step 7 self-check. Opens with its own policy read-back gate as a backstop if invoked directly. | Inferring semantic roles (placed, not designed) and driving the supervisor — that's `nxd-pocket-loop` Step 4. |
+| **`nxd-build-semantic-data-product`** (inference mode) | Profiles a materialized local source (`nxd-analyze-mesh`'s profiler → `schema.json`) and derives the semantic vocabulary — grains/primary keys, dimensions, metrics, joins, PII flags — from the profile **and** the user's questions. Owns the public semantic role grammar (`primary_key()`, `dimension()`, `metric()`, `join()`). | Placing those roles into the desktop closure shape, or generating `spec.py`/`transform/main.py` — that's `nxd-generate-data-product`. This skill also has a separate **platform flow** (Snowflake/k8s `.semantic_tools()`) that Pocket does not use. |
+| **`nxd-generate-data-product`** | Construction specialist. Takes the settled plan (intent + inferred model + connector config) and emits the complete Python-only closure: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, the generated record files (`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`), plus the connector-specific artifact (CSV/file/database/API). Owns the naming invariant, derived-model rules, the in-transform asserts (Step 3b), and the Step 7 self-check. Opens with its own policy read-back gate as a backstop if invoked directly. | Inferring semantic roles (placed, not designed) and driving the supervisor — that's `nxd-pocket-loop` Step 4. |
 | **`nxd-desktop` MCP** (not a skill in `src/`, a capability of the Claude Desktop/Cowork host) | `build_data_product`, `describe_models`, `run_semantic_query` — compiles `spec.py` into the kernel definition YAML, runs the transform, verifies staging, stands up the semantic MCP endpoint, and answers governed queries. | Everything upstream of a settled closure. |
-| **`nxd-mesh-analyzer`** | Supplies the profiler script (`scripts/profile_tabular.py`) `nxd-semantic-data-product` calls to build `schema.json` from a local DuckDB sample. | Anything past the profile — it does not infer roles itself. |
-| **`nxd-data-product-query`** | Not part of the Pocket loop's build path, but Step 5's NL→concept mapping approach is reused from its semantic-layer section. It targets a **deployed** platform DP; Pocket routes there instead of building locally when the user names a remote DP. | Local desktop closures. |
+| **`nxd-analyze-mesh`** | Supplies the profiler script (`scripts/profile_tabular.py`) `nxd-build-semantic-data-product` calls to build `schema.json` from a local DuckDB sample. | Anything past the profile — it does not infer roles itself. |
+| **`nxd-query-data-product`** | Not part of the Pocket loop's build path, but Step 5's NL→concept mapping approach is reused from its semantic-layer section. It targets a **deployed** platform DP; Pocket routes there instead of building locally when the user names a remote DP. | Local desktop closures. |
 
-A single-source build needs only `nxd-pocket-loop` → `nxd-semantic-data-product`
-→ `nxd-generate-dp` → the desktop MCP tools. Multi-source builds thread a
+A single-source build needs only `nxd-pocket-loop` → `nxd-build-semantic-data-product`
+→ `nxd-generate-data-product` → the desktop MCP tools. Multi-source builds thread a
 short label per source through all three steps (`reference/multi-source.md` in
-`nxd-generate-dp`).
+`nxd-generate-data-product`).
 
 ## Context capture: the spec snapshot, the lock, the build record, and `nxd_decisions`
 
@@ -94,7 +94,7 @@ that context, and none substitutes for another.
 The organising idea is a **compiler** one, and it is what retired the old
 hand-written in-closure prose record (see
 [`dp-spec-authoritative.md`](dp-spec-authoritative.md) for the full argument):
-user intent is the *source*, `dp-spec.md` is the *IR*, `nxd-generate-dp` is the
+user intent is the *source*, `dp-spec.md` is the *IR*, `nxd-generate-data-product` is the
 *codegen*, and the closure's Python is the *output artifact*. An IR is a pure
 function of its source, so the **plan** and the **outcomes** live in different
 files and are produced by different actors.
@@ -141,7 +141,7 @@ pre-build gaps use. The elicitation contract is therefore a loop, not a
 pre-build-only gate. And the self-heal loop may change generated code but
 **never** the IR: a compiler does not edit your source to make the build pass.
 
-**`nxd_decisions`** (`src/nxd-generate-dp/reference/derivation-plan.md`) is the
+**`nxd_decisions`** (`src/nxd-generate-data-product/reference/derivation-plan.md`) is the
 **machine-queryable** ledger for the same rulings — a reserved-name base model
 landed as `data/nxd_decisions/nxd_decisions.csv`, one row per ruling, carrying
 two orthogonal classifications: a `status` column restricted to `confirmed` /
@@ -169,11 +169,11 @@ is no longer a second prose copy to diverge from.
 ## Deterministic runtime checks (the self-check phases)
 
 Unlike the platform flow (which relies on the kernel's own build-time
-validation plus the acceptance test in `nxd-semantic-data-product`),
+validation plus the acceptance test in `nxd-build-semantic-data-product`),
 Nexty Pocket closures get a **static, pre-handoff self-check** because the
 `nxd` wheel is not installable in the authoring environment — nothing can be
 imported and exercised for real before the supervisor pins it. That script
-(shipped as source in `src/nxd-generate-dp/reference/self-check.md`, run from
+(shipped as source in `src/nxd-generate-data-product/reference/self-check.md`, run from
 the closure root at Step 7) is the mandatory deterministic gate before any
 handoff. It has four phases plus two non-blocking read-backs:
 
@@ -224,21 +224,21 @@ own claims.
 
 | Scenario | Skills exercised | What it checks |
 |---|---|---|
-| **`pocket-loop-serve-query-refine`** | `nxd-pocket-loop`, `nxd-semantic-data-product`, `nxd-generate-dp` | The full end-to-end loop against a **live local desktop supervisor** (`ci_skip`'d — needs `EVAL_POCKET_SUPERVISOR_DIR`/`EVAL_POCKET_PYTHON`, run locally or via `workflow_dispatch`): serve, `describe`, four phase-A questions answered correctly (country+date filters, a cross-model join, a boolean-sum aggregation, top-N ordering+limit), a staged phase-B request (add an average metric) that must trigger a real regenerate + re-serve of the **same** workflow id rather than being pre-empted, no direct writes to the supervisor's own state DB, and an **independent re-serve of the final immutable snapshot** recomputing every answer from pristine CSVs. `fixtures/check_pocket_loop.py` is the forcing-function/ground-truth script — it never trusts a transcript, a pasted answer, or the mutable workspace CSVs; it re-derives every reference answer from its own pristine `reference_sql` and independently re-serves the pinned snapshot in `--mode harness`. |
-| **`generate-runnable-dp-from-intent`** | `nxd-generate-dp` | Given an already-inferred model, checks the Python-only closure shape (no hand-written `deployment-spec.yaml`/`manifest.yaml`/`models.yaml`), base-vs-derived primary-key rules, derived rows landed through the `duckdb` port as flat dicts in one `pipeline.run(...)`, the naming invariant (`PHYSICAL_MODELS` vs. `data/` directories), public-DSL-only usage, and runs `fixtures/check_generated_closure.py` for `ALL CHECKS PASSED`. |
-| **`generate-semantic-layer-dp-from-schema`** | `nxd-semantic-data-product` | The **platform** flow from a supplied schema doc: grains, metric aggregations (`sum`/`count_distinct`), boolean-flag metrics, join blobs, PII flags, and the `.semantic_tools()` wiring — all graded directly against the quoted `models.py`/`spec.py` text. |
-| **`generate-semantic-layer-from-live-source-and-questions`** | `nxd-semantic-data-product` | The **inference** flow (the half Pocket shares): profile a live DuckDB sample of two tables *before* authoring, save the combined profile to `schema.json` and cite it, declare bare unquoted table names matching profiled columns byte-exactly, infer grains from exact full-table cardinality, surface a genuinely ambiguous metric (revenue with `refunded`/`cancelled` rows present) rather than silently resolving it, and support a column carrying two roles (`sum` + `avg`) via a multi-role wrapper. |
-| **`pharma-cross-dp-mesh-query`** | `nxd-data-product-query` (platform path, not Pocket) | Included here only because Pocket's Step 5 reuses its NL→concept mapping approach; the scenario itself targets deployed cross-DP semantic queries, not a local closure. |
-| **`semantic-intent-validation`** | `nxd-data-product-query` | Exercises the "intent gate" (critic/echo/clarify) ahead of `run_semantic_query` — the same discipline Pocket's Step 5 leans on when mapping a question to a selection, though the scenario itself runs against a deployed DP. |
-| **`coauthor-supplied-rubric`** (not Pocket-specific but shares the gate `nxd-generate-dp`/`nxd-pocket-loop` both implement) | `nxd-generate-dp` | The policy read-back gate: a supplied rubric with an incomplete scale must be read back and approved **before** any closure file is written. `fixtures/check_coauthored_closure.py` fails a transcript where scaffolding starts before the read-back, fails post-hoc disclosure (reading back only after building), and separately fails a **routing** regression where a build request reaches `nxd-generate-dp` directly instead of `nxd-pocket-loop` gathering first. |
-| **`derive-models-from-questions`** | `nxd-generate-dp` | Step 1a/3a/3b end-to-end on a messy transactions export: refund netting (the derived spend *measure* must be correct even though the row count is a red herring), transfer exclusion, a monthly regrain (the semantic layer can't `DATE_TRUNC` at query time), an undisclosed-FX-rate trap across three currencies (silently inventing a rate fails; silently refusing to convert without disclosing why also fails), and a merchant→category ruling landed in `nxd_decisions` (never a dict literal or `if/elif` chain) with an explicit `needs_review` bucket for uncovered merchants. Has its own `deterministic_check` (`fixtures/check_derived_closure.py`) folded into the judge's facts. |
+| **`pocket-loop-serve-query-refine`** | `nxd-pocket-loop`, `nxd-build-semantic-data-product`, `nxd-generate-data-product` | The full end-to-end loop against a **live local desktop supervisor** (`ci_skip`'d — needs `EVAL_POCKET_SUPERVISOR_DIR`/`EVAL_POCKET_PYTHON`, run locally or via `workflow_dispatch`): serve, `describe`, four phase-A questions answered correctly (country+date filters, a cross-model join, a boolean-sum aggregation, top-N ordering+limit), a staged phase-B request (add an average metric) that must trigger a real regenerate + re-serve of the **same** workflow id rather than being pre-empted, no direct writes to the supervisor's own state DB, and an **independent re-serve of the final immutable snapshot** recomputing every answer from pristine CSVs. `fixtures/check_pocket_loop.py` is the forcing-function/ground-truth script — it never trusts a transcript, a pasted answer, or the mutable workspace CSVs; it re-derives every reference answer from its own pristine `reference_sql` and independently re-serves the pinned snapshot in `--mode harness`. |
+| **`generate-runnable-dp-from-intent`** | `nxd-generate-data-product` | Given an already-inferred model, checks the Python-only closure shape (no hand-written `deployment-spec.yaml`/`manifest.yaml`/`models.yaml`), base-vs-derived primary-key rules, derived rows landed through the `duckdb` port as flat dicts in one `pipeline.run(...)`, the naming invariant (`PHYSICAL_MODELS` vs. `data/` directories), public-DSL-only usage, and runs `fixtures/check_generated_closure.py` for `ALL CHECKS PASSED`. |
+| **`generate-semantic-layer-dp-from-schema`** | `nxd-build-semantic-data-product` | The **platform** flow from a supplied schema doc: grains, metric aggregations (`sum`/`count_distinct`), boolean-flag metrics, join blobs, PII flags, and the `.semantic_tools()` wiring — all graded directly against the quoted `models.py`/`spec.py` text. |
+| **`generate-semantic-layer-from-live-source-and-questions`** | `nxd-build-semantic-data-product` | The **inference** flow (the half Pocket shares): profile a live DuckDB sample of two tables *before* authoring, save the combined profile to `schema.json` and cite it, declare bare unquoted table names matching profiled columns byte-exactly, infer grains from exact full-table cardinality, surface a genuinely ambiguous metric (revenue with `refunded`/`cancelled` rows present) rather than silently resolving it, and support a column carrying two roles (`sum` + `avg`) via a multi-role wrapper. |
+| **`pharma-cross-dp-mesh-query`** | `nxd-query-data-product` (platform path, not Pocket) | Included here only because Pocket's Step 5 reuses its NL→concept mapping approach; the scenario itself targets deployed cross-DP semantic queries, not a local closure. |
+| **`semantic-intent-validation`** | `nxd-query-data-product` | Exercises the "intent gate" (critic/echo/clarify) ahead of `run_semantic_query` — the same discipline Pocket's Step 5 leans on when mapping a question to a selection, though the scenario itself runs against a deployed DP. |
+| **`coauthor-supplied-rubric`** (not Pocket-specific but shares the gate `nxd-generate-data-product`/`nxd-pocket-loop` both implement) | `nxd-generate-data-product` | The policy read-back gate: a supplied rubric with an incomplete scale must be read back and approved **before** any closure file is written. `fixtures/check_coauthored_closure.py` fails a transcript where scaffolding starts before the read-back, fails post-hoc disclosure (reading back only after building), and separately fails a **routing** regression where a build request reaches `nxd-generate-data-product` directly instead of `nxd-pocket-loop` gathering first. |
+| **`derive-models-from-questions`** | `nxd-generate-data-product` | Step 1a/3a/3b end-to-end on a messy transactions export: refund netting (the derived spend *measure* must be correct even though the row count is a red herring), transfer exclusion, a monthly regrain (the semantic layer can't `DATE_TRUNC` at query time), an undisclosed-FX-rate trap across three currencies (silently inventing a rate fails; silently refusing to convert without disclosing why also fails), and a merchant→category ruling landed in `nxd_decisions` (never a dict literal or `if/elif` chain) with an explicit `needs_review` bucket for uncovered merchants. Has its own `deterministic_check` (`fixtures/check_derived_closure.py`) folded into the judge's facts. |
 
 Efficiency (turns, tool calls, tokens, cost) is graded alongside correctness
 for every scenario — a skill edit that keeps a `PASS` verdict but doubles the
 tool-call count is treated as a regression too (`evals/README.md`,
 "Benchmarking a skill change"). Before/after comparisons for a behavior change
 to any of these skills are recorded in `evals/benchmarks/ledger.md` via
-`evals/benchmark_record.py`; see e.g. the `nxd-generate-dp` phase-D and
+`evals/benchmark_record.py`; see e.g. the `nxd-generate-data-product` phase-D and
 multi-connector-type entries already in `evals/benchmarks/records/`.
 
 ## Automated tests that guard the gates themselves
@@ -270,7 +270,7 @@ was written for:
   precedes the read-back, fails the post-hoc-disclosure loophole (read-back
   present, but only after building), passes read-only source inspection
   before the read-back, and separately asserts the **routing** check — that
-  reaching `nxd-generate-dp` before `nxd-pocket-loop` is graded as a failure
+  reaching `nxd-generate-data-product` before `nxd-pocket-loop` is graded as a failure
   distinct from what happens inside either skill.
 
 Run them with plain `pytest evals/tests/` — no live supervisor, no agent, no
@@ -298,7 +298,7 @@ open tracked issue or a documented note in the eval ledger:
 - **Database and REST-API connector types have no scenario coverage.**
   `reference/database-source.md`, `reference/api-source.md`, the labeled
   multi-source naming scheme, and the structured `auth_type` dispatch all
-  shipped, but every public eval that touches `nxd-generate-dp` only exercises
+  shipped, but every public eval that touches `nxd-generate-data-product` only exercises
   the single-CSV-source path — noted at the time in
   `evals/benchmarks/records/2026-07-21-...multi-connector-type-sources.json`
   as "real follow-up work" but never filed until now:
@@ -330,9 +330,9 @@ one, and an unbacked "the environment was bad" claim cannot reach
 - `src/nxd-pocket-loop/SKILL.md`, `reference/scheduling.md` (task scheduling),
   `reference/context-and-resume.md` (reattach/context), `reference/dlt.md` —
   the orchestrator.
-- `src/nxd-semantic-data-product/SKILL.md` + `reference/` — inference (shared)
+- `src/nxd-build-semantic-data-product/SKILL.md` + `reference/` — inference (shared)
   and the platform `.semantic_tools()` flow (not used by Pocket).
-- `src/nxd-generate-dp/SKILL.md` + `reference/` — the desktop closure
+- `src/nxd-generate-data-product/SKILL.md` + `reference/` — the desktop closure
   generator, including `reference/self-check.md` (the script above).
 - `examples/pocket-demo/RUNBOOK.md` — a manual live-QA script for driving the
   loop inside Claude Desktop/Cowork against a real supervisor, focused on

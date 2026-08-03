@@ -52,7 +52,7 @@ no model output can change it.
 
 ## What it relaxes
 
-`nxd-generate-dp/SKILL.md` states: *"The transform never calls a model."* This
+`nxd-generate-data-product/SKILL.md` states: *"The transform never calls a model."* This
 harness is the sanctioned exception, narrow by design: it is for sources where
 agent-side judging is infeasible (blob extraction, populations too large to judge
 in-session). Where agent-side judging works, the landed-batch channel in

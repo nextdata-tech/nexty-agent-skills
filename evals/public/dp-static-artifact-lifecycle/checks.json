@@ -1,6 +1,6 @@
 {
   "name": "dp-static-artifact-lifecycle",
-  "skills": ["nxd-dp-static-artifact", "nxd-pocket-loop"],
+  "skills": ["nxd-render-static-artifact", "nxd-pocket-loop"],
   "deterministic_check": {
     "script": "check_static_artifact.py",
     "deps": []

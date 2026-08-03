@@ -1,7 +1,7 @@
 {
   "name": "pgvector Embedding-Column Type Failure",
   "skills": [
-    "nxd-debugging-data-products"
+    "nxd-debug-data-product"
   ],
   "checks": [
     {

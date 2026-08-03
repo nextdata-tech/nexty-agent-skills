@@ -1,7 +1,7 @@
 {
   "name": "Generate a runnable desktop data product from intent",
   "skills": [
-    "nxd-generate-dp"
+    "nxd-generate-data-product"
   ],
   "checks": [
     {"id": "read-inputs", "check": "Read inferred_model.json and the supplied CSV headers before authoring."},

@@ -3,7 +3,7 @@
 How the loop handles a question that needs a **judgement produced by reading
 each entity's evidence** — a per-entity score, verdict, or classification the
 source does not state. The landed *shape* (row schema, evidence citation, batch
-convention) is owned by nxd-generate-dp's `reference/llm-judgments.md`; this file
+convention) is owned by nxd-generate-data-product's `reference/llm-judgments.md`; this file
 owns *when the agent judges* inside the loop.
 
 ## Contents
@@ -20,14 +20,14 @@ score candidates against a rubric, assign tickets a verdict, classify rows on a
 dimension the data doesn't carry. That is real analytical value, but it is
 nondeterministic, so it must not live in the deterministic build. Route it the
 same way you route any ruling: **land it as data, produced agent-side, before the
-build.** nxd-generate-dp's `reference/llm-judgments.md` has the row schema.
+build.** nxd-generate-data-product's `reference/llm-judgments.md` has the row schema.
 
 ## Teach before you judge
 
 A judgement is only checkable against a rubric that already exists as data. A
 score of "4" means nothing until "out of the landed 1–5" is landed. Elicit or
 confirm the rubric — criteria, weights, scale, verdict enum, gates — and have
-nxd-generate-dp land it (and an `nxd_decisions` row, classified
+nxd-generate-data-product land it (and an `nxd_decisions` row, classified
 `provenance = user_confirmed` where the user supplied the rubric and
 `agent_authored` for any anchor or band you filled in yourself) FIRST,
 before any entity is judged.

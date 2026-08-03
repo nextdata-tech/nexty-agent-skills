@@ -25,7 +25,7 @@ from pathlib import Path
 
 EVALS_DIR = Path(__file__).resolve().parents[1]
 SELF_CHECK_MD = (
-    EVALS_DIR.parent / "src" / "nxd-generate-dp" / "reference" / "self-check.md"
+    EVALS_DIR.parent / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
 )
 
 

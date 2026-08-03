@@ -25,7 +25,7 @@ Two agent-execution models, one suite:
 
 - **Live-cluster ``claude -p`` (future, not wired):** the original ambition was
   isolated ``claude -p`` sonnet agents, each getting ONLY the
-  ``nxd-data-product-query`` skill (loaded via ``--plugin-dir``) and a cluster
+  ``nxd-query-data-product`` skill (loaded via ``--plugin-dir``) and a cluster
   session token, driving the strict-mode MCP toolchain against a *deployed*
   multi-DP mesh (see ``MESH_DESIGN.md``). The skill-isolation + token/CA plumbing
   for that lives below (``build_plugin_dir`` / ``cluster_env`` /
@@ -50,7 +50,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-QUERY_SKILL = REPO_ROOT / "src" / "nxd-data-product-query"
+QUERY_SKILL = REPO_ROOT / "src" / "nxd-query-data-product"
 LOOP_DIR = Path(__file__).resolve().parent
 SUITE_FILE = LOOP_DIR / "test_suite.json"
 

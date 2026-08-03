@@ -233,7 +233,7 @@ def check_routing(trace: str) -> None:
     body executes, so nothing inside a skill can compensate for getting it
     wrong. An end-to-end "build me a data product" request has to reach
     nxd-pocket-loop, which gathers intent, source, questions and any supplied
-    procedure; going straight to nxd-generate-dp is the observed failure.
+    procedure; going straight to nxd-generate-data-product is the observed failure.
     """
     loads = SKILL_LOAD.findall(trace)
     if not loads:
@@ -243,7 +243,7 @@ def check_routing(trace: str) -> None:
         return
     check(
         "routing:orchestrator-first",
-        loads[0] != "nxd-generate-dp",
+        loads[0] != "nxd-generate-data-product",
         f"first skill loaded was {loads[0]!r}; an end-to-end build request must "
         f"enter through nxd-pocket-loop, which gathers the inputs and runs the "
         f"policy read-back. Skill order was: {' -> '.join(loads)}",

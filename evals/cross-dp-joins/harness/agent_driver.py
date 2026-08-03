@@ -2,7 +2,7 @@
 """Spawn one isolated sonnet agent to answer one cross-DP question via the query skill.
 
 Each call to ``run_case`` launches a single ``claude -p`` process that gets ONLY
-the nxd-data-product-query skill (loaded as a plugin via ``--plugin-dir``) plus
+the nxd-query-data-product skill (loaded as a plugin via ``--plugin-dir``) plus
 the cluster env (CA bundle + session token path). The agent receives one NL
 question and the strategy it must use:
 
@@ -93,7 +93,7 @@ def _strict_prompt(question: str, token_file: str | None) -> str:
     tok = f"\nSession token file: {token_file}\n" if token_file else ""
     return (
         "You are answering ONE cross-data-product question against a live "
-        "Nextdata OS mesh, using the nxd-data-product-query skill in STRICT "
+        "Nextdata OS mesh, using the nxd-query-data-product skill in STRICT "
         "MCP-only mode.\n\n"
         f"Read {ref} first — it documents the strict-mode contract "
         "(harvest semantic_model -> draft a human-readable PLAN -> "

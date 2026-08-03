@@ -1,3 +1,3 @@
-[submodule "src/nxd-data-product-builder/reference/nextdata-public-examples"]
-	path = src/nxd-data-product-builder/reference/nextdata-public-examples
+[submodule "src/nxd-build-data-product/reference/nextdata-public-examples"]
+	path = src/nxd-build-data-product/reference/nextdata-public-examples
 	url = https://github.com/nextdata-tech/nextdata-public-examples.git

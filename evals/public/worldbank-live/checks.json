@@ -1,8 +1,8 @@
 {
   "name": "worldbank-live",
   "skills": [
-    "nxd-generate-dp",
-    "nxd-semantic-data-product"
+    "nxd-generate-data-product",
+    "nxd-build-semantic-data-product"
   ],
   "ci_skip": "needs a live desktop supervisor plus outbound network to api.worldbank.org; CI provisions neither. Run locally or via workflow_dispatch",
   "checks": [

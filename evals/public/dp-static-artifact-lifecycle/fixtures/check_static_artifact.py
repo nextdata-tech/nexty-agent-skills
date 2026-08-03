@@ -11,7 +11,7 @@ from urllib.parse import quote
 FIXTURES = Path(__file__).parent
 REFERENCE_HTML = (
     Path(__file__).resolve().parents[4]
-    / "src/nxd-dp-static-artifact/assets/artifact-example.html"
+    / "src/nxd-render-static-artifact/assets/artifact-example.html"
 )
 REQUIRED_RELEASE = {
     "workflow",

@@ -106,7 +106,7 @@ cross-session catalog and a fast re-serve; use them:
    verbatim). It reuses the durable published artifact and returns a fresh
    `semantic_endpoint` plus a session `bearer_token` — the same shape
    `build_data_product` returns — in seconds, with **no** regeneration. Then
-   render the pinned release with `nxd-dp-static-artifact` before describing or
+   render the pinned release with `nxd-render-static-artifact` before describing or
    querying it. Every ruling encoded when the product was built is preserved.
 3. **Describe, then answer.** Call `mcp__nxd-desktop__describe_models` with the
    returned endpoint/token before mapping any question — the authoritative
@@ -169,7 +169,7 @@ credentials) can fail two different ways with the same symptom:
   non-secret connection topology (host, port, database, schema for a database;
   base URL for an API) and the `duckdb` / `python-compute` / `<connector>-source`
   service skeleton. Ask the user for the whole file — or for the topology plus
-  their own credential — and rebuild against `nxd-generate-dp`'s
+  their own credential — and rebuild against `nxd-generate-data-product`'s
   `reference/database-source.md` / `api-source.md`. Never invent a host or a
   credential to fill the gap, and never echo a credential in chat.
 
@@ -177,7 +177,7 @@ credentials) can fail two different ways with the same symptom:
 
 For a build that spans turns or sessions you MAY keep a lightweight ledger,
 scoped to one workflow under `.context/nxd-pocket/<workflow>/`, the same way
-`nxd-data-product-builder`'s `reference/state-and-resume.md` scopes a build. It
+`nxd-build-data-product`'s `reference/state-and-resume.md` scopes a build. It
 is optional — a single-turn loop needs none of it — and it holds only what the
 durable catalog cannot reconstruct:
 

@@ -8,7 +8,7 @@ errors gracefully** rather than fabricating an answer or forcing an invalid quer
 
 ## Task for the agent
 
-Use the **strict MCP-only mode** of `nxd-data-product-query`: discover via
+Use the **strict MCP-only mode** of `nxd-query-data-product`: discover via
 `list_models`/`describe_model`, run the intent gate, and only call
 `run_semantic_query` once a valid selection is confirmed. Never author raw SQL.
 For each question, state what you'd run and why — and when a question can't be

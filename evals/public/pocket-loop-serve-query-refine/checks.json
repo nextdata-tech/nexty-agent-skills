@@ -2,8 +2,8 @@
   "name": "pocket-loop-serve-query-refine",
   "skills": [
     "nxd-pocket-loop",
-    "nxd-semantic-data-product",
-    "nxd-generate-dp"
+    "nxd-build-semantic-data-product",
+    "nxd-generate-data-product"
   ],
   "ci_skip": "needs a live desktop supervisor (EVAL_POCKET_SUPERVISOR_DIR / EVAL_POCKET_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
   "pocket_verify": true,
