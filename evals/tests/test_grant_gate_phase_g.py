@@ -621,9 +621,18 @@ def test_gate_agrees_with_grant_py_on_malformed_grants(tmp_path):
     _spec(tmp_path)
     spec_id = _real_spec_id(tmp_path)
 
+    # The last two OMIT a required key rather than carrying a bad value, which
+    # is the case that broke: recognition used to require the full key set, so a
+    # grant missing one was not recognised as a grant at all. The gate then
+    # reported grant.missing — owner: user, next_action: confirm — telling the
+    # human to re-consent to a rubric they had already consented to, while the
+    # grant sat in contracts/. A value-only fixture cannot catch that, because
+    # every one of its docs still has all four keys.
     malformed = [
         _grant_doc(spec_id, pii_category="not-a-category"),
         _grant_doc(spec_id, purpose=""),
+        {k: v for k, v in _grant_doc(spec_id).items() if k != "purpose"},
+        {k: v for k, v in _grant_doc(spec_id).items() if k != "provider"},
     ]
     for doc in malformed:
         try:
@@ -635,6 +644,16 @@ def test_gate_agrees_with_grant_py_on_malformed_grants(tmp_path):
 
         _write(tmp_path, "contracts/grant.json", doc)
         out = _run_phase_g(tmp_path, expect_exit=1)
-        assert "grant.invalid" in _codes(out), (
-            f"grant.py rejects {doc!r} but Phase G did not: {_codes(out)}"
+        codes = _codes(out)
+        assert "grant.invalid" in codes, (
+            f"grant.py rejects {doc!r} but Phase G did not: {codes}"
+        )
+        # A defective grant is the agent's to repair. Reporting grant.missing
+        # here would stop the loop for a human decision over a schema typo, and
+        # would state something the closure contradicts.
+        assert "grant.missing" not in codes, (
+            f"a defective grant was reported as absent for {doc!r}: {codes}"
+        )
+        assert "carries no consent grant" not in out, (
+            f"the report claims no grant exists while one is on disk: {doc!r}"
         )

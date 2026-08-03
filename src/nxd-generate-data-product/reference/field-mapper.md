@@ -63,8 +63,11 @@ Paste that value into the grant's `mapper_spec_id` and write the grant to
 
 `python -m field_mapper grant-check <spec> <grant>` applies the same statically
 decidable checks the gate subprocesses (hash, primary and corroboration model,
-expiry) and prints JSON. It does **not** reject `<derived>`; the gate does that
-before ever calling it, so on that one input the two answers differ.
+expiry) and prints JSON. It has no `<derived>`-specific rule: it fails that value
+on the hash like any other non-matching id, reporting `spec_mismatch`. The gate
+calls the placeholder out by name as `grant.invalid` before it ever subprocesses,
+because a value that binds to whatever it is handed is worth distinguishing from
+a grant for the wrong spec. **Both refuse it** — only the classification differs.
 
 **Consent is the user's act.** You cannot author a grant on the user's behalf,
 extend an expiry, or decide a drifted rubric is still acceptable. Editing the

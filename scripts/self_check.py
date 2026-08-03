@@ -1194,7 +1194,19 @@ if mapper_import:
     SPEC_KEYS = {"instruction", "target_fields", "grain", "cardinality",
                  "thresholds", "input_adapter"}
     GRANT_KEYS = {"mapper_spec_id", "provider", "model", "purpose"}
+    # `mapper_spec_id` alone makes a file a grant CANDIDATE. Requiring the full
+    # GRANT_KEYS set to even recognise one made a defective grant indistinguish-
+    # able from no grant: drop `purpose` and the file fell out of grant_files,
+    # the `elif not grant_files` branch fired, and the gate told the user
+    # "contracts/ carries no consent grant" while the grant sat in contracts/.
+    # That is the one grant.* message that can contradict what is on disk, and
+    # it carries next_action: confirm — so a one-key typo the agent could fix
+    # stopped the loop to ask a human to re-consent to a rubric they had already
+    # consented to. Recognise first, then judge: a candidate that fails the full
+    # shape is grant.invalid (owner: agent), and grant.missing keeps its literal
+    # meaning of no grant artifact at all.
     spec_files, grant_files = [], []
+    malformed_grants = []
     for jpath in sorted(Path("contracts").rglob("*.json")):
         try:
             doc = json.loads(jpath.read_text(encoding="utf-8"))
@@ -1206,6 +1218,19 @@ if mapper_import:
             spec_files.append(jpath)
         elif GRANT_KEYS <= set(doc):
             grant_files.append((jpath, doc))
+        elif "mapper_spec_id" in doc:
+            missing = sorted(GRANT_KEYS - set(doc))
+            malformed_grants.append(jpath)
+            gerr("grant.invalid",
+                 f"{jpath} carries mapper_spec_id, so it is a consent grant, "
+                 f"but it is missing {missing}. Every one of "
+                 f"{sorted(GRANT_KEYS)} is required: a grant without a stated "
+                 f"purpose cannot be reviewed by the person who gave it, and "
+                 f"one that names no provider or model does not say what the "
+                 f"content was authorized to reach.", str(jpath),
+                 ev={"missing_keys": missing},
+                 fix=f"add {missing} to {jpath}; the grant itself does not need "
+                     f"re-consenting, only completing")
 
     # A transform that imports the package but never references `map_inputs` is
     # the bypass grant.py names in its own docstring: `transport.Client` is
@@ -1253,7 +1278,14 @@ if mapper_import:
              "contracts/",
              fix="write the mapper spec to contracts/<name>_spec.json and load "
                  "it with MapperSpec.load")
-    elif not grant_files:
+    elif not grant_files and not malformed_grants:
+        # `and not malformed_grants` so this cannot fire alongside the
+        # grant.invalid above and tell the user, in the same report, both that a
+        # grant is defective and that no grant exists. The defective one is
+        # already reported and is agent-fixable; adding a second finding that
+        # asks for a fresh human yes would be the contradiction this branch is
+        # least able to afford.
+        #
         # owner: user. Consent is the user's act — the agent cannot author a
         # grant on the user's behalf, which is the whole point of a grant.
         gerr("grant.missing",
@@ -1329,6 +1361,13 @@ if mapper_import:
                          f"{bad[0]} carries a mapper_spec_id that is not a "
                          f"32-character lowercase hex hash, so it cannot bind "
                          f"any spec.", bad[0])
+                    continue
+                if not grant_files:
+                    # Every grant in the closure was malformed, so each is
+                    # already reported as grant.invalid. Saying "the grants
+                    # present authorize other spec hashes" here would name a set
+                    # that is empty, and would send the user to re-consent when
+                    # the actual repair is completing a file the agent can fix.
                     continue
                 gerr("grant.spec_mismatch",
                      f"no grant binds {spath} (bound id {spec_id}). The grants "
