@@ -8,7 +8,7 @@ approval without writing" and short-circuits to ALL CHECKS PASSED before any
 artifact check runs, so the whole deterministic gate silently cannot fail.
 
 `coauthor-supplied-rubric` is NOT `ci_skip`, so that checker runs on the PR gate
-whenever `nxd-generate-data-product` or `nxd-pocket-loop` change. These tests pin the
+whenever `nxd-generate-data-product` or `nxd-run-job-loop` change. These tests pin the
 marker contract for both checkers so the two can never drift apart again.
 """
 

@@ -43,7 +43,7 @@ gateway path it wraps is healthy.
    The shell can't reach `$SKILL_DIR/scripts`, but the file-read tools
    (Read / Glob) can read the skill directory, and Write can create files in a
    scratch location the shell *does* see — the session working/output directory,
-   e.g. `"$HOME/.nxd-data-product-query-scripts"` or the harness scratch dir:
+   e.g. `"$HOME/.nxd-query-data-product-scripts"` or the harness scratch dir:
 
    - Glob `scripts/**/*` under `$SKILL_DIR` to enumerate every script **plus**
      `scripts/requirements.txt`.

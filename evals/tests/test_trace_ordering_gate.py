@@ -149,8 +149,8 @@ def test_routing_check_fails_when_generator_is_reached_first(tmp_path):
 
 def test_routing_check_passes_when_orchestrator_is_reached_first(tmp_path):
     trace = (
-        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-pocket-loop"}\n'
-        "[tool_result] Launching skill: nxd-eval-pack:nxd-pocket-loop\n"
+        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-run-job-loop"}\n'
+        "[tool_result] Launching skill: nxd-eval-pack:nxd-run-job-loop\n"
     ) + READBACK_FIRST
     proc = _run_checker(tmp_path, trace)
     assert proc.returncode == 0, proc.stdout

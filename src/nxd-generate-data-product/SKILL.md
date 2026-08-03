@@ -1,6 +1,6 @@
 ---
 name: nxd-generate-data-product
-description: CONSTRUCTION SPECIALIST, not an entry point. Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS from an ALREADY-SETTLED plan (intent, inferred model, connector config): spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (local file, live database, or REST API), ready to boot into a queryable DuckDB result. Supervisor compiles spec.py into the kernel definition YAML, so never hand-write deployment-spec / manifest / models YAML. Use when the plan is settled and the closure needs constructing. End-to-end requests to build a data product from a source start in nxd-pocket-loop, which gathers intent, source, questions and any supplied procedure and runs the policy read-back FIRST; arriving here directly means that handoff is absent, so return there first. Pairs with nxd-build-semantic-data-product, which INFERS the model this skill PLACES. Not for k8s — use nxd-build-data-product.
+description: CONSTRUCTION SPECIALIST, not an entry point. Generates the COMPLETE runnable Python-only data-product closure for lean-desktop Nextdata OS from an ALREADY-SETTLED plan (intent, inferred model, connector config): spec.py + models.py + infra-profile.yaml + transform/main.py + requirements + the connector artifact (local file, live database, or REST API), ready to boot into a queryable DuckDB result. Supervisor compiles spec.py into the kernel definition YAML, so never hand-write deployment-spec / manifest / models YAML. Use when the plan is settled and the closure needs constructing. End-to-end requests to build a data product from a source start in nxd-run-job-loop, which gathers intent, source, questions and any supplied procedure and runs the policy read-back FIRST; arriving here directly means that handoff is absent, so return there first. Pairs with nxd-build-semantic-data-product, which INFERS the model this skill PLACES. Not for k8s — use nxd-build-data-product.
 allowed-tools:
   - Bash
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.32.1
+  version: 0.33.0
 ---
 
 # nxd-generate-data-product skill
@@ -52,7 +52,7 @@ endpoint over it.
 The author emits **Python and prerequisite config only**:
 
 ```
-…/nxd-pocket/<workflow>/
+…/nxd-jobs/<workflow>/
 ├── dp-spec.md             # the approved IR — INPUT, outside the closure. Never emitted here.
 └── closure/               # <dp-root>: what build_data_product receives
     ├── spec.py            # author-facing definition: promises + transform + output port
@@ -104,23 +104,23 @@ snake_case); derived ones are the keys your resource yields.
 
 ## Workflow
 
-The nxd-pocket-loop handoff MUST carry `pocket_helper_dir`, an already-resolved absolute installed-skill directory. Set `POCKET_HELPER_DIR` to that exact value;
-if it is absent, return to nxd-pocket-loop — never reconstruct it from the
+The nxd-run-job-loop handoff MUST carry `job_helper_dir`, an already-resolved absolute installed-skill directory. Set `JOB_HELPER_DIR` to that exact value;
+if it is absent, return to nxd-run-job-loop — never reconstruct it from the
 closure or this skill's cwd.
 
-**Selective-install dependency:** this skill needs **nxd-pocket-loop** at runtime for the approved-spec validator, lock writer, and build-record helpers. A selective install must include both skills; installing `nxd-generate-data-product` alone is not a supported substitute for that handoff.
+**Selective-install dependency:** this skill needs **nxd-run-job-loop** at runtime for the approved-spec validator, lock writer, and build-record helpers. A selective install must include both skills; installing `nxd-generate-data-product` alone is not a supported substitute for that handoff.
 
 ### Step 1 — Collect the inputs
 
 - **The approved `dp-spec.md`** is the primary input when one exists — the
-  user-editable IR **nxd-pocket-loop** authors at its Step 1b, beside the closure
-  at `…/nxd-pocket/<workflow>/dp-spec.md`. **Compile it; do not re-derive it**:
+  user-editable IR **nxd-run-job-loop** authors at its Step 1b, beside the closure
+  at `…/nxd-jobs/<workflow>/dp-spec.md`. **Compile it; do not re-derive it**:
   its `models:` block is the Step-1a plan, `criteria:`/`verdicts:` are the landed
   rubric models, and `decisions:` is `data/nxd_decisions/nxd_decisions.csv` row
   for row with `provenance` **copied, never recomputed**. Re-run
-  `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"` before authoring — a spec that fails is not a
+  `"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"` before authoring — a spec that fails is not a
   settled plan — and treat any closure value appearing in no spec section as one
-  the user never approved. Schema and compile map: **nxd-pocket-loop**'s
+  the user never approved. Schema and compile map: **nxd-run-job-loop**'s
   `reference/dp-spec.md`. **Never write it into the closure**: it is upstream,
   and a closure file pointing at `../dp-spec.md` is the escaping reference Phase
   C fails; the approved revision is byte-copied in as `dp-spec.approved.md` under
@@ -165,7 +165,7 @@ is not a materialization. Asking technical delivery questions is allowed and
 your own recommended defaults are not a reason to proceed.
 
 **The read-back artifact is `dp-spec.md`**, validated with
-`"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"`, which finds those gap classes deterministically.
+`"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"`, which finds those gap classes deterministically.
 It must ENUMERATE every gate with its UNKNOWN handling, every criterion weight,
 **every anchor you propose for an incomplete scale**, the score aggregation, the
 **proposed verdict bands and precedence**, and the provenance and
@@ -177,8 +177,8 @@ approval, and `status: approved` is the user's to set.
 then showing it and waiting again. A fully specified procedure still gets one
 short confirming turn; no procedure at all means this gate does not fire.
 
-**Invoked directly**, without an nxd-pocket-loop handoff, **return to
-nxd-pocket-loop immediately**. Do not run the read-back, materialize a closure, or serve; nxd-pocket-loop owns the user-facing read-back and approval.
+**Invoked directly**, without an nxd-run-job-loop handoff, **return to
+nxd-run-job-loop immediately**. Do not run the read-back, materialize a closure, or serve; nxd-run-job-loop owns the user-facing read-back and approval.
 **Invoked as a generation subagent**, the user turn is the
 orchestrator's and you never open one, and the gate is **not a rubber stamp**:
 re-run the "fires when" criteria and **bounce** (`gap_found: <what and why>`,
@@ -431,7 +431,7 @@ did. Preconditions, procedure, and the `README.md` and `contracts/<name>.md` tem
    never re-serialized — the snapshot is evidence; requires `status: approved` and
    a validator pass. Mirror every `judgments[].prompt_ref` in at the same relative
    path; an absolute or `../`-rooted ref blocks generation.
-2. `python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure>` → `dp-spec.lock.json`, then `python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record init --record <closure>/build-record.json --lock <closure>/dp-spec.lock.json`, before Step 7 reads the record.
+2. `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure>` → `dp-spec.lock.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init --record <closure>/build-record.json --lock <closure>/dp-spec.lock.json`, before Step 7 reads the record.
 3. Render `README.md`: the reopen recipe plus, only for a credentialed source, the
    credentials block. No plan sections, no outcomes.
 
@@ -453,7 +453,7 @@ matches the `data/` directories (derived models and `.model(...)` views have no
 `dp-spec.md` governed the build, confirm shipped-matches-approved**: every
 promised model, gate, weight, band and `nxd_decisions` row traces to a spec
 section, and none carries a value the spec does not. Confirm the
-supplied export is unchanged, then run BOTH the self-check and the lock verify. **The self-check is not shipped as an executable file — write it into the closure first**: copy the single `# self_check.py` python fence out of [reference/self-check.md](reference/self-check.md) verbatim to `<closure>/self_check.py`, then run it **from the closure root** (it resolves `models.py`, `spec.py`, `transform/` and `data/` against its own working directory, so running it elsewhere reports `CANNOT READ`). Skipping this copy leaves nothing to execute, and the reach gate silently never runs. So: `cd <closure> && python3 self_check.py --json --record build-record.json`, then `python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform
+supplied export is unchanged, then run BOTH the self-check and the lock verify. **The self-check is not shipped as an executable file — write it into the closure first**: copy the single `# self_check.py` python fence out of [reference/self-check.md](reference/self-check.md) verbatim to `<closure>/self_check.py`, then run it **from the closure root** (it resolves `models.py`, `spec.py`, `transform/` and `data/` against its own working directory, so running it elsewhere reports `CANNOT READ`). Skipping this copy leaves nothing to execute, and the reach gate silently never runs. So: `cd <closure> && python3 self_check.py --json --record build-record.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure>` — the second is the canonical-hash check the first defers. The self-check dry-runs the transform
 against a scratch DuckDB, **structurally validates `models.py`/`spec.py` against
 the pinned DSL surface** (it parses, does not import — no `nxd` wheel is
 installable here), runs **Phase E — the reach gate**, which decides BEFORE the transform is imported so the verdict precedes the act (`transform/main.py` may import no model-provider SDK, and no raw network transport unless `spec.py` declares an `api-source`/`db-source`; an import contradicting the declared connector type fails too, and `contracts/**/*.py` is scanned for model-SDK imports as well — a green Phase E is an import-level name check, not proof the transform is offline), runs **Phase C** (`dp-spec.approved.md` and `dp-spec.lock.json` present with the snapshot's bytes matching the lock, `build-record.json` present with a matching `compiled_from`, `README.md` present, no `../`-rooted contract pointer) and **Phase D — the policy boundary**: a promised
@@ -487,7 +487,7 @@ an exact fixture count. Without credentials, report it **not run**.
 - **No materialization before the policy read-back** (Workflow § Gate): when the request supplies a procedure with a gap that changes a score, verdict, gate outcome, or which rows land, NOTHING is written — no closure directory, no source copy, no generated code, no table, no scoring, no build — until the user has seen the enumerated proposal and replied. Reading the source is allowed; answering a technical delivery question is not approval; "use your judgement" licenses authoring the proposal, not skipping the turn.
 - **Compile the approved `dp-spec.md`; never re-derive or exceed it.** When the IR exists it is the settled plan: its `models:` block is the derivation plan, its `criteria:`/`verdicts:` blocks are the landed rubric models, and its `decisions:` block is `nxd_decisions` row for row with `provenance` **copied, never recomputed** — a value the user typed stays `user_confirmed`, one you authored stays `agent_authored` however the user later approved it. A ruling in the closure that appears in no spec section is one the user never approved. The IR lives BESIDE the closure and is never referenced from it by a `../` path (Phase C fails that); the approved revision travels inside as the byte-copied `dp-spec.approved.md`, and outcomes — row counts, blockers, review rounds — never go back into the IR, because an IR is a pure function of its source.
 - **The self-heal loop may change generated code; it may NEVER change the IR.** A compiler does not edit your source to make the build pass. Fix `spec.py` / `models.py` / `transform/main.py` / the landed data as often as the caps allow (remap ≤ ~2 per question, regenerate ≤ ~3 total, counted from `build-record.json` `attempts[]` rather than estimated), but if green is only reachable by changing the plan — narrowing the population to dodge a bad join, dropping a model whose grain will not resolve, relaxing a threshold, weakening a criterion — **stop**: that is a spec edit requiring re-approval, not a heal. Escalate it as `blocker.spec_edit_required`. Every attempt records `spec_hash_before` and `spec_hash_after`, so a heal that moved the hash is caught mechanically instead of trusted. A build-time blocker is an `open_questions` entry discovered LATE: write it back into the live `dp-spec.md`, which un-approves the spec and puts it in the same "needs your input" queue as a pre-build gap — never invent a second mechanism for it. Typed heal exits: `healed`, `healed_with_concessions`, `caps_exhausted`, `blocked`, `retry_environmental`; non-convergence is reported, never looped on silently and never abandoned silently.
-- **FORBIDDEN versus DISCOURAGED — a heal loop may not relitigate an absolute.** FORBIDDEN, never done even to reach green, escalated as a blocker instead: hand-writing `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` (`blocker.forbidden_handwritten_yaml`); hand-rolling a durable watermark instead of `transform_state` (`blocker.forbidden_manual_watermark`); `write_disposition="replace"` while yielding a delta (`blocker.forbidden_replace_disposition`); loosening an assert into restating its own arithmetic (`blocker.forbidden_assert_restates_arithmetic`); and reaching green only by changing the plan (`blocker.spec_edit_required`). DISCOURAGED is permissible, but the run is then green **with a disclosed concession** — recorded in `build-record.json` `concessions[]` and said to the user in plain words: what was done, what it cost, the alternative you rejected, in that order, with an offer to redo it. **A green run carrying an undisclosed concession is the worst state in this design, because it reads as materialized.** And `materialized` is the word — never `correct`: a green run means the approved plan compiled, ran and published, never that the numbers are right. Codes, the full split and the record's schema: **nxd-pocket-loop**'s `reference/build-record.md`.
+- **FORBIDDEN versus DISCOURAGED — a heal loop may not relitigate an absolute.** FORBIDDEN, never done even to reach green, escalated as a blocker instead: hand-writing `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` (`blocker.forbidden_handwritten_yaml`); hand-rolling a durable watermark instead of `transform_state` (`blocker.forbidden_manual_watermark`); `write_disposition="replace"` while yielding a delta (`blocker.forbidden_replace_disposition`); loosening an assert into restating its own arithmetic (`blocker.forbidden_assert_restates_arithmetic`); and reaching green only by changing the plan (`blocker.spec_edit_required`). DISCOURAGED is permissible, but the run is then green **with a disclosed concession** — recorded in `build-record.json` `concessions[]` and said to the user in plain words: what was done, what it cost, the alternative you rejected, in that order, with an offer to redo it. **A green run carrying an undisclosed concession is the worst state in this design, because it reads as materialized.** And `materialized` is the word — never `correct`: a green run means the approved plan compiled, ran and published, never that the numbers are right. Codes, the full split and the record's schema: **nxd-run-job-loop**'s `reference/build-record.md`.
 - **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.
 - **Public semantic DSL only**: base models carry `primary_key` / `dimension` / `join`; metrics are `metric_field(metric(...))` on `semantic_view(...)`. Never import private modules or write metadata directly.
 - **Validated keys, by kind**: every promised physical model has one or more `primary_key()` fields. A **base** model's key is one or more EXISTING source columns whose tuple is non-null and unique across the supplied export — never synthesize one; stop and ask for the source key when that evidence is absent. A **derived** model's key is defined by the derivation's grain, constructed deterministically from source values plus the grain's ordinal, and proven unique by an in-transform assert. A dedupe keeps its source key; only a regrain declares a new composite.
@@ -497,4 +497,4 @@ an exact fixture count. Without credentials, report it **not run**.
 - **Reference data is landed, never hardcoded**: FX rates, merchant→category rulings, account mappings and similar judgements that exist in no source data are user-confirmed and landed as their own model, so they stay queryable and reviewable. **This includes any agent- or LLM-inferred score, verdict, or classification** — landed as data (`status = proposed`, `provenance = agent_authored`); a per-entity judgement literal in transform code is hardcoded even when the downstream arithmetic is computed. Never bake reference data into transform code as a constant dict or `if` ladder. With no user available to confirm, land the mapping anyway as PROPOSED, recorded as a row in the closure's landed `nxd_decisions` model — never a `DECISIONS.md` file — see [reference/derivation-plan.md](reference/derivation-plan.md) and, for agent judgement, [reference/llm-judgments.md](reference/llm-judgments.md). **The transform never calls a model**: judging is agent-side and lands as CSV before the build; no model call, API key, or network in `transform/main.py` — inferring from inside the transform is nondeterministic and re-judges every rerun. Self-check **Phase E enforces this mechanically** before the transform is imported, and it is a tripwire rather than a sandbox: it denies an enumerated list of model-SDK and transport imports there, and model-SDK imports in `contracts/**/*.py` too, so a green Phase E means "no *listed* SDK", not "provably offline" (see [reference/self-check.md](reference/self-check.md) § What Phase E cannot see).
 - **Proven pins**: `dlt[duckdb]==1.28.2`, `duckdb==1.5.4`, pandas, the nxd wheel; Python `>=3.12,<3.13`.
 
-**Related skills:** **`nxd-pocket-loop`** owns the conversation and invokes this skill; **`nxd-build-semantic-data-product`** produces the inferred model it places; **`nxd-build-data-product`** is the k8s/cloud path.
+**Related skills:** **`nxd-run-job-loop`** owns the conversation and invokes this skill; **`nxd-build-semantic-data-product`** produces the inferred model it places; **`nxd-build-data-product`** is the k8s/cloud path.

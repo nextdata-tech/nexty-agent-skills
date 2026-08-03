@@ -1,6 +1,6 @@
 """Offloading generation to a subagent must be TAUGHT with its safety boundaries.
 
-The pocket loop's heaviest context cost is source profiling + code generation
+The job loop's heaviest context cost is source profiling + code generation
 (Steps 2-3). Moving that into an isolated subagent keeps it out of the main
 conversation — but only safely if the skill text pins four properties that a
 naive "just fan out generation" would violate:
@@ -26,13 +26,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src"
 
-POCKET_LOOP = SRC / "nxd-pocket-loop"
-SKILL = POCKET_LOOP / "SKILL.md"
-SCHEDULING = POCKET_LOOP / "reference" / "scheduling.md"
+JOB_LOOP = SRC / "nxd-run-job-loop"
+SKILL = JOB_LOOP / "SKILL.md"
+SCHEDULING = JOB_LOOP / "reference" / "scheduling.md"
 GENERATE_DP = SRC / "nxd-generate-data-product" / "SKILL.md"
 ADVERSARIAL_REVIEW = SRC / "nxd-generate-data-product" / "reference" / "adversarial-review.md"
 POLICY_GATE = SRC / "nxd-generate-data-product" / "reference" / "policy-gate.md"
-BUILD_RECORD = POCKET_LOOP / "reference" / "build-record.md"
+BUILD_RECORD = JOB_LOOP / "reference" / "build-record.md"
 
 
 def _strip_markdown(text: str) -> str:
@@ -142,7 +142,7 @@ def test_generate_dp_teaches_subagent_gate_contract():
     )
 
 
-def test_generate_dp_direct_invocation_returns_to_pocket_loop():
+def test_generate_dp_direct_invocation_returns_to_job_loop():
     generator = GENERATE_DP.read_text()
     generator_direct = generator[
         generator.index("**Invoked directly**"):generator.index("**Invoked as a generation subagent**")
@@ -151,17 +151,17 @@ def test_generate_dp_direct_invocation_returns_to_pocket_loop():
     policy_direct = policy[policy.index("## Invoked directly"):policy.index("## Invoked as a generation subagent")]
     for direct in (generator_direct, policy_direct):
         text = _strip_markdown(direct)
-        assert "return to" in text and "nxd-pocket-loop" in text
+        assert "return to" in text and "nxd-run-job-loop" in text
         assert "immediately" in text
         assert "do not run" in text and "read-back" in text
         assert "run the read-back here" not in text
 
 
-def test_generate_dp_declares_pocket_loop_dependency_for_selective_install():
+def test_generate_dp_declares_job_loop_dependency_for_selective_install():
     text = _strip_markdown(GENERATE_DP.read_text())
     assert "selective-install dependency" in text
     assert "selective install must include both skills" in text
-    assert "nxd-pocket-loop" in text
+    assert "nxd-run-job-loop" in text
 
 
 # --- Meaning-pinning tests: a reworded-but-broken doc must FAIL these. ---

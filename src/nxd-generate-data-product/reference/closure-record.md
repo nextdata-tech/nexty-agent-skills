@@ -34,14 +34,14 @@ the copy's bytes against `lock.snapshot_sha256`, so a plan edited inside the
 closure after approval is *detected* rather than trusted.
 
 The normative schema for `build-record.json` and for the diagnostic record every
-stage emits is **nxd-pocket-loop**'s `reference/build-record.md`. Read it there.
+stage emits is **nxd-run-job-loop**'s `reference/build-record.md`. Read it there.
 This file is only the emission procedure; restating a schema in two places is how
 two schemas start to differ.
 
 ## 1. Byte-copy the approved spec
 
 ```bash
-cp "…/nxd-pocket/<workflow>/dp-spec.md" "<closure>/dp-spec.approved.md"
+cp "…/nxd-jobs/<workflow>/dp-spec.md" "<closure>/dp-spec.approved.md"
 ```
 
 **Byte-identical, never re-serialized.** No reformatting, no re-wrapping, no
@@ -53,7 +53,7 @@ Three preconditions, all hard:
 - The live spec's `status:` is `approved`. Copying a `proposed` spec would
   certify a plan the user never approved. `lock.spec_status_at_copy` records what
   was true at copy time, and the self-check fails a snapshot that was not.
-- `"$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"` passes against that spec. A spec that does not
+- `"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"` passes against that spec. A spec that does not
   validate is not a settled plan.
 - The copy happens **after** the policy read-back gate, at generation. That is
   precisely what keeps the gate's bright line intact — "nothing under `closure/`"
@@ -79,13 +79,13 @@ to make the path resolve.
 ## 3. Write the lock
 
 ```bash
-python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir>
+python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir>
 ```
 
 `dp-spec.lock.json` carries the canonical `spec_hash`, the raw
 `snapshot_sha256`, `spec_status_at_copy`, the compiler version and
 `resolved_refs[]`. It deliberately stores **no path back to the live IR**: the
-workflow id plus the `…/nxd-pocket/<workflow>/dp-spec.md` convention recovers it,
+workflow id plus the `…/nxd-jobs/<workflow>/dp-spec.md` convention recovers it,
 and a `../`-shaped string stored inside the closure is exactly the pointer this
 layout exists to remove.
 
@@ -100,7 +100,7 @@ is not a broken product.
 ## 4. Open the build record
 
 ```bash
-python3 "$POCKET_HELPER_DIR/scripts/dp_diagnostics.py" record init \
+python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init \
     --record <closure>/build-record.json \
     --lock   <closure>/dp-spec.lock.json
 ```

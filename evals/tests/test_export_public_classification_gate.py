@@ -28,7 +28,7 @@ GENERATE_DP = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference"
 DATABASE_SOURCE = GENERATE_DP / "database-source.md"
 API_SOURCE = GENERATE_DP / "api-source.md"
 HANDOFF_EXPORT = (
-    REPO_ROOT / "src" / "nxd-pocket-loop" / "reference" / "handoff-export.md"
+    REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "handoff-export.md"
 )
 
 # Credentials/identity that MUST be public: false, per connector.

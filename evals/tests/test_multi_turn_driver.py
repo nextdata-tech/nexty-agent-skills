@@ -565,7 +565,7 @@ def test_a_chatty_stderr_does_not_deadlock_the_conversation(fake_cli, tmp_path):
 
 def test_the_run_budget_is_whole_run_not_per_turn(fake_cli, tmp_path):
     """`timeout_s` must bound the conversation, not each turn, or an N-turn
-    pocket scenario silently runs N times its budget."""
+    desktop scenario silently runs N times its budget."""
     started = time.monotonic()
     ok, _trace, metrics = eb.ClaudeBackend().run_agent(
         tmp_path, "first", "m", 4,
@@ -711,7 +711,7 @@ def test_single_turn_cache_keys_survive_this_change():
         "model",
         "",
         run._fixtures_fingerprint(scenario),
-        "",  # pocket_runtime_key: this scenario is not a pocket cell
+        "",  # desktop_runtime_key: this scenario is not a desktop cell
     ):
         h.update(part.encode())
         h.update(b"\x00")

@@ -27,7 +27,7 @@ author-chosen **source label**: short, lowercase, hyphen-separated (e.g.
 `orders`, `users`, `crm`), unique among instances of *that* type. Reusing a
 label across different types is harmless (`db-source-orders` and
 `api-source-orders` don't collide as service names) but avoid it for
-clarity. **Pocket source-aligned inputs are the exception:** this is a
+clarity. **desktop source-aligned inputs are the exception:** this is a
 transform-service naming rule for labeled CSVs, not permission to bind
 `.input(...).source(_csv_<label>)`; those inputs use the one unlabeled `_csv`.
 
@@ -52,8 +52,8 @@ must be mirrored here.
 
 For CSV instances the driver is `nxd:local/file/storage:0.1.0`; only the
 service name changes. **Runtime boundary:** labeled CSV services may appear in
-`.transform(...).secrets([...])`, but not in Pocket
-`.input(...).source(...)`. Every source-aligned Pocket input, even a
+`.transform(...).secrets([...])`, but not in desktop
+`.input(...).source(...)`. Every source-aligned desktop input, even a
 non-custom one, uses the exact unlabeled `_csv` binding and the one
 `csv-source-path`; multiple input declarations may share it. Other connector
 types retain their documented drivers.
@@ -173,7 +173,7 @@ Same shape: swap `db-source-<label>`/`db_source_<label>`/`sql_database` for
 reader, `api-source-<label>`/`api_source_<label>`/`rest_api_resources`, or
 `csv-source-<label>`/`csv_source_<label>`/`read_csv` **inside the transform**.
 Labeled CSV roots (`data-<label>/<model>/*.csv`) are transform-only; they do
-not create a labeled Pocket source-aligned input. Multiple source-aligned
+not create a labeled desktop source-aligned input. Multiple source-aligned
 inputs instead share `_csv` and `csv-source-path`.
 
 ## What does NOT change

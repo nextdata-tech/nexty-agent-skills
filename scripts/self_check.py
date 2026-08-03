@@ -13,7 +13,7 @@ from pathlib import Path
 #                else, so it can be piped straight into a build record.
 #
 # This file is COPIED INTO THE CLOSURE and run there with a bare interpreter, so
-# it can never import the Pocket diagnostics helper. The table below is an inlined
+# it can never import the desktop diagnostics helper. The table below is an inlined
 # literal subset of that module's registry; evals/tests/
 # test_self_check_diagnostic_vocab.py is what keeps the two from drifting.
 # severity and owner come from the table and are never chosen per call site:
@@ -149,7 +149,7 @@ def merge_record(path, stages):
     except Exception as exc:
         say(f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
             "stages 1-3 NOT merged. Re-run generator lock/record setup with its "
-            "resolved pocket_helper_dir before self_check.py.")
+            "resolved job_helper_dir before self_check.py.")
         return
     rec.setdefault("stages", {}).update(stages)
     if READBACK["distribution"] or READBACK["absent"]:
@@ -961,8 +961,8 @@ if not network_declared:
 # rule (see the doc's "What Phase E cannot see").
 #
 # Nothing here executes a verifier, so unlike the transform scan the placement is
-# not ordering-critical — self_check never imports contracts/, only the Pocket
-# runtime does. Phase E is the right home because it keeps the reach domain in
+# not ordering-critical — self_check never imports contracts/, only the local
+# desktop runtime does. Phase E is the right home because it keeps the reach domain in
 # one place, not because it runs before Phase B.
 for vpath in sorted(p for p in Path("contracts").rglob("*.py")
                     if p.name != "__init__.py"):
@@ -1163,7 +1163,7 @@ diag("s3_closure", "closure.canonical_hash_deferred",
      "Phase C checked the snapshot's raw bytes against dp-spec.lock.json. The "
      "canonical (semantic) hash and the comparison against the live dp-spec.md "
      "are NOT checked here — re-run generator canonical lock verification with its "
-     "resolved pocket_helper_dir for that.",
+     "resolved job_helper_dir for that.",
      path=cpath("dp-spec.lock.json"))
 
 # C1 / C2 — the approved plan and its lock must both be in the closure.
@@ -1539,7 +1539,7 @@ if _spec_tree is not None:
         # told only "found 2" deletes the wrong one.
         if any(isinstance(v, ast.AsyncFunctionDef) for v in verifiers):
             cerr("closure.contract_verifier_malformed",
-                 f"{vpath}: Pocket custom verifier must be synchronous; the "
+                 f"{vpath}: desktop custom verifier must be synchronous; the "
                  f"runtime does not await async verifier functions, so an async "
                  f"verifier never runs and the contract silently passes.",
                  vpath, {"contract": cname})
@@ -1619,9 +1619,9 @@ if _spec_tree is not None:
                      f"{p}: not referenced by any custom(...) in spec.py — a "
                      f"verifier nothing wires never runs.", str(p))
 
-    # --- the Pocket runtime binding for source-aligned inputs -----------------
+    # --- the local desktop runtime binding for source-aligned inputs -----------------
     # These apply to EVERY source_aligned_input(), contract or not: on this
-    # runtime a Pocket input must be the unlabeled csv-source, and the labeled
+    # runtime a desktop input must be the unlabeled csv-source, and the labeled
     # instances are transform secrets only. A labeled service bound through
     # .input(...).source(...) does not resolve, so the closure pins clean and
     # fails at s5/s6 — which is exactly the class of fault an offline gate
@@ -1644,7 +1644,7 @@ if _spec_tree is not None:
         shown = ref if ref is not None else (
             ast.unparse(arg) if arg is not None else "<none>")
         cerr("closure.input_service_mismatch",
-             f"spec.py: Pocket source-aligned inputs currently require "
+             f"spec.py: desktop source-aligned inputs currently require "
              f".source(_csv) bound exactly to {CSV_SERVICE}; labeled CSV "
              f"services are transform-only on this runtime. Got {shown!r}.",
              "spec.py", {"found": shown})
@@ -1815,7 +1815,7 @@ if _spec_tree is not None:
                     scalar_indent = indent
                     continue
                 # Strip a trailing inline comment. The `## expectations`
-                # template in nxd-pocket-loop/reference/dp-spec.md — the shape
+                # template in nxd-run-job-loop/reference/dp-spec.md — the shape
                 # agents copy — annotates `name:` exactly this way, so keeping
                 # the comment made a closure built from the documented example
                 # report BOTH halves of contract drift against itself. Only
@@ -2042,7 +2042,7 @@ say("SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), "
 # judgement that would make this unreliable. A column qualifies on shape alone —
 # it must actually GROUP (few distinct values, and fewer than one per row), which
 # excludes keys and free text without naming either. Relay these counts to the
-# user before the build (see nxd-pocket-loop Step 3). It is also the designated
+# user before the build (see nxd-run-job-loop Step 3). It is also the designated
 # stage-8 predictor: a green build that answers wrongly shows up here first, so
 # it is recorded as DATA in build-record.readback, not only printed.
 for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):

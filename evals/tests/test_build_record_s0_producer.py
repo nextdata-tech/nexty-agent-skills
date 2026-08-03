@@ -25,10 +25,10 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
+SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
 DIAG = SCRIPTS / "dp_diagnostics.py"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
-WORKED_EXAMPLE = REPO / "src" / "nxd-pocket-loop" / "reference" / "dp-spec.md"
+WORKED_EXAMPLE = REPO / "src" / "nxd-run-job-loop" / "reference" / "dp-spec.md"
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))

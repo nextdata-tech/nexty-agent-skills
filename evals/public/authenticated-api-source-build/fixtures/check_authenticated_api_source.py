@@ -419,8 +419,8 @@ def main() -> int:
     root: Path = args.root
     fixtures: Path = args.fixtures
 
-    # The closure does NOT necessarily land at the workspace root. nxd-pocket-loop
-    # documents `…/nxd-pocket/<workflow>/closure/` (SKILL.md "Author dp-spec.md"),
+    # The closure does NOT necessarily land at the workspace root. nxd-run-job-loop
+    # documents `…/nxd-jobs/<workflow>/closure/` (SKILL.md "Author dp-spec.md"),
     # with the IR beside it — so an agent following the skill correctly writes
     # transform/main.py several directories down. A checker hardcoding
     # `<root>/transform/main.py` fails a correct closure and reports it as a

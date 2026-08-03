@@ -166,7 +166,7 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 scripts/install.sh --code                       # global Claude Code install (default)
 scripts/install.sh --code --project             # current project only
 scripts/install.sh --code --skills "nxd-setup-cli nxd-build-data-product"
-scripts/install.sh --code --skills "nxd-pocket-loop nxd-generate-data-product" # generator + its runtime helper skill
+scripts/install.sh --code --skills "nxd-run-job-loop nxd-generate-data-product" # generator + its runtime helper skill
 scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
 scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
 scripts/install.sh --all                        # every target
@@ -178,7 +178,7 @@ scripts/install.sh --code --dry-run             # print actions, change nothing
 Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
 `-y/--yes`, `--verbose`.
 
-When selecting `nxd-generate-data-product`, include `nxd-pocket-loop`: the generator
+When selecting `nxd-generate-data-product`, include `nxd-run-job-loop`: the generator
 uses its installed validator, lock writer, and build-record helpers at runtime.
 
 #### How the Claude Desktop / Cowork install works
@@ -258,7 +258,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-build-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
 | `nxd-run-evals` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
 | `nxd-generate-data-product` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
-| `nxd-pocket-loop` | Drive the local Nexty Pocket loop end to end — infer a semantic model, generate a runnable data product, serve it on the local desktop supervisor, answer natural-language questions against it, and refine wrong answers back into a regenerate |
+| `nxd-run-job-loop` | Drive the local job loop end to end — infer a semantic model, generate a runnable data product, serve it on the local desktop supervisor, answer natural-language questions against it, and refine wrong answers back into a regenerate |
 | `nxd-review-closure` | Review an authored closure adversarially against the original request — hunt the logical and semantic defects a structural self-check cannot see (an unanswerable question, a capability dismissed rather than researched, an aggregation wrong for its grain, a silently-resolved ruling, an assert that restates its own arithmetic) and return them as claims the builder must adjudicate |
 | `nxd-render-static-artifact` | Render one published data-product release as a self-contained offline HTML artifact from its verified read-only catalog resources |
 
@@ -267,14 +267,14 @@ rm -rf .agents .claude/skills skills-lock.json
 Start Claude Code in any project and invoke a skill:
 
 ```
-/nxd-setup-cli                  # Set up the nxd CLI
-/nxd-build-data-product   # Build / bootstrap a new data product
+/nxd-setup-cli           # Set up the nxd CLI
+/nxd-build-data-product  # Build / bootstrap a new data product
 /nxd-add-inputs          # Add inputs to an existing data product
 /nxd-add-outputs         # Add output ports and promises
-/nxd-debug-data-product # Debug a failed deployed data product
-/nxd-query-data-product     # Query output ports from deployed data products
-/nxd-analyze-mesh          # Discover candidate data products from an infra profile
-/nxd-toggle-policies               # List, activate, and deactivate policies
+/nxd-debug-data-product  # Debug a failed deployed data product
+/nxd-query-data-product  # Query output ports from deployed data products
+/nxd-analyze-mesh        # Discover candidate data products from an infra profile
+/nxd-toggle-policies     # List, activate, and deactivate policies
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.

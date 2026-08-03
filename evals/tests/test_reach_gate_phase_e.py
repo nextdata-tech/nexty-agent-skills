@@ -777,7 +777,7 @@ def test_reach_codes_are_registered_in_the_shared_vocabulary():
     """
     import sys as _sys
 
-    skill_scripts = EVALS_DIR.parent / "src" / "nxd-pocket-loop" / "scripts"
+    skill_scripts = EVALS_DIR.parent / "src" / "nxd-run-job-loop" / "scripts"
     if str(skill_scripts) not in _sys.path:
         _sys.path.insert(0, str(skill_scripts))
     import dp_diagnostics as dpd
@@ -882,7 +882,7 @@ def test_phase_e_failure_reports_through_the_real_diagnostic_surface(tmp_path):
 
 # ------------------------------------------------------ contract verifiers ---
 # Executable custom contracts made `contracts/**/*.py` a SECOND class of Python
-# the Pocket runtime runs. A verifier that imports a model SDK and calls it is
+# the local desktop runtime runs. A verifier that imports a model SDK and calls it is
 # the identical risk Phase E denies in the transform, and before these tests it
 # passed the whole self-check green: Phase C reads those files for escape
 # references, AST shape, inertness and secret literals, but never their imports.

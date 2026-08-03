@@ -1,4 +1,4 @@
-$ nxd pocket runs storefront-events
+$ nxd desktop runs storefront-events
 
 WORKFLOW      storefront-events
 RUN           2 of 2

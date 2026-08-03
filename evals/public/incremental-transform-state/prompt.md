@@ -1,6 +1,6 @@
-# Scenario: Incremental Load of an Append-Only Source on Pocket
+# Scenario: Incremental Load of an Append-Only Source on desktop
 
-The workspace contains a working Pocket data-product closure under
+The workspace contains a working desktop data-product closure under
 `data_product/`, built by the default nxd-generate-data-product path:
 
 - `spec.py` / `models.py` — promises one physical model, `events`, on the
@@ -24,7 +24,7 @@ Task for the agent:
 The author asks: "this re-reads the entire export every time — can you make it
 load only the new events?" Make the change in `data_product/`.
 
-This is an NXD Pocket data product. You have the installed Nexty skills
+This is an NXD desktop data product. You have the installed Nexty skills
 available; consult them for the platform's incremental-loading contract before
 editing, rather than inferring the mechanism from the closure or from public
 examples elsewhere on this machine. Work autonomously.

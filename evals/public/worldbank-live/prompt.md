@@ -1,4 +1,4 @@
-# Scenario: Build a Pocket closure against the live World Bank API
+# Scenario: Build a desktop closure against the live World Bank API
 
 The workspace contains a single brief:
 
@@ -12,7 +12,7 @@ machine, and the closure you build must fetch from it.
 
 ## Task for the agent
 
-Read the brief and build the runnable NXD Pocket data product it asks for,
+Read the brief and build the runnable NXD desktop data product it asks for,
 answering the questions it lists.
 
 The API is public — no key, no account, no credential of any kind. Do not
@@ -23,7 +23,7 @@ The brief's author is explicit that they have been burned by someone modelling
 from documentation rather than from the payload, and the shape of these
 responses is not what a first guess would predict.
 
-This is an NXD Pocket data product on the local DuckDB store. You have the
+This is an NXD desktop data product on the local DuckDB store. You have the
 installed Nexty skills available; consult them for the platform's connector,
 derivation and assertion contracts before authoring, rather than inferring the
 mechanism from public dlt examples elsewhere on this machine. Work

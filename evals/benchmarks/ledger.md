@@ -1096,3 +1096,134 @@ fixture is written as bytes because the existing `verifiers` harness writes text
 and cannot express the defect.
 
 Both findings came from review of the merged #141, not from a run.
+
+
+## 2026-08-03 — v0.33.0 — pack-wide: "pocket" codename removed; NEX-830 review follow-ups
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+**No before/after run table.** Same posture as the v0.32.0 entry above, and for the same
+reason: this is a rename plus review fixes, and no scenario distinguishes a pack from
+itself. Two of the five sections below are behavioural — §4 and §5, both harness breaks the
+sweep caused — and each is called out with the tests carrying its evidence rather than a
+manufactured arm. §2 records an accepted break rather than a fix.
+
+### 1. The `nxd-pocket-loop` rename and codename removal
+
+`nxd-pocket-loop` → **`nxd-run-job-loop`**, completing NEX-830, plus removal of the "Pocket"
+product codename from every shipped surface. Prose "Pocket" (the local runtime) became "the
+local desktop runtime" / "desktop"; `POCKET_HELPER_DIR` → `JOB_HELPER_DIR`;
+`…/nxd-pocket/<workflow>/` → `…/nxd-jobs/<workflow>/`. Scenario directories
+`pocket-loop-*` → `job-loop-*` and `pocket-custom-contracts` → `desktop-custom-contracts`;
+`examples/pocket-demo` → `examples/job-loop-demo`; `docs/architecture/nexty-pocket.md` →
+`nexty-desktop.md`. Also renamed: the `JOB VERIFY` runner-fact protocol string (emitter and
+both parsers, same file), and the `EVAL_DESKTOP_SUPERVISOR_DIR` / `EVAL_DESKTOP_PYTHON` /
+`NXD_JOB_CHECK_TMPDIR` environment variables.
+
+**Two path contracts were checked against the supervisor source before touching them**, in
+`projects/nxd`, because a skill that names a directory the supervisor does not create fails
+silently:
+
+- `…/nxd-pocket/<workflow>/` — the supervisor takes `workflow_id` as an opaque string and
+  receives the closure path as a caller argument; it never constructs this layout. **Owned
+  by this repo, safe to rename.**
+- `.pocket/state/` — appears nowhere in supervisor source, whose documented invocation is
+  `nxd-desktop-supervisor --data-dir ~/.nxd/data`. The literal in `SKILL.md` was a stale
+  doc string. It now refers to the supervisor's `--data-dir` generically rather than naming
+  a path that may be wrong. Note that a frozen 2026-07-17 record does contain
+  `"state_dirs": [".pocket/state"]`, so the literal was accurate for that run's
+  configuration — which is exactly why the doc should not hardcode it.
+
+`POCKET_HELPER_DIR` was verified absent from supervisor source before renaming: it is this
+repo's own handoff variable, not a cross-process contract.
+
+### 2. Customer extension paths — break accepted, no compatibility shim
+
+The 0.32.0 rename broke `~/.nxd/skills/<skill-name>/` and `./.nxd/skills/<skill-name>/` for
+`nxd-analyze-mesh` and `nxd-build-data-product`, and the `…/nxd-jobs/` rename in §1 does the
+same to workflow directories holding a hand-edited `dp-spec.md`. These are **customer-owned
+paths outside the pack** — `nxd-analyze-mesh/SKILL.md` states they exist "so they survive
+skill updates" — so no in-repo rewriting reaches them, and the failure is silent: discovery
+falls through to the working-tree glob or the "no profile found" branch and asks for a path
+the user already supplied.
+
+An earlier revision of this branch added legacy-path fallbacks to all three sites. **They
+were removed on the product owner's call: the pack has no installed base to be compatible
+with.** Pre-1.0, with the desktop path young, there is no user carrying a
+`~/.nxd/skills/nxd-mesh-analyzer/` directory forward, so the fallbacks were prose describing
+a migration nobody needs — paid for out of a 500-line `SKILL.md` budget, and load-bearing
+only if the premise were wrong.
+
+Recording it here because the premise, not the code, is what a future reader needs to
+re-check. If the pack ever ships to an installed base and is renamed again, this break is
+the thing to handle deliberately rather than rediscover: the reviewer on #147 rated it high
+severity precisely because nothing surfaces it at runtime.
+
+### 3. Scratch identifiers renamed, correcting a v0.32.0 ledger claim
+
+The v0.32.0 entry asserted "a grep for surviving old names outside `evals/benchmarks/`
+returns nothing." That was **false** — eight occurrences remained in venv and scratch-dir
+names (`.nxd-mesh-analyzer-venv`, `$HOME/.nxd-data-product-query-scripts`, and siblings).
+Each was self-consistent, so nothing broke, but the claim was wrong and the entry's whole
+argument is completeness. They are renamed here, which makes the original claim true rather
+than narrowing it. The prior entry stands as written; this is the correction of record.
+
+### 4. `scripts/self_check.py` regenerated from its fence (behavioural)
+
+`test_self_check_sync.py` asserts the shipped script matches the `# self_check.py` fence in
+`nxd-generate-data-product/reference/self-check.md` byte for byte — the fence is what the
+agent actually runs at session time. The codename sweep hit the two copies unevenly and the
+test failed. The script was regenerated from the fence, which is the authoritative side.
+**This is the change most worth a reviewer's attention**: it is the one place where a purely
+textual rename altered a file the agent executes, and it was caught by a test rather than by
+inspection.
+
+### 5. Two silent harness breaks the sweep caused, caught in review
+
+Both were the same failure shape as §4 and neither raised anything:
+
+- **`fixtures/pocket.json` was never renamed.** The sweep rewrote the marker *string*
+  in `run.py` to `desktop.json`, but a filename on disk has no text to rewrite, so all
+  six scenarios kept shipping `pocket.json`. `scenario_needs_desktop()` returned `None`
+  everywhere: no supervisor provisioned, `extra_dirs` wrongly regaining `EXAMPLES_DIR`,
+  the transcript cache key no longer varying with the supervisor build, and the
+  Claude-model pin for desktop cells silently off. The scenarios are `ci_skip`'d, so
+  the next local desktop run would have graded cells that never had a supervisor.
+- **`EVAL_JOB_PYTHON` vs `EVAL_DESKTOP_PYTHON`.** Substitution order: the broad
+  `POCKET_`→`JOB_` pass ran before the targeted `EVAL_POCKET_PYTHON`→`EVAL_DESKTOP_PYTHON`
+  one, so `run.py` read a name no doc mentions while every doc and the
+  `treasury-yield-curve` checker used the other. Settled on `EVAL_DESKTOP_PYTHON`, which
+  matches its sibling `EVAL_DESKTOP_SUPERVISOR_DIR`.
+
+`class desktopServe` (lowercased by the same blanket substitution) is now `DesktopServe`.
+
+**The lesson is mechanical, not incidental.** A rename sweep is text-substitution over
+file *contents*; every contract whose other half is a *filename*, a directory name, or a
+path on a user's disk is invisible to it. That is the same class as §2's customer
+extension paths — three instances in one PR — and the reason the new tests below assert
+pairings rather than spellings.
+
+`evals/tests/test_runner_opt_in_markers_resolve.py` (9 tests) pins opt-in markers from
+both sides: every shipped marker file resolves, every marker withheld from the agent has
+a resolver, and no scenario shipping runtime-only fixtures resolves nothing. Each was
+verified to fail against the broken state — the code-side rename and a partial data-side
+rename produce different failures, which is the point: a partial rename leaves the suite
+resolving the runtime while one scenario silently grades without it.
+
+**Evidence:**
+- `scripts/validate_skills.py` passes; every `name:` equals its directory name.
+- `./build-skills.sh` packages all 17 `ok`, each under the 200-entry cap.
+- `python3 -m pytest evals/tests` — **549 passed** (540 + the 9 new marker tests).
+- Zero occurrences of "pocket" outside `evals/benchmarks/`, verified case-insensitively.
+- Version surfaces agree at 0.33.0 across `plugin.json`, `marketplace.json` and all 17
+  `SKILL.md`. Minor again: `nxd-pocket-loop` was a storage key, and `JOB_HELPER_DIR` /
+  `…/nxd-jobs/` change a handoff variable and an on-disk layout.
+
+**What this entry cannot tell you.** The §2 break is accepted on a premise this ledger
+cannot verify — that no installed base exists. Nothing in the repo proves that either way;
+it is a product fact, and the entry records whose call it was rather than pretending to
+evidence. If the premise holds, the renames are clean. If it does not, the symptom is a user
+whose infra profile or `dp-spec.md` stops being found after upgrade, with no error to point
+at the cause.

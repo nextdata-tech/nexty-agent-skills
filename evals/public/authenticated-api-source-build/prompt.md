@@ -14,7 +14,7 @@ nothing else to discover by probing it.
 
 ## Task for the agent
 
-Read the brief and build the runnable NXD Pocket data product it asks for. The
+Read the brief and build the runnable NXD desktop data product it asks for. The
 bearer token is supplied in `BRIEF.md` exactly as a user would paste it into
 chat — use it as the live credential, entered into `infra-profile.yaml`, never
 narrated back in chat or written into any committed source file.
@@ -22,7 +22,7 @@ narrated back in chat or written into any committed source file.
 Go and look at what the endpoints actually return before you design the
 models, the same way you would for any connector you have not used before.
 
-This is an NXD Pocket data product on the local DuckDB store. Consult the
+This is an NXD desktop data product on the local DuckDB store. Consult the
 installed Nexty skills for the platform's connector, derivation and assertion
 contracts before authoring, rather than improvising the ingestion mechanism.
 Work autonomously — no user is available to confirm a ruling, which does not

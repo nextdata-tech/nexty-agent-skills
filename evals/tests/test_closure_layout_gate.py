@@ -30,8 +30,8 @@ FILE_LIST = (
 
 CARRIERS = (
     SRC / "nxd-generate-data-product" / "SKILL.md",
-    SRC / "nxd-pocket-loop" / "reference" / "scheduling.md",
-    SRC / "nxd-pocket-loop" / "reference" / "handoff-export.md",
+    SRC / "nxd-run-job-loop" / "reference" / "scheduling.md",
+    SRC / "nxd-run-job-loop" / "reference" / "handoff-export.md",
     SRC / "nxd-review-closure" / "SKILL.md",
 )
 

@@ -86,8 +86,8 @@ def cell_rows(tag: str, report: dict) -> list[dict]:
             "tool_calls": metrics.get("tool_calls", MISSING),
             "output_tokens": metrics.get("output_tokens", MISSING),
             "cost_usd": f"{cost:.2f}" if isinstance(cost, (int, float)) else MISSING,
-            # Per-run first: run.py pins a pocket-path scenario to
-            # POCKET_AGENT_MODEL regardless of the report-level default, so the
+            # Per-run first: run.py pins a desktop-path scenario to
+            # JOB_AGENT_MODEL regardless of the report-level default, so the
             # report field mislabels those rows. Fall back only when absent.
             "agent_model": metrics.get(
                 "agent_model", report.get("agent_model", MISSING)

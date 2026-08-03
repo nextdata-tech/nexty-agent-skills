@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPTS = REPO / "src" / "nxd-pocket-loop" / "scripts"
+SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
 
 if str(SCRIPTS) not in sys.path:
@@ -308,7 +308,7 @@ def test_the_validator_uses_the_canonicalizers_splitters():
 
 def test_validator_usage_names_the_resolved_helper_directory():
     usage = VALIDATOR.read_text(encoding="utf-8").partition("Exit codes:")[0]
-    assert 'python3 "$POCKET_HELPER_DIR/scripts/validate_dp_spec.py"' in usage
+    assert 'python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py"' in usage
     assert "python3 scripts/validate_dp_spec.py" not in usage
 
 

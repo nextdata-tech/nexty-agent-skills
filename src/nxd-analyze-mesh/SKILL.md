@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.32.1
+  version: 0.33.0
 ---
 
 # Nexty Mesh Assets
@@ -71,8 +71,8 @@ Then install the dependencies from `scripts/requirements.txt` into a throwaway v
 (Windows: `py -3 -m venv` + `.\...\Scripts\pip.exe`):
 
 ```bash
-python3 -m venv .nxd-mesh-analyzer-venv
-.nxd-mesh-analyzer-venv/bin/pip install -r "$WORKDIR/scripts/requirements.txt"
+python3 -m venv .nxd-analyze-mesh-venv
+.nxd-analyze-mesh-venv/bin/pip install -r "$WORKDIR/scripts/requirements.txt"
 ```
 
 **Entrypoints** (run as `python "$WORKDIR/scripts/<name>.py"`):

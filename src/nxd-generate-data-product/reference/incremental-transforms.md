@@ -1,4 +1,4 @@
-# Incremental transforms on Pocket
+# Incremental transforms on the local desktop runtime
 
 The default Step 3 ingest is a **full replace** every run — that is what makes
 reruns idempotent, and it is the right answer for almost every closure. Read this
@@ -49,7 +49,7 @@ writing a line:
    - anything whose **derivation logic** you may edit in a later refine cycle —
      rows landed under the old logic stay in the table forever, silently mixed
      with rows landed under the new logic.
-4. **A refine cycle will not change the derivation.** Pocket re-runs are refine
+4. **A refine cycle will not change the derivation.** Desktop re-runs are refine
    cycles on the same workflow, so this is a live risk, not a hypothetical.
 
 If any promised model fails the gate, the correct answer is one of:
@@ -403,7 +403,7 @@ cannot see.
   workflow — run 1 commits a cursor, run 2 must observe
   it. **The product docs' `transform-state.md` scopes `transform_state` to
   `k8s-compute` and calls it a no-op elsewhere; that caveat does not apply to lean
-  desktop.** Pocket's local `python-compute` driver routes through the same batch
+  desktop.** The desktop's local `python-compute` driver routes through the same batch
   module and persists the bag, so do not conclude from that page that the
   parameter does nothing here — an agent that did exactly that hand-rolled the
   watermark this document bans.
@@ -413,7 +413,7 @@ cannot see.
   so it survives refine cycles that reuse the same workflow id — a rebuild of the
   same workflow reads back the previous run's committed state. A *different*
   workflow id starts from an empty bag.
-- **There is no cron on Pocket.** Runs happen because the user asks for one. Do
+- **There is no cron on the desktop runtime.** Runs happen because the user asks for one. Do
   not write guidance or comments in terms of "each scheduled run" or "nightly" —
   the correct framing is "the next run", whenever that is. A refine cycle is a
   run like any other, and it will read the cursor.

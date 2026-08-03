@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.32.1
+  version: 0.33.0
 ---
 
 # NXD Data Product Debugging

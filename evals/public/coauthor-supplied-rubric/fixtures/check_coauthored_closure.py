@@ -232,7 +232,7 @@ def check_routing(trace: str) -> None:
     whether the policy gate is even in scope, and it happens before any skill
     body executes, so nothing inside a skill can compensate for getting it
     wrong. An end-to-end "build me a data product" request has to reach
-    nxd-pocket-loop, which gathers intent, source, questions and any supplied
+    nxd-run-job-loop, which gathers intent, source, questions and any supplied
     procedure; going straight to nxd-generate-data-product is the observed failure.
     """
     loads = SKILL_LOAD.findall(trace)
@@ -245,7 +245,7 @@ def check_routing(trace: str) -> None:
         "routing:orchestrator-first",
         loads[0] != "nxd-generate-data-product",
         f"first skill loaded was {loads[0]!r}; an end-to-end build request must "
-        f"enter through nxd-pocket-loop, which gathers the inputs and runs the "
+        f"enter through nxd-run-job-loop, which gathers the inputs and runs the "
         f"policy read-back. Skill order was: {' -> '.join(loads)}",
     )
 

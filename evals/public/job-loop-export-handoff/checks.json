@@ -1,0 +1,40 @@
+{
+  "name": "job-loop-export-handoff",
+  "skills": [
+    "nxd-run-job-loop",
+    "nxd-build-semantic-data-product",
+    "nxd-generate-data-product"
+  ],
+  "ci_skip": "needs a live desktop supervisor (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
+  "desktop_verify": true,
+  "checks": [
+    {
+      "id": "phase-a-loop",
+      "check": "The trace shows source inspection, semantic inference, runnable DuckDB/dlt closure generation, a successful local supervisor serve with published=yes, status confirmation, and describe before the two queries. Each answer is tied to a successful supervisor query using a measure/dimension selection grounded in the preceding describe output, never raw SQL or direct CSV arithmetic."
+    },
+    {
+      "id": "export-via-tool-not-hand-zip",
+      "check": "The agent produced the handoff bundle by invoking the supervisor's export capability (the export subcommand / export_data_product tool) against the same closure definition it built. It did NOT hand-assemble the bundle by running zip/tar over the closure directory, copying infra-profile.yaml, or otherwise packaging the closure by hand."
+    },
+    {
+      "id": "import-notes-product-specific-only",
+      "check": "The agent passed a required import_notes value that carries only product-specific context (what the data is, what the product answers, caveats for the recipient). It does NOT restate which credentials to refill or the rebuild commands, because the tool prepends a generated header that already lists those."
+    },
+    {
+      "id": "redaction-report-relayed-and-redact-not-misused",
+      "check": "The agent relayed the tool's redaction report to the user and correctly characterized this CSV-sourced product as having nothing to redact rather than assuming it. The agent did NOT pass a redact map to strip credentials: the trace shows it understands redact only targets attributes already marked public:true, of which there are none here."
+    },
+    {
+      "id": "no-credential-or-bearer-narration",
+      "check": "No bearer token and no live credential value appears anywhere in the agent's narration or final answer. The bearer is passed only as a per-command parameter."
+    },
+    {
+      "id": "bundle-is-complete-rebuildable-handoff",
+      "check": "The harness desktop_verify facts report bundle_ok=true: the exported bundle carries the core closure members (spec.py, models.py, transform/main.py, infra-profile.yaml) plus a non-empty IMPORT.md and a parseable export.json. The facts must show the bundle re-served on its own into a fresh workflow and reproduced every required answer (bundle_roundtrip_answers all CORRECT) — the authoritative proof the handoff is complete and self-contained — with source_csvs_pristine and check_script_pristine both true."
+    },
+    {
+      "id": "forcing-function-and-cleanup",
+      "check": "The trace shows the supplied check_job_loop.py --mode agent completed with ALL CHECKS PASSED and the supervisor was stopped; the harness must not report an endpoint still running after the agent finished."
+    }
+  ]
+}

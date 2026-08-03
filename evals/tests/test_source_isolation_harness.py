@@ -152,13 +152,13 @@ def test_missing_and_malformed_attestations_fail_before_workspace(tmp_path, monk
 
 def test_protected_scenario_is_ci_skipped_but_remains_manual_runner_input():
     scenarios, skipped = affected.load_scenarios("public")
-    reason = skipped["pocket-custom-contracts"]
+    reason = skipped["desktop-custom-contracts"]
     assert "source-isolation wrapper" in reason
     decision = affected.select(
-        ["evals/public/pocket-custom-contracts/checks.json"], scenarios, skipped
+        ["evals/public/desktop-custom-contracts/checks.json"], scenarios, skipped
     )
-    assert "pocket-custom-contracts" not in decision["scenarios"]
-    assert decision["skipped"] == ["pocket-custom-contracts"]
+    assert "desktop-custom-contracts" not in decision["scenarios"]
+    assert decision["skipped"] == ["desktop-custom-contracts"]
 
 
 def test_skill_staging_excludes_recursive_git_metadata(tmp_path, monkeypatch):
@@ -208,7 +208,7 @@ def test_protected_prompt_is_workspace_only_and_identical_for_baseline_and_head(
     )
     assert protected == head
     assert "materialized as ordinary files inside your workspace" in protected
-    assert "system and Pocket executables available on PATH" in protected
+    assert "system and desktop executables available on PATH" in protected
     assert "Do not use git, submodules, or another checkout" in protected
     assert "task inputs, examples, repo source, histories, or rubrics outside the workspace" in protected
     assert "WebFetch" not in protected
