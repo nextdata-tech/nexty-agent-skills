@@ -1232,6 +1232,31 @@ All four now agree. Unlike every other item in §5 and §6, this contract *did* 
 and it failed immediately — the contrast with the filename and env-var contracts, which had
 none and stayed broken across review rounds, is the entry's whole argument in miniature.
 
+### 7. A fourth-review sweep of `incremental-transform-state`, and an invented CLI verb
+
+The earlier rounds did not reach this scenario, which is **not** `ci_skip`'d — its
+judge-visible strings are graded on every PR run, so `desktop/desktop` (a degenerate phrase
+from collapsing `desktop/Pocket`) and lowercase `desktop` in the scenario name and two
+checks were more than cosmetic. Rewritten to `the desktop runtime` / `the local DuckDB
+storage driver`. Two `build_data.py` docstrings reading `desktop Loop CSV fixture` became
+`job-loop CSV fixture`.
+
+**The interesting one is `fixtures/nxd-run-history.txt`.** The sweep turned a simulated CLI
+transcript reading `$ nxd pocket runs storefront-events` into `$ nxd desktop runs …` — and
+checking the supervisor repo shows **neither is real**: no `nxd <x> runs` subcommand exists,
+and `runs` is a SQLite table in `state.rs`, not a CLI verb. So the original fixture already
+showed an invented command, and the rename swapped one fiction for another while making it
+look freshly authored.
+
+Replaced with a caption — `# Run history for workflow "…" (supervisor run records)` — that
+describes the data without claiming an invocation. No checker parses that line; `prompt.md`
+introduces the file as "the row counts from the two runs so far," which the caption matches.
+
+This is §1's discipline failing on a surface §1 did not enumerate. That section verified the
+two *path* contracts against supervisor source before renaming them; a command name in a
+fixture is the same kind of external contract and got no such check. Fictional example
+commands in fixtures are worth an audit of their own — this PR only fixes the one it touched.
+
 **The lesson is mechanical, not incidental.** A rename sweep is text-substitution over
 file *contents*; every contract whose other half is a *filename*, a directory name, an
 environment variable read by a human following setup docs, or a path on a user's disk is

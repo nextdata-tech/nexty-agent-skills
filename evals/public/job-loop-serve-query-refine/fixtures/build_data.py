@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and validate the deterministic desktop Loop CSV fixture.
+"""Build and validate the deterministic job-loop CSV fixture.
 
 The CSVs are committed so an eval never needs to generate them.  Running this
 file is still useful: it proves the foreign keys, grains, and the deliberately

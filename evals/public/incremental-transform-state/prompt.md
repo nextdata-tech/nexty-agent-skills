@@ -1,4 +1,4 @@
-# Scenario: Incremental Load of an Append-Only Source on desktop
+# Scenario: Incremental Load of an Append-Only Source on the desktop runtime
 
 The workspace contains a working desktop data-product closure under
 `data_product/`, built by the default nxd-generate-data-product path:
@@ -53,7 +53,7 @@ Success checks:
 - The agent's read-back code, if any, works despite the `duckdb` port parameter
   shadowing the `duckdb` module, and survives the first run when no DuckDB file
   exists yet.
-- The agent does NOT propose a `.when(...)` per-model DAG on desktop, and does not
+- The agent does NOT propose a `.when(...)` per-model DAG on the desktop runtime, and does not
   reference the Databricks-only transform-state sidecar env var.
 - The agent preserves the rest of the transform contract: typed `DuckDbOutput`,
   source config from `secrets`, writes through the port, and the
