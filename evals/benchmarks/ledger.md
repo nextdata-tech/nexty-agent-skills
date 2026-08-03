@@ -1281,19 +1281,23 @@ the sweep says "the local desktop path" and how the supervisor repo itself write
 desktop".
 
 **The capitalization rule was invented when the codebase already had one, and two review
-rounds were needed to see it.** The §6 pass capitalized five `run.py` strings on a
+rounds were needed to see it.** The §6 pass capitalized `run.py` strings on a
 "sentence-initial" rule; the sixth review showed that rule could not distinguish
 `res.error = "Desktop preflight failed"` from `res.error = f"desktop harness infrastructure
 failure: …"`, since both are complete `res.error` values rendered through the same two paths
 (`f"✗ ERROR — {res.error}"` and the JSON report's `"error"` field).
 
-Checking the other thirteen `res.error` assignments settles it: **every pre-existing one is
-lowercase** — `"missing checks.json"`, `"MCP server setup failed: …"`, `"http stub setup
-failed: …"`, `"agent run failed"`, `"source-isolation infrastructure invalid: …"`. And the
-pre-rename text at these very lines was `"pocket preflight failed"` / `"pocket runtime setup
-failed"`, lowercase, because a product name in that slot followed the field's convention
-rather than overriding it. So `res.error` is lowercase, always, and §6 introduced the two
-anomalies rather than fixing them. Both are reverted here.
+`run.py` holds **15** `res.error` assignments. §6 capitalized **three** of them —
+`"Desktop preflight failed"` (:2222), `f"Desktop runtime setup failed: {exc}"` (:2341) and
+`f"Desktop harness infrastructure failure: …"` (:2495), all three introduced by the same
+commit (`5b4d7e0`). Checking the other twelve settles the convention: **every pre-existing
+one is lowercase** — `"missing checks.json"`, `"http stub setup failed: …"`, `"agent run
+failed"`, `"source-isolation infrastructure invalid: …"`, with `"MCP server setup failed:
+…"` the lone acronym-initial exception. And the pre-rename text at those three lines was
+`"pocket preflight failed"`, `"pocket runtime setup failed"` and `"pocket harness
+infrastructure failure: …"` — lowercase, because a product name in that slot followed the
+field's convention rather than overriding it. So `res.error` is lowercase, always, and §6
+introduced all three anomalies rather than fixing them. All three are reverted here.
 
 What survives capitalized is the set that genuinely renders sentence-initial: the stderr line
 `print(f"Desktop preflight OK: …")` and the `res.verdict["summary"]` append, whose leading
@@ -1309,11 +1313,27 @@ EVAL_DESKTOP_SUPERVISOR_DIR …"`) is lowercase and reaches the identical sink �
 sibling test that caught the `verifier facts were malformed` over-application. Lowercased.
 
 **And this one is now pinned in code**, which the two prior corrections were not:
-`test_res_error_literals_are_lowercase` asserts every `res.error` literal starts lowercase
-(acronym-initial values like `MCP server setup failed` excepted), and is verified to fail
-against the pre-correction tree. Unlike §8's prefix convention — where an assertion genuinely
-cannot guard a *reader's* inference — this convention is mechanically checkable, and three
-rounds of drift are the argument that it should have been checked from the start.
+`test_res_error_literals_are_lowercase` asserts every string reaching `res.error` starts
+lowercase (acronym-initial values like `MCP server setup failed` excepted), and is verified
+to fail against the pre-correction tree. Unlike §8's prefix convention — where an assertion
+genuinely cannot guard a *reader's* inference — this convention is mechanically checkable,
+and three rounds of drift are the argument that it should have been checked from the start.
+
+**A pre-merge subagent review found the first version of that test had a hole at exactly the
+strings this correction edits.** It matched only literals assigned directly to `res.error`,
+missing the two `*_infrastructure_error` helpers whose return values are interpolated in
+verbatim — one of which is `"desktop verifier facts were malformed"`, lowercased two rounds
+earlier. Re-capitalizing it passed the suite. The test now parses `run.py` with `ast` and
+covers both the assignments and those helper returns (15 strings, up from 13), which also
+retires the regex's blindness to single quotes and `rf` prefixes: it fails closed on a form
+it does not recognize instead of skipping it.
+
+The same review caught the paragraph above miscounting — "the other thirteen … two
+anomalies" against a real 15 assignments and three §6 capitalizations, with the third
+pre-rename `pocket` string omitted from the evidence list. Corrected, and worth stating
+plainly: **that is a miscount inside the paragraph correcting a miscount**, in the entry
+whose thesis is that a reader can assume every figure in it means something. The count is
+now `git grep`-reproducible from the line numbers cited.
 
 One test docstring was corrected rather than its code: `_names_read_by_runner()` claimed to
 return names `run.py` "passes to os.environ" when it regexes the whole file. The superset is
