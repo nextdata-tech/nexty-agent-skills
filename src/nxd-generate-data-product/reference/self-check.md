@@ -11,9 +11,11 @@
 
 ## What the phases are
 
-The dry-run for Step 7 of nxd-generate-data-product, in five phases. They run in the order
-**A → E → B → C → D**, not in name order — the reason is in Phase E's entry, and
-it is the point of Phase E rather than an accident of how it was added.
+The dry-run for Step 7 of nxd-generate-data-product, in six phases. They run in
+the order **A → E → G → B → C → D**, not in name order — E and G both run before
+B because B executes the transform, and a verdict about what the transform may
+reach or spend is worthless once it already has. That ordering is the point of
+those two phases rather than an accident of how they were added.
 
 - **Phase A — structural check of `models.py` and `spec.py`.** Parses both files
   with `ast` and checks them against the pinned DSL surface in
@@ -52,6 +54,16 @@ it is the point of Phase E rather than an accident of how it was added.
   so a closure could call a model and nothing structural stopped it.
   **What it cannot see is in "What this script does NOT cover" — read that
   before you treat a green Phase E as proof the transform is offline.**
+- **Phase G — consent gate.** Static, and inert on the closures that do not
+  vendor the field-mapper harness. When one does, it fails the closure unless
+  `contracts/` carries a grant binding each mapper spec kept there **by hash**,
+  so a rubric edited after consent was given stops matching and the user is
+  asked again. It runs here, before Phase B, for the same reason Phase E does
+  and one of its own: Phase B *executes* the transform, and a mapper transform
+  with a resolvable key spends real money there, so a consent verdict delivered
+  afterwards would describe consent already spent. **What it cannot see is in
+  "What Phase G cannot see"** — a green Phase G is not proof that no unconsented
+  mapping happened.
 - **Phase B — dry-run of the transform** against a scratch DuckDB: the
   supervisor's execution minus the kernel.
 - **Phase C — closure-record gate** (Step 6a). A closure can be structurally

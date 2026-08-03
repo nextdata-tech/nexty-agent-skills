@@ -1,9 +1,12 @@
 # Field mapper — Layer-1 contract
 
 Status: **normative.** Normative for everything under
-`src/nxd-generate-data-product/mapper/`. Derived from `field-mapper-design.md` v2. Where
-this file and the design doc disagree, that is a bug in this file — report it, do
-not silently diverge.
+`src/nxd-generate-data-product/mapper/`: this file is what the code and the
+acceptance fixtures are held to, and where it and the implementation disagree,
+one of the two is a bug — report it rather than silently diverging. The
+architecture record, which explains *why* the design is shaped this way, is
+[docs/architecture/field-mapper.md](../../../docs/architecture/field-mapper.md).
+It describes the same system but does not govern it.
 
 Two `nxd_decisions` axes landed after the design was written and bear on this
 machinery: `provenance` (a required second axis, vocabulary `user_confirmed` |

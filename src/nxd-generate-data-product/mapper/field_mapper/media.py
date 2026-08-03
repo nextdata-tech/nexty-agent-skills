@@ -9,8 +9,9 @@ content-block *types*, not just media types. A PDF is `{"type": "document"}` and
 an image is `{"type": "image"}`, so serving both is not an enum widening. Naming
 the whole path after PDFs also made one codec look like the domain when scanned
 pages, screenshots, and photographed forms are the same problem — and the
-evidence contract is modality-blind once text has landed (ARCHITECTURE.md,
-"Evidence: two-stage").
+evidence contract is modality-blind once text has landed (see "Evidence:
+two-stage, and what it cannot verify" in the architecture record, which ships in
+the repo at docs/architecture/field-mapper.md rather than beside this package).
 """
 
 from __future__ import annotations

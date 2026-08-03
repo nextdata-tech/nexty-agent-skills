@@ -1388,7 +1388,7 @@ Phase D is the policy-boundary gate and has never checked grants, so the module'
 one stated enforcement mechanism did not exist. That sentence is now true.
 
 Evidence is `evals/tests/test_grant_gate_phase_g.py` (23 tests over the extracted
-block) plus three in `evals/tests/test_pocket_custom_contract_checker.py` that
+block) plus three in `evals/tests/test_desktop_custom_contract_checker.py` that
 drive the **real** `self_check.py` end to end — the distinction matters, because
 the extracted-block harness stubs `diag`/`finish`/`close_stage` and would hide a
 KeyError from an unregistered code. Those three cover deny-without-grant (exit 1
