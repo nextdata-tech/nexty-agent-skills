@@ -12,7 +12,7 @@ It asserts, over the shipped skill/reference text (no agent, no supervisor):
    `list_data_products` before `resume_data_product` before the
    `build_data_product` fallback.
 2. The stale three-tool / no-list / reopen-by-rebuild framing is gone from the
-   desktop-loop skill and the generate-dp build-record reference.
+   job-loop skill and the generate-dp build-record reference.
 """
 
 from __future__ import annotations

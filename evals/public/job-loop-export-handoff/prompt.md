@@ -1,4 +1,4 @@
-# desktop Loop: build a local product, then export it for a teammate
+# Job loop: build a local product, then export it for a teammate
 
 ## Task for the agent
 

@@ -278,7 +278,7 @@ absolute pass rate; the valid within-provider comparison is still
 `no_skills` vs `current_pack` vs `candidate_pack` on the **same** backend.
 
 **Tool restriction is also provider-shaped.** Scenarios that deliberately narrow
-the agent's tool surface (desktop-loop withholds `WebFetch`/`TodoWrite` to measure
+the agent's tool surface (job-loop withholds `WebFetch`/`TodoWrite` to measure
 behaviour without a web escape hatch) pass an `allowed_tools` list. Claude gates
 per-tool and honours it exactly; Codex gates with a sandbox policy and ignores
 the list, so it cannot reproduce the same restriction. A tool-restricted scenario

@@ -1885,7 +1885,7 @@ if _spec_tree is not None:
         # told only "found 2" deletes the wrong one.
         if any(isinstance(v, ast.AsyncFunctionDef) for v in verifiers):
             cerr("closure.contract_verifier_malformed",
-                 f"{vpath}: desktop custom verifier must be synchronous; the "
+                 f"{vpath}: Desktop custom verifier must be synchronous; the "
                  f"runtime does not await async verifier functions, so an async "
                  f"verifier never runs and the contract silently passes.",
                  vpath, {"contract": cname})
@@ -1990,7 +1990,7 @@ if _spec_tree is not None:
         shown = ref if ref is not None else (
             ast.unparse(arg) if arg is not None else "<none>")
         cerr("closure.input_service_mismatch",
-             f"spec.py: desktop source-aligned inputs currently require "
+             f"spec.py: Desktop source-aligned inputs currently require "
              f".source(_csv) bound exactly to {CSV_SERVICE}; labeled CSV "
              f"services are transform-only on this runtime. Got {shown!r}.",
              "spec.py", {"found": shown})

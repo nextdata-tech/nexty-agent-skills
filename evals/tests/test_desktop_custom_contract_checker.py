@@ -29,7 +29,7 @@ finally:
     sys.path.remove(str(RUNNER.parent))
 
 ASYNC_VERIFIER_ERROR = (
-    "desktop custom verifier must be synchronous; the runtime does not await "
+    "Desktop custom verifier must be synchronous; the runtime does not await "
     "async verifier functions"
 )
 

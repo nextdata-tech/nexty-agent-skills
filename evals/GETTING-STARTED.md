@@ -275,7 +275,7 @@ Fixture format and the cross-DP mesh model: [`evals/mcp/README.md`](mcp/README.m
 
 ---
 
-## Tier 3 — desktop-loop (2 scenarios)
+## Tier 3 — job-loop (2 scenarios)
 
 Needs a live desktop supervisor that CI cannot provision.
 
@@ -316,7 +316,7 @@ Set by you:
 | `EVAL_MCP_CAN_SEE_PII=1` | 2 | bypass the governed PII mask — debugging the executor only |
 | `EVAL_DESKTOP_SUPERVISOR_DIR` | 3 | desktop supervisor location |
 | `EVAL_DESKTOP_PYTHON` | 3 | interpreter for the supervisor |
-| `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by desktop-loop fixtures |
+| `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by job-loop fixtures |
 | `NXD_EVAL_JUDGE_RETEST=1` | 1 | opt-in judge test-retest pass |
 | `NXD_CA_BUNDLE` | 1/2 | per-cluster TLS trust store; unset = system store |
 | `NXD_SKILL_PYTHON` | — | interpreter for skill-invoked subprocesses |

@@ -290,7 +290,7 @@ open tracked issue or a documented note in the eval ledger:
   `resume_data_product` before `build_data_product`), but the full playbook and
   the Omission Test are still ungraded by any live scenario. Tracked in
   **[#103](https://github.com/nextdata-tech/nexty-agent-skills/issues/103)**,
-  E5 ("desktop-loop invariants with no scenario at all") — the reattach path is
+  E5 ("job-loop invariants with no scenario at all") — the reattach path is
   "the one a real user hits every second session, since the bearer is
   per-session and never persisted"; E4 separately flags the Omission Test as
   mechanically decidable (run the ruling-bearing measure with no filters,

@@ -1,4 +1,4 @@
-# desktop Loop: serve, query, and refine a local invoice product
+# Job loop: serve, query, and refine a local invoice product
 
 ## Task for the agent
 

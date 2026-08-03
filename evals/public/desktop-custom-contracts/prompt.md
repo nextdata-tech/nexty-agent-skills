@@ -1,4 +1,4 @@
-# desktop custom contracts
+# Desktop custom contracts
 
 Build a desktop closure from the supplied `orders.csv` and `models.py`. The
 user explicitly guarantees: (1) every input currency is EUR or USD; (2) after

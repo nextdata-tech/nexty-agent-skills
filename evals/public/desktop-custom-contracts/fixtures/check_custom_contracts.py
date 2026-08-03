@@ -278,7 +278,7 @@ def check(root: Path):
         inert = not verifier or stub_body or "FAILED" not in verifier_source or "PASS" not in verifier_source or not conditional_failed
         if registered != 1 or not has_main_guard(t) or inert: errors.append(f"bad verifier {rel}")
         if any(isinstance(f, ast.AsyncFunctionDef) for f in verifiers):
-            errors.append("desktop custom verifier must be synchronous; the runtime does not await async verifier functions")
+            errors.append("Desktop custom verifier must be synchronous; the runtime does not await async verifier functions")
         if SECRET_LITERAL.search(source): errors.append(f"secret-like assignment in {rel}")
     for p in (specs[0].parent / "contracts").rglob("*.py") if (specs[0].parent / "contracts").exists() else []:
         if str(p.relative_to(specs[0].parent)) not in scripts: errors.append(f"decorative script {p}")

@@ -1212,6 +1212,26 @@ Recorded rather than quietly amended, because it is the same failure §3 describ
 second one in three entries: **a ledger claim is only worth what re-verifying it after the
 commit costs.** Both fixes are now in the tree and pinned by tests below.
 
+### 6. Third-review cleanups: a prefix that names nothing, and a diagnostic string
+
+`desktop-loop` appeared in eight docs and comments naming a scenario prefix that does not
+exist — the scenarios are `job-loop-*`. Harmless to the runner, which never reads those
+strings, but it points a reader following `GETTING-STARTED.md` at a tier that cannot be
+selected. Corrected to `job-loop`.
+
+Sentence-initial lowercase `desktop` in four agent-facing and user-facing titles (scenario
+`prompt.md` headings, the demo RUNBOOK) — the prose form of the `desktopServe` defect §5
+records, which the new class-name test cannot reach.
+
+**Two of those title fixes broke tests, which is the useful part.** `Desktop custom verifier
+must be synchronous` and `Desktop source-aligned inputs currently require` are *diagnostic
+strings* asserted verbatim by `test_desktop_custom_contract_checker.py` and emitted from
+four places: `self-check.md`'s fence, the `scripts/self_check.py` regenerated from it, and
+the scenario's own `check_custom_contracts.py`. Capitalizing the fence alone desynced them.
+All four now agree. Unlike every other item in §5 and §6, this contract *did* have a test,
+and it failed immediately — the contrast with the filename and env-var contracts, which had
+none and stayed broken across review rounds, is the entry's whole argument in miniature.
+
 **The lesson is mechanical, not incidental.** A rename sweep is text-substitution over
 file *contents*; every contract whose other half is a *filename*, a directory name, an
 environment variable read by a human following setup docs, or a path on a user's disk is
@@ -1237,7 +1257,14 @@ would have caught the omission the reviewer found rather than restating it.
 - `./build-skills.sh` packages all 17 `ok`, each under the 200-entry cap.
 - `python3 -m pytest evals/tests` — **555 passed** (rebased onto v0.32.1, plus the 9 marker
   tests and 4 env-var/naming tests).
-- Zero occurrences of "pocket" outside `evals/benchmarks/`, verified case-insensitively.
+- Zero occurrences of "pocket" in any shipped surface — `src/`, `scripts/`, `docs/`,
+  `examples/`, `README.md`, the manifests and `evals/run.py`. Two remain **by design**,
+  both outside those surfaces: `test_runner_opt_in_markers_resolve.py` and
+  `test_env_var_names_match_docs.py` name the old spellings in their docstrings in order
+  to forbid them, and the latter asserts on the stale string directly. Stating the bound
+  rather than "zero occurrences" because the unqualified version was false when written —
+  the third time in this entry's lineage that a completeness claim outran its check (§3,
+  §5, here).
 - Version surfaces agree at 0.33.0 across `plugin.json`, `marketplace.json` and all 17
   `SKILL.md`. Minor again: `nxd-pocket-loop` was a storage key, and `JOB_HELPER_DIR` /
   `…/nxd-jobs/` change a handoff variable and an on-disk layout.

@@ -419,7 +419,7 @@ class ClaudeBackend:
             # in and confound the no_skills baseline.
             "--setting-sources", "project",
             # Scenarios that measure behaviour under a restricted tool surface
-            # (e.g. desktop-loop, which withholds WebFetch) pass their own list.
+            # (e.g. job-loop, which withholds WebFetch) pass their own list.
             "--allowedTools", allowed_tools or CLAUDE_AGENT_ALLOWED_TOOLS,
             "--add-dir", str(ws),
         ]

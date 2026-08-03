@@ -1,4 +1,4 @@
-# desktop-loop live test — Claude Desktop / Cowork
+# job-loop live test — Claude Desktop / Cowork
 
 Fixed, reproducible drive of the `nxd-run-job-loop` skill against a small local
 CSV export. The point of this run is NOT to test the runtime (the acceptance

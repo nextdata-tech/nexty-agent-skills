@@ -92,7 +92,7 @@ does not" boundary erodes at the first new error type.
 
 ### Public surface
 
-Layer 2 (generated code, skills, desktop-loop closures) may import **only** these:
+Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 
 | Symbol | Module | Purpose |
 |---|---|---|
