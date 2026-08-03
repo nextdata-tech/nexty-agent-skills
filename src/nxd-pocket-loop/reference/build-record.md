@@ -98,6 +98,7 @@ Domains:
 |---|---|
 | `spec.` | the IR alone, from `validate_dp_spec.py` |
 | `struct.` | Phase A structural checks against the pinned DSL |
+| `reach.` | Phase E — the transform's reach to models and the network, decided before it runs |
 | `runtime.` | user code that executed and misbehaved |
 | `closure.` / `policy.` | closure layout, the snapshot and lock, the policy boundary |
 | `semantic.` | the distribution read-back and wrong-answer tells |
@@ -570,7 +571,7 @@ the classifier.
 | stage | what runs | offline? | what a failure means |
 |---|---|---|---|
 | `s0_spec` | `validate_dp_spec.py` — the IR alone | yes | blocker, or a gap the agent can fill |
-| `s1_structure` | self-check Phase A — AST vs the pinned DSL, nothing executed | yes | malformed code; self-heal |
+| `s1_structure` | self-check Phases A + E — AST vs the pinned DSL, then the reach gate; nothing executed | yes | malformed code, or a transform reaching a model / undeclared network; self-heal |
 | `s2_transform` | self-check Phase B — the transform executes for real, scratch DuckDB, no kernel, no network | yes | **user-code runtime error, unambiguously the code** |
 | `s3_closure` | self-check Phases C + D | yes | structural / governance; self-heal |
 | `s4_pin` | the supervisor pins and compiles the closure | no | **a code fault Phase A cannot see** |

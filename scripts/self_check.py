@@ -74,6 +74,13 @@ _codes("error", "agent",
 _codes("info", "agent", "semantic.distribution")
 _codes("warning", "agent", "semantic.uniform_column", "semantic.absent_vocabulary")
 _codes("info", "agent", "meta.stage_not_reached")
+# Phase E, the reach gate. Severities and owners match dp_diagnostics.py and
+# dp-spec-authoritative.md; a code that reports here but is absent from this
+# table raises KeyError inside diag() and takes the whole self-check with it.
+_codes("error", "agent",
+       "reach.model_sdk_import", "reach.undeclared_transport",
+       "reach.connector_shape_mismatch")
+_codes("warning", "agent", "reach.connector_undeclared")
 
 JSON_MODE = "--json" in sys.argv
 RECORD_PATH = None
@@ -629,11 +636,27 @@ if physical and promised != physical:
         f"naming invariant: promised names {sorted(promised)} != "
         f"PHYSICAL_MODELS {sorted(physical)}", "transform/main.py")
 if "BASE_MODELS" in consts:
-    dirs = {d.name for d in Path("data").iterdir() if d.is_dir()}
-    if set(consts["BASE_MODELS"]) != dirs:
-        bad("struct.base_models_vs_data_dirs",
-            f"BASE_MODELS {sorted(consts['BASE_MODELS'])} != data/ directories "
-            f"{sorted(dirs)}", "transform/main.py")
+    # data/ is NOT universal. A csv-source or file-source closure exports its
+    # inputs to data/ and the BASE_MODELS-vs-directories comparison is the
+    # invariant. An api-source or db-source closure lands nothing there: the
+    # connector reads from the network at transform time and data/ never exists.
+    # An unguarded iterdir() raised FileNotFoundError here, which killed the run
+    # inside Phase A and meant Phase E — the gate whose entire job is
+    # discriminating those two connector families — never executed on the ones it
+    # exists for.
+    #
+    # Deliberately NOT a finding when data/ is absent, even for a csv-source
+    # closure: BASE_MODELS is what the transform promises to land, and a
+    # csv-source closure that genuinely has no data/ already fails Phase B, which
+    # executes and reads it. Adding a Phase A finding here would only move the
+    # same failure earlier while risking a false positive on any connector shape
+    # not enumerated above.
+    if Path("data").is_dir():
+        dirs = {d.name for d in Path("data").iterdir() if d.is_dir()}
+        if set(consts["BASE_MODELS"]) != dirs:
+            bad("struct.base_models_vs_data_dirs",
+                f"BASE_MODELS {sorted(consts['BASE_MODELS'])} != data/ "
+                f"directories {sorted(dirs)}", "transform/main.py")
 
 for u, at in zip(unverified, unverified_at):
     say(f"unverified: {u}")
@@ -650,6 +673,355 @@ close_stage("s1_structure", "passed",
 say(f"phase A ok — {len(base_names)} semantic_model, "
     f"{len(modelled - base_names)} semantic_view, "
     f"{len(unverified)} unverified entries")
+
+# ---------------------------------------------------------------- Phase E ---
+# Reach gate. RUNS BEFORE PHASE B, and that placement is the whole point: Phase B
+# imports transform.main and calls ingest(). A scan that sits after it reports
+# "denied" once the transform has already opened the socket, already called the
+# model, already spent the money. The decision must precede the import, so this
+# block sits above Phase B and exits before sys.path.insert(0, ".").
+#
+# What it enforces: the transform never calls a model, and reaches the network
+# only through the connector it declares. That invariant used to be prose only,
+# on the belief that the desktop venv was closed. It is not — requests, httpx,
+# httpcore and urllib3 all arrive transitively via dlt and mcp, and urllib and
+# socket are stdlib. A closure can call a model today; nothing structural stops
+# it. This is the structure.
+#
+# Static, import-level. transform/main.py for both families below, plus a
+# model-SDK-only scan of contracts/**/*.py. Two families of finding:
+#   (a) CONNECTOR-SHAPE MISMATCH — an import contradicting the connector type
+#       spec.py declares. A closure that declares csv-source and imports
+#       dlt.sources.rest_api reads its input from somewhere its own declaration
+#       does not name.
+#   (b) IMPORT REACH — a denied root: a model-provider SDK, or a raw transport.
+# Both are subject to the same connector exception: the transport a declared
+# api-source legitimately needs is not a finding on that closure.
+# Findings carry their code, like Phase D's: the message is for the human in the
+# scrollback, the code is what the build record and any consumer key on.
+eerrors = []
+
+def eerr(code, msg, at="transform/main.py"):
+    eerrors.append((code, msg, at))
+
+# The declared connector type comes from spec.py's service references, read from
+# the AST — every ast.Constant string node, and nothing else. NOT a regex over
+# the source text: a regex counts a service path mentioned inside a `#` comment
+# or a docstring, so a spec.py whose only occurrence of api-source is
+#
+#     # I could have used "/infra-profile/desktop-local#/services/api-source"
+#
+# would declare api-source and collect the transport waiver below from a line
+# Python never evaluates. The waiver is the permissive branch of this gate, so
+# granting it from a comment is granting it to anyone who can type one.
+#
+# Reading Constant nodes also makes quote style irrelevant — '...' and "..." are
+# the same node — which the regex got wrong in the other direction by only ever
+# matching double quotes.
+#
+# Labeled instances per reference/multi-source.md ("db-source-orders") are
+# matched by prefix, so a multi-source closure declares each of its types.
+CONNECTOR_KINDS = ("csv-source", "file-source", "db-source", "api-source")
+# Both documented spellings: the preferred relative path and the absolute
+# https://<host>/infra-profile/... form the platform also accepts.
+SERVICE_REF = re.compile(
+    r"^(?:https?://[^/]+)?/infra-profile/[^/]+#/services/(?P<svc>[A-Za-z0-9_-]+)$")
+
+def declared_connectors(src):
+    """Connector kinds spec.py actually declares, from string LITERALS only.
+
+    An unparseable spec.py declares nothing and warns — see below. It is not this
+    gate's job to report a syntax error; Phase A owns that finding, and it has
+    already run and exited by the time control reaches here.
+    """
+    try:
+        tree = ast.parse(src, "spec.py")
+    except SyntaxError:
+        return set(), False
+    kinds, saw_ref = set(), False
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        m = SERVICE_REF.match(node.value.strip())
+        if not m:
+            continue
+        saw_ref = True
+        svc = m.group("svc")
+        for kind in CONNECTOR_KINDS:
+            if svc == kind or svc.startswith(kind + "-"):
+                kinds.add(kind)
+    return kinds, saw_ref
+
+declared_sources, saw_service_ref = declared_connectors(spec_src)
+
+# A closure whose spec.py yields NO parseable service reference at all is a
+# different situation from one that declares a non-network service: the first is
+# "this gate could not read the declaration", the second is "the declaration says
+# no network". Treating the first as the second denies every transport on the
+# strength of a parse failure, which is a verdict this gate has not earned. Warn
+# and let the closure through the transport branch — the model-SDK denial below
+# is unconditional and still applies, because it is waived by nothing.
+if not saw_service_ref:
+    _m = ("phase E could not read any /infra-profile/.../services/<name> "
+          "reference from spec.py, so the declared connector type is unknown. The "
+          "model-provider SDK denial still applies; the transport check is "
+          "skipped rather than guessed.")
+    say(f"warning: {_m}")
+    diag("s1_structure", "reach.connector_undeclared", _m, path=cpath("spec.py"))
+
+# THE CONNECTOR EXCEPTION. dlt's REST and SQL sources are built on
+# httpx/requests/urllib3 and open sockets by design, and a db-source over a
+# networked engine does the same. A closure that DECLARES a network-shaped
+# source is waived on the transport family — that waiver is what keeps the gate
+# usable, because a rule that fires on every correct api-source closure gets
+# deleted rather than obeyed. Model-provider SDKs are NOT waived by it: no
+# connector type licenses calling a model from a transform.
+# `not saw_service_ref` joins the waiver for the reason above: an unreadable
+# declaration is not evidence of a non-network one.
+network_declared = bool(declared_sources & {"api-source", "db-source"}) \
+    or not saw_service_ref
+
+# (a) Import fingerprints that contradict a declared connector type. Keyed on the
+# two NETWORK-shaped dlt verticals this skill's own reference docs tell the author
+# to use: rest_api for api-source (reference/api-source.md), sql_database for
+# db-source (reference/database-source.md). An import of one while declaring only
+# the other is a shape mismatch: the closure reads from a source its spec does not
+# name.
+#
+# `dlt.sources.filesystem` is deliberately NOT a third entry, and that is a
+# recorded gap rather than an oversight: a filesystem import in an api/db closure
+# reads local files the spec never declared, but it is far more likely to be
+# incidental than a rest_api import is, and firing on it would fire on correct
+# closures. Listed in the doc's "What Phase E cannot see" with the other holes.
+SHAPE = {
+    "dlt.sources.rest_api": ("api-source",
+                             "a REST API source"),
+    "dlt.sources.sql_database": ("db-source",
+                                 "a database source"),
+}
+
+# (b) Denied roots. Model-provider SDKs are denied unconditionally — no connector
+# type licenses calling a model from a transform. Raw transports are denied
+# unless a network-shaped connector is declared.
+#
+# TWO ROOTS ARE DELIBERATELY NOT DENIED, and both are holes rather than
+# non-issues. They are recorded here and in the doc's "What Phase E cannot see"
+# so the next reader inherits the decision instead of re-litigating it:
+#
+#   subprocess / os.popen — `subprocess.run(["curl", ...])` reaches anything, and
+#   os is imported by nearly every transform for os.path, so denying the root
+#   would fire on almost every correct closure while `os.popen` specifically is
+#   an attribute access this import-level check cannot see anyway. Denying
+#   `subprocess` alone would catch the naive spelling and miss `os.popen`,
+#   `os.system`, and `shutil` shelling out — a check that stops one of four
+#   spellings reads as coverage it does not have. Documented gap, not a rule.
+#
+#   mcp — an OPEN TRANSPORT by decision. mcp is in the fixed desktop venv and is
+#   how a closure talks to the supervisor, so denying it would fail closures
+#   doing exactly what the platform intends. But it is a hole and not a small
+#   one: mcp is a general-purpose client library that connects to ANY server it
+#   is pointed at, including a model endpoint, and it is the reason httpx is in
+#   the venv at all. Permitting mcp permits everything mcp can reach.
+#
+# The list is enumerated, so it is not exhaustive and never will be — a provider
+# that ships under a name nobody added here passes. It denies the SDKs an author
+# actually reaches for; it is not a proof of no inference. Say that when
+# reporting a green Phase E.
+MODEL_ROOTS = {
+    # first-party provider SDKs
+    "anthropic", "anthropic_bedrock", "openai", "cohere", "mistralai", "ollama",
+    "groq", "together", "replicate",
+    # google ships the current SDK as `google.genai` and the older one as
+    # `google.generativeai`; `vertexai` is the same models via GCP.
+    "google.generativeai", "google.genai", "vertexai",
+    # aggregators and framework provider-bindings — the same call with a wrapper
+    # in front of it, which is exactly how this denial gets routed around
+    "litellm", "huggingface_hub", "langchain_anthropic", "langchain_openai",
+    "llama_index",
+}
+# Raw transport. Denied only when no network-shaped connector is declared, so a
+# legitimate api-source/db-source closure is unaffected by every entry here.
+#
+# The second group is the one a first pass misses. `requests` and `httpx` are the
+# spellings someone writes when they are not thinking about this gate; the
+# layers UNDER them are what a dlt-shaped closure reaches for without inventing
+# anything. `dlt.sources.helpers.requests` in particular is not an evasion — it
+# is dlt's own re-export, the spelling its docs teach, and it has `.post`. A
+# deny list that stops `import requests` while permitting the library's
+# documented alias for the same object is a list that only catches the naive
+# author, which is not what this gate claims to be.
+#
+# Still enumerated, still not a proof. `anyio`/`asyncio` are here because their
+# open_*_connection primitives are transport by any reading, not because the
+# modules are otherwise suspicious — a closure importing asyncio for unrelated
+# reasons in a csv-source transform is already doing something worth a look.
+TRANSPORT_ROOTS = {
+    # what an author writes directly
+    "httpx", "requests", "aiohttp", "urllib.request", "urllib3",
+    "socket", "http.client",
+    # the layers underneath, reachable without naming any of the above
+    "httpcore", "h11", "anyio", "asyncio",
+    # dlt's own re-exports — the spelling its documentation teaches
+    "dlt.sources.helpers.requests", "dlt.sources.helpers.rest_client",
+}
+
+def imported_roots(src, path):
+    """Every dotted module name transform/main.py imports, statically.
+
+    Import-level only. A helper that wraps a socket behind a local function, a
+    URL handed to pandas.read_json, an `INSTALL httpfs` inside a DuckDB string —
+    none of those are imports and none of them are visible here. See the doc's
+    "What this script does NOT cover".
+
+    Note the ImportFrom expansion: `from google import genai` arrives as
+    module="google", names=["genai"], and neither part alone is a denied root.
+    Emitting "google.genai" as well as "google" is what makes that form reachable
+    by the same root list as `import google.genai`.
+    """
+    out = set()
+    for node in ast.walk(ast.parse(src, path)):
+        if isinstance(node, ast.Import):
+            out |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            out.add(node.module)
+            out |= {f"{node.module}.{a.name}" for a in node.names}
+    return out
+
+def denied_hit(mod, roots):
+    """A dotted module is a hit if it IS a denied root or lives under one.
+
+    Prefix-matched on dot boundaries so `socket` catches `socket.socket` but
+    `socketserver` and `requests_oauthlib` are not collateral.
+    """
+    return next((r for r in roots
+                 if mod == r or mod.startswith(r + ".")), None)
+
+t_imports = imported_roots(transform_src, "transform/main.py")
+
+# Gated on `saw_service_ref` for the same reason the transport family is: when
+# spec.py carried no readable declaration, `declared_sources` is empty, so
+# `needs not in declared_sources` is trivially true and the closure would be
+# denied on the strength of a parse failure — while the message asserted
+# "spec.py declares <no connector service>", the very thing the warning one line
+# earlier says the gate could not determine. A verdict this gate has not earned.
+for mod, (needs, human) in (SHAPE.items() if saw_service_ref else ()):
+    if any(denied_hit(m, {mod}) for m in t_imports) and \
+            needs not in declared_sources:
+        eerr("reach.connector_shape_mismatch",
+            f"transform/main.py imports {mod} — {human} — but spec.py declares "
+            f"{sorted(declared_sources) or 'no connector service'}. The closure "
+            f"reads from a source its own declaration does not name. Either "
+            f"declare the {needs} service in spec.py and infra-profile.yaml "
+            f"(SKILL.md connector-types table), or drop the import.")
+
+# Report once per DENIED ROOT, not once per importing name: `from openai import
+# OpenAI` yields both "openai" and "openai.OpenAI" and both hit the same root, so
+# keying the message on the root collapses them to one line. Purely
+# presentational — one hit and two hits are the same verdict.
+for root in sorted(r for r in MODEL_ROOTS
+                   if any(denied_hit(m, {r}) for m in t_imports)):
+    eerr("reach.model_sdk_import",
+        f"transform/main.py imports {root!r} — a model-provider SDK. A "
+        f"transform lands data; it never calls a model. Inference belongs in "
+        f"the session that AUTHORS the closure, and its output lands as data "
+        f"(reference/derivation-plan.md) so a rerun of the transform "
+        f"reproduces the same rows instead of re-deciding them.")
+if not network_declared:
+    for root in sorted(r for r in TRANSPORT_ROOTS
+                       if any(denied_hit(m, {r}) for m in t_imports)):
+        eerr("reach.undeclared_transport",
+            f"transform/main.py imports {root!r} — raw network transport — and "
+            + (f"spec.py declares {sorted(declared_sources)}, none of which "
+               f"reaches the network. " if declared_sources else
+               "spec.py declares no connector service at all. ")
+            + f"A CSV or file closure reads what the "
+            f"connector already exported to data/. If this closure really "
+            f"needs to fetch, declare an api-source and go through "
+            f"dlt.sources.rest_api (reference/api-source.md).")
+
+# Contract verifiers are the SECOND class of executed Python in the closure, and
+# a verifier that imports a model SDK and calls it is the identical risk this
+# gate exists to deny in the transform. Walked from the filesystem with rglob
+# rather than from spec.py's wiring, matching the unreferenced-file walk later in
+# this script: an unwired-but-present verifier still ships, and the nesting under
+# contracts/expectations/ and contracts/promises/ is covered by the same walk.
+#
+# ONLY the model-SDK denial is applied here, and unconditionally. TRANSPORT_ROOTS
+# is deliberately left out: `network_declared` is computed from spec.py's
+# connector declaration, which is a statement about how the TRANSFORM gets its
+# data. A verifier runs after the data has landed and reads it from the closure's
+# own tables, so it has no claim on that waiver — but denying transport in
+# verifiers outright is a rule this gate has not yet earned evidence for, so the
+# transport family is a recorded gap for verifiers rather than a half-applied
+# rule (see the doc's "What Phase E cannot see").
+#
+# Nothing here executes a verifier, so unlike the transform scan the placement is
+# not ordering-critical — self_check never imports contracts/, only the Pocket
+# runtime does. Phase E is the right home because it keeps the reach domain in
+# one place, not because it runs before Phase B.
+for vpath in sorted(p for p in Path("contracts").rglob("*.py")
+                    if p.name != "__init__.py"):
+    try:
+        v_imports = imported_roots(vpath.read_text(encoding="utf-8"), str(vpath))
+    except (OSError, SyntaxError):
+        # An unreadable or unparseable verifier is Phase C's finding to report,
+        # not this gate's. Silence here means "could not scan", which the doc
+        # records; inventing a reach verdict from a parse failure would be a
+        # verdict this gate has not earned.
+        continue
+    for root in sorted(r for r in MODEL_ROOTS
+                       if any(denied_hit(m, {r}) for m in v_imports)):
+        eerr("reach.model_sdk_import",
+            f"{vpath} imports {root!r} — a model-provider SDK. A contract "
+            f"verifier decides pass/fail from data that has already landed; it "
+            f"never calls a model. A verifier that asks a model is not a "
+            f"check — it re-decides the answer on every run, so the same rows "
+            f"can pass today and fail tomorrow.", str(vpath))
+
+if eerrors:
+    say("\nPHASE E FAILED — reach gate (the transform does not call a model):")
+    seen = set()
+    for ecode, e, eat in eerrors:
+        if e in seen:
+            continue
+        seen.add(e)
+        say(f"  - {e}")
+        diag("s1_structure", ecode, e, path=cpath(eat))
+    # Phase A already closed s1_structure as `passed`. Re-close it as `failed`:
+    # the stage is a verdict on the closure, not on the phase that happened to
+    # run first, and a record saying s1 passed while carrying reach.* errors
+    # would be a record that contradicts itself.
+    close_stage("s1_structure", "failed", errors=len(seen))
+    finish(1)
+# When spec.py carried no readable service ref, `network_declared` was granted
+# above rather than derived — an unreadable declaration is not evidence of a
+# non-network one. That is the right default, but the success line must not then
+# claim a transport check it never performed: `import requests` in the transform
+# passes silently under it, and a reader who was told "no transport import"
+# would have been told something false.
+_transport_checked = saw_service_ref
+say(f"phase E ok — no denied model-SDK import in transform/main.py"
+    + (f", no undeclared transport there, and its imports are consistent with "
+       f"the declared connector {sorted(declared_sources) or ['(none)']}"
+       if _transport_checked else
+       ". TRANSPORT WAS NOT CHECKED: "
+       "spec.py declared no readable service ref, so the transport family was "
+       "waived rather than tested — this line is silent on whether the "
+       "transform opens a socket")
+    + f"; no model-SDK import in any contracts/**/*.py verifier either. This is "
+    f"an import-level name check over the transform plus the verifiers: no "
+    f"*listed* model-provider SDK — the list is enumerated, not exhaustive"
+    # Gated for the same reason the head is. Left unconditional, this clause
+    # re-asserted "no undeclared transport" inside the very branch that had just
+    # disclaimed the check: an unreadable spec.py plus `import requests` printed
+    # both sentences at once, and the second one was false.
+    + (" — and no undeclared transport from the listed roots in the transform "
+       "(verifiers are NOT scanned for transport)."
+       if _transport_checked else
+       ". The transport family was not evaluated at all.")
+    + f" A wrapped socket, a URL passed "
+    f"to a reader, DuckDB httpfs, subprocess, and the mcp client are all "
+    f"invisible or permitted here (see 'What Phase E cannot see').")
 
 # ---------------------------------------------------------------- Phase B ---
 # Dry-run of transform/main.py against a scratch DuckDB. This one EXECUTES.
@@ -1471,6 +1843,15 @@ say("phase C ok — approved spec snapshot + lock present, no closure-escaping "
 # Ground truth is the closure's own landed data, so this needs no fixture.
 # Phase D shares stage s3_closure with Phase C: both are offline, both are
 # agent-owned, both self-heal. The code and the path tell them apart.
+# === PHASE-D-BEGIN ===
+# Anchors, not decoration: evals/tests/test_policy_boundary_phase_d.py slices the
+# block out by these two markers. It used to locate the block by taking the
+# longest fenced python block and cutting between the phase's error-list
+# assignment and the branch that reports it — a content heuristic that holds only
+# while exactly one phase has that shape. Phase E now has it too, so the
+# heuristic is one edit away from selecting the wrong region, and a test that
+# extracts the wrong region does not fail: it passes, having stopped testing
+# Phase D. Move these anchors with the block.
 derrors = []
 dcodes = []
 def derr(code, msg, at=""):
@@ -1585,6 +1966,8 @@ for pcsv in sorted(Path("data").rglob("*.csv")):
                     f"transform must READ it from the row; a copy diverges "
                     f"from the row the user edits.", f"{pcsv}:{col}")
 
+# === PHASE-D-END ===
+
 if derrors:
     say("\nPHASE D FAILED — policy boundary (rulings are data, not code):")
     seen = set()
@@ -1606,8 +1989,11 @@ say("phase D ok — rulings land as editable data with status + provenance, "
 # and every scenario checker key on this line byte-for-byte. Accuracy of the
 # label loses to stability of the contract; this comment is what keeps the
 # trade visible instead of inviting a helpful rename that breaks every checker.
-say("SELF-CHECK OK — Phases A (structural), B (transform dry-run), "
-    "C (context-completeness), D (policy boundary) all passed.")
+say("SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), "
+    "B (transform dry-run), C (context-completeness), D (policy boundary) all "
+    "passed. Phase E is import-level over transform/main.py plus a "
+    "model-SDK scan of contracts/**/*.py: it does not make the transform "
+    "offline (see 'What Phase E cannot see').")
 
 # Distribution read-back. NOT a gate — it never fails the run. It prints the
 # value counts of every classification-shaped string column of every derived

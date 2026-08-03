@@ -605,6 +605,44 @@ _register(
     summary="Phase A could not verify a dynamic construct — its declared blind spot",
 )
 
+# --- domain `reach.` — stage s1_structure (Phase E) --------------------------
+# The reach gate: a transform lands data and never calls a model. Filed under
+# s1_structure because it is static, offline and must DECIDE before Phase B
+# imports the transform — a verdict delivered after the socket is already open
+# is a post-mortem, not a gate.
+#
+# owner: agent on all four. Every one is fixed by editing the closure — drop the
+# import, or declare the service the import implies. None is a question for the
+# user and none is environmental.
+_register_table(
+    "s1_structure",
+    (
+        ("reach.model_sdk_import", "error", "agent", "none", False,
+         "transform/main.py or a contracts/ verifier imports a model-provider SDK — inference belongs in "
+         "the authoring session and lands as data"),
+        ("reach.undeclared_transport", "error", "agent", "none", False,
+         "transform/main.py imports raw network transport but spec.py declares "
+         "no network-shaped connector"),
+        ("reach.connector_shape_mismatch", "error", "agent", "none", False,
+         "an import contradicts the connector type spec.py declares — the "
+         "closure reads from a source its own declaration does not name"),
+    ),
+)
+
+# Not an error: an unreadable connector declaration is "this gate could not read
+# the declaration", which is a different claim from "the declaration says no
+# network". Denying every transport on the strength of a parse failure is a
+# verdict the gate has not earned, so it warns, and the SDK denial — waived by
+# nothing — still applies.
+_register(
+    "reach.connector_undeclared",
+    stage="s1_structure",
+    severity="warning",
+    owner="agent",
+    summary="Phase E could not read a service reference from spec.py, so the "
+            "transport check was skipped rather than guessed",
+)
+
 # --- domain `runtime.` — stages s2_transform, s6_run -------------------------
 _register_table(
     "s2_transform",

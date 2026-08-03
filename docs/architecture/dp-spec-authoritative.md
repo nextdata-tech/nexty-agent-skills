@@ -90,7 +90,7 @@ Nine values, ordered. The `s<N>_` prefix makes the ordinal recoverable by
 | `stage` | What runs | Offline? | Notes |
 |---|---|---|---|
 | `s0_spec` | `validate_dp_spec.py` — the IR alone | yes | blocker or agent-fillable gap |
-| `s1_structure` | `self_check.py` Phase A — ast vs pinned DSL, nothing executed | yes | malformed code, self-heal |
+| `s1_structure` | `self_check.py` Phases A + E — ast vs pinned DSL, then the reach gate; nothing executed | yes | malformed code, or a transform reaching a model / undeclared network; self-heal |
 | `s2_transform` | `self_check.py` Phase B — transform executes for real, scratch DuckDB, no kernel, no network | yes | **user-code runtime error, unambiguously the code** |
 | `s3_closure` | `self_check.py` Phases C + D | yes | structural / governance, self-heal |
 | `s4_pin` | supervisor pins & compiles the closure to YAML (`build_data_product`) | no | **code fault Phase A cannot see** |
@@ -357,6 +357,50 @@ deleting a check *requires* deleting its code. Neither can happen silently.
 All `severity: error`, `owner: agent`, `control: none` — except
 `struct.unverified` (`severity: info`), which carries Phase A's own declared
 blind spot, one diagnostic per `unverified:` line.
+
+#### Domain `reach.` — stage `s1_structure` (Phase E)
+
+`reach.model_sdk_import`, `reach.undeclared_transport`,
+`reach.connector_shape_mismatch` — all `severity: error`, `owner: agent`,
+`control: none` — plus `reach.connector_undeclared` (`severity: warning`).
+
+The invariant is *the transform never calls a model, and reaches the network
+only through the connector it declares*. It was prose-only until this gate, on
+the belief that the desktop venv was closed. **It is not**: `requests`, `httpx`,
+`httpcore` and `urllib3` all arrive transitively via `dlt` and `mcp`, and
+`urllib`/`socket` are stdlib. A closure can call a model in the shipped venv
+today; Phase E is the first mechanical thing that says otherwise.
+
+Two properties make it a gate rather than a report:
+
+1. **It shares `s1_structure` with Phase A but runs after it and before Phase
+   B.** Phase B imports `transform.main` and calls `ingest(...)`. A reach verdict
+   delivered after that point is a post-mortem — the socket is open, the model
+   is called, the money is spent — so the `finish(1)` must precede the import.
+   `evals/tests/test_reach_gate_phase_e.py` asserts the byte offsets, because
+   "the block reads better here" is exactly how this guarantee would be lost.
+2. **A failing Phase E re-closes `s1_structure` as `failed`,** even though Phase
+   A already closed it `passed`. The stage is a verdict on the closure, not on
+   whichever phase happened to run first; a record claiming `s1_structure`
+   passed while carrying `reach.*` errors would contradict itself.
+
+`reach.connector_undeclared` is a warning and not an error on purpose. A spec.py
+yielding no parseable service reference means *this gate could not read the
+declaration*, which is a different claim from *the declaration says no network*.
+Denying every transport on the strength of a parse failure is a verdict the gate
+has not earned, so it warns and skips the transport branch — while the
+model-SDK denial, which no connector type waives, still applies.
+
+**What it is not.** An import-level name check — `transform/main.py`, plus a
+model-SDK-only scan of `contracts/**/*.py` — with an enumerated
+list. A wrapped socket, a URL handed to `pandas.read_json`, DuckDB `httpfs`,
+`subprocess`, dynamic import, and the permitted `mcp` client are all invisible to
+it, and the connector declaration it keys on is agent-authored — so it catches
+the closure that DRIFTED, not the one that lied. `SELF-CHECK OK` says no
+*listed* SDK and no undeclared transport from the *listed* roots; it does not say
+the transform is offline. `reference/self-check.md` § "What Phase E cannot see"
+carries the full list, and the success line itself repeats the caveat, because
+the success line is what gets read and relayed.
 
 #### Domain `runtime.` — stages `s2_transform`, `s6_run`
 
@@ -1808,10 +1852,11 @@ every scenario checker key on them:
 
 ```
 phase A ok — …
+phase E ok — no denied model-SDK import in transform/main.py, …
 phase B ok — …
 phase C ok — approved spec snapshot + lock present, no closure-escaping contract references
 phase D ok — …
-SELF-CHECK OK — Phases A (structural), B (transform dry-run), C (context-completeness), D (policy boundary) all passed.
+SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), B (transform dry-run), C (context-completeness), D (policy boundary) all passed.
 ```
 
 **Note the deliberate lie in that last literal.** Phase C verifies the byte-copied

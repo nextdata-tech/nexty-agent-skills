@@ -29,12 +29,39 @@ SELF_CHECK_MD = (
 )
 
 
+PHASE_D_BEGIN = "# === PHASE-D-BEGIN ==="
+PHASE_D_END = "# === PHASE-D-END ==="
+
+
+def _script_body() -> str:
+    """The single ``# self_check.py`` fence — the source the agent runs.
+
+    Selected by its ``# self_check.py`` header, not by being the longest fence.
+    Length is not an identity: the doc is free to grow a longer example block,
+    and picking by size would silently start testing it.
+    """
+    blocks = re.findall(r"```python\n(.*?)```", SELF_CHECK_MD.read_text(), re.S)
+    bodies = [b for b in blocks if b.lstrip().startswith("# self_check.py")]
+    assert len(bodies) == 1, f"expected one self_check.py fence, found {len(bodies)}"
+    return bodies[0]
+
+
 def _phase_d_source() -> str:
-    """The shipped script's Phase D block, extracted from the markdown."""
-    body = max(
-        re.findall(r"```python\n(.*?)```", SELF_CHECK_MD.read_text(), re.S), key=len
-    )
-    return body[body.index("derrors = []"):body.index("if derrors:")]
+    """The shipped script's Phase D block, sliced by its anchor comments.
+
+    Anchors rather than content-matching, because the content moved out from
+    under the old heuristic. It cut between the first ``derrors = []`` and the
+    first ``if derrors:`` inside the longest fence — which silently selects the
+    wrong region as soon as either token appears earlier (a comment mentioning
+    it) or a sibling phase grows the same shape. Phase E did exactly that: it
+    added a second ``eerrors``/``if eerrors:`` pair. A mis-sliced block does not
+    fail loudly; it keeps passing while testing nothing.
+    """
+    body = _script_body()
+    start = body.index(PHASE_D_BEGIN) + len(PHASE_D_BEGIN)
+    end = body.index(PHASE_D_END)
+    assert start < end, "PHASE-D-END must follow PHASE-D-BEGIN"
+    return body[start:end]
 
 
 def _run_phase_d(tmp_path: Path, *, base_models, physical_models,
@@ -75,11 +102,50 @@ def _run_phase_d(tmp_path: Path, *, base_models, physical_models,
 CLEAN_TRANSFORM = "BASE_MODELS = ('a',)\nDERIVED_MODELS = ()\n"
 
 
+def test_phase_d_anchors_are_present():
+    """Both anchors must exist, exactly once each, in the right order.
+
+    This is the test that makes the anchors real. Without it, deleting a marker
+    while refactoring turns every other test in this file into a collection
+    error whose cause is one level removed from the edit that caused it — and
+    deleting BOTH would send a future reader back to a length/content heuristic
+    because "the anchors were not load-bearing anyway".
+    """
+    body = _script_body()
+    for anchor in (PHASE_D_BEGIN, PHASE_D_END):
+        assert body.count(anchor) == 1, (
+            f"expected exactly one {anchor!r} in the self_check.py fence, found "
+            f"{body.count(anchor)} — evals/tests/test_policy_boundary_phase_d.py "
+            f"slices the Phase D block by these markers"
+        )
+    assert body.index(PHASE_D_BEGIN) < body.index(PHASE_D_END)
+
+
+def test_phase_d_anchors_bracket_the_real_block():
+    """The slice must span the whole gate: its errors list through its last check.
+
+    Pins the anchors to the block's true extent rather than to their own
+    existence. If PHASE-D-BEGIN drifts below ``derrors = []`` the harness stops
+    defining the list; if PHASE-D-END drifts above the CSV-duplication scan, that
+    half of the gate goes untested while every test here still passes.
+    """
+    src = _phase_d_source()
+    assert "derrors = []" in src, "the block must start at or above `derrors = []`"
+    assert "if derrors:" not in src, (
+        "the slice must stop BEFORE `if derrors:` — the harness prints the "
+        "findings itself and the real block's sys.exit would kill it"
+    )
+    assert "nxd_decisions" in src, "the ledger half of Phase D is outside the slice"
+    assert "is landed AND" in src, (
+        "the landed-vs-hardcoded half of Phase D is outside the slice"
+    )
+
+
 def test_phase_d_source_is_extractable():
     """If the block moves or is renamed, these tests must fail loudly."""
     src = _phase_d_source()
     assert "nxd_decisions" in src and "derrors" in src
-    ast.parse("derrors = []\n" + textwrap.dedent(src))
+    ast.parse(textwrap.dedent(src))
 
 
 def test_ledger_generated_in_transform_fails(tmp_path):

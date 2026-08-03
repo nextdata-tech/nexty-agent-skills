@@ -861,3 +861,74 @@ Recorded per AGENTS.md's "changes a skill's behavior" rule, read strictly. The
 v0.30.0 entry above makes the same argument for the contract work itself —
 coverage resting on the test suite rather than on an eval arm — and this is the
 narrower case of it.
+
+## 2026-08-03 — nxd-generate-dp: reach gate (Phase E) + connector-scoped secrets key (plugin v0.31.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.30.1 | no_skills | authenticated-api-source-build | FAIL | 13/15 | 52 | 51 | 52888 | 3.74 | sonnet |
+| before-v0.30.1 | current_pack | authenticated-api-source-build | PASS | 15/15 | 89 | 86 | 75074 | 6.17 | sonnet |
+| before-v0.30.1 | no_review_control | authenticated-api-source-build | FAIL | 7/15 | 86 | 83 | 45579 | 4.69 | sonnet |
+| before-v0.30.1 | candidate_pack | authenticated-api-source-build | FAIL | 13/15 | 95 | 93 | 71571 | 7.86 | sonnet |
+| after-v0.31.0 | no_skills | authenticated-api-source-build | FAIL | 14/15 | 5 | 115 | 2580 | 6.64 | sonnet |
+| after-v0.31.0 | current_pack | authenticated-api-source-build | FAIL | 14/15 | 96 | 104 | 74654 | 7.72 | sonnet |
+| after-v0.31.0 | no_review_control | authenticated-api-source-build | FAIL | 14/15 | 81 | 79 | 63561 | 6.72 | sonnet |
+| after-v0.31.0 | candidate_pack | authenticated-api-source-build | PASS | 15/15 | 79 | 76 | 56522 | 5.22 | sonnet |
+
+Notes: **These arms do not support a quality claim, and none is made.** The
+deltas are single-run agent variance, not signal: `current_pack` goes 15/15 →
+14/15 (DOWN on the change) while `candidate_pack` goes 13/15 → 15/15 (up), and
+`no_review_control`'s 7/15 before-arm is one run that built a working
+rest_api_resources closure and landed it under `$HOME` instead of the graded
+workspace, so `closure:transform-exists` failed on the graded path. Each arm is n=1 and the arms fail on different
+checks in each run. Read the table as "no measured regression", not as evidence
+the change helps.
+
+**The after/`no_skills` efficiency columns are broken telemetry — do not read
+them.** 5 turns against 115 tool calls, and 2,580 output tokens in 34.7s, are
+mutually impossible; the capture failed, not the run. Scanning the column shows
+that arm going 52,888 → 2,580 tokens and 52 → 5 turns, a phantom 95% efficiency
+win that did not happen. Its 14/15 check score is real; its turn, tool-call and
+token figures are not.
+
+The specific bug the change fixes did NOT fire in either run: `KeyError:
+'csv_source'` appears in neither report. It fired in an earlier run of this
+scenario, which is how it was found — Step 5 of `nxd-generate-dp/SKILL.md` told
+every closure the connector config arrives in `secrets["csv_source"]` regardless
+of the connector it declares, so an api-source closure following the main body
+raised at transform time, after the credential had already been resolved.
+`reference/api-source.md` taught the right key all along; the SKILL body
+contradicted it, and the body is read first. With n=1 per arm and an agent free
+to consult either surface, no arm isolates it.
+
+The before arm runs THIS branch's scenario and harness with main's `src/`
+swapped in. A literal before/after is unavailable: `authenticated-api-source-build`
+does not exist on main — this PR adds it.
+
+**The swap covered `src/` only, and that is a disclosed confound.** The
+repo-root `scripts/self_check.py` stayed at branch state, so the before arm
+carried this PR's Phase E. The before `candidate_pack` transcript shows the
+agent finding that file, copying it into its closure and running it — printing
+`phase E ok`. A "before" arm therefore executed the after-state script. The bias
+runs toward the after state and so shrinks any delta rather than inflating one,
+which is why this is recorded rather than rerun; but "the skill pack is the only
+variable" would be false and is not claimed.
+
+**Phase E has no arm here.** Every closure in this scenario passes the gate, so
+nothing in this table speaks to it either way. Its evidence is
+`evals/tests/test_reach_gate_phase_e.py` (53 tests, each verified to fail
+against the pre-change script) and a live run in which the deny path exits 1
+carrying `reach.model_sdk_import` rather than a traceback — not this benchmark.
+
+**`candidate_pack` is "shipped pack plus skills under evaluation."** Its 15/15
+is a pack-composition difference and is not attributable to this change.
+
+**Runs of this scenario before 2026-08-03 are not a progression.** Most of that
+history measured defects in the scenario's own deterministic checker rather than
+agent behaviour: a column whitelist accepting `result_status` while dlt emits
+`result__status` (its `__` path separator); a `find_table` resolving by first
+substring match, so the closure's derived `check_monitor_resolution` was read as
+its `monitors` table; and a child-table guard reading a sibling derived model
+`checks_enriched` as evidence the nested payload was never flattened. Those are
+recorded in the PR description as harness faults and should not be read as skill
+signal.

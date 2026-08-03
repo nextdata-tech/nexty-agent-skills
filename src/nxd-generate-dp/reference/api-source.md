@@ -39,8 +39,38 @@ config: RESTAPIConfig = {
         ...
     ],
 }
-source = rest_api_resources(config)
+resources = {r.name: r for r in rest_api_resources(config)}  # returns a LIST
 ```
+
+### Paginator `type` values — copy these exactly
+
+Omitting the paginator and letting dlt auto-detect is the default advice above,
+and it is usually right. When the API needs an explicit one, the `type` value is
+validated against a fixed table, and **the separator is an underscore**. Guessing
+the hyphenated spelling — `page-number` — is the natural mistake and it fails
+with an error that names neither the field nor the fix:
+
+```
+For `DltResource`: Path `.`: field `resources[0]` expects `callable`
+(function or class instance) but got {...}
+```
+
+That message points at `resources[0]` and says "expects callable", so it reads
+as a problem with how the resource list was built rather than one bad string
+three levels down. Enumerated from `dlt==1.28.2`'s own `PAGINATOR_MAP`:
+
+`auto`, `cursor`, `header_cursor`, `header_link`, `json_link`, `json_response`,
+`offset`, `page_number`, `single_page`
+
+```python
+"paginator": {"type": "page_number", "base_page": 1,
+              "page_param": "page", "total_path": "pages"},
+```
+
+`total_path` is the path to the page COUNT in the response envelope — with
+`{"page": 1, "pages": 4, "data": [...]}` that is `"pages"`. Omit it and dlt
+paginates until a page comes back empty, which is correct but costs one extra
+request per resource.
 
 Re-confirm this shape against the pinned `dlt==1.28.2` changelog before
 relying on it in code — it was verified against current dlt docs, not
@@ -171,6 +201,16 @@ elif auth_type == "oauth2_client_credentials":
         "client_id": api_secrets["auth_client_id"],
         "client_secret": api_secrets["auth_client_secret"],
     }
+elif auth_type is not None:
+    # Do NOT drop this branch, and do not collapse the dispatch to whichever
+    # single scheme today's profile uses. An unhandled auth_type means the
+    # closure cannot authenticate; raising here says so at transform time
+    # instead of sending a wrong-scheme request and reading the 401 as a
+    # credential problem.
+    raise ValueError(
+        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"add a branch above, or fix the infra-profile attribute"
+    )
 
 config: RESTAPIConfig = {
     "client": client_config,
@@ -179,12 +219,22 @@ config: RESTAPIConfig = {
         for model in PHYSICAL_MODELS
     ],
 }
-source = rest_api_resources(config)
+# rest_api_resources returns a LIST of DltResource, not a DltSource. Verified
+# against the pinned dlt==1.28.2:
+#     rest_api_resources(config: RESTAPIConfig) -> List[DltResource]
+# It has no `.resources` mapping, so `source.resources[model]` raises
+# `AttributeError: 'list' object has no attribute 'resources'` — and it raises at
+# RUN time, after the config is assembled and the credential has already been
+# used, so the closure looks correct right up until it lands nothing. Index the
+# list by resource name instead.
+#
+# `rest_api_source` DOES return a DltSource whose `.resources` mapping is real.
+# Pick one and stay with it; the two names differ by one word and not by shape.
+resources = {r.name: r for r in rest_api_resources(config)}
 readers = []
 for model in PHYSICAL_MODELS:
     table_name = duckdb.model_tables[model]
-    resource = source.resources[model]
-    readers.append(resource.with_name(table_name))
+    readers.append(resources[model].with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
 ```
 
@@ -194,6 +244,29 @@ dispatch assembles dlt's structured `auth` dict from the flat secret
 fields, the same way `_build_connection_string` in `database-source.md`
 assembles a connection string from flat `db_source` fields — never pass a
 flat secret value straight through as `auth`.
+
+**Keep the dispatch, and end it with an explicit `else: raise`.** Writing only
+the branch this closure happens to need — `client_config["auth"] = {"type":
+"bearer", ...}` with no `auth_type` read at all — is the natural shortcut, and
+it is wrong for a reason that is invisible on the day it is written: the profile
+still carries `auth_type` as an attribute, so the closure claims to be
+configured by it while ignoring it. Change the profile to `http_basic` and the
+transform keeps sending a bearer header built from a field that is now absent —
+a `KeyError` if you are lucky, and a silent 401 loop against the wrong scheme if
+you are not. The credential is the one input a closure cannot re-derive, so the
+branch that reads it must fail loudly on a value it does not handle:
+
+```python
+else:
+    raise ValueError(
+        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"add a branch above, or fix the infra-profile attribute"
+    )
+```
+
+An `auth_type` the transform does not handle is a closure that cannot
+authenticate. Discovering that as a raise at transform time beats discovering it
+as an HTTP 401 whose body is someone else's error page.
 `_load_api_source_endpoints` is **not** a dlt or stdlib function — the author
 must write it, parsing the `api-source-endpoints` companion file's
 `<model>=<endpoint path>` lines into a dict. A transform that calls it
@@ -201,9 +274,9 @@ without defining it raises `NameError` at runtime.
 
 ## `requirements.txt`
 
-Base pins unchanged. Under current dlt docs, `rest_api_resources` needs no
-additional pin beyond the base `dlt[duckdb]==1.28.2` — reconfirm this holds
-for the pinned `1.28.2` before relying on it. If the chosen `auth_type`
+Base pins unchanged. `rest_api_resources` needs no additional pin beyond the
+base `dlt[duckdb]==1.28.2` — confirmed by import against the pinned version in
+the desktop runtime, not inferred from the dlt docs. If the chosen `auth_type`
 (e.g. `oauth2_client_credentials`) turns out to need an extra dependency,
 add it explicitly rather than assuming it's already covered.
 

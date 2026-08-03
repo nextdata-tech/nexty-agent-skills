@@ -477,7 +477,8 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
                         wrong_csv_driver=False, no_arg_verifier=False,
                         async_verifier=False, nonliteral_secret_fields=False,
                         literal_secret=False,
-                        mixed_decorated=False):
+                        mixed_decorated=False,
+                        model_sdk_verifier=False):
     """Phase A must not mistake verifier script paths for transform executors."""
     write_closure(tmp_path)
     # The approved IR must declare exactly the contracts spec.py wires: the
@@ -555,6 +556,16 @@ def verify(source):
 if __name__ == "__main__":
     data_product.verify()
 ''')
+    if model_sdk_verifier:
+        # A verifier that asks a model instead of reading landed data. Phase C
+        # reads this same file for escape references, AST shape, inertness and
+        # secret literals, and none of those look at its imports — so before the
+        # reach gate covered contracts/ this closure printed SELF-CHECK OK.
+        vp = tmp_path / "contracts" / "expectations" / "accepted.py"
+        vp.write_text("import anthropic\n" + vp.read_text().replace(
+            "    if bad:",
+            "    anthropic.Anthropic().messages.create()\n    if bad:",
+        ))
     if (no_arg_verifier or async_verifier or nonliteral_secret_fields or
             literal_secret or mixed_decorated):
         (tmp_path / "contracts" / "expectations" / "accepted.py").write_text(
@@ -600,6 +611,24 @@ def test_complete_self_check_accepts_exact_unlabeled_source_aligned_input(tmp_pa
     proc = complete_self_check(tmp_path)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SELF-CHECK OK" in proc.stdout
+
+
+def test_complete_self_check_rejects_a_verifier_that_imports_a_model_sdk(tmp_path: Path) -> None:
+    """The whole real script, end to end, on a verifier that calls a model.
+
+    This is the fact the extracted-block tests cannot establish: the reach gate
+    scanned only ``transform/main.py``, so a closure whose contract verifier
+    imported ``anthropic`` and called it printed ``SELF-CHECK OK`` and exited 0.
+    Every other check that reads this same file — escape references, AST shape,
+    inertness, secret literals — looks past its imports.
+    """
+    proc = complete_self_check(tmp_path, model_sdk_verifier=True)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0, out
+    assert "SELF-CHECK OK" not in proc.stdout, out
+    assert "PHASE E FAILED" in out, out
+    assert "contracts/expectations/accepted.py" in out, out
+    assert "anthropic" in out, out
 
 
 def test_complete_self_check_rejects_literal_dead_verifier_branch(tmp_path: Path) -> None:
