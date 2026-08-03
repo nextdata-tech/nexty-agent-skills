@@ -878,10 +878,18 @@ narrower case of it.
 Notes: **These arms do not support a quality claim, and none is made.** The
 deltas are single-run agent variance, not signal: `current_pack` goes 15/15 →
 14/15 (DOWN on the change) while `candidate_pack` goes 13/15 → 15/15 (up), and
-`no_review_control`'s 7/15 before-arm is one run that ended mid-build with no
-`transform/main.py` at all. Each arm is n=1 and the arms fail on different
+`no_review_control`'s 7/15 before-arm is one run that built a working
+rest_api_resources closure and landed it under `$HOME` instead of the graded
+workspace, so `closure:transform-exists` failed on the graded path. Each arm is n=1 and the arms fail on different
 checks in each run. Read the table as "no measured regression", not as evidence
 the change helps.
+
+**The after/`no_skills` efficiency columns are broken telemetry — do not read
+them.** 5 turns against 115 tool calls, and 2,580 output tokens in 34.7s, are
+mutually impossible; the capture failed, not the run. Scanning the column shows
+that arm going 52,888 → 2,580 tokens and 52 → 5 turns, a phantom 95% efficiency
+win that did not happen. Its 14/15 check score is real; its turn, tool-call and
+token figures are not.
 
 The specific bug the change fixes did NOT fire in either run: `KeyError:
 'csv_source'` appears in neither report. It fired in an earlier run of this
@@ -893,13 +901,22 @@ raised at transform time, after the credential had already been resolved.
 contradicted it, and the body is read first. With n=1 per arm and an agent free
 to consult either surface, no arm isolates it.
 
-The before arm runs THIS branch's scenario and harness against main's `src/`, so
-the skill pack is the only variable. A literal before/after is unavailable:
-`authenticated-api-source-build` does not exist on main — this PR adds it.
+The before arm runs THIS branch's scenario and harness with main's `src/`
+swapped in. A literal before/after is unavailable: `authenticated-api-source-build`
+does not exist on main — this PR adds it.
+
+**The swap covered `src/` only, and that is a disclosed confound.** The
+repo-root `scripts/self_check.py` stayed at branch state, so the before arm
+carried this PR's Phase E. The before `candidate_pack` transcript shows the
+agent finding that file, copying it into its closure and running it — printing
+`phase E ok`. A "before" arm therefore executed the after-state script. The bias
+runs toward the after state and so shrinks any delta rather than inflating one,
+which is why this is recorded rather than rerun; but "the skill pack is the only
+variable" would be false and is not claimed.
 
 **Phase E has no arm here.** Every closure in this scenario passes the gate, so
 nothing in this table speaks to it either way. Its evidence is
-`evals/tests/test_reach_gate_phase_e.py` (47 tests, each verified to fail
+`evals/tests/test_reach_gate_phase_e.py` (53 tests, each verified to fail
 against the pre-change script) and a live run in which the deny path exits 1
 carrying `reach.model_sdk_import` rather than a traceback — not this benchmark.
 
