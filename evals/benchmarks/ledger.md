@@ -1329,3 +1329,35 @@ it is a product fact, and the entry records whose call it was rather than preten
 evidence. If the premise holds, the renames are clean. If it does not, the symptom is a user
 whose infra profile or `dp-spec.md` stops being found after upgrade, with no error to point
 at the cause.
+
+## 2026-08-03 — self-check verifier I/O diagnostics and locale-independent reads/writes (plugin v0.33.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+Notes: **No eval arm, deliberately.** No public scenario creates an unreadable
+or non-UTF-8 contract verifier, changes the host locale codec, or observes the
+diagnostic text for a failed `build-record.json` write. Manufacturing a scenario
+to produce a number would measure a fixture rather than this narrow self-check
+behavior. Evidence is `evals/tests/test_reach_gate_phase_e.py` (the generic
+read/write codec sweep, the Phase C diagnostic assertion, the
+`merge_record` write-failure guard, atomic replacement, its JSON diagnostic
+signal, and propagation into the JSON verdict/process exit code) plus
+`evals/tests/test_self_check_sync.py` (the shipped script and reference fence
+remain byte-identical). `test_merge_record_failures_reach_json_verdict` drives
+the shipped reporting/merge surface in a subprocess and checks both read and
+write failures: the diagnostic reaches JSON, the verdict and exit code fail,
+the previous record bytes survive a failed replacement, and no temporary file
+remains. The review-driven assertions were verified to fail against the
+pre-PR implementation at `0e93e3e`: the generic sweep finds its unpinned
+`merge_record` `write_text`, the Phase C assertion finds the decode-only
+diagnostic, and the behavioral merge test finds no diagnostic or failed
+verdict. The final write path preserves the previous record on failure rather
+than admitting a partial write, and a merge failure cannot leave the JSON
+report or process exit green.
+The writer intentionally matches `dp_diagnostics.py` with
+`ensure_ascii=False`, so records remain readable UTF-8 and the explicit codec
+pin is load-bearing; all in-repo record readers already pin UTF-8.
+`python3 scripts/validate_skills.py --root .` and the targeted tests are the
+executable gates for this change.

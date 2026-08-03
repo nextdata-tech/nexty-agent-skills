@@ -1517,8 +1517,8 @@ if _spec_tree is not None:
             # Unguarded, this read died before cerr could be called and the
             # deferral pointed at a phase that had already crashed.
             cerr("closure.contract_verifier_malformed",
-                 f"{vpath}: cannot be decoded as UTF-8 ({exc}). A verifier is "
-                 f"executed Python; write it as UTF-8.", vpath,
+                 f"{vpath}: cannot be read as UTF-8 text ({exc}). A verifier is "
+                 f"executed Python; it must be readable and UTF-8-encoded.", vpath,
                  {"contract": cname})
             continue
         try:

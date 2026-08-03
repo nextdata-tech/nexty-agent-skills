@@ -1065,19 +1065,19 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # then three, then four, then seven — each round patching the sites the last
     # review had named while the next unpinned read sat waiting. A per-site
     # assertion can only catch sites someone already thought of. The invariant
-    # is that NO read in this script decodes under the locale codec, so it is
-    # asserted as one.
-    # Matches every read/open call and requires each to name a codec, rather
+    # is that NO text-file read or write in this script depends on the locale
+    # codec, so it is asserted as one.
+    # Matches every read/open/write_text call and requires each to name a codec, rather
     # than matching one spelling of "unpinned". A regex keyed on empty parens
     # `read_text()` misses the three ways this defect actually came back:
     # `read_text(errors="replace")` (a policy but no codec — the exact Phase C
     # half-fix documented above), a bare `open(p)` with no `newline=""` for the
     # csv check to key on, and a call split across lines.
     calls = re.findall(
-        r"(?:\.read_text|\.open|(?<![\w.])open)\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
+        r"(?:\.read_text|\.write_text|\.open|(?<![\w.])open)\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
         body, re.S,
     )
-    assert calls, "no read/open calls found — did the script move?"
+    assert calls, "no file I/O calls found — did the script move?"
     # The argument regex handles one level of nested parens, so a call like
     # `open(os.path.join(str(a), b))` is not matched AT ALL — it contributes
     # nothing to `calls`, never reaches the codec check, and passes silently.
@@ -1085,15 +1085,15 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # only catch call SPELLINGS someone thought of. Counting the call sites
     # independently makes an unparseable argument list fail the test instead of
     # disappearing from it.
-    sites = re.findall(r"(?:\.read_text|\.open|(?<![\w.])open)\(", body)
+    sites = re.findall(r"(?:\.read_text|\.write_text|\.open|(?<![\w.])open)\(", body)
     assert len(calls) == len(sites), (
-        f"{len(sites) - len(calls)} read/open call(s) have an argument list "
+        f"{len(sites) - len(calls)} file I/O call(s) have an argument list "
         f"this scan cannot parse, so they were never checked for a codec"
     )
     unpinned = [c.strip() for c in calls if "encoding=" not in c]
     assert not unpinned, (
-        "these reads decode under the LOCALE codec, so their result depends on "
-        "the host's locale rather than on the file:\n  "
+        "these file I/O calls depend on the host's locale codec rather than "
+        "the file:\n  "
         + "\n  ".join(unpinned)
     )
 
@@ -1121,6 +1121,10 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         "Phase C's verifier read is unguarded — Phase E defers an undecodable "
         "verifier to Phase C, so Phase C must survive to report it"
     )
+    assert "cannot be read as UTF-8 text" in pc, (
+        "Phase C's verifier diagnostic still describes every read failure as "
+        "a decode failure, including OSError cases"
+    )
     pc_read = re.search(r"vsrc = vp\.read_text\((.*?)\)", pc)
     assert pc_read is not None, "Phase C's verifier read moved"
     assert 'encoding="utf-8"' in pc_read.group(1), (
@@ -1128,17 +1132,6 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         "claims UTF-8 — on a cp1252 host it silently accepts bytes Phase E "
         "rejected, and under an ASCII locale it fails a valid UTF-8 file"
     )
-
-
-def test_merge_record_write_is_utf8_pinned():
-    """The record write must not depend on the host locale codec."""
-    body = _script_body()
-    merge_record = body[body.index("def merge_record"):body.index("def finish")]
-    assert 'p.write_text(json.dumps(rec, indent=2) + "\\n", encoding="utf-8")' in merge_record, (
-        "merge_record writes build-record.json under the host locale codec; "
-        "pin the write to UTF-8 to match its pinned read"
-    )
-
 
 if __name__ == "__main__":  # pragma: no cover
     import pytest
