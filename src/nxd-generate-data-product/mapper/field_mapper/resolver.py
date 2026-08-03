@@ -284,7 +284,9 @@ class Resolution:
         2. **Key uniqueness** — one effective record per `(row_key, field)`;
            unique `evidence_ordinal` within a cell.
         3. **Evidence completeness** — every `ok` cell carries at least the
-           spec's minimum atoms; every evidence row resolves to a real cell.
+           spec's minimum atoms, EXCEPT a human override, which carries no
+           evidence obligation (the floor is on what the model must cite);
+           every evidence row resolves to a real cell.
         4. **Status/value coherence** — non-`ok` implies all slots null;
            `error_code` non-null iff status is `error`.
 

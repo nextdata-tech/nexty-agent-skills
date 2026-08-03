@@ -38,7 +38,12 @@ deliberately absent here — they live in the landed mapper spec, versioned by
 
 ## 1. Module layout
 
-All under `src/nxd-generate-data-product/mapper/field_mapper/`.
+Imported as `nxd.experimental.field_mapper`, from the installed `nxd` package.
+The modules below are not carried in the skill's zip — the runtime provides
+them. The skills repo holds the harness's source of truth at
+`src/nxd-generate-data-product/mapper/field_mapper/`, and the package copy is
+generated from it; that path is a repo location, not one an installed reader
+has.
 
 ```
 field_mapper/
@@ -753,11 +758,26 @@ stand — each states why it does not gate use of the shipped harness.
    `bound_input_snapshot_id` and `bound_mapper_spec_id` make it impossible for a
    review to silently attach to the wrong value.
 
-6. **Harness packaging and version stamping. DECIDED: vendored from the skill,
-   no wheel.** A closure that maps copies `mapper/field_mapper/` out of the
-   installed `nxd-generate-data-product` skill directory to its own root. Drift between
-   closures is not silent: `harness_version` is an input to `mapper_spec_id`, so
-   vendoring a newer harness moves every spec id, the existing grants stop
+6. **Harness packaging and version stamping. DECIDED: shipped inside the `nxd`
+   package.** A closure that maps imports `nxd.experimental.field_mapper` from
+   the package the runtime already installs. Nothing is copied.
+
+   This supersedes an earlier decision to vendor the harness out of the
+   installed skill directory into the closure root. That route never ran on the
+   platform: the desktop supervisor stages only `transform/main.py` into its
+   isolated data directory, so a vendored `field_mapper/` was absent at
+   execution and every build died on `ModuleNotFoundError` after passing every
+   static gate.
+
+   **Do not vendor a copy.** The consent gate denies the retired spelling by
+   name (`grant.vendored_harness`): a vendored harness answers for its own spec
+   hash, so no grant bound to it means anything, and the remedy is deleting the
+   directory rather than consenting to it. A copy under a DIFFERENT name is
+   still undetected — see `reference/self-check.md` § "What Phase G cannot see".
+
+   Drift is still not silent: `harness_version` is an input to
+   `mapper_spec_id`, so a release that changes the harness moves every spec id,
+   the existing grants stop
    binding, and the consent gate demands fresh ones. The version appears in the
    ledger and in the spec-hash input list for the same reason.
 

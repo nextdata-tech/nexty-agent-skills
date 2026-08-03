@@ -705,10 +705,15 @@ TRIGGER_CASES = [
     ("import nxd.experimental.semantic", False),
     # Prefix-but-not-on-a-dot-boundary.
     ("import nxd.experimental.field_mapper_utils", False),
-    # The pre-move vendored form. It does NOT fire — recorded here as the
-    # residual it is, not as an aspiration. `mapper/CONTRACT.md` tells authors
-    # not to vendor, and the skill ships no copy to vendor, but nothing detects
-    # one. Change this expectation only alongside a gate that actually catches it.
+    # The pre-move vendored form. `False` here means it does not match
+    # MAPPER_ROOT — which is correct and must stay correct, since the two roots
+    # are deliberately separate checks. It does NOT mean the closure passes:
+    # `LEGACY_MAPPER_ROOT` denies this spelling by name as
+    # `grant.vendored_harness`, covered by
+    # `test_the_legacy_vendored_import_is_denied_by_name` below. Were it folded
+    # into MAPPER_ROOT instead, a vendored copy would be routed through the
+    # grant oracle — offering consent for a harness that answers for its own
+    # spec hash, which is exactly what must not be consentable.
     ("import field_mapper", False),
     ("from field_mapper import map_inputs", False),
 ]

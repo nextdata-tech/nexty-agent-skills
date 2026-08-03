@@ -367,14 +367,14 @@ exists. Specifically not:
   than a closure that lied, which makes it the one hole here a careful author
   could reach by accident. An
   `importlib.import_module("nxd.experimental.field_mapper")`,
-  `transport.py`'s body pasted inline, or a **copy of the harness placed in the
-  closure and imported under a different name** — a vendored `field_mapper/` at
-  the root with `import field_mapper`, which matches no dot-boundary prefix of
-  the installed path — never fires this gate either. That last route is worth
-  naming because it used to be the *sanctioned* one: before the harness shipped
-  inside `nxd`, vendoring was how a closure reached it. `mapper/CONTRACT.md`
-  now says not to, and the skill no longer carries a copy to vendor, but
-  nothing here detects one. Such a closure passes **Phase E as well**: the
+  `transport.py`'s body pasted inline, or a **copy of the harness vendored
+  under a name the gate does not know** never fires this gate either. Note the
+  scope of that last one, which changed: the RETIRED spelling — a
+  `field_mapper/` at the closure root imported as `import field_mapper`, which
+  was the sanctioned contract before the harness shipped inside `nxd` — IS
+  detected now, and denied by name as `grant.vendored_harness`. What stays
+  undetected is the same copy under any OTHER name, because this gate matches
+  import names, never content. Such a closure passes **Phase E as well**: the
   harness's `import anthropic` is function-local inside `transport.py`, and
   Phase E walks only the transform and the verifiers, not the packages they
   import. Both gates green is not proof that no unconsented mapping happened.
