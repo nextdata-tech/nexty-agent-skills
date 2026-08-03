@@ -684,11 +684,11 @@ def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
 def _desktop_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str], str]:
     """Return a narrow command directory and the matched Python interpreter."""
     supervisor_dir = Path(os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", "")).expanduser()
-    python = os.environ.get("EVAL_JOB_PYTHON", "").strip()
+    python = os.environ.get("EVAL_DESKTOP_PYTHON", "").strip()
     if not supervisor_dir.is_dir() or not python:
         raise RuntimeError(
             "set EVAL_DESKTOP_SUPERVISOR_DIR (both desktop binaries) and "
-            "EVAL_JOB_PYTHON (supervisor venv Python)"
+            "EVAL_DESKTOP_PYTHON (supervisor venv Python)"
         )
     binaries = ("nxd-desktop-supervisor", "nxd-desktop-kernel-host")
     missing = [name for name in binaries if not (supervisor_dir / name).is_file()]
@@ -725,7 +725,7 @@ def _desktop_kv(output: str) -> dict[str, str]:
 
 
 @dataclass
-class desktopServe:
+class DesktopServe:
     """Foreground supervisor process plus its startup transcript files."""
 
     process: subprocess.Popen
@@ -737,7 +737,7 @@ class desktopServe:
 
 def _desktop_start_serve(supervisor: Path, definition: Path, workflow: str,
                         data_dir: Path, env: dict[str, str],
-                        timeout_s: int = 300) -> desktopServe:
+                        timeout_s: int = 300) -> DesktopServe:
     """Start documented foreground ``serve`` and wait for real publication.
 
     ``create --detach`` can report ``published=yes`` while its child has already
@@ -761,7 +761,7 @@ def _desktop_start_serve(supervisor: Path, definition: Path, workflow: str,
         output = stdout.read()
         values = _desktop_kv(output)
         if values.get("published") == "yes":
-            return desktopServe(proc, stdout, stderr, values, bearer)
+            return DesktopServe(proc, stdout, stderr, values, bearer)
         if proc.poll() is not None:
             stderr.seek(0)
             detail = stderr.read()
@@ -778,7 +778,7 @@ def _desktop_start_serve(supervisor: Path, definition: Path, workflow: str,
     raise RuntimeError(f"foreground serve did not publish within {timeout_s}s: {detail}")
 
 
-def _desktop_stop_serve(supervisor: Path, data_dir: Path, served: desktopServe,
+def _desktop_stop_serve(supervisor: Path, data_dir: Path, served: DesktopServe,
                        env: dict[str, str]) -> None:
     """Stop a foreground desktop serve and close runner-owned log handles."""
     recorded_pids: list[int] = []
@@ -844,7 +844,7 @@ def desktop_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str
         tmp = Path(tempfile.mkdtemp(prefix="eval-desktop-preflight-"))
         (tmp / ".owner-pid").write_text(str(os.getpid()), encoding="utf-8")
         data_dir = tmp / "state"
-        served: desktopServe | None = None
+        served: DesktopServe | None = None
         try:
             try:
                 served = _desktop_start_serve(
@@ -1838,7 +1838,7 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
     if scenario_needs_desktop(scenario_dir) is not None:
         desktop_runtime_key = "|".join((
             os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", ""),
-            os.environ.get("EVAL_JOB_PYTHON", ""),
+            os.environ.get("EVAL_DESKTOP_PYTHON", ""),
         ))
     parts = [
         skill_set.name,

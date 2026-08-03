@@ -1199,11 +1199,24 @@ Both were the same failure shape as §4 and neither raised anything:
 
 `class desktopServe` (lowercased by the same blanket substitution) is now `DesktopServe`.
 
+**Two of those three fixes were claimed here before they existed, and the second review
+caught it.** The `EVAL_DESKTOP_PYTHON` rename and the `DesktopServe` capitalization were
+edited, then silently reverted by a `git checkout evals/run.py` used to undo a deliberate
+test mutation during negative-control verification — the file carried both the mutation and
+two real uncommitted fixes, and the restore took all three. Only the six `git mv`'d fixture
+files survived into the commit. So an earlier revision of this entry asserted a completed
+fix for the exact break it was documenting, in the entry whose §3 exists to correct an
+identical false completeness claim in v0.32.0.
+
+Recorded rather than quietly amended, because it is the same failure §3 describes and the
+second one in three entries: **a ledger claim is only worth what re-verifying it after the
+commit costs.** Both fixes are now in the tree and pinned by tests below.
+
 **The lesson is mechanical, not incidental.** A rename sweep is text-substitution over
-file *contents*; every contract whose other half is a *filename*, a directory name, or a
-path on a user's disk is invisible to it. That is the same class as §2's customer
-extension paths — three instances in one PR — and the reason the new tests below assert
-pairings rather than spellings.
+file *contents*; every contract whose other half is a *filename*, a directory name, an
+environment variable read by a human following setup docs, or a path on a user's disk is
+invisible to it. That is the same class as §2's customer extension paths — four instances
+in one PR — and the reason the new tests assert pairings rather than spellings.
 
 `evals/tests/test_runner_opt_in_markers_resolve.py` (9 tests) pins opt-in markers from
 both sides: every shipped marker file resolves, every marker withheld from the agent has
@@ -1212,10 +1225,18 @@ verified to fail against the broken state — the code-side rename and a partial
 rename produce different failures, which is the point: a partial rename leaves the suite
 resolving the runtime while one scenario silently grades without it.
 
+`evals/tests/test_env_var_names_match_docs.py` (4 tests) closes the half that stayed
+broken, which the marker tests did not cover: every `EVAL_*` name `run.py` reads must
+appear in the eval docs, the desktop pair must agree across runner, READMEs, `ci_skip`
+messages, checker and architecture doc, and no `class` in `run.py` may start lowercase.
+All four were verified to fail against the state this PR actually shipped — that is, they
+would have caught the omission the reviewer found rather than restating it.
+
 **Evidence:**
 - `scripts/validate_skills.py` passes; every `name:` equals its directory name.
 - `./build-skills.sh` packages all 17 `ok`, each under the 200-entry cap.
-- `python3 -m pytest evals/tests` — **549 passed** (540 + the 9 new marker tests).
+- `python3 -m pytest evals/tests` — **555 passed** (rebased onto v0.32.1, plus the 9 marker
+  tests and 4 env-var/naming tests).
 - Zero occurrences of "pocket" outside `evals/benchmarks/`, verified case-insensitively.
 - Version surfaces agree at 0.33.0 across `plugin.json`, `marketplace.json` and all 17
   `SKILL.md`. Minor again: `nxd-pocket-loop` was a storage key, and `JOB_HELPER_DIR` /
