@@ -88,7 +88,7 @@ numbers cited beside it — which is the only defensible way to write the correc
   assignment (`"Desktop preflight failed"`) and re-capitalizing a helper return
   (`"Desktop verifier facts were malformed"`) each trip it, where the earlier
   regex version caught only the first.
-- `python3 -m pytest evals/tests` — 571 passed (570 on `origin/main`; this PR adds exactly the one test named above).
+- `python3 -m pytest evals/tests` — 597 passed (596 on `origin/main`; this PR adds exactly the one test named above).
 - `python3 scripts/validate_skills.py --root .` — passes.
 - `python3 evals/benchmark_record.py --check` — passes.
 - No `src/` skill, manifest or version surface is touched, so pack completeness
