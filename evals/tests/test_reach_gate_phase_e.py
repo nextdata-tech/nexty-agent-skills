@@ -1078,6 +1078,18 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         body, re.S,
     )
     assert calls, "no read/open calls found — did the script move?"
+    # The argument regex handles one level of nested parens, so a call like
+    # `open(os.path.join(str(a), b))` is not matched AT ALL — it contributes
+    # nothing to `calls`, never reaches the codec check, and passes silently.
+    # That is this file's own never-fires shape one level up: the sweep would
+    # only catch call SPELLINGS someone thought of. Counting the call sites
+    # independently makes an unparseable argument list fail the test instead of
+    # disappearing from it.
+    sites = re.findall(r"(?:\.read_text|\.open|(?<![\w.])open)\(", body)
+    assert len(calls) == len(sites), (
+        f"{len(sites) - len(calls)} read/open call(s) have an argument list "
+        f"this scan cannot parse, so they were never checked for a codec"
+    )
     unpinned = [c.strip() for c in calls if "encoding=" not in c]
     assert not unpinned, (
         "these reads decode under the LOCALE codec, so their result depends on "
