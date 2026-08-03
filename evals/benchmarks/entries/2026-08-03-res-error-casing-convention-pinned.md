@@ -34,10 +34,12 @@ whole (`f"✗ ERROR — {res.error}"` and the JSON report's `"error"` field), so
 convention is simply: lowercase, always.
 
 Also lowercased: the `RuntimeError` at :704, which is neither a log line nor a
-`res.error` literal — both callers of `_desktop_runtime` catch it into
+`res.error` literal — the caller at :2337 catches it into
 `res.error = f"desktop runtime setup failed: {exc}"`, so it renders mid-sentence.
-Its sibling `RuntimeError` eight lines up was already lowercase and reaches the
-identical sink. Still capitalized, correctly: `print(f"Desktop preflight OK: …")`,
+(The other caller, :2211, routes it to `res.metrics["desktop_preflight_error"]`
+and sets the fixed `res.error = "desktop preflight failed"`, so it never
+interpolates the message.) Its sibling `RuntimeError` eight lines up was already
+lowercase and reaches the same `res.error` sink. Still capitalized, correctly: `print(f"Desktop preflight OK: …")`,
 a standalone stderr line, and the `res.verdict["summary"]` append whose leading
 `{prior}` may be empty.
 
