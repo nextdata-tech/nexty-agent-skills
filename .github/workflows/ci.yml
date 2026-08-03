@@ -42,3 +42,11 @@ jobs:
       # deterministic gate cannot silently regress to judge-only grading.
       - name: Harness unit tests
         run: uv run --no-project --with pytest --with duckdb --with pyyaml python -m pytest evals/tests -q
+
+      # Benchmark evidence is source-controlled like the skills: validate the
+      # stdlib recorder directly and fail if an entry or generated index drifts.
+      - name: Benchmark evidence index
+        run: |
+          set -euo pipefail
+          python3 -m unittest evals.tests.test_benchmark_record
+          python3 evals/benchmark_record.py --check

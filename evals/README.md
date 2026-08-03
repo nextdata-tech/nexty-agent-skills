@@ -325,21 +325,51 @@ python3 evals/benchmark_record.py \
   --notes "<why the change was made>"
 ```
 
-This appends a before/after entry to `evals/benchmarks/ledger.md` and saves a
-compact transcript-free copy of the reports under `evals/benchmarks/records/`.
-Commit both in the same PR as the skill change they measure. To produce a
+This creates a before/after entry at `evals/benchmarks/entries/<id>.md`, a
+matching compact transcript-free report at `evals/benchmarks/records/<id>.json`,
+and deterministically rebuilds `evals/benchmarks/README.md`. The ID defaults to
+`<date>-<label-slug>`; use `--date YYYY-MM-DD` for reproducible evidence and
+`--id lowercase-slug` only when a stable identity is needed. Commit the entry,
+record, and index in the same PR as the skill change it measures. The old
+`evals/benchmarks/ledger.md` and all pre-migration `records/*` are frozen
+legacy evidence — do not backfill, append, or rewrite them. To produce a
 genuine "before" for a scenario that is new in your PR, run it from a worktree
 of `main` with the scenario (and `evals/run.py`, for identical metrics) copied
 in: `git worktree add /tmp/before origin/main && cp -R evals/public/<scenario>
 /tmp/before/evals/public/ && cp evals/run.py /tmp/before/evals/`.
 **When no scenario can distinguish the change** — a diagnostic's `path` or
 message moving, say — there is nothing to run, and `benchmark_record.py` has no
-report to consume. Hand-author the ledger entry instead: keep the table row
-empty, say plainly why there is no arm, and name the tests carrying the evidence
-(preferring ones verified to fail against the previous implementation). Do not
-manufacture a scenario to produce a number; the ledger's value is that a reader
-can assume every figure in it means something. See the AGENTS.md benchmarking
-paragraph, which is the contract this mirrors.
+report to consume. Hand-author `evals/benchmarks/entries/<id>.md` instead with
+this frontmatter schema:
+
+```yaml
+---
+id: "2026-08-03-diagnostic-path"
+date: "2026-08-03"
+label: "diagnostic path clarification"
+plugin_version: "0.0.0"
+status: "NO_EVAL"
+scenarios: []
+record: null
+---
+```
+
+Give the body a title, Notes that plainly explain why there is no eval arm, and
+Evidence naming an existing carrying test file path such as
+`evals/tests/test_diagnostic.py` (prefer tests verified to fail against the
+previous implementation). Then run
+`python3 evals/benchmark_record.py --rebuild-index`. `--rebuild-index` validates
+all entries and rewrites the generated index; `--check` validates them and fails
+if the checked-in index drifts. Do not manufacture a scenario to produce a
+number: the evidence's value is that a reader can assume every figure in it
+means something. See the AGENTS.md benchmarking paragraph, which is the
+contract this mirrors.
+
+The recorder serializes publication and recovers safely after a process crash.
+An uncatchable `SIGKILL` can leave a private publication marker plus a partial
+entry/record pair until the next recorder, `--rebuild-index`, or `--check` runs;
+that next invocation removes a partial pair (or retains a complete byte-matching
+pair) before it reads the index. Do not delete these recovery files manually.
 
 Because agent runs are nondeterministic, treat single-run metric deltas under
 ~20% as noise — repeat the run (or use `--cache-dir` only for judge iteration,

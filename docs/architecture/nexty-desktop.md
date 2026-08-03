@@ -237,9 +237,10 @@ Efficiency (turns, tool calls, tokens, cost) is graded alongside correctness
 for every scenario — a skill edit that keeps a `PASS` verdict but doubles the
 tool-call count is treated as a regression too (`evals/README.md`,
 "Benchmarking a skill change"). Before/after comparisons for a behavior change
-to any of these skills are recorded in `evals/benchmarks/ledger.md` via
-`evals/benchmark_record.py`; see e.g. the `nxd-generate-data-product` phase-D and
-multi-connector-type entries already in `evals/benchmarks/records/`.
+to any of these skills are recorded as paired Markdown entries and compact JSON
+reports via `evals/benchmark_record.py`; see the generated
+`evals/benchmarks/README.md`. `evals/benchmarks/ledger.md` and the records it
+already references are frozen pre-migration history.
 
 ## Automated tests that guard the gates themselves
 

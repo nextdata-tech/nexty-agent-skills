@@ -73,20 +73,27 @@ python3 scripts/validate_skills.py --root .   # conventions
 When a PR changes a skill's behavior (not pure packaging/typo fixes), benchmark
 it and commit the evidence: run the relevant eval scenario(s) before and after
 (`evals/run.py --report ...`), then record the comparison with
-`evals/benchmark_record.py`, which appends to `evals/benchmarks/ledger.md`.
+`evals/benchmark_record.py`. It creates a paired measured entry at
+`evals/benchmarks/entries/<id>.md` and compact report at
+`evals/benchmarks/records/<id>.json`, then deterministically rebuilds
+`evals/benchmarks/README.md`. The historical `evals/benchmarks/ledger.md` and
+all pre-existing `records/*` are frozen evidence; never append to or rewrite
+them. CI runs `benchmark_record.py --check` to validate entry frontmatter and
+index freshness.
 
-**When no scenario can distinguish the change**, still add a ledger entry, but
-hand-author it with an empty table row and say plainly why there is no arm — a
-diagnostic's `path` or message moving, for instance, changes shipped output no
-public scenario exercises. Manufacturing a scenario to produce a number for
-such a change makes the ledger less trustworthy, not more: its value is that a
-reader can assume every figure in it means something. Name the tests carrying
-the evidence instead, and prefer tests verified to fail against the previous
-implementation.
+**When no scenario can distinguish the change**, hand-author a new entry under
+`evals/benchmarks/entries/` with frontmatter `status: NO_EVAL`,
+`scenarios: []`, and `record: null`. Its Notes must explain why no arm exists,
+and its Evidence must name an existing carrying test file path (prefer tests
+verified to fail against the previous implementation). Run
+`python3 evals/benchmark_record.py --rebuild-index` afterward. Manufacturing a
+scenario to produce a number for such a change makes the evidence less
+trustworthy, not more.
 
-The ledger is the repo's before/after history of skill quality and efficiency
-(judge checks, turns, tool calls, tokens) — see "Benchmarking a skill change"
-in `evals/README.md`.
+The generated entry index is the current before/after history of skill quality
+and efficiency (judge checks, turns, tool calls, tokens); the legacy ledger is
+an immutable historical record. See "Benchmarking a skill change" in
+`evals/README.md`.
 
 ## Safety
 

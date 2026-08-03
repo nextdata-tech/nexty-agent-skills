@@ -63,6 +63,15 @@ infra-profile-ecommerce-demo.yaml
 # Eval reports (generated)
 eval*report*.json
 pharma*report*.json
+
+# Benchmark recorder crash-recovery/runtime artifacts
+evals/benchmarks/.benchmark-index.lock
+evals/benchmarks/.benchmark-publication.json
+evals/benchmarks/..benchmark-publication.json.*
+evals/benchmarks/.benchmark-staging/
+evals/benchmarks/entries/.*.md.*
+evals/benchmarks/records/.*.json.*
+evals/benchmarks/.README.md.*
 # MCP server venv + lock (resolved locally with matched nxd wheels)
 evals/mcp/.venv/
 evals/mcp/uv.lock
