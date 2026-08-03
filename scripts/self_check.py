@@ -187,7 +187,7 @@ def merge_record(path, stages):
         message = (
             f"record: {path} could not be written ({type(exc).__name__}: {exc}) — "
             "the previous record is unchanged. Re-run generator lock/record "
-            "setup with its resolved pocket_helper_dir before self_check.py.")
+            "setup with its resolved job_helper_dir before self_check.py.")
         record_notice(message)
         diag("s3_closure", "closure.build_record_merge_failed", message,
              path=cpath(path), evidence={"record": path})
