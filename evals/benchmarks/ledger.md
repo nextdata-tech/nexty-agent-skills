@@ -1035,8 +1035,15 @@ authors to end it with a bare `else: raise` and supplied a snippet to paste.
 and the template reads it with `.get("auth_type")`, so an unauthenticated
 api-source closure has `auth_type is None` — which the `elif` lets through and a
 bare `else` turns into a transform-time raise naming a profile attribute that is
-legitimately absent. `authenticated-api-source-build`, the only api-source
-scenario, authenticates; no arm reaches the None case. The three dispatch
+legitimately absent. **An arm that reaches this case does exist**, and the
+earlier claim here that none did was wrong: `worldbank-live` is an api-source
+scenario whose own checks state the API "needs no authentication … carries
+`base_url` and no `auth_type`", so a closure written from the old bare-`else`
+guidance would have raised at transform time and failed its downstream checks.
+It cannot produce a number, because it is `ci_skip` — it needs a live desktop
+supervisor and outbound network to `api.worldbank.org`, which CI does not
+provision. `authenticated-api-source-build`, the api-source scenario that does
+run, authenticates and so never reaches the None case. The three dispatch
 surfaces now agree, and the deterministic check
 `secret:auth-dispatched-on-auth-type` was confirmed by execution to still pass a
 closure written from the corrected guidance and still fail one with the terminal

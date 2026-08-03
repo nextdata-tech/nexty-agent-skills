@@ -1677,7 +1677,12 @@ if _spec_tree is not None:
              "input. It carries the export root every model_paths entry "
              "resolves under.", "csv-source-path")
     elif csvp.is_file():
-        raw = csvp.read_text(encoding="utf-8").strip()
+        # errors="replace" like the neighbouring reads: this value is only
+        # checked for a "/" prefix, ".." parts and emptiness, none of which a
+        # replacement character can create or mask — so a latin-1 export root
+        # ("données/") surfaces as closure.csv_root_invalid naming the mangled
+        # path, which is a finding, instead of a bare traceback with no code.
+        raw = csvp.read_text(encoding="utf-8", errors="replace").strip()
         parts = Path(raw).parts if raw else ()
         if (not raw or raw.startswith("/") or ".." in parts
                 or any(p in ("", ".") for p in parts)):

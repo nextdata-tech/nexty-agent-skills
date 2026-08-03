@@ -1050,6 +1050,15 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
             "a landed CSV is read with no error policy — a cp1252 export kills "
             "the script with a bare traceback partway through grading"
         )
+        # Both halves, because checking only the error policy is the mistake
+        # this file already documents at Phase C: errors="replace" with no
+        # encoding= still decodes under the host locale, so the same cp1252
+        # export mangles graded cells on one machine and not another, and
+        # presents as a vocabulary mismatch that is not really there.
+        assert 'encoding="utf-8"' in args, (
+            "a landed CSV declares an error policy but no codec — it decodes "
+            "under the host locale, so grading depends on the machine"
+        )
 
     # EXHAUSTIVE, and that is the point. This defect was closed at one site,
     # then three, then four, then seven — each round patching the sites the last
