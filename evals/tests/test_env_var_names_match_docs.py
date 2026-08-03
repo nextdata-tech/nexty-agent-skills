@@ -14,6 +14,7 @@ Docs may describe extra variables consumed elsewhere (checkers, backends, CI).
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -101,6 +102,79 @@ def test_desktop_python_var_agrees_across_every_surface() -> None:
         if stale in path.read_text(encoding="utf-8", errors="ignore"):
             offenders.append(str(path.relative_to(ROOT)))
     assert not offenders, f"stale {stale} spelling survives in: {offenders}"
+
+
+def _leading_string_literals(node: ast.AST) -> list[str]:
+    """The literal text a value would start with, for str and f-string forms."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.JoinedStr):
+        for part in node.values:  # only the FIRST part sets the leading case
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                return [part.value]
+            return []  # starts with an interpolation — no literal case to judge
+    return []
+
+
+def _res_error_literals() -> list[str]:
+    """Strings assigned to ``res.error``, plus the helper returns interpolated in.
+
+    Parsed with ``ast`` rather than regexed, so single quotes, ``rf`` prefixes and
+    odd whitespace cannot slip a non-conforming form past the check — the test
+    fails closed on a form it does not recognize rather than silently skipping it.
+    """
+    tree = ast.parse(RUN_PY.read_text(encoding="utf-8"))
+    found: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "error"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "res"
+                ):
+                    found += _leading_string_literals(node.value)
+
+    # Helpers whose return value is interpolated into res.error verbatim; their
+    # literals render mid-sentence and follow the same convention.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name.endswith(
+            "_infrastructure_error"
+        ):
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Return) and inner.value is not None:
+                    found += _leading_string_literals(inner.value)
+
+    return found
+
+
+def test_res_error_literals_are_lowercase() -> None:
+    """Every string reaching ``res.error`` starts lowercase.
+
+    ``res.error`` renders through two sinks that treat it as an opaque whole —
+    ``f"✗ ERROR — {res.error}"`` and the JSON report's ``"error"`` field — and the
+    field's long-standing convention is lowercase (``"missing checks.json"``,
+    ``"agent run failed"``, ``"http stub setup failed: …"``). A codename sweep
+    capitalized three of them on an invented "sentence-initial" rule, and the
+    drift took three review rounds to unwind because nothing asserted it.
+
+    Covers the ``*_infrastructure_error`` helper returns too: those are
+    interpolated into ``res.error`` verbatim, so they render mid-sentence and are
+    the same contract. Checking only direct assignments would leave a hole at
+    exactly the strings the correcting PR had to edit.
+
+    Acronym-initial values (``MCP server setup failed``) are the one exception.
+    """
+    bad = [
+        lit for lit in _res_error_literals()
+        if lit[:1].isupper() and not re.match(r"^[A-Z]{2,}\b", lit)
+    ]
+    assert not bad, (
+        "string(s) reaching res.error that start with a capital; the field's "
+        f"convention is lowercase (acronyms excepted): {bad}"
+    )
 
 
 def test_runner_class_names_are_capitalized() -> None:

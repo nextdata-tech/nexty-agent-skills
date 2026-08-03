@@ -701,7 +701,7 @@ def _desktop_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str
     missing = [name for name in binaries if not (supervisor_dir / name).is_file()]
     if missing or not Path(python).is_file():
         raise RuntimeError(
-            f"Desktop runtime missing binaries={missing} or Python={python!r}"
+            f"desktop runtime missing binaries={missing} or Python={python!r}"
         )
     # The supervisor finds its kernel-host sibling from its *real* executable
     # path, so tiny exec wrappers preserve that contract while exposing only the
@@ -1034,7 +1034,7 @@ def desktop_facts_infrastructure_error(facts: list[str]) -> str | None:
             try:
                 error = json.loads(fact[len(prefix):]).get("infrastructure_error")
             except json.JSONDecodeError:
-                return "Desktop verifier facts were malformed"
+                return "desktop verifier facts were malformed"
             return str(error) if error else None
     return None
 
@@ -2219,7 +2219,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         if preflight_error:
             # Deliberately stable: callers distinguish this infrastructure
             # error from an agent FAIL without parsing build-specific details.
-            res.error = "Desktop preflight failed"
+            res.error = "desktop preflight failed"
             res.metrics["desktop_preflight_error"] = preflight_error
             return res
         preflight_metrics["desktop_preflight"] = "passed"
@@ -2338,7 +2338,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         scenario_dir, Path(tmp)
                     )
                 except RuntimeError as exc:
-                    res.error = f"Desktop runtime setup failed: {exc}"
+                    res.error = f"desktop runtime setup failed: {exc}"
                     return res
                 # Both the agent forcing-function checker and the pristine
                 # harness verifier place snapshot state under the workspace so
@@ -2492,7 +2492,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     verifier_infrastructure_error = desktop_facts_infrastructure_error(facts)
     if verifier_infrastructure_error:
-        res.error = f"Desktop harness infrastructure failure: {verifier_infrastructure_error}"
+        res.error = f"desktop harness infrastructure failure: {verifier_infrastructure_error}"
         return res
 
     det_infrastructure_error = deterministic_check_infrastructure_error(facts)
