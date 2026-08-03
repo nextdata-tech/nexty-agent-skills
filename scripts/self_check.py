@@ -162,7 +162,7 @@ def merge_record(path, stages):
             "origin": "agent_observed",
             "note": "scratch DuckDB dry run — NOT the published product",
             "models": ROW_COUNTS}
-    p.write_text(json.dumps(rec, indent=2) + "\n")
+    p.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
 
 def finish(exit_code):
     """Every exit goes through here, including a failing phase.
@@ -1511,7 +1511,7 @@ if _spec_tree is not None:
             # UTF-8 — failing the closure over an em dash in a comment, with a
             # message telling the author to write UTF-8 that they already wrote.
             vsrc = vp.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             # Phase E defers an undecodable verifier to "Phase C's finding to
             # report" — so Phase C has to survive long enough to report it.
             # Unguarded, this read died before cerr could be called and the

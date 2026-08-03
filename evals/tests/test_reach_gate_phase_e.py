@@ -1117,7 +1117,7 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # is the same never-fires shape this file exists to document.
     pc = body[body.index('cerr("closure.contract_verifier_missing"'):]
     pc = pc[:pc.index("closure.contract_verifier_malformed") + 400]
-    assert "except UnicodeDecodeError as exc:" in pc, (
+    assert "except (OSError, UnicodeDecodeError) as exc:" in pc, (
         "Phase C's verifier read is unguarded — Phase E defers an undecodable "
         "verifier to Phase C, so Phase C must survive to report it"
     )
@@ -1127,6 +1127,16 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         "Phase C reads the verifier under the LOCALE codec while its diagnostic "
         "claims UTF-8 — on a cp1252 host it silently accepts bytes Phase E "
         "rejected, and under an ASCII locale it fails a valid UTF-8 file"
+    )
+
+
+def test_merge_record_write_is_utf8_pinned():
+    """The record write must not depend on the host locale codec."""
+    body = _script_body()
+    merge_record = body[body.index("def merge_record"):body.index("def finish")]
+    assert 'p.write_text(json.dumps(rec, indent=2) + "\\n", encoding="utf-8")' in merge_record, (
+        "merge_record writes build-record.json under the host locale codec; "
+        "pin the write to UTF-8 to match its pinned read"
     )
 
 
