@@ -334,11 +334,19 @@ exists. Specifically not:
   `Grant.check` still compares the running spec's hash against the grant it is
   handed — that is where an honest closure fails, and a closure minting its own
   spec/grant pair is the "lied, not drifted" case no static gate here catches.
-- **The trigger is an import-level name, in any module under `transform/`.** The
-  scan walks `transform/**/*.py`, so moving the import into a helper module is
-  not an exemption. But a renamed vendor directory, an
+- **The trigger is an import-level name, in any module under `transform/` or at
+  the closure root.** The scan walks `transform/**/*.py` plus the closure root's
+  own `*.py`, so moving the import into a helper module — under `transform/` or
+  beside `models.py` — is not an exemption. The root glob is non-recursive (a
+  full walk would descend into the vendored `field_mapper/` package, whose
+  modules import their own siblings, and self-trigger on every closure that
+  vendored it correctly), so an import inside a root *subpackage* —
+  `helpers/util.py`, with the transform doing `import helpers.util` — does not
+  fire the gate. Unlike the routes below, that is an ordinary refactor rather
+  than a closure that lied, which makes it the one hole here a careful author
+  could reach by accident. A renamed vendor directory, an
   `importlib.import_module("field_mapper")`, or `transport.py`'s body pasted
-  inline never fires this gate. Such a closure passes **Phase E as well**: the
+  inline never fires this gate either. Such a closure passes **Phase E as well**: the
   harness's `import anthropic` is function-local inside `transport.py`, and
   Phase E walks only the transform and the verifiers, not the packages they
   import. Both gates green is not proof that no unconsented mapping happened.
