@@ -431,12 +431,19 @@ cp "$JOB_HELPER_DIR/scripts/self_check.py" <closure>/self_check.py
 cd <closure> && python3 self_check.py --json --record build-record.json
 ```
 
-If `dlt`, `duckdb` and `pandas` are not already on the interpreter that Phase B
-will import the transform under, pin them for the run instead:
+Two different things need packages on that interpreter, and only one of them is
+the transform's. `self_check.py` imports `duckdb` **itself**, to open the scratch
+database and count the landed rows — and it does so *after* Phase B has already
+run the transform, so a missing `duckdb` surfaces as a bare traceback on a run
+that did real work, with no diagnostic emitted and no build record merged. `dlt`
+and `pandas` are the transform's, reached through Phase B's import of it. If any
+of the three is absent, pin them for the run — and keep the working directory and
+the flags, or the run produces prose and merges nothing:
 
 ```bash
-uv run --python 3.12 --with "dlt[duckdb]==1.28.2" --with "duckdb==1.5.4" \
-  --with "pandas==2.3.3" python self_check.py
+cd <closure> && uv run --python 3.12 --with "dlt[duckdb]==1.28.2" \
+  --with "duckdb==1.5.4" --with "pandas==2.3.3" \
+  python self_check.py --json --record build-record.json
 ```
 
 That shipped file is now the single source of truth for the self-check runtime behaviour; this reference keeps the phases, boundaries, report contract and failure-reading guidance, not a second executable copy.
