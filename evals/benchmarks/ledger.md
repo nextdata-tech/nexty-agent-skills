@@ -1274,11 +1274,21 @@ settled deliberately, while `JOB_*` names this repo's own shape. Neither new tes
 prefix choice, and neither should: the failure it guards against is a *reader* mis-inferring
 the pattern, which a comment fixes and an assertion cannot.
 
-Also in this round: sentence-initial lowercase `desktop` in eight `run.py` strings that
-reach benchmark reports and the judge (two beyond those reported), and `Nexty desktop` —
-a proper-noun frame with a common noun inside it, left over from `Nexty Pocket`. The frame
-is dropped rather than capitalized, matching how the rest of the sweep says "the local
-desktop path" and how the supervisor repo itself writes "NXD desktop".
+Also in this round: lowercase `desktop` in `run.py` strings that reach benchmark reports and
+the judge, and `Nexty desktop` — a proper-noun frame with a common noun inside it, left over
+from `Nexty Pocket`. The frame is dropped rather than capitalized, matching how the rest of
+the sweep says "the local desktop path" and how the supervisor repo itself writes "NXD
+desktop".
+
+**The capitalization rule is positional, and a sixth-review note corrected an over-application
+of it.** Capitalize only where the string *is* the whole message (`"Desktop preflight
+failed"`, `f"Desktop runtime setup failed: {exc}"`, and the `res.verdict["summary"]` append,
+whose leading `{prior}` may be empty). Leave it lowercase where the string only ever renders
+mid-sentence: `"desktop verifier facts were malformed"` exists solely to be interpolated
+into `f"desktop harness infrastructure failure: {…}"`, and its sibling pair three lines away
+— `"deterministic check facts were malformed"` / `f"deterministic check infrastructure
+failure: {…}"` — is lowercase for the same reason. Capitalizing the first pair broke a
+symmetry the second pair still holds, which is how the over-application was spotted.
 
 One test docstring was corrected rather than its code: `_names_read_by_runner()` claimed to
 return names `run.py` "passes to os.environ" when it regexes the whole file. The superset is
@@ -1312,10 +1322,14 @@ would have caught the omission the reviewer found rather than restating it.
 - `python3 -m pytest evals/tests` — **555 passed** (rebased onto v0.32.1, plus the 9 marker
   tests and 4 env-var/naming tests).
 - Zero occurrences of "pocket" in any shipped surface — `src/`, `scripts/`, `docs/`,
-  `examples/`, `README.md`, the manifests and `evals/run.py`. Two remain **by design**,
-  both outside those surfaces: `test_runner_opt_in_markers_resolve.py` and
-  `test_env_var_names_match_docs.py` name the old spellings in their docstrings in order
-  to forbid them, and the latter asserts on the stale string directly. Stating the bound
+  `examples/`, `README.md`, the manifests and `evals/run.py`. Outside those surfaces and
+  outside `evals/benchmarks/` — frozen evidence keeps its original text, and this entry's
+  own prose names the old spellings throughout — exactly two files remain, **by design**:
+  `test_runner_opt_in_markers_resolve.py` and `test_env_var_names_match_docs.py` name the
+  old spellings in their docstrings in order to forbid them, and the latter asserts on the
+  stale string directly. That is the same exclusion
+  `test_env_var_names_match_docs.py` already encodes in code (`if "benchmarks" in
+  path.parts`). Stating the bound
   rather than "zero occurrences" because the unqualified version was false when written —
   the third time in this entry's lineage that a completeness claim outran its check (§3,
   §5, here).

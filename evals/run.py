@@ -1034,7 +1034,7 @@ def desktop_facts_infrastructure_error(facts: list[str]) -> str | None:
             try:
                 error = json.loads(fact[len(prefix):]).get("infrastructure_error")
             except json.JSONDecodeError:
-                return "Desktop verifier facts were malformed"
+                return "desktop verifier facts were malformed"
             return str(error) if error else None
     return None
 
@@ -2492,7 +2492,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
 
     verifier_infrastructure_error = desktop_facts_infrastructure_error(facts)
     if verifier_infrastructure_error:
-        res.error = f"Desktop harness infrastructure failure: {verifier_infrastructure_error}"
+        res.error = f"desktop harness infrastructure failure: {verifier_infrastructure_error}"
         return res
 
     det_infrastructure_error = deterministic_check_infrastructure_error(facts)
