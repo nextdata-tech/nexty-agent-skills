@@ -1105,6 +1105,14 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     assert "could not be written" in merge_record, (
         "merge_record's write failure is not reported through say()"
     )
+    assert "record may be partially written" in merge_record, (
+        "merge_record's write failure claims the record is intact even after "
+        "write_text may have truncated it"
+    )
+    record_notice = body[body.index("def record_notice"):body.index("def cpath")]
+    assert "print(message, file=sys.stderr)" in record_notice, (
+        "record I/O failures disappear under --json instead of reaching stderr"
+    )
 
     # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
     # the reads Phase E's deferral depends on. This test is not a whole-file

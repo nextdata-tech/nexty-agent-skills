@@ -117,6 +117,12 @@ def say(*a, **k):
     if not JSON_MODE:
         print(*a, **k)
 
+def record_notice(message):
+    """Keep record I/O failures visible without contaminating JSON stdout."""
+    say(message)
+    if JSON_MODE:
+        print(message, file=sys.stderr)
+
 def cpath(at):
     return f"closure:{at}" if at else ""
 
@@ -147,7 +153,8 @@ def merge_record(path, stages):
     try:
         rec = json.loads(p.read_text(encoding="utf-8"))
     except Exception as exc:
-        say(f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
+        record_notice(
+            f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
             "stages 1-3 NOT merged. Re-run generator lock/record setup with its "
             "resolved job_helper_dir before self_check.py.")
         return
@@ -165,8 +172,10 @@ def merge_record(path, stages):
     try:
         p.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
     except OSError as exc:
-        say(f"record: {path} could not be written ({type(exc).__name__}: {exc}) — "
-            "stages 1-3 NOT merged.")
+        record_notice(
+            f"record: {path} could not be written ({type(exc).__name__}: {exc}) — "
+            "the record may be partially written. Re-run generator lock/record "
+            "setup with its resolved pocket_helper_dir before self_check.py.")
         return
 
 def finish(exit_code):
