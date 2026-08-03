@@ -28,11 +28,19 @@ EXCLUDES=(
   '*/.nxdignore/*'
   '*.zip'           '*/*.zip'
   '*/uv.lock'       'uv.lock'
-  # The field-mapper harness ships (mapper/field_mapper + mapper/samples), but
-  # its e2e proof needs an nxd monorepo checkout a Desktop user cannot have,
+  # The field-mapper harness itself does NOT ship in the zip: it reaches a
+  # closure as `nxd.experimental.field_mapper`, from the installed nxd package,
+  # so a copy inside the skill is unusable at best and an invitation to vendor a
+  # second one at worst. This tree stays the harness's source of truth — the
+  # package copy is generated from it — but a Desktop user's installed skill has
+  # no use for it. `mapper/CONTRACT.md` and `mapper/samples/` DO ship: the
+  # contract is normative documentation, and the fixtures are what
+  # `reference/field-mapper.md` points at when explaining evidence modes.
+  # Its e2e proof needs an nxd monorepo checkout a Desktop user cannot have,
   # and its run ledgers / live-API credentials must never leave the machine.
   # zip reads the filesystem, not git, so gitignored artifacts need excluding
   # here too.
+  'mapper/field_mapper/*'  '*/mapper/field_mapper/*'
   'mapper/examples/*'  '*/mapper/examples/*'
   'mapper/runs/*'      '*/mapper/runs/*'
   '.venv-live/*'       '*/.venv-live/*'

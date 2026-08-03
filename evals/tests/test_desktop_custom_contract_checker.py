@@ -24,6 +24,21 @@ REPO = Path(__file__).parents[2]
 MAPPER_SRC = REPO / "src" / "nxd-generate-data-product" / "mapper" / "field_mapper"
 MAPPER_SAMPLE = REPO / "src" / "nxd-generate-data-product" / "mapper" / "samples" / "01-row-scores"
 
+
+def _stage_harness(closure: Path) -> None:
+    """Put the REAL harness where `nxd.experimental.field_mapper` resolves.
+
+    The harness ships inside the installed `nxd` package. Laying the tree down
+    under the closure — the subprocess cwd — makes the import and the
+    `python -m` oracle resolve exactly as they will from site-packages, without
+    requiring the monorepo wheel to be installed here.
+    """
+    pkg = closure / "nxd" / "experimental"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (closure / "nxd" / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    shutil.copytree(MAPPER_SRC, pkg / "field_mapper", dirs_exist_ok=True)
+
 RUNNER = Path(__file__).parents[1] / "run.py"
 runner_spec = importlib.util.spec_from_file_location("eval_runner_desktop_custom", RUNNER)
 runner = importlib.util.module_from_spec(runner_spec)
@@ -612,31 +627,32 @@ if __name__ == "__main__":
         verifier_path = tmp_path / "contracts" / "expectations" / "accepted.py"
         verifier_path.write_text(verifier_path.read_text() + "\n# See ../../POLICY.md\n")
     if vendor_mapper:
-        # The REAL harness, vendored the way a mapper closure vendors it, and
-        # the real sample spec under contracts/. Phase G subprocesses this copy
-        # as its oracle, so a stub would test nothing.
-        shutil.copytree(MAPPER_SRC, tmp_path / "field_mapper", dirs_exist_ok=True)
+        # The REAL harness, staged where `nxd.experimental.field_mapper`
+        # resolves, and the real sample spec under contracts/. Phase G
+        # subprocesses this copy as its oracle, so a stub would test nothing.
+        _stage_harness(tmp_path)
         shutil.copy(MAPPER_SAMPLE / "spec.json", tmp_path / "contracts" / "mapper_spec.json")
         main = tmp_path / "transform" / "main.py"
-        main.write_text("from field_mapper import map_inputs\n" + main.read_text()
+        main.write_text("from nxd.experimental.field_mapper import map_inputs\n"
+                        + main.read_text()
                         + "\ndef _mapper_entry():\n    return map_inputs\n")
     if root_module_mapper:
-        # The same vendored harness, but the import sits in a CLOSURE-ROOT
-        # module and transform/main.py only imports that. Runtime-viable
-        # precisely because the vendoring contract puts the closure root on
-        # sys.path — that is how `import field_mapper` resolves at all — so this
-        # maps for real under Phase B.
-        shutil.copytree(MAPPER_SRC, tmp_path / "field_mapper", dirs_exist_ok=True)
+        # The same harness, but the import sits in a CLOSURE-ROOT module and
+        # transform/main.py only imports that. Runtime-viable because the
+        # transform executes with the closure root as its working directory, so
+        # a root module is importable from it — this maps for real under Phase B.
+        _stage_harness(tmp_path)
         shutil.copy(MAPPER_SAMPLE / "spec.json", tmp_path / "contracts" / "mapper_spec.json")
         (tmp_path / "glue.py").write_text(
-            "from field_mapper import map_inputs\n\n\n"
+            "from nxd.experimental.field_mapper import map_inputs\n\n\n"
             "def run():\n    return map_inputs\n")
         main = tmp_path / "transform" / "main.py"
         main.write_text("import glue\n" + main.read_text()
                         + "\ndef _mapper_entry():\n    return glue.run()\n")
     if mapper_grant:
         idproc = subprocess.run(
-            [sys.executable, "-m", "field_mapper", "spec-id", "contracts/mapper_spec.json"],
+            [sys.executable, "-m", "nxd.experimental.field_mapper", "spec-id",
+             "contracts/mapper_spec.json"],
             cwd=tmp_path, text=True, capture_output=True)
         assert idproc.returncode == 0, idproc.stderr
         doc = json.loads((MAPPER_SAMPLE / "grant.json").read_text())

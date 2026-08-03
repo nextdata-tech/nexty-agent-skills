@@ -2042,7 +2042,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    default_root = Path(__file__).parent.parent / "samples"
+    # The acceptance fixtures ship inside the package, so `verify` and `pins`
+    # answer "is this harness intact?" from any install, not only from a repo
+    # checkout. Resolved in two places because this file has two homes: beside
+    # this module in the installed package, and one level up in the skill repo
+    # that is its source of truth. Checking both keeps the two copies
+    # byte-identical, so neither can quietly drift from the other.
+    default_root = next(
+        (p for p in (Path(__file__).parent / "samples",
+                     Path(__file__).parent.parent / "samples") if p.is_dir()),
+        Path(__file__).parent / "samples")
     target = Path(args.target) if args.target else default_root
 
     try:
