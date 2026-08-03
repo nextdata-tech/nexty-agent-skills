@@ -7,5 +7,6 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-03 | nxd-generate-data-product: self-check shipped as an installed file, not a transcribed fence | NO_EVAL | — | [`2026-08-03-self-check-vendored-not-transcribed`](entries/2026-08-03-self-check-vendored-not-transcribed.md) |
 | 2026-08-03 | res.error casing convention pinned; a v0.33.0 ledger figure corrected | NO_EVAL | — | [`2026-08-03-res-error-casing-convention-pinned`](entries/2026-08-03-res-error-casing-convention-pinned.md) |
 | 2026-08-03 | nxd-generate-data-product: field-mapper promoted, gated on recorded consent | NO_EVAL | — | [`2026-08-03-field-mapper-promoted-consent-gate`](entries/2026-08-03-field-mapper-promoted-consent-gate.md) |

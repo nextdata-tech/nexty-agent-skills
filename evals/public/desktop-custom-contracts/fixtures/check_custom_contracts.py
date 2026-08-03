@@ -256,8 +256,9 @@ def check(root: Path):
         registered = len(verifiers)
         source = p.read_text(); verifier = next(iter(verifiers), None)
         verifier_source = ast.unparse(verifier) if verifier else ""
-    # Deliberately the SAME predicate as nxd-run-job-loop/scripts/self_check.py: a non-literal
-        # If/IfExp anywhere in the function, with FAILED present in the body —
+        # Deliberately the SAME predicate as the shipped self_check.py
+        # (nxd-run-job-loop/scripts/): a non-literal If/IfExp anywhere in the
+        # function, with FAILED present in the body —
         # NOT "FAILED lexically inside the branch". The stricter form rejects the
         # inverted guard clause (`if not violations: return PASS` / bare
         # `return FAILED`), which self_check accepts, and a closure that passes
