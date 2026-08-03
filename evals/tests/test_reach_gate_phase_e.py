@@ -1097,6 +1097,15 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         + "\n  ".join(unpinned)
     )
 
+    merge_record = body[body.index("def merge_record"):body.index("def finish")]
+    assert "except OSError as exc:" in merge_record, (
+        "merge_record's record write can still abort the final diagnostic report "
+        "with a bare OSError"
+    )
+    assert "could not be written" in merge_record, (
+        "merge_record's write failure is not reported through say()"
+    )
+
     # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
     # the reads Phase E's deferral depends on. This test is not a whole-file
     # sweep, and saying so keeps a later reader from trusting a coverage claim
@@ -1132,6 +1141,7 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         "claims UTF-8 — on a cp1252 host it silently accepts bytes Phase E "
         "rejected, and under an ASCII locale it fails a valid UTF-8 file"
     )
+
 
 if __name__ == "__main__":  # pragma: no cover
     import pytest

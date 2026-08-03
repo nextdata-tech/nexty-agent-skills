@@ -508,7 +508,12 @@ def merge_record(path, stages):
             "origin": "agent_observed",
             "note": "scratch DuckDB dry run — NOT the published product",
             "models": ROW_COUNTS}
-    p.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+    try:
+        p.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        say(f"record: {path} could not be written ({type(exc).__name__}: {exc}) — "
+            "stages 1-3 NOT merged.")
+        return
 
 def finish(exit_code):
     """Every exit goes through here, including a failing phase.
