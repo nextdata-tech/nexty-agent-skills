@@ -1042,18 +1042,29 @@ surfaces now agree, and the deterministic check
 closure written from the corrected guidance and still fail one with the terminal
 branch removed.
 
-The second is shipped script behaviour. Phase E's contract-verifier scan caught
-`(OSError, SyntaxError)`, but `UnicodeDecodeError` subclasses `ValueError`, so a
-verifier that is valid Python under a non-UTF-8 coding declaration escaped the
-handler and killed the self-check with a bare traceback — no `reach.*` code, no
-`close_stage`, no record merge, which is the one failure mode the rest of the
-script is written to avoid. No scenario ships a latin-1 verifier.
+The second is shipped script behaviour, at **three** read sites, not one.
+Phase E's contract-verifier scan caught `(OSError, SyntaxError)`, but
+`UnicodeDecodeError` subclasses `ValueError`, so a verifier that is valid Python
+under a non-UTF-8 coding declaration escaped the handler and killed the
+self-check with a bare traceback — no `reach.*` code, no `close_stage`, no record
+merge, which is the one failure mode the rest of the script is written to avoid.
+Guarding only Phase E moved the traceback rather than removing it: the C9
+escaping-reference scan rglobs `contracts/*` and read them unguarded, and Phase
+C's verifier read had the same hole — while Phase E's handler defers an
+undecodable verifier to "Phase C's finding to report", which Phase C could not do
+while dying on the same read. All three are closed. No scenario ships a latin-1
+verifier.
 
-Evidence is `evals/tests/test_reach_gate_phase_e.py::test_a_non_utf8_verifier_is_skipped_not_crashed`,
-**verified to fail against the previous implementation** rather than assumed to:
-run against `origin/main`'s fence the same closure exits 1 with the
-`UnicodeDecodeError` traceback; against this change it exits 0 and prints `phase
-E ok`. The fixture is written as bytes because the existing `verifiers` harness
-writes text and cannot express the defect.
+Evidence is two tests in `evals/tests/test_reach_gate_phase_e.py`, both
+**verified to fail against the previous implementation** rather than assumed to.
+`test_a_non_utf8_verifier_is_skipped_not_crashed` scopes its green to the Phase E
+SLICE — `_run_phase_e` runs an extracted harness, not `self_check.py`, and that
+distinction is precisely what hid the two remaining crashes, so it is stated here
+rather than left for a reader to infer. `test_every_read_under_contracts_survives_a_non_utf8_file`
+covers the other two sites statically over the shipped source: reaching C9 needs
+a complete valid closure, and a fixture that fails an earlier phase exits before
+C9 and passes vacuously — which the first version of that test did. The Phase E
+fixture is written as bytes because the existing `verifiers` harness writes text
+and cannot express the defect.
 
 Both findings came from review of the merged #141, not from a run.

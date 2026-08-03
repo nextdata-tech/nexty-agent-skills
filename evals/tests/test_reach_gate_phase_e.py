@@ -983,6 +983,47 @@ def test_a_non_utf8_verifier_is_skipped_not_crashed(tmp_path):
     assert "phase E ok" in out
 
 
+def test_every_read_under_contracts_survives_a_non_utf8_file():
+    """Phase E is not the only place the script decodes a file under contracts/.
+
+    Guarding only Phase E moved the traceback a few hundred lines down and left
+    the observable behaviour identical: the same latin-1 verifier cleared the
+    reach gate and then killed the C9 escaping-reference scan, which rglobs
+    ``contracts/*`` and ``contracts/*/*`` and read them unguarded. Phase C's
+    verifier read had the same hole — and Phase E's handler comment defers an
+    undecodable verifier to "Phase C's finding to report", which Phase C could
+    not do while dying on the same read.
+
+    Asserted statically over the shipped source rather than by running the
+    script: reaching C9 needs a complete valid closure (models.py, spec.py,
+    transform/, data/), so a runtime test would spend a large fixture to cover
+    one guard — and a fixture that fails an earlier phase exits before C9 and
+    passes vacuously, which is exactly how the first version of this test
+    reported green against a script that still crashed.
+    """
+    body = _script_body()
+    reads = re.findall(r"read_text\((.*?)\)", body)
+    assert reads, "no read_text calls found — did the script move?"
+
+    # Every read_text in the script must either declare an error policy or sit
+    # inside a handler that catches UnicodeDecodeError. The two that matter are
+    # keyed on their surrounding context, since a bare read_text() elsewhere
+    # (spec.py, models.py) fails the closure loudly and correctly.
+    c9 = body[body.index('rglob("contracts/*")'):]
+    c9_read = re.search(r"ESCAPE\.findall\(p\.read_text\((.*?)\)\)", c9)
+    assert c9_read is not None, "C9's escaping-reference read moved"
+    assert "errors=" in c9_read.group(1), (
+        "the C9 escaping-reference scan reads contracts/ files with no error "
+        "policy — a non-UTF-8 verifier kills the script there with a bare "
+        "traceback, after Phase E has already cleared it"
+    )
+
+    assert "except UnicodeDecodeError as exc:" in body, (
+        "Phase C's verifier read is unguarded — Phase E defers an undecodable "
+        "verifier to Phase C, so Phase C must survive to report it"
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     import pytest
 

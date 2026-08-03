@@ -1294,7 +1294,12 @@ for rel in scan:
     p = Path(rel)
     if not p.is_file():
         continue
-    for m in ESCAPE.findall(p.read_text()):
+    # errors="replace" rather than a try/except: this loop only regex-searches
+    # for ../*.md, so a replacement character can neither create nor mask a
+    # match, and a file this scan cannot decode is still a file whose escaping
+    # references must be reported. Skipping it would make an undecodable
+    # contract the one place an escaping reference hides.
+    for m in ESCAPE.findall(p.read_text(encoding="utf-8", errors="replace")):
         cerr("closure.escaping_reference",
              f"{rel}: references '{m}' — a contract/design path that escapes "
              f"the closure. Materialize it inside the closure "
@@ -1491,7 +1496,18 @@ if _spec_tree is not None:
                  f"{vpath}: referenced by custom({cname!r}) but the file does "
                  f"not exist.", vpath, {"contract": cname})
             continue
-        vsrc = vp.read_text()
+        try:
+            vsrc = vp.read_text()
+        except UnicodeDecodeError as exc:
+            # Phase E defers an undecodable verifier to "Phase C's finding to
+            # report" — so Phase C has to survive long enough to report it.
+            # Unguarded, this read died before cerr could be called and the
+            # deferral pointed at a phase that had already crashed.
+            cerr("closure.contract_verifier_malformed",
+                 f"{vpath}: cannot be decoded as UTF-8 ({exc}). A verifier is "
+                 f"executed Python; write it as UTF-8.", vpath,
+                 {"contract": cname})
+            continue
         try:
             vtree = ast.parse(vsrc, vpath)
         except SyntaxError as exc:
