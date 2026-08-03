@@ -18,9 +18,13 @@ from __future__ import annotations
 
 import csv
 import io
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from enum import Enum
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
+from typing import Iterable
+from typing import Mapping
+from typing import Sequence
 
 from .errors import SpecError
 from .identity import value_hash
@@ -365,9 +369,7 @@ class MapperProposal:
     execution_id: str
     observation_id: str
     emission_ordinal: int
-    evidence: list[MapperEvidence] = dc_field(
-        default_factory=lambda: list[MapperEvidence]()
-    )
+    evidence: list[MapperEvidence] = dc_field(default_factory=lambda: list[MapperEvidence]())
     error_code: str | None = None
     error_detail: str | None = None
     attempt_count: int = 0
@@ -381,8 +383,7 @@ class MapperProposal:
         if self.value_status is ValueStatus.OK:
             if self.typed.is_null:
                 raise SpecError(
-                    f"{self.target_row_key}/{self.field}: value_status=ok "
-                    "requires exactly one non-null typed slot"
+                    f"{self.target_row_key}/{self.field}: value_status=ok requires exactly one non-null typed slot"
                 )
         elif not self.typed.is_null:
             raise SpecError(
@@ -453,15 +454,9 @@ class MapperReview:
 
     def __post_init__(self) -> None:
         if self.verdict is Verdict.OVERRIDDEN and self.override is None:
-            raise SpecError(
-                f"review {self.review_id}: verdict=overridden requires an "
-                "override value"
-            )
+            raise SpecError(f"review {self.review_id}: verdict=overridden requires an override value")
         if self.verdict is not Verdict.OVERRIDDEN and self.override is not None:
-            raise SpecError(
-                f"review {self.review_id}: override value is only meaningful "
-                "with verdict=overridden"
-            )
+            raise SpecError(f"review {self.review_id}: override value is only meaningful with verdict=overridden")
         # A model does not review. If a model name could land here, the
         # human-precedence rule in the resolver would silently become
         # model-precedence.
@@ -486,9 +481,7 @@ class MapperReview:
             "target_row_key": self.target_row_key,
             "field": self.field,
             "verdict": self.verdict.value,
-            "override_value_type": (
-                self.override.value_type.value if self.override else None
-            ),
+            "override_value_type": (self.override.value_type.value if self.override else None),
             "bound_value_hash": self.bound_value_hash,
             "bound_input_snapshot_id": self.bound_input_snapshot_id,
             "bound_mapper_spec_id": self.bound_mapper_spec_id,
@@ -528,9 +521,7 @@ def _csv_cell(value: Any) -> Any:
     return value
 
 
-def _typed_from_row(
-    row: Mapping[str, Any], mapping: Mapping[ValueType, str]
-) -> TypedValue:
+def _typed_from_row(row: Mapping[str, Any], mapping: Mapping[ValueType, str]) -> TypedValue:
     """Rebuild a `TypedValue` from the five nullable slot columns.
 
     The declared `value_type` decides which slot is authoritative — NOT
@@ -581,9 +572,7 @@ def _strict_bool(raw: Any, lineno: int) -> bool:
     )
 
 
-def proposals_from_csv(
-    text: str, evidence: Iterable[MapperEvidence] = ()
-) -> list[MapperProposal]:
+def proposals_from_csv(text: str, evidence: Iterable[MapperEvidence] = ()) -> list[MapperProposal]:
     """Parse landed `mapper_proposals.csv` back into records.
 
     The inverse of `as_row()`, and what lets `resolve` run as a separate step at
@@ -700,9 +689,7 @@ def reviews_from_csv(text: str) -> list[MapperReview]:
                 verdict=verdict,
                 bound_value_hash=row.get("bound_value_hash"),
                 override=override,
-                bound_input_snapshot_id=_require(
-                    row, "bound_input_snapshot_id", lineno
-                ),
+                bound_input_snapshot_id=_require(row, "bound_input_snapshot_id", lineno),
                 bound_mapper_spec_id=_require(row, "bound_mapper_spec_id", lineno),
                 reviewer=_require(row, "reviewer", lineno),
                 reviewed_at=_require(row, "reviewed_at", lineno),
@@ -742,7 +729,5 @@ def _parse_slot(value_type: ValueType, raw: Any) -> Any:
                 return False
             raise ValueError(text)
     except ValueError as exc:
-        raise SpecError(
-            f"override value {text!r} is not a valid {value_type.value}"
-        ) from exc
+        raise SpecError(f"override value {text!r} is not a valid {value_type.value}") from exc
     return text

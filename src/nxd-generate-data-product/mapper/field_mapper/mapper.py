@@ -30,41 +30,49 @@ what makes the adversarial fixtures inspectable rather than just fatal.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field as dc_field, replace as dc_replace
-from typing import Any, Callable, Mapping, Sequence, cast
+from dataclasses import dataclass
+from dataclasses import field as dc_field
+from dataclasses import replace as dc_replace
+from typing import Any
+from typing import Callable
+from typing import Mapping
+from typing import Sequence
+from typing import cast
 
 from . import __version__
-from .errors import CellError, SpecError, SystemicError
+from .errors import CellError
+from .errors import SpecError
+from .errors import SystemicError
 from .grant import Grant
-from .identity import (
-    evidence_digest,
-    input_snapshot_id as derive_input_snapshot_id,
-    new_execution_id,
-    normalize_text,
-    observation_id as derive_observation_id,
-    target_row_key as derive_target_row_key,
-)
-from .ledger import AttemptRecord, RunLedger, hash_text
-from .media import MediaInput, media_digest
-from .records import (
-    LocatorKind,
-    MapperEvidence,
-    MapperProposal,
-    TypedValue,
-    ValueStatus,
-    ValueType,
-    VerifyStatus,
-)
-from .schema import ABSENT_SENTINEL, compile_schema, schema_cache_key
-from .spec import MapperSpec, TargetField
-from .validate import (
-    FieldConstraint,
-    ValidatedCell,
-    Violation,
-    check_cross_field,
-    validate_value,
-    verify_quote,
-)
+from .identity import evidence_digest
+from .identity import input_snapshot_id as derive_input_snapshot_id
+from .identity import new_execution_id
+from .identity import normalize_text
+from .identity import observation_id as derive_observation_id
+from .identity import target_row_key as derive_target_row_key
+from .ledger import AttemptRecord
+from .ledger import RunLedger
+from .ledger import hash_text
+from .media import MediaInput
+from .media import media_digest
+from .records import LocatorKind
+from .records import MapperEvidence
+from .records import MapperProposal
+from .records import TypedValue
+from .records import ValueStatus
+from .records import ValueType
+from .records import VerifyStatus
+from .schema import ABSENT_SENTINEL
+from .schema import compile_schema
+from .schema import schema_cache_key
+from .spec import MapperSpec
+from .spec import TargetField
+from .validate import FieldConstraint
+from .validate import ValidatedCell
+from .validate import Violation
+from .validate import check_cross_field
+from .validate import validate_value
+from .validate import verify_quote
 
 __all__ = [
     "MapperInput",
@@ -186,9 +194,7 @@ class MapperInput:
 
     input_id: str
     identity: Mapping[str, Any]
-    fields: Mapping[str, Any] = dc_field(
-        default_factory=lambda: dict[str, Any]()
-    )
+    fields: Mapping[str, Any] = dc_field(default_factory=lambda: dict[str, Any]())
     landed_text: str | None = None
     landed_text_model: str | None = None
     media: Sequence[MediaInput] = ()
@@ -263,18 +269,10 @@ class MapResult:
     is the drift the value-hash assert exists to catch.
     """
 
-    proposals: list[MapperProposal] = dc_field(
-        default_factory=lambda: list[MapperProposal]()
-    )
-    evidence: list[MapperEvidence] = dc_field(
-        default_factory=lambda: list[MapperEvidence]()
-    )
-    cells: list[ValidatedCell] = dc_field(
-        default_factory=lambda: list[ValidatedCell]()
-    )
-    quarantined: list[Quarantine] = dc_field(
-        default_factory=lambda: list[Quarantine]()
-    )
+    proposals: list[MapperProposal] = dc_field(default_factory=lambda: list[MapperProposal]())
+    evidence: list[MapperEvidence] = dc_field(default_factory=lambda: list[MapperEvidence]())
+    cells: list[ValidatedCell] = dc_field(default_factory=lambda: list[ValidatedCell]())
+    quarantined: list[Quarantine] = dc_field(default_factory=lambda: list[Quarantine]())
     execution_id: str = ""
     input_snapshot_id: str = ""
     mapper_spec_id: str = ""
@@ -358,10 +356,7 @@ def reconcile_identity(item: MapperInput) -> Quarantine | None:
             continue
         expected = item.identity[key]
         if _norm_component(asserted) != _norm_component(expected):
-            mismatches.append(
-                f"{key}: attached row says {expected!r}, the document itself "
-                f"asserts {asserted!r}"
-            )
+            mismatches.append(f"{key}: attached row says {expected!r}, the document itself asserts {asserted!r}")
     if not mismatches:
         return None
     return Quarantine(
@@ -370,8 +365,7 @@ def reconcile_identity(item: MapperInput) -> Quarantine | None:
         detail=(
             "the document's asserted identity does not match the row it is "
             "attached to, so every quote from it would substring-verify "
-            "against the WRONG entity's source. Quarantined before mapping. "
-            + "; ".join(mismatches)
+            "against the WRONG entity's source. Quarantined before mapping. " + "; ".join(mismatches)
         ),
     )
 
@@ -435,12 +429,9 @@ def map_inputs(
         bound_spec = dc_replace(bound_spec, harness_version=__version__)
 
     declared_fields = sorted(
-        {k for item in inputs for k in item.fields}
-        | {k for item in inputs for k in item.identity}
+        {k for item in inputs for k in item.fields} | {k for item in inputs for k in item.identity}
     )
-    declared_doc_classes = sorted(
-        {item.document_class for item in inputs if item.document_class}
-    )
+    declared_doc_classes = sorted({item.document_class for item in inputs if item.document_class})
     grant.check(
         bound_spec,
         input_fields=declared_fields,
@@ -504,11 +495,7 @@ def map_inputs(
     # `MapperSpec.__post_init__` has already established that this mode is legal
     # only for document media, so an image spec still reaches the refusal below.
     citations_mode = getattr(bound_spec, "evidence_mode", "structured") == "citations"
-    direct = [
-        i.input_id
-        for i in survivors
-        if i.is_media_direct and not citations_mode
-    ]
+    direct = [i.input_id for i in survivors if i.is_media_direct and not citations_mode]
     if direct:
         obliged = [f.name for f in bound_spec.target_fields if f.min_evidence > 0]
         if obliged:
@@ -532,14 +519,9 @@ def map_inputs(
     sort_keys = bound_spec.grain.canonical_sort
     ordered = sorted(
         survivors,
-        key=lambda i: tuple(
-            _sort_component(i, name) for name in sort_keys
-        )
-        + (i.input_id,),
+        key=lambda i: tuple(_sort_component(i, name) for name in sort_keys) + (i.input_id,),
     )
-    result.input_snapshot_id = derive_input_snapshot_id(
-        [i.snapshot_projection(bearing) for i in ordered]
-    )
+    result.input_snapshot_id = derive_input_snapshot_id([i.snapshot_projection(bearing) for i in ordered])
 
     ledger = RunLedger(
         run_dir,
@@ -556,25 +538,14 @@ def map_inputs(
     for ordinal, item in enumerate(ordered):
         row_key = derive_target_row_key(
             {k: item.identity[k] for k in bound_spec.grain.identity_fields},
-            source_locators={
-                k: item.fields[k]
-                for k in bound_spec.grain.source_locators
-                if k in item.fields
-            }
-            or None,
-            ordinal=(
-                ordinal
-                if bound_spec.grain.duplicate_policy == "ordinal_suffix"
-                else None
-            ),
+            source_locators={k: item.fields[k] for k in bound_spec.grain.source_locators if k in item.fields} or None,
+            ordinal=(ordinal if bound_spec.grain.duplicate_policy == "ordinal_suffix" else None),
         )
         beat(f"mapping {item.input_id} -> {row_key}")
         # Per input, not per run: a mixed population asks text-backed rows for
         # verbatim quotes and media-direct rows for region descriptions, so the
         # hash that records WHICH prompt was used has to vary with them.
-        prompt_hash = hash_text(
-            system_prompt_for(item) + "\n" + bound_spec.instruction
-        )
+        prompt_hash = hash_text(system_prompt_for(item) + "\n" + bound_spec.instruction)
         _map_one(
             item,
             row_key=row_key,
@@ -800,9 +771,7 @@ def _map_one(
             provider_notes=provider_notes,
         )
 
-        outstanding = tuple(
-            v for cell in per_field.values() for v in cell.violations
-        )
+        outstanding = tuple(v for cell in per_field.values() for v in cell.violations)
         if not outstanding:
             break
         violations = outstanding
@@ -821,30 +790,20 @@ def _map_one(
     # against, so the second call would spend real money to be discarded. This
     # matters most when the primary failed on BUDGET — spending again there is
     # the worst possible response to running out of money.
-    if (
-        spec.corroboration_model
-        and corroborate is not None
-        and item.is_media_direct
-        and systemic is None
-        and per_field
-    ):
+    if spec.corroboration_model and corroborate is not None and item.is_media_direct and systemic is None and per_field:
         second_parsed: Mapping[str, Any] | None = None
         second_result: Any = None
         failure: str | None = None
         started_second = time.monotonic()
         try:
-            second_result = corroborate(
-                item=item, spec=spec, wire_schema=wire_schema, violations=()
-            )
+            second_result = corroborate(item=item, spec=spec, wire_schema=wire_schema, violations=())
             second_parsed = getattr(second_result, "parsed", None)
             if second_parsed is None:
                 # A CallResult that came back without a parsed body is a failed
                 # attempt, not an absent one. `transport.Client` RETURNS this
                 # shape on exhausted retries rather than raising, so it must be
                 # handled alongside the exception path or it reads as success.
-                failure = (
-                    getattr(second_result, "error_code", None) or "no_parsed_body"
-                )
+                failure = getattr(second_result, "error_code", None) or "no_parsed_body"
         except (SystemicError, CellError) as exc:
             # CellError too, not just SystemicError. A transient per-attempt
             # failure on the SECOND reader must not be more destructive than the
@@ -876,8 +835,7 @@ def _map_one(
             # The CORROBORATOR's model, not the primary's: an attempt
             # attributed to the wrong model makes the audit trail claim a
             # call that never happened.
-            model=getattr(second_result, "model_snapshot", None)
-            or spec.corroboration_model,
+            model=getattr(second_result, "model_snapshot", None) or spec.corroboration_model,
             response_hash=getattr(second_result, "response_hash", None),
             input_tokens=getattr(second_result, "input_tokens", 0),
             output_tokens=getattr(second_result, "output_tokens", 0),
@@ -976,11 +934,7 @@ def _map_one(
                 # "X read A, Y read B" text existed only in memory, while the
                 # landed record a human is supposed to adjudicate carried
                 # nothing to adjudicate.
-                error_detail=(
-                    "; ".join(v.message for v in cell.violations)
-                    if cell.violations
-                    else cell.error_detail
-                ),
+                error_detail=("; ".join(v.message for v in cell.violations) if cell.violations else cell.error_detail),
                 error_code=cell.error_code,
             )
 
@@ -1015,9 +969,7 @@ def _map_one(
                 target_row_key_=row_key,
                 field=name,
                 value_hash_=typed.hash,
-                evidence_digest_=evidence_digest(
-                    [a.digest_payload() for a in atoms]
-                ),
+                evidence_digest_=evidence_digest([a.digest_payload() for a in atoms]),
                 response_hash=response_hash,
             ),
             emission_ordinal=ordinal,
@@ -1175,18 +1127,13 @@ def _validate_response(
                 needs_review=True,
                 attempt_count=1,
                 error_code="schema_reject",
-                error_detail=(
-                    f"field {name!r} missing from a response the wire schema "
-                    "marks required"
-                ),
+                error_detail=(f"field {name!r} missing from a response the wire schema marks required"),
             )
             continue
 
         block_map = cast(Mapping[str, Any], block)
         raw_value: Any = block_map.get("value")
-        raw_evidence: Sequence[Any] = cast(
-            Sequence[Any], block_map.get("evidence") or []
-        )
+        raw_evidence: Sequence[Any] = cast(Sequence[Any], block_map.get("evidence") or [])
 
         statuses: list[str] = []
         for atom in raw_evidence:
@@ -1237,11 +1184,7 @@ def _validate_response(
         out[name] = ValidatedCell(
             field=name,
             value=raw_value if not violations else raw_value,
-            value_status=(
-                ValueStatus.OK.value
-                if not violations
-                else ValueStatus.VALIDATION_FAILED.value
-            ),
+            value_status=(ValueStatus.OK.value if not violations else ValueStatus.VALIDATION_FAILED.value),
             needs_review=bool(violations),
             attempt_count=1,
             violations=tuple(violations),
@@ -1256,11 +1199,7 @@ def _validate_response(
     # violation — the harness knows one of the operands is wrong but not which,
     # and landing a value it cannot trust is what this whole design refuses.
     if cross_field_checks:
-        typed_values = {
-            name: cell.value
-            for name, cell in out.items()
-            if cell.value_status == ValueStatus.OK.value
-        }
+        typed_values = {name: cell.value for name, cell in out.items() if cell.value_status == ValueStatus.OK.value}
         for check in cross_field_checks:
             violation = check_cross_field(check, typed_values)
             if violation is None:
@@ -1373,9 +1312,7 @@ def _evidence_for(
         return []
     atoms: list[MapperEvidence] = []
     block_map = cast(Mapping[str, Any], block)
-    evidence_entries: Sequence[Any] = cast(
-        Sequence[Any], block_map.get("evidence") or []
-    )
+    evidence_entries: Sequence[Any] = cast(Sequence[Any], block_map.get("evidence") or [])
     for ordinal, raw in enumerate(evidence_entries):
         if not isinstance(raw, Mapping):
             continue
@@ -1386,14 +1323,8 @@ def _evidence_for(
         # `_verify_atom`. The eligibility exclusions (a `verified` atom is never
         # downgraded to the weaker claim; a `verify_failed` atom is never
         # laundered into an acceptable bucket, §2.3) live there.
-        status, match = _verify_atom(
-            quote, landed_text=item.landed_text, citations=citations
-        )
-        locator = (
-            LocatorKind.LANDED_TEXT
-            if item.landed_text is not None
-            else LocatorKind.SOURCE_FIELD
-        )
+        status, match = _verify_atom(quote, landed_text=item.landed_text, citations=citations)
+        locator = LocatorKind.LANDED_TEXT if item.landed_text is not None else LocatorKind.SOURCE_FIELD
         cite_page: int | None = None
         if match is not None:
             locator = LocatorKind.PAGE_REGION
@@ -1419,25 +1350,15 @@ def _evidence_for(
                 # extractor produced the input's landed text — on this path
                 # there is none, and naming one would credit a component that
                 # did no work here.
-                extractor=(
-                    _CITATION_EXTRACTOR
-                    if status == VerifyStatus.API_CITED.value
-                    else item.extractor
-                ),
+                extractor=(_CITATION_EXTRACTOR if status == VerifyStatus.API_CITED.value else item.extractor),
                 # The model snapshot that served the call, so a change in
                 # extraction behaviour is attributable to a specific build
                 # after the fact. Not the input's extractor version, which
                 # describes a component that did no work on this path.
                 extractor_version=(
-                    citation_source or ""
-                    if status == VerifyStatus.API_CITED.value
-                    else item.extractor_version
+                    citation_source or "" if status == VerifyStatus.API_CITED.value else item.extractor_version
                 ),
-                text_hash=(
-                    hash_text(normalize_text(item.landed_text))
-                    if item.landed_text is not None
-                    else None
-                ),
+                text_hash=(hash_text(normalize_text(item.landed_text)) if item.landed_text is not None else None),
             )
         )
     return atoms
@@ -1485,10 +1406,7 @@ def _record_attempt(
             wire_schema_hash=schema_hash,
             # The INPUT CONTENT HASH. The landed text and field values are
             # hashed at this boundary and the bytes never reach the ledger.
-            input_content_hash=hash_text(
-                str(sorted(item.fields.items()))
-                + (item.landed_text or "")
-            ),
+            input_content_hash=hash_text(str(sorted(item.fields.items())) + (item.landed_text or "")),
             model=model,
             request_params={
                 "model": request_model or spec.model,

@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
+from typing import Mapping
+from typing import Sequence
 
 from .errors import GrantError
 from .spec import MapperSpec
@@ -38,9 +41,7 @@ __all__ = ["Grant", "PII_CATEGORIES"]
 #: against this category. Phase G validates the value is in this vocabulary and
 #: that a grant carrying it binds the spec; it does not — and no check does —
 #: verify that what the transform actually sends matches what is declared here.
-PII_CATEGORIES: frozenset[str] = frozenset(
-    {"none", "pseudonymous", "personal", "sensitive"}
-)
+PII_CATEGORIES: frozenset[str] = frozenset({"none", "pseudonymous", "personal", "sensitive"})
 
 
 def _parse_expiry(raw: Any) -> _dt.datetime | None:
@@ -51,9 +52,7 @@ def _parse_expiry(raw: Any) -> _dt.datetime | None:
     try:
         parsed = _dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError as exc:
-        raise GrantError(
-            f"grant expiry {raw!r} is not an ISO-8601 timestamp"
-        ) from exc
+        raise GrantError(f"grant expiry {raw!r} is not an ISO-8601 timestamp") from exc
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=_dt.timezone.utc)
 
 
@@ -98,10 +97,7 @@ class Grant:
                 "particular. Bind the grant to a canonical spec hash."
             )
         if self.pii_category not in PII_CATEGORIES:
-            raise GrantError(
-                f"unknown pii_category {self.pii_category!r}; expected one of "
-                f"{sorted(PII_CATEGORIES)}"
-            )
+            raise GrantError(f"unknown pii_category {self.pii_category!r}; expected one of {sorted(PII_CATEGORIES)}")
         if not self.purpose.strip():
             raise GrantError(
                 "grant declares no purpose. A grant without a stated purpose "
@@ -117,8 +113,7 @@ class Grant:
             raw = json.loads(p.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise GrantError(
-                f"no consent grant at {p}. The harness refuses to read source "
-                "content or credentials without one."
+                f"no consent grant at {p}. The harness refuses to read source content or credentials without one."
             ) from exc
         except json.JSONDecodeError as exc:
             raise GrantError(f"grant at {p} is not valid JSON: {exc}") from exc
@@ -129,10 +124,21 @@ class Grant:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "Grant":
         known = {
-            "mapper_spec_id", "provider", "model", "corroboration_model",
-            "purpose", "input_fields",
-            "document_classes", "pii_category", "recurring", "expires_at",
-            "max_calls", "max_tokens", "max_usd", "granted_by", "granted_at",
+            "mapper_spec_id",
+            "provider",
+            "model",
+            "corroboration_model",
+            "purpose",
+            "input_fields",
+            "document_classes",
+            "pii_category",
+            "recurring",
+            "expires_at",
+            "max_calls",
+            "max_tokens",
+            "max_usd",
+            "granted_by",
+            "granted_at",
         }
         unknown = sorted(set(raw) - known)
         if unknown:
@@ -189,10 +195,7 @@ class Grant:
             )
 
         if self.model != spec.model:
-            problems.append(
-                f"model mismatch: grant authorizes {self.model!r}, spec names "
-                f"{spec.model!r}"
-            )
+            problems.append(f"model mismatch: grant authorizes {self.model!r}, spec names {spec.model!r}")
 
         # Consent is PER MODEL. Approving an artifact for one model is not
         # approval to send it to a second one, so a corroborating run under a
@@ -209,10 +212,7 @@ class Grant:
 
         moment = now or _dt.datetime.now(_dt.timezone.utc)
         if self.expires_at is not None and moment > self.expires_at:
-            problems.append(
-                f"grant expired at {self.expires_at.isoformat()} "
-                f"(now {moment.isoformat()})"
-            )
+            problems.append(f"grant expired at {self.expires_at.isoformat()} (now {moment.isoformat()})")
 
         # Undeclared inputs are the leak that matters: a grant listing three
         # fields does not authorize sending a fourth.
@@ -220,13 +220,10 @@ class Grant:
             undeclared = sorted(set(input_fields) - set(self.input_fields))
             if undeclared:
                 problems.append(
-                    f"input fields {undeclared} are not covered by the grant, "
-                    f"which lists {sorted(self.input_fields)}"
+                    f"input fields {undeclared} are not covered by the grant, which lists {sorted(self.input_fields)}"
                 )
         if self.document_classes:
-            undeclared_docs = sorted(
-                set(document_classes) - set(self.document_classes)
-            )
+            undeclared_docs = sorted(set(document_classes) - set(self.document_classes))
             if undeclared_docs:
                 problems.append(
                     f"document classes {undeclared_docs} are not covered by the "
@@ -236,8 +233,7 @@ class Grant:
         if problems:
             raise GrantError(
                 "consent grant does not authorize this run; refusing before "
-                "reading source content or credentials.\n  - "
-                + "\n  - ".join(problems)
+                "reading source content or credentials.\n  - " + "\n  - ".join(problems)
             )
 
     def budget_ceilings(self) -> dict[str, Any]:

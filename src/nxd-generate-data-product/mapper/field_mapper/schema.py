@@ -20,11 +20,16 @@ Pure stdlib. No network, no `anthropic` import.
 
 from __future__ import annotations
 
-from typing import Any, Final, Mapping, cast
+from typing import Any
+from typing import Final
+from typing import Mapping
+from typing import cast
 
 from .errors import SpecError
-from .identity import canonical_json, digest
-from .spec import MapperSpec, TargetField
+from .identity import canonical_json
+from .identity import digest
+from .spec import MapperSpec
+from .spec import TargetField
 
 __all__ = [
     "WIRE_SUPPORTED_KEYWORDS",
@@ -40,8 +45,19 @@ __all__ = [
 #: Keywords this API's structured-output schema actually honors. Anything a spec
 #: declares that is NOT in here must be enforced by `validate.py` instead.
 WIRE_SUPPORTED_KEYWORDS: Final[frozenset[str]] = frozenset(
-    {"type", "enum", "const", "anyOf", "$ref", "format", "required",
-     "additionalProperties", "properties", "items", "description"}
+    {
+        "type",
+        "enum",
+        "const",
+        "anyOf",
+        "$ref",
+        "format",
+        "required",
+        "additionalProperties",
+        "properties",
+        "items",
+        "description",
+    }
 )
 
 #: Keywords a JSON-Schema author would reach for that this API silently does
@@ -49,8 +65,19 @@ WIRE_SUPPORTED_KEYWORDS: Final[frozenset[str]] = frozenset(
 #: than folklore — emitting one of these into the wire schema is a bug, because
 #: it reads as enforced while doing nothing.
 HARNESS_ENFORCED_KEYWORDS: Final[frozenset[str]] = frozenset(
-    {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
-     "minLength", "maxLength", "pattern", "minItems", "maxItems", "uniqueItems"}
+    {
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+    }
 )
 
 #: `mapper_proposals` value_type -> JSON Schema `type`.
@@ -93,10 +120,7 @@ class ConstraintRoute:
         self.reason = reason
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostics only
-        return (
-            f"ConstraintRoute({self.field!r}, {self.constraint!r}, "
-            f"enforced_by={self.enforced_by!r})"
-        )
+        return f"ConstraintRoute({self.field!r}, {self.constraint!r}, enforced_by={self.enforced_by!r})"
 
     def as_row(self) -> dict[str, str]:
         return {
@@ -184,9 +208,7 @@ def describe_unenforceable(spec: MapperSpec) -> list[str]:
     than on the API rejecting bad output.
     """
     return [
-        f"{r.field}.{r.constraint} -> {r.enforced_by}"
-        for r in routing_table(spec)
-        if r.enforced_by != "wire_schema"
+        f"{r.field}.{r.constraint} -> {r.enforced_by}" for r in routing_table(spec) if r.enforced_by != "wire_schema"
     ]
 
 
@@ -232,15 +254,11 @@ def _field_schema(field: TargetField) -> dict[str, Any]:
                     "properties": {
                         "quote": {
                             "type": "string",
-                            "description": (
-                                "A verbatim substring of the source text."
-                            ),
+                            "description": ("A verbatim substring of the source text."),
                         },
                         "source_field_name": {
                             "type": "string",
-                            "description": (
-                                "Which named input field this quote came from."
-                            ),
+                            "description": ("Which named input field this quote came from."),
                         },
                     },
                 },
