@@ -1462,11 +1462,14 @@ if gerrors:
     finish(1)
 
 if not mapper_import:
-    say("phase G ok — no transform module imports the field-mapper "
-        "harness, so there was no consent obligation to check. This says "
-        "nothing about whether the closure reaches a model by some other "
-        "route; that is Phase E's question, and neither gate sees a renamed "
-        "vendor directory or an importlib call.")
+    say("phase G ok — no module under transform/ or at the closure root "
+        "imports the field-mapper harness, so no consent obligation was "
+        "found. Absence of a finding is not proof of absence: the scan does "
+        "not descend into root SUBPACKAGES, so a helper at helpers/util.py "
+        "holding the import reaches here silently, and neither this gate nor "
+        "Phase E sees a renamed vendor directory or an importlib call. "
+        "Whether the closure reaches a model by some other route is Phase "
+        "E's question, not this one's.")
 else:
     say(f"phase G ok — {mapper_import_file} imports {mapper_import!r}; "
         f"{len(matched)} mapper spec(s) under contracts/ each bound by a "
