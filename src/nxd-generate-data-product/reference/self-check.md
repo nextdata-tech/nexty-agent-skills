@@ -396,7 +396,8 @@ _codes("error", "agent",
        "closure.spec_snapshot_missing", "closure.lock_missing",
        "closure.lock_unparseable", "closure.lock_snapshot_byte_mismatch",
        "closure.build_record_missing", "closure.build_record_invalid",
-       "closure.build_record_hash_mismatch", "closure.readme_missing",
+       "closure.build_record_hash_mismatch", "closure.build_record_merge_failed",
+       "closure.readme_missing",
        "closure.resolved_ref_missing", "closure.escaping_reference",
        "closure.gitignore_missing", "closure.sensitive_missing",
        "closure.gitignore_not_naming_profile",
@@ -463,6 +464,12 @@ def say(*a, **k):
     if not JSON_MODE:
         print(*a, **k)
 
+def record_notice(message):
+    """Keep record I/O failures visible without contaminating JSON stdout."""
+    say(message)
+    if JSON_MODE:
+        print(message, file=sys.stderr)
+
 def cpath(at):
     return f"closure:{at}" if at else ""
 
@@ -493,10 +500,14 @@ def merge_record(path, stages):
     try:
         rec = json.loads(p.read_text(encoding="utf-8"))
     except Exception as exc:
-        say(f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
+        message = (
+            f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
             "stages 1-3 NOT merged. Re-run generator lock/record setup with its "
             "resolved job_helper_dir before self_check.py.")
-        return
+        record_notice(message)
+        diag("s3_closure", "closure.build_record_merge_failed", message,
+             path=cpath(path), evidence={"record": path})
+        return False
     rec.setdefault("stages", {}).update(stages)
     if READBACK["distribution"] or READBACK["absent"]:
         rec["readback"] = READBACK
@@ -508,7 +519,26 @@ def merge_record(path, stages):
             "origin": "agent_observed",
             "note": "scratch DuckDB dry run — NOT the published product",
             "models": ROW_COUNTS}
-    p.write_text(json.dumps(rec, indent=2) + "\n")
+    tmp = p.with_name(p.name + ".tmp")
+    try:
+        tmp.write_text(
+            json.dumps(rec, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        tmp.replace(p)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        message = (
+            f"record: {path} could not be written ({type(exc).__name__}: {exc}) — "
+            "the previous record is unchanged. Re-run generator lock/record "
+            "setup with its resolved job_helper_dir before self_check.py.")
+        record_notice(message)
+        diag("s3_closure", "closure.build_record_merge_failed", message,
+             path=cpath(path), evidence={"record": path})
+        return False
+    return True
 
 def finish(exit_code):
     """Every exit goes through here, including a failing phase.
@@ -537,8 +567,10 @@ def finish(exit_code):
         stages[s] = {"status": status, "ordinal": ordinal,
                      "at_unix_ms": STAGE_AT.get(s), "origin": "tool_computed",
                      "diagnostics": ds, "detail": STAGE_DETAIL[s]}
-    if RECORD_PATH:
-        merge_record(RECORD_PATH, stages)
+    if RECORD_PATH and not merge_record(RECORD_PATH, stages):
+        # The record could not carry this failure, so make the process verdict
+        # fail as well; the diagnostic already recorded it in DIAGS.
+        exit_code = max(exit_code, 1)
     if JSON_MODE:
         counts = {"error": 0, "warning": 0, "info": 0}
         for d in DIAGS:
@@ -1857,14 +1889,14 @@ if _spec_tree is not None:
             # UTF-8 — failing the closure over an em dash in a comment, with a
             # message telling the author to write UTF-8 that they already wrote.
             vsrc = vp.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             # Phase E defers an undecodable verifier to "Phase C's finding to
             # report" — so Phase C has to survive long enough to report it.
             # Unguarded, this read died before cerr could be called and the
             # deferral pointed at a phase that had already crashed.
             cerr("closure.contract_verifier_malformed",
-                 f"{vpath}: cannot be decoded as UTF-8 ({exc}). A verifier is "
-                 f"executed Python; write it as UTF-8.", vpath,
+                 f"{vpath}: cannot be read as UTF-8 text ({exc}). A verifier is "
+                 f"executed Python; it must be readable and UTF-8-encoded.", vpath,
                  {"contract": cname})
             continue
         try:

@@ -697,6 +697,8 @@ _register_table(
          "build-record.json does not parse or does not validate"),
         ("closure.build_record_hash_mismatch", "error", "agent", "none", False,
          "build-record.compiled_from does not match lock.spec_hash"),
+        ("closure.build_record_merge_failed", "error", "agent", "none", False,
+         "self-check could not merge build-record.json"),
         ("closure.readme_missing", "error", "agent", "none", False,
          "README.md — the reopen recipe — is missing"),
         ("closure.resolved_ref_missing", "error", "agent", "none", False,
@@ -716,7 +718,8 @@ _register_table(
         ("closure.contract_verifier_missing", "error", "agent", "none", False,
          "a custom contract's verifier file does not exist"),
         ("closure.contract_verifier_malformed", "error", "agent", "none", False,
-         "a verifier does not parse, is async, or has no on_verify/main guard"),
+         "a verifier cannot be read as UTF-8, does not parse, is async, or has "
+         "no on_verify/main guard"),
         ("closure.contract_verifier_inert", "error", "agent", "none", False,
          "a verifier can never fail — decorative, not executable"),
         ("closure.contract_verifier_unreferenced", "error", "agent", "none", False,

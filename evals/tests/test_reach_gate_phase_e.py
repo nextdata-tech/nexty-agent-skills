@@ -26,6 +26,7 @@ Phase E for proof that the transform is offline.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -156,6 +157,67 @@ def _diags(out: str) -> list[dict]:
 
 def _codes(out: str) -> list[str]:
     return [d["code"] for d in _diags(out)]
+
+
+def _run_merge_record_harness(
+    tmp_path: Path, record_path: Path, *, fail_replace: bool = False
+) -> tuple[subprocess.CompletedProcess[str], dict]:
+    """Run the shipped reporting/record-merge surface with a real subprocess."""
+    body = _script_body()
+    reporting_surface = body[: body.index(
+        "# ---------------------------------------------------------------- Phase A ---"
+    )]
+    harness = reporting_surface + f"""
+if {fail_replace!r}:
+    def _fail_replace(self, target):
+        raise OSError("simulated replace failure")
+    Path.replace = _fail_replace
+close_stage("s1_structure", "passed")
+close_stage("s2_transform", "passed")
+close_stage("s3_closure", "passed")
+finish(0)
+"""
+    script = tmp_path / "_merge_record.py"
+    script.write_text(harness, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(script), "--json", "--record", str(record_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert "Traceback" not in proc.stdout + proc.stderr
+    report = json.loads(proc.stdout)
+    return proc, report
+
+
+def test_merge_record_failures_reach_json_verdict(tmp_path):
+    """Record read/write failures are observable and preserve prior bytes."""
+    record_dir = tmp_path / "record-dir"
+    record_dir.mkdir()
+    proc, report = _run_merge_record_harness(tmp_path, record_dir)
+    assert proc.returncode != 0
+    assert report["ok"] is False
+    assert any(
+        d["code"] == "closure.build_record_merge_failed"
+        for d in report["diagnostics"]
+    )
+    assert "could not be read" in proc.stderr
+
+    record_path = tmp_path / "build-record.json"
+    original = b'{"marker": "keep", "stages": {}}\n'
+    record_path.write_bytes(original)
+    proc, report = _run_merge_record_harness(
+        tmp_path, record_path, fail_replace=True
+    )
+    assert proc.returncode != 0
+    assert report["ok"] is False
+    assert any(
+        d["code"] == "closure.build_record_merge_failed"
+        for d in report["diagnostics"]
+    )
+    assert record_path.read_bytes() == original
+    assert not record_path.with_name(record_path.name + ".tmp").exists()
+    assert "could not be written" in proc.stderr
 
 
 # --------------------------------------------------------------- ordering ---
@@ -1065,19 +1127,20 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # then three, then four, then seven — each round patching the sites the last
     # review had named while the next unpinned read sat waiting. A per-site
     # assertion can only catch sites someone already thought of. The invariant
-    # is that NO read in this script decodes under the locale codec, so it is
-    # asserted as one.
-    # Matches every read/open call and requires each to name a codec, rather
-    # than matching one spelling of "unpinned". A regex keyed on empty parens
+    # is that NO text-file read or write in this script depends on the locale
+    # codec, so it is asserted as one.
+    # Matches every read/open/write_text call and requires each text-mode call
+    # to name a codec rather than matching one spelling of "unpinned". A regex
+    # keyed on empty parens
     # `read_text()` misses the three ways this defect actually came back:
     # `read_text(errors="replace")` (a policy but no codec — the exact Phase C
     # half-fix documented above), a bare `open(p)` with no `newline=""` for the
     # csv check to key on, and a call split across lines.
     calls = re.findall(
-        r"(?:\.read_text|\.open|(?<![\w.])open)\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
+        r"(?:\.read_text|\.write_text|\.open|(?<![\w.])open)\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
         body, re.S,
     )
-    assert calls, "no read/open calls found — did the script move?"
+    assert calls, "no file I/O calls found — did the script move?"
     # The argument regex handles one level of nested parens, so a call like
     # `open(os.path.join(str(a), b))` is not matched AT ALL — it contributes
     # nothing to `calls`, never reaches the codec check, and passes silently.
@@ -1085,15 +1148,20 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # only catch call SPELLINGS someone thought of. Counting the call sites
     # independently makes an unparseable argument list fail the test instead of
     # disappearing from it.
-    sites = re.findall(r"(?:\.read_text|\.open|(?<![\w.])open)\(", body)
+    sites = re.findall(r"(?:\.read_text|\.write_text|\.open|(?<![\w.])open)\(", body)
     assert len(calls) == len(sites), (
-        f"{len(sites) - len(calls)} read/open call(s) have an argument list "
+        f"{len(sites) - len(calls)} file I/O call(s) have an argument list "
         f"this scan cannot parse, so they were never checked for a codec"
     )
-    unpinned = [c.strip() for c in calls if "encoding=" not in c]
+    binary_mode = re.compile(
+        r"(?:,\s*|mode\s*=\s*)[\"'][rwxa+]*b[rwxa+]*[\"']"
+    )
+    # Binary handles do not decode text and therefore must not name a text codec.
+    unpinned = [c.strip() for c in calls
+                if "encoding=" not in c and not binary_mode.search(c)]
     assert not unpinned, (
-        "these reads decode under the LOCALE codec, so their result depends on "
-        "the host's locale rather than on the file:\n  "
+        "these file I/O calls depend on the host's locale codec rather than "
+        "the file:\n  "
         + "\n  ".join(unpinned)
     )
 
@@ -1117,9 +1185,13 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # is the same never-fires shape this file exists to document.
     pc = body[body.index('cerr("closure.contract_verifier_missing"'):]
     pc = pc[:pc.index("closure.contract_verifier_malformed") + 400]
-    assert "except UnicodeDecodeError as exc:" in pc, (
+    assert "except (OSError, UnicodeDecodeError) as exc:" in pc, (
         "Phase C's verifier read is unguarded — Phase E defers an undecodable "
         "verifier to Phase C, so Phase C must survive to report it"
+    )
+    assert "cannot be read as UTF-8 text" in pc, (
+        "Phase C's verifier diagnostic still describes every read failure as "
+        "a decode failure, including OSError cases"
     )
     pc_read = re.search(r"vsrc = vp\.read_text\((.*?)\)", pc)
     assert pc_read is not None, "Phase C's verifier read moved"
