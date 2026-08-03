@@ -13,7 +13,7 @@ evals/README.md), this script turns the run.py --report JSON(s) into:
 Usage:
 
     python3 evals/benchmark_record.py \
-        --label "nxd-setup: headless device-flow branch" \
+        --label "nxd-setup-cli: headless device-flow branch" \
         --report before-v0.7.0=/tmp/eval-before.json \
         --report after-v0.8.0=/tmp/eval-after.json \
         --notes "Adds sandboxed-shell auth branch; scenario nxd-setup-headless-auth is new."
@@ -136,7 +136,7 @@ def slugify(text: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True,
-                        help="What changed, e.g. 'nxd-setup: headless device-flow branch'.")
+                        help="What changed, e.g. 'nxd-setup-cli: headless device-flow branch'.")
     parser.add_argument("--report", action="append", required=True,
                         dest="reports", metavar="[TAG=]PATH",
                         help="run.py --report JSON; repeatable. Tag rows with "

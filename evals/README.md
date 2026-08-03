@@ -50,8 +50,8 @@ one is responsible when a change ships unmeasured:
   `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
   `skill-sets.yaml`, the workflow — select every scenario.
 - **The 12 `ci_skip` scenarios never run automatically**, so the skills they
-  cover are unguarded. `nxd-data-product-query` is covered *only* by skipped
-  scenarios and `nxd-mesh-analyzer` has no scenario at all — for those two, a
+  cover are unguarded. `nxd-query-data-product` is covered *only* by skipped
+  scenarios and `nxd-analyze-mesh` has no scenario at all — for those two, a
   green eval check means "nothing ran", not "nothing regressed". Run them
   locally (see [`GETTING-STARTED.md`](GETTING-STARTED.md) tiers 2–3) when you
   change either.
@@ -319,7 +319,7 @@ Record the outcome in the repo so improvement is visible over time:
 
 ```sh
 python3 evals/benchmark_record.py \
-  --label "nxd-setup: <what changed>" \
+  --label "nxd-setup-cli: <what changed>" \
   --report before-v0.7.0=/tmp/eval-before.json \
   --report after-v0.8.0=/tmp/eval-after.json \
   --notes "<why the change was made>"
@@ -347,7 +347,7 @@ never for before/after comparisons, since a cache hit replays the old
 transcript).
 
 Each scenario should pin down one failure mode we never want to reintroduce
-(e.g. `nxd-setup-headless-auth` regression-tests the `nxd-setup` skill's
+(e.g. `nxd-setup-headless-auth` regression-tests the `nxd-setup-cli` skill's
 sandboxed-shell auth branch: dead background login poller → manual curl device
 flow → hand-written `tokens.json` → PAT).
 
@@ -444,7 +444,7 @@ inverts the `skills` array each scenario declares in its `checks.json`:
 ```json
 {
   "name": "Duplicate Rows on Every Re-run",
-  "skills": ["nxd-debugging-data-products", "nxd-adding-outputs"],
+  "skills": ["nxd-debug-data-product", "nxd-add-outputs"],
   "checks": [ ... ]
 }
 ```
@@ -521,21 +521,21 @@ Three traps worth knowing before you spend an afternoon on them:
   successful read, and the run errors `access_observed`. That is deliberate: the
   audit does not guess. Re-run rather than reinterpret.
 
-**Coverage gaps this leaves.** `nxd-data-product-query` is covered *only* by
+**Coverage gaps this leaves.** `nxd-query-data-product` is covered *only* by
 skipped scenarios, so a PR touching it currently gets a green no-op. One more
-skill — `nxd-mesh-analyzer` — has no scenario at all: a scenario for it was
+skill — `nxd-analyze-mesh` — has no scenario at all: a scenario for it was
 authored but withdrawn because its fixture rewarded *not* following the skill,
 so it detected nothing (see the git history for
 `infra-profile-source-discovery`). `nxd-review-closure` is a third: no
 scenario's `skills` list names it, because it is dispatched as a subagent from
-`nxd-generate-dp` Step 6b rather than invoked directly — what a scenario can
+`nxd-generate-data-product` Step 6b rather than invoked directly — what a scenario can
 observe is its EFFECT on the landed closure, which is what the
 `no_review_control` arm in `skill-sets.yaml` measures. Three of sixteen skills
 are therefore unguarded by CI. A green eval check on those PRs means "nothing
 ran", not "nothing regressed".
 
-The three scenarios these gaps used to include — `nxd-adding-policy`,
-`nxd-policies`, `nxd-eval-harness` — now each have a scenario, though none is
+The three scenarios these gaps used to include — `nxd-add-policies`,
+`nxd-toggle-policies`, `nxd-run-evals` — now each have a scenario, though none is
 baselined yet: they run and report `new`, and gate only once a measured verdict
 is recorded.
 

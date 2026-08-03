@@ -1,6 +1,6 @@
 ---
 name: nxd-pocket-loop
-description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request — "build me a data product", "score these against my rubric" — starts HERE, not in nxd-generate-dp: this skill gathers intent, source, questions and any supplied procedure (rubric, gates, weights, thresholds, verdicts), runs the mandatory policy read-back when that procedure has gaps, then invokes nxd-generate-dp. Going straight to the generator skips the co-authoring checkpoint and encodes a policy the user never saw. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-data-product-query.
+description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request — "build me a data product", "score these against my rubric" — starts HERE, not in nxd-generate-data-product: this skill gathers intent, source, questions and any supplied procedure (rubric, gates, weights, thresholds, verdicts), runs the mandatory policy read-back when that procedure has gaps, then invokes it. Going straight to the generator skips the co-authoring checkpoint and encodes a policy the user never saw. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-query-data-product.
 allowed-tools:
   - Bash
   - Read
@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.31.0
+  version: 0.32.0
 ---
 
 # nxd-pocket-loop skill
@@ -29,15 +29,15 @@ product on a local desktop supervisor — no Kubernetes, no remote warehouse:
 ```
 intent + source + questions
    → author dp-spec.md, the IR        (user-editable; the policy read-back)
-   → infer the semantic model        (nxd-semantic-data-product)
-   → generate the runnable closure    (nxd-generate-dp)
+   → infer the semantic model        (nxd-build-semantic-data-product)
+   → generate the runnable closure    (nxd-generate-data-product)
    → build + serve on the supervisor  (nxd-desktop MCP)
-   → render the pinned static release  (nxd-dp-static-artifact)
+   → render the pinned static release  (nxd-render-static-artifact)
    → describe → translate NL → query → present → refine
 ```
 
 This skill is the **orchestrator** and the **entry point for any end-to-end
-"build me a data product from this source" request**. `nxd-generate-dp`
+"build me a data product from this source" request**. `nxd-generate-data-product`
 constructs the closure once the plan is settled; it is not where a request starts
 — if you are in the generator without having done Steps 1–1b here, come back, do
 them, then invoke it from Step 3. It does not re-teach inference or code
@@ -114,7 +114,7 @@ Establish three things (ask the user for whatever is missing):
 - **Any procedure the user already has** — a rubric, gates, weights, thresholds,
   a verdict vocabulary, a selection rule. Ask for it here rather than inferring
   one later: a supplied procedure is the spec, encoded verbatim and landed as
-  data, and a gap in it is a question back to the user (nxd-generate-dp's
+  data, and a gap in it is a question back to the user (nxd-generate-data-product's
   `reference/derivation-plan.md` owns how it lands). **If the user already wrote
   it down** — a build spec, a requirements doc, a rubric page — take the doc
   rather than asking them to re-state it; Step 1b translates it.
@@ -195,7 +195,7 @@ naming the `generator_model` that will produce the rows;
 
 ### Step 2 — Infer the semantic model
 
-Invoke the **nxd-semantic-data-product** skill in its inference mode: profile
+Invoke the **nxd-build-semantic-data-product** skill in its inference mode: profile
 each source into `schema.json`, then derive the semantic model — grains,
 dimensions, metrics, joins, PII, **and a description on every model, dimension
 and metric** (Step 5 reads them to map questions) — from the profile(s), the
@@ -204,7 +204,7 @@ separately, carrying labels forward. That skill owns the role grammar.
 
 ### Step 3 — Generate the runnable closure
 
-Invoke the **nxd-generate-dp** skill: assemble the complete Python-authored
+Invoke the **nxd-generate-data-product** skill: assemble the complete Python-authored
 closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
 `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
 `build-record.json`, `README.md`, and the connector-type-specific artifact(s) —
@@ -216,7 +216,7 @@ policy read-back gate**: when the request carried a procedure with a gap that ch
 until the user has replied — the approved spec discharges it, so don't route
 around it. Pass through **every** gathered source with its label
 (or the single unlabeled source) and its per-model provenance from Step 2,
-untouched — one artifact per source, labeled per `nxd-generate-dp`'s
+untouched — one artifact per source, labeled per `nxd-generate-data-product`'s
 `reference/multi-source.md` when there's more than one. **That skill owns the
 exact per-type shape — don't re-derive it here**, along with the local DP shape
 (DuckDB output port, dlt-in-transform, local executor), the naming invariant, and
@@ -291,7 +291,7 @@ and never claim an "environment issue" you cannot evidence
 
 ### Step 4a — Render the pinned static artifact
 
-After every successful build or resume, invoke **nxd-dp-static-artifact** for the
+After every successful build or resume, invoke **nxd-render-static-artifact** for the
 workflow before `describe_models` or any query. It reads only the current,
 verified and outputs documents — over `nxd://` resources or the bridge tools —
 and writes one self-contained release HTML file. Report artifact `status`, `path`
@@ -311,7 +311,7 @@ natural-language translation is yours to do. For each question:
    names from source columns.
 2. **Map the NL question to a selection.** Pick the measure(s)/dimension(s) that
    answer it — reuse the question→concept mapping approach from
-   **nxd-data-product-query**'s semantic-layer section. Restate the selection
+   **nxd-query-data-product**'s semantic-layer section. Restate the selection
    before running and, if it is ambiguous against the declared concepts, ask
    rather than silently picking.
 3. **Check the question fits the MCP grammar.**
@@ -414,11 +414,11 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   label. With multiple sources each gets a short, distinct label used
   consistently across materialization, inference, and generation; two sources of
   the same connector type sharing an unlabeled or duplicate name is a collision
-  nxd-generate-dp can't resolve for you.
+  nxd-generate-data-product can't resolve for you.
 - **Correct data downstream, never upstream.** Cleaning, deduplication,
   amortization, currency normalization, reclassification and regrain belong in
   **derived models computed from the pristine source** — authored by
-  nxd-generate-dp, landed through the DuckDB output port, asserted in the
+  nxd-generate-data-product, landed through the DuckDB output port, asserted in the
   transform. Never edit the source export to reach that outcome, never emulate it
   agent-side.
 - **A judgement not in the data is confirmed and landed, not hardcoded.** FX

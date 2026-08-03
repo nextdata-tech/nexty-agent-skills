@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SELF_CHECK_MD = REPO_ROOT / "src" / "nxd-generate-dp" / "reference" / "self-check.md"
+SELF_CHECK_MD = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
 SELF_CHECK_PY = REPO_ROOT / "scripts" / "self_check.py"
 
 _FENCE = re.compile(r"```python\n(.*?)```", re.DOTALL)

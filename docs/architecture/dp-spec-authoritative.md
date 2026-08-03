@@ -24,7 +24,7 @@ agree on them exactly.
 
 ## 0. The model
 
-**User intent is the source, `dp-spec.md` is the IR, `nxd-generate-dp` is codegen,
+**User intent is the source, `dp-spec.md` is the IR, `nxd-generate-data-product` is codegen,
 the closure's Python is the output artifact.** Everything below follows from
 that framing, and two consequences are load-bearing throughout:
 
@@ -817,7 +817,7 @@ signal at all.
   "compiled_from": "sha256:…",          // == dp-spec.lock.json spec_hash
   "compiler_version": {
     "plugin": "0.28.0",
-    "generator_skill": "nxd-generate-dp",
+    "generator_skill": "nxd-generate-data-product",
     "dp_spec_version": 1,
     "canonicalization": "nxd-dp-spec-canon-v1"
   },
@@ -1102,7 +1102,7 @@ excluded from §5 because staleness is not a build outcome.
 ```
 
 Counted from `attempts[]`, never estimated. This is what makes the caps at
-`scheduling.md` and `nxd-generate-dp/SKILL.md` something the agent can check
+`scheduling.md` and `nxd-generate-data-product/SKILL.md` something the agent can check
 rather than self-police.
 
 `retry_environmental_total: 3` exists because §1.4's re-emission rule needs a
@@ -1174,7 +1174,7 @@ reformatted on the way in cannot be compared.
   "source_basename": "dp-spec.md",
   "compiler_version": {
     "plugin": "0.28.0",
-    "generator_skill": "nxd-generate-dp",
+    "generator_skill": "nxd-generate-data-product",
     "self_check": "nxd-self-check-v1"
   },
   "copied_at_unix_ms": 1769904000000,
@@ -1566,7 +1566,7 @@ silently, never abandoned silently.
 ### 6.6 The concession split
 
 **FORBIDDEN — never do it even to get green. Escalate as a blocker instead.**
-The invariants at `nxd-generate-dp/SKILL.md` are absolutes and a heal loop must
+The invariants at `nxd-generate-data-product/SKILL.md` are absolutes and a heal loop must
 not be allowed to relitigate them:
 
 - hand-writing `deployment-spec.yaml` / `manifest.yaml` / `models.yaml`
@@ -1833,12 +1833,12 @@ here may be paraphrased, pluralized or reordered.
 for §1, §2, §5 and §6.
 `src/nxd-pocket-loop/reference/failure-handling.md` — the loop's operating
 procedure over it (the ladder, fail-closed classification, typed exits, R1–R8).
-`src/nxd-generate-dp/reference/closure-record.md` — how the generator emits the
+`src/nxd-generate-data-product/reference/closure-record.md` — how the generator emits the
 record surfaces (byte copy, `prompt_ref` mirroring, lock write, `record init`,
 the `README.md` and `contracts/<name>.md` templates).
 
 **The verify-before-build closure file list** — must read identically in
-`nxd-generate-dp/SKILL.md`, `scheduling.md`, `handoff-export.md`,
+`nxd-generate-data-product/SKILL.md`, `scheduling.md`, `handoff-export.md`,
 `nxd-review-closure/SKILL.md` and the eval checkers, and is pinned by
 `test_closure_layout_gate.py`:
 
@@ -1962,7 +1962,7 @@ Deliberate limits. Each is a decision, not an oversight.
   incremental route and cursor). It carries no **join logic, aggregation logic,
   or order of operations between models**: there is no section stating that a
   derived model is built by joining A to B on key K and then grouping by G.
-  Where two models can be combined in more than one way, `nxd-generate-dp`
+  Where two models can be combined in more than one way, `nxd-generate-data-product`
   chooses at codegen time and the spec never records the choice.
 
   This weakens the pipeline claim in §0 at its centre. "The closure is a pure

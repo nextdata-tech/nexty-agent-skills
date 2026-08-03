@@ -29,9 +29,9 @@ SRC = REPO_ROOT / "src"
 POCKET_LOOP = SRC / "nxd-pocket-loop"
 SKILL = POCKET_LOOP / "SKILL.md"
 SCHEDULING = POCKET_LOOP / "reference" / "scheduling.md"
-GENERATE_DP = SRC / "nxd-generate-dp" / "SKILL.md"
-ADVERSARIAL_REVIEW = SRC / "nxd-generate-dp" / "reference" / "adversarial-review.md"
-POLICY_GATE = SRC / "nxd-generate-dp" / "reference" / "policy-gate.md"
+GENERATE_DP = SRC / "nxd-generate-data-product" / "SKILL.md"
+ADVERSARIAL_REVIEW = SRC / "nxd-generate-data-product" / "reference" / "adversarial-review.md"
+POLICY_GATE = SRC / "nxd-generate-data-product" / "reference" / "policy-gate.md"
 BUILD_RECORD = POCKET_LOOP / "reference" / "build-record.md"
 
 
@@ -129,7 +129,7 @@ def test_generate_dp_teaches_subagent_gate_contract():
     text = _strip_markdown(raw)
     # The generator, when run as a subagent, never opens a user turn and bounces.
     assert "invoked as a generation subagent" in text, (
-        "nxd-generate-dp must address the generation-subagent invocation"
+        "nxd-generate-data-product must address the generation-subagent invocation"
     )
     assert "you never open one" in text or "never open a user turn" in text or (
         "user turn is the orchestrator" in text
@@ -212,7 +212,7 @@ def test_credential_slots_are_key_names_only():
     # the subagent away from scheduling.md).
     gen = _strip_markdown(GENERATE_DP.read_text())
     assert "hold no credential" in gen and "placeholder" in gen, (
-        "nxd-generate-dp's subagent block must restate the placeholder credential rule inline"
+        "nxd-generate-data-product's subagent block must restate the placeholder credential rule inline"
     )
 
 

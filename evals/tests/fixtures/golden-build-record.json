@@ -6,7 +6,7 @@
   "compiled_from": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "compiler_version": {
     "plugin": "0.28.0",
-    "generator_skill": "nxd-generate-dp",
+    "generator_skill": "nxd-generate-data-product",
     "dp_spec_version": 1,
     "canonicalization": "nxd-dp-spec-canon-v1"
   },

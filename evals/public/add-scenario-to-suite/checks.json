@@ -1,7 +1,7 @@
 {
   "name": "Add a Case to an Eval Suite and State the Pass Criterion",
   "skills": [
-    "nxd-eval-harness"
+    "nxd-run-evals"
   ],
   "workspace_files": [
     "suite.py",

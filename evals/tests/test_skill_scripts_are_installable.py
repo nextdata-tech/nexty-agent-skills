@@ -82,7 +82,7 @@ def test_the_two_spec_scripts_live_in_the_pocket_loop_skill():
 def test_the_embedded_exception_is_real(name):
     """`self_check.py` is exempt only because a fence actually carries it."""
     assert (REPO / "scripts" / name).is_file()
-    fence = (SRC / "nxd-generate-dp" / "reference" / "self-check.md").read_text(encoding="utf-8")
+    fence = (SRC / "nxd-generate-data-product" / "reference" / "self-check.md").read_text(encoding="utf-8")
     assert f"# {name}" in fence, (
         f"{name} is exempted from the install rule because it is embedded in "
         "reference/self-check.md. That fence is gone, so the exemption is now a hole."
@@ -105,11 +105,11 @@ def test_a_cross_skill_call_names_the_owning_skill():
 
 
 def test_generator_selective_install_names_its_pocket_loop_dependency():
-    generator = (SRC / "nxd-generate-dp" / "SKILL.md").read_text(encoding="utf-8")
+    generator = (SRC / "nxd-generate-data-product" / "SKILL.md").read_text(encoding="utf-8")
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "Selective-install dependency" in generator
     assert "selective install must include both skills" in generator
-    assert "nxd-pocket-loop nxd-generate-dp" in readme
+    assert "nxd-pocket-loop nxd-generate-data-product" in readme
 
 
 def _assert_helpers_run(skill_dir: Path) -> None:

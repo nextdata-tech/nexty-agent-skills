@@ -52,7 +52,7 @@ def test_the_retired_names_appear_nowhere(needle):
 
 
 def test_the_context_doc_file_itself_is_gone():
-    assert not (REPO / "src" / "nxd-generate-dp" / "reference" / "context-doc.md").exists()
+    assert not (REPO / "src" / "nxd-generate-data-product" / "reference" / "context-doc.md").exists()
 
 
 def test_the_carve_out_is_one_exact_path():

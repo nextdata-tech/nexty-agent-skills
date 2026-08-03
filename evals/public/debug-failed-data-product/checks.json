@@ -1,7 +1,7 @@
 {
   "name": "Debug Failed Data Product (startup timeout caused by dependency install failure)",
   "skills": [
-    "nxd-debugging-data-products"
+    "nxd-debug-data-product"
   ],
   "checks": [
     {

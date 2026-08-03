@@ -1,7 +1,7 @@
 {
   "name": "incremental-multi-model",
   "skills": [
-    "nxd-generate-dp",
+    "nxd-generate-data-product",
     "nxd-pocket-loop"
   ],
   "ci_skip": "needs a live desktop supervisor (EVAL_POCKET_SUPERVISOR_DIR / EVAL_POCKET_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",

@@ -1679,7 +1679,7 @@ def write_lock(
     closure: Path,
     *,
     plugin_version: str | None = None,
-    generator_skill: str = "nxd-generate-dp",
+    generator_skill: str = "nxd-generate-data-product",
     now_ms: int | None = None,
 ) -> tuple[dict, Report]:
     """Snapshot an approved spec into a closure and write the lock.
@@ -1997,7 +1997,7 @@ def new_build_record(
         "compiler_version": {
             "plugin": (lock.get("compiler_version") or {}).get("plugin", "unknown"),
             "generator_skill": (lock.get("compiler_version") or {}).get(
-                "generator_skill", "nxd-generate-dp"
+                "generator_skill", "nxd-generate-data-product"
             ),
             "dp_spec_version": lock.get("dp_spec_version"),
             "canonicalization": lock.get("canonicalization", CANONICALIZATION),

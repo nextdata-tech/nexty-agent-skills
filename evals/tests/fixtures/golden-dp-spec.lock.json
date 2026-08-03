@@ -11,7 +11,7 @@
   "source_basename": "dp-spec.md",
   "compiler_version": {
     "plugin": "0.28.0",
-    "generator_skill": "nxd-generate-dp",
+    "generator_skill": "nxd-generate-data-product",
     "self_check": "nxd-self-check-v1"
   },
   "copied_at_unix_ms": 1769904000000,

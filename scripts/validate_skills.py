@@ -194,7 +194,7 @@ def validate_submodules(root: Path) -> list[str]:
     examples = (
         root
         / "src"
-        / "nxd-data-product-builder"
+        / "nxd-build-data-product"
         / "reference"
         / "nextdata-public-examples"
         / "data_products"

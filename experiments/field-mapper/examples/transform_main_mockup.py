@@ -14,7 +14,7 @@ Read it for the wiring and the ordering. Do not copy it into a data product yet.
 ---
 
 The shape follows the base-ingest template in
-`src/nxd-generate-dp/reference/transform-template.md`: land base models with dlt
+`src/nxd-generate-data-product/reference/transform-template.md`: land base models with dlt
 readers, append derived models as `@dlt.resource`, one `pipeline.run(...)`, then
 the table assert and the completion marker.
 

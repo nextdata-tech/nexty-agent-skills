@@ -2,7 +2,7 @@
 
 ## Mesh
 
-`nxd-setup` already ran this session and selected the mesh `logistics-prod`.
+`nxd-setup-cli` already ran this session and selected the mesh `logistics-prod`.
 It wrote the session config to:
 
 ```

@@ -1,6 +1,6 @@
 {
-  "$comment": "Inferred semantic intent — the handoff artifact produced by nxd-semantic-data-product (inference mode) over the profiled CSV export and stakeholder questions. Per model: description, source column types, and required public semantic roles. Translate these roles with semantic_model, field, primary_key, dimension, join, semantic_view, and metric_field; do not write __nxd_semantic__ metadata directly. Every column carries a role and a description — the only bare-typed attributes are columns whose roles are all metrics — a base model cannot carry a metric, so they land in the schema bare and their meaning travels on the metric (here orders.amount_usd and customers.is_churned).",
-  "produced_by": "nxd-semantic-data-product (inference mode)",
+  "$comment": "Inferred semantic intent — the handoff artifact produced by nxd-build-semantic-data-product (inference mode) over the profiled CSV export and stakeholder questions. Per model: description, source column types, and required public semantic roles. Translate these roles with semantic_model, field, primary_key, dimension, join, semantic_view, and metric_field; do not write __nxd_semantic__ metadata directly. Every column carries a role and a description — the only bare-typed attributes are columns whose roles are all metrics — a base model cannot carry a metric, so they land in the schema bare and their meaning travels on the metric (here orders.amount_usd and customers.is_churned).",
+  "produced_by": "nxd-build-semantic-data-product (inference mode)",
   "models": {
     "customers": {
       "description": "One row per customer.",

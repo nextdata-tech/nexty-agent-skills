@@ -1,6 +1,6 @@
 """Incremental transforms must be a GATED second path, never a relaxed default.
 
-The nxd-generate-dp default ingest lands every model with
+The nxd-generate-data-product default ingest lands every model with
 `write_disposition="replace"` from run-local dlt state. That pair is the antidote
 to the duplicate-rows-on-rerun bug class: a rerun rewrites the table instead of
 appending to it, so a green rerun cannot multiply rows.
@@ -69,7 +69,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src"
 
-GENERATE_DP = SRC / "nxd-generate-dp"
+GENERATE_DP = SRC / "nxd-generate-data-product"
 SKILL = GENERATE_DP / "SKILL.md"
 INCREMENTAL = GENERATE_DP / "reference" / "incremental-transforms.md"
 TRANSFORM_TEMPLATE = GENERATE_DP / "reference" / "transform-template.md"

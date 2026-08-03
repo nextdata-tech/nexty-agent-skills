@@ -31,7 +31,7 @@ CONTEXT_AND_RESUME = POCKET_LOOP / "reference" / "context-and-resume.md"
 HANDOFF_EXPORT = POCKET_LOOP / "reference" / "handoff-export.md"
 BUILD_RECORD = POCKET_LOOP / "reference" / "build-record.md"
 SCHEDULING = POCKET_LOOP / "reference" / "scheduling.md"
-GENERATE_DP_CLOSURE_RECORD = SRC / "nxd-generate-dp" / "reference" / "closure-record.md"
+GENERATE_DP_CLOSURE_RECORD = SRC / "nxd-generate-data-product" / "reference" / "closure-record.md"
 
 # The three tools whose relative order encodes "reattach before rebuild".
 LIST = "list_data_products"

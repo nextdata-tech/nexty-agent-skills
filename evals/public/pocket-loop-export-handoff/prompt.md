@@ -13,9 +13,9 @@ The export has one subdirectory per table. Treat 2025-07-15 as today, so
 Use this loop:
 
 1. Inspect/profile the source and infer a question-driven semantic model with
-   `nxd-semantic-data-product`.
+   `nxd-build-semantic-data-product`.
 2. Generate a complete runnable local DuckDB + dlt closure with
-   `nxd-generate-dp` — `spec.py`, `models.py`, `infra-profile.yaml`,
+   `nxd-generate-data-product` — `spec.py`, `models.py`, `infra-profile.yaml`,
    `transform/main.py`, `requirements.txt`, and the `data/`
    export. Do not hand-write `deployment-spec.yaml`, `manifest.yaml`, or
    `models.yaml`; the supervisor compiles those from `spec.py` at serve time.

@@ -152,7 +152,7 @@ POCKET_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 # MCP server (via uv / EVAL_MCP_PYTHON, so its heavy deps — the real
 # nxd.experimental.semantic compiler + Snowflake connector — stay out of the
 # stdlib-only runner) and puts a fake `nxd` on the agent's PATH so the
-# nxd-data-product-query skill's shipped HTTP toolchain (`nxd mcp health` +
+# nxd-query-data-product skill's shipped HTTP toolchain (`nxd mcp health` +
 # Streamable-HTTP) discovers + drives the genuine tools, exactly as in
 # production. Without this, the agent can only Read the catalog fixture and
 # *narrate* tool output (fabricating SQL + rows) — which the xhigh judge
@@ -331,7 +331,7 @@ DEFAULT_DOCS_BASE = "https://docs.demo.nextopia.dev/"
 # read-only via --add-dir — it is the public GitHub examples a user starts from.
 EXAMPLES_DIR = (
     REPO_ROOT
-    / "src" / "nxd-data-product-builder" / "reference" / "nextdata-public-examples"
+    / "src" / "nxd-build-data-product" / "reference" / "nextdata-public-examples"
 )
 
 
@@ -1211,7 +1211,7 @@ def semantic_http_server(scenario_dir: Path, mcp_spec: dict):
     """Start the semantic DP as a Streamable-HTTP MCP server for the duration of
     a scenario, and yield the (endpoint_url, env_overrides) the agent needs.
 
-    This mirrors production: the nxd-data-product-query skill discovers DP MCP
+    This mirrors production: the nxd-query-data-product skill discovers DP MCP
     endpoints by shelling out to ``nxd mcp health`` and then opens an HTTP MCP
     session. We start the real server, then point a fake ``nxd`` (on the agent's
     PATH) at it via EVAL_MCP_ENDPOINT — so the skill's shipped toolchain drives

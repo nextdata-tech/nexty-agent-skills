@@ -21,7 +21,7 @@ later number traces back to it. Cleaning, dedup, amortization, currency
 normalization, reclassification and regrain are legitimate — often necessary —
 but exist **only as derived models computed downstream of the pristine source**,
 never as an edit to the source export. Preserve the row on the way in, then
-derive the corrected model beside it; `nxd-generate-dp` owns how.
+derive the corrected model beside it; `nxd-generate-data-product` owns how.
 
 Materialization is also **gated**: if the request supplied a procedure with a
 result-changing gap, copying a source into a closure waits for the user's reply
@@ -63,7 +63,7 @@ auth is required. Treat access as **read-only** and never fabricate an endpoint.
 A database or API credential lands in exactly one place: the generated
 `infra-profile.yaml` connector service's `attributes`. Never in chat, never in
 `dp-spec.md` (which names key names only), never in a subagent's prompt or
-return. Per-type shape is in `nxd-generate-dp`'s `reference/database-source.md`
+return. Per-type shape is in `nxd-generate-data-product`'s `reference/database-source.md`
 and `reference/api-source.md`; labeled instances in its
 `reference/multi-source.md`.
 

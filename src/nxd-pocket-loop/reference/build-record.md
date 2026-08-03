@@ -25,7 +25,7 @@
 was compiled and run** — and it is the only place that content lives.
 
 The split is not filing tidiness. The compiler framing behind this pack is: user
-intent is the source, [`dp-spec.md`](dp-spec.md) is the IR, `nxd-generate-dp` is
+intent is the source, [`dp-spec.md`](dp-spec.md) is the IR, `nxd-generate-data-product` is
 codegen, the closure's Python is the output artifact. An IR is a pure function
 of its source, so an outcome — a row count, a runtime blocker, a review round, a
 build result — cannot live in it. It lives here.
@@ -238,7 +238,7 @@ disguise an observation as a measurement. `record append` rejects a report whose
   "compiled_from": "sha256:…",          // == dp-spec.lock.json spec_hash
   "compiler_version": {
     "plugin": "0.29.0",
-    "generator_skill": "nxd-generate-dp",
+    "generator_skill": "nxd-generate-data-product",
     "dp_spec_version": 1,
     "canonicalization": "nxd-dp-spec-canon-v1"
   },
@@ -643,7 +643,7 @@ ends up relitigating an absolute.
 
 ### FORBIDDEN — never do it, even to get green. Escalate instead.
 
-These are absolutes in `nxd-generate-dp`. A heal loop does not get to weigh them
+These are absolutes in `nxd-generate-data-product`. A heal loop does not get to weigh them
 against a red build:
 
 | doing this | escalates as |

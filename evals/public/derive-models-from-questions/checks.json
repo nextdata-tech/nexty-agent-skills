@@ -1,7 +1,7 @@
 {
   "name": "Derive the models the questions actually need",
   "skills": [
-    "nxd-generate-dp"
+    "nxd-generate-data-product"
   ],
   "deterministic_check": {
     "script": "check_derived_closure.py",

@@ -22,9 +22,9 @@ smallest path that can give an honest answer:
 
 | Situation | Route |
 |---|---|
-| **Explicit deployed/platform product** — the user names a remote DP, cluster, or platform endpoint | Hand off to `nxd-data-product-query`. Do not create a local replacement. |
+| **Explicit deployed/platform product** — the user names a remote DP, cluster, or platform endpoint | Hand off to `nxd-query-data-product`. Do not create a local replacement. |
 | **Existing local product with endpoint/token but no workflow id** | Explicit query-only exception: state that the static artifact is unavailable, then call `describe_models` and answer through `run_semantic_query`. |
-| **Existing local product, but no endpoint/token** — the typical new session, since the bearer is per-session and never persisted | **Reattach, don't rebuild.** Use `list_data_products` for discovery only, then `resume_data_product`, render the release with `nxd-dp-static-artifact`, then describe/query. A fresh endpoint and bearer arrive in seconds with no regeneration. Rebuild is the fallback only when the published artifact is gone. |
+| **Existing local product, but no endpoint/token** — the typical new session, since the bearer is per-session and never persisted | **Reattach, don't rebuild.** Use `list_data_products` for discovery only, then `resume_data_product`, render the release with `nxd-render-static-artifact`, then describe/query. A fresh endpoint and bearer arrive in seconds with no regeneration. Rebuild is the fallback only when the published artifact is gone. |
 | **Endpoint + bearer + workflow** | Render the pinned static artifact first, then describe/query. The artifact is release-scoped and does not consume the bearer. |
 | **Share / hand off a product** — the user wants to give it to another person or machine | Call `mcp__nxd-desktop__export_data_product` with the same `definition` path used to build it. Read-only and on demand — not part of the build/query loop. It zips the closure, strips credentials fail-closed, and emits a guided `IMPORT.md` for the recipient to rebuild. Full playbook: [handoff-export.md](handoff-export.md). |
 | **In-scope source data** — attached/exported CSVs, another local file (JSON/JSONL/Parquet), a connected workspace folder, pasted tabular data, a spreadsheet, an accessible live database connection, or an off-mesh REST API the user describes | Preserve the source, infer a model, generate a local closure when no suitable local product exists, then answer through the supervisor. An ordinary single file source may be copied unchanged into the generated closure's required export layout; a database or API source is described (host/URL, credentials-availability, table/endpoint list), never fabricated, and its connection details pass through to generation exactly as the user gave them — **except a live credential, which never enters an offloaded generate subagent (see the credential boundary under "Offloading generation to a subagent"); it is injected host-side**. Never modify a supplied original. |
@@ -76,7 +76,7 @@ non-convergence rather than looping forever or giving up silently:
 - **Model / DP-level regenerate** — the inferred model is wrong, or the question
   needs a column/grain that does not exist yet (a filtered figure, a ratio, a
   monthly rollup, a classification). The latter is a **derived model**, not a
-  query tweak: go back to Step 2/3, have `nxd-generate-dp` materialize the
+  query tweak: go back to Step 2/3, have `nxd-generate-data-product` materialize the
   ruling, rebuild through MCP with the **same** workflow id. Cap at **~3
   regenerate cycles total**.
 - **Environmental retry** — a failure the closure cannot fix, evidenced by a
@@ -170,7 +170,7 @@ expensive profiling on every bounce:
 
 1. **Profile subagent (Step 2, read-only).** Dispatch a built-in read-only
    subagent for a **file** source (CSV/JSON/JSONL/Parquet), giving it only the
-   source path and the `nxd-semantic-data-product` inference instructions. It
+   source path and the `nxd-build-semantic-data-product` inference instructions. It
    profiles each source into `schema.json`, derives the semantic model, and —
    crucially — surfaces any way the source data makes the user's supplied
    procedure ambiguous or under-determined. It returns the inferred model, the
@@ -197,9 +197,9 @@ expensive profiling on every bounce:
 
 Scope each subagent's context to the work at hand: the dispatch names the
 connector type(s) in play so the generate subagent loads only the matching
-`nxd-generate-dp` connector references (a CSV closure needs none of
+`nxd-generate-data-product` connector references (a CSV closure needs none of
 `database-source.md` / `api-source.md`), and the profile subagent loads only
-`nxd-semantic-data-product`'s inference path. The heavy references then load in
+`nxd-build-semantic-data-product`'s inference path. The heavy references then load in
 the subagent that needs them and never in the main thread — the whole reason to
 offload the step rather than run it inline.
 

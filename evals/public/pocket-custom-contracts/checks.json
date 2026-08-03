@@ -1,6 +1,6 @@
 {
   "name": "Generate executable Pocket custom contracts",
-  "skills": ["nxd-pocket-loop", "nxd-generate-dp"],
+  "skills": ["nxd-pocket-loop", "nxd-generate-data-product"],
   "ci_skip": "requires a manually operated default-deny source-isolation wrapper plus operator-resolved protected roots; the automatic PR runner has no such adapter. Run explicitly outside CI with the isolation attestation, wrapper, and roots configured.",
   "workspace_files": [
     "dp-spec.approved.md",

@@ -25,7 +25,7 @@ session that produced it.
 
 `dp-spec.md` is that same content as a **file the user can read and edit**. It is
 the intermediate representation: above it is what the user wants, below it is the
-Python closure `nxd-generate-dp` compiles. Everything the generator needs to
+Python closure `nxd-generate-data-product` compiles. Everything the generator needs to
 author a closure is in it, and nothing else is.
 
 Three things it fixes:
@@ -47,7 +47,7 @@ Three things it fixes:
 ## Outcomes do not live in this file
 
 The framing that decides what belongs here: **user intent is the source, this
-file is the IR, `nxd-generate-dp` is codegen, the closure's Python is the output
+file is the IR, `nxd-generate-data-product` is codegen, the closure's Python is the output
 artifact.** An IR is a pure function of its source, so a build outcome cannot
 live in it — it would be a value nothing in the spec derived.
 
@@ -243,7 +243,7 @@ excludes: |
 ### `## models` (required)
 
 The model plan, backward-chained from the questions. This is the section
-`nxd-generate-dp`'s Step 1a would otherwise derive from scratch.
+`nxd-generate-data-product`'s Step 1a would otherwise derive from scratch.
 
 ```yaml
 - name: raw_candidates
@@ -474,7 +474,7 @@ scores, under which rubric version, with which prompt.
 `generator_model` is what lands in the judgement rows' `judged_by` column, so
 "which model scored this entity" is a query rather than a guess. Two runs by
 different models coexist as distinct rows — that is what the four-part key in
-`nxd-generate-dp`'s `reference/llm-judgments.md` is for. Reproducibility depends
+`nxd-generate-data-product`'s `reference/llm-judgments.md` is for. Reproducibility depends
 on this being recorded, because nothing else in the closure carries it.
 
 `reruns: incremental` means a later run judges only `source keys − already-judged
@@ -492,7 +492,7 @@ cursor_field: created_at
 ```
 
 `incremental: true` is a claim with teeth — it commits the closure to the one
-sanctioned route in `nxd-generate-dp`'s `reference/incremental-transforms.md`,
+sanctioned route in `nxd-generate-data-product`'s `reference/incremental-transforms.md`,
 which gates on every promised model being append-safe. A spec asking for
 incremental over an aggregate or regrain model is a gap the read-back surfaces,
 not something the generator quietly resolves.
@@ -528,7 +528,7 @@ both axes always populated.
 
 This block **is** `data/nxd_decisions/nxd_decisions.csv` — the generator writes
 the CSV from these rows rather than composing it. See
-`nxd-generate-dp`'s `reference/derivation-plan.md` for the column semantics and
+`nxd-generate-data-product`'s `reference/derivation-plan.md` for the column semantics and
 the orthogonality of the two axes; nothing here overrides them.
 
 ### `## open_questions` (optional)
