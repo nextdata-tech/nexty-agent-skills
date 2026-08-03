@@ -11,9 +11,11 @@
 
 ## What the phases are
 
-The dry-run for Step 7 of nxd-generate-data-product, in five phases. They run in the order
-**A → E → B → C → D**, not in name order — the reason is in Phase E's entry, and
-it is the point of Phase E rather than an accident of how it was added.
+The dry-run for Step 7 of nxd-generate-data-product, in six phases. They run in
+the order **A → E → G → B → C → D**, not in name order — E and G both run before
+B because B executes the transform, and a verdict about what the transform may
+reach or spend is worthless once it already has. That ordering is the point of
+those two phases rather than an accident of how they were added.
 
 - **Phase A — structural check of `models.py` and `spec.py`.** Parses both files
   with `ast` and checks them against the pinned DSL surface in
@@ -52,6 +54,16 @@ it is the point of Phase E rather than an accident of how it was added.
   so a closure could call a model and nothing structural stopped it.
   **What it cannot see is in "What this script does NOT cover" — read that
   before you treat a green Phase E as proof the transform is offline.**
+- **Phase G — consent gate.** Static, and inert on the closures that do not
+  vendor the field-mapper harness. When one does, it fails the closure unless
+  `contracts/` carries a grant binding each mapper spec kept there **by hash**,
+  so a rubric edited after consent was given stops matching and the user is
+  asked again. It runs here, before Phase B, for the same reason Phase E does
+  and one of its own: Phase B *executes* the transform, and a mapper transform
+  with a resolvable key spends real money there, so a consent verdict delivered
+  afterwards would describe consent already spent. **What it cannot see is in
+  "What Phase G cannot see"** — a green Phase G is not proof that no unconsented
+  mapping happened.
 - **Phase B — dry-run of the transform** against a scratch DuckDB: the
   supervisor's execution minus the kernel.
 - **Phase C — closure-record gate** (Step 6a). A closure can be structurally
@@ -207,9 +219,13 @@ trustworthy rather than decorative:
   phase that produced no signal at all did not agree with you.
 - **`severity` does not decide who hears about it; `owner` does.** Everything
   this script emits is `owner: agent` — structural faults and user-code runtime
-  faults are yours to self-heal — except `closure.lock_status_not_approved`,
-  which is `owner: user`, because only the user can approve a spec. The agent
-  absorbs the rest and reports one plain line of outcome.
+  faults are yours to self-heal — except `closure.lock_status_not_approved` and
+  the three consent codes `grant.missing`, `grant.spec_mismatch` and
+  `grant.expired`, which are `owner: user`. Only the user can approve a spec,
+  and only the user can consent to sending the closure's content to a model: you
+  cannot author a grant on their behalf, decide that a drifted rubric is still
+  acceptable, or extend an expiry. The agent absorbs the rest and reports one
+  plain line of outcome.
 - **Phase B row counts are recorded under their own key, `phase_b_row_counts`,
   and are never merged with published counts.** One is a dry run against a
   temporary database; the other is what shipped. Collapsing them would let a
@@ -303,6 +319,75 @@ model was called. Specifically:
 Phase E raises the cost of reaching a model from *nothing* to *deliberately
 routing around a named check*. That is what it is worth; do not report it as
 more.
+
+**What Phase G cannot see.** Phase G is the *consent* gate, and it is a
+different question from Phase E's. Phase E asks whether the transform reaches a
+model at all; Phase G applies only to the one sanctioned way it may — a closure
+that **vendors the field-mapper harness** at its root as `field_mapper/` — and
+asks whether a grant under `contracts/` binds each mapper spec found there. A
+closure with no `field_mapper` import never triggers it, and `phase G ok` says
+so in as many words. `field_mapper` is deliberately **not** in Phase E's
+`MODEL_ROOTS`: it would fail every legitimate mapper closure, and the two gates
+answer different questions. Green Phase G means a binding consent artifact
+exists. Specifically not:
+
+- **The hash is computed by the artifact being audited.** Phase G subprocesses
+  the *vendored* `python -m field_mapper spec-id` rather than reimplementing the
+  binding, because two copies of a consent rule is how a gate ends up enforcing
+  something other than what it claims. The price is self-attestation: a closure
+  that edited its own `field_mapper/spec.py` can mint any id. Phase G catches
+  the closure that **drifted** — the spec edited after the user said yes, which
+  is the common failure — never the one that **lied**.
+- **Binding is to the specs on disk, not to the spec the call passes.** Phase G
+  hashes every spec-shaped JSON under `contracts/` and demands a grant for each;
+  nothing inspects which spec path the transform actually hands to `map_inputs`.
+  A closure carrying a granted decoy spec under `contracts/` while its transform
+  loads a different spec passes this gate. At run time the harness's own
+  `Grant.check` still compares the running spec's hash against the grant it is
+  handed — that is where an honest closure fails, and a closure minting its own
+  spec/grant pair is the "lied, not drifted" case no static gate here catches.
+- **The trigger is an import-level name, in any module under `transform/` or at
+  the closure root.** The scan walks `transform/**/*.py` plus the closure root's
+  own `*.py`, so moving the import into a helper module — under `transform/` or
+  beside `models.py` — is not an exemption. The root glob is non-recursive (a
+  full walk would descend into the vendored `field_mapper/` package, whose
+  modules import their own siblings, and self-trigger on every closure that
+  vendored it correctly), so an import inside a root *subpackage* —
+  `helpers/util.py`, with the transform doing `import helpers.util` — does not
+  fire the gate. Unlike the routes below, that is an ordinary refactor rather
+  than a closure that lied, which makes it the one hole here a careful author
+  could reach by accident. A renamed vendor directory, an
+  `importlib.import_module("field_mapper")`, or `transport.py`'s body pasted
+  inline never fires this gate either. Such a closure passes **Phase E as well**: the
+  harness's `import anthropic` is function-local inside `transport.py`, and
+  Phase E walks only the transform and the verifiers, not the packages they
+  import. Both gates green is not proof that no unconsented mapping happened.
+- **Static binding is not runtime coverage.** `input_fields` and
+  `document_classes` overreach, and the `max_calls`/`max_tokens`/`max_usd`
+  ceilings, are properties of a *run*. They are enforced by `Grant.check` and
+  `RunBudget` inside the harness at call time. Phase G passes no runtime
+  arguments and watches no individual call.
+- **One gated call is not every call.** A transform that calls `map_inputs`
+  (satisfying the gate) and *also* constructs a second `transport.Client`
+  beside it is invisible — attribute-level use is beyond an import check, the
+  same way `os.popen` is beyond Phase E's.
+- **Phase B spends under the grant, for real.** Phase B *executes* the
+  transform, and the harness resolves its key from secrets with an environment
+  fallback — so with `ANTHROPIC_API_KEY` set, self-checking a mapper closure
+  makes live model calls during the dry run. Phase G runs before Phase B so that
+  spend happens only under a binding grant; the ceilings on it are the harness's
+  job, not this script's.
+- **The grant binds the model id string, not the snapshot.** A snapshot rollover
+  behind the same alias is invisible here, by an upstream decision this gate
+  does not preempt.
+- **Expiry makes the gate time-dependent, deliberately.** A closure green
+  yesterday fails after its grant's `expires_at`. That is consent lapsing, not
+  flakiness — re-ask rather than extending the date to make the check quiet.
+
+`grant.unbound` is the one warning: a grant binding no spec in the closure
+authorizes nothing and fails nothing, but left on disk it reads as coverage it
+does not provide. It is reported only when every spec *did* find its grant —
+otherwise the same files are already the subject of a mismatch error.
 
 ## Where an expected value may come from
 
@@ -428,6 +513,19 @@ _codes("error", "agent",
        "reach.model_sdk_import", "reach.undeclared_transport",
        "reach.connector_shape_mismatch")
 _codes("warning", "agent", "reach.connector_undeclared")
+# Phase G, the consent gate. Same KeyError hazard as reach.* above.
+#
+# Three of these are owner: user, which is unusual — every other agent-fixable
+# code in this table is owned by the agent. Consent is not a code defect: the
+# agent cannot author a grant on the user's behalf, cannot decide that a drifted
+# rubric is still acceptable, and cannot extend an expiry. Those three are
+# questions FOR the user, exactly like closure.lock_status_not_approved.
+_codes("error", "user",
+       "grant.missing", "grant.spec_mismatch", "grant.expired")
+_codes("error", "agent",
+       "grant.invalid", "grant.spec_unreadable", "grant.ungated_map",
+       "grant.verifier_maps")
+_codes("warning", "agent", "grant.unbound")
 
 JSON_MODE = "--json" in sys.argv
 RECORD_PATH = None
@@ -1411,6 +1509,407 @@ say(f"phase E ok — no denied model-SDK import in transform/main.py"
     + f" A wrapped socket, a URL passed "
     f"to a reader, DuckDB httpfs, subprocess, and the mcp client are all "
     f"invisible or permitted here (see 'What Phase E cannot see').")
+
+# === PHASE-G-BEGIN ===
+# ---------------------------------------------------------------- Phase G ---
+# The consent gate: a closure that VENDORS the field-mapper harness maps only
+# under a grant binding each mapper spec found in the closure. Statically that
+# is the specs on disk under contracts/, never the path the transform hands to
+# `map_inputs` — the gap is recorded in "What Phase G cannot see".
+#
+# Why a gate at all. `field_mapper/grant.py` says, in its own module docstring,
+# that it "is a userland convention, not an enforceable security boundary" and
+# that something outside it is what fails a closure mapping without a matching
+# grant. For a long time nothing did. A consent record that no one checks is a
+# file, not a consent record — the spec drifts after the user said yes, the old
+# grant keeps sitting in contracts/, and every run afterwards is authorized by
+# an artifact describing a rubric the user never saw.
+#
+# ORDERING — the forced half. This block must DECIDE before Phase B's
+# `sys.path.insert(0, ".")` / `from transform.main import ...` / `ingest(...)`,
+# for Phase E's reason and one more. Phase B EXECUTES the transform, and the
+# mapper resolves its API key from secrets with an environment fallback: on a
+# machine with ANTHROPIC_API_KEY set, self-checking a mapper closure makes live
+# model calls during Phase B — real disclosure of the closure's source content
+# and real spend. A consent verdict delivered after that is a report about
+# consent already violated. test_phase_g_decides_before_phase_b_imports pins the
+# byte offsets so this cannot decay into a post-hoc note.
+#
+# ORDERING — the chosen half. G runs after E rather than before because it
+# reuses E's `imported_roots`/`denied_hit`/`t_imports`, and because E is purely
+# static while G subprocesses vendored code. Strictly more privileged runs later.
+#
+# Letter G, not F: the run order is already A, E, B, C, D, so "next letter"
+# communicates nothing, and D is taken by the policy boundary below. G is for
+# grant.
+import subprocess                          # noqa: E402 — only Phase G shells out
+MAPPER_ROOT = "field_mapper"
+gerrors, gwarnings = [], []
+# Bound here rather than inside the discovery branch: the success line reports
+# `len(matched)`, and a NameError in the reporting path of a gate that just
+# passed would turn a green closure into a crash.
+matched = {}
+
+def gerr(code, msg, at="", ev=None, fix=None):
+    gerrors.append((code, msg, at, ev, fix))
+
+# The trigger is an import-level root name in ANY module under transform/ OR at
+# the closure root, matched on dot boundaries by the same helper Phase E uses —
+# so `import field_mapper`, `from field_mapper import map_inputs` and
+# `from field_mapper.records import reviews_from_csv` all fire, while a
+# hypothetical `field_mapper_utils` is not collateral. Scanning only main.py
+# would let an honest refactor — the import moved to transform/helpers.py,
+# main.py importing that — through green, and it is the same closure mapping
+# the same content.
+#
+# The closure root is scanned for the same reason, one directory up: the
+# vendoring contract puts the root on sys.path (that is how `import field_mapper`
+# resolves at all), so a root module is importable from the transform and
+# executes under Phase B exactly like a transform/ one. A `glue.py` sitting
+# beside models.py holding the import, with transform/main.py doing
+# `import glue`, maps for real. Root is globbed NON-recursively on purpose: a
+# full-tree walk would descend into the vendored field_mapper/ package itself,
+# whose modules import their own siblings and would self-trigger on every
+# closure that vendored it correctly.
+#
+# `field_mapper` is deliberately NOT added to MODEL_ROOTS. It would fail every
+# legitimate mapper closure at Phase E, which denies model SDKs outright and
+# offers no grant-shaped exception. The mapper's own `import anthropic` is
+# function-local inside `transport.py` and invisible to Phase E's AST walk
+# anyway; the two gates answer different questions and stay separate.
+t_modules = {"transform/main.py": (t_imports, transform_src)}
+for _tp in sorted(list(Path("transform").rglob("*.py")) + list(Path(".").glob("*.py"))):
+    _rel = _tp.as_posix()
+    if _rel in t_modules:
+        continue
+    try:
+        _tsrc = _tp.read_text(encoding="utf-8")
+        t_modules[_rel] = (imported_roots(_tsrc, _rel), _tsrc)
+    except (OSError, SyntaxError):
+        continue        # Phase A and Phase B own an unreadable transform module.
+mapper_import_file, mapper_import = next(
+    ((rel, m) for rel, (mods, _s) in sorted(t_modules.items())
+     for m in sorted(mods) if denied_hit(m, {MAPPER_ROOT})),
+    (None, None))
+
+# The verifier scan is UNCONDITIONAL and not grant-waivable — a grant authorizes
+# mapping in a transform, never in a contract verifier. This closes a hole Phase
+# E structurally cannot: its verifier scan checks MODEL_ROOTS only, and the
+# mapper reaches a model through that function-local import, so a verifier that
+# maps passes Phase E while doing exactly what Phase E's own message forbids —
+# re-deciding pass/fail on every run, so the same landed rows can pass today and
+# fail tomorrow.
+for vpath in sorted(p for p in Path("contracts").rglob("*.py")
+                    if p.name != "__init__.py"):
+    try:
+        gv_imports = imported_roots(vpath.read_text(encoding="utf-8"), str(vpath))
+    except (OSError, SyntaxError):
+        # Same reasoning as Phase E's verifier scan: an unreadable verifier is
+        # Phase C's finding. "Could not scan" is not a consent verdict.
+        continue
+    if any(denied_hit(m, {MAPPER_ROOT}) for m in gv_imports):
+        gerr("grant.verifier_maps",
+             f"{vpath} imports {MAPPER_ROOT!r}. A contract verifier decides "
+             f"pass/fail from data that has already landed; it never calls a "
+             f"model. No grant authorizes this — consent covers mapping in the "
+             f"transform, and a verifier that maps re-decides the answer every "
+             f"run.", str(vpath))
+
+if mapper_import:
+    # --- Discover specs and grants under contracts/, BY SHAPE. -------------
+    # By required-key shape rather than by filename: a closure names these files
+    # whatever it likes, and a gate keyed on `mapper_spec.json` is bypassed by
+    # renaming a file — which is not a threat model worth honouring, but is a
+    # very easy way to get a false GREEN on an honest closure that just used a
+    # different name.
+    SPEC_KEYS = {"instruction", "target_fields", "grain", "cardinality",
+                 "thresholds", "input_adapter"}
+    GRANT_KEYS = {"mapper_spec_id", "provider", "model", "purpose"}
+    # `mapper_spec_id` alone makes a file a grant CANDIDATE. Requiring the full
+    # GRANT_KEYS set to even recognise one made a defective grant indistinguish-
+    # able from no grant: drop `purpose` and the file fell out of grant_files,
+    # the `elif not grant_files` branch fired, and the gate told the user
+    # "contracts/ carries no consent grant" while the grant sat in contracts/.
+    # That is the one grant.* message that can contradict what is on disk, and
+    # it carries next_action: confirm — so a one-key typo the agent could fix
+    # stopped the loop to ask a human to re-consent to a rubric they had already
+    # consented to. Recognise first, then judge: a candidate that fails the full
+    # shape is grant.invalid (owner: agent), and grant.missing keeps its literal
+    # meaning of no grant artifact at all.
+    spec_files, grant_files = [], []
+    malformed_grants = []
+    for jpath in sorted(Path("contracts").rglob("*.json")):
+        try:
+            doc = json.loads(jpath.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        if SPEC_KEYS <= set(doc):
+            spec_files.append(jpath)
+        elif GRANT_KEYS <= set(doc):
+            grant_files.append((jpath, doc))
+        elif "mapper_spec_id" in doc:
+            missing = sorted(GRANT_KEYS - set(doc))
+            malformed_grants.append(jpath)
+            gerr("grant.invalid",
+                 f"{jpath} carries mapper_spec_id, so it is a consent grant, "
+                 f"but it is missing {missing}. Every one of "
+                 f"{sorted(GRANT_KEYS)} is required: a grant without a stated "
+                 f"purpose cannot be reviewed by the person who gave it, and "
+                 f"one that names no provider or model does not say what the "
+                 f"content was authorized to reach.", str(jpath),
+                 ev={"missing_keys": missing},
+                 fix=f"add {missing} to {jpath}; the grant itself does not need "
+                     f"re-consenting, only completing")
+
+    # A transform that imports the package but never references `map_inputs` is
+    # the bypass grant.py names in its own docstring: `transport.Client` is
+    # reachable directly, and it takes no grant. `map_inputs` is the only entry
+    # point where `Grant.check` runs — its `grant` parameter is required, not
+    # optional — so its absence means the consent path was routed around.
+    # AST-level, Name or Attribute, so both `map_inputs(...)` and
+    # `field_mapper.map_inputs(...)` count — across every transform module, for
+    # the same reason the trigger spans them. `map_inputs as mi` binds the call
+    # to a different name, so the import aliases are collected too: an alias is
+    # recorded in the AST, and reading it beats calling a consented closure
+    # ungated on a spelling.
+    _refs, _gated_aliases = set(), {"map_inputs"}
+    for _rel, (_mods, _msrc) in sorted(t_modules.items()):
+        try:
+            _tree = ast.parse(_msrc, _rel)
+        except SyntaxError:
+            _refs.add("map_inputs")  # Phase A already owns the parse failure.
+            continue
+        for node in ast.walk(_tree):
+            if isinstance(node, ast.Name):
+                _refs.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                _refs.add(node.attr)
+            elif (isinstance(node, ast.ImportFrom) and node.module
+                  and denied_hit(node.module, {MAPPER_ROOT})):
+                _gated_aliases |= {a.asname for a in node.names
+                                   if a.name == "map_inputs" and a.asname}
+    if not (_refs & _gated_aliases):
+        gerr("grant.ungated_map",
+             f"{mapper_import_file} imports {mapper_import!r} but no transform "
+             f"module references map_inputs. map_inputs is the only entry point "
+             f"that checks the grant before reading source content or resolving "
+             f"a key; reaching transport.Client directly maps with no consent "
+             f"check at all.",
+             mapper_import_file)
+
+    if not spec_files:
+        gerr("grant.spec_unreadable",
+             f"{mapper_import_file} imports {mapper_import!r} but no mapper "
+             f"spec JSON was found under contracts/. Whatever form the spec "
+             f"takes elsewhere — another directory, or inlined as a Python "
+             f"literal — it is invisible here, and an inline literal "
+             f"additionally has no stable mapper_spec_id to consent to.",
+             "contracts/",
+             fix="write the mapper spec to contracts/<name>_spec.json and load "
+                 "it with MapperSpec.load")
+    elif not grant_files and not malformed_grants:
+        # `and not malformed_grants` so this cannot fire alongside the
+        # grant.invalid above and tell the user, in the same report, both that a
+        # grant is defective and that no grant exists. The defective one is
+        # already reported and is agent-fixable; adding a second finding that
+        # asks for a fresh human yes would be the contradiction this branch is
+        # least able to afford.
+        #
+        # owner: user. Consent is the user's act — the agent cannot author a
+        # grant on the user's behalf, which is the whole point of a grant.
+        gerr("grant.missing",
+             f"{mapper_import_file} imports {mapper_import!r} and "
+             f"{len(spec_files)} mapper spec(s) are present, but contracts/ "
+             f"carries no consent grant. The mapper sends the closure's source "
+             f"content to a model; that needs a recorded human yes bound to "
+             f"the spec by hash.", "contracts/",
+             ev={"specs": [str(p) for p in spec_files]},
+             fix="ask the user, then write the grant with the mapper_spec_id "
+                 "printed by `python -m field_mapper spec-id <spec.json>`")
+    else:
+        # --- Recompute each spec's bound id and pair a grant to it. --------
+        # The id is computed by SUBPROCESSING THE VENDORED HARNESS rather than
+        # reimplementing the hash here. Two copies of a binding rule is how a
+        # gate ends up enforcing something other than what it claims: the
+        # closure's own `field_mapper` is what will run, so it is what must
+        # answer. The cost is self-attestation — a closure that tampered
+        # spec.py can mint any id — and that limit is recorded in the doc.
+        bound = {}
+        for spath in spec_files:
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "field_mapper", "spec-id", str(spath)],
+                    capture_output=True, text=True, timeout=60)
+                if proc.returncode != 0:
+                    # LAST line of stderr, not the whole of it. A broken package
+                    # exits with a full traceback, and pasting that into a
+                    # finding buries the one informative line under frames from
+                    # runpy — while also putting the word "Traceback" into a
+                    # report whose readers use it to mean "the tool itself
+                    # crashed".
+                    _last = [ln for ln in proc.stderr.strip().splitlines()
+                             if ln.strip()]
+                    raise ValueError(_last[-1].strip()[:200] if _last
+                                     else "non-zero exit")
+                bound[str(spath)] = json.loads(proc.stdout.strip())["mapper_spec_id"]
+            except Exception as exc:
+                # A broken vendored package is a FINDING, not a traceback. The
+                # whole self-check dying on a subprocess failure would take
+                # every other phase's verdict with it.
+                gerr("grant.spec_unreadable",
+                     f"could not compute the bound mapper_spec_id for {spath}: "
+                     f"{type(exc).__name__}: {exc}. The vendored field_mapper "
+                     f"package could not answer for its own spec, so no grant "
+                     f"can be matched to it.", str(spath))
+        for spath, spec_id in sorted(bound.items()):
+            hit = next((g for g, doc in grant_files
+                        if doc.get("mapper_spec_id") == spec_id), None)
+            if hit is None:
+                # `<derived>` is the samples-only escape hatch in the harness's
+                # fixture loader, where it is substituted with whatever spec is
+                # loaded. In a closure that is not a binding at all — it
+                # authorizes anything — so it is called out by name rather than
+                # folded into the generic mismatch.
+                placeholder = [str(g) for g, doc in grant_files
+                               if doc.get("mapper_spec_id") == "<derived>"]
+                if placeholder:
+                    gerr("grant.invalid",
+                         f"{placeholder[0]} carries "
+                         f'"mapper_spec_id": "<derived>" — the harness fixture '
+                         f"placeholder, which binds to whatever spec it is "
+                         f"handed and therefore authorizes anything.",
+                         placeholder[0],
+                         fix="replace it with the literal id from "
+                             "`python -m field_mapper spec-id`")
+                    continue
+                bad = [str(g) for g, doc in grant_files
+                       if not re.fullmatch(r"[0-9a-f]{32}",
+                                           str(doc.get("mapper_spec_id", "")))]
+                if bad:
+                    gerr("grant.invalid",
+                         f"{bad[0]} carries a mapper_spec_id that is not a "
+                         f"32-character lowercase hex hash, so it cannot bind "
+                         f"any spec.", bad[0])
+                    continue
+                if not grant_files:
+                    # Every grant in the closure was malformed, so each is
+                    # already reported as grant.invalid. Saying "the grants
+                    # present authorize other spec hashes" here would name a set
+                    # that is empty, and would send the user to re-consent when
+                    # the actual repair is completing a file the agent can fix.
+                    continue
+                gerr("grant.spec_mismatch",
+                     f"no grant binds {spath} (bound id {spec_id}). The grants "
+                     f"present authorize other spec hashes — the rubric, "
+                     f"fields, thresholds or model changed since consent was "
+                     f"given, which is exactly when the user should be asked "
+                     f"again.", str(spath),
+                     ev={"expected": spec_id,
+                         "found": sorted({str(doc.get("mapper_spec_id"))
+                                          for _, doc in grant_files})},
+                     fix="re-ask the user and rewrite the grant against the "
+                         "current spec-id")
+                continue
+            matched[str(spath)] = (str(hit), spec_id)
+
+        # --- Run the harness's OWN check on each bound pair. ---------------
+        # `Grant.check` is the rule of record. Calling it means the gate cannot
+        # drift from the consent rules it claims to enforce. No runtime
+        # arguments are passed: input_fields and document_classes are properties
+        # of a RUN, so only the statically decidable subset — hash, model,
+        # corroboration model, expiry — is exercised here.
+        for spath, (gpath, spec_id) in sorted(matched.items()):
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "field_mapper", "grant-check",
+                     spath, gpath],
+                    capture_output=True, text=True, timeout=60)
+                verdict = json.loads(proc.stdout.strip())
+            except Exception as exc:
+                gerr("grant.spec_unreadable",
+                     f"could not check {gpath} against {spath}: "
+                     f"{type(exc).__name__}: {exc}", gpath)
+                continue
+            for problem in verdict.get("problems", []):
+                kind, detail = problem.get("kind"), problem.get("message", "")
+                if kind == "expired":
+                    gerr("grant.expired",
+                         f"{gpath} has expired: {detail} Consent lapses on "
+                         f"purpose — a closure green yesterday failing today is "
+                         f"the grant doing its job, not flakiness.", gpath)
+                elif kind in ("model_mismatch", "corroboration_mismatch"):
+                    gerr("grant.spec_mismatch",
+                         f"{gpath} binds {spath}'s hash but not its models: "
+                         f"{detail} Consent is per model — sending the same "
+                         f"content to a second model is a separate disclosure.",
+                         gpath)
+                elif kind == "spec_mismatch":
+                    gerr("grant.spec_mismatch",
+                         f"{gpath} does not authorize {spath}: {detail}", gpath)
+                else:
+                    gerr("grant.invalid",
+                         f"{gpath} was rejected by the harness: {detail}", gpath)
+
+        # A grant matching no spec is a WARNING, not an error: it fails nothing
+        # and authorizes nothing, but a stale consent artifact left in contracts/
+        # is the thing a later reader mistakes for coverage.
+        #
+        # "Stale" is only meaningful when the closure's consent is OTHERWISE
+        # complete. If some spec failed to bind, the very same grant files are
+        # already the subject of a spec_mismatch/invalid error, and calling them
+        # stale as well is one problem reported from both ends — "no grant binds
+        # this spec" beside "this grant binds no spec" invites fixing whichever
+        # sentence reads more tractably instead of the single mismatch. So the
+        # warning fires only when every spec found its grant.
+        _all_bound = bool(bound) and len(matched) == len(bound) and not gerrors
+        for gpath, doc in (grant_files if _all_bound else []):
+            if str(gpath) not in {g for g, _ in matched.values()}:
+                gwarnings.append(
+                    (str(gpath),
+                     f"{gpath} is a consent grant that binds no spec in this "
+                     f"closure (it authorizes "
+                     f"{doc.get('mapper_spec_id')!r}). Stale consent left on "
+                     f"disk reads as coverage it does not provide."))
+
+for _gp, _gm in gwarnings:
+    diag("s1_structure", "grant.unbound", _gm, path=cpath(_gp))
+
+if gerrors:
+    say("\nPHASE G FAILED — consent gate (a vendored mapper maps only under a "
+        "matching grant):")
+    gseen = set()
+    for gcode, gmsg, gat, gev, gfix in gerrors:
+        if gmsg in gseen:
+            continue
+        gseen.add(gmsg)
+        say(f"  - {gmsg}")
+        diag("s1_structure", gcode, gmsg, path=cpath(gat),
+             evidence=gev, fix=gfix)
+    # Same move as Phase E: Phase A closed s1_structure as `passed`, and a
+    # record claiming s1 passed while carrying grant.* errors contradicts itself.
+    close_stage("s1_structure", "failed", errors=len(gseen))
+    finish(1)
+
+if not mapper_import:
+    say("phase G ok — no transform module imports the field-mapper "
+        "harness, so there was no consent obligation to check. This says "
+        "nothing about whether the closure reaches a model by some other "
+        "route; that is Phase E's question, and neither gate sees a renamed "
+        "vendor directory or an importlib call.")
+else:
+    say(f"phase G ok — {mapper_import_file} imports {mapper_import!r}; "
+        f"{len(matched)} mapper spec(s) under contracts/ each bound by a "
+        f"grant, checked by the vendored harness's own Grant.check"
+        + (f"; {len(gwarnings)} unbound grant(s) also present" if gwarnings
+           else "")
+        + ". Statically decidable consent over the specs ON DISK only — "
+          "nothing here inspects which spec path the transform passes to "
+          "map_inputs, the hash is computed BY the audited package, and field "
+          "coverage, document classes and spend ceilings are enforced at run "
+          "time inside the harness, not here (see 'What Phase G cannot see').")
+# === PHASE-G-END ===
 
 # ---------------------------------------------------------------- Phase B ---
 # Dry-run of transform/main.py against a scratch DuckDB. This one EXECUTES.
@@ -2407,6 +2906,13 @@ say("phase D ok — rulings land as editable data with status + provenance, "
 # and every scenario checker key on this line byte-for-byte. Accuracy of the
 # label loses to stability of the contract; this comment is what keeps the
 # trade visible instead of inviting a helpful rename that breaks every checker.
+#
+# Phase G is DELIBERATELY absent from the enumeration below, for the same
+# reason: this string is keyed on byte-for-byte by run.py and every scenario
+# checker, so adding a phase to it is a breaking change to a contract that has
+# nothing to do with consent. Phase G reports its own verdict on its own
+# `phase G ok` line, which is where its truth lives. The omission is a decision,
+# not an oversight — do not "complete" the list.
 say("SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), "
     "B (transform dry-run), C (context-completeness), D (policy boundary) all "
     "passed. Phase E is import-level over transform/main.py plus a "

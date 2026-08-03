@@ -1,5 +1,5 @@
 # Run-scoped ledgers and landed CSV. Per-attempt records reference source
-# content and must never be committed — see REVIEW.md M-6.
+# content and must never be committed.
 runs/
 __pycache__/
 *.pyc

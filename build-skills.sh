@@ -28,6 +28,16 @@ EXCLUDES=(
   '*/.nxdignore/*'
   '*.zip'           '*/*.zip'
   '*/uv.lock'       'uv.lock'
+  # The field-mapper harness ships (mapper/field_mapper + mapper/samples), but
+  # its e2e proof needs an nxd monorepo checkout a Desktop user cannot have,
+  # and its run ledgers / live-API credentials must never leave the machine.
+  # zip reads the filesystem, not git, so gitignored artifacts need excluding
+  # here too.
+  'mapper/examples/*'  '*/mapper/examples/*'
+  'mapper/runs/*'      '*/mapper/runs/*'
+  '.venv-live/*'       '*/.venv-live/*'
+  '.env'               '*/.env'
+  '.env.*'             '*/.env.*'
   # Strip housekeeping from the bundled examples repo only
   '*/nextdata-public-examples/README.md'
   '*/nextdata-public-examples/CLAUDE.md'

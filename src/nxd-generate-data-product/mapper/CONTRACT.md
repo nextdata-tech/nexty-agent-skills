@@ -1,19 +1,20 @@
 # Field mapper — Layer-1 contract
 
-Status: **contract, pre-implementation.** Normative for everything under
-`experiments/field-mapper/`. Derived from `field-mapper-design.md` v2 (post-Fable,
-post-Sol). Where this file and the design doc disagree, that is a bug in this
-file — report it, do not silently diverge.
+Status: **normative.** Normative for everything under
+`src/nxd-generate-data-product/mapper/`: this file is what the code and the
+acceptance fixtures are held to, and where it and the implementation disagree,
+one of the two is a bug — report it rather than silently diverging. The
+architecture record, which explains *why* the design is shaped this way, is
+[docs/architecture/field-mapper.md](../../../docs/architecture/field-mapper.md).
+It describes the same system but does not govern it.
 
-Reconciled against upstream `main` at `81848fc`, which includes two commits that
-land on this machinery: **#128** (`nxd_decisions.provenance` — a required second
-axis, vocabulary `user_confirmed` | `agent_authored` | `source_derived` |
-`deferred`; note the merged spelling is `agent_authored`, not the
-`agent_proposed_approved` the PR description debates) and **#127**
-(`evidence_kind`, `fact` / `inference`, on a *deterministic* score-explanation
-row). Neither existed when the design was written. Consequences are carried in
-§2.3 and open question 9: `evidence_kind` and this contract's `verify_status`
-answer different questions and must never be populated from each other.
+Two `nxd_decisions` axes landed after the design was written and bear on this
+machinery: `provenance` (a required second axis, vocabulary `user_confirmed` |
+`agent_authored` | `source_derived` | `deferred`) and `evidence_kind` (`fact` /
+`inference`, on a *deterministic* score-explanation row). Consequences are
+carried in §2.3 and open question 9: `evidence_kind` and this contract's
+`verify_status` answer different questions and must never be populated from
+each other.
 
 **Layer-1 is what does not vary between experiments.** Prompt text, field
 grouping, input-adapter shape, and evidence granularity are Layer 2 and are
@@ -37,7 +38,7 @@ deliberately absent here — they live in the landed mapper spec, versioned by
 
 ## 1. Module layout
 
-All under `experiments/field-mapper/field_mapper/`.
+All under `src/nxd-generate-data-product/mapper/field_mapper/`.
 
 ```
 field_mapper/
@@ -170,7 +171,9 @@ under-determined, which is the failure mode §3 of the design exists to catch.
 
 Durable human state. **Never replace-loaded away.** One row per review act; rows
 are immutable and append-only (new batch file per review session, per the
-`llm-judgments.md` batch convention — the physical location is open question 5).
+`llm-judgments.md` batch convention). The physical location is
+`data/mapper_reviews/batch-NNN.csv` inside the closure — decided, with its
+tradeoff recorded, in open question 5.
 
 | Column | Type | Null? | Key | Description |
 |---|---|---|---|---|
@@ -252,8 +255,8 @@ Uniqueness: `(target_row_key, field, evidence_ordinal)`.
 against text the model itself returned in the same response.** Validating a quote
 against model-returned text is circular and proves nothing (design §5).
 
-> **Not `evidence_kind`, and not `nxd_decisions.provenance`.** Upstream #127 put
-> an `evidence_kind` column (`fact` / `inference`) on the *deterministic*
+> **Not `evidence_kind`, and not `nxd_decisions.provenance`.** `evidence_kind`
+> (`fact` / `inference`) sits on the *deterministic*
 > score-explanation row, answering **how firmly the source supports one reading**.
 > `verify_status` answers a mechanical question instead — **did a substring check
 > run against landed text, and did it pass**. A hallucinated citation is
@@ -333,6 +336,11 @@ read". **That is stronger than what the code does, and the claim is withdrawn.**
 What actually holds: the grant is checked in `map_inputs` before any content is
 sent to a model and before the API key is resolved. Nothing reaches a provider,
 and no money is spent, without a matching grant.
+
+The grant binds the model **as the spec names it** — the alias, not the resolved
+snapshot (open question 7). A snapshot rollover behind that alias is invisible to
+the grant and to `mapper_spec_id`; the ledger's per-call `response.model` is what
+makes it auditable after the fact.
 
 What does not hold: callers may already have read source bytes off local disk by
 then. `Fixture.load()` hydrates inputs — including `landed_text` from disk —
@@ -647,16 +655,20 @@ like `replay_prompt`.
 
 ## 10. Open questions
 
-Carried forward from design §15, plus what this contract surfaced. None is
-resolvable from the design doc; each blocks a specific module.
+Carried forward from design §15, plus what this contract surfaced. Five are now
+**decided** (1, 4, 5, 6, 7) and are recorded here as decisions rather than
+deleted, so the reasoning that produced them survives. Four (2, 3, 8, 9) still
+stand — each states why it does not gate use of the shipped harness.
 
-1. **Threshold values.** `max_degrade_share`, `max_error_rate`,
-   `max_unverified_share`, `max_absent_share` are declared per spec, but there is
-   no default and no principled starting point. A too-loose default makes §4
-   decorative; a too-tight one makes every first run block. *Blocks:*
-   `validate.py` defaults. *Needs:* a first real population to calibrate against,
-   or an explicit "no default — spec must declare" stance (my inclination, since
-   a wrong default is worse than an absent one).
+1. **Threshold values. DECIDED: no defaults — the spec must declare them.**
+   A too-loose default makes §4 decorative; a too-tight one makes every first run
+   block, and a wrong default is worse than an absent one. `Thresholds` therefore
+   has no defaults for `max_degrade_share`, `max_error_rate` and
+   `max_unverified_share`, and `__post_init__` rejects `None` for each;
+   `max_absent_share` stays genuinely optional, because a sparse source
+   legitimately declares no ceiling. The consent gate's spec shape requires a
+   `thresholds` key for a JSON to count as a mapper spec at all, so a spec that
+   forgot them is not silently ungated — it is not a spec.
 
 2. **Concurrency and rate-limit policy, concretely.** Requests in flight,
    per-minute ceiling, whether the ceiling is spec-declared or discovered from
@@ -665,7 +677,9 @@ resolvable from the design doc; each blocks a specific module.
    would have caught). *Blocks:* `transport.py`. Also unresolved: whether the
    Batches API (50% cost, ≤24h) is in scope — it changes the wall-time story for
    10k rows completely, but its results arrive unordered and it rejects the
-   `fallbacks` parameter.
+   `fallbacks` parameter. *Does not gate use:* the shipped transport is serial,
+   which is correct and merely slow. Concurrency is a throughput question, not a
+   correctness one.
 
 3. **What `needs_review` actually is.** The design flags that value bucket /
    sidecar status / `nxd_decisions` status are not interchangeable. The shipped
@@ -677,10 +691,13 @@ resolvable from the design doc; each blocks a specific module.
    boolean is internal and the reviewer-facing surface is a dimension whose
    values are the `value_status` enum, with an `nxd_decisions` row at
    `status = proposed` / `provenance = agent_authored` for the mapper spec as a
-   whole. Not resolvable unilaterally.
+   whole. Not resolvable unilaterally. *Does not gate use:* the boolean is
+   internal to this harness, and the reviewer-facing surface is the `value_status`
+   dimension — settling the vocabulary is an upstream alignment, not a blocker on
+   mapping.
 
-9. **Which `nxd_decisions` axes the mapper spec and its rows carry.** Upstream
-   #128 made `provenance` a required second axis on every `nxd_decisions` row
+9. **Which `nxd_decisions` axes the mapper spec and its rows carry.**
+   `provenance` is a required second axis on every `nxd_decisions` row
    (`user_confirmed` | `agent_authored` | `source_derived` | `deferred`),
    orthogonal to `status`, and the Phase D self-check fails a ledger missing
    either. The mapper spec itself is clearly one row — `agent_authored` when the
@@ -689,56 +706,65 @@ resolvable from the design doc; each blocks a specific module.
    confirmation moves `status`. What is *not* settled: whether the mapper's
    per-cell proposals also owe an `nxd_decisions` row each (almost certainly not
    — that is what `mapper_proposals` is for), and whether a `human_override`
-   review flips the spec-level row's `provenance` (it must not, by #128's
+   review flips the spec-level row's `provenance` (it must not, by the
    "provenance never moves" rule, but the override is a genuinely user-authored
    *value*, which is the case that rule was not written against). Separately,
-   `mapper_evidence.verify_status` is **not** `evidence_kind` from #127: that
+   `mapper_evidence.verify_status` is **not** `evidence_kind`: that
    column answers `fact` vs `inference` for a deterministic band, whereas
    `verify_status` answers whether a substring check ran and passed. Disjoint
    vocabularies, and §2.3 must never be populated from the other.
    *Blocks:* the `nxd_decisions` rows `__main__.py` emits, and Phase D passage.
+   *Does not gate use:* this is the decisions-ledger semantics settling, and it
+   constrains what the mapper records about itself, not whether it may map.
 
-4. **PDF text extractor.** Stage 1 of §5 requires canonical text with page and
-   character offsets. Nothing in the pinned venv extracts PDF text, and adding
-   `anthropic` does not address it. Options each have a cost: adding `pypdf` /
-   `pdfplumber` to `RUNTIME_DEP_PACKAGES` widens the desktop venv further;
-   sending the PDF to the API and landing the returned text makes the substring
-   check circular when the SAME call both reads the document and returns the
-   quote — though see the 2026-07-30 correction in ARCHITECTURE.md: the API's
-   citations feature extracts `cited_text` server-side from the document, so
-   that path is not circular at all, at the cost of structured output;
-   an external extraction step breaks the
-   single-closure story. *Blocks:* `mapper_evidence.locator_kind = landed_text`
-   for any PDF source — which is the design's motivating use case.
+4. **PDF evidence. DECIDED: covered by `evidence_mode`, not by a PDF library.**
+   The three evidence paths are distinct and each is honest about what it proves:
+   `evidence_mode: "citations"` has the API extract `cited_text` spans
+   server-side from the document, with page locations — structurally
+   non-fabricable by the answering model, landing `api_cited`; the substring
+   check (`verified`) requires text that has **already landed** in the
+   `landed_text` model, of any modality (extracted PDF text, an ASR transcript);
+   and media sent direct without citations stays `evidence_unverified` by design.
+   Scanned PDFs are not citable, and image citations do not exist. **The one
+   residual:** `count_pdf_pages` is stdlib-only and returns `None` for encrypted
+   or object-stream-compressed PDFs, so the *cost estimator* degrades to
+   unpriceable on those. The mapping path is unaffected. No PDF library is added
+   to fix an estimator.
 
-5. **Where `mapper_reviews` physically lives.** It must survive
-   `write_disposition="replace"` and be editable by a human. The batch-CSV
-   convention (`data/mapper_reviews/batch-00N.csv`) satisfies both, since dlt
-   replace-loads the full glob and the agent/reviewer adds files rather than
-   editing them — but that puts durable human state inside the closure's `data/`
-   dir alongside agent-generated files, with no protection against a regeneration
-   wiping it. *Blocks:* `resolver.py` input contract and the `__main__.py`
-   `resolve` path. *Needs:* a decision on whether reviews live in the closure at
-   all, and what the reviewer's edit surface is (hand-edited CSV? a query + a
-   write tool? an MCP tool?).
+5. **Where `mapper_reviews` physically lives. DECIDED:
+   `data/mapper_reviews/batch-NNN.csv`, inside the closure.** Three reasons.
+   (a) The closure self-containment invariant makes any outside-the-closure
+   location a violation of an already-shipped rule — the generate-dp self-check
+   fails `../`-rooted references precisely to stop durable state escaping the
+   closure. (b) It survives `write_disposition="replace"`, because dlt
+   replace-loads the full glob every run. (c) The edit surface is **adding a new
+   batch file, never editing an existing one**, hand-authored or tool-written, so
+   review history is append-only like the ledger. **Stated tradeoff:** durable
+   human state then sits inside `data/` beside agent-managed exports, protected
+   by convention only — the "preserve a file connector's supplied export exactly"
+   rule is that convention. The compensating control is the review-binding
+   machinery itself: a wiped `data/mapper_reviews/` is *loss* (reviews gone,
+   cells re-infer), never *corruption* — `bound_value_hash`,
+   `bound_input_snapshot_id` and `bound_mapper_spec_id` make it impossible for a
+   review to silently attach to the wrong value.
 
-6. **Harness packaging and version stamping.** If Layer 1 is vendored into each
-   closure it drifts, and two closures silently run different bijection asserts.
-   If it is a dependency, it needs a wheel, a version, and a place in
-   `RUNTIME_DEP_PACKAGES`. Either way the version must appear in the ledger and
-   in `mapper_spec_id`'s inputs — otherwise a harness change is invisible in an
-   experiment comparison. *Blocks:* `__init__.py` version stamp and the spec-hash
-   input list.
+6. **Harness packaging and version stamping. DECIDED: vendored from the skill,
+   no wheel.** A closure that maps copies `mapper/field_mapper/` out of the
+   installed `nxd-generate-data-product` skill directory to its own root. Drift between
+   closures is not silent: `harness_version` is an input to `mapper_spec_id`, so
+   vendoring a newer harness moves every spec id, the existing grants stop
+   binding, and the consent gate demands fresh ones. The version appears in the
+   ledger and in the spec-hash input list for the same reason.
 
-7. **Does the grant bind the model snapshot?** §9 requires the grant to name
-   provider/model. `response.model` returns an exact snapshot that can change
-   under an alias without any spec change. If the grant binds the alias, a
-   snapshot rollover silently changes the experiment variable; if it binds the
-   snapshot, every rollover invalidates the grant and blocks the build. *Blocks:*
-   `grant.py` match logic. Related: `mapper_spec_id` currently hashes the model
-   *id*, not the snapshot — so two runs with the same `mapper_spec_id` may have
-   run on different snapshots, and reviews bound to the spec would not
-   auto-invalidate.
+7. **Does the grant bind the model snapshot? DECIDED: the alias, as the spec
+   names it.** A snapshot rollover behind an alias is a platform property no
+   local gate can observe — a spec pins a model, not a platform — and binding the
+   snapshot would invalidate every grant on every rollover and block builds for a
+   change the user never made. **Stated limit:** two runs with the same
+   `mapper_spec_id` may therefore have run on different snapshots. The
+   compensating control is the ledger, which records the exact `response.model`
+   per call, so the drift is auditable after the fact even though it is not
+   preventable before it.
 
 8. **What happens to a review when only `emission_ordinal` changed.** Under
    `duplicate_policy = ordinal_suffix`, a source reorder changes `target_row_key`
@@ -746,4 +772,5 @@ resolvable from the design doc; each blocks a specific module.
    correct, practically a reviewer losing all their work to a no-op source
    change. *Blocks:* nothing immediately (the policy can be forbidden), but it
    determines whether `ordinal_suffix` is a supported policy or a documented
-   trap.
+   trap. *Does not gate use:* `ordinal_suffix` is a documented trap today, and
+   the default `reject` policy avoids it entirely.

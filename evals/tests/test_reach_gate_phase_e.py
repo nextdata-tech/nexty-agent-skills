@@ -63,9 +63,17 @@ def _script_body() -> str:
 
 
 def _phase_e_source() -> str:
-    """Phase E's block, from ``eerrors = []`` to the Phase B banner."""
+    """Phase E's block, from ``eerrors = []`` to the Phase G anchor.
+
+    The end anchor moved from the Phase B banner to ``PHASE-G-BEGIN`` when the
+    consent gate landed between the two: slicing to ``Phase B ---`` would now
+    swallow all of Phase G, whose subprocess calls this file's stub harness
+    cannot satisfy. That Phase G carries an explicit anchor at all is the same
+    lesson — a slice keyed on a content heuristic rots the moment anything is
+    inserted beside it.
+    """
     body = _script_body()
-    block = body[body.index("eerrors = []"):body.index("Phase B ---")]
+    block = body[body.index("eerrors = []"):body.index("=== PHASE-G-BEGIN ===")]
     return block[:block.rindex("\n#")]
 
 

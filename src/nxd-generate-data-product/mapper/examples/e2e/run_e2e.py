@@ -1,8 +1,9 @@
 """END-TO-END: dlt -> duckdb -> field mapper -> gate -> dlt -> duckdb.
 
-**This one actually runs.** `examples/transform_main_mockup.py` is the shape of
-an NXD transform and does not execute; this is the same wiring with the platform
-parts stubbed out, so the whole chain can be proven rather than described.
+This is the data chain with the platform parts stubbed out, so it can be proven
+rather than described. Its sibling `transform_main.py` proves the other half —
+the same closure registered with `@data_product.on_transform()` and invoked by
+nxd's own runner.
 
     python3 examples/e2e/run_e2e.py            # replay, no API calls
     python3 examples/e2e/run_e2e.py --live     # real Anthropic calls
