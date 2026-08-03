@@ -30,8 +30,8 @@ import json
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field as dc_field
-from typing import Any, Mapping, Protocol, Sequence
+from dataclasses import dataclass
+from typing import Any, Mapping, Protocol, Sequence, cast
 
 from .errors import (
     DependencyMissingError,
@@ -66,6 +66,28 @@ _CLI_DEFAULT_MODEL = "sonnet"
 #: only the extraction was wrong. Search for the block, do not require the
 #: response to be nothing but the block.
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
+
+def _strip_content_block(block: Any) -> Any:
+    """Remove harness-only keys from one provider content block."""
+    if not isinstance(block, Mapping):
+        return block
+    block_map = cast(Mapping[str, Any], block)
+    return {k: v for k, v in block_map.items() if not k.startswith("_")}
+
+
+def _strip_message(message: Any) -> Any:
+    """Remove harness-only keys from the content blocks in one message."""
+    if not isinstance(message, Mapping) or "content" not in message:
+        return cast(Any, message)
+    message_map = cast(Mapping[str, Any], message)
+    return {
+        **message_map,
+        "content": [
+            _strip_content_block(block)
+            for block in cast(Sequence[Any], message_map.get("content", ()))
+        ],
+    }
 
 
 @dataclass
@@ -114,23 +136,10 @@ def _strip_harness_keys(request: Mapping[str, Any]) -> dict[str, Any]:
     rather than at the call site means a new provider cannot forget to do it.
     """
     payload = dict(request)
-    messages = payload.get("messages")
+    messages: Sequence[Any] = cast(Sequence[Any], payload.get("messages") or ())
     if not messages:
         return payload
-    payload["messages"] = [
-        {
-            **message,
-            "content": [
-                {k: v for k, v in block.items() if not k.startswith("_")}
-                if isinstance(block, Mapping)
-                else block
-                for block in message.get("content", ())
-            ],
-        }
-        if isinstance(message, Mapping) and "content" in message
-        else message
-        for message in messages
-    ]
+    payload["messages"] = [_strip_message(message) for message in messages]
     return payload
 
 
@@ -398,7 +407,9 @@ class ClaudeCliProvider:
                 "agent loop, not a single model call"
             )
 
-        usage_raw = envelope.get("usage") or {}
+        usage_raw: Mapping[str, Any] = cast(
+            Mapping[str, Any], envelope.get("usage") or {}
+        )
         usage = _Usage(
             input_tokens=int(usage_raw.get("input_tokens") or 0),
             output_tokens=int(usage_raw.get("output_tokens") or 0),
@@ -413,8 +424,10 @@ class ClaudeCliProvider:
         # The CLI reports its own stop reason; map the one that matters.
         stop_reason = envelope.get("stop_reason") or "end_turn"
 
-        model = None
-        model_usage = envelope.get("modelUsage") or {}
+        model: str | None = None
+        model_usage: Mapping[str, Any] = cast(
+            Mapping[str, Any], envelope.get("modelUsage") or {}
+        )
         if model_usage:
             model = next(iter(model_usage))
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field as dc_field, replace as dc_replace
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, cast
 
 from . import __version__
 from .errors import CellError, SpecError, SystemicError
@@ -76,6 +76,10 @@ __all__ = [
     "map_inputs",
     "build_constraint",
 ]
+
+
+def _noop_heartbeat(_message: str) -> None:
+    """Default progress callback."""
 
 
 #: The harness-authored system prompt. Source content is NEVER interpolated
@@ -182,7 +186,9 @@ class MapperInput:
 
     input_id: str
     identity: Mapping[str, Any]
-    fields: Mapping[str, Any] = dc_field(default_factory=dict)
+    fields: Mapping[str, Any] = dc_field(
+        default_factory=lambda: dict[str, Any]()
+    )
     landed_text: str | None = None
     landed_text_model: str | None = None
     media: Sequence[MediaInput] = ()
@@ -257,10 +263,18 @@ class MapResult:
     is the drift the value-hash assert exists to catch.
     """
 
-    proposals: list[MapperProposal] = dc_field(default_factory=list)
-    evidence: list[MapperEvidence] = dc_field(default_factory=list)
-    cells: list[ValidatedCell] = dc_field(default_factory=list)
-    quarantined: list[Quarantine] = dc_field(default_factory=list)
+    proposals: list[MapperProposal] = dc_field(
+        default_factory=lambda: list[MapperProposal]()
+    )
+    evidence: list[MapperEvidence] = dc_field(
+        default_factory=lambda: list[MapperEvidence]()
+    )
+    cells: list[ValidatedCell] = dc_field(
+        default_factory=lambda: list[ValidatedCell]()
+    )
+    quarantined: list[Quarantine] = dc_field(
+        default_factory=lambda: list[Quarantine]()
+    )
     execution_id: str = ""
     input_snapshot_id: str = ""
     mapper_spec_id: str = ""
@@ -268,7 +282,7 @@ class MapResult:
     calls_made: int = 0
     #: Non-fatal notes the run wants surfaced (a systemic error that was caught
     #: and turned into cells, an unreachable ledger, ...).
-    notes: list[str] = dc_field(default_factory=list)
+    notes: list[str] = dc_field(default_factory=lambda: list[str]())
 
     @property
     def row_keys(self) -> tuple[str, ...]:
@@ -404,7 +418,7 @@ def map_inputs(
     `MapperInput`s with distinct identity, which is what keeps the N->M shape a
     spec decision rather than an emergent one.
     """
-    beat = heartbeat or (lambda _msg: None)
+    beat: Callable[[str], None] = heartbeat or _noop_heartbeat
 
     # -- 1. Grant, BEFORE reading source content or resolving the key. -------
     # `Grant.check` re-derives `mapper_spec_id` from the spec it is handed, so
@@ -633,6 +647,7 @@ def _map_one(
     cell_error_code: str | None = None
     cell_error_detail: str | None = None
     per_field: dict[str, ValidatedCell] = {}
+    model_snapshot: str | None = None
 
     for _ in range(max_retries + 1):
         attempt_id = ledger.new_attempt_id()
@@ -640,7 +655,7 @@ def _map_one(
         started = time.monotonic()
         outcome = "success"
         stop_reason: str | None = None
-        model_snapshot: str | None = None
+        model_snapshot = None
         # Which provider answered, and how it diverges from the API contract.
         # Read off the CallResult so a ledger line is self-describing: an attempt
         # made through a development provider must never look like a real API
@@ -1099,7 +1114,8 @@ def _corroborate(
         block = second.get(name)
         second_value = None
         if isinstance(block, Mapping):
-            raw = block.get("value")
+            block_map = cast(Mapping[str, Any], block)
+            raw: Any = block_map.get("value")
             second_value = None if raw == ABSENT_SENTINEL else raw
         if not _values_disagree(cell.value, second_value):
             continue
@@ -1166,15 +1182,19 @@ def _validate_response(
             )
             continue
 
-        raw_value = block.get("value")
-        raw_evidence = block.get("evidence") or []
+        block_map = cast(Mapping[str, Any], block)
+        raw_value: Any = block_map.get("value")
+        raw_evidence: Sequence[Any] = cast(
+            Sequence[Any], block_map.get("evidence") or []
+        )
 
         statuses: list[str] = []
         for atom in raw_evidence:
             if not isinstance(atom, Mapping):
                 continue
+            atom_map = cast(Mapping[str, Any], atom)
             status, _ = _verify_atom(
-                str(atom.get("quote", "")),
+                str(atom_map.get("quote", "")),
                 landed_text=item.landed_text,
                 citations=citations,
             )
@@ -1352,10 +1372,15 @@ def _evidence_for(
     if not isinstance(block, Mapping):
         return []
     atoms: list[MapperEvidence] = []
-    for ordinal, raw in enumerate(block.get("evidence") or []):
+    block_map = cast(Mapping[str, Any], block)
+    evidence_entries: Sequence[Any] = cast(
+        Sequence[Any], block_map.get("evidence") or []
+    )
+    for ordinal, raw in enumerate(evidence_entries):
         if not isinstance(raw, Mapping):
             continue
-        quote = str(raw.get("quote", ""))
+        raw_map = cast(Mapping[str, Any], raw)
+        quote = str(raw_map.get("quote", ""))
         _, start, end = verify_quote(quote, item.landed_text)
         # Same rule the gating path uses, from the same helper — see
         # `_verify_atom`. The eligibility exclusions (a `verified` atom is never
@@ -1383,7 +1408,7 @@ def _evidence_for(
                 locator_kind=locator,
                 source_model=item.landed_text_model,
                 source_row_key=item.input_id,
-                source_field_name=raw.get("source_field_name"),
+                source_field_name=raw_map.get("source_field_name"),
                 document_hash=item.document_hash,
                 # The API's page when it cited one, since that locates the span
                 # in the document rather than restating the input's own page.

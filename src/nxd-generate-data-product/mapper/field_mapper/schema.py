@@ -20,7 +20,7 @@ Pure stdlib. No network, no `anthropic` import.
 
 from __future__ import annotations
 
-from typing import Any, Final, Mapping
+from typing import Any, Final, Mapping, cast
 
 from .errors import SpecError
 from .identity import canonical_json, digest
@@ -299,7 +299,8 @@ def _assert_no_unenforceable_keywords(node: Any, path: str = "$") -> None:
     time instead of shipping a schema that looks enforced and is not.
     """
     if isinstance(node, dict):
-        for key, value in node.items():
+        node_map = cast(dict[str, Any], node)
+        for key, value in node_map.items():
             if key in HARNESS_ENFORCED_KEYWORDS:
                 raise SpecError(
                     f"compiled wire schema contains {key!r} at {path}, which "
@@ -309,7 +310,8 @@ def _assert_no_unenforceable_keywords(node: Any, path: str = "$") -> None:
                 )
             _assert_no_unenforceable_keywords(value, f"{path}.{key}")
     elif isinstance(node, list):
-        for i, item in enumerate(node):
+        node_items = cast(list[Any], node)
+        for i, item in enumerate(node_items):
             _assert_no_unenforceable_keywords(item, f"{path}[{i}]")
 
 

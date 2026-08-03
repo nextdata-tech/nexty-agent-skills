@@ -40,7 +40,7 @@ import json
 import sys
 from dataclasses import dataclass, fields as dc_fields, replace as dc_replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, cast
 
 from . import __version__
 from .errors import (
@@ -69,7 +69,7 @@ from .records import (
 )
 from .resolver import BijectionError, EffectiveSource, resolve
 from .schema import compile_schema, describe_unenforceable, routing_table
-from .spec import CrossFieldCheck, MapperSpec
+from .spec import MapperSpec
 from .transport import (
     RunBudget,
     rates_for,
@@ -138,7 +138,9 @@ class Fixture:
         if not bound.harness_version:
             bound = _stamp_harness_version(bound)
 
-        grant_raw = json.loads((base / GRANT_FILE).read_text(encoding="utf-8"))
+        grant_raw: dict[str, Any] = json.loads(
+            (base / GRANT_FILE).read_text(encoding="utf-8")
+        )
         # A fixture stores `"mapper_spec_id": "<derived>"` rather than a literal
         # hash: pinning the hash in a checked-in file would make every harness
         # or spec edit a mass fixture rewrite, and a reviewer cannot verify a
@@ -148,17 +150,19 @@ class Fixture:
             grant_raw["mapper_spec_id"] = bound.mapper_spec_id
         grant = Grant.from_dict(grant_raw)
 
-        raw_inputs = json.loads((base / INPUTS_FILE).read_text(encoding="utf-8"))
+        raw_inputs: list[dict[str, Any]] = json.loads(
+            (base / INPUTS_FILE).read_text(encoding="utf-8")
+        )
         inputs = [_input_from_dict(item, base) for item in raw_inputs]
 
         recorded_path = base / RECORDED_FILE
-        recorded = (
+        recorded: dict[str, Any] = (
             json.loads(recorded_path.read_text(encoding="utf-8"))
             if recorded_path.exists()
             else {}
         )
         corroborated_path = base / CORROBORATED_FILE
-        corroborated = (
+        corroborated: dict[str, Any] = (
             json.loads(corroborated_path.read_text(encoding="utf-8"))
             if corroborated_path.exists()
             else {}
@@ -176,7 +180,7 @@ class Fixture:
         # 32-hex literal anyway. What the fixture DOES check in is the binding
         # *shape*, which is the thing under test.
         expect_path = base / EXPECT_FILE
-        expect = (
+        expect: dict[str, Any] = (
             json.loads(expect_path.read_text(encoding="utf-8"))
             if expect_path.exists()
             else {}
@@ -470,20 +474,22 @@ class RecordedPlayer:
             )
         entry = self._recorded[item.input_id]
         if isinstance(entry, list):
-            index = min(self._served.get(item.input_id, 0), len(entry) - 1)
+            entry_list = cast(list[Any], entry)
+            index = min(self._served.get(item.input_id, 0), len(entry_list) - 1)
             self._served[item.input_id] = index + 1
-            entry = entry[index]
+            entry = entry_list[index]
 
         # A recorded entry may model a transport outcome rather than an answer:
         # `{"__outcome__": "refusal"}` exercises the non-SUCCESS branches
         # without needing the SDK to produce them.
         if isinstance(entry, Mapping) and "__outcome__" in entry:
+            outcome_entry = cast(Mapping[str, Any], entry)
             return RecordedCall(
                 parsed=None,
                 response_hash="",
-                stop_reason=entry.get("stop_reason"),
-                error_code=str(entry["__outcome__"]),
-                error_detail=entry.get("detail"),
+                stop_reason=outcome_entry.get("stop_reason"),
+                error_code=str(outcome_entry["__outcome__"]),
+                error_detail=outcome_entry.get("detail"),
             )
 
         payload = json.dumps(entry, sort_keys=True, separators=(",", ":"))
@@ -492,7 +498,13 @@ class RecordedPlayer:
         # reserved transport key can never be mistaken for a target field —
         # the wire schema is closed, and an unknown key would be a validation
         # error rather than the citation set it actually is.
-        answer = {k: v for k, v in entry.items() if k != "__citations__"}
+        entry_map = cast(dict[str, Any], entry)
+        answer: dict[str, Any] = {
+            k: v for k, v in entry_map.items() if k != "__citations__"
+        }
+        citation_entries: Sequence[Mapping[str, Any]] = cast(
+            Sequence[Mapping[str, Any]], entry_map.get("__citations__") or ()
+        )
         cites = tuple(
             RecordedCitation(
                 text=str(c.get("text", "")),
@@ -501,7 +513,7 @@ class RecordedPlayer:
                 char_start=c.get("char_start"),
                 char_end=c.get("char_end"),
             )
-            for c in (entry.get("__citations__") or ())
+            for c in citation_entries
         )
         return RecordedCall(
             parsed=dict(answer),
@@ -586,7 +598,7 @@ def _live_caller(
             input_hash=item.input_id,
         )
 
-    corroborate: Any | None = None
+    corroborate: Callable[..., Any] | None = None
     if fixture.spec.corroboration_model:
         # A SECOND client on the SECOND model. Its own TransportConfig, because
         # capability gating (`supports_reasoning_controls`) is per-model — which
@@ -610,7 +622,7 @@ def _live_caller(
             provider_cwd=str(fixture.path),
         )
 
-        def corroborate(  # noqa: F811 - deliberate conditional definition
+        def _corroborate(
             *,
             item: MapperInput,
             spec: MapperSpec,
@@ -629,6 +641,8 @@ def _live_caller(
                 media_inputs=item.media,
                 input_hash=item.input_id,
             )
+
+        corroborate = _corroborate
 
     return call, api_key, corroborate
 
@@ -1564,7 +1578,7 @@ def cmd_grant_check(spec_path: Path, grant_path: Path) -> int:
     try:
         grant.check(bound)
     except GrantError as exc:
-        problems = []
+        problems: list[dict[str, str]] = []
         for line in str(exc).splitlines():
             line = line.strip().lstrip("- ").strip()
             if not line or line.startswith("consent grant does not authorize"):
@@ -1787,7 +1801,10 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
 
     # Status-count expectations.
     counts = result.status_counts()
-    for status, want in (expect.get("status_counts") or {}).items():
+    status_counts: Mapping[str, int] = cast(
+        Mapping[str, int], expect.get("status_counts") or {}
+    )
+    for status, want in status_counts.items():
         if counts.get(status, 0) != want:
             return (
                 f"status {status}: got {counts.get(status, 0)}, expected {want}"
@@ -1799,7 +1816,10 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
         ev_counts[atom.verify_status.value] = (
             ev_counts.get(atom.verify_status.value, 0) + 1
         )
-    for status, want in (expect.get("evidence_counts") or {}).items():
+    evidence_counts: Mapping[str, int] = cast(
+        Mapping[str, int], expect.get("evidence_counts") or {}
+    )
+    for status, want in evidence_counts.items():
         if ev_counts.get(status, 0) != want:
             return (
                 f"evidence {status}: got {ev_counts.get(status, 0)}, "

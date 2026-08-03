@@ -656,12 +656,14 @@ class CoverageReport:
     run still narrates its degrade share rather than reporting a bare number."""
 
     total: int = 0
-    counts: dict[str, int] = dc_field(default_factory=dict)
-    shares: dict[str, float] = dc_field(default_factory=dict)
+    counts: dict[str, int] = dc_field(default_factory=lambda: dict[str, int]())
+    shares: dict[str, float] = dc_field(
+        default_factory=lambda: dict[str, float]()
+    )
     unverified_share: float = 0.0
     evidence_total: int = 0
     blocked: bool = False
-    reasons: list[str] = dc_field(default_factory=list)
+    reasons: list[str] = dc_field(default_factory=lambda: list[str]())
 
     @property
     def ok_share(self) -> float:

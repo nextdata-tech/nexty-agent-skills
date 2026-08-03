@@ -52,7 +52,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence, cast
 
 __all__ = [
     "LEDGER_FILENAME",
@@ -131,11 +131,16 @@ def _redact_params(params: Mapping[str, Any]) -> dict[str, Any]:
         if _SECRET_KEY_PATTERN.search(str(key)):
             out[str(key)] = _REDACTED
         elif isinstance(value, Mapping):
-            out[str(key)] = _redact_params(value)
+            out[str(key)] = _redact_params(cast(Mapping[str, Any], value))
         elif isinstance(value, (list, tuple)):
+            values: Sequence[Any] = cast(Sequence[Any], value)
             out[str(key)] = [
-                _redact_params(item) if isinstance(item, Mapping) else item
-                for item in value
+                (
+                    _redact_params(cast(Mapping[str, Any], item))
+                    if isinstance(item, Mapping)
+                    else item
+                )
+                for item in values
             ]
         else:
             out[str(key)] = value
@@ -172,7 +177,9 @@ class AttemptRecord:
     """
 
     api_version: str | None = None
-    request_params: Mapping[str, Any] = field(default_factory=dict)
+    request_params: Mapping[str, Any] = field(
+        default_factory=lambda: dict[str, Any]()
+    )
 
     response_hash: str | None = None
     stop_reason: str | None = None

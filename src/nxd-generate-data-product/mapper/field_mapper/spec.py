@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field as dc_field, replace as dc_replace
 from pathlib import Path
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final, Mapping, cast
 
 from .errors import SpecError
 from .identity import canonical_json, digest, full_digest
@@ -846,12 +846,16 @@ class MapperSpec:
             max_rows=card_raw.get("max_rows"),
             expected_per_input=card_raw.get("expected_per_input"),
         )
-        thr_raw = dict(raw["thresholds"])
+        thr_raw: dict[str, Any] = dict(
+            cast(Mapping[str, Any], raw["thresholds"])
+        )
         thresholds = Thresholds(
-            max_degrade_share=thr_raw.get("max_degrade_share"),  # type: ignore[arg-type]
-            max_error_rate=thr_raw.get("max_error_rate"),  # type: ignore[arg-type]
-            max_unverified_share=thr_raw.get("max_unverified_share"),  # type: ignore[arg-type]
-            max_absent_share=thr_raw.get("max_absent_share"),
+            max_degrade_share=cast(float, thr_raw.get("max_degrade_share")),
+            max_error_rate=cast(float, thr_raw.get("max_error_rate")),
+            max_unverified_share=cast(
+                float, thr_raw.get("max_unverified_share")
+            ),
+            max_absent_share=cast(float | None, thr_raw.get("max_absent_share")),
             max_validation_retries=int(thr_raw.get("max_validation_retries", 2)),
         )
         fields: list[TargetField] = []
@@ -909,14 +913,14 @@ class MapperSpec:
         """
         p = Path(path)
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
+            raw: Any = json.loads(p.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise SpecError(f"mapper spec not found at {p}") from exc
         except json.JSONDecodeError as exc:
             raise SpecError(f"mapper spec at {p} is not valid JSON: {exc}") from exc
         if not isinstance(raw, dict):
             raise SpecError(f"mapper spec at {p} must be a JSON object")
-        spec = cls.from_dict(raw)
+        spec = cls.from_dict(cast(dict[str, Any], raw))
         object.__setattr__(spec, "source_path", str(p))
         return spec
 

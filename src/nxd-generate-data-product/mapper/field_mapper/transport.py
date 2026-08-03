@@ -31,7 +31,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Final
+from typing import Any, Final, cast
 
 # ---------------------------------------------------------------------------
 # Error taxonomy
@@ -51,7 +51,6 @@ from .errors import (
     ModelNotFoundError,
     RunCancelledError,
     SchemaRejectedError,
-    SystemicError,
     TransportExhaustedError,
 )
 from .media import MediaInput, build_media_content_block
@@ -68,6 +67,10 @@ __all__ = [
     "estimate",
     "resolve_api_key",
 ]
+
+
+def _noop_heartbeat(_message: str) -> None:
+    """Default progress callback."""
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +373,9 @@ def _import_anthropic() -> Any:
     attempted, so it BLOCKS.
     """
     try:
-        import anthropic  # noqa: PLC0415
+        import importlib
+
+        anthropic = importlib.import_module("anthropic")
     except ImportError as exc:
         raise DependencyMissingError(
             "The `anthropic` package is not installed, so the field mapper "
@@ -618,7 +623,7 @@ class PreflightEstimate:
         """
         breaches = self.fits_within(budget)
         if breaches:
-            caveats = []
+            caveats: list[str] = []
             if not self.token_counts_measured:
                 caveats.append(
                     "token counts are the offline heuristic, not count_tokens"
@@ -1133,7 +1138,7 @@ class Client:
         self._config = config or TransportConfig()
         self._ledger = budget_ledger
         # Progress signal so the supervisor readiness gate survives a long run.
-        self._heartbeat = heartbeat or (lambda _msg: None)
+        self._heartbeat: Callable[[str], None] = heartbeat or _noop_heartbeat
         self._cancelled = cancelled or (lambda: False)
         self._sleep = sleep
         self._provider_kind = provider
@@ -1578,8 +1583,11 @@ class Client:
                 ),
             )
 
+        parsed_object = cast(dict[str, Any], parsed)
         return _result(
-            AttemptOutcome.SUCCESS, parsed=parsed, response_hash=response_hash
+            AttemptOutcome.SUCCESS,
+            parsed=parsed_object,
+            response_hash=response_hash,
         )
 
     # -- failure classification ------------------------------------------
@@ -1679,7 +1687,7 @@ def _first_text_block(response: Any) -> str | None:
     fragmented and this returns a prefix that does not parse — use
     `_joined_text_blocks` on that path.
     """
-    content = getattr(response, "content", None) or []
+    content: Sequence[Any] = getattr(response, "content", None) or []
     for block in content:
         if getattr(block, "type", None) == "text":
             text = getattr(block, "text", None)
@@ -1756,8 +1764,8 @@ def _joined_text_blocks(response: Any) -> str | None:
     JSON body, and splicing them in would corrupt a document that would
     otherwise parse.
     """
-    content = getattr(response, "content", None) or []
-    parts = [
+    content: Sequence[Any] = getattr(response, "content", None) or []
+    parts: list[str] = [
         text
         for block in content
         if getattr(block, "type", None) == "text"
@@ -1779,10 +1787,14 @@ def _citations_of(response: Any) -> tuple[CitationSpan, ...]:
     upgrade into an outage.
     """
     spans: list[CitationSpan] = []
-    for block in getattr(response, "content", None) or []:
+    content: Sequence[Any] = getattr(response, "content", None) or []
+    for block in content:
         if getattr(block, "type", None) != "text":
             continue
-        for cite in getattr(block, "citations", None) or []:
+        citations: Sequence[Any] = cast(
+            Sequence[Any], getattr(block, "citations", None) or ()
+        )
+        for cite in citations:
             text = getattr(cite, "cited_text", None)
             if not isinstance(text, str) or not text.strip():
                 continue

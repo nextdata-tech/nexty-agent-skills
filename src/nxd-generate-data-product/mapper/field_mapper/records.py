@@ -365,7 +365,9 @@ class MapperProposal:
     execution_id: str
     observation_id: str
     emission_ordinal: int
-    evidence: list[MapperEvidence] = dc_field(default_factory=list)
+    evidence: list[MapperEvidence] = dc_field(
+        default_factory=lambda: list[MapperEvidence]()
+    )
     error_code: str | None = None
     error_detail: str | None = None
     attempt_count: int = 0
