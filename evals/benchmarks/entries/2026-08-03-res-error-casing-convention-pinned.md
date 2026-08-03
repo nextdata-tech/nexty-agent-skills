@@ -1,13 +1,13 @@
 ---
 id: 2026-08-03-res-error-casing-convention-pinned
 date: 2026-08-03
-label: "res.error casing convention pinned; three corrections to the v0.33.0 ledger entry"
+label: "res.error casing convention pinned; a v0.33.0 ledger figure corrected"
 plugin_version: 0.33.0
 status: NO_EVAL
 scenarios: []
 record: null
 ---
-# Benchmark — res.error casing convention pinned; three corrections to the v0.33.0 ledger entry
+# Benchmark — res.error casing convention pinned; a v0.33.0 ledger figure corrected
 
 ## Notes
 
@@ -51,23 +51,31 @@ strings, up from 13), which also retires the regex's blindness to single quotes
 and `rf` prefixes: it fails closed on a form it does not recognize instead of
 skipping it.
 
-**3. The v0.33.0 `ledger.md` entry carries three factual errors that are NOT
-corrected there.** It says "the other thirteen `res.error` assignments" and "§6
-introduced the two anomalies … Both are reverted" — the real figures are 15
-assignments and three anomalies, and its evidence list omits the third pre-rename
-string. It also opens with a "five strings" tally that does not reconcile with its
-own surviving-capitalized list. Those corrections were written and then withdrawn:
-`ledger.md` became frozen evidence under the entry-migration contract
-(`AGENTS.md`: *never append to or rewrite*), and "my rewrite is a correction" is
-what every rewrite claims. The numbers stand there as merged; this entry is the
-correction of record, and the figures above are reproducible by `git grep` from
-the line numbers cited.
+**3. The v0.33.0 `ledger.md` entry overstates one figure, and it cannot be fixed
+there.** Its §8 reads: *"sentence-initial lowercase `desktop` in eight `run.py`
+strings that reach benchmark reports and the judge (two beyond those reported)"*
+(`ledger.md:1277`). The real count is **seven**:
+
+```
+git show 5b4d7e0 -- evals/run.py | grep -cE '^\+.*Desktop [a-z]'   # 7
+```
+
+Two log lines (:704, :903), the helper return (:1037), the three `res.error`
+assignments (:2222, :2341, :2495), and the `res.verdict["summary"]` append. "Eight"
+matches no commit.
+
+That entry is frozen evidence under the entry-migration contract (`AGENTS.md`:
+*never append to or rewrite*), so the figure stands there as merged and this entry
+is the correction of record. An earlier revision of this PR did rewrite it in
+place; those edits were withdrawn on the rebase that brought the freeze in,
+because "my rewrite is a correction" is what every rewrite claims.
 
 Worth naming plainly, since that entry's own thesis is that a reader can assume
-every figure in it means something: it miscounted inside the paragraph correcting
-a miscount. Four rounds of review were needed to reach a casing rule derived from
-the code rather than asserted over it, and the entry documenting that is itself
-the fourth data point.
+every figure in it means something: it miscounted while documenting a miscount.
+Four review rounds were needed to reach a casing rule derived from the code rather
+than asserted over it, and the entry documenting that is itself the fourth data
+point. Every figure in *this* entry is reproducible from the commands and line
+numbers cited beside it — which is the only defensible way to write the correction.
 
 ## Evidence
 
@@ -78,7 +86,7 @@ the fourth data point.
   assignment (`"Desktop preflight failed"`) and re-capitalizing a helper return
   (`"Desktop verifier facts were malformed"`) each trip it, where the earlier
   regex version caught only the first.
-- `python3 -m pytest evals/tests` — 556 passed.
+- `python3 -m pytest evals/tests` — 571 passed (570 on `origin/main`; this PR adds exactly the one test named above).
 - `python3 scripts/validate_skills.py --root .` — passes.
 - `python3 evals/benchmark_record.py --check` — passes.
 - No `src/` skill, manifest or version surface is touched, so pack completeness
