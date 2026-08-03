@@ -491,7 +491,7 @@ def merge_record(path, stages):
     """
     p = Path(path)
     try:
-        rec = json.loads(p.read_text())
+        rec = json.loads(p.read_text(encoding="utf-8"))
     except Exception as exc:
         say(f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
             "stages 1-3 NOT merged. Re-run generator lock/record setup with its "
@@ -545,7 +545,7 @@ def finish(exit_code):
             counts[d["severity"]] += 1
         try:
             spec_hash = json.loads(
-                Path("dp-spec.lock.json").read_text()).get("spec_hash")
+                Path("dp-spec.lock.json").read_text(encoding="utf-8")).get("spec_hash")
         except Exception:
             spec_hash = None
         print(json.dumps({"schema": "nxd-diagnostic-report-v1",
@@ -946,12 +946,17 @@ def model_constants(src):
 # Exit 2 = could not read, distinct from exit 1 = found something. A traceback
 # here reads as a broken checker; the closure is simply not where we are.
 try:
-    models_src = Path("models.py").read_text()
-    spec_src = Path("spec.py").read_text()
-    transform_src = Path("transform/main.py").read_text()
-except OSError as exc:
+    models_src = Path("models.py").read_text(encoding="utf-8")
+    spec_src = Path("spec.py").read_text(encoding="utf-8")
+    transform_src = Path("transform/main.py").read_text(encoding="utf-8")
+except (OSError, UnicodeDecodeError) as exc:
+    # UnicodeDecodeError subclasses ValueError, not OSError, so a latin-1
+    # models.py walked past this handler and exited 1 with a bare traceback —
+    # "found something", by this block's own definition, when nothing was ever
+    # read. Same reasoning as the contracts/ reads below.
     print(f"CANNOT READ — {exc}. Run self_check.py from the CLOSURE ROOT: "
-          f"models.py, spec.py and transform/main.py must all be present.",
+          f"models.py, spec.py and transform/main.py must all be present, and "
+          f"must be UTF-8.",
           file=sys.stderr)
     finish(2)
 
@@ -1309,7 +1314,13 @@ for vpath in sorted(p for p in Path("contracts").rglob("*.py")
                     if p.name != "__init__.py"):
     try:
         v_imports = imported_roots(vpath.read_text(encoding="utf-8"), str(vpath))
-    except (OSError, SyntaxError):
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        # UnicodeDecodeError subclasses ValueError, not OSError, so a verifier
+        # that is valid Python under a non-UTF-8 coding declaration escaped this
+        # handler and took the whole self-check with it — a bare traceback, no
+        # reach.* code, no close_stage, no record merge. Exactly the failure mode
+        # the rest of this script is written to avoid.
+        #
         # An unreadable or unparseable verifier is Phase C's finding to report,
         # not this gate's. Silence here means "could not scan", which the doc
         # records; inventing a reach verdict from a parse failure would be a
@@ -1520,7 +1531,7 @@ if not lockp.exists():
          "dp-spec.lock.json")
 else:
     try:
-        lock = json.loads(lockp.read_text())
+        lock = json.loads(lockp.read_text(encoding="utf-8"))
         if not isinstance(lock, dict):
             raise ValueError("not a JSON object")
         if lock.get("schema") != "nxd-dp-spec-lock-v1":
@@ -1569,7 +1580,7 @@ if not recp.exists():
          "generation, before self_check.py.", "build-record.json")
 else:
     try:
-        record = json.loads(recp.read_text())
+        record = json.loads(recp.read_text(encoding="utf-8"))
         if not isinstance(record, dict):
             raise ValueError("not a JSON object")
         if record.get("schema") != "nxd-build-record-v1":
@@ -1634,7 +1645,12 @@ for rel in scan:
     p = Path(rel)
     if not p.is_file():
         continue
-    for m in ESCAPE.findall(p.read_text()):
+    # errors="replace" rather than a try/except: this loop only regex-searches
+    # for ../*.md, so a replacement character can neither create nor mask a
+    # match, and a file this scan cannot decode is still a file whose escaping
+    # references must be reported. Skipping it would make an undecodable
+    # contract the one place an escaping reference hides.
+    for m in ESCAPE.findall(p.read_text(encoding="utf-8", errors="replace")):
         cerr("closure.escaping_reference",
              f"{rel}: references '{m}' — a contract/design path that escapes "
              f"the closure. Materialize it inside the closure "
@@ -1649,7 +1665,7 @@ for rel in scan:
 # secret it found turns a contained file leak into a transcript leak.
 profile = Path("infra-profile.yaml")
 if profile.exists():
-    text = profile.read_text()
+    text = profile.read_text(encoding="utf-8", errors="replace")
     # A populated attributes list = `attributes:` followed by a `- ` item before
     # the next key at the same or shallower indent. `attributes: []` never matches.
     # Match every YAML spelling of a populated list, because a gate that only
@@ -1677,7 +1693,8 @@ if profile.exists():
                      f"See reference/database-source.md, 'Sensitivity artifacts'.",
                      name)
         gi = Path(".gitignore")
-        if gi.exists() and "infra-profile.yaml" not in gi.read_text():
+        if gi.exists() and "infra-profile.yaml" not in gi.read_text(
+            encoding="utf-8", errors="replace"):
             cerr("closure.gitignore_not_naming_profile",
                  ".gitignore exists but does not ignore infra-profile.yaml — the one "
                  "file that must never be committed. Ignore it by name, never `*`.",
@@ -1831,7 +1848,25 @@ if _spec_tree is not None:
                  f"{vpath}: referenced by custom({cname!r}) but the file does "
                  f"not exist.", vpath, {"contract": cname})
             continue
-        vsrc = vp.read_text()
+        try:
+            # Pinned to UTF-8, not the locale codec. Phase E reads this same
+            # file as UTF-8 and defers an undecodable one to here, so reading it
+            # under a different codec breaks the deferral in both directions: on
+            # a cp1252 host Phase C decodes bytes Phase E rejected and reports
+            # nothing, and under an ASCII locale it rejects a file that is valid
+            # UTF-8 — failing the closure over an em dash in a comment, with a
+            # message telling the author to write UTF-8 that they already wrote.
+            vsrc = vp.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            # Phase E defers an undecodable verifier to "Phase C's finding to
+            # report" — so Phase C has to survive long enough to report it.
+            # Unguarded, this read died before cerr could be called and the
+            # deferral pointed at a phase that had already crashed.
+            cerr("closure.contract_verifier_malformed",
+                 f"{vpath}: cannot be decoded as UTF-8 ({exc}). A verifier is "
+                 f"executed Python; write it as UTF-8.", vpath,
+                 {"contract": cname})
+            continue
         try:
             vtree = ast.parse(vsrc, vpath)
         except SyntaxError as exc:
@@ -1988,7 +2023,12 @@ if _spec_tree is not None:
              "input. It carries the export root every model_paths entry "
              "resolves under.", "csv-source-path")
     elif csvp.is_file():
-        raw = csvp.read_text().strip()
+        # errors="replace" like the neighbouring reads: this value is only
+        # checked for a "/" prefix, ".." parts and emptiness, none of which a
+        # replacement character can create or mask — so a latin-1 export root
+        # ("données/") surfaces as closure.csv_root_invalid naming the mangled
+        # path, which is a finding, instead of a bare traceback with no code.
+        raw = csvp.read_text(encoding="utf-8", errors="replace").strip()
         parts = Path(raw).parts if raw else ()
         if (not raw or raw.startswith("/") or ".." in parts
                 or any(p in ("", ".") for p in parts)):
@@ -2030,7 +2070,7 @@ if _spec_tree is not None:
     # swap, which a per-driver presence check cannot.
     prof = Path("infra-profile.yaml")
     if prof.is_file():
-        ptext = prof.read_text()
+        ptext = prof.read_text(encoding="utf-8", errors="replace")
         if not re.search(r"^metadata:\n\s+name: desktop-local$", ptext, re.M):
             cerr("closure.profile_name_mismatch",
                  "infra-profile.yaml: metadata.name must be desktop-local to "
@@ -2234,7 +2274,7 @@ if "nxd_decisions" in set(PHYSICAL_MODELS):
                  "data/nxd_decisions/nxd_decisions.csv")
         else:
             import csv as _csv
-            with led.open(newline="") as fh:
+            with led.open(newline="", encoding="utf-8", errors="replace") as fh:
                 lrows = list(_csv.DictReader(fh))
             # status and provenance are checked INDEPENDENTLY: they are separate
             # axes, so a missing provenance column must not skip status
@@ -2272,7 +2312,7 @@ if "nxd_decisions" in set(PHYSICAL_MODELS):
 # coincidence, and flagging those would make this unreliable.
 POLICY_HINT = ("rubric", "weight", "threshold", "band", "anchor", "verdict",
                "scale", "policy", "gate", "criteri")
-tsrc = Path("transform/main.py").read_text()
+tsrc = Path("transform/main.py").read_text(encoding="utf-8", errors="replace")
 tlits = set()
 for node in ast.walk(ast.parse(tsrc)):
     if isinstance(node, ast.Constant):
@@ -2290,7 +2330,7 @@ for pcsv in sorted(Path("data").rglob("*.csv")):
     if not any(h in pcsv.parent.name.lower() for h in POLICY_HINT):
         continue
     import csv as _csv
-    with pcsv.open(newline="") as fh:
+    with pcsv.open(newline="", encoding="utf-8", errors="replace") as fh:
         prows = list(_csv.DictReader(fh))
     if not prows:
         continue
@@ -2414,7 +2454,7 @@ for vcsv in sorted(Path("data").rglob("*.csv")):
     if vcsv.parent.name == "nxd_decisions":
         continue
     import csv as _csv
-    with vcsv.open(newline="") as fh:
+    with vcsv.open(newline="", encoding="utf-8", errors="replace") as fh:
         vrows = list(_csv.DictReader(fh))
     for col in (vrows[0] if vrows else {}):
         if not any(h in col.lower() for h in VOCAB_HINT):

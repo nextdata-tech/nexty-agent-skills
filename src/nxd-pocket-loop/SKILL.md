@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.32.0
+  version: 0.32.1
 ---
 
 # nxd-pocket-loop skill

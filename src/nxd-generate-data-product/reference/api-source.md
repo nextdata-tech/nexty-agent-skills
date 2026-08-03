@@ -245,7 +245,8 @@ fields, the same way `_build_connection_string` in `database-source.md`
 assembles a connection string from flat `db_source` fields — never pass a
 flat secret value straight through as `auth`.
 
-**Keep the dispatch, and end it with an explicit `else: raise`.** Writing only
+**Keep the dispatch, and end it with an explicit `elif auth_type is not None:
+raise`.** Writing only
 the branch this closure happens to need — `client_config["auth"] = {"type":
 "bearer", ...}` with no `auth_type` read at all — is the natural shortcut, and
 it is wrong for a reason that is invisible on the day it is written: the profile
@@ -257,12 +258,22 @@ you are not. The credential is the one input a closure cannot re-derive, so the
 branch that reads it must fail loudly on a value it does not handle:
 
 ```python
-else:
+elif auth_type is not None:
     raise ValueError(
         f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
         f"add a branch above, or fix the infra-profile attribute"
     )
 ```
+
+**`auth_type is None` is the one value that must NOT raise.** It means the
+profile configures no authentication, which is why the template reads the field
+with `api_secrets.get("auth_type")` and why `secrets["api_source"]` carries
+`auth_type` *only when the API requires authentication* (see the attributes list
+above). A bare `else: raise` fails every unauthenticated api-source closure at
+transform time, with a message pointing the author at a profile attribute that is
+legitimately absent — so the guard is `elif auth_type is not None`, matching the
+template. Appending a bare `else:` after that `elif` is the same bug wearing a
+different shape: it raises on exactly the case the `elif` exists to let through.
 
 An `auth_type` the transform does not handle is a closure that cannot
 authenticate. Discovering that as a raise at transform time beats discovering it

@@ -1022,3 +1022,77 @@ well enough to prove the edited descriptions still win their skill the same disp
 v0.16.0 entry above measured routing at n=4/n=5 and called it directional at best. If a
 routing regression is going to hide anywhere in this PR, it is in those two descriptions and
 not in the renames.
+
+## 2026-08-03 — auth dispatch on an unauthenticated API; non-UTF-8 verifier (plugin v0.32.1)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+Notes: **No eval arm, deliberately.** Both defects need an input no public
+scenario produces, and manufacturing one to yield a number would put a figure in
+this ledger that measures the fixture rather than the change.
+
+The first is shipped guidance, not code. `reference/api-source.md` contradicted
+itself: the canonical transform template ends the auth dispatch with `elif
+auth_type is not None:`, while a prose section fifty lines below instructed
+authors to end it with a bare `else: raise` and supplied a snippet to paste.
+`auth_type` is documented as present only when the API requires authentication,
+and the template reads it with `.get("auth_type")`, so an unauthenticated
+api-source closure has `auth_type is None` — which the `elif` lets through and a
+bare `else` turns into a transform-time raise naming a profile attribute that is
+legitimately absent. **An arm that reaches this case does exist**, and the
+earlier claim here that none did was wrong: `worldbank-live` is an api-source
+scenario whose own checks state the API "needs no authentication … carries
+`base_url` and no `auth_type`", so a closure written from the old bare-`else`
+guidance would have raised at transform time and failed its downstream checks.
+It cannot produce a number, because it is `ci_skip` — it needs a live desktop
+supervisor and outbound network to `api.worldbank.org`, which CI does not
+provision. `authenticated-api-source-build`, the api-source scenario that does
+run, authenticates and so never reaches the None case. The three dispatch
+surfaces now agree, and the deterministic check
+`secret:auth-dispatched-on-auth-type` was confirmed by execution to still pass a
+closure written from the corrected guidance and still fail one with the terminal
+branch removed.
+
+The second is shipped script behaviour, at **every** read site in the script — sixteen, not one.
+Phase E's contract-verifier scan caught `(OSError, SyntaxError)`, but
+`UnicodeDecodeError` subclasses `ValueError`, so a verifier that is valid Python
+under a non-UTF-8 coding declaration escaped the handler and killed the
+self-check with a bare traceback — no `reach.*` code, no `close_stage`, no record
+merge, which is the one failure mode the rest of the script is written to avoid.
+Guarding only Phase E moved the traceback rather than removing it: the C9
+escaping-reference scan rglobs `contracts/*` and read them unguarded, and Phase
+C's verifier read had the same hole — while Phase E's handler defers an
+undecodable verifier to "Phase C's finding to report", which Phase C could not do
+while dying on the same read. The fourth is the opening read of
+`models.py`/`spec.py`/`transform/main.py`, whose `except OSError` missed the same
+subclass: a latin-1 `models.py` exited **1** with a bare traceback — "found
+something", by that block's own definition — instead of the **2** it reserves for
+"could not read". The last three are the landed CSVs, and they are the reads
+most likely to meet a non-UTF-8 byte in practice: a latin-1 verifier is a rare
+hand-written artifact, but a CSV exported from Excel as cp1252 is routine, and
+`csv.DictReader` over one raised the same bare traceback partway through grading.
+Every read in the script now names its codec explicitly — the fix was reached
+site-by-site over four rounds, each closing the reads the last review had named
+while the next one waited, so the final pass swept the file rather than patching
+it and the test asserts the absence of ANY locale-codec read rather than a list
+of remembered sites: Phase C's guard initially left its read on the LOCALE codec while its
+own diagnostic asserted UTF-8, which breaks the deferral in both directions — a
+cp1252 host decodes bytes Phase E rejected and reports nothing, and an ASCII
+locale fails a valid UTF-8 file over an em dash in a comment. No scenario ships a
+latin-1 verifier.
+
+Evidence is two tests in `evals/tests/test_reach_gate_phase_e.py`, both
+**verified to fail against the previous implementation** rather than assumed to.
+`test_a_non_utf8_verifier_is_skipped_not_crashed` scopes its green to the Phase E
+SLICE — `_run_phase_e` runs an extracted harness, not `self_check.py`, and that
+distinction is precisely what hid the two remaining crashes, so it is stated here
+rather than left for a reader to infer. `test_every_read_under_contracts_survives_a_non_utf8_file`
+covers the other two sites statically over the shipped source: reaching C9 needs
+a complete valid closure, and a fixture that fails an earlier phase exits before
+C9 and passes vacuously — which the first version of that test did. The Phase E
+fixture is written as bytes because the existing `verifiers` harness writes text
+and cannot express the defect.
+
+Both findings came from review of the merged #141, not from a run.

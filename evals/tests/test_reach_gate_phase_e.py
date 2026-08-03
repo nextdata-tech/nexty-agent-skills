@@ -54,7 +54,8 @@ CLEAN_CSV_TRANSFORM = (
 
 def _script_body() -> str:
     """The single ``# self_check.py`` fence, same source the agent runs."""
-    blocks = re.findall(r"```python\n(.*?)```", SELF_CHECK_MD.read_text(), re.S)
+    blocks = re.findall(r"```python\n(.*?)```",
+                        SELF_CHECK_MD.read_text(encoding="utf-8"), re.S)
     bodies = [b for b in blocks if b.lstrip().startswith("# self_check.py")]
     assert len(bodies) == 1, f"expected one self_check.py fence, found {len(bodies)}"
     return bodies[0]
@@ -960,6 +961,173 @@ def test_an_unparseable_verifier_is_skipped_not_crashed(tmp_path):
         verifiers={"contracts/broken.py": "def verify(con:\n"},
     )
     assert "phase E ok" in out
+
+
+def test_a_non_utf8_verifier_is_skipped_not_crashed(tmp_path):
+    """The same for a verifier this gate cannot DECODE, not just cannot parse.
+
+    ``UnicodeDecodeError`` subclasses ``ValueError``, not ``OSError``, so a
+    verifier that is valid Python under a non-UTF-8 coding declaration escaped
+    the handler above and took the whole self-check with it: a bare traceback,
+    no ``reach.*`` code, no ``close_stage``, no record merge — the one failure
+    mode the rest of this script is written to avoid.
+
+    Written as bytes directly rather than through the ``verifiers`` dict,
+    because that dict writes text and cannot express the defect.
+    """
+    (tmp_path / "contracts" / "promises").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "contracts" / "promises" / "legacy.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\nTHRESHOLD = '\xe9'\n"
+    )
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0)
+    assert "Traceback" not in out, out
+    assert "phase E ok" in out
+
+
+def test_every_read_under_contracts_survives_a_non_utf8_file():
+    """Phase E is not the only place the script decodes a file under contracts/.
+
+    Guarding only Phase E moved the traceback a few hundred lines down and left
+    the observable behaviour identical: the same latin-1 verifier cleared the
+    reach gate and then killed the C9 escaping-reference scan, which rglobs
+    ``contracts/*`` and ``contracts/*/*`` and read them unguarded. Phase C's
+    verifier read had the same hole — and Phase E's handler comment defers an
+    undecodable verifier to "Phase C's finding to report", which Phase C could
+    not do while dying on the same read.
+
+    Asserted statically over the shipped source rather than by running the
+    script: reaching C9 needs a complete valid closure (models.py, spec.py,
+    transform/, data/), so a runtime test would spend a large fixture to cover
+    one guard — and a fixture that fails an earlier phase exits before C9 and
+    passes vacuously, which is exactly how the first version of this test
+    reported green against a script that still crashed.
+    """
+    body = _script_body()
+
+    # The opening read of models.py/spec.py/transform/main.py is the fourth site
+    # of the same class, and it is asserted first because it is the one a reader
+    # is most likely to assume is safe. An earlier version of this comment
+    # claimed a bare read_text() there "fails the closure loudly and correctly";
+    # it does not. `except OSError` misses UnicodeDecodeError, so a latin-1
+    # models.py exited 1 with a bare traceback — "found something", by that
+    # block's own definition, when nothing had been read. Exit 2 is the code it
+    # reserves for "could not read".
+    opening = body[body.index('models_src = Path("models.py")'):]
+    opening = opening[:opening.index("finish(2)") + 20]
+    assert "except (OSError, UnicodeDecodeError) as exc:" in opening, (
+        "the opening closure read catches OSError only — a non-UTF-8 models.py "
+        "escapes as a traceback and exits 1, the code this block reserves for "
+        "'found something', rather than 2 for 'could not read'"
+    )
+    # Catching the error is half of it. An earlier revision of this test
+    # asserted the handler and not the codec, and the fix that followed caught
+    # UnicodeDecodeError while still reading under the LOCALE encoding — so the
+    # guard printed "must be UTF-8" about a decode it had not performed in
+    # UTF-8. On a cp1252 host that message is simply false; under an ASCII
+    # locale it fires on a file that is already UTF-8.
+    for name in ("models.py", "spec.py", "transform/main.py"):
+        m = re.search(rf'Path\("{re.escape(name)}"\)\.read_text\((.*?)\)', opening)
+        assert m is not None, f"the opening read of {name} moved"
+        assert 'encoding="utf-8"' in m.group(1), (
+            f"{name} is read under the locale codec while the handler below "
+            f"tells the author it must be UTF-8"
+        )
+
+    # The landed CSVs, which are the reads most likely to meet a non-UTF-8 byte
+    # in practice: a latin-1 verifier is a rare hand-written artifact, but a CSV
+    # exported from Excel as cp1252 is routine. csv.DictReader over one raises
+    # UnicodeDecodeError, and with no top-level handler in this script that is
+    # the same bare traceback — no code, no close_stage, no record merge.
+    # errors="replace" rather than skipping: an undecodable CSV is still a CSV
+    # whose rows are graded, and skipping it would make it the one place a
+    # mismatch hides. Unlike C9 — where the search is a fixed `../*.md` pattern
+    # a replacement char cannot match — a replacement char here CAN sit inside a
+    # graded value, so the trade is deliberate: a mangled cell reports as a
+    # vocabulary mismatch, which is a finding, where a skip reports nothing.
+    csv_opens = re.findall(r"\.open\(newline=\"\"(.*?)\)", body)
+    assert csv_opens, "the landed-CSV reads moved"
+    for args in csv_opens:
+        assert "errors=" in args, (
+            "a landed CSV is read with no error policy — a cp1252 export kills "
+            "the script with a bare traceback partway through grading"
+        )
+        # Both halves, because checking only the error policy is the mistake
+        # this file already documents at Phase C: errors="replace" with no
+        # encoding= still decodes under the host locale, so the same cp1252
+        # export mangles graded cells on one machine and not another, and
+        # presents as a vocabulary mismatch that is not really there.
+        assert 'encoding="utf-8"' in args, (
+            "a landed CSV declares an error policy but no codec — it decodes "
+            "under the host locale, so grading depends on the machine"
+        )
+
+    # EXHAUSTIVE, and that is the point. This defect was closed at one site,
+    # then three, then four, then seven — each round patching the sites the last
+    # review had named while the next unpinned read sat waiting. A per-site
+    # assertion can only catch sites someone already thought of. The invariant
+    # is that NO read in this script decodes under the locale codec, so it is
+    # asserted as one.
+    # Matches every read/open call and requires each to name a codec, rather
+    # than matching one spelling of "unpinned". A regex keyed on empty parens
+    # `read_text()` misses the three ways this defect actually came back:
+    # `read_text(errors="replace")` (a policy but no codec — the exact Phase C
+    # half-fix documented above), a bare `open(p)` with no `newline=""` for the
+    # csv check to key on, and a call split across lines.
+    calls = re.findall(
+        r"(?:\.read_text|\.open|(?<![\w.])open)\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
+        body, re.S,
+    )
+    assert calls, "no read/open calls found — did the script move?"
+    # The argument regex handles one level of nested parens, so a call like
+    # `open(os.path.join(str(a), b))` is not matched AT ALL — it contributes
+    # nothing to `calls`, never reaches the codec check, and passes silently.
+    # That is this file's own never-fires shape one level up: the sweep would
+    # only catch call SPELLINGS someone thought of. Counting the call sites
+    # independently makes an unparseable argument list fail the test instead of
+    # disappearing from it.
+    sites = re.findall(r"(?:\.read_text|\.open|(?<![\w.])open)\(", body)
+    assert len(calls) == len(sites), (
+        f"{len(sites) - len(calls)} read/open call(s) have an argument list "
+        f"this scan cannot parse, so they were never checked for a codec"
+    )
+    unpinned = [c.strip() for c in calls if "encoding=" not in c]
+    assert not unpinned, (
+        "these reads decode under the LOCALE codec, so their result depends on "
+        "the host's locale rather than on the file:\n  "
+        + "\n  ".join(unpinned)
+    )
+
+    # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
+    # the reads Phase E's deferral depends on. This test is not a whole-file
+    # sweep, and saying so keeps a later reader from trusting a coverage claim
+    # this file does not make.
+    c9 = body[body.index('rglob("contracts/*")'):]
+    c9_read = re.search(r"ESCAPE\.findall\(p\.read_text\((.*?)\)\)", c9)
+    assert c9_read is not None, "C9's escaping-reference read moved"
+    assert "errors=" in c9_read.group(1), (
+        "the C9 escaping-reference scan reads contracts/ files with no error "
+        "policy — a non-UTF-8 verifier kills the script there with a bare "
+        "traceback, after Phase E has already cleared it"
+    )
+
+    # Anchored to Phase C's own region, like the C9 check above. A file-wide
+    # substring search is satisfied by any handler anywhere in ~2000 lines: move
+    # the guard off this read, spell one the same way elsewhere, and the test
+    # still reports green while the deferral it protects is broken again. That
+    # is the same never-fires shape this file exists to document.
+    pc = body[body.index('cerr("closure.contract_verifier_missing"'):]
+    pc = pc[:pc.index("closure.contract_verifier_malformed") + 400]
+    assert "except UnicodeDecodeError as exc:" in pc, (
+        "Phase C's verifier read is unguarded — Phase E defers an undecodable "
+        "verifier to Phase C, so Phase C must survive to report it"
+    )
+    pc_read = re.search(r"vsrc = vp\.read_text\((.*?)\)", pc)
+    assert pc_read is not None, "Phase C's verifier read moved"
+    assert 'encoding="utf-8"' in pc_read.group(1), (
+        "Phase C reads the verifier under the LOCALE codec while its diagnostic "
+        "claims UTF-8 — on a cp1252 host it silently accepts bytes Phase E "
+        "rejected, and under an ASCII locale it fails a valid UTF-8 file"
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
