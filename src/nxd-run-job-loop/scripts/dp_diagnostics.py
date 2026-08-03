@@ -698,7 +698,7 @@ _register_table(
         ("closure.build_record_hash_mismatch", "error", "agent", "none", False,
          "build-record.compiled_from does not match lock.spec_hash"),
         ("closure.build_record_merge_failed", "error", "agent", "none", False,
-         "build-record.json could not be updated; the previous record is unchanged"),
+         "self-check could not merge build-record.json"),
         ("closure.readme_missing", "error", "agent", "none", False,
          "README.md — the reopen recipe — is missing"),
         ("closure.resolved_ref_missing", "error", "agent", "none", False,

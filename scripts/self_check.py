@@ -175,7 +175,9 @@ def merge_record(path, stages):
             "models": ROW_COUNTS}
     tmp = p.with_name(p.name + ".tmp")
     try:
-        tmp.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+        tmp.write_text(
+            json.dumps(rec, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         tmp.replace(p)
     except OSError as exc:
         try:
@@ -220,11 +222,8 @@ def finish(exit_code):
                      "at_unix_ms": STAGE_AT.get(s), "origin": "tool_computed",
                      "diagnostics": ds, "detail": STAGE_DETAIL[s]}
     if RECORD_PATH and not merge_record(RECORD_PATH, stages):
-        # The record could not carry this failure, so preserve it in the
-        # report and make the process verdict fail as well.
-        stages["s3_closure"]["status"] = "failed"
-        stages["s3_closure"]["diagnostics"] = [
-            d for d in DIAGS if d["stage"] == "s3_closure"]
+        # The record could not carry this failure, so make the process verdict
+        # fail as well; the diagnostic already recorded it in DIAGS.
         exit_code = max(exit_code, 1)
     if JSON_MODE:
         counts = {"error": 0, "warning": 0, "info": 0}

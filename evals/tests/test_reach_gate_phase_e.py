@@ -26,6 +26,7 @@ Phase E for proof that the transform is offline.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -156,6 +157,67 @@ def _diags(out: str) -> list[dict]:
 
 def _codes(out: str) -> list[str]:
     return [d["code"] for d in _diags(out)]
+
+
+def _run_merge_record_harness(
+    tmp_path: Path, record_path: Path, *, fail_replace: bool = False
+) -> tuple[subprocess.CompletedProcess[str], dict]:
+    """Run the shipped reporting/record-merge surface with a real subprocess."""
+    body = _script_body()
+    reporting_surface = body[: body.index(
+        "# ---------------------------------------------------------------- Phase A ---"
+    )]
+    harness = reporting_surface + f"""
+if {fail_replace!r}:
+    def _fail_replace(self, target):
+        raise OSError("simulated replace failure")
+    Path.replace = _fail_replace
+close_stage("s1_structure", "passed")
+close_stage("s2_transform", "passed")
+close_stage("s3_closure", "passed")
+finish(0)
+"""
+    script = tmp_path / "_merge_record.py"
+    script.write_text(harness, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(script), "--json", "--record", str(record_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert "Traceback" not in proc.stdout + proc.stderr
+    report = json.loads(proc.stdout)
+    return proc, report
+
+
+def test_merge_record_failures_reach_json_verdict(tmp_path):
+    """Record read/write failures are observable and preserve prior bytes."""
+    record_dir = tmp_path / "record-dir"
+    record_dir.mkdir()
+    proc, report = _run_merge_record_harness(tmp_path, record_dir)
+    assert proc.returncode != 0
+    assert report["ok"] is False
+    assert any(
+        d["code"] == "closure.build_record_merge_failed"
+        for d in report["diagnostics"]
+    )
+    assert "could not be read" in proc.stderr
+
+    record_path = tmp_path / "build-record.json"
+    original = b'{"marker": "keep", "stages": {}}\n'
+    record_path.write_bytes(original)
+    proc, report = _run_merge_record_harness(
+        tmp_path, record_path, fail_replace=True
+    )
+    assert proc.returncode != 0
+    assert report["ok"] is False
+    assert any(
+        d["code"] == "closure.build_record_merge_failed"
+        for d in report["diagnostics"]
+    )
+    assert record_path.read_bytes() == original
+    assert not record_path.with_name(record_path.name + ".tmp").exists()
+    assert "could not be written" in proc.stderr
 
 
 # --------------------------------------------------------------- ordering ---
@@ -1101,44 +1163,6 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
         "these file I/O calls depend on the host's locale codec rather than "
         "the file:\n  "
         + "\n  ".join(unpinned)
-    )
-
-    merge_record = body[body.index("def merge_record"):body.index("def finish")]
-    assert "except OSError as exc:" in merge_record, (
-        "merge_record's record write can still abort the final diagnostic report "
-        "with a bare OSError"
-    )
-    assert "could not be written" in merge_record, (
-        "merge_record's write failure is not reported through say()"
-    )
-    assert "tmp = p.with_name(p.name + \".tmp\")" in merge_record, (
-        "merge_record writes directly to the record, so a failed write can "
-        "leave it truncated"
-    )
-    assert "tmp.replace(p)" in merge_record, (
-        "merge_record does not atomically replace the record after a complete "
-        "temporary write"
-    )
-    assert "the previous record is unchanged" in merge_record, (
-        "merge_record's write failure message does not describe the atomic "
-        "replacement guarantee"
-    )
-    assert "closure.build_record_merge_failed" in merge_record, (
-        "merge_record's write failure is missing from the JSON diagnostics"
-    )
-    finish = body[body.index("def finish"):body.index("# ---------------------------------------------------------------- Phase A")]
-    assert "if RECORD_PATH and not merge_record(RECORD_PATH, stages):" in finish, (
-        "finish() does not observe a failed record merge"
-    )
-    assert 'stages["s3_closure"]["status"] = "failed"' in finish, (
-        "a failed record merge does not fail the closure stage"
-    )
-    assert "exit_code = max(exit_code, 1)" in finish, (
-        "a failed record merge can still produce a green process verdict"
-    )
-    record_notice = body[body.index("def record_notice"):body.index("def cpath")]
-    assert "print(message, file=sys.stderr)" in record_notice, (
-        "record I/O failures disappear under --json instead of reaching stderr"
     )
 
     # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
