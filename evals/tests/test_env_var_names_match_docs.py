@@ -103,6 +103,30 @@ def test_desktop_python_var_agrees_across_every_surface() -> None:
     assert not offenders, f"stale {stale} spelling survives in: {offenders}"
 
 
+def test_res_error_literals_are_lowercase() -> None:
+    """Every ``res.error`` literal in ``run.py`` starts lowercase.
+
+    ``res.error`` renders through two sinks that treat it as an opaque whole —
+    ``f"✗ ERROR — {res.error}"`` and the JSON report's ``"error"`` field — and the
+    field's long-standing convention is lowercase (``"missing checks.json"``,
+    ``"agent run failed"``, ``"http stub setup failed: …"``). A codename sweep
+    capitalized two of them on an invented "sentence-initial" rule, and the drift
+    took three review rounds to unwind because nothing asserted the convention.
+
+    Acronym-initial values (``MCP server setup failed``) are the one exception.
+    """
+    text = RUN_PY.read_text(encoding="utf-8")
+    literals = re.findall(r"res\.error = \(?\s*f?\"([^\"]*)\"", text)
+    bad = [
+        lit for lit in literals
+        if lit[:1].isupper() and not re.match(r"^[A-Z]{2,}\b", lit)
+    ]
+    assert not bad, (
+        "res.error literal(s) starting with a capital; the field's convention is "
+        f"lowercase (acronyms excepted): {bad}"
+    )
+
+
 def test_runner_class_names_are_capitalized() -> None:
     """No ``class`` in ``run.py`` starts lowercase.
 

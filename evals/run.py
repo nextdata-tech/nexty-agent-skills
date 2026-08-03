@@ -701,7 +701,7 @@ def _desktop_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str
     missing = [name for name in binaries if not (supervisor_dir / name).is_file()]
     if missing or not Path(python).is_file():
         raise RuntimeError(
-            f"Desktop runtime missing binaries={missing} or Python={python!r}"
+            f"desktop runtime missing binaries={missing} or Python={python!r}"
         )
     # The supervisor finds its kernel-host sibling from its *real* executable
     # path, so tiny exec wrappers preserve that contract while exposing only the

@@ -1295,11 +1295,25 @@ failed"`, lowercase, because a product name in that slot followed the field's co
 rather than overriding it. So `res.error` is lowercase, always, and §6 introduced the two
 anomalies rather than fixing them. Both are reverted here.
 
-What survives capitalized is the set that never was `res.error`: the standalone log lines
-(`f"Desktop runtime missing binaries=…"`, `print(f"Desktop preflight OK: …")`), which were
-`Pocket`-capitalized before the rename, and the `res.verdict["summary"]` append, whose
-leading `{prior}` may be empty. The rule, stated as the codebase actually has it: **`res.error`
-values are lowercase; standalone log lines and report sentences take a capital.**
+What survives capitalized is the set that genuinely renders sentence-initial: the stderr line
+`print(f"Desktop preflight OK: …")` and the `res.verdict["summary"]` append, whose leading
+`{prior}` may be empty. The rule, stated as the codebase actually has it: **`res.error` values
+are lowercase; standalone log lines and report sentences take a capital.**
+
+**A seventh review caught this amendment mis-sorting one more string, the same way.**
+`f"Desktop runtime missing binaries=…"` was listed above as a standalone log line. It is
+neither log line nor `res.error` literal — it is a `RuntimeError` message, and both callers
+of `_desktop_runtime` catch it into `res.error = f"desktop runtime setup failed: {exc}"`, so
+it renders mid-sentence. Its sibling `RuntimeError` eight lines up (`"set
+EVAL_DESKTOP_SUPERVISOR_DIR …"`) is lowercase and reaches the identical sink — the same
+sibling test that caught the `verifier facts were malformed` over-application. Lowercased.
+
+**And this one is now pinned in code**, which the two prior corrections were not:
+`test_res_error_literals_are_lowercase` asserts every `res.error` literal starts lowercase
+(acronym-initial values like `MCP server setup failed` excepted), and is verified to fail
+against the pre-correction tree. Unlike §8's prefix convention — where an assertion genuinely
+cannot guard a *reader's* inference — this convention is mechanically checkable, and three
+rounds of drift are the argument that it should have been checked from the start.
 
 One test docstring was corrected rather than its code: `_names_read_by_runner()` claimed to
 return names `run.py` "passes to os.environ" when it regexes the whole file. The superset is
@@ -1330,8 +1344,8 @@ would have caught the omission the reviewer found rather than restating it.
 **Evidence:**
 - `scripts/validate_skills.py` passes; every `name:` equals its directory name.
 - `./build-skills.sh` packages all 17 `ok`, each under the 200-entry cap.
-- `python3 -m pytest evals/tests` — **555 passed** (rebased onto v0.32.1, plus the 9 marker
-  tests and 4 env-var/naming tests).
+- `python3 -m pytest evals/tests` — **556 passed** (rebased onto v0.32.1, plus the 9 marker
+  tests and 5 env-var/naming tests, the last of which pins the `res.error` casing above).
 - Zero occurrences of "pocket" in any shipped surface — `src/`, `scripts/`, `docs/`,
   `examples/`, `README.md`, the manifests and `evals/run.py`. Outside those surfaces and
   outside `evals/benchmarks/` — frozen evidence keeps its original text, and this entry's
