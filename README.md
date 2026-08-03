@@ -647,9 +647,12 @@ eyeballed. The loop for editing an existing skill:
      --report after=/tmp/eval-after.json \
      --notes "<why>"
    ```
-   This appends a before/after entry to `evals/benchmarks/ledger.md` — the repo's
-   history of skill quality and efficiency (judge checks, turns, tool calls,
-   tokens). Commit it in the same PR as the change it measures.
+   This creates a before/after Markdown entry in `evals/benchmarks/entries/`, a
+   matching compact JSON record in `evals/benchmarks/records/`, and rebuilds
+   `evals/benchmarks/README.md` — the current history of skill quality and
+   efficiency (judge checks, turns, tool calls, tokens). Commit all three in the
+   same PR as the change it measures. `evals/benchmarks/ledger.md` and its
+   existing records are frozen legacy history, never append to or rewrite them.
 4. **Bump the version** if behavior changed — plugin version is authoritative and
    kept in lockstep across `.claude-plugin/plugin.json`,
    `.claude-plugin/marketplace.json`, and every `src/*/SKILL.md` `metadata.version`.

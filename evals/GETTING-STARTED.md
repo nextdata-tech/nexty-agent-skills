@@ -362,5 +362,5 @@ before:
 3. **Agent runs are nondeterministic.** Treat single-run metric deltas under
    ~20% as noise, and repeat the run before believing a regression.
 
-Benchmarking a skill change, recording it in the ledger, the baseline and
-flakiness machinery: [`evals/README.md`](README.md).
+Benchmarking a skill change, recording current evidence entries, the baseline
+and flakiness machinery: [`evals/README.md`](README.md).

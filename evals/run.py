@@ -309,7 +309,7 @@ def effective_agent_model(is_desktop: bool, backend_name: str, default_model: st
     desktop is pinned to a verified Claude model, but that id is meaningless to
     any other provider, so the pin applies only on the Claude backend. The
     dispatch path and the report must agree on this or a report attributes a
-    Codex desktop run to a Claude model and poisons the benchmark ledger.
+    Codex desktop run to a Claude model and poisons benchmark evidence.
     """
     if is_desktop and backend_name == "claude":
         return JOB_AGENT_MODEL
