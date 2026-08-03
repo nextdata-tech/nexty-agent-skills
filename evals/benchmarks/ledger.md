@@ -934,7 +934,6 @@ recorded in the PR description as harness faults and should not be read as skill
 signal.
 
 ## 2026-08-03 — v0.32.0 — pack-wide: skill names standardized to imperative action phrases (NEX-830)
-## 2026-08-03 — auth dispatch on an unauthenticated API; non-UTF-8 verifier (plugin v0.31.1)
 
 | run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1023,6 +1022,13 @@ well enough to prove the edited descriptions still win their skill the same disp
 v0.16.0 entry above measured routing at n=4/n=5 and called it directional at best. If a
 routing regression is going to hide anywhere in this PR, it is in those two descriptions and
 not in the renames.
+
+## 2026-08-03 — auth dispatch on an unauthenticated API; non-UTF-8 verifier (plugin v0.32.1)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
 Notes: **No eval arm, deliberately.** Both defects need an input no public
 scenario produces, and manufacturing one to yield a number would put a figure in
 this ledger that measures the fixture rather than the change.

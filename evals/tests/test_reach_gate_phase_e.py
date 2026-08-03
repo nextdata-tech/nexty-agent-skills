@@ -54,7 +54,8 @@ CLEAN_CSV_TRANSFORM = (
 
 def _script_body() -> str:
     """The single ``# self_check.py`` fence, same source the agent runs."""
-    blocks = re.findall(r"```python\n(.*?)```", SELF_CHECK_MD.read_text(), re.S)
+    blocks = re.findall(r"```python\n(.*?)```",
+                        SELF_CHECK_MD.read_text(encoding="utf-8"), re.S)
     bodies = [b for b in blocks if b.lstrip().startswith("# self_check.py")]
     assert len(bodies) == 1, f"expected one self_check.py fence, found {len(bodies)}"
     return bodies[0]
@@ -1066,11 +1067,22 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # assertion can only catch sites someone already thought of. The invariant
     # is that NO read in this script decodes under the locale codec, so it is
     # asserted as one.
-    bare = re.findall(r"^.*\.read_text\(\).*$", body, re.M)
-    assert not bare, (
+    # Matches every read/open call and requires each to name a codec, rather
+    # than matching one spelling of "unpinned". A regex keyed on empty parens
+    # `read_text()` misses the three ways this defect actually came back:
+    # `read_text(errors="replace")` (a policy but no codec — the exact Phase C
+    # half-fix documented above), a bare `open(p)` with no `newline=""` for the
+    # csv check to key on, and a call split across lines.
+    calls = re.findall(
+        r"(?:\.read_text|\.open|(?<![\w.])open)\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
+        body, re.S,
+    )
+    assert calls, "no read/open calls found — did the script move?"
+    unpinned = [c.strip() for c in calls if "encoding=" not in c]
+    assert not unpinned, (
         "these reads decode under the LOCALE codec, so their result depends on "
         "the host's locale rather than on the file:\n  "
-        + "\n  ".join(b.strip() for b in bare)
+        + "\n  ".join(unpinned)
     )
 
     # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
