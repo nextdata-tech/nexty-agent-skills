@@ -418,7 +418,7 @@ def annotation_errors(
             continue
         if not has_description(node):
             continue
-        # Matches scripts/self_check.py: a wrapper description is a legal
+        # Matches nxd-run-job-loop/scripts/self_check.py: a wrapper description is a legal
         # attribute description (it reaches the structural data_model block).
         # The defect is using it INSTEAD of the role's, so fail only when no
         # sibling role carries one. The two gates must agree or correctly
@@ -432,7 +432,7 @@ def annotation_errors(
                        if call_name(r.func) in ("dimension", "metric")]
         if any(has_description(r) for r in describable):
             continue
-        # Same branching as scripts/self_check.py: with no dimension/metric
+        # Same branching as nxd-run-job-loop/scripts/self_check.py: with no dimension/metric
         # role there is nowhere to move the text to, so the remedy is deletion.
         remedy = ("move it inside dimension(...) / metric(...)" if describable
                   else "primary_key()/join() take no description — drop it")

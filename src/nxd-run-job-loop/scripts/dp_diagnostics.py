@@ -31,8 +31,8 @@ Two rules worth stating up front, because everything else follows from them:
    failure is environmental, it is not environmental. Misclassifying a real bug
    as "the environment" is what ships a broken data product flagged green.
 
-CONSTRAINT: `scripts/self_check.py` is copied INTO a closure and run there. It
-can never import this module. It inlines a literal vocabulary instead, and
+CONSTRAINT: the installed `self_check.py` is copied INTO a closure and run
+there. It can never import this module. It inlines a literal vocabulary instead, and
 `evals/tests/test_self_check_diagnostic_vocab.py` asserts that vocabulary is a
 subset of `CODES`.
 

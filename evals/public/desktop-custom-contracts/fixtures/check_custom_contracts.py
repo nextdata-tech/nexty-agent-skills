@@ -6,7 +6,7 @@ import ast
 import re
 from pathlib import Path
 
-# Byte-identical to scripts/self_check.py's SECRET_LITERAL. Restating it drifted
+# Byte-identical to nxd-run-job-loop/scripts/self_check.py's SECRET_LITERAL. Restating it drifted
 # in BOTH directions: `passwd` was missing here (Phase C failed, this passed)
 # and the missing \b made `csrf_token` match here but not there (this failed,
 # Phase C passed). Either way a closure passes one gate and fails the other,
@@ -256,7 +256,7 @@ def check(root: Path):
         registered = len(verifiers)
         source = p.read_text(); verifier = next(iter(verifiers), None)
         verifier_source = ast.unparse(verifier) if verifier else ""
-        # Deliberately the SAME predicate as scripts/self_check.py: a non-literal
+    # Deliberately the SAME predicate as nxd-run-job-loop/scripts/self_check.py: a non-literal
         # If/IfExp anywhere in the function, with FAILED present in the body —
         # NOT "FAILED lexically inside the branch". The stricter form rejects the
         # inverted guard clause (`if not violations: return PASS` / bare

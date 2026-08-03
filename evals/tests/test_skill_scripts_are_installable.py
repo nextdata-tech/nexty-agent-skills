@@ -17,9 +17,9 @@ from the repo, not from an install.
 The eval harness reproduces the same environment (it copies skill dirs into an
 isolated workspace), so it cannot catch this either. Hence a plain pytest gate.
 
-`self_check.py` is the deliberate exception and is asserted as such below: it is
-copied INTO the closure and run from there, so it is delivered by the embedded
-fence in `reference/self-check.md`, never by an installer.
+`self_check.py` ships like every other helper, inside the skill tree that owns
+the resolver. It is still copied INTO the closure and run from there, but the
+installer now delivers the exact file instead of relying on transcription.
 """
 
 from __future__ import annotations
@@ -38,11 +38,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 
-# Delivered by embedding in a reference doc, not by an installer.
-# `test_self_check_sync.py` keeps the fence and the file byte-identical.
-DELIVERED_BY_EMBEDDING = {"self_check.py"}
-
-HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py")
+HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py", "self_check.py")
 VERSION_STAMP = ".nexty-plugin-version.json"
 SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
 WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
@@ -59,7 +55,7 @@ def test_every_referenced_script_ships_inside_a_skill_tree():
     missing: dict[str, list[str]] = {}
     for doc in _skill_docs():
         names = set(SCRIPT_PATH.findall(doc.read_text(encoding="utf-8")))
-        unavailable = names - installable - DELIVERED_BY_EMBEDDING
+        unavailable = names - installable
         if unavailable:
             missing[str(doc.relative_to(SRC))] = sorted(unavailable)
     assert not missing, (
@@ -68,25 +64,14 @@ def test_every_referenced_script_ships_inside_a_skill_tree():
     )
 
 
-def test_the_two_spec_scripts_live_in_the_job_loop_skill():
+def test_the_spec_scripts_live_in_the_job_loop_skill():
     """Pin the home explicitly — a silent move back to the root is the bug."""
     home = SRC / "nxd-run-job-loop" / "scripts"
-    for name in ("dp_diagnostics.py", "validate_dp_spec.py"):
+    for name in HELPERS:
         assert (home / name).is_file(), f"{name} must ship at src/nxd-run-job-loop/scripts/"
         assert not (REPO / "scripts" / name).exists(), (
             f"{name} is back at the repo root, where no installer copies it"
         )
-
-
-@pytest.mark.parametrize("name", sorted(DELIVERED_BY_EMBEDDING))
-def test_the_embedded_exception_is_real(name):
-    """`self_check.py` is exempt only because a fence actually carries it."""
-    assert (REPO / "scripts" / name).is_file()
-    fence = (SRC / "nxd-generate-data-product" / "reference" / "self-check.md").read_text(encoding="utf-8")
-    assert f"# {name}" in fence, (
-        f"{name} is exempted from the install rule because it is embedded in "
-        "reference/self-check.md. That fence is gone, so the exemption is now a hole."
-    )
 
 
 def test_a_cross_skill_call_names_the_owning_skill():
@@ -104,6 +89,21 @@ def test_a_cross_skill_call_names_the_owning_skill():
     )
 
 
+def test_self_check_copy_names_the_owning_skill():
+    """The copy source uses the installed helper path; the run stays closure-local."""
+    offenders = []
+    for doc in _skill_docs():
+        rel = doc.relative_to(SRC)
+        for line_no, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            if "cp " in line and "self_check.py" in line and "scripts/" in line:
+                if '"$JOB_HELPER_DIR/scripts/self_check.py"' not in line:
+                    offenders.append(f"{rel}:{line_no}: {line.strip()}")
+    assert not offenders, (
+        "self_check.py copy sites must use the resolved JOB_HELPER_DIR path: "
+        f"{offenders}"
+    )
+
+
 def test_generator_selective_install_names_its_job_loop_dependency():
     generator = (SRC / "nxd-generate-data-product" / "SKILL.md").read_text(encoding="utf-8")
     readme = (REPO / "README.md").read_text(encoding="utf-8")
@@ -113,12 +113,14 @@ def test_generator_selective_install_names_its_job_loop_dependency():
 
 
 def _assert_helpers_run(skill_dir: Path) -> None:
-    """Assert both entrypoints run from a copied or extracted install tree."""
+    """Assert the installed helper entrypoints are present and runnable."""
     scripts = skill_dir / "scripts"
     validator = scripts / "validate_dp_spec.py"
     diagnostics = scripts / "dp_diagnostics.py"
+    self_check = scripts / "self_check.py"
     assert validator.is_file()
     assert diagnostics.is_file()
+    assert self_check.is_file()
     assert (scripts / "requirements.txt").read_text(encoding="utf-8") == "PyYAML>=6.0,<7\n"
 
     schema = subprocess.run(
@@ -263,6 +265,7 @@ def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
     with zipfile.ZipFile(archive) as zf:
         assert "scripts/dp_diagnostics.py" in zf.namelist()
         assert "scripts/validate_dp_spec.py" in zf.namelist()
+        assert "scripts/self_check.py" in zf.namelist()
         assert "scripts/requirements.txt" in zf.namelist()
         skill_dir = (
             tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"

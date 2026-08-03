@@ -2332,8 +2332,8 @@ say("phase C ok — approved spec snapshot + lock present, no closure-escaping "
 # === PHASE-D-BEGIN ===
 # Anchors, not decoration: evals/tests/test_policy_boundary_phase_d.py slices the
 # block out by these two markers. It used to locate the block by taking the
-# longest fenced python block and cutting between the phase's error-list
-# assignment and the branch that reports it — a content heuristic that holds only
+# the script's phase block and cutting between the phase's error-list assignment
+# and the branch that reports it — a content heuristic that holds only
 # while exactly one phase has that shape. Phase E now has it too, so the
 # heuristic is one edit away from selecting the wrong region, and a test that
 # extracts the wrong region does not fail: it passes, having stopped testing

@@ -145,7 +145,8 @@ float the version.
 
 ## Self-check
 
-Identical pattern to the CSV `self_check.py` in `SKILL.md` Step 7 — this
+Identical pattern to the CSV `self_check.py` shipped by `nxd-run-job-loop` and
+invoked in `SKILL.md` Step 7 — this
 connector type needs no live credentials, so the full offline dry-run
 applies unchanged: build a scratch `DuckDbOutput`, call `ingest` with
 `secrets={"file_source": <local path>}`, assert the read-back and the

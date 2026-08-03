@@ -41,7 +41,7 @@ ASYNC_VERIFIER_ERROR = (
 
 DIAG = (Path(__file__).parents[2] / "src" / "nxd-run-job-loop" / "scripts" /
         "dp_diagnostics.py")
-SELF_CHECK = Path(__file__).parents[2] / "scripts" / "self_check.py"
+SELF_CHECK = Path(__file__).parents[2] / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
 
 # The approved IR these fixtures compile from. Its `## expectations` and
 # `## promises` names must match the custom(...) names the generated spec.py
@@ -643,7 +643,7 @@ if __name__ == "__main__":
         doc["mapper_spec_id"] = json.loads(idproc.stdout)["mapper_spec_id"]
         (tmp_path / "contracts" / "mapper_grant.json").write_text(
             json.dumps(doc, indent=2), encoding="utf-8")
-    return subprocess.run([sys.executable, str(Path(__file__).parents[2] / "scripts" / "self_check.py")], cwd=tmp_path, text=True, capture_output=True)
+    return subprocess.run([sys.executable, str(SELF_CHECK)], cwd=tmp_path, text=True, capture_output=True)
 
 
 def test_real_self_check_denies_ungranted_mapper_before_phase_b(tmp_path: Path) -> None:
@@ -942,4 +942,3 @@ def test_secret_literal_regex_matches_self_check_exactly():
         ('tokenizer = "x"', False),
     ]:
         assert bool(checker.SECRET_LITERAL.search(sample)) is expected, sample
-
