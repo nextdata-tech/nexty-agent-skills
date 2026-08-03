@@ -2219,7 +2219,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         if preflight_error:
             # Deliberately stable: callers distinguish this infrastructure
             # error from an agent FAIL without parsing build-specific details.
-            res.error = "Desktop preflight failed"
+            res.error = "desktop preflight failed"
             res.metrics["desktop_preflight_error"] = preflight_error
             return res
         preflight_metrics["desktop_preflight"] = "passed"
@@ -2338,7 +2338,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         scenario_dir, Path(tmp)
                     )
                 except RuntimeError as exc:
-                    res.error = f"Desktop runtime setup failed: {exc}"
+                    res.error = f"desktop runtime setup failed: {exc}"
                     return res
                 # Both the agent forcing-function checker and the pristine
                 # harness verifier place snapshot state under the workspace so

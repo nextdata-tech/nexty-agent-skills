@@ -1280,15 +1280,26 @@ from `Nexty Pocket`. The frame is dropped rather than capitalized, matching how 
 the sweep says "the local desktop path" and how the supervisor repo itself writes "NXD
 desktop".
 
-**The capitalization rule is positional, and a sixth-review note corrected an over-application
-of it.** Capitalize only where the string *is* the whole message (`"Desktop preflight
-failed"`, `f"Desktop runtime setup failed: {exc}"`, and the `res.verdict["summary"]` append,
-whose leading `{prior}` may be empty). Leave it lowercase where the string only ever renders
-mid-sentence: `"desktop verifier facts were malformed"` exists solely to be interpolated
-into `f"desktop harness infrastructure failure: {…}"`, and its sibling pair three lines away
-— `"deterministic check facts were malformed"` / `f"deterministic check infrastructure
-failure: {…}"` — is lowercase for the same reason. Capitalizing the first pair broke a
-symmetry the second pair still holds, which is how the over-application was spotted.
+**The capitalization rule was invented when the codebase already had one, and two review
+rounds were needed to see it.** The §6 pass capitalized five `run.py` strings on a
+"sentence-initial" rule; the sixth review showed that rule could not distinguish
+`res.error = "Desktop preflight failed"` from `res.error = f"desktop harness infrastructure
+failure: …"`, since both are complete `res.error` values rendered through the same two paths
+(`f"✗ ERROR — {res.error}"` and the JSON report's `"error"` field).
+
+Checking the other thirteen `res.error` assignments settles it: **every pre-existing one is
+lowercase** — `"missing checks.json"`, `"MCP server setup failed: …"`, `"http stub setup
+failed: …"`, `"agent run failed"`, `"source-isolation infrastructure invalid: …"`. And the
+pre-rename text at these very lines was `"pocket preflight failed"` / `"pocket runtime setup
+failed"`, lowercase, because a product name in that slot followed the field's convention
+rather than overriding it. So `res.error` is lowercase, always, and §6 introduced the two
+anomalies rather than fixing them. Both are reverted here.
+
+What survives capitalized is the set that never was `res.error`: the standalone log lines
+(`f"Desktop runtime missing binaries=…"`, `print(f"Desktop preflight OK: …")`), which were
+`Pocket`-capitalized before the rename, and the `res.verdict["summary"]` append, whose
+leading `{prior}` may be empty. The rule, stated as the codebase actually has it: **`res.error`
+values are lowercase; standalone log lines and report sentences take a capital.**
 
 One test docstring was corrected rather than its code: `_names_read_by_runner()` claimed to
 return names `run.py` "passes to os.environ" when it regexes the whole file. The superset is
@@ -1327,12 +1338,13 @@ would have caught the omission the reviewer found rather than restating it.
   own prose names the old spellings throughout — exactly two files remain, **by design**:
   `test_runner_opt_in_markers_resolve.py` and `test_env_var_names_match_docs.py` name the
   old spellings in their docstrings in order to forbid them, and the latter asserts on the
-  stale string directly. That is the same exclusion
-  `test_env_var_names_match_docs.py` already encodes in code (`if "benchmarks" in
-  path.parts`). Stating the bound
-  rather than "zero occurrences" because the unqualified version was false when written —
-  the third time in this entry's lineage that a completeness claim outran its check (§3,
-  §5, here).
+  stale string directly. That is the same exclusion `test_env_var_names_match_docs.py`
+  already encodes in code (`if "benchmarks" in path.parts`). The bound is stated this way
+  rather than as "zero occurrences" because the unqualified version was false when written —
+  the fourth time in this entry's lineage that a completeness claim outran its check: §3
+  (v0.32.0's grep claim), §5 (two fixes cited before they existed), §6 (this bullet's first
+  version, which said "zero occurrences" unqualified), and this correction of it — the
+  second pass over the same sentence, which is its own data point.
 - Version surfaces agree at 0.33.0 across `plugin.json`, `marketplace.json` and all 17
   `SKILL.md`. Minor again: `nxd-pocket-loop` was a storage key, and `JOB_HELPER_DIR` /
   `…/nxd-jobs/` change a handoff variable and an on-disk layout.
