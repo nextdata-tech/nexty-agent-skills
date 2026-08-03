@@ -512,7 +512,7 @@ def test_broken_vendored_package_is_a_finding_not_a_traceback(tmp_path):
 
 def test_grant_codes_are_registered_in_the_shared_vocabulary():
     """Every code Phase G emits must exist in dp_diagnostics' registry."""
-    sys.path.insert(0, str(REPO_ROOT / "src" / "nxd-pocket-loop" / "scripts"))
+    sys.path.insert(0, str(REPO_ROOT / "src" / "nxd-run-job-loop" / "scripts"))
     import dp_diagnostics as dpd
 
     emitted = set(re.findall(r'"(grant\.[a-z_]+)"', _phase_g_source()))
