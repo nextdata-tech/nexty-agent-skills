@@ -1037,9 +1037,12 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
     # exported from Excel as cp1252 is routine. csv.DictReader over one raises
     # UnicodeDecodeError, and with no top-level handler in this script that is
     # the same bare traceback — no code, no close_stage, no record merge.
-    # errors="replace" for the C9 reason: a replacement character cannot
-    # manufacture or hide a vocabulary match, and skipping the file would make
-    # an undecodable CSV the one place a mismatch hides.
+    # errors="replace" rather than skipping: an undecodable CSV is still a CSV
+    # whose rows are graded, and skipping it would make it the one place a
+    # mismatch hides. Unlike C9 — where the search is a fixed `../*.md` pattern
+    # a replacement char cannot match — a replacement char here CAN sit inside a
+    # graded value, so the trade is deliberate: a mangled cell reports as a
+    # vocabulary mismatch, which is a finding, where a skip reports nothing.
     csv_opens = re.findall(r"\.open\(newline=\"\"(.*?)\)", body)
     assert csv_opens, "the landed-CSV reads moved"
     for args in csv_opens:
@@ -1047,6 +1050,19 @@ def test_every_read_under_contracts_survives_a_non_utf8_file():
             "a landed CSV is read with no error policy — a cp1252 export kills "
             "the script with a bare traceback partway through grading"
         )
+
+    # EXHAUSTIVE, and that is the point. This defect was closed at one site,
+    # then three, then four, then seven — each round patching the sites the last
+    # review had named while the next unpinned read sat waiting. A per-site
+    # assertion can only catch sites someone already thought of. The invariant
+    # is that NO read in this script decodes under the locale codec, so it is
+    # asserted as one.
+    bare = re.findall(r"^.*\.read_text\(\).*$", body, re.M)
+    assert not bare, (
+        "these reads decode under the LOCALE codec, so their result depends on "
+        "the host's locale rather than on the file:\n  "
+        + "\n  ".join(b.strip() for b in bare)
+    )
 
     # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
     # the reads Phase E's deferral depends on. This test is not a whole-file

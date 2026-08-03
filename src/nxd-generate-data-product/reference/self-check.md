@@ -491,7 +491,7 @@ def merge_record(path, stages):
     """
     p = Path(path)
     try:
-        rec = json.loads(p.read_text())
+        rec = json.loads(p.read_text(encoding="utf-8"))
     except Exception as exc:
         say(f"record: {path} could not be read ({type(exc).__name__}: {exc}) — "
             "stages 1-3 NOT merged. Re-run generator lock/record setup with its "
@@ -545,7 +545,7 @@ def finish(exit_code):
             counts[d["severity"]] += 1
         try:
             spec_hash = json.loads(
-                Path("dp-spec.lock.json").read_text()).get("spec_hash")
+                Path("dp-spec.lock.json").read_text(encoding="utf-8")).get("spec_hash")
         except Exception:
             spec_hash = None
         print(json.dumps({"schema": "nxd-diagnostic-report-v1",
@@ -1531,7 +1531,7 @@ if not lockp.exists():
          "dp-spec.lock.json")
 else:
     try:
-        lock = json.loads(lockp.read_text())
+        lock = json.loads(lockp.read_text(encoding="utf-8"))
         if not isinstance(lock, dict):
             raise ValueError("not a JSON object")
         if lock.get("schema") != "nxd-dp-spec-lock-v1":
@@ -1580,7 +1580,7 @@ if not recp.exists():
          "generation, before self_check.py.", "build-record.json")
 else:
     try:
-        record = json.loads(recp.read_text())
+        record = json.loads(recp.read_text(encoding="utf-8"))
         if not isinstance(record, dict):
             raise ValueError("not a JSON object")
         if record.get("schema") != "nxd-build-record-v1":
@@ -1665,7 +1665,7 @@ for rel in scan:
 # secret it found turns a contained file leak into a transcript leak.
 profile = Path("infra-profile.yaml")
 if profile.exists():
-    text = profile.read_text()
+    text = profile.read_text(encoding="utf-8", errors="replace")
     # A populated attributes list = `attributes:` followed by a `- ` item before
     # the next key at the same or shallower indent. `attributes: []` never matches.
     # Match every YAML spelling of a populated list, because a gate that only
@@ -1693,7 +1693,8 @@ if profile.exists():
                      f"See reference/database-source.md, 'Sensitivity artifacts'.",
                      name)
         gi = Path(".gitignore")
-        if gi.exists() and "infra-profile.yaml" not in gi.read_text():
+        if gi.exists() and "infra-profile.yaml" not in gi.read_text(
+            encoding="utf-8", errors="replace"):
             cerr("closure.gitignore_not_naming_profile",
                  ".gitignore exists but does not ignore infra-profile.yaml — the one "
                  "file that must never be committed. Ignore it by name, never `*`.",
@@ -2022,7 +2023,7 @@ if _spec_tree is not None:
              "input. It carries the export root every model_paths entry "
              "resolves under.", "csv-source-path")
     elif csvp.is_file():
-        raw = csvp.read_text().strip()
+        raw = csvp.read_text(encoding="utf-8").strip()
         parts = Path(raw).parts if raw else ()
         if (not raw or raw.startswith("/") or ".." in parts
                 or any(p in ("", ".") for p in parts)):
@@ -2064,7 +2065,7 @@ if _spec_tree is not None:
     # swap, which a per-driver presence check cannot.
     prof = Path("infra-profile.yaml")
     if prof.is_file():
-        ptext = prof.read_text()
+        ptext = prof.read_text(encoding="utf-8", errors="replace")
         if not re.search(r"^metadata:\n\s+name: desktop-local$", ptext, re.M):
             cerr("closure.profile_name_mismatch",
                  "infra-profile.yaml: metadata.name must be desktop-local to "
@@ -2306,7 +2307,7 @@ if "nxd_decisions" in set(PHYSICAL_MODELS):
 # coincidence, and flagging those would make this unreliable.
 POLICY_HINT = ("rubric", "weight", "threshold", "band", "anchor", "verdict",
                "scale", "policy", "gate", "criteri")
-tsrc = Path("transform/main.py").read_text()
+tsrc = Path("transform/main.py").read_text(encoding="utf-8", errors="replace")
 tlits = set()
 for node in ast.walk(ast.parse(tsrc)):
     if isinstance(node, ast.Constant):
