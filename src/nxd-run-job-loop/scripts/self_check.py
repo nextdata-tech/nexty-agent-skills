@@ -2331,9 +2331,9 @@ say("phase C ok — approved spec snapshot + lock present, no closure-escaping "
 # agent-owned, both self-heal. The code and the path tell them apart.
 # === PHASE-D-BEGIN ===
 # Anchors, not decoration: evals/tests/test_policy_boundary_phase_d.py slices the
-# block out by these two markers. It used to locate the block by taking the
-# the script's phase block and cutting between the phase's error-list assignment
-# and the branch that reports it — a content heuristic that holds only
+# block out by these two markers. It used to locate the block by scanning the
+# script for the phase's error-list assignment and cutting from there to the
+# branch that reports it — a content heuristic that holds only
 # while exactly one phase has that shape. Phase E now has it too, so the
 # heuristic is one edit away from selecting the wrong region, and a test that
 # extracts the wrong region does not fail: it passes, having stopped testing
