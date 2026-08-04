@@ -25,8 +25,11 @@ pack-level invariants CI cannot check on its own.
   carries its own docs. An experiment that graduates moves its code under `src/`
   and its architecture doc to `docs/architecture/`; until then treat
   `experiments/` as a staging area, never as a dependency. The worked example of
-  a graduation is the field mapper: code at `src/nxd-generate-data-product/mapper/`,
-  design record at `docs/architecture/field-mapper.md`.
+  a graduation is the field mapper, which graduated twice: out of `experiments/`
+  into the skill, then out of this repo entirely. Its code now ships in the
+  `nxd` package as `nxd.experimental.field_mapper`; what stays here is its
+  normative contract (`src/nxd-generate-data-product/mapper/CONTRACT.md`), its
+  fixtures, and its design record at `docs/architecture/field-mapper.md`.
 
 ## Versioning (single source of truth)
 

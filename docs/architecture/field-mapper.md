@@ -2,8 +2,8 @@
 
 Layer-1 harness for LLM inference from inside a data-product transform.
 
-Status: **shipped** as part of the `nxd-generate-data-product` skill, at
-`src/nxd-generate-data-product/mapper/`. Vendored per closure and gated by the generate-dp
+Status: **shipped** inside the `nxd` package as `nxd.experimental.field_mapper`.
+Closures import it from the installed runtime and it is gated by the generate-dp
 self-check's Phase G consent gate. Acceptance suite passes 13/13, and it is
 proven end to end as a real nxd transform (dlt → duckdb → mapper → gate → dlt).
 What it deliberately does not cover is in
@@ -321,11 +321,11 @@ reviews re-attach to the wrong entity while the uniqueness assert still passes.
 
 ## Acceptance suite
 
-`python -m field_mapper verify samples` — 13/13 pass. Each fixture declares what
+`python -m nxd.experimental.field_mapper verify samples` — 13/13 pass. Each fixture declares what
 it proves in its own `expect.json`; `verify` fails a fixture that stops behaving
 as declared, so the claims below are checked rather than asserted.
 
-`python -m field_mapper pins` checks three invariants the fixture suite
+`python -m nxd.experimental.field_mapper pins` checks three invariants the fixture suite
 structurally cannot: spec-hash stability, canonical-form coverage, and that
 every `SystemicError` code still blocks at the gate.
 
@@ -371,43 +371,54 @@ mapping. Neither addresses injection.
 - API key resolution: `secrets` dict first, env fallback for the CLI. The key is
   never logged and never appears in the ledger.
 
-## Vendoring into a closure
+## Importing it in a closure
 
-The harness is not published as a wheel; it is **vendored from the skill**
-(CONTRACT.md open question 6). A closure that wants to map copies
-`<skill-dir>/mapper/field_mapper/` to its own root, and the generate-dp
-self-check's **Phase G** enforces consent on the result. Version drift between
-closures is re-consented by design: `harness_version` is an input to
-`mapper_spec_id`, so vendoring a newer harness moves every spec id and Phase G
-demands fresh grants. The layout is not a suggestion; two parts of it are load-bearing.
+The harness ships inside the `nxd` package as `nxd.experimental.field_mapper`
+(CONTRACT.md decision 6). A closure that wants to map imports it; the runtime
+already installs `nxd`, so nothing is copied into the closure and the
+generate-dp self-check's **Phase G** enforces consent on the import. Version
+drift is re-consented by design: `harness_version` is an input to
+`mapper_spec_id`, so a newer harness moves every spec id and Phase G demands
+fresh grants. That blast radius is wider than vendoring's was — the package
+version moves for every closure at once, not one at a time.
 
 ```
 <closure>/
-  field_mapper/          # the vendored package, at the CLOSURE ROOT
   contracts/
     <name>_spec.json     # the MapperSpec — hashable, therefore consentable
     <name>_grant.json    # the consent grant, binding that spec's id
-  transform/main.py      # imports field_mapper, calls map_inputs
+  transform/main.py      # imports nxd.experimental.field_mapper, calls map_inputs
 ```
 
-**At the closure root, never under `contracts/`.** Phase E rglobs
-`contracts/**/*.py` and parses every file for model-SDK imports. `transport.py`
-contains `import anthropic` — function-local, but a function-local import is
-still an `ast.Import` node that `ast.walk` finds. A package vendored under
-`contracts/` therefore dies in Phase E: correctly, but very confusingly.
+**Do not copy the harness into the closure.** That was the contract before it
+shipped inside `nxd`, and it no longer runs: the supervisor's snapshot
+allowlists do not carry a closure-root `field_mapper/`, so the directory is
+absent at execution. Phase G denies it by name as `grant.vendored_harness`, and
+no grant rescues it — a vendored copy answers for its own spec hash, so consent
+bound to it means nothing.
+
+Phase E catches a harness tree copied under `contracts/` as a second line of
+defence: it rglobs `contracts/**/*.py` for model-SDK imports, and `transport.py`
+contains `import anthropic` — function-local, but still an `ast.Import` node
+that `ast.walk` finds. That statement form is load-bearing for exactly this
+reason. A pyright-strict pass once rewrote it to
+`importlib.import_module("anthropic")`, which is identical at runtime and
+invisible to every AST walk, and the copied-tree case went uncaught until it was
+restored. `tests/nxd/experimental/test_field_mapper_acceptance.py` in the
+monorepo now pins the form.
 
 **Author the grant against the harness, not by hand.** The `mapper_spec_id` is
 the hash of the spec *with its compiled wire schema and harness version stamped
 in*, not of the JSON sitting on disk. Get it from the harness:
 
 ```
-python -m field_mapper spec-id contracts/<name>_spec.json
+python -m nxd.experimental.field_mapper spec-id contracts/<name>_spec.json
 ```
 
 Paste that id into the grant's `mapper_spec_id`. A hand-computed hash — or the
 `"<derived>"` placeholder the `samples/` fixtures use — binds nothing: Phase G
 rejects `<derived>` by name, because a grant carrying it authorizes whatever
-spec it is handed. `python -m field_mapper grant-check <spec> <grant>` applies
+spec it is handed. `python -m nxd.experimental.field_mapper grant-check <spec> <grant>` applies
 the same statically decidable checks Phase G subprocesses (hash, primary and
 corroboration model, expiry); Phase G additionally rejects the `<derived>`
 placeholder by name before ever calling it, so on that one input the two answers

@@ -47,10 +47,16 @@ from pathlib import Path
 
 import pytest
 
+from _harness import harness_path, requires_harness
+
 EVALS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = EVALS_DIR.parent
 SELF_CHECK = REPO_ROOT / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
-REAL_MAPPER = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "field_mapper"
+# The harness lives in the nxd monorepo; only the fixtures are carried here.
+# `harness_path()` is None when that checkout is unreachable, which is what
+# `requires_harness` skips on — so this stays a module-level lookup rather than
+# an import that would error at collection.
+REAL_MAPPER = harness_path()
 REAL_SAMPLE = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "samples" / "01-row-scores"
 
 CSV = '_csv = "/infra-profile/desktop-local#/services/csv-source"\n'
@@ -170,6 +176,45 @@ def _codes(out: str) -> list[str]:
     return [d["code"] for d in _diags(out)]
 
 
+def _stand_in(dest: Path) -> None:
+    """A harness that HASHES but never JUDGES, for when the monorepo is absent.
+
+    The gate reaches the harness through exactly two verbs — ``spec-id`` and
+    ``grant-check`` — and most of the suite only needs the first to be a stable
+    function of the spec. That is a hash, not a consent rule, so reproducing it
+    here costs nothing and drifts from nothing.
+
+    ``grant-check`` is the line this must not cross. Its real verdicts encode
+    consent policy — expiry, model agreement, the wording that Phase G maps to
+    ``grant.expired`` (owner: user) versus ``grant.invalid`` (owner: agent) —
+    and a second copy of a consent rule is the exact defect the gate exists to
+    prevent. So it returns "no problems" unconditionally: enough for tests that
+    assert on the gate's own pairing, hash-comparison and reporting logic, and
+    useless for tests that assert on a verdict. Those carry
+    ``requires_harness`` and run against the real package.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "__init__.py").write_text("", encoding="utf-8")
+    (dest / "__main__.py").write_text(
+        "import hashlib, json, sys\n"
+        "cmd = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "if cmd == 'spec-id':\n"
+        # Hash the spec's canonical JSON, so the id is stable across calls and
+        # different for different specs — the only two properties the gate's
+        # pairing logic actually reads. The real harness stamps a wire schema
+        # and harness version in first, so this value is deliberately NOT
+        # equal to a real spec id; nothing here compares the two.
+        "    raw = json.load(open(sys.argv[2], encoding='utf-8'))\n"
+        "    blob = json.dumps(raw, sort_keys=True, separators=(',', ':'))\n"
+        "    digest = hashlib.sha256(blob.encode()).hexdigest()[:32]\n"
+        "    print(json.dumps({'mapper_spec_id': digest}))\n"
+        "elif cmd == 'grant-check':\n"
+        "    print(json.dumps({'problems': []}))\n"
+        "else:\n"
+        "    sys.exit(2)\n",
+        encoding="utf-8")
+
+
 def _vendor(closure: Path) -> None:
     """Stage the REAL harness where `nxd.experimental.field_mapper` resolves.
 
@@ -180,12 +225,20 @@ def _vendor(closure: Path) -> None:
     site-packages, without requiring the monorepo wheel to be installed in the
     test environment. The subprocess oracle is the thing under test, so it has
     to be the real package rather than a stub.
+
+    When the monorepo is unreachable this falls back to ``_stand_in``, which
+    hashes but does not judge — enough for the tests that assert on the gate's
+    own logic, and deliberately useless for the ones that assert on a consent
+    verdict. Those carry ``requires_harness`` and skip instead.
     """
     pkg = closure / "nxd" / "experimental"
     pkg.mkdir(parents=True, exist_ok=True)
     (closure / "nxd" / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "__init__.py").write_text("", encoding="utf-8")
-    shutil.copytree(REAL_MAPPER, pkg / "field_mapper")
+    if REAL_MAPPER is not None:
+        shutil.copytree(REAL_MAPPER, pkg / "field_mapper")
+    else:
+        _stand_in(pkg / "field_mapper")
     (closure / "contracts").mkdir(parents=True, exist_ok=True)
 
 
@@ -317,6 +370,7 @@ def test_spec_absent_is_a_finding(tmp_path):
 
 # ------------------------------------------------------------ binding ---
 
+@requires_harness
 def test_matching_grant_passes(tmp_path):
     """The only end-to-end proof the subprocess oracle works.
 
@@ -361,6 +415,7 @@ def test_placeholder_derived_id_is_invalid(tmp_path):
     assert "<derived>" in out
 
 
+@requires_harness
 def test_expired_grant_fails(tmp_path):
     """Consent lapses. A closure green yesterday failing today is the point."""
     _vendor(tmp_path)
@@ -372,6 +427,7 @@ def test_expired_grant_fails(tmp_path):
     assert _codes(out) == ["grant.expired"], _codes(out)
 
 
+@requires_harness
 def test_grant_naming_a_different_model_fails(tmp_path):
     """Consent is PER MODEL — a second model is a separate disclosure."""
     _vendor(tmp_path)
@@ -639,19 +695,25 @@ def test_phase_g_failure_reports_through_the_real_diagnostic_surface(tmp_path):
     assert _diags(out)[0]["owner"] == "user"
 
 
+@requires_harness
 def test_gate_agrees_with_grant_py_on_malformed_grants(tmp_path):
     """The inlined shape checks must not drift from grant.py's own rules.
 
     Two copies of a consent rule is how a gate ends up enforcing something other
     than what it claims. Phase G calls the harness rather than reimplementing
     it, and this asserts the two verdicts agree on grants the harness rejects.
+
+    This is the one test that reads the harness as a LIBRARY rather than
+    driving it as a subprocess, and it is the reason the gate suite cannot fall
+    back to a stub: the rules it compares against are `grant.py`'s own.
     """
-    # Imported from the harness source directly rather than through the
-    # `nxd.experimental` package path: this repo has no monorepo checkout, and
-    # the two modules under test read consent rules that do not depend on where
-    # the package is mounted. The GATE's agreement with them is what is being
-    # asserted, and the gate reaches the harness by subprocess, not by this
-    # import.
+    # Imported off the package's parent rather than as
+    # `nxd.experimental.field_mapper`: the two modules under test read consent
+    # rules that do not depend on where the package is mounted, and importing
+    # the dotted path would need the whole `nxd` package on sys.path. The
+    # GATE's agreement with them is what is being asserted, and the gate
+    # reaches the harness by subprocess, not by this import.
+    assert REAL_MAPPER is not None  # guaranteed by @requires_harness
     sys.path.insert(0, str(REAL_MAPPER.parent))
     from field_mapper.errors import GrantError, SpecError
     from field_mapper.grant import Grant

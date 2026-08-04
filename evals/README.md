@@ -42,6 +42,36 @@ The scenario suite's own harness tests (`evals/tests/`) do run on every PR,
 under `ci.yml` — those cover the deterministic checkers and gates, not the
 skills.
 
+**Seven of them are the exception, and they skip on every PR.** The field-mapper
+harness the consent gate tests against lives in the nxd monorepo, and this repo
+is air-gapped from it — no submodule points that way, and nxd wheels publish to
+a private registry rather than PyPI. `ci.yml` sets no `NXD_REPO`, so these skip
+permanently and silently:
+
+| Test | File |
+|---|---|
+| `test_matching_grant_passes` | `test_grant_gate_phase_g.py` |
+| `test_expired_grant_fails` | `test_grant_gate_phase_g.py` |
+| `test_grant_naming_a_different_model_fails` | `test_grant_gate_phase_g.py` |
+| `test_gate_agrees_with_grant_py_on_malformed_grants` | `test_grant_gate_phase_g.py` |
+| `test_real_self_check_denies_ungranted_mapper_before_phase_b` | `test_desktop_custom_contract_checker.py` |
+| `test_real_self_check_denies_a_mapper_imported_from_a_closure_root_module` | `test_desktop_custom_contract_checker.py` |
+| `test_real_self_check_green_with_matching_grant` | `test_desktop_custom_contract_checker.py` |
+
+They are the ones needing the harness to *judge* rather than merely be noticed;
+the rest run here against a stand-in that hashes but never judges. To run them,
+point `NXD_REPO` at an nxd checkout — or clone nxd beside this repo, which
+`evals/tests/_harness.py` finds with no configuration:
+
+```bash
+NXD_REPO=/path/to/nxd uv run --no-project --with pytest --with duckdb \
+  --with pyyaml python -m pytest evals/tests -q -rs
+```
+
+`-rs` prints skip reasons; one mentioning "field-mapper harness not found" means
+`NXD_REPO` did not resolve. The monorepo's CI is where these are meant to run on
+every change, since it vendors this repo and has both trees.
+
 The automatic gate narrows on three axes at once, so be explicit about which
 one is responsible when a change ships unmeasured:
 

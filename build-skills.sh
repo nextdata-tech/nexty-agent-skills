@@ -28,12 +28,15 @@ EXCLUDES=(
   '*/.nxdignore/*'
   '*.zip'           '*/*.zip'
   '*/uv.lock'       'uv.lock'
-  # The field-mapper harness itself does NOT ship in the zip: it reaches a
-  # closure as `nxd.experimental.field_mapper`, from the installed nxd package,
-  # so a copy inside the skill is unusable at best and an invitation to vendor a
-  # second one at worst. This tree stays the harness's source of truth — the
-  # package copy is generated from it — but a Desktop user's installed skill has
-  # no use for it. `mapper/CONTRACT.md` and `mapper/samples/` DO ship: the
+  # The field-mapper harness is not in this repo at all. It lives in the nxd
+  # monorepo and reaches a closure as `nxd.experimental.field_mapper`, from the
+  # installed nxd package. This repo carried a second copy for a while so the
+  # consent-gate tests had something real to run against; two copies of
+  # executable source with nothing enforcing sync drifted within a day, so the
+  # tests resolve the monorepo copy instead (`evals/tests/_harness.py`) and skip
+  # where it is unreachable. The exclusion below stays because zip reads the
+  # filesystem rather than git: a stray local checkout under `mapper/` must
+  # still not ship. `mapper/CONTRACT.md` and `mapper/samples/` DO ship: the
   # contract is the normative record of the harness's behaviour (record schemas,
   # value_status semantics, the blocking rules), and it describes the fixtures
   # case by case, so shipping the prose without the cases it cites would leave a

@@ -179,7 +179,7 @@ fixture.
   test. It does not exist.
 - **The durable-review half never executes here.** `resolve()` runs, but with an
   empty review set, so override, staleness, and re-binding are unexercised by
-  this script. `python -m field_mapper resolve` covers them: it re-resolves from
+  this script. `python -m nxd.experimental.field_mapper resolve` covers them: it re-resolves from
   the landed CSVs without re-inferring, which is where a changed `reviews.csv`
   shows confirmations applying or coming unbound with a `stale_reason`.
 - **No platform integration.** No cluster, no driver, no real output port.
