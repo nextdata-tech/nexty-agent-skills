@@ -20,9 +20,12 @@ the gateway has no lease tool, so this path stays on REST `connect_port.py`).
 
 **Step 1 — Discover the chunk schema and embedding model.**
 
-Read the models via `gateway_tools.py details --dp <dp> --models`. Discovery goes
-through the MCP gateway, not REST — SKILL.md's gateway-first rule is the contract,
-and REST `/api/v1/models` can answer from a different or staler schema. Learn:
+Read the data product's `description` **and** its models in one gateway call:
+`gateway_tools.py details --dp <dp> --models` passes `proxy__get_data_product_details`
+through verbatim, so the `description` — where the embedding model is recorded —
+comes back with them. Discovery goes through the MCP gateway, not REST: SKILL.md's
+gateway-first rule is the contract, and REST `/api/v1/models` can answer from a
+different or staler schema. Learn:
 - which embedding model produced the index (e.g. `sentence-transformers/all-MiniLM-L6-v2`),
 - which column holds the text chunk (default `content`),
 - which column holds the vector (default `embedding`),
