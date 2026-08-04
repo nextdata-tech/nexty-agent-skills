@@ -41,7 +41,7 @@
 
 ## Packaging for `nxd launch`
 
-The platform's init container installs the Data Product as a Python package via `pip`, which uses `setuptools` for package discovery. A flat layout with multiple top-level `.py` files breaks auto-discovery (`error: Multiple top-level modules discovered in a flat-layout: [...]`) and the launch fails at `Installing dependencies`.
+The platform's init container installs the data product as a Python package via `pip`, which uses `setuptools` for package discovery. A flat layout with multiple top-level `.py` files breaks auto-discovery (`error: Multiple top-level modules discovered in a flat-layout: [...]`) and the launch fails at `Installing dependencies`.
 
 * **Declare every shipped module explicitly in `pyproject.toml`**:
 
@@ -80,7 +80,7 @@ The platform's init container installs the Data Product as a Python package via 
 
 ## Transformation
 
-* `@data_product.on_transform()` should be avoided when creating Python based Data Products. *Thus the usage of `.transform(code(transform_fn))` is also preferred within `spec.py` file(s)*.
+* `@data_product.on_transform()` should be avoided when creating Python based data products. *Thus the usage of `.transform(code(transform_fn))` is also preferred within `spec.py` file(s)*.
 * Usage of `nxd.data_product.context` is preferred over `nxd.core.context` when importing context classes.
 * Most `with_*` functions have been deprecated, however they could still be present in examples. Ensure there isn't a suitable replacement prior to using them.
 * Different context classes may have different attribute names which achieve the same purpose i.e. `AzureDataLakeStorage().model_paths` and `S3Output().model_output_paths`. Ensure context class attributes are valid when implementing them.
@@ -92,7 +92,7 @@ The platform's init container installs the Data Product as a Python package via 
 
 ## Contracts
 
-* `@data_product.on_verify()` should be avoided when creating Python based Data Products. *Thus the usage of `.verify(code(verify_fn))` is also preferred within `spec.py` file(s)*.
+* `@data_product.on_verify()` should be avoided when creating Python based data products. *Thus the usage of `.verify(code(verify_fn))` is also preferred within `spec.py` file(s)*.
     * Input expectations attach to `.input(...)` declarations:
     * ```python
       from contracts import input_format

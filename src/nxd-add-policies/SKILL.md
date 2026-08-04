@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # NXD Adding Policy
@@ -37,7 +37,7 @@ Add computational policy enforcement without guessing CLI flags, env names, doma
 3. Run `nxd activate policy --help` if there is any doubt about current flags.
 4. For DataQualityCompliance, ensure the data product has the required promise and/or expectation before activation.
 5. For parameters-driven policies, create or inspect the parameters JSON file. Keep it in the data-product repo when that matches local convention.
-6. If a computational contract is needed, register it first:
+6. If a computational contract is needed, register it first. This is the rule set a policy enforces — distinct from the data contract a data product forms through its expectations and promises:
 
 > **`--skip-version-check`** bypasses the CLI-vs-mesh version compatibility check. It is shown here only to keep these examples runnable across mesh versions during authoring. Drop it for normal use; add it back **only** when the CLI blocks on a version mismatch you have confirmed is safe to ignore.
 

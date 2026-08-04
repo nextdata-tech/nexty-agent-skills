@@ -7,7 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
-| 2026-08-04 | nxd-generate-data-product: restore the mapper's static import signal and stop verify falling back | NO_EVAL | — | [`2026-08-04-field-mapper-static-signal-and-usage-errors`](entries/2026-08-04-field-mapper-static-signal-and-usage-errors.md) |
+| 2026-08-04 | user-facing skill language aligned with the public docs; nine review findings fixed | NO_EVAL | — | [`2026-08-04-skill-language-aligned-with-public-docs`](entries/2026-08-04-skill-language-aligned-with-public-docs.md) |
 | 2026-08-03 | nxd-generate-data-product: self-check shipped as an installed file, not a transcribed fence | NO_EVAL | — | [`2026-08-03-self-check-vendored-not-transcribed`](entries/2026-08-03-self-check-vendored-not-transcribed.md) |
 | 2026-08-03 | res.error casing convention pinned; a v0.33.0 ledger figure corrected | NO_EVAL | — | [`2026-08-03-res-error-casing-convention-pinned`](entries/2026-08-03-res-error-casing-convention-pinned.md) |
 | 2026-08-03 | nxd-generate-data-product: field-mapper promoted, gated on recorded consent | NO_EVAL | — | [`2026-08-03-field-mapper-promoted-consent-gate`](entries/2026-08-03-field-mapper-promoted-consent-gate.md) |

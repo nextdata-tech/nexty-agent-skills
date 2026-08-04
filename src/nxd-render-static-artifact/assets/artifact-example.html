@@ -52,16 +52,16 @@
     <div class="fields">
       <article class="field"><h4><code>ticket_id</code><span class="type"><code>string</code></span></h4><p>Ticket identifier.</p><p><strong>Roles:</strong> <span class="badge">primary_key</span><span class="badge">metric: ticket_count / count_distinct</span></p></article>
       <article class="field"><h4><code>customer_id</code><span class="type"><code>string</code></span></h4><p>Customer reference (no join declared).</p></article>
-      <article class="field"><h4><code>opened_at</code><span class="type"><code>timestamp</code></span></h4><p class="muted">null · the manifest didn’t say</p><p><strong>Roles:</strong> <span class="badge">dimension</span></p></article>
+      <article class="field"><h4><code>opened_at</code><span class="type"><code>timestamp</code></span></h4><p class="muted">null · not declared</p><p><strong>Roles:</strong> <span class="badge">dimension</span></p></article>
     </div>
   </section>
 
   <section aria-labelledby="joins"><h2 id="joins">Joins</h2><p><code>orders.customer_id</code> → <code>customers.customer_id</code> · many_to_one</p><p class="muted"><code>support_tickets.customer_id</code> shares a column name with the models above, but the registry declares no join for it — so none is drawn.</p></section>
   <section aria-labelledby="ports"><h2 id="ports">Output ports</h2>
-    <p><strong>Output-level models:</strong> <code>orders</code> <span class="muted">(metadata: null · the manifest didn’t say)</span></p>
+    <p><strong>Output-level models:</strong> <code>orders</code> <span class="muted">(metadata: null · not declared)</span></p>
     <div class="fields">
-      <article class="field"><h3 class="mono">analytics</h3><p><strong>Service:</strong> <code>output</code></p><p><strong>Models:</strong><br><code>customers</code> <span class="muted">(metadata: null · the manifest didn’t say)</span><br><code>orders</code> <span class="muted">(metadata: null · the manifest didn’t say)</span></p><p><strong>Promises:</strong> <code>model: [orders]</code>; <code>freshness</code> on <code>[orders]</code>: freshness &lt; 24h</p></article>
-      <article class="field"><h3 class="mono">empty-declaration</h3><p><strong>Service:</strong> <code>empty</code></p><p><strong>Models:</strong> <span class="muted">[] · none declared</span></p><p><strong>Promises:</strong> <span class="muted">null · the manifest didn’t say</span></p></article>
+      <article class="field"><h3 class="mono">analytics</h3><p><strong>Service:</strong> <code>output</code></p><p><strong>Models:</strong><br><code>customers</code> <span class="muted">(metadata: null · not declared)</span><br><code>orders</code> <span class="muted">(metadata: null · not declared)</span></p><p><strong>Promises:</strong> <code>model: [orders]</code>; <code>freshness</code> on <code>[orders]</code>: freshness &lt; 24h</p></article>
+      <article class="field"><h3 class="mono">empty-declaration</h3><p><strong>Service:</strong> <code>empty</code></p><p><strong>Models:</strong> <span class="muted">[] · none declared</span></p><p><strong>Promises:</strong> <span class="muted">null · not declared</span></p></article>
     </div>
   </section>
   <section aria-labelledby="evidence"><h2 id="evidence">Evidence</h2><table><thead><tr><th>Dataset</th><th>Table</th><th>Published row count</th></tr></thead><tbody><tr><td><code>main</code></td><td><code>customers</code></td><td>24</td></tr><tr><td><code>main</code></td><td><code>orders</code></td><td>42</td></tr></tbody></table><p>Compiler evidence: <code>compiler-2f7d1a</code>.</p></section>

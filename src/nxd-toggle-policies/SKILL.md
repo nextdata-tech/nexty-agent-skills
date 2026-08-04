@@ -6,7 +6,7 @@ allowed-tools:
   - Read
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # nxd Policies
@@ -55,8 +55,8 @@ nxd --config <session_config> deactivate policy --skip-version-check --name <pol
 ```
 
 - **Do not pass `--env`** — `nxd deactivate policy` does not accept it. Deactivation is global by policy name.
+- **Prefer `--id <activation-id>` from the list step.** Because deactivation is global and takes no `--env`, `--name` deactivates EVERY activation carrying that name — across every data product and environment, not just the one the user asked about. The filtered listing above does not prove the name is unique. Resolve the name to activations first; if more than one matches, show the user each activation's data product, environment, consequence, and scope, and deactivate by `--id` after they confirm which one. Use `--name` only when exactly one activation matches and the user has confirmed the change is meant to be global.
 - The contract behind the policy is **not** deleted, so you can reactivate later without recreating it.
-- Use `--id <activation-id>` instead of `--name` if you have the numeric ID from the list step.
 
 Example (substitute `<mesh_name>` and the real policy name from the list step):
 
@@ -64,7 +64,9 @@ Example (substitute `<mesh_name>` and the real policy name from the list step):
 nxd --config <session_config> deactivate policy --skip-version-check --name <policy-name>
 ```
 
-For a **full teardown** (delete the policy and contract, not just deactivate):
+For a **full teardown** (delete the policy and contract, not just deactivate).
+
+**Teardown is irreversible and is never implied by a request to toggle or deactivate.** Run it only when the user has explicitly asked to delete. Deleting the contract also destroys the cheap reactivation path the deactivate step above preserves — recreating it means re-registering the contract from source. Before running these, re-list the exact policy and contract you are about to delete, state that both are permanent, and get explicit confirmation. `--yes` suppresses the CLI's own prompt, so your confirmation is the only one the user gets:
 
 ```bash
 nxd --config <session_config> deactivate policy --skip-version-check --name <policy-name>

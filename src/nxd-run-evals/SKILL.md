@@ -10,7 +10,7 @@ allowed-tools:
   - Glob
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # nxd-run-evals skill
@@ -64,10 +64,12 @@ for the active mesh's `api_url`, then the gateway serves each DP's tools under
 `<base>/dp/mcp/`. Confirm the DP answers before you eval it:
 
 ```bash
-# active mesh + api base (from your local nxd settings)
+# active mesh + api base (from your local nxd settings).
+# Print ONLY the non-secret fields: every meshes.json entry carries a live
+# auth token, so dumping the whole file leaks a PAT into the transcript.
 uv run --project evals/nxd_eval python -c "import json,pathlib; \
   m=json.loads(pathlib.Path('~/.nxd/meshes.json').expanduser().read_text()); \
-  print(m)"
+  print({k: {f: v.get(f) for f in ('app_url', 'api_url')} for k, v in m.items()})"
 # then handshake the DP's MCP tools with your token (PAT on X-Nextdata-Token,
 # OAuth session on Authorization: Bearer). If list_models/describe_model/
 # run_semantic_query come back, the URL is eval-ready.
@@ -213,9 +215,13 @@ print('log:', log)
 "
 ```
 
-`variant` (`no_skills` / `current_pack` / `candidate_pack`) selects the agent's
-skill context and is recorded on the run so a report can pair two variants on the
-same cases. Repeats per case come from `epochs`; correlated repeats are
+`variant` (`no_skills` / `current_pack` / `candidate_pack`) **labels** the run so a
+report can pair two variants on the same cases. It is a validated label, not a
+switch: `run_suite` records it as metadata and never installs or removes skills.
+**You must arrange the agent's actual skill context yourself** before the run —
+otherwise both arms execute the identical agent and any "skill lift" the report
+shows is measuring nothing. `evals/run.py --skill-set` is the layer that really
+swaps packs; use it when you want the comparison to mean something. Repeats per case come from `epochs`; correlated repeats are
 discounted in the stats (Step 5). See `reference/running-suites.md` for the
 variant contract, auth, and the offline (mockllm, no key) lane.
 
@@ -269,10 +275,17 @@ on PASS. Reading the card:
 - **pass^k** — fraction of questions that passed on *every* epoch (determinism).
 - **governance P/R** — precision/recall on the clarify+abstain behaviours.
 
-Three verdicts: **PASS** (lower bound ≥ target), **FAIL** (mean clears target but
-lower bound doesn't — the change didn't earn the claim), **REFUSE** (insufficient
-N — the interval is wider than the requested `--halfwidth`, so no defensible call
-exists; grow N and re-run). Gate a single behaviour with a per-bucket gate, e.g.
+Three verdicts, each decided on the **lower bound**, never the mean:
+
+- **PASS** — lower bound ≥ target.
+- **FAIL** — lower bound below target, whether the mean misses the target
+  outright or clears it while the interval does not; either way the change
+  didn't earn the claim.
+- **REFUSE** — insufficient N: the interval is wider than the requested
+  `--halfwidth`, so no defensible call exists; grow N and re-run. Interval
+  width is a REFUSE reason, never a FAIL reason.
+
+Gate a single behaviour with a per-bucket gate, e.g.
 `--gate 'abstain>=0.95'`. Compare against a prior run with
 `--baseline ./logs/<old>.eval` to get a McNemar + BH-FDR regression delta. Full
 gate grammar and regression reading: `reference/statistics.md`.

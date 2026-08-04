@@ -129,7 +129,7 @@ the adjusted p < 0.05 **and** the delta is negative.
 | Verdict | Meaning | What to do |
 |---|---|---|
 | **PASS** | Wilson lower bound ≥ target. | Claim the number. |
-| **FAIL** | Point estimate clears the target but the lower bound doesn't. | The change didn't earn the claim at this confidence; improve the agent or accept a lower target. |
+| **FAIL** | Wilson lower bound below target — the point estimate either misses the target outright, or clears it while the lower bound does not. | The change didn't earn the claim at this confidence; improve the agent or accept a lower target. |
 | **REFUSE** | Observed half-width on `N_eff` exceeds `--halfwidth` — insufficient N. | Grow the suite with *distinct* questions (not more epochs) and re-run. |
 
 Gate grammar: `--gate 'accuracy>=0.90'` gates overall accuracy;

@@ -304,7 +304,7 @@ def assert_html(html_path: Path) -> None:
         "decimal128",
         "empty-declaration",
         "freshness &lt; 24h",
-        "null · the manifest didn’t say",
+        "null · not declared",
         "[] · none declared",
         # support_tickets carries description "" — declared and empty, which is
         # a different statement from null and must carry its own gloss.
@@ -340,7 +340,7 @@ def assert_html(html_path: Path) -> None:
     # rendered, not merely somewhere on the page.
     opened_at = near(schema, "opened_at")
     assert opened_at, "opened_at missing from the schema section"
-    assert "null · the manifest didn’t say" in opened_at, (
+    assert "null · not declared" in opened_at, (
         f"opened_at's null description must be glossed at the field: {opened_at[:140]}"
     )
 

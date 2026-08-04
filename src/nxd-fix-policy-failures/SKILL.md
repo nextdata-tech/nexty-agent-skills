@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # NXD Policy Compliance Fix
@@ -54,7 +54,7 @@ nxd --config <session_config> logs <dp-name> --debug-logs
 nxd validate --config <session_config> <data_product_directory> --debug
 ```
 
-7. If deployed state must be refreshed, tell the user the exact launch or retry command. Use `nxd run --retry`, not a nonexistent retry subcommand.
+7. If deployed state must be refreshed, tell the user the exact launch or retry command — complete and runnable, not a fragment: `nxd --config <session_config> run <dp-name> --retry --follow`. There is no `nxd retry` / `nxd reset` subcommand.
 8. Re-check the policy list and data-product compute status.
 
 ## Guardrails

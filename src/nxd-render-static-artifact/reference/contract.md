@@ -118,12 +118,12 @@ sentence asserting otherwise.
 ### Absence is per-field, and never a labelled blank
 
 Four absence states are distinct and must not be normalized into one another:
-an **absent key** (this surface cannot know), `null` (the manifest didn't say),
+an **absent key** (this surface cannot know), `null` (not declared),
 `""` (declared, empty), and `[]` (none declared). They co-occur inside a single
 release — `identity.description` is `null` while a model `description` is `""`,
 and registry `joins` is `[]` while per-model `joins` is `null`.
 
-Render `null` as `null · the manifest didn’t say`, `[]` as `[] · none declared`,
+Render `null` as `null · not declared`, `[]` as `[] · none declared`,
 and `""` as `"" · empty`. Never print one gloss for another value, and never
 leave the cell blank: an empty cell under a populated header asserts "this is
 unset" in a payload that said something more specific.

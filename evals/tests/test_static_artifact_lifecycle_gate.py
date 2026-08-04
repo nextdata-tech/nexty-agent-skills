@@ -155,7 +155,7 @@ def test_absence_states_are_distinct_and_never_a_labelled_blank():
     pitfalls = flat("reference/pitfalls.md")
 
     # All three glosses present verbatim, including the empty-string one.
-    for gloss in ("null · the manifest didn’t say", "[] · none declared", '"" · empty'):
+    for gloss in ("null · not declared", "[] · none declared", '"" · empty'):
         assert gloss in skill, gloss
         assert gloss in contract, gloss
 

@@ -63,7 +63,7 @@ Report high/medium pairs as candidate data products. List low-confidence pairs s
 
 ## Multiple inputs, multiple outputs
 
-A transform may take several inputs (a join) or write several outputs. Group all assets that share lineage signals into one candidate product rather than emitting many disconnected pairs. Per the nextdata convention, each distinct source store is one input, and each file/table with a unique schema is its own input model within that input.
+A transform may take several inputs (a join) or write several outputs. Group all assets that share lineage signals into one candidate product rather than emitting many disconnected pairs. Per the Nextdata OS convention, each distinct source store is one input, and each file/table with a unique schema is its own input model within that input.
 
 ## Scheduling hint
 

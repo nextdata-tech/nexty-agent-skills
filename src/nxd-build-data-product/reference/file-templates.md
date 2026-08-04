@@ -11,7 +11,7 @@
 - requirements.txt
 - Driver Classification Reference
 
-Concrete scaffolding for a new Data Product. Use these as starting points
+Concrete scaffolding for a new data product. Use these as starting points
 during the **Implementation** phase, then adapt names, models, and drivers to
 the user's plan. Prefer matching the closest public example
 ([examples-guide.md](examples-guide.md)) for file layout and imports; these

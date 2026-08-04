@@ -9,12 +9,12 @@
 - Placeholder conventions
 - Finalize check
 
-A Data Product build can span multiple sessions. A user may finish discovery in
+A data product build can span multiple sessions. A user may finish discovery in
 one sitting, come back later, and pick up at implementation. They may also leave
 open questions ("come back to the embedding model choice"). This document defines
 an optional lightweight ledger so a build can resume reliably and losslessly.
 
-This ledger is scoped to **a single Data Product build** under
+This ledger is scoped to **a single data product build** under
 `.context/dp-build/<timestamp>/`.
 
 ## state.json

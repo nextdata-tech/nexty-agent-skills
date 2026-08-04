@@ -46,7 +46,7 @@ The key files are:
 *   `spec.py` : specifies the data product identifiers, transform logic, inputs and outputs, semantic models, contracts, access policies and more.
 *   `transform.py` : defines the transformation code of the data product.
 
-For a more detailed definition of the interfaces of the various Python modules and supporting API and libraries, see the Python Data Product Spec DSL.
+For a more detailed definition of the interfaces of the various Python modules and supporting API and libraries, see the Python data product Spec DSL.
 
 ### Excluding files
 
@@ -257,11 +257,11 @@ spec = (
 
 Unstructured semantic models are still in beta.
 
-This guide shows you how to build data products that process unstructured data on the Nextdata platform.
+This guide shows you how to build data products that process unstructured data on Nextdata OS.
 
 ## Overview
 
-The Nextdata platform provides:
+Nextdata OS provides:
 
 *   Unified abstraction over structured and unstructured data
 *   Choice of extraction tools (Unstructured, LlamaIndex, custom parsers)

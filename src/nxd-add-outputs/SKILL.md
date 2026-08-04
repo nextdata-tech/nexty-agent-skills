@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # NXD Adding Outputs
@@ -42,8 +42,14 @@ Add outputs to an existing Nextdata OS Python data product while keeping port na
 9. Run validation:
 
 ```bash
+nxd --config <session_config> whoami
 nxd validate --config <session_config> <data_product_directory> --debug
+echo "nxd validate exit code: $?"
 ```
+
+`nxd validate` resolves infra-profile services against the `--config` mesh. If
+`whoami` prints `Not logged in`, record validation as `NOT RUN` even if the shell
+exit code is `0` — never report the output as validated on that exit code alone.
 
 ## Driver Notes
 
@@ -64,7 +70,12 @@ Use this pattern when the product rebuilds a rolling window on a schedule:
    (`urllib.parse.quote_plus`) because service passwords may contain `@`, `/`,
    `:`, or spaces.
 3. Before writing, check table existence with `to_regclass` or equivalent.
-4. If the table exists, `TRUNCATE` it for full-refresh semantics.
+4. If the table exists, `TRUNCATE` it for full-refresh semantics. This destroys
+   every row consumers can currently read, and a later failure in the same run
+   leaves them with an empty or half-rebuilt table. Only truncate when
+   full-replace is the declared write mode for this port — never as a way to
+   clear a table you are unsure about. If the transform appends or upserts, do
+   not truncate; fix the document IDs (step 6) instead.
 5. If it does not exist, call `PGEngine.init_vectorstore_table(...)` with the
    known embedding dimension.
 6. Use deterministic document IDs, for example `uuid.uuid5(namespace,

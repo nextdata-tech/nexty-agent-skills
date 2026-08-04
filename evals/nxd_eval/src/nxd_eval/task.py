@@ -184,10 +184,13 @@ def run_suite(
     falling back to the suite's own wiring. ``agent_prompt`` overrides the agent
     system prompt.
 
-    ``variant`` (``no_skills`` / ``current_pack`` / ``candidate_pack``) selects
-    the agent's skill context and is recorded on the run metadata so the report
-    can pair variants on the same cases. It is validated here so a typo fails
-    loudly instead of silently mislabelling a run.
+    ``variant`` (``no_skills`` / ``current_pack`` / ``candidate_pack``) **labels**
+    the run on its metadata so the report can pair variants on the same cases. It
+    is validated here so a typo fails loudly instead of silently mislabelling a
+    run. It does NOT select the agent's skill context: nothing below installs or
+    removes skills, so the caller must arrange that before calling. Passing two
+    different variants without doing so runs the identical agent twice and makes
+    any resulting lift number meaningless.
     """
     if variant not in VARIANTS:
         raise ValueError(f"variant must be one of {VARIANTS}; got {variant!r}")
