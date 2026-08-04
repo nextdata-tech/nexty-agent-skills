@@ -45,18 +45,21 @@ def _candidate_roots() -> list[Path]:
     cloned side by side — so the tests run locally with nothing configured. The
     env var is what CI sets, and what a non-standard layout overrides with.
     """
-    roots: list[Path] = []
     env = os.environ.get(NXD_REPO_ENV)
     if env:
-        roots.append(Path(env))
+        # EXCLUSIVE when set. A named target that is wrong must not fall
+        # through to a different checkout: on a machine with both a worktree
+        # and a main clone, a mistyped NXD_REPO would silently validate against
+        # the other tree's harness — and since `harness_version` feeds
+        # `mapper_spec_id`, the two can legitimately disagree. Skipping is the
+        # honest answer; a green from the wrong tree is not.
+        return [Path(env)]
     # Walk up rather than checking one fixed parent. A git worktree of this
     # repo sits at `<repo>/.claude/worktrees/<name>/`, so the sibling clone is
     # three levels further up than it is from a plain checkout — and the
     # monorepo is itself usually checked out as a worktree, which is why each
     # ancestor is tried against both layouts by `harness_path`.
-    for ancestor in (_REPO_ROOT, *_REPO_ROOT.parents):
-        roots.append(ancestor.parent / "nxd")
-    return roots
+    return [ancestor.parent / "nxd" for ancestor in (_REPO_ROOT, *_REPO_ROOT.parents)]
 
 
 def harness_path() -> Path | None:

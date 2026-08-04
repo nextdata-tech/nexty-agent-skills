@@ -397,11 +397,15 @@ absent at execution. Phase G denies it by name as `grant.vendored_harness`, and
 no grant rescues it — a vendored copy answers for its own spec hash, so consent
 bound to it means nothing.
 
-Note that Phase E does **not** independently catch a harness tree copied under
-`contracts/`. It rglobs `contracts/**/*.py` for model-SDK imports, and
-`transport.py` reaches the SDK through `importlib.import_module("anthropic")`,
-which no `ast.Import` walk sees. This was previously a plain function-local
-`import anthropic` and was load-bearing for exactly that reason.
+Phase E catches a harness tree copied under `contracts/` as a second line of
+defence: it rglobs `contracts/**/*.py` for model-SDK imports, and `transport.py`
+contains `import anthropic` — function-local, but still an `ast.Import` node
+that `ast.walk` finds. That statement form is load-bearing for exactly this
+reason. A pyright-strict pass once rewrote it to
+`importlib.import_module("anthropic")`, which is identical at runtime and
+invisible to every AST walk, and the copied-tree case went uncaught until it was
+restored. `tests/nxd/experimental/test_field_mapper_acceptance.py` in the
+monorepo now pins the form.
 
 **Author the grant against the harness, not by hand.** The `mapper_spec_id` is
 the hash of the spec *with its compiled wire schema and harness version stamped

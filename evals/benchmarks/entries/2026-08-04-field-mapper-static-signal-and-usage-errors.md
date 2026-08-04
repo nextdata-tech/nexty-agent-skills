@@ -28,8 +28,13 @@ among transport.py's import-level names at all. A harness tree copied under
 `contracts/` then reached neither gate — Phase E could not see the SDK, and
 Phase G's verifier scan matches import-level package names that the harness's
 own relative imports never produce. Restored to the statement form, with a
-comment saying why it must stay one. Neither repo's ruff config enables
-`PLC0415`, so no suppression is needed; the rule the rewrite served is not on.
+comment saying why it must stay one and a `# noqa: PLC0415` beside it. Neither
+repo's ruff config selects `PL` today, so that suppression is pre-emptive — but
+the sibling function-local imports in the same package already carry it, which
+is evidence the rule has been live, and its remediation for this line was the
+rewrite. A test in the monorepo now `ast.walk`s the module and asserts
+`anthropic` is still an import-level name, because the gate that depends on it
+lives in this repo and nothing there would otherwise notice.
 
 **`verify` and `pins` answered for fixtures the caller did not name.** The
 target resolved as `target if target.is_dir() else default_root`, so a mistyped
