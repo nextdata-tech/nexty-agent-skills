@@ -57,9 +57,23 @@ seeing `import anthropic`, which is true again only because of the first fix.
 
 ## Evidence
 
-`evals/tests/test_grant_gate_phase_g.py` and
-`evals/tests/test_desktop_custom_contract_checker.py` cover the gate, not the
-harness, and pass unchanged — 609 in `evals/tests/` overall.
+`evals/tests/test_grant_gate_phase_g.py` carries the deletion: it is where
+`_harness.py` is consumed and where the stand-in lives, and it holds four of the
+seven tests that now skip without a monorepo checkout. Together with
+`evals/tests/test_desktop_custom_contract_checker.py` it passes unchanged at 609
+with the harness reachable and 602/8 without — the evidence that removing the
+tree cost no coverage.
+
+The two harness fixes are carried by tests in the nxd monorepo, since that is
+where the harness now lives — the field-mapper acceptance module there gained
+`test_the_anthropic_import_stays_statically_visible`, which `ast.walk`s
+transport.py and fails against the previous implementation (`importlib` binds
+the name through a string literal no import-node collector sees), and
+`test_a_named_target_that_is_not_a_directory_is_a_usage_error`, which fails
+against the previous fallback by asserting both the exit code and the absence of
+the success line. Those paths are deliberately not spelled out as file
+references: this repo's validator resolves Evidence paths locally, and a
+monorepo path would read as a missing file rather than a cross-repo pointer.
 The harness's own acceptance suite is nxd-side; the CLI behaviour above was
 verified directly — a named bad path exits 3 for both `verify` and `pins`, a
 bare invocation still exits 0 with 13/13 — and the restored import was confirmed
@@ -71,8 +85,12 @@ actually depends on.
 The two fixes above had to be applied twice, to two byte-identical trees, which
 is the defect underneath them. That is now closed: `mapper/field_mapper/` is
 deleted from this repo, and the gate tests resolve the monorepo copy through
-`evals/tests/_harness.py` — an env var (`NXD_REPO`), falling back to a sibling
-checkout, and `pytest.mark.skipif` when neither is present.
+`evals/tests/_harness.py` — `NXD_REPO` when set, a sibling checkout otherwise,
+and `pytest.mark.skipif` when neither resolves. `NXD_REPO` is exclusive rather
+than a first choice: a mistyped value that fell through to a sibling clone would
+validate against a different tree's harness, and since `harness_version` feeds
+`mapper_spec_id` the two can legitimately disagree. Skipping is the honest
+answer there; a green from the wrong tree is not.
 
 Seven tests carry that marker. They are the ones that need the harness to
 *judge*: the matching-grant pass, the expired grant, the wrong-model grant, the
