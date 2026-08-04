@@ -55,18 +55,18 @@ Append each path to `<app_url>/docs/#/`. No `.md` extension.
 | Topic | Path to append to `<app_url>/docs/#/` | Hand out when |
 |---|---|---|
 | Orientation / docs index | `tutorials/guides/README` | First contact; "where do I start", "what is this" |
-| Quick start | `tutorials/guides/quick-start` | User wants the fastest path to a working DP |
+| Quick start | `tutorials/guides/quick-start` | User wants the fastest path to a working data product |
 | Getting started | `tutorials/guides/getting-started` | User wants the fuller, guided walkthrough |
 | CLI setup (install / env) | `tutorials/cli/setup` | Installing `nxd`, configuring a mesh, auth/PAT setup |
-| Create a Data Product (CLI) | `tutorials/cli/create` | Scaffolding a new DP from the CLI |
+| Create a data product (CLI) | `tutorials/cli/create` | Scaffolding a new data product from the CLI |
 | Semantic model | `tutorials/guides/01-semantic-model` | Defining the semantic model / entities / fields |
-| Inputs | `tutorials/guides/04-inputs` | Wiring source inputs into a DP |
+| Inputs | `tutorials/guides/04-inputs` | Wiring source inputs into a data product |
 | Outputs | `tutorials/guides/02-outputs` | Defining output ports / consumable outputs |
 | Promises & data quality | `tutorials/guides/03-promises` + `tutorials/cli/data_quality` | Declaring promises; checking/enforcing data quality |
 | Expectations | `tutorials/guides/05-expectations` | Adding expectations / validation rules |
 | Scheduling | `tutorials/guides/06-scheduling` | Setting run cadence / schedules |
-| MCP | `tutorials/guides/07-mcp` | Exposing or consuming a DP via MCP |
-| Consuming other DPs | `tutorials/guides/consumer-tutorial` | Reading/depending on another team's DP |
+| MCP | `tutorials/guides/07-mcp` | Exposing or consuming a data product via MCP |
+| Consuming other data products | `tutorials/guides/consumer-tutorial` | Reading/depending on another team's data product |
 
 ## The platform itself is a doc
 
@@ -77,7 +77,7 @@ prefer it over prose when it answers the question:
   active mesh, with current state. Great for "what's already here" and for
   grounding an answer in real names instead of placeholders.
 - **App catalog / product page** — `<app_url>/app/data-products/<name>` for a
-  specific Data Product (resolve `<app_url>` exactly as above). The catalog
+  specific data product (resolve `<app_url>` exactly as above). The catalog
   view at `<app_url>/app/data-products` lists everything browsable.
 - **In-app Learn tab** — the docs surfaced inside the app, always matched to
   the running mesh; a reliable fallback when a deep doc link doesn't resolve.
@@ -90,7 +90,7 @@ When you can **show** instead of **link**, show. Prefer:
 - the **REST API** — authenticated with a PAT via the
   `x-nextdata-token: <PAT>` header (or `Authorization: Bearer` on
   multi-domain environments);
-- **MCP** — drive the DP's MCP surface directly.
+- **MCP** — drive the data product's MCP surface directly.
 
 A live CLI/REST/MCP demonstration against the user's actual mesh is almost
 always more useful than pointing at a manual page — use the doc links above

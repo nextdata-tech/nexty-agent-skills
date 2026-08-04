@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # nxd-run-job-loop skill
@@ -221,7 +221,7 @@ untouched — one artifact per source, labeled per `nxd-generate-data-product`'s
 exact per-type shape — don't re-derive it here**, along with the local DP shape
 (DuckDB output port, dlt-in-transform, local executor), the naming invariant, and
 the derived models carrying any business ruling the semantic layer can't express
-— its own `reference/` holds the connector-type-specific shape, and
+— its own `reference/` holds the connector-type-specific shape, and that skill's
 `reference/llm-judgments.md` holds how an agent judgement lands as data.
 Pass the bootstrap-resolved absolute `job_helper_dir` too; this is a required
 generator handoff field, not a path it may reconstruct from its own cwd.

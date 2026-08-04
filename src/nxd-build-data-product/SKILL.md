@@ -1,6 +1,6 @@
 ---
 name: nxd-build-data-product
-description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based Data Product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-analyze-mesh`). Use when the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` Data Product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
+description: Guide for creating, scaffolding, refining, and validating a Nextdata OS Python-based data product, including the interactive bootstrap wizard for a brand-new product. Two discovery modes — an interactive interview that walks through inputs, semantic models, transforms, outputs, glossary links, and contracts, or spec-from-document (e.g. a candidate in a `mesh-assets-PROFILE.md` report produced by `nxd-analyze-mesh`). Use when the user mentions building, bootstrapping, scaffolding, or iterating on an `nxd` data product, references files like `spec.py`, `models.py`, or `transform.py`, or asks about Nextdata OS drivers, semantic models, or transformations. Do not use for generic Python data pipelines unrelated to Nextdata OS.
 allowed-tools:
   - Bash
   - Read
@@ -12,13 +12,13 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
-# Nextdata OS Data Product Builder
+# Nextdata OS data product builder
 
 ## Overview
-Support the design, planning, implementation, and refinement of a Nextdata OS Python-based Data Product through structured collaboration with the user. Rely on verified references and confirm decisions at every step.
+Support the design, planning, implementation, and refinement of a Nextdata OS Python-based data product through structured collaboration with the user. Rely on verified references and confirm decisions at every step.
 
 This Skill is intended for technically proficient users who are familiar with technical terms and concepts. Minimise assumptions and seek clarity from the user throughout the workflow.
 
@@ -42,12 +42,12 @@ uv add nxd-data-product --index nxd=https://registry.trynxd.com/index/
 *Critical: Do not rely on internal or assumed knowledge regarding Nextdata OS or its Python packages. Always verify usage against the locally installed version of the `nxd` Python package.*
 
 ### Platform docs (per-mesh)
-Docs are served **per-mesh** from the active mesh's app host — there is no single global docs URL. Resolve the base from mesh config (the `app_url` of the selected mesh in `~/.nxd/meshes.json`, exactly as `nxd-setup-cli` records it), then build links as `<app_url>/docs/#/<path>` (docsify hash routing — keep the `#/`, no `.md` extension). The doc paths most relevant to *building* a Data Product:
+Docs are served **per-mesh** from the active mesh's app host — there is no single global docs URL. Resolve the base from mesh config (the `app_url` of the selected mesh in `~/.nxd/meshes.json`, exactly as `nxd-setup-cli` records it), then build links as `<app_url>/docs/#/<path>` (docsify hash routing — keep the `#/`, no `.md` extension). The doc paths most relevant to *building* a data product:
 
 | Topic | Path (append to `<app_url>/docs/#/`) |
 |---|---|
 | CLI setup / mesh + auth | `tutorials/cli/setup` |
-| Create a Data Product (CLI) | `tutorials/cli/create` |
+| Create a data product (CLI) | `tutorials/cli/create` |
 | Inputs | `tutorials/guides/04-inputs` |
 | Outputs | `tutorials/guides/02-outputs` |
 
@@ -55,11 +55,11 @@ Hand these out **inline and contextually** at the matching step below (full path
 
 ---
 
-## Data Product Creation Workflow
+## Data product creation workflow
 Copy this checklist into your response and tick items off as you complete them:
 
 ```
-Data Product Build Progress:
+Data product build progress:
 - [ ] 0. Prerequisites verified (NXD CLI, mesh selected, uv env, nxd-data-product installed)
 - [ ] 1. Discovery complete (interview answered OR spec-from-document extracted; infra profile located; references consulted)
 - [ ] 2. Plan approved by user
@@ -92,16 +92,16 @@ build can be paused and resumed without losing context. On startup, check whethe
 protocol and ledger format.
 
 ### 1. Discovery and Requirements Gathering
-Start by deeply understanding the user's intent, objectives, and requirements for the proposed Data Product.
+Start by deeply understanding the user's intent, objectives, and requirements for the proposed data product.
 
 #### Research
 Consult the following references for concepts, APIs, and best practices:
 
-* Real-world examples of implemented Data Products — bundled as a submodule at [reference/nextdata-public-examples/](reference/nextdata-public-examples/); see [reference/examples-guide.md](reference/examples-guide.md) for selection and drafting rules.
-    * Ignore the single-import rule present within examples, it does not apply to newly built Data Products.
+* Real-world examples of implemented data products — bundled as a submodule at [reference/nextdata-public-examples/](reference/nextdata-public-examples/); see [reference/examples-guide.md](reference/examples-guide.md) for selection and drafting rules.
+    * Ignore the single-import rule present within examples, it does not apply to newly built data products.
 * Information regarding best practices, preferred approaches and more: [reference/best_practices.md](reference/best_practices.md)
 * Overview of Nextdata OS concepts: [reference/concepts.md](reference/concepts.md)
-* Data Product structure and build process: [reference/build.md](reference/build.md)
+* Data product structure and build process: [reference/build.md](reference/build.md)
 * In-depth details of the critical `data_product()` function: [reference/data_product_spec.md](reference/data_product_spec.md)
 * In-depth details of `semantic_model()`: [reference/semantic_model_spec.md](reference/semantic_model_spec.md)
 * Storage config helpers, source-URL patterns, and transform context types per driver: [reference/storage-configs.md](reference/storage-configs.md)
@@ -109,14 +109,14 @@ Consult the following references for concepts, APIs, and best practices:
 * Running `transform()` locally: [reference/local_transform.md](reference/local_transform.md)
 * Examples of drivers (services) used within transformations: [reference/driver_examples.md](reference/driver_examples.md)
 * Authoring-time pitfalls (triggers, requirements, naming, types): [reference/common-pitfalls.md](reference/common-pitfalls.md)
-* Debugging a deployed Data Product (symptom → root cause → fix): [reference/troubleshooting.md](reference/troubleshooting.md)
+* Debugging a deployed data product (symptom → root cause → fix): [reference/troubleshooting.md](reference/troubleshooting.md)
 * Classifying a candidate into a data product type, with evidence discipline: [reference/product-taxonomy.md](reference/product-taxonomy.md)
 
 #### Discovery Source — interview or spec-from-document
-Decide once, up front, how the Data Product's requirements will be sourced. Ask the user which mode applies:
+Decide once, up front, how the data product's requirements will be sourced. Ask the user which mode applies:
 
 * **Interactive interview** (default) — work through the questions in **Interview** below.
-* **Spec-from-document** — the user points at one or more documents that already describe the Data Product. The canonical case is a candidate `#N` in a `mesh-assets-<profile>.md` report produced by the **`nxd-analyze-mesh`** skill, paired with its companion `mesh-assets-<profile>-models.md` for input/output schemas. Phrases like *"build the data product described by #41 in mesh-assets-daff.md"* trigger this branch.
+* **Spec-from-document** — the user points at one or more documents that already describe the data product. The canonical case is a candidate `#N` in a `mesh-assets-<profile>.md` report produced by the **`nxd-analyze-mesh`** skill, paired with its companion `mesh-assets-<profile>-models.md` for input/output schemas. Phrases like *"build the data product described by #41 in mesh-assets-daff.md"* trigger this branch.
 
 If spec-from-document is chosen, follow **Spec-from-Document** below in place of Interview. Either branch must end with the same outputs: the candidate's purpose, inputs/outputs (with locations, services, formats), drivers, and any transformation notes. Confirm the extracted answers with the user before moving on to step 2.
 
@@ -125,7 +125,7 @@ For each document path the user supplies (file path or `http(s)://` URL), read i
 
 **Mesh-assets report — the primary supported format.** A `mesh-assets-<profile>.md` lists candidates grouped by domain, each numbered (`#### 41. \`<name>\``). Each candidate carries:
 
-- *Suggested data product name* — use as the Data Product name unless the user overrides.
+- *Suggested data product name* — use as the data product name unless the user overrides.
 - *Domain*, *Infra profile*.
 - *Classification* — `source-aligned` or `transformed` (with confidence). Source-aligned + file→database typically means lift-and-shift with minimal logic; transformed means real reshaping.
 - *Input data source* — `location`, `service`, `service URL`. The service name maps to a service in the infra profile (see Infra Profile Lookup below).
@@ -136,9 +136,9 @@ Pair the report with its companion `mesh-assets-<profile>-models.md`. That file 
 
 If the user refers to a candidate by number (`#41`) or by name (`top-playlists`), locate that block in both files and read it. If the user gives only the report file with no candidate selector, present the candidates grouped by domain and ask which one to build.
 
-Other document shapes — plain markdown or text describing a Data Product — are supported best-effort: read the document, extract whatever maps onto the Interview questions, then ask the user to fill any gaps.
+Other document shapes — plain markdown or text describing a data product — are supported best-effort: read the document, extract whatever maps onto the Interview questions, then ask the user to fill any gaps.
 
-**Build a doc-claim checklist before any code.** Before writing `spec.py` / `models.py` / `transform.py`, enumerate every concrete claim from the input doc as a flat list: Data Product name, domain, infra profile, mesh URL, each input port (service + driver + filters + expectations), **each output port** (service + driver + schema + table + model + format), transform constraints (chunk sizes, embedding models, library choices), schedule, model count and shape, validation expectations. Treat each paragraph of a section like *Output* as a potential standalone claim — sections often carry N facts, not one. After scaffolding, walk the checklist and mark which file/line implements each claim. Anything unmapped = revisit before reporting done. When a claim conflicts with a similar reference example, **the doc wins**.
+**Build a doc-claim checklist before any code.** Before writing `spec.py` / `models.py` / `transform.py`, enumerate every concrete claim from the input doc as a flat list: data product name, domain, infra profile, mesh URL, each input port (service + driver + filters + expectations), **each output port** (service + driver + schema + table + model + format), transform constraints (chunk sizes, embedding models, library choices), schedule, model count and shape, validation expectations. Treat each paragraph of a section like *Output* as a potential standalone claim — sections often carry N facts, not one. After scaffolding, walk the checklist and mark which file/line implements each claim. Anything unmapped = revisit before reporting done. When a claim conflicts with a similar reference example, **the doc wins**.
 
 #### Infra Profile Lookup
 Both discovery branches need to know the infra profile file to wire services into `spec.py`. Locate it the same way `nxd-analyze-mesh` does, then confirm with the user.
@@ -259,7 +259,7 @@ destination all models share a port, with several ask which models route where.
 
 Also cover the underlying technical questions for any path:
 
-1. Intended purpose and outcome of this Data Product.
+1. Intended purpose and outcome of this data product.
 2. Expected inputs and outputs, and their formats.
 3. Drivers (services) needed, whether Nextdata OS supports them, and the
    service names + infra profile they belong to.
@@ -282,7 +282,7 @@ Based on the user's answers, perform additional research as needed, particularly
 Where the questions are very specific, guide the user by offering recommendations and examples for them to confirm.
 
 ### 2. Planning and Design
-Use all gathered information to create a clear, actionable plan for the Data Product's implementation. Ideally the plan should be simple while still achieving the user's end goals.
+Use all gathered information to create a clear, actionable plan for the data product's implementation. Ideally the plan should be simple while still achieving the user's end goals.
 
 Highlight critical decisions, uncertainties, and options for explicit user confirmation, including:
 
@@ -372,12 +372,12 @@ and the command to re-run after fixing it.
 The `nxd` library should already be installed in the virtual environment by the prerequisites step. Always refer to the locally installed version for implementation details rather than relying on prior knowledge.
 
 #### Transformation Validation
-Although the `transform(...)` function is designed to run within the Nextdata OS platform, it is worth creating an additional script that can execute it locally — this is very useful for testing. Any Python libraries required only for running the transformation locally should be added as development dependencies (e.g. `uv add --dev <package>`) so they are recorded in `pyproject.toml` without being treated as runtime dependencies of the Data Product, *including `python-dotenv` if used*.
+Although the `transform(...)` function is designed to run within the Nextdata OS platform, it is worth creating an additional script that can execute it locally — this is very useful for testing. Any Python libraries required only for running the transformation locally should be added as development dependencies (e.g. `uv add --dev <package>`) so they are recorded in `pyproject.toml` without being treated as runtime dependencies of the data product, *including `python-dotenv` if used*.
 
 **Exercise the full pipeline, not just the I/O boundary.** A local test that only confirms "did the input fetch succeed" passes happily while the transform breaks at parse time — real-world APIs often return fields in shapes the naive code path doesn't anticipate (nested document trees instead of strings, optional containers, vendor-specific encodings). The local test must walk every internal stage the transform walks: fetch → parse / extract → chunk / aggregate / shape → (write is fine to stub if the sink is hard to reach locally). Run it against real upstream data when credentials are available; assert that each stage produces non-empty output across the full sample, not just the first record. Stage failures should report with the stage name (`FAIL[parse]: …`) so the breakpoint is obvious.
 
 #### Packaging for `nxd launch`
-The platform's init container installs the Data Product as a Python package via `pip`, which uses `setuptools` for discovery. A flat directory with multiple top-level `.py` files (`spec.py`, `models.py`, `transform.py`, plus the `nxd_spec` / `nxd_models` shims) breaks auto-discovery and the launch fails at `Installing dependencies` with `Multiple top-level modules discovered in a flat-layout`. Two things prevent this:
+The platform's init container installs the data product as a Python package via `pip`, which uses `setuptools` for discovery. A flat directory with multiple top-level `.py` files (`spec.py`, `models.py`, `transform.py`, plus the `nxd_spec` / `nxd_models` shims) breaks auto-discovery and the launch fails at `Installing dependencies` with `Multiple top-level modules discovered in a flat-layout`. Two things prevent this:
 
 * **Declare `py-modules` explicitly in `pyproject.toml`** (see `reference/best_practices.md` for the snippet). List every `.py` module that should ship — typically `spec`, `models`, `nxd_spec`, `nxd_models`, `transform`, plus contract files if any.
 * **Ship a `.nxdignore`** that excludes everything local-only from the deployment bundle: `.env*`, `local_transform.py` (and any other local runner / smoke-test script), `.venv/`, `__pycache__/`, build artifacts, IDE / VCS noise. Local-execution files have credentials wired in or use development-only dependencies the platform shouldn't see.
@@ -391,7 +391,7 @@ Fix what you can, and record every unresolved launch or validation risk in both
 ---
 
 ### 4. Validation
-Once implementation is complete, validate the Data Product before handover. Track progress with the following checklist:
+Once implementation is complete, validate the data product before handover. Track progress with the following checklist:
 
 ```
 Validation Progress:
@@ -432,7 +432,7 @@ run next.
 
 End-to-end runtime validation is performed by the user in the Finalisation step.
 
-**Watch for semantic-model removal across versions at launch time.** The platform protects downstream consumers from breaking changes: if a previously launched version of the same Data Product declared a semantic model that the new launch no longer declares, `nxd launch` aborts with HTTP `409` and a message like `The following model(s) are no longer available: [<model_name>]`. This commonly happens when the model is renamed during scaffolding (e.g. an unintended pluralisation / casing change) — the rename looks local but the server sees deletion. Two resolutions:
+**Watch for semantic-model removal across versions at launch time.** The platform protects downstream consumers from breaking changes: if a previously launched version of the same data product declared a semantic model that the new launch no longer declares, `nxd launch` aborts with HTTP `409` and a message like `The following model(s) are no longer available: [<model_name>]`. This commonly happens when the model is renamed during scaffolding (e.g. an unintended pluralisation / casing change) — the rename looks local but the server sees deletion. Two resolutions:
 
 * **Rename the model to match the prior name** in `models.py`, `spec.py`, `nxd_spec.py`'s `__all__`, the `target_table(...)` model argument, and any model-name string constants in `transform.py`. Re-run launch.
 * **Bump `manifest.version` and launch with `--versioned`** so the previous version coexists.
@@ -457,17 +457,17 @@ Finalisation (user to complete):
 - [ ] Run the local smoke test command shown in README.md
 - [ ] Run validation: `nxd validate --config=<session_config> <data_product_directory> --debug`
 - [ ] Run the local transform script and confirm it completes end-to-end
-- [ ] Launch the Data Product on the mesh: `nxd launch --dir <data_product_directory> --config=<session_config>`
+- [ ] Launch the data product on the mesh: `nxd launch --dir <data_product_directory> --config=<session_config>`
 - [ ] Verify the first platform run: transform completes, outputs land at configured ports, promises/expectations pass
 ```
 
-If the launched Data Product fails or behaves unexpectedly, work through
+If the launched data product fails or behaves unexpectedly, work through
 [reference/troubleshooting.md](reference/troubleshooting.md) — it maps the
 platform's error messages (which are often misleading, e.g. OOM reported as
 "startup timeout") to root causes and fixes.
 
 In the handover summary, call out any items needing particular attention —
 deferred TODOs, missing inputs, areas where assumptions were made, or sections
-that may require manual review. Do not describe a running scheduled Data Product,
+that may require manual review. Do not describe a running scheduled data product,
 created vector table, or deployed mesh resource unless the command that created
 or verified it actually ran successfully.

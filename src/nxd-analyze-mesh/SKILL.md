@@ -1,6 +1,6 @@
 ---
 name: nxd-analyze-mesh
-description: Inspect data-bearing services in a nextdata infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects to selected storage services (S3, Snowflake, ADLS, Databricks, BigQuery, Postgres, Kafka, Pinecone, and more), inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product. Use when discovering candidate data products from infra profiles, mesh assets, service schemas, or offline evidence.
+description: Inspect data-bearing services in a Nextdata OS infra profile to discover candidate data product inputs and outputs. Reads an infra profile file, connects read-only to S3, Snowflake and ADLS — the three service types with shipped inspection drivers — inventories files/tables/schemas, and reports data sources that appear connected as a source-aligned data product. Other declared data-bearing services (Databricks, BigQuery, Postgres, Kafka, Pinecone, and more) are classified and reported as unsupported rather than inspected. Use when discovering candidate data products from infra profiles, mesh assets, service schemas, or offline evidence.
 allowed-tools:
   - Bash
   - Read
@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # Nexty Mesh Assets
@@ -169,6 +169,8 @@ Present the data-bearing services as a numbered list. For each, show the name, d
 
 **Prompt the user for which services to parse — always, never auto-select.** Use `AskUserQuestion` (multi-select). Pre-select all Storage services as the default, but the user confirms or narrows the list. Inspect only the services they choose.
 
+**Only S3, Snowflake, and ADLS have shipped inspection drivers** (`scripts/drivers/`). A profile may declare data-bearing services this skill can classify but cannot connect to — BigQuery, Postgres, Kafka, Pinecone and the rest inventory as *unsupported*, not as empty. Say so when presenting the list, so the user does not read a missing driver as a missing dataset, and never write code mid-discovery to fill the gap.
+
 ### Step 3: Credential handling
 
 The infra profile file contains **live credentials in plaintext**. Before inspecting:
@@ -192,9 +194,9 @@ Build an **asset inventory** for the service. For every data asset record:
 - **Size** — object/row count and total bytes where cheap to obtain.
 - **Last modified** — most recent write timestamp.
 
-The inventory must honor the nextdata **one service = one input** and **one unique schema = one input model** convention — this is what makes the results map cleanly onto nxd-build-data-product. For the model behind it, link `<app_url>/docs/#/tutorials/guides/04-inputs` (resolve `<app_url>` per Step 0 / Platform docs).
+The inventory must honor the Nextdata OS **one service = one input** and **one unique schema = one input model** convention — this is what makes the results map cleanly onto nxd-build-data-product. For the model behind it, link `<app_url>/docs/#/tutorials/guides/04-inputs` (resolve `<app_url>` per Step 0 / Platform docs).
 
-**Group file-based storage by schema fingerprint, not by directory path.** Path-based grouping fails both ways: a bucket laid out as `<data-product>/<port>/...` collapses a whole product into one asset, while a raw partitioned export explodes one dataset into one fragment per partition. Instead — infer each file's schema, then group files that share an identical schema and format into one logical asset. Path segments that *vary within a group* are **partition keys** (`key=value`, date segments, numeric ids) — record them as partitioning, do not split on them. Per the nextdata convention, treat **one infra service as one input** and **each unique schema as its own input model**.
+**Group file-based storage by schema fingerprint, not by directory path.** Path-based grouping fails both ways: a bucket laid out as `<data-product>/<port>/...` collapses a whole product into one asset, while a raw partitioned export explodes one dataset into one fragment per partition. Instead — infer each file's schema, then group files that share an identical schema and format into one logical asset. Path segments that *vary within a group* are **partition keys** (`key=value`, date segments, numeric ids) — record them as partitioning, do not split on them. Per the Nextdata OS convention, treat **one infra service as one input** and **each unique schema as its own input model**.
 
 **Delta / Iceberg tables are one asset.** A Delta or Iceberg table on file storage is a single logical table, not the pile of `_delta_log/`, `metadata/`, and UUID-named data files it is made of. `inspect_service.py` detects a table root and emits one `table` asset, taking its schema from the table metadata — that metadata is the authority and it points at the underlying parquet/avro. If a table is also registered in a catalog service (Unity Catalog, Snowflake) and it is unclear which catalog owns it, ask the user.
 
@@ -203,6 +205,8 @@ The inventory must honor the nextdata **one service = one input** and **one uniq
 The inventory can run to thousands of assets. Write it to a file under the temp dir and work from a summary — never dump raw inventory JSON into the chat.
 
 If a connection fails (bad credentials, network, missing client library), report it and continue with the other services — don't abort the whole run.
+
+**But carry the gap into the report.** An asset whose counterpart lives in a service that failed to connect looks exactly like an asset with no counterpart, and the report labels those "potential standalone inputs". Name every skipped or failed service in the report, and state that standalone/unmatched conclusions are provisional until those services are inspected or the user rules them out of scope. A negative conclusion drawn over a partial inventory is not a finding.
 
 ### Step 5: Match candidate inputs and outputs
 

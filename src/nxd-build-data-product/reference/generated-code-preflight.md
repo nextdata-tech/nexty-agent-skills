@@ -107,6 +107,6 @@ The README status block must reflect the preflight result:
 
 ## What not to claim
 
-Do not describe a running scheduled Data Product, created vector table, deployed
+Do not describe a running scheduled data product, created vector table, deployed
 mesh resource, or passing `nxd validate` unless the command that created or
 verified it actually ran successfully.

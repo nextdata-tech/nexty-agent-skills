@@ -20,8 +20,12 @@ the gateway has no lease tool, so this path stays on REST `connect_port.py`).
 
 **Step 1 — Discover the chunk schema and embedding model.**
 
-Read `/api/v1/info` (DP `description`) and the models (via
-`gateway_tools.py details --dp <dp> --models`, or REST `/api/v1/models`) to learn:
+Read the data product's `description` **and** its models in one gateway call:
+`gateway_tools.py details --dp <dp> --models` passes `proxy__get_data_product_details`
+through verbatim, so the `description` — where the embedding model is recorded —
+comes back with them. Discovery goes through the MCP gateway, not REST: SKILL.md's
+gateway-first rule is the contract, and REST `/api/v1/models` can answer from a
+different or staler schema. Learn:
 - which embedding model produced the index (e.g. `sentence-transformers/all-MiniLM-L6-v2`),
 - which column holds the text chunk (default `content`),
 - which column holds the vector (default `embedding`),
@@ -87,7 +91,7 @@ Then retrieve. Two modes:
 
 **Step 5 — Abstain on low confidence (optional).**
 
-Pass `--min-score <f>` to set a floor on the best result's score (RRF score for hybrid, `1/(1+L2)` for vector-only). If no result clears the bar, the script returns `"abstain": true` with empty `rows`. When that fires, **tell the user "no good match in the DP"** rather than hallucinating from weak chunks. The data-quality / expectation model that governs when to trust a port's data is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
+Pass `--min-score <f>` to set a floor on the best result's score (RRF score for hybrid, `1/(1+L2)` for vector-only). If no result clears the bar, the script returns `"abstain": true` with empty `rows`. When that fires, **tell the user "no good match in the data product"** rather than hallucinating from weak chunks. The data-quality / expectation model that governs when to trust a port's data is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
 
 Reasonable starting thresholds:
 - vector-only: `0.45` (≈ L2 distance ≤ 1.2 for normalised embeddings),

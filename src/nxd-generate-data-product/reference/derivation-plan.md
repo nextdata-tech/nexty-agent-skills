@@ -524,7 +524,7 @@ should not be built. A question no model answers is the gap to raise now — not
 after a build.
 
 When a supplied procedure is in play this is a **hard gate**, not a courtesy:
-see the Workflow's "Gate — policy read-back before ANY materialization" in
+see the Workflow's "Gate — confirm the policy with the user before writing anything" in
 `SKILL.md`. The read-back enumerates every gate, criterion, weight and verdict
 string with the user's own value, every anchor you propose for an incomplete
 scale, the verdict bands and precedence, and every gap you are about to land as

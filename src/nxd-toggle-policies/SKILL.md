@@ -6,7 +6,7 @@ allowed-tools:
   - Read
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # nxd Policies
@@ -55,16 +55,24 @@ nxd --config <session_config> deactivate policy --skip-version-check --name <pol
 ```
 
 - **Do not pass `--env`** — `nxd deactivate policy` does not accept it. Deactivation is global by policy name.
+- **Prefer `--id <activation-id>` from the list step, and confirm the blast radius before using `--name`.** Because deactivation is global and takes no `--env`, `--name` deactivates EVERY activation carrying that name — across every data product and environment, not just the one the user asked about. `nxd ls policies` requires `--dp` and `--env`, so **there is no command here that enumerates every activation of a name across the mesh**: the listing you ran proves only that this name is active on the data product and environment you filtered by, never that it is unique. So either list the specific `--dp`/`--env` pairs in scope and deactivate each by its `--id`, or — when the full set can't be established — tell the user plainly that `--name` deactivates the policy everywhere it is active and get their confirmation that a global change is what they want. Never infer uniqueness from a filtered listing.
+- **`--id` takes the `ID` column, not `DP Activation ID`.** The list step prints both, so be precise: `nxd deactivate policy --help` documents `--id` as "the numeric ID of the policy activation", which is the `ID` column. The two are different identifiers — passing the wrong one can target another activation rather than erroring.
 - The contract behind the policy is **not** deleted, so you can reactivate later without recreating it.
-- Use `--id <activation-id>` instead of `--name` if you have the numeric ID from the list step.
 
-Example (substitute `<mesh_name>` and the real policy name from the list step):
+Example (substitute `<mesh_name>` and the real activation ID from the list step):
 
 ```bash
+# By activation ID — targets exactly the activation you listed.
+nxd --config <session_config> deactivate policy --skip-version-check --id <activation-id>
+
+# By name — deactivates the policy on EVERY data product and environment.
+# Only after the user has confirmed a global change is intended.
 nxd --config <session_config> deactivate policy --skip-version-check --name <policy-name>
 ```
 
-For a **full teardown** (delete the policy and contract, not just deactivate):
+For a **full teardown** (delete the policy and contract, not just deactivate).
+
+**Teardown is irreversible and is never implied by a request to toggle or deactivate.** Run it only when the user has explicitly asked to delete. Deleting the contract also destroys the cheap reactivation path the deactivate step above preserves — recreating it means re-registering the contract from source. Before running these, re-list the exact policy and contract you are about to delete, state that both are permanent, and get explicit confirmation. `--yes` suppresses the CLI's own prompt, so your confirmation is the only one the user gets. These are all name-keyed, so they carry the global reach described above — in the one place it cannot be undone:
 
 ```bash
 nxd --config <session_config> deactivate policy --skip-version-check --name <policy-name>

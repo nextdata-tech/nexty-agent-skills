@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # nxd-build-semantic-data-product skill
@@ -241,8 +241,7 @@ metadata or add a second semantic representation.
 `join(to="<model>", to_column="<col>")`, not `to_model=`, and give every
 dimension its stable business name and PII flag when applicable.
 
-Keep every module **flat at the DP root** — `models.py`, `transform.py`, `spec.py`
-are siblings. No `transform/` subdir package.
+Keep every module **flat at the DP root** — `models.py`, `transform.py`, `spec.py` are siblings. No `transform/` subdir package.
 
 ```python
 # models.py
@@ -250,6 +249,8 @@ from nxd.spec import Agg, dimension, field, join, metric, metric_field, primary_
 from nxd.spec import semantic_model, semantic_view
 from nxd.spec.data_types import float64, int64, string
 
+# Abridged. This file must ALSO define `products` (the join target below — a join
+# is invalid unless its `to=` model exists) and `provision_marker` (Step 4's marker).
 orders = (
     semantic_model("orders")
     .description("One row per order.")

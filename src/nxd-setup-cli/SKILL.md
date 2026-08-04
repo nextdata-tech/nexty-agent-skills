@@ -1,17 +1,19 @@
 ---
 name: nxd-setup-cli
-description: Install, configure, and authenticate the nxd CLI. Manages mesh environments so the user can work with multiple nextdata platforms across sessions. Use when setting up nxd, selecting a mesh, refreshing authentication, or producing the session config path used by other Nextdata skills.
+description: Install, configure, and authenticate the nxd CLI. Manages registered meshes so the user can work with multiple Nextdata OS installations across sessions. Use when setting up nxd, selecting a mesh, refreshing authentication, or producing the session config path used by other Nextdata skills.
 allowed-tools:
   - Bash
   - Read
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # nxd Setup
 
-Ensure the user's environment is ready to work with the nextdata platform. This skill manages mesh environments — named platform instances (e.g. dev, staging, prod) — so the user can register, select, and switch between them across sessions.
+Ensure the user's machine is ready to work with Nextdata OS. This skill manages registered meshes — named Nextdata OS installations (e.g. dev, staging, prod) — so the user can register, select, and switch between them across sessions.
+
+A **mesh** here is a whole Nextdata OS installation. That is not the same thing as a **mesh environment** (the `--env` a single data product is deployed to). Keep the two distinct when talking to the user.
 
 Mesh configurations are persisted in the user's nxd home (`~/.nxd/meshes.json` on POSIX/WSL, `$env:USERPROFILE\.nxd\meshes.json` on Windows PowerShell). Each mesh stores an **app URL**, an **API URL**, an authentication token, and an install URL. At session start, a temporary config file is generated from the registry so the CLI can target the correct platform.
 
@@ -54,8 +56,8 @@ Append the path **without** a `.md` extension. The paths most relevant to setup:
 |---|---|
 | CLI setup (install / env / auth) | `tutorials/cli/setup` |
 | Quick start | `tutorials/guides/quick-start` |
-| Create a Data Product | `tutorials/cli/create` |
-| Consuming other DPs | `tutorials/guides/consumer-tutorial` |
+| Create a data product | `tutorials/cli/create` |
+| Consuming other data products | `tutorials/guides/consumer-tutorial` |
 
 Hand these out inline at the relevant step rather than waiting to be asked. If a deep link 404s, open the docs home (`<app_url>/docs/#/`) and navigate the sidebar, or re-confirm `app_url` from the mesh config.
 
@@ -373,7 +375,7 @@ If it fails, help the user debug:
 
 Report the active mesh configuration, using the real values for the selected mesh:
 
-> Environment is ready!
+> Your nxd CLI is ready.
 > - **Mesh**: `<mesh_name>`
 > - **App URL**: `<app_url>`
 > - **API URL**: `<api_url>`
@@ -381,7 +383,7 @@ Report the active mesh configuration, using the real values for the selected mes
 
 **Important**: For the rest of this session, always pass `--config <session_config>` to every `nxd` command. Use the OS-specific path from "Cross-platform command conventions." This ensures all operations target the selected mesh.
 
-Now that `app_url` is known, surface the canonical environment-ready reference: `<app_url>/docs/#/tutorials/cli/setup`. The mesh's `app_url` is also the **doc base** other skills use to build `<app_url>/docs/#/<path>` links.
+Now that `app_url` is known, surface the canonical CLI setup reference: `<app_url>/docs/#/tutorials/cli/setup`. The mesh's `app_url` is also the **doc base** other skills use to build `<app_url>/docs/#/<path>` links.
 
 If the user came here from (or is heading to) another skill, point them onward with the relevant per-mesh doc link:
 

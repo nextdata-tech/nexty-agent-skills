@@ -1,6 +1,6 @@
 ---
 name: nxd-query-data-product
-description: Query a deployed Nextdata OS Data Product. Discovers the active mesh from local nxd settings, then does ALL discovery — Data Products, output ports, model attributes, health, glossary — through the mesh MCP gateway multiplexer in one session, not per-DP REST. Direct-store reads lease a credential from the per-DP REST API (the one thing the gateway cannot do) and route by output-port driver: SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone); RPC/MCP ports are called as gateway tools. Turns natural-language questions into concrete queries. Semantic questions — single-DP and cross-DP alike — go through the governed `run_semantic_query` tool; the platform compiles and executes, merging cross-DP joins server-side in the query system DP. Use when the user asks to "query a data product", "read from an output port", "search a named DP", or "join across data products".
+description: Query a deployed Nextdata OS data product. Discovers the active mesh from local nxd settings, then does ALL discovery — data products, output ports, model attributes, health, glossary — through the mesh MCP gateway multiplexer in one session, not per-DP REST. Direct-store reads lease a credential from the per-DP REST API (the one thing the gateway cannot do) and route by output-port driver: SQL for relational stores (Snowflake, Postgres, BigQuery, Redshift, Databricks, DuckDB), presigned-URL fetch for file storage (S3, ADLS, GCS), vector similarity for vector stores (pgvector, Pinecone); RPC/MCP ports are called as gateway tools. Turns natural-language questions into concrete queries. Semantic questions — single-DP and cross-DP alike — go through the governed `run_semantic_query` tool; the platform compiles and executes, merging cross-DP joins server-side in the query system DP. Use when the user asks to "query a data product", "read from an output port", "search a named DP", or "join across data products".
 allowed-tools:
   - Bash
   - Read
@@ -10,15 +10,15 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
-# nxd Data Product Query
+# nxd data product query
 
-Query a deployed Nextdata OS Data Product. The skill:
+Query a deployed Nextdata OS data product. The skill:
 
 1. Finds the active mesh from `~/.nxd/meshes.json` (or `~/.nxd/config.yaml` as fallback).
-2. Lists Data Products **via the MCP gateway** and asks the user which one (if not supplied).
+2. Lists data products **via the MCP gateway** and asks the user which one (if not supplied).
 3. Lists output ports + tools **via the MCP gateway** and asks the user which (if not supplied).
 4. For a direct-store read, fetches the port's location and a leased credential from the DP REST API.
 5. Routes the query by output-port driver type (or calls the MCP tool), then runs it.
@@ -33,7 +33,7 @@ against `<base>/dp/mcp/`):
 
 | Need | `gateway_tools.py` subcommand | Gateway tool |
 |---|---|---|
-| List DPs | `list-dps [--domain D]` | `discovery…__list_data_products` |
+| List data products | `list-dps [--domain D]` | `discovery…__list_data_products` |
 | Output ports (+ infra service) + models/attributes | `details --dp <dp> --outputs --models` | `proxy__get_data_product_details` |
 | Per-DP MCP/RPC tool list | `tools [--dp <dp>]` | `tools/list` |
 | Health (diagnose a failing tool) | `health [--broken-only]` | `proxy__getDataProductsHealth` |
@@ -51,7 +51,7 @@ used everywhere here (see **Credentials**): a PAT is sent on `X-Nextdata-Token`,
 an OAuth session token on `Authorization: Bearer` — `mcp_http.py` picks the
 header by token type automatically.
 
-The public Data Product REST API contract the lease/query scripts drive is documented per-mesh at `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (resolve `<app_url>` in Step 1; see **Platform docs**).
+The public data product REST API contract the lease/query scripts drive is documented per-mesh at `<app_url>/docs/#/tutorials/guides/consumer-tutorial` (resolve `<app_url>` in Step 1; see **Platform docs**).
 
 For **vector stores** and **MCP / RPC ports**, this skill consults the LLM (Claude — the conversation itself) to turn the user's natural-language question into a concrete query (vector similarity expression, MCP call payload) before executing.
 
@@ -64,7 +64,7 @@ This skill is read-only. It never writes to a data product's output store.
 The user may pass any of these in the request — collect the rest interactively:
 
 - **Mesh** — which configured mesh to query. nxd-setup-cli owns mesh selection; the active mesh + its api/app host come from `~/.nxd` (see Step 1). Do not hardcode a mesh host — derive it.
-- **Data Product** — `fullName` (illustrative example: `<dp-name>`, e.g. an embeddings DP). If missing, prompt with the list from `gateway_tools.py list-dps`. You can also scope by **domain** (`--domain`) when many DPs span domains — ask the user to narrow by domain rather than scrolling a long list.
+- **Data product** — `fullName` (illustrative example: `<dp-name>`, e.g. an embeddings DP). If missing, prompt with the list from `gateway_tools.py list-dps`. You can also scope by **domain** (`--domain`) when many DPs span domains — ask the user to narrow by domain rather than scrolling a long list.
 - **Output port** — port `name` (illustrative examples: a `pgvector` port, an `adls` file port, a relational `*-out` port). If missing, prompt with `gateway_tools.py details --dp <dp> --outputs` (data ports) + `gateway_tools.py tools --dp <dp>` (MCP/RPC tools).
 - **Infra-profile** — only needed when a port's `connect` returns `unsupported` (Step 5). Derive it from the port / mesh — `nxd ls infra-profiles` against the active mesh — or ask the user; do not assume a local file (see Step 5).
 - **Query** — natural-language question, or a SQL string, or a vector-search description, or an MCP function + args. If missing, ask.
@@ -99,7 +99,7 @@ python3 scripts/find_mesh.py
 
 - Reads `~/.nxd/meshes.json` first (the registry the nxd-setup-cli skill maintains). The mesh **name**, `api_url`, `app_url`, and the auth/install host all come from the registry **entry** — never reconstructed from the host by label-count guesses.
 - Falls back to `~/.nxd/config.yaml` — top-level `url:` and entries under `meshes:`.
-- If multiple meshes are present, prints them and exits non-zero with a list. **Never guess the mesh** — do not infer it from the Data Product name or from where a DP "likely" lives. Resolve it two ways only: (1) if the config marks one mesh active (`config.yaml (active)`), use that one and re-run with `--mesh <name>`; (2) otherwise ask the user which one (use `AskUserQuestion`) and re-run with `--mesh <name>`.
+- If multiple meshes are present, prints them and exits non-zero with a list. **Never guess the mesh** — do not infer it from the data product name or from where a DP "likely" lives. Resolve it two ways only: (1) if the config marks one mesh active (`config.yaml (active)`), use that one and re-run with `--mesh <name>`; (2) otherwise ask the user which one (use `AskUserQuestion`) and re-run with `--mesh <name>`.
 - Token comes from the registry entry first; if absent, reads `~/.nxd/tokens.json` (the file `nxd login` writes). Tokens there are keyed by the OAuth auth host (`auth.<mesh>.<domain>`) — `find_mesh.py` matches the auth/install host carried by the mesh registry entry, falling back to an api-host domain match only when the registry omits it.
 - Use the emitted `token_file` path as `$TOKEN_FILE` in later commands. The default token-file directory is the OS temp directory (`/tmp/...` on POSIX/WSL, `%TEMP%\...` on Windows), so do not hardcode `/tmp`.
 
@@ -117,11 +117,11 @@ Docs are served **per-mesh** from the active mesh's app host — there is no sin
 <app_url>/docs/#/<path>
 ```
 
-It is a **docsify** site with hash (`#/`) routing — keep the `#/`, append the path **without** a `.md` extension. If a deep link 404s or shows a blank page, don't guess alternate paths: open the docs home `<app_url>/docs/#/` and navigate its sidebar, use the in-app Learn tab, or re-confirm the host from the mesh config. The doc paths most relevant to **querying / consuming** a Data Product:
+It is a **docsify** site with hash (`#/`) routing — keep the `#/`, append the path **without** a `.md` extension. If a deep link 404s or shows a blank page, don't guess alternate paths: open the docs home `<app_url>/docs/#/` and navigate its sidebar, use the in-app Learn tab, or re-confirm the host from the mesh config. The doc paths most relevant to **querying / consuming** a data product:
 
 | Topic | Path to append to `<app_url>/docs/#/` |
 |---|---|
-| Consuming another team's DP (REST API contract) | `tutorials/guides/consumer-tutorial` |
+| Consuming another team's data product (REST API contract) | `tutorials/guides/consumer-tutorial` |
 | Output ports | `tutorials/guides/02-outputs` |
 | Semantic model (attributes / data types) | `tutorials/guides/01-semantic-model` |
 | Inputs (request-model field semantics) | `tutorials/guides/04-inputs` |
@@ -129,13 +129,13 @@ It is a **docsify** site with hash (`#/`) routing — keep the `#/`, append the 
 | Expectations (access / approval, DQ) | `tutorials/guides/05-expectations` |
 | MCP (rpc-outputs / `nxd mcp client`) | `tutorials/guides/07-mcp` |
 | CLI setup (mesh / auth) | `tutorials/cli/setup` |
-| Create a DP & its infra-profile | `tutorials/cli/create` |
+| Create a data product & its infra profile | `tutorials/cli/create` |
 
 Prefer **showing** over linking — a live `nxd ls …` / REST call against the user's mesh usually beats pointing at a page. Use the links to orient and fill gaps.
 
 ---
 
-## Step 2: Pick the Data Product
+## Step 2: Pick the data product
 
 If the user named one, validate it against the list. Otherwise present the list:
 
@@ -143,7 +143,7 @@ If the user named one, validate it against the list. Otherwise present the list:
 python3 scripts/gateway_tools.py list-dps [--domain <domain>] --token-file "$TOKEN_FILE"
 ```
 
-Returns one entry per DP: `name`, `domain`, `description`, `status`, `endpoint`, plus access/promise stats. Use `AskUserQuestion` (single-select) when there are many; pass `--domain` (or the gateway tool's `filter_domain`) to narrow rather than scrolling an unscoped list.
+Returns one entry per data product: `name`, `domain`, `description`, `status`, `endpoint`, plus access/promise stats. Use `AskUserQuestion` (single-select) when there are many; pass `--domain` (or the gateway tool's `filter_domain`) to narrow rather than scrolling an unscoped list.
 
 Docs: the consumer REST API contract these calls follow is at `<app_url>/docs/#/tutorials/guides/consumer-tutorial`.
 
@@ -151,7 +151,7 @@ Docs: the consumer REST API contract these calls follow is at `<app_url>/docs/#/
 
 ## Step 3: Pick the output port
 
-List the DP's output ports and its MCP/RPC tools:
+List the data product's output ports and its MCP/RPC tools:
 
 ```bash
 python3 scripts/gateway_tools.py details --dp <fullName> --outputs --token-file "$TOKEN_FILE"
@@ -241,7 +241,7 @@ RPC / MCP tools are served through the **gateway multiplexer** — discover and
 call them there, not via the REST `/rpc-outputs` contract. The MCP guide is at
 `<app_url>/docs/#/tutorials/guides/07-mcp`.
 
-**Consult the LLM.** The user's natural-language question maps onto one of the DP's tools:
+**Consult the LLM.** The user's natural-language question maps onto one of the data product's tools:
 
 1. List the DP's tools (names, descriptions, input schemas) — already in hand from `gateway_tools.py tools --dp <fullName>` (Step 3), each named `<function>__<hash>` on the multiplexer.
 2. Pick the tool that matches the user's intent (you, Claude, do this).
@@ -260,7 +260,7 @@ python3 scripts/mcp_call.py \
 
 #### Semantic-layer MCP ports (`list_models` / `run_semantic_query`)
 
-A DP built with the **nxd-build-semantic-data-product** skill exposes a governed
+A data product built with the **nxd-build-semantic-data-product** skill exposes a governed
 text-to-SQL surface as four RPC functions: `list_models`, `describe_model`,
 `run_semantic_query`, and `semantic_model` (raw per-model registry projection,
 including any `to_data_product` cross-DP join edges the DP publishes). Treat the
@@ -415,7 +415,7 @@ Each script writes secrets only to `--out` files (never stdout) and reads tokens
 - **`connect` returns `unsupported`** — derive the infra-profile from the active mesh (`nxd ls infra-profiles`) or ask the user; only read an on-disk infra-profile YAML if the user confirms they have a working-tree copy (e.g. from `nxd-build-data-product`) and confirms the path. Do not grep assumed directories. See `<app_url>/docs/#/tutorials/cli/create`.
 - **`connect` returns `approval_pending`** — stop and surface the `message` / `tracking_url` to the user. Do not poll.
 - **Long-lived presigned URLs** — every `connect` call returns fresh credentials with a fixed TTL. Cache the response in `<port_credentials_file>` for the session; re-request if the TTL passes.
-- **Vector store embedding model mismatch** — querying with a different embedding model from the one the DP used to index gives nonsense results. Always confirm the model from the DP's `description` / `/v1/info` before computing the query vector.
+- **Vector store embedding model mismatch** — querying with a different embedding model from the one the data product used to index gives nonsense results. Always confirm the model from the data product's `description` before computing the query vector — read it through the gateway (`gateway_tools.py details --dp <dp>`), the same source as every other discovery here.
 - **Local `*.nxd.local` cluster + `requests` SSL errors despite a correct CA bundle** — `REQUESTS_CA_BUNDLE` pointed at the cluster CA (`shared/charts/nxd/localCerts/nxdCA.crt`) is the right first fix, but Python `requests` can still fail TLS verification against a local cluster even when `curl` against the same host succeeds. If `requests` still errors after confirming the bundle path, set `NXD_MCP_INSECURE=1` (skips TLS verification in `mcp_http.py` — local dev only, never against a real mesh).
 - **`find_mesh.py --mesh <name>` fails but a `config.yaml.<name>` file exists** — a saved-but-inactive config variant isn't the same as a registered mesh; `find_mesh.py` only reads `meshes.json` + the *active* `config.yaml` (no `--config` flag). Copy `~/.nxd/config.yaml.<name>` over `~/.nxd/config.yaml` to make it active, then re-run. If the mesh is still unreachable after that, it's a network problem (VPN) between you and that mesh — a prerequisite this skill can't fix.
 - **One gateway session per query** — the DP set + each DP's tools change (new DP, redeploy, breaker flip). Don't reuse a tool list across queries; re-run `gateway_tools.py` per question. Use `nxd mcp client` only when the user explicitly wants an interactive MCP session.
@@ -430,6 +430,6 @@ Symptom → cause → fix for failures hit while querying a port lives in
 `connect` `unsupported`/`approval_pending`, vector model/dimension mismatch,
 pgvector 0-rows, RPC 404, and the `run_semantic_query` grain/dimension/value-match
 cases). Diagnose before retrying — the same symptom (e.g. an empty result) has
-more than one cause. When the failure is the Data Product itself (port unhealthy,
+more than one cause. When the failure is the data product itself (port unhealthy,
 no data, RPC pod crashing) rather than the query, switch to the
 **nxd-debug-data-product** skill.

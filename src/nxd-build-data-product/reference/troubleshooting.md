@@ -1,4 +1,4 @@
-# Troubleshooting deployed Data Products
+# Troubleshooting deployed data products
 
 ## Contents
 - Startup timeout / OOM diagnosis
@@ -10,7 +10,7 @@
 - Infra-profile / service resolution failures
 - Debugging workflow
 
-Symptom → diagnosis → fix reference for Data Products that fail after
+Symptom → diagnosis → fix reference for data products that fail after
 `nxd launch`. Each entry gives the error as the platform reports it, the
 likely root cause (sometimes different from what the error text suggests),
 how to confirm, and the fix.
@@ -113,7 +113,7 @@ intended physical table name.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ModuleNotFoundError: No module named 'mcp'` in the RPC pod | RPC runtime deps not in the DP venv | Add `nxd-drivers[rpc]` to the Data Product's dependencies. |
+| `ModuleNotFoundError: No module named 'mcp'` in the RPC pod | RPC runtime deps not in the DP venv | Add `nxd-drivers[rpc]` to the data product's dependencies. |
 | `NameError: name '<module-global>' is not defined` when a tool is called | The RPC runtime executes the decorated function WITHOUT its module globals | Make RPC function bodies fully self-contained: all imports and constants inside the function. Cache heavyweight state on an imported module attribute (e.g. `sentence_transformers._my_model = m`). |
 | RPC pod killed (exit 137) loading a model | RPC pods get the same default memory limit as compute pods | Raise the RPC pod's memory. If the spec API version in use doesn't expose RPC resources, the kubernetes/rpc driver reads a flattened `resources` key from the port config. |
 
@@ -155,14 +155,14 @@ kubectl get events -n dps --sort-by=.lastTimestamp | grep contract-<id>
 
 Usual culprits: cluster out of allocatable CPU/memory (`FailedScheduling`),
 image pull failure (`ErrImagePull`), or a missing volume/secret. If the
-cluster is at capacity, lower the Data Product's compute resource *requests*
+cluster is at capacity, lower the data product's compute resource *requests*
 or free node capacity.
 
 ---
 
 ## 6. Stuck in `PROVISIONING` / `PENDING`
 
-A Data Product that never reaches `STARTED` is reporting a *state*, not yet an
+A data product that never reaches `STARTED` is reporting a *state*, not yet an
 error. Read the state before reading code:
 
 | State | Meaning | First check |

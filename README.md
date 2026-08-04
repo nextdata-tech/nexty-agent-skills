@@ -253,7 +253,7 @@ rm -rf .agents .claude/skills skills-lock.json
 | `nxd-fix-policy-failures` | Diagnose policy violations and update the data product to comply |
 | `nxd-debug-data-product` | Diagnose failed data products from describe/logs/init logs/verify output |
 | `nxd-query-data-product` | Query a deployed data product — discovery via the MCP gateway; reads via SQL / file fetch / vector similarity / MCP-RPC (REST only for credential leasing) |
-| `nxd-analyze-mesh` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
+| `nxd-analyze-mesh` | Inspect an infra profile's data-bearing services read-only (S3, Snowflake and ADLS have inspection drivers; others report as unsupported) and report candidate data product inputs/outputs grouped by domain |
 | `nxd-toggle-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
 | `nxd-build-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
 | `nxd-run-evals` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |

@@ -10,7 +10,7 @@ allowed-tools:
   - Grep
 metadata:
   author: nextdata
-  version: 0.35.2
+  version: 0.35.3
 ---
 
 # nxd-render-static-artifact
@@ -121,7 +121,7 @@ raw-payload screens.
    as their own declaration, then preserve each port and read its own
    `model_names` / `models`. Never replace either surface with a union. Render
    each port's service name and `promises`. A port whose `promises` is `null`
-   still renders the label with `null · the manifest didn’t say`, and one whose
+   still renders the label with `null · not declared`, and one whose
    `models` is `[]` renders `[] · none declared` — never omit the row.
 6. **Evidence** — only published artifact evidence. Show `compiler_id` only as
    evidence when non-zero; an all-zero ID is not meaningful provenance.
@@ -133,7 +133,7 @@ raw-payload screens.
 
 Every value you render that is present-but-empty carries a gloss — no
 exceptions, and check each one as you write it. The fixed glosses are
-`null · the manifest didn’t say`, `[] · none declared`, and `"" · empty`.
+`null · not declared`, `[] · none declared`, and `"" · empty`.
 This applies wherever the value appears: a model or field `description`, a
 port's `promises` or `models`, and any optional identity field. These states
 co-occur in one release — `identity.description` is `null` while a model
@@ -168,7 +168,8 @@ Build a sibling temporary file, validate it, then atomically rename it to
 `null`, `""` and `[]` the bundle declares — a port's `promises`, a field's or
 model's `description`, an empty `models` list — and confirm each appears in the
 file with its gloss before the rename. A gloss the bundle needs and the file
-lacks means the render dropped a declared value: fix it and re-validate rather
+lacks means either the render dropped a declared value or the gloss text does
+not match exactly — check the spelling first, then fix and re-validate rather
 than landing the file. This is the step that most often gets skipped, and
 skipping it is how an incomplete page reaches the user looking finished.
 

@@ -1,9 +1,9 @@
-# Data Product Type Taxonomy & Evidence Discipline
+# Data product type taxonomy and evidence discipline
 
 Use this reference to classify a candidate into a data product role and to keep
 inferences grounded in evidence while building it.
 
-## Data Product Types
+## Data product types
 
 Classify each candidate into one of five roles:
 
