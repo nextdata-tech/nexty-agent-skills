@@ -40,10 +40,11 @@ deliberately absent here — they live in the landed mapper spec, versioned by
 
 Imported as `nxd.experimental.field_mapper`, from the installed `nxd` package.
 The modules below are not carried in the skill's zip — the runtime provides
-them. The skills repo holds the harness's source of truth at
-`src/nxd-generate-data-product/mapper/field_mapper/`, and the package copy is
-generated from it; that path is a repo location, not one an installed reader
-has.
+them. The canonical copy lives in the nxd monorepo, which is where the harness
+is tested, version-stamped and packaged; the skills repo keeps a tree at
+`src/nxd-generate-data-product/mapper/field_mapper/` because the consent gate's
+tests need a real harness to run against and that repo's CI cannot reach the
+monorepo. Both paths are repo locations, not ones an installed reader has.
 
 ```
 field_mapper/

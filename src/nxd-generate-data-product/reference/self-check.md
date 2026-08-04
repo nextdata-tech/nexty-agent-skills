@@ -55,10 +55,13 @@ those two phases rather than an accident of how they were added.
   **What it cannot see is in "What this script does NOT cover" — read that
   before you treat a green Phase E as proof the transform is offline.**
 - **Phase G — consent gate.** Static, and inert on the closures that do not
-  vendor the field-mapper harness. When one does, it fails the closure unless
-  `contracts/` carries a grant binding each mapper spec kept there **by hash**,
-  so a rubric edited after consent was given stops matching and the user is
-  asked again. It runs here, before Phase B, for the same reason Phase E does
+  import the field-mapper harness as `nxd.experimental.field_mapper`. When one
+  does, it fails the closure unless `contracts/` carries a grant binding each
+  mapper spec kept there **by hash**, so a rubric edited after consent was given
+  stops matching and the user is asked again. A closure that instead *vendors* a
+  copy of the harness is denied outright as `grant.vendored_harness` — no grant
+  rescues that, which is the point of denying it by name rather than routing it
+  through the grant oracle. It runs here, before Phase B, for the same reason Phase E does
   and one of its own: Phase B *executes* the transform, and a mapper transform
   with a resolvable key spends real money there, so a consent verdict delivered
   afterwards would describe consent already spent. **What it cannot see is in
@@ -324,10 +327,14 @@ more.
 **What Phase G cannot see.** Phase G is the *consent* gate, and it is a
 different question from Phase E's. Phase E asks whether the transform reaches a
 model at all; Phase G applies only to the one sanctioned way it may — a closure
-that **vendors the field-mapper harness** at its root as `field_mapper/` — and
-asks whether a grant under `contracts/` binds each mapper spec found there. A
-closure with no `field_mapper` import never triggers it, and `phase G ok` says
-so in as many words. `field_mapper` is deliberately **not** in Phase E's
+that **imports the field-mapper harness** from the installed package as
+`nxd.experimental.field_mapper` — and asks whether a grant under `contracts/`
+binds each mapper spec found there. A closure that imports nothing under that
+path never triggers it, and `phase G ok` says so in as many words. The retired
+spelling — a harness copied into the closure root and imported as
+`import field_mapper` — is not a route into this gate either; it is denied by
+name as `grant.vendored_harness`, described below.
+`nxd.experimental.field_mapper` is deliberately **not** in Phase E's
 `MODEL_ROOTS`: it would fail every legitimate mapper closure, and the two gates
 answer different questions. Green Phase G means a binding consent artifact
 exists. Specifically not:
@@ -359,9 +366,8 @@ exists. Specifically not:
   the closure root.** The scan walks `transform/**/*.py` plus the closure root's
   own `*.py`, so moving the import into a helper module — under `transform/` or
   beside `models.py` — is not an exemption. The root glob is non-recursive (a
-  full walk would descend into the vendored `field_mapper/` package, whose
-  modules import their own siblings, and self-trigger on every closure that
-  vendored it correctly), so an import inside a root *subpackage* —
+  full-tree walk buys little here and costs a walk of every `data/` and
+  `contracts/` subtree on every run), so an import inside a root *subpackage* —
   `helpers/util.py`, with the transform doing `import helpers.util` — does not
   fire the gate. Unlike the routes below, that is an ordinary refactor rather
   than a closure that lied, which makes it the one hole here a careful author

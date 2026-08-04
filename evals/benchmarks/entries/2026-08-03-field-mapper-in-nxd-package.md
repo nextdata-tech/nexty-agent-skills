@@ -37,7 +37,7 @@ carries do not fire the gate, and neither does a sibling like
 block, now staging the harness where `nxd.experimental.field_mapper` resolves so
 the subprocess oracle is the real package rather than a stub.
 `evals/tests/test_desktop_custom_contract_checker.py` carries the three tests
-that drive the **real** `scripts/self_check.py` end to end — deny-without-grant,
+that drive the **real** `src/nxd-run-job-loop/scripts/self_check.py` end to end — deny-without-grant,
 green-with-matching-grant, and the closure-root module route. The
 green-with-matching-grant case is the one that pins the Phase B shadowing fix
 described below; the deny cases pass with or without it, which is why a gate
@@ -80,8 +80,32 @@ invitation to vendor a second one. `mapper/CONTRACT.md` and `mapper/samples/`
 still ship — the contract is normative and the fixtures are what
 `reference/field-mapper.md` points at.
 
-The harness has two homes now: this repo is its source of truth, and the package
-copy is generated from it. Every `.py` file is byte-identical between them, and
-the fixture root resolves in both layouts from one shared implementation, so
-neither copy can quietly drift. The residual is that nothing enforces that
-automatically — a future edit to one tree still has to be mirrored by hand.
+Two changes ship here that are not the import move and are worth naming
+separately, because neither is visible in the gate's diff.
+
+`resolver.py` now exempts `EffectiveSource.HUMAN_OVERRIDE` from the model's
+`min_evidence` floor, with CONTRACT §7.2 amended to match. This is a behaviour
+change, not a refactor: an override carrying no evidence atoms used to raise
+`BijectionError` and block the build, and now lands. A human who states a value
+is the authority for it and owes no citation to the model that guessed wrong.
+The carrying test is nxd-side — acceptance fixture 06 covers it, and the first
+attempt at this fix narrowed the enclosing branch instead of nesting inside it,
+which dropped overrides into a structural-error path and was caught by that
+fixture rather than by review.
+
+The verifier scan now denies **both** spellings. The legacy-import denial walks
+`transform/**/*.py` plus a non-recursive closure root, and `contracts/` is in
+neither, so a verifier carrying the retired `import field_mapper` matched
+nothing anywhere once `MAPPER_ROOT` became the dotted path — coverage that the
+pre-move constant had provided for free. A verifier that maps is the worst case
+the gate handles: it re-decides pass/fail against a live model on every run, and
+Phase E cannot see it because the harness reaches `anthropic` through a
+function-local import.
+
+The harness has two homes. The canonical copy is the one in the nxd monorepo,
+where it is tested, version-stamped and packaged; this repo keeps a tree because
+the consent gate's tests need a real harness to run against and this repo's CI
+cannot reach the monorepo. Every `.py` file is byte-identical between them, and
+the fixture root resolves in both layouts from one shared implementation. The
+residual is that nothing enforces that automatically — a future edit to one tree
+still has to be mirrored by hand.
