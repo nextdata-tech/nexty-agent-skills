@@ -44,22 +44,23 @@ three record sets it returns the same resolution every time, which is what lets
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
+from typing import Iterable
+from typing import Mapping
+from typing import Sequence
 
 from .errors import FieldMapperError
 from .identity import value_hash
-from .records import (
-    EffectiveSource,
-    MapperEvidence,
-    MapperProposal,
-    MapperReview,
-    StaleReason,
-    TypedValue,
-    ValueStatus,
-    ValueType,
-    Verdict,
-    VerifyStatus,
-)
+from .records import EffectiveSource
+from .records import MapperEvidence
+from .records import MapperProposal
+from .records import MapperReview
+from .records import StaleReason
+from .records import TypedValue
+from .records import ValueStatus
+from .records import ValueType
+from .records import Verdict
+from .records import VerifyStatus
 
 __all__ = [
     "EffectiveValue",
@@ -209,13 +210,10 @@ class Resolution:
         exact defect design §4 forbids.
         """
         by_key: dict[str, dict[str, Any]] = {
-            key: {"target_row_key": key, **{f: None for f in self.fields}}
-            for key in self.row_keys
+            key: {"target_row_key": key, **{f: None for f in self.fields}} for key in self.row_keys
         }
         for item in self.effective:
-            by_key[item.target_row_key][item.field] = (
-                item.value if item.is_governed else None
-            )
+            by_key[item.target_row_key][item.field] = item.value if item.is_governed else None
         return tuple(by_key[key] for key in self.row_keys)
 
     @property
@@ -286,7 +284,9 @@ class Resolution:
         2. **Key uniqueness** — one effective record per `(row_key, field)`;
            unique `evidence_ordinal` within a cell.
         3. **Evidence completeness** — every `ok` cell carries at least the
-           spec's minimum atoms; every evidence row resolves to a real cell.
+           spec's minimum atoms, EXCEPT a human override, which carries no
+           evidence obligation (the floor is on what the model must cite);
+           every evidence row resolves to a real cell.
         4. **Status/value coherence** — non-`ok` implies all slots null;
            `error_code` non-null iff status is `error`.
 
@@ -307,21 +307,14 @@ class Resolution:
                 )
             seen.add(cell)
             if item.target_row_key not in row_key_set:
-                raise BijectionError(
-                    f"orphan effective record {cell!r}: no such target_row_key"
-                )
+                raise BijectionError(f"orphan effective record {cell!r}: no such target_row_key")
             if item.field not in field_set:
-                raise BijectionError(
-                    f"orphan effective record {cell!r}: field not declared by the spec"
-                )
+                raise BijectionError(f"orphan effective record {cell!r}: field not declared by the spec")
 
         expected = {(key, f) for key in self.row_keys for f in self.fields}
         missing = expected - seen
         if missing:
-            raise BijectionError(
-                f"{len(missing)} wide cell(s) have no effective record, e.g. "
-                f"{sorted(missing)[:3]!r}"
-            )
+            raise BijectionError(f"{len(missing)} wide cell(s) have no effective record, e.g. {sorted(missing)[:3]!r}")
 
         # Evidence must resolve to a real cell, with unique ordinals within it.
         counts: dict[tuple[str, str], int] = {}
@@ -329,27 +322,35 @@ class Resolution:
         for row in self.evidence:
             cell = (row.target_row_key, row.field)
             if cell not in seen:
-                raise BijectionError(
-                    f"orphan evidence row for {cell!r}: no matching effective record"
-                )
+                raise BijectionError(f"orphan evidence row for {cell!r}: no matching effective record")
             counts[cell] = counts.get(cell, 0) + 1
             bucket = ordinals.setdefault(cell, set())
             if row.evidence_ordinal in bucket:
-                raise BijectionError(
-                    f"duplicate evidence_ordinal {row.evidence_ordinal} for {cell!r}"
-                )
+                raise BijectionError(f"duplicate evidence_ordinal {row.evidence_ordinal} for {cell!r}")
             bucket.add(row.evidence_ordinal)
 
         for item in self.effective:
             cell = (item.target_row_key, item.field)
             if item.value_status is ValueStatus.OK:
-                have = counts.get(cell, 0)
-                want = self.min_evidence_for(item.field)
-                if have < want:
-                    raise BijectionError(
-                        f"cell {cell!r} is ok with {have} evidence atom(s); the "
-                        f"spec requires at least {want}"
-                    )
+                # A human override carries no evidence obligation: it is `ok`
+                # because a person stated it, not because a model cleared the
+                # harness's checks, and `min_evidence` is a floor on what the
+                # MODEL must cite. Applying it to an override blocks the whole
+                # build on a cell the model never proposed — the case `resolve`
+                # explicitly supports via a null-bound review — and contradicts
+                # the unconditional precedence CONTRACT §6 grants an override.
+                #
+                # Exempted INSIDE this branch, never by narrowing the branch
+                # itself: an override is still `ok` with a non-null value, so
+                # falling through to the `elif` below would raise a structural
+                # error instead. The two checks answer different questions.
+                if item.effective_source is not EffectiveSource.HUMAN_OVERRIDE:
+                    have = counts.get(cell, 0)
+                    want = self.min_evidence_for(item.field)
+                    if have < want:
+                        raise BijectionError(
+                            f"cell {cell!r} is ok with {have} evidence atom(s); the spec requires at least {want}"
+                        )
             elif item.value is not None:
                 raise BijectionError(
                     f"cell {cell!r} has status {item.value_status.value} but a "
@@ -393,8 +394,7 @@ class Resolution:
         count = len(self.row_keys)
         if count < min_rows or count > max_rows:
             raise BijectionError(
-                f"emitted {count} target row(s), outside the spec's declared "
-                f"cardinality [{min_rows}, {max_rows}]"
+                f"emitted {count} target row(s), outside the spec's declared cardinality [{min_rows}, {max_rows}]"
             )
 
 
@@ -403,9 +403,7 @@ class Resolution:
 # --------------------------------------------------------------------------
 
 
-def _binding_failures(
-    review: MapperReview, proposal: MapperProposal | None
-) -> list[StaleReason]:
+def _binding_failures(review: MapperReview, proposal: MapperProposal | None) -> list[StaleReason]:
     """Which binding components moved. Empty list means the review still applies."""
     reasons: list[StaleReason] = []
 
@@ -413,9 +411,7 @@ def _binding_failures(
         # No proposal this run. Only a null-bound override survives — the
         # "human fills a gap the model never filled" case (§2.2). Anything else
         # has lost the value it was bound to.
-        if not (
-            review.verdict is Verdict.OVERRIDDEN and review.bound_value_hash is None
-        ):
+        if not (review.verdict is Verdict.OVERRIDDEN and review.bound_value_hash is None):
             reasons.append(StaleReason.VALUE_CHANGED)
         return reasons
 
@@ -526,11 +522,15 @@ def resolve(
     for row_key in ordered_keys:
         for field_name in ordered_fields:
             cell = (row_key, field_name)
-            proposal = by_cell.get(cell)
+            # Named apart from the `proposal` bound while building `by_cell`:
+            # that one is always present, this one is a lookup that may miss.
+            # A cell with no proposal this run is the null-bound-override case
+            # `_binding_failures` handles explicitly.
+            cell_proposal: MapperProposal | None = by_cell.get(cell)
 
             valid: list[MapperReview] = []
             for review in reviews_by_cell.get(cell, []):
-                reasons = _binding_failures(review, proposal)
+                reasons = _binding_failures(review, cell_proposal)
                 if reasons:
                     stale.append(
                         StaleReview(
@@ -553,14 +553,13 @@ def resolve(
             # "what was cited cannot be checked".
             cell_atoms = evidence_by_cell.get(cell, ())
             unfalsifiable = bool(cell_atoms) and all(
-                atom.verify_status is VerifyStatus.EVIDENCE_UNVERIFIED
-                for atom in cell_atoms
+                atom.verify_status is VerifyStatus.EVIDENCE_UNVERIFIED for atom in cell_atoms
             )
             effective.append(
                 _resolve_cell(
                     row_key=row_key,
                     field_name=field_name,
-                    proposal=proposal,
+                    proposal=cell_proposal,
                     review=winner,
                     evidence_count=evidence_counts.get(cell, 0),
                     evidence_unfalsifiable=unfalsifiable,
@@ -604,7 +603,7 @@ def _resolve_cell(
             effective_source=EffectiveSource.HUMAN_OVERRIDE,
             needs_review=False,
             evidence_count=evidence_count,
-        evidence_unfalsifiable=evidence_unfalsifiable,
+            evidence_unfalsifiable=evidence_unfalsifiable,
             observation_id=observation_id,
             value_hash=review.override.hash,
             reviewer=review.reviewer,
@@ -616,9 +615,7 @@ def _resolve_cell(
 
     # Step 5: a rejection nulls the cell regardless of what the model proposed.
     if review is not None and review.verdict is Verdict.REJECTED:
-        null_typed = TypedValue(
-            proposal.typed.value_type if proposal else ValueType.STRING, None
-        )
+        null_typed = TypedValue(proposal.typed.value_type if proposal else ValueType.STRING, None)
         return EffectiveValue(
             target_row_key=row_key,
             field=field_name,
@@ -627,7 +624,7 @@ def _resolve_cell(
             effective_source=EffectiveSource.HUMAN_REJECTED,
             needs_review=False,
             evidence_count=evidence_count,
-        evidence_unfalsifiable=evidence_unfalsifiable,
+            evidence_unfalsifiable=evidence_unfalsifiable,
             observation_id=observation_id,
             value_hash=null_typed.hash,
             reviewer=review.reviewer,
@@ -650,7 +647,7 @@ def _resolve_cell(
             effective_source=EffectiveSource.MODEL_PROPOSED,
             needs_review=True,
             evidence_count=evidence_count,
-        evidence_unfalsifiable=evidence_unfalsifiable,
+            evidence_unfalsifiable=evidence_unfalsifiable,
             observation_id="",
             value_hash=null_typed.hash,
             error_code=None,

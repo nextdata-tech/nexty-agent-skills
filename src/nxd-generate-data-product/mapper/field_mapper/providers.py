@@ -30,15 +30,17 @@ import json
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field as dc_field
-from typing import Any, Mapping, Protocol, Sequence
+from dataclasses import dataclass
+from typing import Any
+from typing import Mapping
+from typing import Protocol
+from typing import Sequence
+from typing import cast
 
-from .errors import (
-    DependencyMissingError,
-    ModelNotFoundError,
-    SpecError,
-    TransportExhaustedError,
-)
+from .errors import DependencyMissingError
+from .errors import ModelNotFoundError
+from .errors import SpecError
+from .errors import TransportExhaustedError
 
 __all__ = [
     "PROVIDER_KINDS",
@@ -66,6 +68,25 @@ _CLI_DEFAULT_MODEL = "sonnet"
 #: only the extraction was wrong. Search for the block, do not require the
 #: response to be nothing but the block.
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
+
+def _strip_content_block(block: Any) -> Any:
+    """Remove harness-only keys from one provider content block."""
+    if not isinstance(block, Mapping):
+        return block
+    block_map = cast(Mapping[str, Any], block)
+    return {k: v for k, v in block_map.items() if not k.startswith("_")}
+
+
+def _strip_message(message: Any) -> Any:
+    """Remove harness-only keys from the content blocks in one message."""
+    if not isinstance(message, Mapping) or "content" not in message:
+        return cast(Any, message)
+    message_map = cast(Mapping[str, Any], message)
+    return {
+        **message_map,
+        "content": [_strip_content_block(block) for block in cast(Sequence[Any], message_map.get("content", ()))],
+    }
 
 
 @dataclass
@@ -114,23 +135,10 @@ def _strip_harness_keys(request: Mapping[str, Any]) -> dict[str, Any]:
     rather than at the call site means a new provider cannot forget to do it.
     """
     payload = dict(request)
-    messages = payload.get("messages")
+    messages: Sequence[Any] = cast(Sequence[Any], payload.get("messages") or ())
     if not messages:
         return payload
-    payload["messages"] = [
-        {
-            **message,
-            "content": [
-                {k: v for k, v in block.items() if not k.startswith("_")}
-                if isinstance(block, Mapping)
-                else block
-                for block in message.get("content", ())
-            ],
-        }
-        if isinstance(message, Mapping) and "content" in message
-        else message
-        for message in messages
-    ]
+    payload["messages"] = [_strip_message(message) for message in messages]
     return payload
 
 
@@ -270,13 +278,9 @@ class ClaudeCliProvider:
                 elif btype in {"image", "document"}:
                     path = block.get("_local_path")
                     if path:
-                        parts.append(
-                            f"Read the {btype} at {path} and use its contents "
-                            "as the source material above."
-                        )
+                        parts.append(f"Read the {btype} at {path} and use its contents as the source material above.")
                         notes.append(
-                            f"{btype} reached the model as a filesystem Read of "
-                            f"{path}, NOT as a base64 content block"
+                            f"{btype} reached the model as a filesystem Read of {path}, NOT as a base64 content block"
                         )
                     else:
                         raise SpecError(
@@ -287,14 +291,11 @@ class ClaudeCliProvider:
                             "content-block path."
                         )
 
-        schema = (
-            request.get("output_config", {}).get("format", {}).get("schema")
-        )
+        schema = request.get("output_config", {}).get("format", {}).get("schema")
         if schema is not None:
             parts.append(
                 "Return ONLY a JSON object conforming to this schema. No prose, "
-                "no explanation, no markdown fence:\n"
-                + json.dumps(schema, indent=2)
+                "no explanation, no markdown fence:\n" + json.dumps(schema, indent=2)
             )
             notes.append(
                 "the wire schema was requested in prose; this provider has no "
@@ -302,8 +303,7 @@ class ClaudeCliProvider:
             )
         if request.get("output_config", {}).get("effort"):
             notes.append(
-                f"declared effort {request['output_config']['effort']!r} was "
-                "ignored; the CLI exposes no effort control"
+                f"declared effort {request['output_config']['effort']!r} was ignored; the CLI exposes no effort control"
             )
         return "\n\n".join(parts), tuple(notes)
 
@@ -333,47 +333,36 @@ class ClaudeCliProvider:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise TransportExhaustedError(
-                f"the claude CLI did not answer within {self._timeout:.0f}s"
-            ) from exc
+            raise TransportExhaustedError(f"the claude CLI did not answer within {self._timeout:.0f}s") from exc
 
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
             first = detail.splitlines()[0] if detail else "no output"
             if "model" in first.lower() and "not" in first.lower():
-                raise ModelNotFoundError(
-                    f"the claude CLI rejected model {self._model!r}: {first}"
-                )
-            raise TransportExhaustedError(
-                f"the claude CLI exited {completed.returncode}: {first}"
-            )
+                raise ModelNotFoundError(f"the claude CLI rejected model {self._model!r}: {first}")
+            raise TransportExhaustedError(f"the claude CLI exited {completed.returncode}: {first}")
 
         try:
             envelope = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
             raise TransportExhaustedError(
-                "the claude CLI returned output that is not JSON, so the "
-                "response envelope could not be read"
+                "the claude CLI returned output that is not JSON, so the response envelope could not be read"
             ) from exc
 
         return self._to_response(envelope, notes)
 
-    def _to_response(
-        self, envelope: Mapping[str, Any], notes: Sequence[str]
-    ) -> ProviderResponse:
+    def _to_response(self, envelope: Mapping[str, Any], notes: Sequence[str]) -> ProviderResponse:
         """Shape the CLI envelope like an SDK `Message`."""
         all_notes = list(notes)
 
         if envelope.get("is_error") or envelope.get("subtype") != "success":
             detail = str(envelope.get("result") or envelope.get("subtype") or "")
-            raise TransportExhaustedError(
-                f"the claude CLI reported failure: {detail[:200]}"
-            )
+            raise TransportExhaustedError(f"the claude CLI reported failure: {detail[:200]}")
 
         text = str(envelope.get("result", ""))
         fenced = _FENCE.search(text)
         if fenced:
-            trailing = text[fenced.end():].strip()
+            trailing = text[fenced.end() :].strip()
             text = fenced.group(1)
             all_notes.append(
                 "the response was wrapped in a markdown fence and was unwrapped "
@@ -394,11 +383,10 @@ class ClaudeCliProvider:
         turns = int(envelope.get("num_turns") or 1)
         if turns > 1:
             all_notes.append(
-                f"the CLI took {turns} turns (tool use occurred); this was an "
-                "agent loop, not a single model call"
+                f"the CLI took {turns} turns (tool use occurred); this was an agent loop, not a single model call"
             )
 
-        usage_raw = envelope.get("usage") or {}
+        usage_raw: Mapping[str, Any] = cast(Mapping[str, Any], envelope.get("usage") or {})
         usage = _Usage(
             input_tokens=int(usage_raw.get("input_tokens") or 0),
             output_tokens=int(usage_raw.get("output_tokens") or 0),
@@ -413,8 +401,8 @@ class ClaudeCliProvider:
         # The CLI reports its own stop reason; map the one that matters.
         stop_reason = envelope.get("stop_reason") or "end_turn"
 
-        model = None
-        model_usage = envelope.get("modelUsage") or {}
+        model: str | None = None
+        model_usage: Mapping[str, Any] = cast(Mapping[str, Any], envelope.get("modelUsage") or {})
         if model_usage:
             model = next(iter(model_usage))
 
@@ -447,13 +435,9 @@ def build_provider(
 ) -> Provider:
     """Construct a provider, or reject an unknown kind."""
     if kind not in PROVIDER_KINDS:
-        raise SpecError(
-            f"unknown provider {kind!r}; expected one of {list(PROVIDER_KINDS)}"
-        )
+        raise SpecError(f"unknown provider {kind!r}; expected one of {list(PROVIDER_KINDS)}")
     if kind == "anthropic":
         if client is None:
-            raise SpecError(
-                "provider 'anthropic' needs an SDK client; none was supplied"
-            )
+            raise SpecError("provider 'anthropic' needs an SDK client; none was supplied")
         return AnthropicProvider(client, should_stream=should_stream)
     return ClaudeCliProvider(model=model or _CLI_DEFAULT_MODEL, cwd=cwd)

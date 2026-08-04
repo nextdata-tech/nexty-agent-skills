@@ -6,10 +6,10 @@ Thirteen fixtures. Together they are the acceptance suite for the Layer-1 contra
 reality diverges.
 
 ```
-python -m field_mapper verify samples              # the whole suite
-python -m field_mapper run samples/01-row-scores --dry-run
-python -m field_mapper preflight samples/06-validation-failure
-python -m field_mapper canary samples/01-row-scores --dry-run --canary 1
+python -m nxd.experimental.field_mapper verify samples              # the whole suite
+python -m nxd.experimental.field_mapper run samples/01-row-scores --dry-run
+python -m nxd.experimental.field_mapper preflight samples/06-validation-failure
+python -m nxd.experimental.field_mapper canary samples/01-row-scores --dry-run --canary 1
 ```
 
 Exit codes: `0` the run may land, `2` the build is blocked, `3` a usage, spec,
@@ -305,7 +305,7 @@ Being precise about the boundary, because a green suite invites over-reading:
   the desktop venv, so a live run fails at import with an actionable
   `DependencyMissing` and exits 2. That is correct behavior — a missing
   dependency means zero cells can be attempted — and it is verifiable today
-  (`python -m field_mapper run samples/01-row-scores`, no `--dry-run`). Backoff,
+  (`python -m nxd.experimental.field_mapper run samples/01-row-scores`, no `--dry-run`). Backoff,
   streaming, `stop_reason == "refusal"`, and rate-limit handling are unexercised
   until the SDK lands.
 - **It does not test publication atomicity.** CONTRACT.md §7.7 requires

@@ -29,12 +29,19 @@ Pure stdlib. No network.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field as dc_field, replace as dc_replace
+from dataclasses import dataclass
+from dataclasses import field as dc_field
+from dataclasses import replace as dc_replace
 from pathlib import Path
-from typing import Any, Final, Mapping, Sequence
+from typing import Any
+from typing import Final
+from typing import Mapping
+from typing import cast
 
 from .errors import SpecError
-from .identity import canonical_json, digest, full_digest
+from .identity import canonical_json
+from .identity import digest
+from .identity import full_digest
 from .media import SUPPORTED_MEDIA_TYPES
 
 __all__ = [
@@ -55,22 +62,16 @@ __all__ = [
 #: letter of "never a string sentinel in a numeric column" (there is no numeric
 #: column) and defeats its purpose — every consumer casts, and a bad cast becomes
 #: a query-time error instead of a build-time one.
-VALUE_TYPES: Final[frozenset[str]] = frozenset(
-    {"string", "int", "float", "bool", "timestamp"}
-)
+VALUE_TYPES: Final[frozenset[str]] = frozenset({"string", "int", "float", "bool", "timestamp"})
 
 #: CONTRACT.md §5. `ordinal_suffix` is supported but carries an explicit warning:
 #: review binding is fragile under it, because reordering the source changes the
 #: key. Open question 8 asks whether it should be a documented trap instead.
-DUPLICATE_POLICIES: Final[frozenset[str]] = frozenset(
-    {"reject", "ordinal_suffix", "merge_by_rule"}
-)
+DUPLICATE_POLICIES: Final[frozenset[str]] = frozenset({"reject", "ordinal_suffix", "merge_by_rule"})
 
 #: How inputs reach the model. Layer 2 chooses; Layer 1 fixes the closed set so
 #: the choice is hashed into `mapper_spec_id` and visible in an experiment diff.
-INPUT_ADAPTER_KINDS: Final[frozenset[str]] = frozenset(
-    {"landed_rows", "landed_text", "document_blob"}
-)
+INPUT_ADAPTER_KINDS: Final[frozenset[str]] = frozenset({"landed_rows", "landed_text", "document_blob"})
 
 #: How evidence is obtained. Closed set for the same reason as the adapter
 #: kinds: the choice changes what an `ok` cell's evidence MEANS, so it is hashed
@@ -80,9 +81,7 @@ EVIDENCE_MODES: Final[frozenset[str]] = frozenset({"structured", "citations"})
 #: Media types the API can extract citations from. Images are absent and that is
 #: the whole point: there is no text in a PNG for the API to cite, so the media
 #: path this harness cannot falsify stays unfalsifiable after citations land.
-CITABLE_MEDIA_TYPES: Final[frozenset[str]] = frozenset(
-    {"application/pdf", "text/plain"}
-)
+CITABLE_MEDIA_TYPES: Final[frozenset[str]] = frozenset({"application/pdf", "text/plain"})
 
 
 @dataclass(frozen=True)
@@ -126,15 +125,11 @@ class TargetField:
             )
         if self.minimum is not None and self.maximum is not None:
             if self.minimum > self.maximum:
-                raise SpecError(
-                    f"target field {self.name!r}: minimum {self.minimum} exceeds "
-                    f"maximum {self.maximum}"
-                )
+                raise SpecError(f"target field {self.name!r}: minimum {self.minimum} exceeds maximum {self.maximum}")
         if self.min_length is not None and self.max_length is not None:
             if self.min_length > self.max_length:
                 raise SpecError(
-                    f"target field {self.name!r}: min_length {self.min_length} "
-                    f"exceeds max_length {self.max_length}"
+                    f"target field {self.name!r}: min_length {self.min_length} exceeds max_length {self.max_length}"
                 )
         if (self.minimum is not None or self.maximum is not None) and self.value_type not in {
             "int",
@@ -144,9 +139,7 @@ class TargetField:
                 f"target field {self.name!r}: numeric range declared on a "
                 f"{self.value_type} field. The range would never be checked."
             )
-        if (self.min_length is not None or self.max_length is not None) and (
-            self.value_type != "string"
-        ):
+        if (self.min_length is not None or self.max_length is not None) and (self.value_type != "string"):
             raise SpecError(
                 f"target field {self.name!r}: length constraint declared on a "
                 f"{self.value_type} field. The constraint would never be checked."
@@ -154,9 +147,7 @@ class TargetField:
         if self.min_evidence < 0:
             raise SpecError(f"target field {self.name!r}: min_evidence cannot be negative")
         if self.enum is not None and len(self.enum) == 0:
-            raise SpecError(
-                f"target field {self.name!r}: empty enum makes every value invalid"
-            )
+            raise SpecError(f"target field {self.name!r}: empty enum makes every value invalid")
 
     @property
     def harness_enforced_constraints(self) -> tuple[str, ...]:
@@ -239,13 +230,10 @@ class GrainDeclaration:
                 "two rows)."
             )
         if len(set(self.identity_fields)) != len(self.identity_fields):
-            raise SpecError(
-                f"identity_fields contains duplicates: {list(self.identity_fields)!r}"
-            )
+            raise SpecError(f"identity_fields contains duplicates: {list(self.identity_fields)!r}")
         if self.duplicate_policy not in DUPLICATE_POLICIES:
             raise SpecError(
-                f"unknown duplicate_policy {self.duplicate_policy!r}; "
-                f"expected one of {sorted(DUPLICATE_POLICIES)}"
+                f"unknown duplicate_policy {self.duplicate_policy!r}; expected one of {sorted(DUPLICATE_POLICIES)}"
             )
         if not self.canonical_sort:
             raise SpecError(
@@ -297,9 +285,7 @@ class Cardinality:
         if self.min_rows < 0:
             raise SpecError("cardinality min_rows cannot be negative")
         if self.max_rows is not None and self.max_rows < self.min_rows:
-            raise SpecError(
-                f"cardinality max_rows {self.max_rows} is below min_rows {self.min_rows}"
-            )
+            raise SpecError(f"cardinality max_rows {self.max_rows} is below min_rows {self.min_rows}")
 
     def to_canonical(self) -> dict[str, Any]:
         return {
@@ -366,9 +352,7 @@ class Thresholds:
             if not 0.0 <= float(value) <= 1.0:
                 raise SpecError(f"{name} must be a share in [0.0, 1.0], got {value!r}")
         if self.max_absent_share is not None and not 0.0 <= float(self.max_absent_share) <= 1.0:
-            raise SpecError(
-                f"max_absent_share must be a share in [0.0, 1.0], got {self.max_absent_share!r}"
-            )
+            raise SpecError(f"max_absent_share must be a share in [0.0, 1.0], got {self.max_absent_share!r}")
         if self.max_validation_retries < 0:
             raise SpecError("max_validation_retries cannot be negative")
 
@@ -423,17 +407,11 @@ class CrossFieldCheck:
 
     def __post_init__(self) -> None:
         if self.kind not in CROSS_FIELD_KINDS:
-            raise SpecError(
-                f"cross_field_check kind {self.kind!r} is not one of "
-                f"{CROSS_FIELD_KINDS}"
-            )
+            raise SpecError(f"cross_field_check kind {self.kind!r} is not one of {CROSS_FIELD_KINDS}")
         if not self.target:
             raise SpecError("cross_field_check requires a target field")
         if len(self.operands) < 2:
-            raise SpecError(
-                f"cross_field_check on {self.target!r} needs at least 2 "
-                f"operands, got {len(self.operands)}"
-            )
+            raise SpecError(f"cross_field_check on {self.target!r} needs at least 2 operands, got {len(self.operands)}")
         if self.target in self.operands:
             raise SpecError(
                 f"cross_field_check target {self.target!r} cannot also be an "
@@ -531,13 +509,11 @@ class MapperSpec:
         duplicates = sorted({n for n in names if names.count(n) > 1})
         if duplicates:
             raise SpecError(
-                f"duplicate target field name(s) {duplicates!r}; "
-                "(target_row_key, field) would not be unique"
+                f"duplicate target field name(s) {duplicates!r}; (target_row_key, field) would not be unique"
             )
         if self.input_adapter not in INPUT_ADAPTER_KINDS:
             raise SpecError(
-                f"unknown input_adapter {self.input_adapter!r}; "
-                f"expected one of {sorted(INPUT_ADAPTER_KINDS)}"
+                f"unknown input_adapter {self.input_adapter!r}; expected one of {sorted(INPUT_ADAPTER_KINDS)}"
             )
         # A cross-field check naming a field that does not exist, or one the
         # arithmetic cannot apply to, can never fire. It would sit in the spec
@@ -568,10 +544,7 @@ class MapperSpec:
         # exactly like the structured path failing to verify and would let a
         # spec claim an evidence guarantee it never had.
         if self.evidence_mode not in EVIDENCE_MODES:
-            raise SpecError(
-                f"unknown evidence_mode {self.evidence_mode!r}; "
-                f"expected one of {sorted(EVIDENCE_MODES)}"
-            )
+            raise SpecError(f"unknown evidence_mode {self.evidence_mode!r}; expected one of {sorted(EVIDENCE_MODES)}")
         if self.evidence_mode == "citations":
             if not self.accepts_media:
                 raise SpecError(
@@ -581,9 +554,7 @@ class MapperSpec:
                     "check already verifies every quote locally and can be "
                     "re-run offline."
                 )
-            unsupported = [
-                m for m in self.accepts_media if m not in CITABLE_MEDIA_TYPES
-            ]
+            unsupported = [m for m in self.accepts_media if m not in CITABLE_MEDIA_TYPES]
             if unsupported:
                 raise SpecError(
                     f"evidence_mode='citations' is not available for media "
@@ -600,10 +571,7 @@ class MapperSpec:
             referenced = (check.target, *check.operands)
             missing = [n for n in referenced if n not in declared]
             if missing:
-                raise SpecError(
-                    f"cross_field_check {check.describe()} references "
-                    f"undeclared field(s) {missing!r}"
-                )
+                raise SpecError(f"cross_field_check {check.describe()} references undeclared field(s) {missing!r}")
             non_numeric = [n for n in referenced if n not in numeric]
             if non_numeric:
                 raise SpecError(
@@ -709,8 +677,7 @@ class MapperSpec:
             if f.name == name:
                 return f
         raise SpecError(
-            f"field {name!r} is not declared by this mapper spec; "
-            f"declared fields are {list(self.field_names)!r}"
+            f"field {name!r} is not declared by this mapper spec; declared fields are {list(self.field_names)!r}"
         )
 
     # -- canonicalization and hashing --------------------------------------
@@ -763,9 +730,7 @@ class MapperSpec:
         # `pins` coverage check probes a maximally-populated spec so an omitted
         # key still cannot hide from it.
         if self.cross_field_checks:
-            canonical["cross_field_checks"] = [
-                c.to_canonical() for c in self.cross_field_checks
-            ]
+            canonical["cross_field_checks"] = [c.to_canonical() for c in self.cross_field_checks]
         if self.corroboration_model:
             canonical["corroboration_model"] = self.corroboration_model
         if self.evidence_mode != "structured":
@@ -827,8 +792,7 @@ class MapperSpec:
                 "ignored — a silently-dropped key is how a spec ends up not "
                 "declaring what its author believed it declared."
             )
-        for required_key in ("instruction", "target_fields", "grain", "cardinality",
-                             "thresholds", "input_adapter"):
+        for required_key in ("instruction", "target_fields", "grain", "cardinality", "thresholds", "input_adapter"):
             if required_key not in raw:
                 raise SpecError(f"mapper spec is missing required key {required_key!r}")
 
@@ -846,12 +810,12 @@ class MapperSpec:
             max_rows=card_raw.get("max_rows"),
             expected_per_input=card_raw.get("expected_per_input"),
         )
-        thr_raw = dict(raw["thresholds"])
+        thr_raw: dict[str, Any] = dict(cast(Mapping[str, Any], raw["thresholds"]))
         thresholds = Thresholds(
-            max_degrade_share=thr_raw.get("max_degrade_share"),  # type: ignore[arg-type]
-            max_error_rate=thr_raw.get("max_error_rate"),  # type: ignore[arg-type]
-            max_unverified_share=thr_raw.get("max_unverified_share"),  # type: ignore[arg-type]
-            max_absent_share=thr_raw.get("max_absent_share"),
+            max_degrade_share=cast(float, thr_raw.get("max_degrade_share")),
+            max_error_rate=cast(float, thr_raw.get("max_error_rate")),
+            max_unverified_share=cast(float, thr_raw.get("max_unverified_share")),
+            max_absent_share=cast(float | None, thr_raw.get("max_absent_share")),
             max_validation_retries=int(thr_raw.get("max_validation_retries", 2)),
         )
         fields: list[TargetField] = []
@@ -909,14 +873,14 @@ class MapperSpec:
         """
         p = Path(path)
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
+            raw: Any = json.loads(p.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise SpecError(f"mapper spec not found at {p}") from exc
         except json.JSONDecodeError as exc:
             raise SpecError(f"mapper spec at {p} is not valid JSON: {exc}") from exc
         if not isinstance(raw, dict):
             raise SpecError(f"mapper spec at {p} must be a JSON object")
-        spec = cls.from_dict(raw)
+        spec = cls.from_dict(cast(dict[str, Any], raw))
         object.__setattr__(spec, "source_path", str(p))
         return spec
 

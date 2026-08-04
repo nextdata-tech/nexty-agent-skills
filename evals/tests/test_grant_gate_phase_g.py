@@ -37,12 +37,15 @@ closure that drifted, never the one that lied.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 EVALS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = EVALS_DIR.parent
@@ -59,7 +62,7 @@ CLEAN_TRANSFORM = (
 
 MAPPER_TRANSFORM = (
     "import dlt\n"
-    "from field_mapper import map_inputs\n"
+    "from nxd.experimental.field_mapper import map_inputs\n"
     "from nxd import data_product\n"
     "def go():\n"
     "    return map_inputs([], spec=None, grant=None, run_dir='', call=None)\n"
@@ -96,7 +99,7 @@ def _run_phase_g(
     """Execute Phase G standalone against a synthetic closure on disk.
 
     Unlike the Phase E harness this one needs a real directory: Phase G walks
-    ``contracts/`` for JSON, and subprocesses ``python -m field_mapper`` with the
+    ``contracts/`` for JSON, and subprocesses ``python -m nxd.experimental.field_mapper`` with the
     closure as cwd, so the vendored package has to actually be there.
 
     ``expect_exit`` is mandatory for Phase E's reason. The banner text and the
@@ -168,8 +171,21 @@ def _codes(out: str) -> list[str]:
 
 
 def _vendor(closure: Path) -> None:
-    """Copy the REAL harness in. The subprocess oracle is the thing under test."""
-    shutil.copytree(REAL_MAPPER, closure / "field_mapper")
+    """Stage the REAL harness where `nxd.experimental.field_mapper` resolves.
+
+    The harness ships inside the installed ``nxd`` package, so the import the
+    gate triggers on is a dotted package path, not a closure-root directory.
+    Laying the tree down under the closure — which is the subprocess cwd — makes
+    ``python -m nxd.experimental.field_mapper`` resolve exactly as it will from
+    site-packages, without requiring the monorepo wheel to be installed in the
+    test environment. The subprocess oracle is the thing under test, so it has
+    to be the real package rather than a stub.
+    """
+    pkg = closure / "nxd" / "experimental"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (closure / "nxd" / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    shutil.copytree(REAL_MAPPER, pkg / "field_mapper")
     (closure / "contracts").mkdir(parents=True, exist_ok=True)
 
 
@@ -181,7 +197,7 @@ def _spec(closure: Path) -> None:
 
 def _real_spec_id(closure: Path) -> str:
     proc = subprocess.run(
-        [sys.executable, "-m", "field_mapper", "spec-id", "contracts/spec.json"],
+        [sys.executable, "-m", "nxd.experimental.field_mapper", "spec-id", "contracts/spec.json"],
         cwd=closure, capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stderr
@@ -286,7 +302,7 @@ def test_records_only_import_still_requires_grant(tmp_path):
     _spec(tmp_path)
     out = _run_phase_g(
         tmp_path, expect_exit=1,
-        transform_src=("from field_mapper.records import reviews_from_csv\n"
+        transform_src=("from nxd.experimental.field_mapper.records import reviews_from_csv\n"
                        "map_inputs = None\n"),
     )
     assert "grant.missing" in _codes(out), _codes(out)
@@ -398,7 +414,7 @@ def test_helper_module_import_triggers_the_gate(tmp_path):
     _spec(tmp_path)
     (tmp_path / "transform").mkdir(parents=True, exist_ok=True)
     (tmp_path / "transform" / "helpers.py").write_text(
-        "from field_mapper import map_inputs\n"
+        "from nxd.experimental.field_mapper import map_inputs\n"
         "def run():\n"
         "    return map_inputs([], spec=None, grant=None, run_dir='', call=None)\n",
         encoding="utf-8")
@@ -419,7 +435,7 @@ def test_helper_module_with_matching_grant_passes(tmp_path):
     _spec(tmp_path)
     (tmp_path / "transform").mkdir(parents=True, exist_ok=True)
     (tmp_path / "transform" / "helpers.py").write_text(
-        "from field_mapper import map_inputs\n"
+        "from nxd.experimental.field_mapper import map_inputs\n"
         "def run():\n"
         "    return map_inputs([], spec=None, grant=None, run_dir='', call=None)\n",
         encoding="utf-8")
@@ -444,7 +460,7 @@ def test_aliased_map_inputs_import_is_not_ungated(tmp_path):
     _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
     out = _run_phase_g(
         tmp_path, expect_exit=0,
-        transform_src=("from field_mapper import map_inputs as mi\n"
+        transform_src=("from nxd.experimental.field_mapper import map_inputs as mi\n"
                        "def go():\n"
                        "    return mi([], spec=None, grant=None, run_dir='', call=None)\n"))
     assert "grant.ungated_map" not in _codes(out), _codes(out)
@@ -465,7 +481,7 @@ def test_transport_direct_without_map_inputs_fails(tmp_path):
     _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
     out = _run_phase_g(
         tmp_path, expect_exit=1,
-        transform_src="from field_mapper.transport import Client\n",
+        transform_src="from nxd.experimental.field_mapper.transport import Client\n",
     )
     assert "grant.ungated_map" in _codes(out), _codes(out)
 
@@ -480,16 +496,38 @@ def test_verifier_importing_field_mapper_is_denied(tmp_path):
     """
     (tmp_path / "contracts").mkdir(parents=True, exist_ok=True)
     (tmp_path / "contracts" / "x.py").write_text(
-        "import field_mapper\ndef check(df): return True\n", encoding="utf-8")
+        "import nxd.experimental.field_mapper\ndef check(df): return True\n", encoding="utf-8")
     out = _run_phase_g(tmp_path, expect_exit=1, transform_src=CLEAN_TRANSFORM)
     assert _codes(out) == ["grant.verifier_maps"], _codes(out)
     assert "contracts/x.py" in out
 
 
-def test_broken_vendored_package_is_a_finding_not_a_traceback(tmp_path):
+def test_verifier_importing_the_legacy_vendored_name_is_denied(tmp_path):
+    """The retired spelling must not become an exemption inside contracts/.
+
+    The legacy denial walks `t_modules` — transform/ plus a non-recursive
+    closure root — and contracts/ is in neither, so this case reaches the gate
+    only through the verifier loop. Before the harness moved into the package
+    `MAPPER_ROOT` was "field_mapper" and that loop caught it; matching the
+    dotted path alone would retire the coverage along with the spelling and
+    leave a verifier free to map against a live model on every run with both
+    gates green.
+    """
+    (tmp_path / "contracts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "contracts" / "x.py").write_text(
+        "import field_mapper\ndef check(df): return True\n", encoding="utf-8")
+    out = _run_phase_g(tmp_path, expect_exit=1, transform_src=CLEAN_TRANSFORM)
+    assert _codes(out) == ["grant.verifier_maps"], _codes(out)
+    # The finding must name what was actually imported, not the constant: a
+    # legacy hit reported as `nxd.experimental.field_mapper` sends the reader
+    # looking for an import their verifier does not contain.
+    assert "'field_mapper'" in out, out
+
+
+def test_broken_harness_package_is_a_finding_not_a_traceback(tmp_path):
     """A subprocess failure must not take the whole self-check with it."""
     _vendor(tmp_path)
-    (tmp_path / "field_mapper" / "__init__.py").write_text(
+    (tmp_path / "nxd" / "experimental" / "field_mapper" / "__init__.py").write_text(
         "raise RuntimeError('gutted')\n", encoding="utf-8")
     _spec(tmp_path)
     # A well-formed grant is present so the failure cannot be confused with
@@ -608,7 +646,13 @@ def test_gate_agrees_with_grant_py_on_malformed_grants(tmp_path):
     than what it claims. Phase G calls the harness rather than reimplementing
     it, and this asserts the two verdicts agree on grants the harness rejects.
     """
-    sys.path.insert(0, str(REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper"))
+    # Imported from the harness source directly rather than through the
+    # `nxd.experimental` package path: this repo has no monorepo checkout, and
+    # the two modules under test read consent rules that do not depend on where
+    # the package is mounted. The GATE's agreement with them is what is being
+    # asserted, and the gate reaches the harness by subprocess, not by this
+    # import.
+    sys.path.insert(0, str(REAL_MAPPER.parent))
     from field_mapper.errors import GrantError, SpecError
     from field_mapper.grant import Grant
 
@@ -652,3 +696,146 @@ def test_gate_agrees_with_grant_py_on_malformed_grants(tmp_path):
         assert "carries no consent grant" not in out, (
             f"the report claims no grant exists while one is on disk: {doc!r}"
         )
+
+
+# ------------------------------------------------------- the trigger itself ---
+
+# The gate's whole narrowing claim lives in one constant and one prefix rule.
+# Before the harness moved into the nxd package, `MAPPER_ROOT` was a globally
+# unique root name; now it is a dotted path underneath `nxd`, which is the ONE
+# package every closure imports. That makes the boundary rule load-bearing in a
+# way it was not before: a truncated MAPPER_ROOT, or a `denied_hit` that stopped
+# matching on dot boundaries, would demand a consent grant from every closure in
+# existence — and every test above would stay green, because they all vendor a
+# real mapper import and assert the gate FIRES.
+#
+# These cases were checked by hand when the trigger moved. Checking by hand is
+# what this test exists to stop being necessary.
+TRIGGER_CASES = [
+    # (import statement, must the gate fire?)
+    ("import nxd.experimental.field_mapper", True),
+    ("from nxd.experimental.field_mapper import map_inputs", True),
+    ("from nxd.experimental.field_mapper.records import reviews_from_csv", True),
+    # Imports the package without naming it in the module path.
+    ("from nxd.experimental import field_mapper", True),
+    # Every closure carries these. If any of them fires, every build breaks.
+    ("import nxd", False),
+    ("from nxd import data_product", False),
+    ("from nxd.spec import data_product", False),
+    # A sibling under the same parent must not be collateral.
+    ("from nxd.experimental import semantic", False),
+    ("import nxd.experimental.semantic", False),
+    # Prefix-but-not-on-a-dot-boundary.
+    ("import nxd.experimental.field_mapper_utils", False),
+    # The pre-move vendored form. `False` here means it does not match
+    # MAPPER_ROOT — which is correct and must stay correct, since the two roots
+    # are deliberately separate checks. It does NOT mean the closure passes:
+    # `LEGACY_MAPPER_ROOT` denies this spelling by name as
+    # `grant.vendored_harness`, covered by
+    # `test_the_legacy_vendored_import_is_denied_by_name` below. Were it folded
+    # into MAPPER_ROOT instead, a vendored copy would be routed through the
+    # grant oracle — offering consent for a harness that answers for its own
+    # spec hash, which is exactly what must not be consentable.
+    ("import field_mapper", False),
+    ("from field_mapper import map_inputs", False),
+]
+
+
+def _trigger_fires(statement: str) -> bool:
+    """Run the SHIPPED helpers over one import statement.
+
+    Executes `imported_roots` / `denied_hit` out of the real script rather than
+    reimplementing them: a copy of the boundary rule here could agree with
+    itself while disagreeing with the gate.
+    """
+    body = _script_body()
+    ns: dict = {"ast": ast}
+    for node in ast.parse(body).body:
+        if isinstance(node, ast.FunctionDef) and node.name in {
+            "imported_roots",
+            "denied_hit",
+        }:
+            exec(compile(ast.Module([node], []), "<self_check>", "exec"), ns)
+    root = re.search(r'^MAPPER_ROOT = "([^"]+)"', body, re.M)
+    assert root, "MAPPER_ROOT is not a literal assignment in the shipped script"
+    roots = ns["imported_roots"](statement, "transform/main.py")
+    return any(ns["denied_hit"](m, {root.group(1)}) for m in roots)
+
+
+@pytest.mark.parametrize("statement,should_fire", TRIGGER_CASES)
+def test_trigger_fires_on_the_mapper_and_nothing_else(statement, should_fire):
+    fired = _trigger_fires(statement)
+    if should_fire:
+        assert fired, (
+            f"{statement!r} reaches the mapper but does not fire the consent "
+            f"gate — an unconsented mapping would pass Phase G green"
+        )
+    else:
+        assert not fired, (
+            f"{statement!r} does not reach the mapper but fires the consent "
+            f"gate. Every closure carries imports of this shape, so this "
+            f"demands a grant from builds that never map anything"
+        )
+
+
+def test_mapper_root_is_the_full_dotted_path():
+    """A truncated root would make the gate fire on unrelated `nxd` imports.
+
+    The parametrised cases above would catch that too, but this names the
+    failure directly: `nxd`, `nxd.experimental`, or any other prefix is not a
+    safe value for this constant.
+    """
+    body = _script_body()
+    root = re.search(r'^MAPPER_ROOT = "([^"]+)"', body, re.M)
+    assert root and root.group(1) == "nxd.experimental.field_mapper", (
+        f"MAPPER_ROOT is {root.group(1)!r} if it matched at all; a prefix of "
+        f"the harness path demands consent from every closure that imports nxd"
+    )
+
+
+def test_the_legacy_vendored_import_is_denied_by_name(tmp_path):
+    """The pre-package spelling must not pass green.
+
+    Before the harness shipped inside `nxd`, the sanctioned contract was to COPY
+    `field_mapper/` into the closure root and `import field_mapper`. Every
+    closure authored before the move has that shape on disk, and the import
+    still resolves at Phase B because the closure root is on `sys.path` — so
+    left unmatched this is the worst case the gate has: the transform maps for
+    real against the env-fallback key while the gate reports no obligation.
+
+    Denied by name rather than routed through the grant oracle: a vendored copy
+    answers for its own spec hash, so no grant bound to it means anything.
+    """
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    out = _run_phase_g(
+        tmp_path,
+        expect_exit=1,
+        transform_src=("import dlt\n"
+                       "from field_mapper import map_inputs\n"
+                       "from nxd import data_product\n"
+                       "def go():\n"
+                       "    return map_inputs([], spec=None, grant=None,\n"
+                       "                      run_dir='', call=None)\n"),
+    )
+    assert "grant.vendored_harness" in _codes(out), _codes(out)
+    # The finding must name the offending module and say what is wrong with it.
+    # (The `fix=` remediation is not asserted here: this harness's `diag` stub
+    # records only stage/code/path, so asserting on it would test the stub's
+    # rendering rather than the gate's message.)
+    assert "transform/main.py imports 'field_mapper'" in out, out
+    assert "vendored into the closure" in out, out
+
+
+def test_a_granted_closure_is_not_accused_of_vendoring(tmp_path):
+    """The legacy check must not fire on the shape this PR makes canonical.
+
+    A gate that denies the correct spelling as well as the retired one is worse
+    than no gate: it makes the fix unreachable.
+    """
+    _vendor(tmp_path)
+    _spec(tmp_path)
+    spec_id = _real_spec_id(tmp_path)
+    _write(tmp_path, "contracts/grant.json", _grant_doc(spec_id))
+    out = _run_phase_g(tmp_path, expect_exit=0)
+    assert "grant.vendored_harness" not in _codes(out), _codes(out)

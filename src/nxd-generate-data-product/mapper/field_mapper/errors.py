@@ -277,6 +277,4 @@ def _systemic_error_codes() -> frozenset[str]:
 #: reported reason would name the gate instead of the cause. It is genuinely
 #: systemic (landing after it would be a lie) but it is an OUTPUT of this
 #: decision, never an input to it.
-SYSTEMIC_ERROR_CODES: frozenset[str] = _systemic_error_codes() - {
-    "coverage_blocked"
-}
+SYSTEMIC_ERROR_CODES: frozenset[str] = _systemic_error_codes() - {"coverage_blocked"}

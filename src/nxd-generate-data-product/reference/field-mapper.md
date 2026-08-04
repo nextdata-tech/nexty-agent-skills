@@ -7,58 +7,49 @@ the exception, and it is gated by consent rather than trusted.
 ## Contents
 
 - [When to use it (and when not to)](#when-to-use-it-and-when-not-to)
-- [Vendoring it into a closure](#vendoring-it-into-a-closure)
+- [Importing it in a closure](#importing-it-in-a-closure)
 - [Authoring the spec and the grant](#authoring-the-spec-and-the-grant)
 - [Evidence modes — what each one proves](#evidence-modes--what-each-one-proves)
 - [Reviews: `data/mapper_reviews/`](#reviews-datamapper_reviews)
 - [Two dlt runs, in this order](#two-dlt-runs-in-this-order)
 - [Spend: the self-check really pays](#spend-the-self-check-really-pays)
 - [What the consent gate cannot see](#what-the-consent-gate-cannot-see)
-- [Verifying a vendored copy](#verifying-a-vendored-copy)
+- [Verifying the installed harness](#verifying-the-installed-harness)
 
 ## When to use it (and when not to)
 
 Use [reference/llm-judgments.md](llm-judgments.md) — agent-side judging, landed
 as CSV — whenever the judgements are a **fixed set** you can enumerate once: FX
 rates, merchant→category rulings, a rubric applied to a bounded list. That path
-needs no vendored package, no grant, and no model call at build time.
+needs no grant and no model call at build time.
 
 Use the field mapper only when the mapping must run **over rows the transform
 itself produces**, so no fixed CSV can be authored ahead of it. It brings real
-cost: a vendored package in the closure, a consent grant the user must author,
-and live model calls during the self-check.
+cost: a consent grant the user must author, and live model calls during the
+self-check.
 
-> **A vendored closure does not run on the platform path yet.** The supervisor
-> stages only `transform/main.py` into its isolated data directory, not the rest
-> of the closure, so a vendored `field_mapper/` is absent at execution and the
-> transform dies on `ModuleNotFoundError: No module named 'field_mapper'`.
-> `requirements.txt` names installable packages, which is how production expects
-> the harness to arrive.
->
-> Everything below is still correct and worth doing — the self-check runs the
-> harness from the closure and Phase G gates it there — but the mapping itself
-> currently only executes where the closure root is importable, which is the
-> self-check and the `mapper/examples/e2e/` proofs, not a dispatched build. This
-> was found by running a real build end to end, not inferred. Until the harness
-> ships inside the `nxd` package the supervisor already installs, treat a mapper
-> closure as gate-verifiable but not publishable.
+## Importing it in a closure
 
-## Vendoring it into a closure
+The harness ships inside the `nxd` package the runtime already installs. There
+is nothing to copy:
 
-The harness is **not a wheel**. Copy it out of this installed skill:
-
-```bash
-cp -R "<skill-dir>/mapper/field_mapper" "<closure>/field_mapper"
+```python
+from nxd.experimental.field_mapper import MapperInput, MapperSpec, map_inputs
 ```
 
-`<skill-dir>` is the directory containing the running `SKILL.md` — installed,
-that is `~/.claude/skills/nxd-generate-data-product/`. The destination name must be
-literally `field_mapper` at the **closure root**; that is the import name the
-package uses internally and the name the consent gate triggers on.
+That dotted path is also what the consent gate triggers on, matched on dot
+boundaries — so the `import nxd` and `from nxd.spec import ...` that every
+closure carries are not collateral, and neither is a sibling such as
+`nxd.experimental.semantic`.
 
-Drift between closures is re-consented rather than silent: `harness_version` is
-an input to `mapper_spec_id`, so vendoring a newer harness moves every spec id,
-existing grants stop binding, and the gate demands fresh ones.
+Drift is re-consented rather than silent: `harness_version` is an input to
+`mapper_spec_id`, so a release that changes the harness moves every spec id,
+existing grants stop binding, and the gate demands fresh ones. Because the
+harness now travels with the package rather than with each closure, that
+re-consent lands on an `nxd` upgrade and applies to every mapper closure at
+once, rather than only when a closure re-copied the directory. That is a wider
+blast radius than vendoring had, and it is the intended trade: the alternative
+is a closure quietly mapping under a grant issued against a different harness.
 
 ## Authoring the spec and the grant
 
@@ -69,14 +60,14 @@ as a Python literal has no stable id, so nothing can be consented to.
 Compute the id the grant must carry:
 
 ```bash
-python -m field_mapper spec-id contracts/mapper_spec.json
+python -m nxd.experimental.field_mapper spec-id contracts/mapper_spec.json
 ```
 
 Paste that value into the grant's `mapper_spec_id` and write the grant to
 `contracts/`. A hand-computed hash, or the `"<derived>"` placeholder the
 `samples/` fixtures use, binds nothing — the gate rejects `<derived>` by name.
 
-`python -m field_mapper grant-check <spec> <grant>` applies the same statically
+`python -m nxd.experimental.field_mapper grant-check <spec> <grant>` applies the same statically
 decidable checks the gate subprocesses (hash, primary and corroboration model,
 expiry) and prints JSON. It has no `<derived>`-specific rule: it fails that value
 on the hash like any other non-matching id, reporting `spec_mismatch`. The gate
@@ -156,18 +147,19 @@ enforced inside the harness at call time, not by the gate.
 
 Green Phase G means a binding consent artifact exists. It is not proof that no
 unconsented mapping happened, and the full list of what it misses — the
-self-attested hash, the decoy-spec limit, renamed vendor directories, runtime
-coverage versus static binding — is in
+self-attested hash, the decoy-spec limit, `importlib` and inlined-source
+routes, runtime coverage versus static binding — is in
 [reference/self-check.md](self-check.md) § "What Phase G cannot see". Read it
 before treating a green gate as a safety guarantee.
 
-## Verifying a vendored copy
+## Verifying the installed harness
 
-The fixtures ship with the skill and are the acceptance suite, not a demo:
+The fixtures ship inside the package and are the acceptance suite, not a demo,
+so this answers "is this harness intact?" from any install:
 
 ```bash
-python -m field_mapper verify "<skill-dir>/mapper/samples"   # expect 13/13
-python -m field_mapper pins                                  # spec-id stability
+python -m nxd.experimental.field_mapper verify   # expect 13/13
+python -m nxd.experimental.field_mapper pins     # spec-id stability
 ```
 
 Record schemas, `value_status` semantics, the blocking rules and the resolution

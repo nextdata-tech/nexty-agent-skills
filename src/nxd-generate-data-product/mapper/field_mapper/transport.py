@@ -28,10 +28,15 @@ import os
 import random
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from collections.abc import Mapping
+from collections.abc import Sequence
+from dataclasses import dataclass
+from dataclasses import field
 from enum import Enum
-from typing import Any, Final
+from typing import Any
+from typing import Final
+from typing import cast
 
 # ---------------------------------------------------------------------------
 # Error taxonomy
@@ -42,19 +47,17 @@ from typing import Any, Final
 # would produce two distinct classes with the same name, and
 # `except CredentialMissing` in a caller would silently fail to catch the one
 # raised here. There is no degraded mode worth that.
-
-from .errors import (
-    BudgetExceededError,
-    CredentialMissingError,
-    DependencyMissingError,
-    FieldMapperError,
-    ModelNotFoundError,
-    RunCancelledError,
-    SchemaRejectedError,
-    SystemicError,
-    TransportExhaustedError,
-)
-from .media import MediaInput, build_media_content_block
+from .errors import BudgetExceededError
+from .errors import CredentialMissingError
+from .errors import DependencyMissingError
+from .errors import FieldMapperError
+from .errors import ModelNotFoundError
+from .errors import RunCancelledError
+from .errors import SchemaRejectedError
+from .errors import SystemicError
+from .errors import TransportExhaustedError
+from .media import MediaInput
+from .media import build_media_content_block
 from .providers import build_provider
 
 __all__ = [
@@ -68,6 +71,10 @@ __all__ = [
     "estimate",
     "resolve_api_key",
 ]
+
+
+def _noop_heartbeat(_message: str) -> None:
+    """Default progress callback."""
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +166,7 @@ def supports_reasoning_controls(model: str) -> bool:
 def capabilities_from_table(model: str) -> ModelCapabilities:
     """Offline guess. Conflates the two leaves, because a prefix cannot see them."""
     known = supports_reasoning_controls(model)
-    return ModelCapabilities(
-        adaptive_thinking=known, effort=known, from_table=True
-    )
+    return ModelCapabilities(adaptive_thinking=known, effort=known, from_table=True)
 
 
 def probe_capabilities(client: Any, model: str) -> ModelCapabilities | None:
@@ -192,6 +197,7 @@ def probe_capabilities(client: Any, model: str) -> ModelCapabilities | None:
         )
     except Exception:  # noqa: BLE001 - a probe must never break the run
         return None
+
 
 #: Retried with backoff. Everything else surfaces immediately rather than
 #: burning budget: 400/401/403/404 are systemic and retrying cannot fix them.
@@ -231,6 +237,7 @@ def rates_for(model: str) -> tuple[float, float, bool]:
             return rate_in, rate_out, False
     return _USD_PER_MTOK_FALLBACK[0], _USD_PER_MTOK_FALLBACK[1], True
 
+
 #: Rough chars-per-token for the offline estimate. `count_tokens` is the
 #: accurate path and `estimate()` uses it when a client is supplied; this
 #: constant only backs the no-network preflight.
@@ -269,6 +276,7 @@ def count_pdf_pages(data: bytes) -> int | None:
         return None
     found = len(_PDF_PAGE_RE.findall(data))
     return found or None
+
 
 #: Hard API ceilings. NOT YET ENFORCED — declared here so the numbers live in one
 #: place, but no call site reads them, so an oversized request still discovers its
@@ -370,7 +378,9 @@ def _import_anthropic() -> Any:
     attempted, so it BLOCKS.
     """
     try:
-        import anthropic  # noqa: PLC0415
+        import importlib
+
+        anthropic = importlib.import_module("anthropic")
     except ImportError as exc:
         raise DependencyMissingError(
             "The `anthropic` package is not installed, so the field mapper "
@@ -471,19 +481,11 @@ class BudgetLedger:
     def exhaustion_reason(self) -> str | None:
         """Name the first exhausted ceiling, or None. Never raises."""
         if self.calls_remaining <= 0:
-            return (
-                f"call ceiling reached ({self.budget.max_calls} calls)"
-            )
+            return f"call ceiling reached ({self.budget.max_calls} calls)"
         if self.input_tokens >= self.budget.max_input_tokens:
-            return (
-                f"input-token ceiling reached "
-                f"({self.input_tokens} >= {self.budget.max_input_tokens})"
-            )
+            return f"input-token ceiling reached ({self.input_tokens} >= {self.budget.max_input_tokens})"
         if self.output_tokens >= self.budget.max_output_tokens:
-            return (
-                f"output-token ceiling reached "
-                f"({self.output_tokens} >= {self.budget.max_output_tokens})"
-            )
+            return f"output-token ceiling reached ({self.output_tokens} >= {self.budget.max_output_tokens})"
         if self.usd_remaining <= 0.0:
             return f"spend ceiling reached (${self.budget.max_usd:.2f})"
         if self.seconds_remaining <= 0.0:
@@ -522,9 +524,7 @@ class BudgetLedger:
     def release(self, calls: int = 1) -> None:
         self.calls_reserved = max(0, self.calls_reserved - calls)
 
-    def record(
-        self, *, input_tokens: int, output_tokens: int, model: str | None = None
-    ) -> None:
+    def record(self, *, input_tokens: int, output_tokens: int, model: str | None = None) -> None:
         """Reconcile a completed attempt to actuals.
 
         `model` prices THIS attempt. A corroborating run shares one ledger
@@ -586,28 +586,15 @@ class PreflightEstimate:
         """Return the ceilings this estimate breaches. Empty means it fits."""
         breaches: list[str] = []
         if self.estimated_calls > budget.max_calls:
-            breaches.append(
-                f"calls: {self.estimated_calls} > {budget.max_calls}"
-            )
+            breaches.append(f"calls: {self.estimated_calls} > {budget.max_calls}")
         if self.estimated_input_tokens > budget.max_input_tokens:
-            breaches.append(
-                f"input tokens: {self.estimated_input_tokens} > "
-                f"{budget.max_input_tokens}"
-            )
+            breaches.append(f"input tokens: {self.estimated_input_tokens} > {budget.max_input_tokens}")
         if self.estimated_output_tokens > budget.max_output_tokens:
-            breaches.append(
-                f"output tokens: {self.estimated_output_tokens} > "
-                f"{budget.max_output_tokens}"
-            )
+            breaches.append(f"output tokens: {self.estimated_output_tokens} > {budget.max_output_tokens}")
         if self.estimated_usd > budget.max_usd:
-            breaches.append(
-                f"spend: ${self.estimated_usd:.2f} > ${budget.max_usd:.2f}"
-            )
+            breaches.append(f"spend: ${self.estimated_usd:.2f} > ${budget.max_usd:.2f}")
         if self.estimated_wall_seconds > budget.max_wall_seconds:
-            breaches.append(
-                f"wall time: {self.estimated_wall_seconds:.0f}s > "
-                f"{budget.max_wall_seconds:.0f}s"
-            )
+            breaches.append(f"wall time: {self.estimated_wall_seconds:.0f}s > {budget.max_wall_seconds:.0f}s")
         return breaches
 
     def require_within(self, budget: RunBudget) -> None:
@@ -618,16 +605,11 @@ class PreflightEstimate:
         """
         breaches = self.fits_within(budget)
         if breaches:
-            caveats = []
+            caveats: list[str] = []
             if not self.token_counts_measured:
-                caveats.append(
-                    "token counts are the offline heuristic, not count_tokens"
-                )
+                caveats.append("token counts are the offline heuristic, not count_tokens")
             if self.pricing_is_approximate:
-                caveats.append(
-                    f"spend is priced at {DEFAULT_MODEL_ID} rates but the run "
-                    f"calls {self.model}"
-                )
+                caveats.append(f"spend is priced at {DEFAULT_MODEL_ID} rates but the run calls {self.model}")
             caveat_text = f" (caveats: {'; '.join(caveats)})" if caveats else ""
             raise BudgetExceededError(
                 "Preflight estimate exceeds the declared ceiling; refusing to "
@@ -687,9 +669,7 @@ class TransportConfig:
         if not self.model or not self.model.strip():
             raise ValueError("TransportConfig.model must name a model")
         if self.effort not in _EFFORT_ORDER:
-            raise ValueError(
-                f"effort must be one of {_EFFORT_ORDER}, got {self.effort!r}"
-            )
+            raise ValueError(f"effort must be one of {_EFFORT_ORDER}, got {self.effort!r}")
         if self.max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
         if self.max_transport_retries < 0:
@@ -725,9 +705,7 @@ class TransportConfig:
         return self.max_tokens > self.stream_above_max_tokens
 
 
-def _validate_thinking_effort_pairing(
-    *, model: str, effort: str, thinking_enabled: bool
-) -> None:
+def _validate_thinking_effort_pairing(*, model: str, effort: str, thinking_enabled: bool) -> None:
     """Reject the one parameter pairing this model 400s on.
 
     On `claude-opus-5`, `thinking: {"type": "disabled"}` is accepted only at
@@ -835,9 +813,7 @@ def build_pdf_content_block(pdf_bytes: bytes) -> dict[str, Any]:
     common case and `MediaInput(media_type="application/pdf", data=...)` reads
     worse at a call site that only ever has PDFs.
     """
-    return build_media_content_block(
-        MediaInput(media_type="application/pdf", data=pdf_bytes)
-    )
+    return build_media_content_block(MediaInput(media_type="application/pdf", data=pdf_bytes))
 
 
 def build_user_content(
@@ -876,7 +852,7 @@ def build_user_content(
             blocks.append(
                 {
                     "type": "text",
-                    "text": f"<source_media label=\"{media.label}\" />",
+                    "text": f'<source_media label="{media.label}" />',
                 }
             )
     for source_text in text_inputs:
@@ -902,20 +878,14 @@ def build_user_content(
             blocks.append(
                 {
                     "type": "text",
-                    "text": (
-                        "<source_document>\n"
-                        f"{source_text}\n"
-                        "</source_document>"
-                    ),
+                    "text": (f"<source_document>\n{source_text}\n</source_document>"),
                 }
             )
     blocks.append({"type": "text", "text": instruction})
     return blocks
 
 
-def _instruction_with_prose_schema(
-    instruction: str, wire_schema: Mapping[str, Any]
-) -> str:
+def _instruction_with_prose_schema(instruction: str, wire_schema: Mapping[str, Any]) -> str:
     """Append the wire schema as prose, for the citations path.
 
     `citations` and `output_config.format` are mutually exclusive — sending both
@@ -977,9 +947,7 @@ def _media_token_estimate(media: Sequence[Any]) -> tuple[int, int]:
             if pages is None:
                 unpriceable += 1
                 continue
-            tokens += pages * (
-                _PDF_TOKENS_PER_PAGE_TEXT + _PDF_TOKENS_PER_PAGE_IMAGE
-            )
+            tokens += pages * (_PDF_TOKENS_PER_PAGE_TEXT + _PDF_TOKENS_PER_PAGE_IMAGE)
         elif media_type.startswith("image/"):
             # Flat documented cap: real cost is ceil(w/28) * ceil(h/28), and
             # reading dimensions needs an image library the venv lacks.
@@ -1032,9 +1000,7 @@ def estimate(
 
     if client is not None:
         try:
-            counted = client.count_tokens(
-                instruction=instruction, text_inputs=text_inputs
-            )
+            counted = client.count_tokens(instruction=instruction, text_inputs=text_inputs)
         except FieldMapperError:
             raise
         except Exception:  # noqa: BLE001 - estimation must never block on itself
@@ -1098,9 +1064,7 @@ def estimate(
     )
 
 
-def _offline_token_estimate(
-    instruction: str, text_inputs: Sequence[str]
-) -> int:
+def _offline_token_estimate(instruction: str, text_inputs: Sequence[str]) -> int:
     chars = len(instruction) + sum(len(t) for t in text_inputs)
     return int(chars / _CHARS_PER_TOKEN) + 512  # + fixed request overhead
 
@@ -1133,7 +1097,7 @@ class Client:
         self._config = config or TransportConfig()
         self._ledger = budget_ledger
         # Progress signal so the supervisor readiness gate survives a long run.
-        self._heartbeat = heartbeat or (lambda _msg: None)
+        self._heartbeat: Callable[[str], None] = heartbeat or _noop_heartbeat
         self._cancelled = cancelled or (lambda: False)
         self._sleep = sleep
         self._provider_kind = provider
@@ -1191,11 +1155,7 @@ class Client:
         if self._caps is not None:
             return self._caps
         table = capabilities_from_table(self._config.model)
-        probed = (
-            probe_capabilities(self._client, self._config.model)
-            if self._client is not None
-            else None
-        )
+        probed = probe_capabilities(self._client, self._config.model) if self._client is not None else None
         if probed is None:
             self._caps = table
             return self._caps
@@ -1224,9 +1184,7 @@ class Client:
 
     # -- token counting ---------------------------------------------------
 
-    def count_tokens(
-        self, *, instruction: str, text_inputs: Sequence[str] = ()
-    ) -> int | None:
+    def count_tokens(self, *, instruction: str, text_inputs: Sequence[str] = ()) -> int | None:
         """Measured input tokens, or None if the provider cannot say.
 
         Routed through the provider: the `claude_cli` provider returns None
@@ -1241,9 +1199,7 @@ class Client:
                 "messages": [
                     {
                         "role": "user",
-                        "content": build_user_content(
-                            instruction=instruction, text_inputs=text_inputs
-                        ),
+                        "content": build_user_content(instruction=instruction, text_inputs=text_inputs),
                     }
                 ],
             }
@@ -1292,9 +1248,7 @@ class Client:
             self._raise_if_cancelled()
             if self._ledger is not None:
                 if (reason := self._ledger.exhaustion_reason()) is not None:
-                    raise BudgetExceededError(
-                        f"Run budget exhausted mid-call: {reason}."
-                    )
+                    raise BudgetExceededError(f"Run budget exhausted mid-call: {reason}.")
                 self._ledger.reserve(1)
 
             started = time.monotonic()
@@ -1309,8 +1263,7 @@ class Client:
                 if attempt_index < cfg.max_transport_retries:
                     delay = self._backoff_delay(attempt_index, exc)
                     self._heartbeat(
-                        f"transport retry {attempt_index + 1}/"
-                        f"{cfg.max_transport_retries} in {delay:.1f}s: {detail}"
+                        f"transport retry {attempt_index + 1}/{cfg.max_transport_retries} in {delay:.1f}s: {detail}"
                     )
                     self._sleep(delay)
                     continue
@@ -1325,10 +1278,7 @@ class Client:
                     latency_seconds=time.monotonic() - started,
                     attempt_index=attempt_index,
                     error_code=TransportExhaustedError.error_code,
-                    error_detail=(
-                        f"exhausted {cfg.max_transport_retries} transport "
-                        f"retries: {detail}"
-                    ),
+                    error_detail=(f"exhausted {cfg.max_transport_retries} transport retries: {detail}"),
                 )
 
             latency = time.monotonic() - started
@@ -1342,10 +1292,7 @@ class Client:
                     # is shared; the RATE has to stay per-attempt.
                     model=self._config.model,
                 )
-            self._heartbeat(
-                f"call ok in {latency:.1f}s "
-                f"(in={usage_in} out={usage_out} hash={input_hash[:12]})"
-            )
+            self._heartbeat(f"call ok in {latency:.1f}s (in={usage_in} out={usage_out} hash={input_hash[:12]})")
             return self._interpret(
                 response,
                 latency_seconds=latency,
@@ -1392,11 +1339,7 @@ class Client:
                     "role": "user",
                     "content": build_user_content(
                         instruction=(
-                            _instruction_with_prose_schema(
-                                instruction, wire_schema
-                            )
-                            if citations_on
-                            else instruction
+                            _instruction_with_prose_schema(instruction, wire_schema) if citations_on else instruction
                         ),
                         text_inputs=text_inputs,
                         media_inputs=media_inputs,
@@ -1482,20 +1425,14 @@ class Client:
                 # WHICH provider answered. Absent on a real SDK Message, where
                 # the "anthropic" default is correct by construction.
                 provider=getattr(response, "provider", "anthropic"),
-                provider_notes=tuple(
-                    getattr(response, "provider_notes", ()) or ()
-                ),
+                provider_notes=tuple(getattr(response, "provider_notes", ()) or ()),
                 citations=citations,
             )
 
         # Read once, before any early return: a refusal or a truncation still
         # carries whatever the API cited up to that point, and the ledger line
         # for a failed attempt is exactly where that is worth having.
-        citations = (
-            _citations_of(response)
-            if self._config.evidence_mode == "citations"
-            else ()
-        )
+        citations = _citations_of(response) if self._config.evidence_mode == "citations" else ()
 
         # Branch on stop_reason, never on stop_details: the latter may be null
         # even on a refusal. A refusal is an HTTP 200 with empty or partial
@@ -1508,9 +1445,7 @@ class Client:
             return _result(
                 AttemptOutcome.REFUSAL,
                 error_code="refusal",
-                error_detail=(
-                    f"model declined (category={category or 'unspecified'})"
-                ),
+                error_detail=(f"model declined (category={category or 'unspecified'})"),
             )
 
         if stop_reason == "max_tokens":
@@ -1531,17 +1466,13 @@ class Client:
         # cited run being its own block. Taking only the first would return a
         # prefix that cannot parse, so the whole body is reassembled.
         text = (
-            _joined_text_blocks(response)
-            if self._config.evidence_mode == "citations"
-            else _first_text_block(response)
+            _joined_text_blocks(response) if self._config.evidence_mode == "citations" else _first_text_block(response)
         )
         if text is None:
             return _result(
                 AttemptOutcome.SCHEMA_REJECT,
                 error_code=SchemaRejectedError.error_code,
-                error_detail=(
-                    f"no text content block (stop_reason={stop_reason!r})"
-                ),
+                error_detail=(f"no text content block (stop_reason={stop_reason!r})"),
             )
 
         response_hash = _sha256_hex(text)
@@ -1552,11 +1483,7 @@ class Client:
             # fail. The structured path keeps the strict parse: there the model
             # was told to emit JSON alone, and quietly tolerating a preamble
             # there would hide a prompt that stopped being obeyed.
-            parsed = (
-                _trailing_json_object(text)
-                if self._config.evidence_mode == "citations"
-                else json.loads(text)
-            )
+            parsed = _trailing_json_object(text) if self._config.evidence_mode == "citations" else json.loads(text)
         except json.JSONDecodeError as exc:
             return _result(
                 AttemptOutcome.SCHEMA_REJECT,
@@ -1572,14 +1499,14 @@ class Client:
                 AttemptOutcome.SCHEMA_REJECT,
                 response_hash=response_hash,
                 error_code=SchemaRejectedError.error_code,
-                error_detail=(
-                    f"structured output was {type(parsed).__name__}, expected "
-                    f"a JSON object"
-                ),
+                error_detail=(f"structured output was {type(parsed).__name__}, expected a JSON object"),
             )
 
+        parsed_object = cast(dict[str, Any], parsed)
         return _result(
-            AttemptOutcome.SUCCESS, parsed=parsed, response_hash=response_hash
+            AttemptOutcome.SUCCESS,
+            parsed=parsed_object,
+            response_hash=response_hash,
         )
 
     # -- failure classification ------------------------------------------
@@ -1594,7 +1521,14 @@ class Client:
         """
         anthropic = self._anthropic
 
-        if isinstance(exc, FieldMapperError):
+        # SystemicError only, not the taxonomy root. `FieldMapperError` is the
+        # base of every typed failure including `CellError`, so catching it here
+        # re-raised per-attempt failures past the retry loop that exists to
+        # absorb them — `ClaudeCliProvider.dispatch` raises
+        # `TransportExhaustedError` (a CellError) for subprocess timeout,
+        # non-zero exit and unparseable output, which made
+        # `max_transport_retries` inert on that provider entirely.
+        if isinstance(exc, SystemicError):
             raise exc
 
         auth_error = getattr(anthropic, "AuthenticationError", ())
@@ -1679,7 +1613,7 @@ def _first_text_block(response: Any) -> str | None:
     fragmented and this returns a prefix that does not parse — use
     `_joined_text_blocks` on that path.
     """
-    content = getattr(response, "content", None) or []
+    content: Sequence[Any] = getattr(response, "content", None) or []
     for block in content:
         if getattr(block, "type", None) == "text":
             text = getattr(block, "text", None)
@@ -1756,12 +1690,11 @@ def _joined_text_blocks(response: Any) -> str | None:
     JSON body, and splicing them in would corrupt a document that would
     otherwise parse.
     """
-    content = getattr(response, "content", None) or []
-    parts = [
+    content: Sequence[Any] = getattr(response, "content", None) or []
+    parts: list[str] = [
         text
         for block in content
-        if getattr(block, "type", None) == "text"
-        and isinstance((text := getattr(block, "text", None)), str)
+        if getattr(block, "type", None) == "text" and isinstance((text := getattr(block, "text", None)), str)
     ]
     if not parts:
         return None
@@ -1779,10 +1712,12 @@ def _citations_of(response: Any) -> tuple[CitationSpan, ...]:
     upgrade into an outage.
     """
     spans: list[CitationSpan] = []
-    for block in getattr(response, "content", None) or []:
+    content: Sequence[Any] = getattr(response, "content", None) or []
+    for block in content:
         if getattr(block, "type", None) != "text":
             continue
-        for cite in getattr(block, "citations", None) or []:
+        citations: Sequence[Any] = cast(Sequence[Any], getattr(block, "citations", None) or ())
+        for cite in citations:
             text = getattr(cite, "cited_text", None)
             if not isinstance(text, str) or not text.strip():
                 continue

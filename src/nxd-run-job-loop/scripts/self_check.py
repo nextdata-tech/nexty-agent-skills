@@ -93,7 +93,7 @@ _codes("error", "user",
        "grant.missing", "grant.spec_mismatch", "grant.expired")
 _codes("error", "agent",
        "grant.invalid", "grant.spec_unreadable", "grant.ungated_map",
-       "grant.verifier_maps")
+       "grant.verifier_maps", "grant.vendored_harness")
 _codes("warning", "agent", "grant.unbound")
 
 JSON_MODE = "--json" in sys.argv
@@ -1106,13 +1106,13 @@ say(f"phase E ok — no denied model-SDK import in transform/main.py"
 #
 # ORDERING — the chosen half. G runs after E rather than before because it
 # reuses E's `imported_roots`/`denied_hit`/`t_imports`, and because E is purely
-# static while G subprocesses vendored code. Strictly more privileged runs later.
+# static while G subprocesses the installed harness. More privileged runs later.
 #
 # Letter G, not F: the run order is already A, E, B, C, D, so "next letter"
 # communicates nothing, and D is taken by the policy boundary below. G is for
 # grant.
 import subprocess                          # noqa: E402 — only Phase G shells out
-MAPPER_ROOT = "field_mapper"
+MAPPER_ROOT = "nxd.experimental.field_mapper"
 gerrors, gwarnings = [], []
 # Bound here rather than inside the discovery branch: the success line reports
 # `len(matched)`, and a NameError in the reporting path of a gate that just
@@ -1122,26 +1122,29 @@ matched = {}
 def gerr(code, msg, at="", ev=None, fix=None):
     gerrors.append((code, msg, at, ev, fix))
 
-# The trigger is an import-level root name in ANY module under transform/ OR at
-# the closure root, matched on dot boundaries by the same helper Phase E uses —
-# so `import field_mapper`, `from field_mapper import map_inputs` and
-# `from field_mapper.records import reviews_from_csv` all fire, while a
-# hypothetical `field_mapper_utils` is not collateral. Scanning only main.py
-# would let an honest refactor — the import moved to transform/helpers.py,
-# main.py importing that — through green, and it is the same closure mapping
-# the same content.
+# The trigger is an import-level module name in ANY module under transform/ OR
+# at the closure root, matched on dot boundaries by the same helper Phase E uses
+# — so `import nxd.experimental.field_mapper`, `from nxd.experimental.field_mapper
+# import map_inputs`, `from nxd.experimental.field_mapper.records import
+# reviews_from_csv` and `from nxd.experimental import field_mapper` all fire.
+# Dot-boundary matching is what keeps this narrow: the root is the full dotted
+# path, so the `import nxd` and `from nxd.spec import ...` that EVERY closure
+# carries are not collateral, and neither is a sibling like
+# `nxd.experimental.semantic`. Scanning only main.py would let an honest
+# refactor — the import moved to transform/helpers.py, main.py importing that —
+# through green, and it is the same closure mapping the same content.
 #
-# The closure root is scanned for the same reason, one directory up: the
-# vendoring contract puts the root on sys.path (that is how `import field_mapper`
-# resolves at all), so a root module is importable from the transform and
-# executes under Phase B exactly like a transform/ one. A `glue.py` sitting
-# beside models.py holding the import, with transform/main.py doing
-# `import glue`, maps for real. Root is globbed NON-recursively on purpose: a
-# full-tree walk would descend into the vendored field_mapper/ package itself,
-# whose modules import their own siblings and would self-trigger on every
-# closure that vendored it correctly.
+# The closure root is scanned because a root module is importable from the
+# transform (the transform executes with the closure root as its working
+# directory) and so runs under Phase B exactly like a transform/ one. A
+# `glue.py` sitting beside models.py holding the import, with transform/main.py
+# doing `import glue`, maps for real. Root is globbed NON-recursively: a
+# full-tree walk buys little here and costs a walk of every data/ and
+# contracts/ subtree on every run. The residual — a root SUBPACKAGE holding the
+# import — is stated in the no-obligation success line rather than left for a
+# reader to discover.
 #
-# `field_mapper` is deliberately NOT added to MODEL_ROOTS. It would fail every
+# The mapper root is deliberately NOT added to MODEL_ROOTS. It would fail every
 # legitimate mapper closure at Phase E, which denies model SDKs outright and
 # offers no grant-shaped exception. The mapper's own `import anthropic` is
 # function-local inside `transport.py` and invisible to Phase E's AST walk
@@ -1161,6 +1164,37 @@ mapper_import_file, mapper_import = next(
      for m in sorted(mods) if denied_hit(m, {MAPPER_ROOT})),
     (None, None))
 
+# The pre-package spelling. The harness used to be COPIED into the closure root
+# and imported as a top-level `field_mapper`, and that was the sanctioned
+# contract, so every closure authored before it moved into `nxd` has this shape
+# on disk. Left unmatched it is the worst case this gate has: the import
+# resolves at Phase B (the closure root is on sys.path), the transform maps for
+# real against the env-fallback key, and the gate says "no consent obligation"
+# on the way past. Phase E does not cover it either — the harness's
+# `import anthropic` is function-local and invisible to its AST walk.
+#
+# Denied by name rather than sent through the grant oracle: a vendored copy is
+# not a thing to consent to, it is a thing to delete. A grant cannot make it
+# right, because the vendored harness answers for its own spec hash.
+LEGACY_MAPPER_ROOT = "field_mapper"
+legacy_file, legacy_import = next(
+    ((rel, m) for rel, (mods, _s) in sorted(t_modules.items())
+     for m in sorted(mods) if denied_hit(m, {LEGACY_MAPPER_ROOT})),
+    (None, None))
+if legacy_file:
+    gerr("grant.vendored_harness",
+         f"{legacy_file} imports '{legacy_import}' — a copy of the field-mapper "
+         f"harness vendored into the closure. That was the contract before the "
+         f"harness shipped inside the nxd package, and it no longer runs on the "
+         f"platform: the supervisor stages only transform/main.py, so the "
+         f"vendored package is absent at execution. It also answers for its own "
+         f"spec hash, so no grant bound to it means anything.",
+         legacy_file,
+         fix="delete the vendored field_mapper/ directory and import "
+             "`nxd.experimental.field_mapper` instead; the grant's "
+             "mapper_spec_id must then be recomputed with "
+             "`python -m nxd.experimental.field_mapper spec-id <spec.json>`")
+
 # The verifier scan is UNCONDITIONAL and not grant-waivable — a grant authorizes
 # mapping in a transform, never in a contract verifier. This closes a hole Phase
 # E structurally cannot: its verifier scan checks MODEL_ROOTS only, and the
@@ -1176,9 +1210,22 @@ for vpath in sorted(p for p in Path("contracts").rglob("*.py")
         # Same reasoning as Phase E's verifier scan: an unreadable verifier is
         # Phase C's finding. "Could not scan" is not a consent verdict.
         continue
-    if any(denied_hit(m, {MAPPER_ROOT}) for m in gv_imports):
+    # BOTH spellings. The legacy scan above walks t_modules — transform/ plus a
+    # non-recursive closure root — and contracts/ is in neither, so a verifier
+    # carrying the retired `import field_mapper` would match nothing anywhere.
+    # Before the harness moved into the package MAPPER_ROOT *was* "field_mapper"
+    # and this loop caught it; narrowing the root to the dotted path alone would
+    # have retired the coverage along with the spelling. A verifier that maps is
+    # the worst case either way — it re-decides pass/fail against a live model
+    # on every run — so it is denied whichever way it reaches the harness.
+    v_hit = next((h for m in gv_imports
+                  if (h := denied_hit(m, {MAPPER_ROOT, LEGACY_MAPPER_ROOT}))),
+                 None)
+    if v_hit:
+        # The hit, not MAPPER_ROOT: interpolating the constant would name the
+        # dotted path in a finding raised by a legacy import.
         gerr("grant.verifier_maps",
-             f"{vpath} imports {MAPPER_ROOT!r}. A contract verifier decides "
+             f"{vpath} imports {v_hit!r}. A contract verifier decides "
              f"pass/fail from data that has already landed; it never calls a "
              f"model. No grant authorizes this — consent covers mapping in the "
              f"transform, and a verifier that maps re-decides the answer every "
@@ -1296,20 +1343,22 @@ if mapper_import:
              f"the spec by hash.", "contracts/",
              ev={"specs": [str(p) for p in spec_files]},
              fix="ask the user, then write the grant with the mapper_spec_id "
-                 "printed by `python -m field_mapper spec-id <spec.json>`")
+                 "printed by `python -m nxd.experimental.field_mapper "
+                 "spec-id <spec.json>`")
     else:
         # --- Recompute each spec's bound id and pair a grant to it. --------
-        # The id is computed by SUBPROCESSING THE VENDORED HARNESS rather than
+        # The id is computed by SUBPROCESSING THE INSTALLED HARNESS rather than
         # reimplementing the hash here. Two copies of a binding rule is how a
         # gate ends up enforcing something other than what it claims: the
-        # closure's own `field_mapper` is what will run, so it is what must
-        # answer. The cost is self-attestation — a closure that tampered
-        # spec.py can mint any id — and that limit is recorded in the doc.
+        # harness the transform will import under Phase B is what must answer.
+        # It resolves from the same interpreter running this script, so the
+        # copy that binds and the copy that maps cannot drift apart.
         bound = {}
         for spath in spec_files:
             try:
                 proc = subprocess.run(
-                    [sys.executable, "-m", "field_mapper", "spec-id", str(spath)],
+                    [sys.executable, "-m", "nxd.experimental.field_mapper",
+                     "spec-id", str(spath)],
                     capture_output=True, text=True, timeout=60)
                 if proc.returncode != 0:
                     # LAST line of stderr, not the whole of it. A broken package
@@ -1324,12 +1373,12 @@ if mapper_import:
                                      else "non-zero exit")
                 bound[str(spath)] = json.loads(proc.stdout.strip())["mapper_spec_id"]
             except Exception as exc:
-                # A broken vendored package is a FINDING, not a traceback. The
+                # A broken harness package is a FINDING, not a traceback. The
                 # whole self-check dying on a subprocess failure would take
                 # every other phase's verdict with it.
                 gerr("grant.spec_unreadable",
                      f"could not compute the bound mapper_spec_id for {spath}: "
-                     f"{type(exc).__name__}: {exc}. The vendored field_mapper "
+                     f"{type(exc).__name__}: {exc}. The field-mapper "
                      f"package could not answer for its own spec, so no grant "
                      f"can be matched to it.", str(spath))
         for spath, spec_id in sorted(bound.items()):
@@ -1351,7 +1400,8 @@ if mapper_import:
                          f"handed and therefore authorizes anything.",
                          placeholder[0],
                          fix="replace it with the literal id from "
-                             "`python -m field_mapper spec-id`")
+                             "`python -m nxd.experimental.field_mapper "
+                             "spec-id`")
                     continue
                 bad = [str(g) for g, doc in grant_files
                        if not re.fullmatch(r"[0-9a-f]{32}",
@@ -1392,8 +1442,8 @@ if mapper_import:
         for spath, (gpath, spec_id) in sorted(matched.items()):
             try:
                 proc = subprocess.run(
-                    [sys.executable, "-m", "field_mapper", "grant-check",
-                     spath, gpath],
+                    [sys.executable, "-m", "nxd.experimental.field_mapper",
+                     "grant-check", spath, gpath],
                     capture_output=True, text=True, timeout=60)
                 verdict = json.loads(proc.stdout.strip())
             except Exception as exc:
@@ -1446,7 +1496,7 @@ for _gp, _gm in gwarnings:
     diag("s1_structure", "grant.unbound", _gm, path=cpath(_gp))
 
 if gerrors:
-    say("\nPHASE G FAILED — consent gate (a vendored mapper maps only under a "
+    say("\nPHASE G FAILED — consent gate (a mapper maps only under a "
         "matching grant):")
     gseen = set()
     for gcode, gmsg, gat, gev, gfix in gerrors:
@@ -1462,15 +1512,19 @@ if gerrors:
     finish(1)
 
 if not mapper_import:
-    say("phase G ok — no transform module imports the field-mapper "
-        "harness, so there was no consent obligation to check. This says "
-        "nothing about whether the closure reaches a model by some other "
-        "route; that is Phase E's question, and neither gate sees a renamed "
-        "vendor directory or an importlib call.")
+    say("phase G ok — no module under transform/ or at the closure root "
+        "imports the field-mapper harness, so no consent obligation was "
+        "found. Absence of a finding is not proof of absence: the scan does "
+        "not descend into root SUBPACKAGES, so a helper at helpers/util.py "
+        "holding the import reaches here silently, and neither this gate nor "
+        "Phase E sees an importlib call or an inlined copy of the "
+        "harness source. "
+        "Whether the closure reaches a model by some other route is Phase "
+        "E's question, not this one's.")
 else:
     say(f"phase G ok — {mapper_import_file} imports {mapper_import!r}; "
         f"{len(matched)} mapper spec(s) under contracts/ each bound by a "
-        f"grant, checked by the vendored harness's own Grant.check"
+        f"grant, checked by the harness's own Grant.check"
         + (f"; {len(gwarnings)} unbound grant(s) also present" if gwarnings
            else "")
         + ". Statically decidable consent over the specs ON DISK only — "
@@ -1513,9 +1567,41 @@ nxd = types.ModuleType("nxd"); core = types.ModuleType("nxd.core")
 ctx = types.ModuleType("nxd.core.context"); ctx.DuckDbOutput = DuckDbOutput; dp = types.SimpleNamespace(
     on_transform=lambda *a, **k: (lambda fn: fn), main=lambda: None)
 nxd.data_product, nxd.core, core.context = dp, core, ctx
-sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": ctx})
-
+# The stub stands in for `nxd` so the dry run needs no installed SDK. But a bare
+# ModuleType has no `__path__`, and a module without one cannot have submodules:
+# once this lands in sys.modules it SHADOWS the real package, so any
+# `nxd.<anything>` the transform imports dies as "'nxd' is not a package" — an
+# error about the stub, reported against the closure. That matters for the field
+# mapper, which lives at `nxd.experimental.field_mapper` and is imported by
+# exactly the closures Phase G has just cleared to run. Borrow the real
+# package's search path when it is installed, so genuine submodules resolve
+# through it while the stubbed names above still win by being set here directly.
+#
+# The closure root goes on sys.path FIRST: the resolution has to see the same
+# path the transform will, or a closure-root package is invisible to the lookup
+# and present at import — the ordering that made this look like a missing
+# dependency rather than a shadowed one.
 sys.path.insert(0, ".")
+import importlib.util                    # noqa: E402 — only this shim needs it
+_real_path = None
+if "nxd" in sys.modules:
+    # Already imported: read the live module's own path rather than calling
+    # find_spec, which raises ValueError on an entry with no __spec__. Giving up
+    # here would overwrite a provably-importable package with the path-less stub
+    # two lines below — reintroducing the exact shadowing this shim exists to
+    # remove, in the one case where the real package was known to be present.
+    _real_path = getattr(sys.modules["nxd"], "__path__", None)
+else:
+    try:
+        _spec = importlib.util.find_spec("nxd")
+    except (ImportError, ValueError):
+        # A broken or partially-installed `nxd` must not take the dry run down
+        # before it starts; a path-less stub is the pre-existing behaviour.
+        _spec = None
+    _real_path = _spec.submodule_search_locations if _spec is not None else None
+if _real_path:
+    nxd.__path__ = list(_real_path)
+sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": ctx})
 try:
     from transform.main import BASE_MODELS, PHYSICAL_MODELS, ingest  # noqa: E402
 except Exception as exc:

@@ -4,10 +4,10 @@ Run one mapper spec over sample inputs and print the resulting long-form rows,
 the resolver's wide projection, and a summary of issues counted by
 `value_status`.
 
-    python -m field_mapper run     samples/01-row-scores --dry-run
-    python -m field_mapper preflight samples/01-row-scores
-    python -m field_mapper canary  samples/01-row-scores --dry-run --canary 1
-    python -m field_mapper verify  samples/                 # the whole suite
+    python -m nxd.experimental.field_mapper run     samples/01-row-scores --dry-run
+    python -m nxd.experimental.field_mapper preflight samples/01-row-scores
+    python -m nxd.experimental.field_mapper canary  samples/01-row-scores --dry-run --canary 1
+    python -m nxd.experimental.field_mapper verify  samples/                 # the whole suite
 
 Two execution modes, and the distinction is load-bearing:
 
@@ -38,45 +38,52 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, fields as dc_fields, replace as dc_replace
+from dataclasses import dataclass
+from dataclasses import fields as dc_fields
+from dataclasses import replace as dc_replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
+from typing import Callable
+from typing import Mapping
+from typing import Sequence
+from typing import cast
 
 from . import __version__
-from .errors import (
-    BudgetExceeded,
-    FieldMapperError,
-    GrantError,
-    SpecError,
-    SystemicError,
-)
+from .errors import BudgetExceeded
+from .errors import FieldMapperError
+from .errors import GrantError
+from .errors import SpecError
+from .errors import SystemicError
 from .grant import Grant
 from .identity import target_row_key
 from .ledger import read_attempts
-from .mapper import MapperInput, MapResult, map_inputs, system_prompt_for
+from .mapper import MapperInput
+from .mapper import MapResult
+from .mapper import map_inputs
+from .mapper import system_prompt_for
 from .media import MediaInput
 from .providers import PROVIDER_KINDS
-from .records import (
-    EVIDENCE_COLUMNS,
-    PROPOSAL_COLUMNS,
-    MapperProposal,
-    MapperReview,
-    ValueStatus,
-    evidence_from_csv,
-    proposals_from_csv,
-    reviews_from_csv,
-    rows_to_csv,
-)
-from .resolver import BijectionError, EffectiveSource, resolve
-from .schema import compile_schema, describe_unenforceable, routing_table
-from .spec import CrossFieldCheck, MapperSpec
-from .transport import (
-    RunBudget,
-    rates_for,
-    TransportConfig,
-    estimate,
-    resolve_api_key,
-)
+from .records import EVIDENCE_COLUMNS
+from .records import PROPOSAL_COLUMNS
+from .records import MapperProposal
+from .records import MapperReview
+from .records import ValueStatus
+from .records import evidence_from_csv
+from .records import proposals_from_csv
+from .records import reviews_from_csv
+from .records import rows_to_csv
+from .resolver import BijectionError
+from .resolver import EffectiveSource
+from .resolver import resolve
+from .schema import compile_schema
+from .schema import describe_unenforceable
+from .schema import routing_table
+from .spec import MapperSpec
+from .transport import RunBudget
+from .transport import TransportConfig
+from .transport import estimate
+from .transport import rates_for
+from .transport import resolve_api_key
 from .validate import evaluate_coverage
 
 EXIT_OK = 0
@@ -138,7 +145,7 @@ class Fixture:
         if not bound.harness_version:
             bound = _stamp_harness_version(bound)
 
-        grant_raw = json.loads((base / GRANT_FILE).read_text(encoding="utf-8"))
+        grant_raw: dict[str, Any] = json.loads((base / GRANT_FILE).read_text(encoding="utf-8"))
         # A fixture stores `"mapper_spec_id": "<derived>"` rather than a literal
         # hash: pinning the hash in a checked-in file would make every harness
         # or spec edit a mass fixture rewrite, and a reviewer cannot verify a
@@ -148,27 +155,19 @@ class Fixture:
             grant_raw["mapper_spec_id"] = bound.mapper_spec_id
         grant = Grant.from_dict(grant_raw)
 
-        raw_inputs = json.loads((base / INPUTS_FILE).read_text(encoding="utf-8"))
+        raw_inputs: list[dict[str, Any]] = json.loads((base / INPUTS_FILE).read_text(encoding="utf-8"))
         inputs = [_input_from_dict(item, base) for item in raw_inputs]
 
         recorded_path = base / RECORDED_FILE
-        recorded = (
-            json.loads(recorded_path.read_text(encoding="utf-8"))
-            if recorded_path.exists()
-            else {}
+        recorded: dict[str, Any] = (
+            json.loads(recorded_path.read_text(encoding="utf-8")) if recorded_path.exists() else {}
         )
         corroborated_path = base / CORROBORATED_FILE
-        corroborated = (
-            json.loads(corroborated_path.read_text(encoding="utf-8"))
-            if corroborated_path.exists()
-            else {}
+        corroborated: dict[str, Any] = (
+            json.loads(corroborated_path.read_text(encoding="utf-8")) if corroborated_path.exists() else {}
         )
         reviews_path = base / REVIEWS_FILE
-        reviews = (
-            reviews_from_csv(reviews_path.read_text(encoding="utf-8"))
-            if reviews_path.exists()
-            else []
-        )
+        reviews = reviews_from_csv(reviews_path.read_text(encoding="utf-8")) if reviews_path.exists() else []
         # A fixture's reviews.csv addresses rows by `input_id` and writes
         # `<derived>` for the three binding hashes. `bind_reviews` resolves both
         # against the run's actual proposals. Checking in literal hashes would
@@ -176,11 +175,7 @@ class Fixture:
         # 32-hex literal anyway. What the fixture DOES check in is the binding
         # *shape*, which is the thing under test.
         expect_path = base / EXPECT_FILE
-        expect = (
-            json.loads(expect_path.read_text(encoding="utf-8"))
-            if expect_path.exists()
-            else {}
-        )
+        expect: dict[str, Any] = json.loads(expect_path.read_text(encoding="utf-8")) if expect_path.exists() else {}
         return cls(
             path=base,
             spec=bound,
@@ -263,12 +258,7 @@ def bind_reviews_to_landed(
             try:
                 by_input_id[item.input_id] = target_row_key(
                     {k: item.identity[k] for k in grain.identity_fields},
-                    source_locators={
-                        k: item.fields[k]
-                        for k in grain.source_locators
-                        if k in item.fields
-                    }
-                    or None,
+                    source_locators={k: item.fields[k] for k in grain.source_locators if k in item.fields} or None,
                 )
             except (KeyError, SpecError):
                 # An input whose identity cannot be derived was quarantined and
@@ -292,14 +282,10 @@ def bind_reviews_to_landed(
                 bound_value_hash=value_hash,
                 override=review.override,
                 bound_input_snapshot_id=(
-                    snapshot
-                    if review.bound_input_snapshot_id == "<derived>"
-                    else review.bound_input_snapshot_id
+                    snapshot if review.bound_input_snapshot_id == "<derived>" else review.bound_input_snapshot_id
                 ),
                 bound_mapper_spec_id=(
-                    spec_id
-                    if review.bound_mapper_spec_id == "<derived>"
-                    else review.bound_mapper_spec_id
+                    spec_id if review.bound_mapper_spec_id == "<derived>" else review.bound_mapper_spec_id
                 ),
                 reviewer=review.reviewer,
                 reviewed_at=review.reviewed_at,
@@ -309,9 +295,7 @@ def bind_reviews_to_landed(
     return bound
 
 
-def bind_reviews(
-    reviews: Sequence[MapperReview], result: MapResult, fixture: Fixture
-) -> list[MapperReview]:
+def bind_reviews(reviews: Sequence[MapperReview], result: MapResult, fixture: Fixture) -> list[MapperReview]:
     """Resolve a fixture review's `<derived>` placeholders against this run.
 
     A checked-in review addresses its target row by `input_id` (readable) and
@@ -335,9 +319,7 @@ def bind_reviews(
     return bind_reviews_to_landed(reviews, result.proposals, fixture)
 
 
-def _media_from_dicts(
-    raws: Sequence[Mapping[str, Any]], base: Path
-) -> tuple[MediaInput, ...]:
+def _media_from_dicts(raws: Sequence[Mapping[str, Any]], base: Path) -> tuple[MediaInput, ...]:
     """Build `MediaInput`s, resolving `file` against the fixture directory.
 
     A fixture declares `{"file": "invoice.png", "media_type": "image/png"}` and
@@ -470,20 +452,22 @@ class RecordedPlayer:
             )
         entry = self._recorded[item.input_id]
         if isinstance(entry, list):
-            index = min(self._served.get(item.input_id, 0), len(entry) - 1)
+            entry_list = cast(list[Any], entry)
+            index = min(self._served.get(item.input_id, 0), len(entry_list) - 1)
             self._served[item.input_id] = index + 1
-            entry = entry[index]
+            entry = entry_list[index]
 
         # A recorded entry may model a transport outcome rather than an answer:
         # `{"__outcome__": "refusal"}` exercises the non-SUCCESS branches
         # without needing the SDK to produce them.
         if isinstance(entry, Mapping) and "__outcome__" in entry:
+            outcome_entry = cast(Mapping[str, Any], entry)
             return RecordedCall(
                 parsed=None,
                 response_hash="",
-                stop_reason=entry.get("stop_reason"),
-                error_code=str(entry["__outcome__"]),
-                error_detail=entry.get("detail"),
+                stop_reason=outcome_entry.get("stop_reason"),
+                error_code=str(outcome_entry["__outcome__"]),
+                error_detail=outcome_entry.get("detail"),
             )
 
         payload = json.dumps(entry, sort_keys=True, separators=(",", ":"))
@@ -492,7 +476,11 @@ class RecordedPlayer:
         # reserved transport key can never be mistaken for a target field —
         # the wire schema is closed, and an unknown key would be a validation
         # error rather than the citation set it actually is.
-        answer = {k: v for k, v in entry.items() if k != "__citations__"}
+        entry_map = cast(dict[str, Any], entry)
+        answer: dict[str, Any] = {k: v for k, v in entry_map.items() if k != "__citations__"}
+        citation_entries: Sequence[Mapping[str, Any]] = cast(
+            Sequence[Mapping[str, Any]], entry_map.get("__citations__") or ()
+        )
         cites = tuple(
             RecordedCitation(
                 text=str(c.get("text", "")),
@@ -501,7 +489,7 @@ class RecordedPlayer:
                 char_start=c.get("char_start"),
                 char_end=c.get("char_end"),
             )
-            for c in (entry.get("__citations__") or ())
+            for c in citation_entries
         )
         return RecordedCall(
             parsed=dict(answer),
@@ -537,7 +525,8 @@ def _live_caller(
     `mapper_spec_id` claimed another, and reviews bound to a model that never
     ran.
     """
-    from .transport import BudgetLedger, Client  # noqa: PLC0415
+    from .transport import BudgetLedger  # noqa: PLC0415
+    from .transport import Client  # noqa: PLC0415
 
     # Only the Anthropic provider needs a key; `claude_cli` authenticates itself.
     api_key = resolve_api_key() if provider == "anthropic" else None
@@ -572,9 +561,7 @@ def _live_caller(
             # The correction turn names every outstanding violation at once.
             # One round trip per violation is how a validation budget of 2
             # becomes a budget of 2/number-of-fields.
-            instruction += "\n\nYour previous answer had these problems:\n" + "\n".join(
-                f"- {v}" for v in violations
-            )
+            instruction += "\n\nYour previous answer had these problems:\n" + "\n".join(f"- {v}" for v in violations)
         return client.call(
             # Must match what `map_inputs` hashed into `prompt_hash` for this
             # same item, or the ledger records a prompt the API never saw.
@@ -586,16 +573,14 @@ def _live_caller(
             input_hash=item.input_id,
         )
 
-    corroborate: Any | None = None
+    corroborate: Callable[..., Any] | None = None
     if fixture.spec.corroboration_model:
         # A SECOND client on the SECOND model. Its own TransportConfig, because
         # capability gating (`supports_reasoning_controls`) is per-model — which
         # is exactly why the spec knob is a model id rather than a config copy:
         # corroborating an opus primary with a pre-4.6 model must send a
         # different request shape, not the same one twice.
-        corroboration_config = dc_replace(
-            config, model=fixture.spec.corroboration_model
-        )
+        corroboration_config = dc_replace(config, model=fixture.spec.corroboration_model)
         corroboration_client = Client(
             api_key=api_key,
             config=corroboration_config,
@@ -610,7 +595,7 @@ def _live_caller(
             provider_cwd=str(fixture.path),
         )
 
-        def corroborate(  # noqa: F811 - deliberate conditional definition
+        def _corroborate(
             *,
             item: MapperInput,
             spec: MapperSpec,
@@ -629,6 +614,8 @@ def _live_caller(
                 media_inputs=item.media,
                 input_hash=item.input_id,
             )
+
+        corroborate = _corroborate
 
     return call, api_key, corroborate
 
@@ -701,14 +688,8 @@ def _render_evidence(result: MapResult) -> None:
 def _render_wide(resolution: Any, fields: Sequence[str]) -> None:
     _print_header("Wide projection (derived — resolved from the long form)")
     header = ["target_row_key", *fields]
-    rows = [
-        [str(row["target_row_key"])] + [_fmt(row.get(f)) for f in fields]
-        for row in resolution.wide_rows
-    ]
-    widths = [
-        max(len(header[i]), *(len(r[i]) for r in rows)) if rows else len(header[i])
-        for i in range(len(header))
-    ]
+    rows = [[str(row["target_row_key"])] + [_fmt(row.get(f)) for f in fields] for row in resolution.wide_rows]
+    widths = [max(len(header[i]), *(len(r[i]) for r in rows)) if rows else len(header[i]) for i in range(len(header))]
     print("  " + "  ".join(h.ljust(widths[i]) for i, h in enumerate(header)))
     print("  " + "  ".join("-" * widths[i] for i in range(len(header))))
     for row in rows:
@@ -824,10 +805,7 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
     print(f"  harness_version    {spec.harness_version}")
     print(f"  target fields      {', '.join(spec.field_names)}")
     print(f"  inputs             {len(fixture.inputs)}")
-    print(
-        f"  cardinality        [{spec.cardinality.min_rows}, "
-        f"{spec.cardinality.max_rows}]"
-    )
+    print(f"  cardinality        [{spec.cardinality.min_rows}, {spec.cardinality.max_rows}]")
 
     _print_header("Constraint routing (CONTRACT.md §8)")
     routes = routing_table(spec)
@@ -851,10 +829,7 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
             size = m.size_bytes()
             sized = f"{size:,} bytes" if size is not None else "size unknown"
             label = f" [{m.label}]" if m.label else ""
-            print(
-                f"  {m.media_type:<20} {m.kind:<9} via {m.source_form:<8} "
-                f"{sized}{label}"
-            )
+            print(f"  {m.media_type:<20} {m.kind:<9} via {m.source_form:<8} {sized}{label}")
 
     # Derived from the declared fields, never from a declaration the spec could
     # quietly set to 1.0. A media-direct run has no substring haystack, so saying
@@ -883,11 +858,7 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
         # +1 for the corroborating read. Without it the bound omits a whole
         # extra call per media-direct input, so the gate that exists to refuse
         # at the boundary would wave through a run it cannot afford.
-        calls_per_cell=(
-            1
-            + spec.thresholds.max_validation_retries
-            + (1 if spec.corroboration_model else 0)
-        ),
+        calls_per_cell=(1 + spec.thresholds.max_validation_retries + (1 if spec.corroboration_model else 0)),
         # from_spec, not TransportConfig(effort=...): the latter drops spec.model,
         # so preflight priced a haiku run at Opus rates AND reported
         # pricing_is_approximate=False. The same defect had already been fixed
@@ -919,8 +890,10 @@ def cmd_preflight(fixture: Fixture, args: argparse.Namespace) -> int:
             dearer = rate_in > prim_in or rate_out > prim_out
             cheaper = rate_in < prim_in or rate_out < prim_out
             direction = (
-                "LOW" if dearer and not cheaper
-                else "high" if cheaper and not dearer
+                "LOW"
+                if dearer and not cheaper
+                else "high"
+                if cheaper and not dearer
                 else "in a direction that depends on the input/output mix"
             )
             print(
@@ -963,9 +936,7 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
     corroborate: Any | None = None
     if args.dry_run:
         call = RecordedPlayer(fixture.recorded)
-        corroborate = (
-            RecordedPlayer(fixture.corroborated) if fixture.corroborated else None
-        )
+        corroborate = RecordedPlayer(fixture.corroborated) if fixture.corroborated else None
     else:
         # Building the live caller is itself a blocking operation: it imports
         # the SDK and resolves the key, and both failures are systemic. Caught
@@ -1005,7 +976,7 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
         print(f"\n  BUDGET BLOCK:\n    {exc}")
         return EXIT_BLOCKED
     except SystemicError as exc:
-        print(f"\n  SYSTEMIC FAILURE — the build blocks, nothing lands:")
+        print("\n  SYSTEMIC FAILURE — the build blocks, nothing lands:")
         print(f"    [{exc.error_code}] {exc}")
         return EXIT_BLOCKED
 
@@ -1020,9 +991,7 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
         fields=list(spec.field_names),
         row_keys=result.row_keys,
         # PER FIELD, not the weakest field's floor.
-        min_evidence_per_ok_cell={
-            f.name: f.min_evidence for f in spec.target_fields
-        },
+        min_evidence_per_ok_cell={f.name: f.min_evidence for f in spec.target_fields},
     )
     _render_wide(resolution, spec.field_names)
     _render_provenance(resolution)
@@ -1066,10 +1035,7 @@ def cmd_run(fixture: Fixture, args: argparse.Namespace) -> int:
 
     if result.ledger_path:
         scan = read_attempts(result.ledger_path)
-        print(
-            f"\n  ledger: {len(scan.attempts)} attempt line(s) at "
-            f"{result.ledger_path}"
-        )
+        print(f"\n  ledger: {len(scan.attempts)} attempt line(s) at {result.ledger_path}")
         if scan.torn_final_line:
             print("    (a torn final line was discarded — the run crashed mid-write)")
 
@@ -1104,29 +1070,18 @@ def cmd_resolve(fixture: Fixture, args: argparse.Namespace) -> int:
     Exercises the review-binding path in isolation: change `reviews.csv`, run
     this, and see confirmations apply or come unbound with a `stale_reason`.
     """
-    landed = Path(
-        args.run_dir or (Path(__file__).parent.parent / "runs" / fixture.name)
-    ) / "landed"
+    landed = Path(args.run_dir or (Path(__file__).parent.parent / "runs" / fixture.name)) / "landed"
     proposals_csv = landed / "mapper_proposals.csv"
     if not proposals_csv.exists():
-        print(
-            f"  no landed proposals at {landed}. Run `run --dry-run --write-csv` "
-            "first."
-        )
+        print(f"  no landed proposals at {landed}. Run `run --dry-run --write-csv` first.")
         return EXIT_USAGE
 
     evidence_csv = landed / "mapper_evidence.csv"
-    evidence = (
-        evidence_from_csv(evidence_csv.read_text(encoding="utf-8"))
-        if evidence_csv.exists()
-        else []
-    )
+    evidence = evidence_from_csv(evidence_csv.read_text(encoding="utf-8")) if evidence_csv.exists() else []
     # Atoms are passed so `evidence_count` survives the round trip: it is
     # DERIVED from len(proposal.evidence), so parsing without them would make
     # every proposal claim zero evidence while the sidecar still holds atoms.
-    proposals = proposals_from_csv(
-        proposals_csv.read_text(encoding="utf-8"), evidence
-    )
+    proposals = proposals_from_csv(proposals_csv.read_text(encoding="utf-8"), evidence)
 
     # Reviews come from the FIXTURE, not from the landed directory. That is the
     # whole point of the review model: `mapper_proposals` is replace-loaded on
@@ -1140,15 +1095,10 @@ def cmd_resolve(fixture: Fixture, args: argparse.Namespace) -> int:
         reviews,
         evidence,
         fields=fixture.spec.field_names,
-        min_evidence_per_ok_cell={
-            f.name: f.min_evidence for f in fixture.spec.target_fields
-        },
+        min_evidence_per_ok_cell={f.name: f.min_evidence for f in fixture.spec.target_fields},
     )
 
-    print(
-        f"  {len(proposals)} proposal(s), {len(evidence)} evidence atom(s), "
-        f"{len(reviews)} review(s) — no model call"
-    )
+    print(f"  {len(proposals)} proposal(s), {len(evidence)} evidence atom(s), {len(reviews)} review(s) — no model call")
     _render_wide(resolution, fixture.spec.field_names)
     _render_provenance(resolution)
 
@@ -1164,25 +1114,18 @@ def cmd_resolve(fixture: Fixture, args: argparse.Namespace) -> int:
             # by several bindings at once (the value moved AND the spec
             # changed), and collapsing that to one reason would hide half of
             # what a re-reviewer needs to know.
-            reasons = ", ".join(
-                getattr(r, "value", str(r)) for r in stale.stale_reasons
-            )
+            reasons = ", ".join(getattr(r, "value", str(r)) for r in stale.stale_reasons)
             print(f"    {stale.target_row_key[:10]} {stale.field}: {reasons}")
     else:
         print("\n  no stale reviews")
 
-    applied = [
-        cell
-        for cell in resolution.effective
-        if cell.effective_source is not EffectiveSource.MODEL_PROPOSED
-    ]
+    applied = [cell for cell in resolution.effective if cell.effective_source is not EffectiveSource.MODEL_PROPOSED]
     if applied:
         print(f"  {len(applied)} cell(s) resolved from a REVIEW, not the model:")
         for cell in applied:
             print(
                 f"    {cell.target_row_key[:10]} {cell.field} <- "
-                f"{cell.effective_source.value}"
-                + (f" (by {cell.reviewer})" if cell.reviewer else "")
+                f"{cell.effective_source.value}" + (f" (by {cell.reviewer})" if cell.reviewer else "")
             )
     else:
         print("  no review overrode a proposal")
@@ -1321,9 +1264,7 @@ def _check_canonical_coverage() -> list[str]:
             "model": "claude-opus-5",
             "effort": "medium",
             "accepts_media": ["application/pdf"],
-            "cross_field_checks": [
-                {"kind": "product_equals", "target": "a", "operands": ["b", "c"]}
-            ],
+            "cross_field_checks": [{"kind": "product_equals", "target": "a", "operands": ["b", "c"]}],
             "corroboration_model": "claude-sonnet-5",
             # Legal here only because `accepts_media` above is a DOCUMENT type;
             # `citations` on an image spec is refused at construction.
@@ -1342,13 +1283,10 @@ def _check_canonical_coverage() -> list[str]:
             f"collide on one mapper_spec_id"
         )
     for name in sorted(canonical_keys - declared):
-        problems.append(
-            f"to_canonical() emits {name!r}, which is not a MapperSpec field"
-        )
+        problems.append(f"to_canonical() emits {name!r}, which is not a MapperSpec field")
     for name in sorted(_HASH_EXCLUDED & canonical_keys):
         problems.append(
-            f"MapperSpec.{name} is in _HASH_EXCLUDED but to_canonical() emits "
-            f"it anyway — the exclusion list is lying"
+            f"MapperSpec.{name} is in _HASH_EXCLUDED but to_canonical() emits it anyway — the exclusion list is lying"
         )
     return problems
 
@@ -1366,7 +1304,8 @@ def _check_systemic_codes() -> list[str]:
     three codes while five other systemic failures — including `cancelled` and
     `budget_exceeded` — landed as complete runs.
     """
-    from .errors import ERROR_CODES, SYSTEMIC_ERROR_CODES
+    from .errors import ERROR_CODES
+    from .errors import SYSTEMIC_ERROR_CODES
 
     #: Pinned deliberately. `coverage_blocked` is systemic in the hierarchy but
     #: excluded from the gate's inputs — it is what the gate RAISES, and feeding
@@ -1564,7 +1503,7 @@ def cmd_grant_check(spec_path: Path, grant_path: Path) -> int:
     try:
         grant.check(bound)
     except GrantError as exc:
-        problems = []
+        problems: list[dict[str, str]] = []
         for line in str(exc).splitlines():
             line = line.strip().lstrip("- ").strip()
             if not line or line.startswith("consent grant does not authorize"):
@@ -1616,9 +1555,7 @@ def cmd_pins(root: Path, args: argparse.Namespace) -> int:
         print("  ok   systemic: every SystemicError code blocks at the gate")
     problems.extend(systemic_problems)
 
-    fixtures = sorted(
-        p for p in root.iterdir() if p.is_dir() and (p / SPEC_FILE).exists()
-    )
+    fixtures = sorted(p for p in root.iterdir() if p.is_dir() and (p / SPEC_FILE).exists())
     observed: dict[str, str] = {}
     for path in fixtures:
         try:
@@ -1643,14 +1580,8 @@ def cmd_pins(root: Path, args: argparse.Namespace) -> int:
         elif pinned != spec_id:
             problems.append(f"{name}: hash moved")
             print(f"  FAIL {name}: pinned {pinned}, observed {spec_id}")
-            print(
-                "         a moved hash unbinds every grant and invalidates "
-                "every review bound to this spec."
-            )
-            print(
-                "         intended? update the pin IN THIS COMMIT with the "
-                "reason. not intended? this is the bug."
-            )
+            print("         a moved hash unbinds every grant and invalidates every review bound to this spec.")
+            print("         intended? update the pin IN THIS COMMIT with the reason. not intended? this is the bug.")
         else:
             print(f"  ok   {name}  {spec_id}")
 
@@ -1694,9 +1625,7 @@ def cmd_verify(root: Path, args: argparse.Namespace) -> int:
     injected-instruction document ever starts producing a clean `ok` cell, this
     goes red rather than printing a satisfied summary.
     """
-    fixtures = sorted(
-        p for p in root.iterdir() if p.is_dir() and (p / SPEC_FILE).exists()
-    )
+    fixtures = sorted(p for p in root.iterdir() if p.is_dir() and (p / SPEC_FILE).exists())
     if not fixtures:
         print(f"  no fixtures under {root}")
         return EXIT_USAGE
@@ -1742,11 +1671,7 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
             # visibly distinct in the fixture rather than interleaved in one
             # file. None when the fixture declares no corroboration, which
             # `map_inputs` refuses if the spec asked for it.
-            corroborate=(
-                RecordedPlayer(fixture.corroborated)
-                if fixture.corroborated
-                else None
-            ),
+            corroborate=(RecordedPlayer(fixture.corroborated) if fixture.corroborated else None),
         )
     except GrantError as exc:
         if expect.get("grant_refused"):
@@ -1761,15 +1686,10 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
             # longer tests.
             want_code = expect.get("blocks_error_code")
             if want_code and exc.error_code != want_code:
-                return (
-                    f"blocked with [{exc.error_code}], expected "
-                    f"[{want_code}]: {exc}"
-                )
+                return f"blocked with [{exc.error_code}], expected [{want_code}]: {exc}"
             want_text = expect.get("blocks_message_contains")
             if want_text and want_text not in str(exc):
-                return (
-                    f"block message did not contain {want_text!r}: {exc}"
-                )
+                return f"block message did not contain {want_text!r}: {exc}"
             return None
         return f"systemic failure: [{exc.error_code}] {exc}"
 
@@ -1780,31 +1700,23 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
     quarantined = {q.input_id for q in result.quarantined}
     want_quarantined = set(expect.get("quarantined", []))
     if quarantined != want_quarantined:
-        return (
-            f"quarantined {sorted(quarantined)}, expected "
-            f"{sorted(want_quarantined)}"
-        )
+        return f"quarantined {sorted(quarantined)}, expected {sorted(want_quarantined)}"
 
     # Status-count expectations.
     counts = result.status_counts()
-    for status, want in (expect.get("status_counts") or {}).items():
+    status_counts: Mapping[str, int] = cast(Mapping[str, int], expect.get("status_counts") or {})
+    for status, want in status_counts.items():
         if counts.get(status, 0) != want:
-            return (
-                f"status {status}: got {counts.get(status, 0)}, expected {want}"
-            )
+            return f"status {status}: got {counts.get(status, 0)}, expected {want}"
 
     # Evidence verify_status expectations.
     ev_counts: dict[str, int] = {}
     for atom in result.evidence:
-        ev_counts[atom.verify_status.value] = (
-            ev_counts.get(atom.verify_status.value, 0) + 1
-        )
-    for status, want in (expect.get("evidence_counts") or {}).items():
+        ev_counts[atom.verify_status.value] = ev_counts.get(atom.verify_status.value, 0) + 1
+    evidence_counts: Mapping[str, int] = cast(Mapping[str, int], expect.get("evidence_counts") or {})
+    for status, want in evidence_counts.items():
         if ev_counts.get(status, 0) != want:
-            return (
-                f"evidence {status}: got {ev_counts.get(status, 0)}, "
-                f"expected {want}"
-            )
+            return f"evidence {status}: got {ev_counts.get(status, 0)}, expected {want}"
 
     # Explicit per-cell value expectations, for the cases where the NUMBER is
     # the finding (an injected "return 5" must not land as 5).
@@ -1830,15 +1742,9 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
                 )
         if "value" in want_cell:
             if proposal.typed.value != want_cell["value"]:
-                return (
-                    f"{proposal.field}: value {proposal.typed.value!r}, "
-                    f"expected {want_cell['value']!r}"
-                )
+                return f"{proposal.field}: value {proposal.typed.value!r}, expected {want_cell['value']!r}"
         if "value_not" in want_cell and proposal.typed.value == want_cell["value_not"]:
-            return (
-                f"{proposal.field}: landed the forbidden value "
-                f"{want_cell['value_not']!r} — the attack succeeded"
-            )
+            return f"{proposal.field}: landed the forbidden value {want_cell['value_not']!r} — the attack succeeded"
 
     # Gate expectation.
     report = evaluate_coverage(
@@ -1855,9 +1761,7 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
         result.evidence,
         fields=list(fixture.spec.field_names),
         row_keys=result.row_keys,
-        min_evidence_per_ok_cell={
-            f.name: f.min_evidence for f in fixture.spec.target_fields
-        },
+        min_evidence_per_ok_cell={f.name: f.min_evidence for f in fixture.spec.target_fields},
     )
     # The same three asserts `run` applies, in the same order. `verify` and
     # `run` must agree on whether a fixture blocks, or the suite would pass a
@@ -1876,23 +1780,18 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
 
     blocked = report.blocked or structural_failed
     if "blocks" in expect and bool(expect["blocks"]) != blocked:
-        return (
-            f"expected blocks={expect['blocks']}, got blocked={blocked}"
-            + (f" ({'; '.join(report.reasons)})" if report.reasons else "")
+        return f"expected blocks={expect['blocks']}, got blocked={blocked}" + (
+            f" ({'; '.join(report.reasons)})" if report.reasons else ""
         )
 
     # A4: which cells carry unfalsifiable evidence. Declared per fixture so the
     # media-direct path cannot silently start looking checkable — the whole
     # point of the column is that `ok` alone does not distinguish the two.
     if "unfalsifiable_cells" in expect:
-        marked = sorted(
-            c.field for c in resolution.effective if c.evidence_unfalsifiable
-        )
+        marked = sorted(c.field for c in resolution.effective if c.evidence_unfalsifiable)
         want_marked = sorted(expect["unfalsifiable_cells"])
         if marked != want_marked:
-            return (
-                f"unfalsifiable cells {marked}, expected {want_marked}"
-            )
+            return f"unfalsifiable cells {marked}, expected {want_marked}"
 
     # -- resolve round trip ------------------------------------------------
     # Land the long form to CSV, read it back, and re-resolve. `resolve` is a
@@ -1906,21 +1805,15 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
     # re-resolved wide rows against the in-memory ones makes that loud.
     landed_proposals = proposals_from_csv(
         rows_to_csv([p.as_row() for p in result.proposals], PROPOSAL_COLUMNS),
-        evidence_from_csv(
-            rows_to_csv([e.as_row() for e in result.evidence], EVIDENCE_COLUMNS)
-        ),
+        evidence_from_csv(rows_to_csv([e.as_row() for e in result.evidence], EVIDENCE_COLUMNS)),
     )
     reresolved = resolve(
         landed_proposals,
         bind_reviews_to_landed(fixture.reviews, landed_proposals, fixture),
-        evidence_from_csv(
-            rows_to_csv([e.as_row() for e in result.evidence], EVIDENCE_COLUMNS)
-        ),
+        evidence_from_csv(rows_to_csv([e.as_row() for e in result.evidence], EVIDENCE_COLUMNS)),
         fields=list(fixture.spec.field_names),
         row_keys=result.row_keys,
-        min_evidence_per_ok_cell={
-            f.name: f.min_evidence for f in fixture.spec.target_fields
-        },
+        min_evidence_per_ok_cell={f.name: f.min_evidence for f in fixture.spec.target_fields},
     )
     if reresolved.wide_rows != resolution.wide_rows:
         return (
@@ -1938,15 +1831,11 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
     if reresolved.provenance != resolution.provenance:
         before = {(r["target_row_key"], r["field"]): r for r in resolution.provenance}
         diffs = [
-            f"{row['field']}: {before.get((row['target_row_key'], row['field']))} "
-            f"-> {row}"
+            f"{row['field']}: {before.get((row['target_row_key'], row['field']))} -> {row}"
             for row in reresolved.provenance
             if before.get((row["target_row_key"], row["field"])) != row
         ]
-        return (
-            "resolve round trip changed the provenance sidecar: "
-            + (diffs[0] if diffs else "row set differs")
-        )
+        return "resolve round trip changed the provenance sidecar: " + (diffs[0] if diffs else "row set differs")
     # Stale review IDENTITY, not just the count. A swap — one review going
     # stale in place of another — keeps the count and changes who has to
     # re-review.
@@ -1966,7 +1855,7 @@ def _verify_one(fixture: Fixture, args: argparse.Namespace) -> str | None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="field_mapper",
+        prog="python -m nxd.experimental.field_mapper",
         description=(
             "Run one mapper spec over sample inputs; print long-form rows, the "
             "wide projection, and issue counts by value_status."
@@ -1975,16 +1864,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         choices=(
-            "preflight", "canary", "run", "resolve", "verify", "pins",
-            "spec-id", "grant-check",
+            "preflight",
+            "canary",
+            "run",
+            "resolve",
+            "verify",
+            "pins",
+            "spec-id",
+            "grant-check",
         ),
     )
     parser.add_argument(
         "target",
         nargs="?",
         help=(
-            "fixture directory (or the samples root, for `verify`; a spec.json "
-            "path for `spec-id` and `grant-check`)"
+            "fixture directory (or the samples root, for `verify`; a spec.json path for `spec-id` and `grant-check`)"
         ),
     )
     parser.add_argument(
@@ -2042,7 +1936,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    default_root = Path(__file__).parent.parent / "samples"
+    # The acceptance fixtures ship inside the package, so `verify` and `pins`
+    # answer "is this harness intact?" from any install, not only from a repo
+    # checkout. Resolved in two places because this file has two homes: beside
+    # this module in the installed package, and one level up in the skill repo
+    # that is its source of truth. Checking both keeps the two copies
+    # byte-identical, so neither can quietly drift from the other.
+    default_root = next(
+        (p for p in (Path(__file__).parent / "samples", Path(__file__).parent.parent / "samples") if p.is_dir()),
+        Path(__file__).parent / "samples",
+    )
     target = Path(args.target) if args.target else default_root
 
     try:

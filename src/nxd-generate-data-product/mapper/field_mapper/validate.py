@@ -23,11 +23,17 @@ and so no code path here can reach the wire.
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field as dc_field
+from collections.abc import Callable
+from collections.abc import Iterable
+from collections.abc import Mapping
+from collections.abc import Sequence
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from typing import Any
 
-from .errors import SYSTEMIC_ERROR_CODES, CoverageBlocked, SpecError
+from .errors import SYSTEMIC_ERROR_CODES
+from .errors import CoverageBlocked
+from .errors import SpecError
 
 #: Why each systemic code blocks, in the words the gate reports to a human.
 #: Only narration — `SYSTEMIC_ERROR_CODES` decides WHAT blocks, and a code
@@ -162,43 +168,18 @@ class FieldConstraint:
     def __post_init__(self) -> None:
         if self.value_type not in _TYPE_SLOTS:
             raise SpecError(
-                f"field {self.name!r}: unknown value_type {self.value_type!r}; "
-                f"expected one of {sorted(_TYPE_SLOTS)}"
+                f"field {self.name!r}: unknown value_type {self.value_type!r}; expected one of {sorted(_TYPE_SLOTS)}"
             )
-        if (
-            self.minimum is not None
-            and self.maximum is not None
-            and self.minimum > self.maximum
-        ):
-            raise SpecError(
-                f"field {self.name!r}: minimum {self.minimum} exceeds maximum "
-                f"{self.maximum}"
-            )
-        if (
-            self.min_length is not None
-            and self.max_length is not None
-            and self.min_length > self.max_length
-        ):
-            raise SpecError(
-                f"field {self.name!r}: min_length {self.min_length} exceeds "
-                f"max_length {self.max_length}"
-            )
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise SpecError(f"field {self.name!r}: minimum {self.minimum} exceeds maximum {self.maximum}")
+        if self.min_length is not None and self.max_length is not None and self.min_length > self.max_length:
+            raise SpecError(f"field {self.name!r}: min_length {self.min_length} exceeds max_length {self.max_length}")
         # A range on a non-numeric field is a spec authoring error, not a
         # silently-ignored no-op. Catching it here is why the spec is data.
-        if (self.minimum is not None or self.maximum is not None) and (
-            self.value_type not in ("int", "float")
-        ):
-            raise SpecError(
-                f"field {self.name!r}: numeric range declared on non-numeric "
-                f"type {self.value_type!r}"
-            )
-        if (self.min_length is not None or self.max_length is not None) and (
-            self.value_type != "string"
-        ):
-            raise SpecError(
-                f"field {self.name!r}: length constraint declared on "
-                f"non-string type {self.value_type!r}"
-            )
+        if (self.minimum is not None or self.maximum is not None) and (self.value_type not in ("int", "float")):
+            raise SpecError(f"field {self.name!r}: numeric range declared on non-numeric type {self.value_type!r}")
+        if (self.min_length is not None or self.max_length is not None) and (self.value_type != "string"):
+            raise SpecError(f"field {self.name!r}: length constraint declared on non-string type {self.value_type!r}")
 
     @property
     def slot(self) -> str:
@@ -218,8 +199,16 @@ _SPACE_LIKE = {
     " ",  # no-break space
     " ",  # figure space
     " ",  # narrow no-break space
-    " ", " ", " ", " ", " ",
-    " ", " ", " ", " ", " ",  # en/em/thin spaces
+    " ",
+    " ",
+    " ",
+    " ",
+    " ",
+    " ",
+    " ",
+    " ",
+    " ",
+    " ",  # en/em/thin spaces
     "　",  # ideographic space
     "​",  # zero-width space
 }
@@ -273,8 +262,7 @@ def check_type(constraint: FieldConstraint, value: Any) -> Violation | None:
             return Violation(
                 constraint.name,
                 "type",
-                f"field {constraint.name!r} must be a boolean; "
-                f"received {type(value).__name__}",
+                f"field {constraint.name!r} must be a boolean; received {type(value).__name__}",
             )
         return None
     if expected == "int":
@@ -282,8 +270,7 @@ def check_type(constraint: FieldConstraint, value: Any) -> Violation | None:
             return Violation(
                 constraint.name,
                 "type",
-                f"field {constraint.name!r} must be an integer; "
-                f"received {type(value).__name__} ({value!r})",
+                f"field {constraint.name!r} must be an integer; received {type(value).__name__} ({value!r})",
             )
         return None
     if expected == "float":
@@ -291,8 +278,7 @@ def check_type(constraint: FieldConstraint, value: Any) -> Violation | None:
             return Violation(
                 constraint.name,
                 "type",
-                f"field {constraint.name!r} must be a number; "
-                f"received {type(value).__name__} ({value!r})",
+                f"field {constraint.name!r} must be a number; received {type(value).__name__} ({value!r})",
             )
         return None
     # string and timestamp both arrive as strings on the wire. Timestamp
@@ -302,8 +288,7 @@ def check_type(constraint: FieldConstraint, value: Any) -> Violation | None:
         return Violation(
             constraint.name,
             "type",
-            f"field {constraint.name!r} must be a string; "
-            f"received {type(value).__name__}",
+            f"field {constraint.name!r} must be a string; received {type(value).__name__}",
         )
     return None
 
@@ -320,8 +305,7 @@ def check_enum(constraint: FieldConstraint, value: Any) -> Violation | None:
     return Violation(
         constraint.name,
         "enum",
-        f"field {constraint.name!r} must be one of [{allowed}]; "
-        f"received {value!r}",
+        f"field {constraint.name!r} must be one of [{allowed}]; received {value!r}",
     )
 
 
@@ -388,15 +372,13 @@ def check_range(constraint: FieldConstraint, value: Any) -> Violation | None:
         return Violation(
             constraint.name,
             "range",
-            f"field {constraint.name!r} must be >= {constraint.minimum}; "
-            f"received {value!r}",
+            f"field {constraint.name!r} must be >= {constraint.minimum}; received {value!r}",
         )
     if constraint.maximum is not None and value > constraint.maximum:
         return Violation(
             constraint.name,
             "range",
-            f"field {constraint.name!r} must be <= {constraint.maximum}; "
-            f"received {value!r}",
+            f"field {constraint.name!r} must be <= {constraint.maximum}; received {value!r}",
         )
     return None
 
@@ -416,15 +398,13 @@ def check_length(constraint: FieldConstraint, value: Any) -> Violation | None:
         return Violation(
             constraint.name,
             "length",
-            f"field {constraint.name!r} must be at least "
-            f"{constraint.min_length} characters; received {n}",
+            f"field {constraint.name!r} must be at least {constraint.min_length} characters; received {n}",
         )
     if constraint.max_length is not None and n > constraint.max_length:
         return Violation(
             constraint.name,
             "length",
-            f"field {constraint.name!r} must be at most "
-            f"{constraint.max_length} characters; received {n}",
+            f"field {constraint.name!r} must be at most {constraint.max_length} characters; received {n}",
         )
     return None
 
@@ -536,9 +516,7 @@ def validate_value(
             )
         )
     if not allow_unverified:
-        unverified = sum(
-            1 for s in evidence_statuses if s == VerifyStatus.UNVERIFIED
-        )
+        unverified = sum(1 for s in evidence_statuses if s == VerifyStatus.UNVERIFIED)
         if unverified:
             violations.append(
                 Violation(
@@ -656,12 +634,12 @@ class CoverageReport:
     run still narrates its degrade share rather than reporting a bare number."""
 
     total: int = 0
-    counts: dict[str, int] = dc_field(default_factory=dict)
-    shares: dict[str, float] = dc_field(default_factory=dict)
+    counts: dict[str, int] = dc_field(default_factory=lambda: dict[str, int]())
+    shares: dict[str, float] = dc_field(default_factory=lambda: dict[str, float]())
     unverified_share: float = 0.0
     evidence_total: int = 0
     blocked: bool = False
-    reasons: list[str] = dc_field(default_factory=list)
+    reasons: list[str] = dc_field(default_factory=lambda: list[str]())
 
     @property
     def ok_share(self) -> float:
@@ -670,10 +648,7 @@ class CoverageReport:
     def summary(self) -> str:
         parts = [f"{self.total} cells"]
         for status in sorted(self.counts):
-            parts.append(
-                f"{status}={self.counts[status]} "
-                f"({self.shares.get(status, 0.0):.1%})"
-            )
+            parts.append(f"{status}={self.counts[status]} ({self.shares.get(status, 0.0):.1%})")
         if self.evidence_total:
             parts.append(f"evidence_unverified={self.unverified_share:.1%}")
         return ", ".join(parts)
@@ -748,28 +723,20 @@ def evaluate_coverage(
         # either an empty input or a broken adapter, and "0 of 0 degraded"
         # trivially satisfies every share threshold.
         report.blocked = True
-        report.reasons.append(
-            "no cells were produced; an empty result cannot be validated as "
-            "complete coverage"
-        )
+        report.reasons.append("no cells were produced; an empty result cannot be validated as complete coverage")
         if raise_on_block:
             raise CoverageBlocked(report.reasons[0], report)
         return report
 
     for cell in cells:
-        report.counts[cell.value_status] = (
-            report.counts.get(cell.value_status, 0) + 1
-        )
+        report.counts[cell.value_status] = report.counts.get(cell.value_status, 0) + 1
     total = report.total
     report.shares = {k: v / total for k, v in report.counts.items()}
 
     evidence = [s for cell in cells for s in cell.evidence_statuses]
     report.evidence_total = len(evidence)
     if evidence:
-        report.unverified_share = (
-            sum(1 for s in evidence if s == VerifyStatus.UNVERIFIED)
-            / len(evidence)
-        )
+        report.unverified_share = sum(1 for s in evidence if s == VerifyStatus.UNVERIFIED) / len(evidence)
 
     # -- Unconditional blocks: systemic, never threshold-governed. -----------
     # The zero-`ok` floor. Placed FIRST because it is the broadest statement of
@@ -810,18 +777,12 @@ def evaluate_coverage(
         if cell.value_status == ValueStatus.ERROR and cell.error_code in systemic:
             seen[cell.error_code] = seen.get(cell.error_code, 0) + 1
     for code, count in sorted(seen.items()):
-        report.reasons.append(
-            f"{count} cell(s) failed with systemic error {code!r}: "
-            f"{systemic[code]}"
-        )
+        report.reasons.append(f"{count} cell(s) failed with systemic error {code!r}: {systemic[code]}")
 
     # -- Threshold-governed blocks. -----------------------------------------
     def _gate(share: float, ceiling: float | None, label: str) -> None:
         if ceiling is not None and share > ceiling:
-            report.reasons.append(
-                f"{label} share {share:.1%} exceeds the declared ceiling "
-                f"{ceiling:.1%}"
-            )
+            report.reasons.append(f"{label} share {share:.1%} exceeds the declared ceiling {ceiling:.1%}")
 
     _gate(
         report.shares.get(ValueStatus.VALIDATION_FAILED, 0.0),
@@ -837,20 +798,13 @@ def evaluate_coverage(
     # unconditionally above and must not be double-counted into a rate that a
     # loose ceiling could then wave through.
     non_systemic_errors = sum(
-        1
-        for cell in cells
-        if cell.value_status == ValueStatus.ERROR
-        and cell.error_code not in systemic
+        1 for cell in cells if cell.value_status == ValueStatus.ERROR and cell.error_code not in systemic
     )
     _gate(non_systemic_errors / total, max_error_rate, "error")
     if report.evidence_total:
-        _gate(
-            report.unverified_share, max_unverified_share, "evidence_unverified"
-        )
+        _gate(report.unverified_share, max_unverified_share, "evidence_unverified")
 
     report.blocked = bool(report.reasons)
     if report.blocked and raise_on_block:
-        raise CoverageBlocked(
-            "build blocked: " + "; ".join(report.reasons), report
-        )
+        raise CoverageBlocked("build blocked: " + "; ".join(report.reasons), report)
     return report

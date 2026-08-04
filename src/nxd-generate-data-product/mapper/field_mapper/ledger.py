@@ -50,9 +50,16 @@ import os
 import re
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import Any
+from typing import Callable
+from typing import Iterable
+from typing import Iterator
+from typing import Mapping
+from typing import Sequence
+from typing import cast
 
 __all__ = [
     "LEDGER_FILENAME",
@@ -131,11 +138,12 @@ def _redact_params(params: Mapping[str, Any]) -> dict[str, Any]:
         if _SECRET_KEY_PATTERN.search(str(key)):
             out[str(key)] = _REDACTED
         elif isinstance(value, Mapping):
-            out[str(key)] = _redact_params(value)
+            out[str(key)] = _redact_params(cast(Mapping[str, Any], value))
         elif isinstance(value, (list, tuple)):
+            values: Sequence[Any] = cast(Sequence[Any], value)
             out[str(key)] = [
-                _redact_params(item) if isinstance(item, Mapping) else item
-                for item in value
+                (_redact_params(cast(Mapping[str, Any], item)) if isinstance(item, Mapping) else item)
+                for item in values
             ]
         else:
             out[str(key)] = value
@@ -172,7 +180,7 @@ class AttemptRecord:
     """
 
     api_version: str | None = None
-    request_params: Mapping[str, Any] = field(default_factory=dict)
+    request_params: Mapping[str, Any] = field(default_factory=lambda: dict[str, Any]())
 
     response_hash: str | None = None
     stop_reason: str | None = None
@@ -254,10 +262,7 @@ def _assert_no_secret(line: str, forbidden: Sequence[str]) -> None:
     lowered = line.lower()
     for prefix in _KEY_PREFIXES:
         if prefix in lowered:
-            raise SecretLeakError(
-                f"refusing to write a ledger line containing an {prefix!r}-shaped "
-                "credential"
-            )
+            raise SecretLeakError(f"refusing to write a ledger line containing an {prefix!r}-shaped credential")
 
 
 #: Directory names that mark a path as an ephemeral run dir rather than a
@@ -346,10 +351,7 @@ class RunLedger:
     def __repr__(self) -> str:
         # Explicit: a default dataclass-style repr would happily print
         # self._forbidden into a traceback.
-        return (
-            f"RunLedger(path={str(self.path)!r}, "
-            f"execution_id={self.execution_id!r}, attempts={self._count})"
-        )
+        return f"RunLedger(path={str(self.path)!r}, execution_id={self.execution_id!r}, attempts={self._count})"
 
     @property
     def attempt_count(self) -> int:

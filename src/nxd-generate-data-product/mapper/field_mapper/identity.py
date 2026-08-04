@@ -187,10 +187,7 @@ def _normalize_components(values: dict[str, Any]) -> dict[str, Any]:
     incidental whitespace or case, and coercing them to text would let the
     integer 1 and the string "1" collide into one row key.
     """
-    return {
-        k: normalize_text(v) if isinstance(v, str) else v
-        for k, v in values.items()
-    }
+    return {k: normalize_text(v) if isinstance(v, str) else v for k, v in values.items()}
 
 
 def input_snapshot_id(identity_bearing_inputs: list[Any]) -> str:

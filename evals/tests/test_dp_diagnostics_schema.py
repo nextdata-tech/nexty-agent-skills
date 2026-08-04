@@ -58,7 +58,7 @@ FROZEN_CODES = (
   'env.remote_unreachable', 'env.supervisor_busy', 'grant.expired',
   'grant.invalid', 'grant.missing', 'grant.spec_mismatch',
   'grant.spec_unreadable', 'grant.unbound', 'grant.ungated_map',
-  'grant.verifier_maps', 'heal.attempt_started',
+  'grant.vendored_harness', 'grant.verifier_maps', 'heal.attempt_started',
   'heal.blocked', 'heal.caps_exhausted', 'heal.healed',
   'heal.healed_with_concessions', 'heal.retry_environmental',
   'meta.classification_unsettled', 'meta.stage_not_reached',

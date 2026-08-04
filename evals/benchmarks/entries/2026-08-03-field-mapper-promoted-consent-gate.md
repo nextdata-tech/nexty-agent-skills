@@ -76,6 +76,10 @@ That run also found what the tests could not: a closure built exactly as the
 shipped guidance describes passes all three static phases and then fails at
 Phase B with `ModuleNotFoundError: No module named 'field_mapper'`, because the
 supervisor stages only `transform/main.py` and never the vendored package. The
-gate is correct; the vendoring path is not yet runnable on the platform. Both
-`reference/field-mapper.md` and the SKILL.md bullet now say so, and moving the
-harness into the `nxd` package the supervisor already installs is the follow-up.
+gate is correct; the vendoring path is not runnable on the platform.
+
+That gap is closed by
+[2026-08-03-field-mapper-in-nxd-package](2026-08-03-field-mapper-in-nxd-package.md),
+which moves the harness into the `nxd` package the supervisor already installs.
+Vendoring is gone, and the caveats this entry's fix added to
+`reference/field-mapper.md` and the SKILL.md bullet are gone with it.
