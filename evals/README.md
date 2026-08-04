@@ -26,21 +26,40 @@ customer-facing form lives under `evals/private/cross-dp-joins/`.
 
 ## What runs in CI vs. what only runs locally
 
-Only a narrow slice of the above runs automatically. Everything else is
-local-only, which means **a green PR is not evidence that it passed** —
-it is evidence that it never ran.
+Nothing in the scenario suite runs automatically on a pull request. Agent runs
+cost model tokens, so a PR spends nothing unless you ask it to: **a green PR is
+not evidence that the skills passed** — it is evidence that they never ran.
 
-| | Runs on every PR | Manual (`workflow_dispatch`) | Local only |
-|---|---|---|---|
-| **Harness** | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | any, incl. `ci_skip` | any |
-| **Skill set** | `current_pack` | any | any |
-| **Backend** | `codex` both sides | any | any |
-| **Gate** | fails on regression vs. baseline | reports drift, never fails | — |
+There are three ways the suite runs, and only one of them is unconditional:
+
+| | PR with the `run-evals` label | Release (`v*` tag) | Manual (`workflow_dispatch`) | Local only |
+|---|---|---|---|---|
+| **Harness** | scenario suite (`run.py`) | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
+| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | the whole suite, minus `ci_skip` | any, incl. `ci_skip` | any |
+| **Skill set** | `current_pack` | `current_pack` | any | any |
+| **Backend** | `codex` both sides | `codex` both sides | any | any |
+| **Gate** | fails on regression vs. baseline | fails the release on regression | reports drift, never fails | — |
+
+**Pull requests are opt-in.** Add the `run-evals` label to a PR and the affected
+scenarios run and gate on regression, exactly as before; adding the label to an
+already-open PR fires a run immediately. Without the label the `evals-pr` job
+is skipped. Use it on any change that could move a verdict — the label is how
+you say "measure this one", not a formality.
+
+**Releases are not opt-in.** `release.yml` runs the full public suite on the
+tagged commit before publishing anything, and a confirmed regression fails the
+release. Only if the suite is green does the release carry an `evals.json`
+asset, and the nxd monorepo requires that asset before its
+`external/nexty-agent-skills` submodule bump PR can merge (see
+`.github/workflows/nxd.bump-nexty-skills.yml` over there). So the guarantee is
+about what *ships*: unmeasured skills can sit on main, but they cannot reach the
+monorepo. `workflow_dispatch` on `release.yml` takes a `skip_evals` input for
+emergencies; it publishes without `evals.json`, which leaves the nxd bump PR
+blocked by construction.
 
 The scenario suite's own harness tests (`evals/tests/`) do run on every PR,
 under `ci.yml` — those cover the deterministic checkers and gates, not the
-skills.
+skills. They need no model credentials, so they are free.
 
 **Seven of them are the exception, and they skip on every PR.** The field-mapper
 harness the consent gate tests against lives in the nxd monorepo, and this repo
@@ -494,12 +513,18 @@ is built rather than silently grading a turn-1-only transcript.
 
 ### CI
 
-`.github/workflows/evals.yml` has two entry points.
+`.github/workflows/evals.yml` has two entry points, and `release.yml` adds a
+third that is not opt-in.
 
-**Automatic (pull requests).** A PR touching `src/**` or `evals/**` runs only
+**Opt-in (pull requests).** A PR runs evals only while it carries the
+`run-evals` label. Labelled, and touching `src/**` or `evals/**`, it runs only
 the scenarios that cover the changed skills, on the `codex` backend with
-`current_pack`. Selection is computed by `evals/affected_scenarios.py`, which
-inverts the `skills` array each scenario declares in its `checks.json`:
+`current_pack`. Unlabelled, the job is skipped and the PR costs nothing. The
+label is honoured on `labeled` as well as `synchronize`, so adding it to an open
+PR starts a run without needing a push.
+
+Selection is computed by `evals/affected_scenarios.py`, which inverts the
+`skills` array each scenario declares in its `checks.json`:
 
 ```json
 {
@@ -748,9 +773,25 @@ and scenario. It reports baseline drift but never fails on it, since an
 arbitrary backend/model combination is expected to diverge from the PR gate's
 baseline.
 
-Credentials: the PR gate uses the `OPENAI_API_KEY` repo secret (codex backend).
-The manual job additionally reads `ANTHROPIC_API_KEY` when either side is set to
-the `claude` backend.
+**Release (`v*` tag).** The `release-evals` job in `.github/workflows/release.yml`
+runs the *whole* public suite on the tagged commit, with the same
+retry-then-confirm regression gate the PR path uses. Nothing is published unless
+it passes. This is the run whose evidence leaves the repo: the report ships as
+the release's `evals.json` asset, and nxd's submodule bump requires it.
+
+It is a full-suite run rather than an affected-scenarios one deliberately. At
+release time there is no single "changed skill" to narrow by — the diff since the
+previous tag can span the whole pack — and this is the one run whose result is
+published as the version's evidence, so it should not be scoped by a heuristic.
+
+Two consequences worth stating plainly. Tagging a release now costs a full suite
+run, which is the point: it is the only place the pack is measured end to end.
+And because PR evals are opt-in, a commit can reach `main` unmeasured; the
+release gate is what stops it reaching the monorepo, not the PR gate.
+
+Credentials: both the PR gate and the release gate use the `OPENAI_API_KEY` repo
+secret (codex backend). The manual job additionally reads `ANTHROPIC_API_KEY`
+when either side is set to the `claude` backend.
 
 ## Running a scenario (manual reference)
 

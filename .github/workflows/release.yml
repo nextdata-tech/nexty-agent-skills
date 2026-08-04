@@ -4,6 +4,15 @@ name: release
 # them as a GitHub Release. Claude Desktop installs a skill by uploading its zip
 # (Settings > Capabilities > Skills, or drag into chat), so the release assets are
 # one zip per skill plus a combined pack zip for whole-pack installs.
+#
+# A release is also the point where the eval suite runs for real. PR evals are
+# opt-in (the `run-evals` label, see evals.yml), so a released commit may never
+# have been measured on a PR — and a PR head SHA is not the commit that lands on
+# main anyway. The `release-evals` job below therefore runs the suite against the
+# tagged commit itself and publishes the report as the `evals.json` release
+# asset. That asset is the evidence the nxd submodule bump requires before its
+# PR can merge (see nxd .github/workflows/nxd.bump-nexty-skills.yml), so a
+# release with failing or missing evals cannot reach the monorepo.
 on:
   push:
     tags:
@@ -14,12 +23,140 @@ on:
         description: 'Tag to release (e.g. v0.2.1). Must already exist or will be created from the current ref.'
         required: true
         type: string
+      skip_evals:
+        description: 'Publish without running the eval gate. Emergency use only — the release ships with no evals.json, and the nxd bump PR will open blocked.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # required to create the release and upload assets
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Release eval gate. Runs the full public suite on the tagged commit and
+  # fails the release if any cell regresses against evals/baselines/public.json.
+  #
+  # Full suite, not affected-scenarios: at release time there is no meaningful
+  # "changed skill" to narrow by (the diff since the previous tag can span the
+  # whole pack), and this is the one run whose result is published as the
+  # release's evidence. Retry-on-regression mirrors the PR gate — a single agent
+  # run is too noisy to block a release on.
+  # ---------------------------------------------------------------------------
+  release-evals:
+    if: ${{ !inputs.skip_evals }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive   # example data products the scenarios reference
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Deterministic scenario checkers shell out to `uv`; without it they abort
+      # with an infrastructure ERROR before the regression gate can run.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install and authenticate Codex CLI
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex
+          # `codex` does NOT pick up OPENAI_API_KEY from the environment: it
+          # defaults to ChatGPT-style websocket auth and 401s without a stored
+          # credential. The key has to be handed to an explicit login.
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY secret is empty — the codex backend cannot authenticate." >&2
+            exit 1
+          fi
+          printenv OPENAI_API_KEY | codex login --with-api-key
+          codex login status
+          # `codex` installs bundled system skills on first run and fails with
+          # "Directory not empty (os error 39)" when the target already exists
+          # from the npm install. Clearing it lets the first run populate it.
+          rm -rf "${CODEX_HOME:-$HOME/.codex}/skills" || true
+
+      - name: Run the public suite on the tagged commit
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Codex's workspace-write sandbox is bubblewrap-based and cannot create
+          # a network namespace on a GitHub-hosted runner. The runner is itself
+          # the disposable isolation boundary. Never set this on a shared machine.
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
+        run: |
+          set -euo pipefail
+          python3 evals/run.py --suite public --report evals.json \
+            --agent-backend codex --judge-backend codex \
+            --skill-set current_pack \
+            --concurrency 4
+
+      - name: Gate on regression vs baseline
+        id: gate
+        run: |
+          set -euo pipefail
+          # First pass reports and captures regressed cells; it does not fail.
+          # The same cell has been observed PASS, FAIL, then PASS again on
+          # identical input, so one failure is not yet evidence of a regression.
+          status=0
+          python3 evals/compare_baseline.py --report evals.json --suite public \
+            --write-regressed regressed.txt | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
+          if [ -s regressed.txt ]; then
+            echo "retry=true" >> "$GITHUB_OUTPUT"
+            echo "Regressed cells to retry:"; cat regressed.txt
+          else
+            echo "retry=false" >> "$GITHUB_OUTPUT"
+            exit $status
+          fi
+
+      - name: Retry regressed scenarios
+        if: steps.gate.outputs.retry == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EVAL_CODEX_AGENT_SANDBOX: danger-full-access
+        run: |
+          set -euo pipefail
+          args=(--suite public --report evals-retry.json
+                --agent-backend codex --judge-backend codex
+                --skill-set current_pack
+                --concurrency 4)
+          while IFS= read -r scenario; do
+            [ -n "$scenario" ] && args+=(--scenario "$scenario")
+          done < regressed.txt
+          python3 evals/run.py "${args[@]}"
+
+      - name: Confirm regressions against the retry
+        if: steps.gate.outputs.retry == 'true'
+        run: |
+          set -euo pipefail
+          # A cell blocks the release only if it regressed twice. One that passes
+          # on retry is reported as FLAKY-RUN and does not block.
+          python3 evals/compare_baseline.py --report evals.json --suite public \
+            --confirm-with evals-retry.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Only reached when the gate passed, so this artifact exists if and only if
+      # the tagged commit's evals are green. The release job publishes it as the
+      # evals.json asset, and nxd's bump treats its presence as the gate.
+      - name: Upload the eval report for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evals
+          path: |
+            evals.json
+            evals-retry.json
+          if-no-files-found: error
+
   release:
+    needs: release-evals
+    # `needs` on a skipped job makes the dependent skip too, so a skip_evals
+    # dispatch must explicitly allow the skipped result through. `failure()` and
+    # `cancelled()` are still excluded: only success-or-deliberately-skipped runs.
+    if: ${{ always() && (needs.release-evals.result == 'success' || (inputs.skip_evals && needs.release-evals.result == 'skipped')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -71,6 +208,16 @@ jobs:
             exit 1
           fi
 
+      # The green report from release-evals. Downloaded before assembling assets
+      # so `evals.json` ships with the release; nxd's submodule bump reads it as
+      # the gate. Skipped only on a skip_evals dispatch, where no artifact exists.
+      - name: Download the release eval report
+        if: ${{ !inputs.skip_evals }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-evals
+          path: eval-report
+
       # Combined whole-pack zip for users who want every skill in one upload. Each
       # skill keeps its own zip too (built into build/ by build-skills.sh).
       - name: Assemble release assets
@@ -83,8 +230,18 @@ jobs:
           for z in build/*.zip; do
             cp "$z" "dist/$(basename "$z")"
           done
-          # Combined pack: bundle every per-skill zip into one archive
+          # Combined pack: bundle every per-skill zip into one archive. Done
+          # before evals.json lands in dist/ so the glob picks up zips only.
           ( cd dist && zip -q "nexty-agent-skills-${tag}.zip" ./*.zip )
+          # Eval evidence, published as its own asset. Its presence is the
+          # contract nxd checks; a skip_evals release deliberately has none.
+          if [ -f eval-report/evals.json ]; then
+            cp eval-report/evals.json dist/evals.json
+            echo "evals=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "evals=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::publishing without evals.json — the nxd bump PR will open blocked."
+          fi
           echo "Assets:"
           ls -la dist/
 
@@ -108,6 +265,14 @@ jobs:
           these zips target Claude Desktop.
           EOF
           )
+          # Record the eval verdict in the notes. `evals.json` in the asset list
+          # is the machine-readable form nxd gates on; this line is for humans
+          # reading the release page.
+          if [ "${{ steps.assets.outputs.evals }}" = "true" ]; then
+            notes="${notes}"$'\n\n''**Evals:** the public suite ran green on this commit; see the `evals.json` asset.'
+          else
+            notes="${notes}"$'\n\n''**Evals: NOT RUN.** Published with `skip_evals`. The nxd submodule bump for this version will open blocked until evals are recorded.'
+          fi
           # Create the tag-backed release if it doesn't exist yet, then upload assets.
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
@@ -127,14 +292,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.NXD_DISPATCH_PAT }}
           TAG: ${{ steps.tag.outputs.tag }}
+          EVALS: ${{ steps.assets.outputs.evals }}
         run: |
           set -euo pipefail
           if [[ -z "${GH_TOKEN:-}" ]]; then
             echo "NXD_DISPATCH_PAT not set — skipping nxd notification (release still published)."
             exit 0
           fi
+          # `evals` is a hint for the bump PR's body. It is deliberately NOT the
+          # gate: a client_payload field is whatever the dispatcher claims, so
+          # nxd re-verifies the evals.json asset against this repo's release API
+          # rather than trusting this flag.
           gh api repos/nextdata-tech/nxd/dispatches \
             -f event_type=nexty-skills-release \
             -F "client_payload[tag]=${TAG}" \
-            -F "client_payload[sha]=${GITHUB_SHA}"
-          echo "Dispatched nexty-skills-release (${TAG}) to nextdata-tech/nxd"
+            -F "client_payload[sha]=${GITHUB_SHA}" \
+            -F "client_payload[evals]=${EVALS}"
+          echo "Dispatched nexty-skills-release (${TAG}, evals=${EVALS}) to nextdata-tech/nxd"

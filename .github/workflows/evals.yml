@@ -5,19 +5,29 @@ name: evals
 #
 # Two entry points:
 #
-#   pull_request  — automatic, but only for PRs that touch skills or the eval
-#                   harness. Runs the *affected* scenarios (the ones whose
+#   pull_request  — OPT-IN. A PR runs evals only while it carries the
+#                   `run-evals` label. Every agent run costs model tokens, so
+#                   the default for a PR is to spend nothing; you add the label
+#                   on the changes you actually want measured. When the label is
+#                   present the job runs the *affected* scenarios (the ones whose
 #                   checks.json declares a changed skill) on the codex backend
 #                   with current_pack, and gates on regression against
 #                   evals/baselines/public.json. See the `evals-pr` job.
 #   workflow_dispatch — manual, full control over backend/model/skill-set.
 #
-# Cost control is by scenario selection, not by disabling the workflow: a PR
-# touching one skill runs only that skill's scenarios (see
-# evals/affected_scenarios.py).
+# Cost control is therefore two-layered: the label decides *whether* a PR spends
+# anything at all, and scenario selection decides how much (see
+# evals/affected_scenarios.py). The `paths:` filter below still applies — it
+# stops a labelled docs-only PR from queueing a run that could not move a verdict.
+#
+# The release gate is separate and NOT opt-in: release.yml runs the suite on the
+# tagged commit and publishes the report as the `evals.json` release asset, which
+# is the evidence the nxd submodule bump requires before it can merge.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `labeled` is what makes the opt-in usable mid-PR: adding `run-evals` to an
+    # already-open PR fires a fresh run instead of waiting for the next push.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'src/**'
       - 'evals/**'
@@ -102,10 +112,17 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Automatic PR gate: affected scenarios only, codex backend, regression-gated.
+  # Opt-in PR gate: affected scenarios only, codex backend, regression-gated.
+  #
+  # Requires the `run-evals` label. Without it the job is skipped and the PR
+  # spends no model tokens. Removing the label mid-PR stops subsequent pushes
+  # from running; it does not retract a result already reported.
   # ---------------------------------------------------------------------------
   evals-pr:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.draft == false
+      && contains(github.event.pull_request.labels.*.name, 'run-evals')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
