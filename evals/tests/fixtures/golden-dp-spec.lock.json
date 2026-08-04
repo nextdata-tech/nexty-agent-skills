@@ -1,19 +1,19 @@
 {
-  "schema": "nxd-dp-spec-lock-v1",
+  "schema": "nxd-dp-spec-lock-v2",
   "spec_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "canonicalization": "nxd-dp-spec-canon-v1",
+  "canonicalization": "nxd-dp-spec-canon-v2",
   "snapshot": "dp-spec.approved.md",
   "snapshot_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "spec_status_at_copy": "approved",
-  "dp_spec_version": 1,
+  "dp_spec_version": 2,
   "name": "candidate_scoring",
   "workflow": "candidate-scoring",
   "source_basename": "dp-spec.md",
+  "contract_names": [],
   "compiler_version": {
     "plugin": "0.28.0",
     "generator_skill": "nxd-generate-data-product",
-    "self_check": "nxd-self-check-v1"
+    "self_check": "nxd-self-check-v2"
   },
-  "copied_at_unix_ms": 1769904000000,
-  "resolved_refs": []
+  "copied_at_unix_ms": 1769904000000
 }

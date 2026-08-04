@@ -100,10 +100,10 @@ function of its source, so the **plan** and the **outcomes** live in different
 files and are produced by different actors.
 
 **`dp-spec.md`** (`src/nxd-run-job-loop/reference/dp-spec.md`) is the live,
-user-editable IR. It stays **beside** the closure, never inside it, so that
-authoring it is not a materialization and the pre-approval policy gate keeps its
-bright line ("nothing under `closure/`"). It holds drafting history, rejected
-options and open questions.
+user-editable v2 IR. It stays **beside** the closure, never inside it, so that
+authoring it is not a materialization. Its explicit Outputs define the public
+surface; Decisions is provenance only and executable procedures live under
+Transform or Models.
 
 **`dp-spec.approved.md`** is a **byte-for-byte copy** of the approved revision,
 taken at generation time (Step 6a) and written at the closure root. Because the
@@ -112,8 +112,8 @@ self-containment becomes a hash-checkable snapshot instead of a prose
 "copy, never point" discipline nobody could enforce.
 
 **`dp-spec.lock.json`** pins that snapshot: the whole-spec canonical hash
-(`nxd-dp-spec-canon-v1`), the compiler/skill version, `spec_status_at_copy`, and
-a sha256 for every mirrored `prompt_ref`. It is what makes approval
+(`nxd-dp-spec-canon-v2`), the compiler/skill version, `spec_status_at_copy`, and
+the raw snapshot sha256. It is what makes approval
 **tamper-evident** — a snapshot whose hash no longer matches the lock was edited
 after approval — and what lets a rebuild be skipped when nothing changed.
 
@@ -134,7 +134,7 @@ never persists) and credentials (key *names* only, never values). It is not the
 old prose record under a new name: it has no plan sections, no outcomes and no
 rulings.
 
-A build-time blocker is not a second mechanism: it is an `## open_questions`
+A build-time blocker is not a second mechanism: it is an `## Open Questions`
 entry **discovered late**, written back into the live IR — which un-approves it
 (the hash moves) and surfaces it in the same "needs your input" queue the
 pre-build gaps use. The elicitation contract is therefore a loop, not a
@@ -181,7 +181,7 @@ any handoff. It has four phases plus two non-blocking read-backs:
 |---|---|---|---|
 | **A — structural** | `models.py` / `spec.py` parsed with `ast` against the pinned `nxd.spec` DSL surface (`reference/nxd-spec-api.md`, pinned to a specific `nxd` version): known role kwargs, known data types, known `Agg` members, the naming invariant (`semantic_model` name == `.promise` == `PHYSICAL_MODELS` == `data/<name>/`), `.semantic_tools()` forbidden, output port must be `"duckdb"`, `infra_profile="desktop-local"`, every base model has a `primary_key()`. | Pure `ast.parse` — nothing imported or executed. Dynamic constructs (variables, comprehensions, `**` spreads) are reported `unverified:` rather than silently passed. | Yes |
 | **B — transform dry-run** | Actually **executes** `transform/main.py` against a scratch DuckDB with a stub `DuckDbOutput`, then queries every `PHYSICAL_MODELS` table and asserts `.transform-complete` exists. | Real execution — the only phase that runs code. | Yes |
-| **C — context-completeness** | The snapshot/lock/record gate (C1–C11): `dp-spec.approved.md` and `README.md` exist at the closure root; `dp-spec.lock.json` parses as `nxd-dp-spec-lock-v1`; the snapshot's **raw bytes** hash to `lock.snapshot_sha256` (the tamper check — approved means frozen for that build); `lock.spec_status_at_copy == "approved"`; `build-record.json` parses with `compiled_from == lock.spec_hash`; every mirrored `prompt_ref` exists with a matching sha256; no closure file (the snapshot included) references a contract/design doc by a `../`-rooted path that escapes the closure; if `infra-profile.yaml` carries a populated `attributes:` list (a live credential), `.gitignore` (naming the file, never `*`) and `SENSITIVE` both exist. | sha256 over raw bytes + JSON schema checks + text/regex scan of author-facing files; never reads or echoes a secret value, only reports missing guard files. The **canonical** hash check is deferred to `dp_diagnostics.py lock verify` and Phase C says so with an always-emitted informational diagnostic. | Yes |
+| **C — context-completeness** | The snapshot/lock/record gate (C1–C11): `dp-spec.approved.md` and `README.md` exist at the closure root; `dp-spec.lock.json` parses as `nxd-dp-spec-lock-v2`; the snapshot's **raw bytes** hash to `lock.snapshot_sha256`; `lock.spec_status_at_copy == "approved"`; `build-record.json` parses with `compiled_from == lock.spec_hash`; no closure file references a contract/design doc by a `../`-rooted path that escapes the closure; if `infra-profile.yaml` carries a populated `attributes:` list, `.gitignore` and `SENSITIVE` both exist. | sha256 over raw bytes + JSON schema checks + text/regex scan of author-facing files. The **canonical** hash check is deferred to `dp_diagnostics.py lock verify`. | Yes |
 | **D — policy boundary** | A promised `nxd_decisions` model must be a **base** model (backed by `data/`, not derived from a Python literal) with a `status` column restricted to `{confirmed, proposed, blocked}`; no distinctive value in a landed policy CSV also appears as a literal in `transform/main.py`. | AST-derived `PHYSICAL_MODELS`/`BASE_MODELS` from the values Phase B actually imported (not the static parse, which can't resolve `BASE_MODELS + DERIVED_MODELS` as a literal) + CSV/text scan. | Yes |
 | **Distribution read-back** | Prints value counts for every classification-shaped column of every derived model; flags `UNIFORM` (a value the code supplied, not one the data produced). | Query over the Phase-B DuckDB connection. | No — always relayed to the user before build, never fails the run. |
 | **ABSENT read-back** | Flags a declared vocabulary value (verdict/bucket/tier/category-named CSV columns) that never appears in any derived output column — a branch that never fired. | Set-difference over declared vs. produced values. | No — informational only. |

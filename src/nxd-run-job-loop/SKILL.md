@@ -1,6 +1,6 @@
 ---
 name: nxd-run-job-loop
-description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request — "build me a data product", "score these against my rubric" — starts HERE, not in nxd-generate-data-product: this skill gathers intent, source, questions and any supplied procedure (rubric, gates, weights, thresholds, verdicts), runs the mandatory policy read-back when that procedure has gaps, then invokes it. Going straight to the generator skips the co-authoring checkpoint and encodes a policy the user never saw. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-query-data-product.
+description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request starts HERE, not in nxd-generate-data-product: this skill gathers intent, sources, questions, models, transform logic, explicit outputs, delivery, decisions, and open questions into the editable dp-spec.md, then invokes the generator. Going straight to the generator skips the co-authoring checkpoint. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-query-data-product.
 allowed-tools:
   - Bash
   - Read
@@ -27,7 +27,7 @@ natural-language intent plus a local data source become a running, queryable dat
 product on a local desktop supervisor — no Kubernetes, no remote warehouse:
 
 ```
-intent + source + questions
+intent + sources + questions
    → author dp-spec.md, the IR        (user-editable; the policy read-back)
    → infer the semantic model        (nxd-build-semantic-data-product)
    → generate the runnable closure    (nxd-generate-data-product)
@@ -101,24 +101,24 @@ are mandatory anyway whenever the session registry exposes them.
 
 ## The loop — step by step
 
-### Step 1 — Gather intent, source, and questions
+### Step 1 — Gather intent, sources, questions, and output needs
 
-Establish three things (ask the user for whatever is missing):
+Establish the following (ask the user for whatever is missing):
 
 - **Intent** — what the data product is about, in the user's words.
-- **Source** — where the in-scope local data lives. Preserve it exactly; if it
+- **Sources** — where the in-scope local data lives. Preserve each source exactly; if it
   is not already a connector export, keep any generated export copy separate
   from the supplied source.
 - **Questions** — the natural-language questions the DP must answer. These
   drive the whole inference (right-to-left): the model is judged by whether it
   answers them.
-- **Any procedure the user already has** — a rubric, gates, weights, thresholds,
-  a verdict vocabulary, a selection rule. Ask for it here rather than inferring
-  one later: a supplied procedure is the spec, encoded verbatim and landed as
-  data, and a gap in it is a question back to the user (nxd-generate-data-product's
-  `reference/derivation-plan.md` owns how it lands). **If the user already wrote
-  it down** — a build spec, a requirements doc, a rubric page — take the doc
-  rather than asking them to re-state it; Step 1b translates it.
+- **Models, transform logic, and outputs** — what named relations should exist,
+  which typed operations produce them, which questions each Output answers, and
+  where each Output is delivered.
+- **Any procedure the user already has** — capture it as a versioned procedure
+  on a Transform step or reference Model. Decisions record provenance and
+  rationale; they are never executable policy. If it is already written down,
+  translate the document rather than asking the user to re-state it.
 
 Warm the user up before long work: state you'll write the spec, generate the DP,
 run it locally, then answer their questions — a multi-minute build is expected,
@@ -151,30 +151,24 @@ pristine source, never an edit to it.
 
 Write what Step 1 gathered into **`dp-spec.md`** at
 `…/nxd-jobs/<workflow>/dp-spec.md`, beside the closure (which lands at
-`closure/`) — the user-editable IR carrying intent, questions, sources,
-population, the model plan, any gates / criteria / verdicts / judgements /
-schedule, the rulings ledger, and every open question. Schema, authoring modes
-and the compile map: [reference/dp-spec.md](reference/dp-spec.md). It is **not a
-closure file**, so writing it is not a materialization and the policy gate is not
-violated by it — nothing under `closure/` is written until the user replies.
+`closure/`). It is the user-editable IR with the fixed sections Intent,
+Questions, Scope, Inputs, Models, Transform, Outputs, Delivery, Decisions, and
+Open Questions. Outputs are explicit: every question must reach one, and every
+delivery must be used. Schema, editing rules, and the Claude Desktop form
+contract: [reference/dp-spec.md](reference/dp-spec.md). It is **not a closure
+file**, so writing it is not a materialization.
 
 **If the user supplied a doc** — a build spec, a rubric page — translate it onto
 the schema rather than asking them to re-type it. Their values are the
-specification: encode them verbatim, add what is missing marked `provenance:
-agent_authored`, and **show what you filled in**. Never change a value they wrote,
-never silently fix weights that do not sum, never mark your own addition
-`user_confirmed`. Draft the whole file when they only described it; edit and
+specification: encode them verbatim, add what is missing as an Open Question or
+clearly agent-authored Decision, and **show what you filled in**. Never change a
+value they wrote. Draft the whole file when they only described it; edit and
 re-approve an existing one on a later pass. Then **validate** — `python3
 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-spec.md` after resolving
-`JOB_HELPER_DIR` with [scripts bootstrap](reference/scripts-bootstrap.md) — which deterministically finds
-the gap classes the gate fires on: a scale defining only its endpoints, weights
-that do not sum, a verdict no band reaches, a gate with no `UNKNOWN` rule, a
-ruling with no ledger row, a judgement with no `generator_model`. Fix each, or
-carry it as an `open_questions` entry, before showing the spec. **One gap class
-it cannot see: a sentinel encoding non-capture** — `LISTED - URL NOT CAPTURED`,
-`not stated`, `N/A`. Non-empty, so nothing mechanical flags it, and reading one
-as real turns *never captured* into *the entity lacks it*. Route them to
-`unknown`, name the value in the read-back, never let one fail a gate.
+`JOB_HELPER_DIR` with [scripts bootstrap](reference/scripts-bootstrap.md) — which
+checks typed model origins, transform operations, qualified field references,
+explicit Outputs and Delivery, procedure versions, and approval blockers. Fix
+each issue, or carry it as an Open Question, before showing the spec.
 
 **This file is the policy read-back.** When the request carried a procedure with
 a result-changing gap, show the spec, name every value you authored, and wait —
@@ -185,14 +179,12 @@ but needs no approval turn. **The approved revision is what gets snapshotted** �
 byte-copied into the closure and hashed at generation, so the plan a build came
 from stays recoverable. A ruling only the user can make, discovered *later*
 during the build, is an open question found late: write it back into
-`## open_questions` here, which **un-approves** the spec and re-enters this step.
+`## Open Questions` here, which **un-approves** the spec and re-enters this step.
 
-**When a question needs a judgement read from each entity's evidence** — a
-per-entity score, verdict or classification — it is nondeterministic, so route it
-like any ruling: **land it as data, produced agent-side, before the build**, with
-the rubric taught as data FIRST. Declare it in the spec's `judgments:` block,
-naming the `generator_model` that will produce the rows;
-[reference/inference.md](reference/inference.md) owns *when the agent judges*.
+When a question needs a judgement read from each entity's evidence, model that
+decision as a versioned `apply_procedure` Transform step or reference Model. The
+result is a named Model and must be exposed through an Output; the Decisions
+ledger remains provenance only.
 
 ### Step 2 — Infer the semantic model
 
@@ -367,7 +359,7 @@ exit: `healed`, `healed_with_concessions`, `caps_exhausted`, `blocked`,
   loop indefinitely or give up silently.
 - **Blocked** — the fix is a ruling only the user can make (a missing rate, an
   ambiguous scope, a measurement no source carries). That is an open question
-  found late, not a heal: write it back into `dp-spec.md`'s `## open_questions`
+  found late, not a heal: write it back into `dp-spec.md`'s `## Open Questions`
   with what it blocks, which **un-approves** the spec; ask the one smallest
   question and re-enter Step 1b. Never reach green by changing the plan.
 

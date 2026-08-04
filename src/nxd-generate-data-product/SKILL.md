@@ -55,7 +55,7 @@ The author emits **Python and prerequisite config only**:
 …/nxd-jobs/<workflow>/
 ├── dp-spec.md             # the approved IR — INPUT, outside the closure. Never emitted here.
 └── closure/               # <dp-root>: what build_data_product receives
-    ├── spec.py            # author-facing definition: promises + transform + output port
+    ├── spec.py            # generated closure wiring: models + transform + output port
     ├── models.py          # semantic models + placed semantic roles
     ├── infra-profile.yaml # the desktop-local profile: duckdb + python-compute + csv-source
     ├── transform/
@@ -115,9 +115,11 @@ closure or this skill's cwd.
 - **The approved `dp-spec.md`** is the primary input when one exists — the
   user-editable IR **nxd-run-job-loop** authors at its Step 1b, beside the closure
   at `…/nxd-jobs/<workflow>/dp-spec.md`. **Compile it; do not re-derive it**:
-  its `models:` block is the Step-1a plan, `criteria:`/`verdicts:` are the landed
-  rubric models, and `decisions:` is `data/nxd_decisions/nxd_decisions.csv` row
-  for row with `provenance` **copied, never recomputed**. Re-run
+  its `Models` and `Transform` sections are the plan, its explicit `Outputs`
+  are the only user-visible products, and `Decisions` is
+  `data/nxd_decisions/nxd_decisions.csv` row for row with `provenance`
+  **copied, never recomputed**. Procedures resolve from Transform steps or
+  reference Models, never from the Decisions ledger. Re-run
   `"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"` before authoring — a spec that fails is not a
   settled plan — and treat any closure value appearing in no spec section as one
   the user never approved. Schema and compile map: **nxd-run-job-loop**'s
@@ -197,7 +199,7 @@ expressions, no default filters, no row generation/removal, and no
 therefore has to be materialized as a physical column or row by the transform**,
 before the semantic layer sees it. So plan the models by backward-chaining from
 the user's QUESTIONS, not forward from the source headers — **an approved
-`dp-spec.md`'s `models:` block IS this plan**, already backward-chained and
+`dp-spec.md`'s `Models` and `Transform` sections ARE this plan**, already backward-chained and
 approved: validate it, don't redo it.
 [reference/derivation-plan.md](reference/derivation-plan.md) has the worked
 method, base-vs-derived test, `Agg.EXPRESSION` boundary, and mandatory
@@ -358,16 +360,14 @@ worked code, in [reference/derived-models.md](reference/derived-models.md).
 and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 `database-source.md`, `api-source.md`). Steps 3a/3b are connector-independent.
 
-### Step 4 — `spec.py`: promises + transform + the `duckdb` output port
+### Step 4 — `spec.py`: models + transform + the `duckdb` output port
 
-`spec.py` is the author-facing source of truth the supervisor compiles into the
-deployment YAML: it declares the infra profile, wires the transform to compute,
-promises every physical model — base and derived — on the DuckDB port, and
-registers each query-time view. Bind the three service references by relative
-infra-profile path (resolved against `infra-profile.yaml`, Step 5). A spec
-declaring `## expectations` / `## promises` wires each one here too
-([reference/custom-contracts.md](reference/custom-contracts.md)); worked
-`spec.py`: [reference/models-example.md](reference/models-example.md).
+`spec.py` is the author-facing source compiled into deployment YAML: it declares
+the infra profile, transform, every landed physical model, and query-time views.
+Bind service references by relative `infra-profile.yaml` paths. Explicit v2
+`Inputs`, `Models`, `Transform`, and `Outputs` are compiled here; custom contracts are closure-side wiring ([reference/custom-contracts.md](reference/custom-contracts.md)). Worked `spec.py`: [reference/models-example.md](reference/models-example.md).
+
+`Outputs` is authoritative for user-facing projections, questions, and delivery channels. DuckDB still publishes all landed physical models, including internal support relations; do not call one user-facing unless listed in `Outputs`.
 
 Contract facts baked into that shape — keep every one:
 
@@ -428,9 +428,9 @@ spec is **byte-copied in** and hashed, beside a generated record of what the bui
 did. Preconditions, procedure, and the `README.md` and `contracts/<name>.md` templates: [reference/closure-record.md](reference/closure-record.md).
 
 1. `cp <workflow>/dp-spec.md <closure>/dp-spec.approved.md`, **byte-identical** and
-   never re-serialized — the snapshot is evidence; requires `status: approved` and
-   a validator pass. Mirror every `judgments[].prompt_ref` in at the same relative
-   path; an absolute or `../`-rooted ref blocks generation.
+   never re-serialized — the snapshot is evidence; requires `status: approved`, a
+   matching `approved_content_hash`, and a validator pass. There is no legacy
+   section or migration path to mirror.
 2. `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure>` → `dp-spec.lock.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init --record <closure>/build-record.json --lock <closure>/dp-spec.lock.json`, before Step 7 reads the record.
 3. Render `README.md`: the reopen recipe plus, only for a credentialed source, the
    credentials block. No plan sections, no outcomes.
@@ -461,7 +461,6 @@ installable here), runs **Phase E — the reach gate**, which decides BEFORE the
 and no landed policy value may also be a literal in the transform.
 Then it prints the **distribution** and **ABSENT** read-backs (recorded as data in `build-record.json` `readback`, still non-gating). Read `unverified:`, read the distributions (`UNIFORM`
 = a value you supplied, not one the data produced), and state both.
-
 Reading a failure: a read-back assert or unquoted `main.<name>` query failure
 means a name diverged — fix the NAME (`models.py`, `.promise`, `PHYSICAL_MODELS`,
 and `data/<name>/` for base models), never quote around it. A derived model's
@@ -472,20 +471,19 @@ LOGIC, never loosen the assert.
 run each type's own connectivity check per its reference doc (`database-source.md`
 asserts `row_count > 0` per model; `api-source.md` a parseable response) — never
 an exact fixture count. Without credentials, report it **not run**.
-
 ## Invariants — NEVER violate these
 
-- **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore` (the companion artifact is per the connector-types table in Overview; the credential guards are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. Add one `contracts/expectations/<name>.py` or `contracts/promises/<name>.py` per contract the approved spec declares in `## expectations` / `## promises` — no more, no fewer.
-- **Custom contracts are executable, not decorative** — each compiles to a verifier that must be able to FAIL, and a custom promise never replaces the ordinary `.promise(model)`. Never invent one the spec does not declare; wiring is Step 4 and [reference/custom-contracts.md](reference/custom-contracts.md).
+- **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore` (the companion artifact is per the connector-types table in Overview; the credential guards are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. The active `dp-spec.md` is v2-only and has no legacy expectations/promises or policy payload.
+- **Custom contracts are executable, not decorative** — each compiles to a verifier that must be able to FAIL, and a custom promise never replaces the ordinary `.promise(model)`. Create only contracts explicitly requested and wired to the relevant generated input/output; wiring is Step 4 and [reference/custom-contracts.md](reference/custom-contracts.md).
 - **Self-contained closure — no cross-boundary contract pointers** (Step 6a): the approved `dp-spec.md` is byte-copied in as `dp-spec.approved.md` and bound by `dp-spec.lock.json`, so everything a later session needs to continue the work lives INSIDE the closure and self-containment is hash-checkable rather than a discipline anyone has to remember. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in the approved spec, as `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure, `../dp-spec.md` included. Phase C fails a missing snapshot, lock, `build-record.json` or `README.md`, a snapshot whose bytes no longer match the lock, and any closure-escaping contract reference.
-- **Sample-selection is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in the spec's `population:` (and so travels in `dp-spec.approved.md`), reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends. A deterministic-but-arbitrary sample (e.g. "the oldest N") that silently excludes the rows a later step needs is a defect even though it reruns identically. A source field a downstream model or step depends on (a URL a later evaluation needs, a key a later join needs) is a **required-capture** field — declared in the plan as `models[].fields[].required_capture: true`, with the rows that actually lacked it recorded as an outcome in `build-record.json` `evidence.required_capture`, because a missing required field disables the downstream step without erroring.
+- **Scope is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in `Scope` (and so travels in `dp-spec.approved.md`), reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends.
 - **The naming invariant**: each physical model name == `models.py` `semantic_model` arg == `spec.py` `.promise` == `PHYSICAL_MODELS` == `main.<name>`, unquoted lowercase snake_case; additionally `==` the connector's per-model reference (`data/<name>/`, see "THE NAMING INVARIANT" table) for base models only. `PHYSICAL_MODELS` is landed tables (base + derived), NOT the `data/` listing. Semantic views are `.model(...)` only and have no physical table. The transform's read-back assert is the runtime tripwire — keep it.
 - **Output port named `duckdb`**: `.port("duckdb", storage(...))`, transform param `duckdb` typed `DuckDbOutput` (port name == param name). The local DuckDB driver requires exactly this name.
 - **Through the port, always**: dlt destination is `duckdb.path` / `duckdb.schema`. No raw `duckdb.connect` writes, no view/table DDL, no direct file writes into staging. **Derived models do not relax this** — they reach the port as `@dlt.resource` generators in the same `pipeline.run(...)`, not as DDL.
 - **Derived models are flat, deterministic, and in-run** (Step 3a): plain scalar dicts (no DataFrame — no pyarrow in the fixed venv; no nested values — they spawn `parent__field` child tables), appended to the SAME `resources` list, landed in ONE `pipeline.run(..., write_disposition="replace")`, named from `duckdb.model_tables`, listed in `PHYSICAL_MODELS`. Read the sources yourself with stdlib `csv`. No `now()`, no unseeded random, sorted inputs. Imports confined to pandas / duckdb / stdlib.
 - **Every derived model carries mandatory in-memory asserts** (Step 3b): Tier 1 always — declared-key uniqueness plus a grain-derived row count against independently-read source rows; Tier 2 whenever a measure column is present — a signed measure total reconciled per currency pre-FX in `Decimal`, every exclusion itemized as a named term. Raised with actual-vs-expected before the rows are yielded. It is the ONLY durable data-quality gate on desktop. Never restate the transform's arithmetic as an assert, never substitute a weaker invariant for the measure reconciliation, and never loosen one to make a run pass. A model that **scores** adds both: every scored cell carries an explanation row (`band_id` + `evidence_field` + `evidence_quote` + `evidence_kind` + `limitation`, keyed by entity × criterion, reusing the `reference/llm-judgments.md` citation vocabulary; `evidence_kind` is `fact`/`inference` per explanation row and is NOT `nxd_decisions.provenance`, which is authorship per ruling), and every quote is asserted a verbatim substring of the field it cites. **Absence is labelled, never scored** — a field the derivation could not read scores empty with a `limitation` naming the kind: never the scale minimum, never zero, never a gate `FAIL` (an absent gate input is a landed `UNKNOWN`); it drops out of the weighted sum, the composite lands beside the fraction of rubric weight that scored, and a cap keyed on absence is legitimate only when its verdict names the uncertainty (`NEEDS_MORE_INFO`), never when it is a judgement (`REJECT`). Full rules, the absence kinds, and the precedence when a supplied rubric's bottom band *is* the absence case: [reference/derived-models.md](reference/derived-models.md).
-- **Nothing written before the policy read-back** (Workflow § Gate): when the request supplies a procedure with a gap that changes a score, verdict, gate outcome, or which rows land, NOTHING is written — no closure directory, no source copy, no generated code, no table, no scoring, no build — until the user has seen the enumerated proposal and replied. Reading the source is allowed; answering a technical delivery question is not approval; "use your judgement" licenses authoring the proposal, not skipping the turn.
-- **Compile the approved `dp-spec.md`; never re-derive or exceed it.** When the IR exists it is the settled plan: its `models:` block is the derivation plan, its `criteria:`/`verdicts:` blocks are the landed rubric models, and its `decisions:` block is `nxd_decisions` row for row with `provenance` **copied, never recomputed** — a value the user typed stays `user_confirmed`, one you authored stays `agent_authored` however the user later approved it. A ruling in the closure that appears in no spec section is one the user never approved. The IR lives BESIDE the closure and is never referenced from it by a `../` path (Phase C fails that); the approved revision travels inside as the byte-copied `dp-spec.approved.md`, and outcomes — row counts, blockers, review rounds — never go back into the IR, because an IR is a pure function of its source.
+- **No materialization before the policy read-back** (Workflow § Gate): when the request supplies a procedure with a gap that changes a score, verdict, gate outcome, or which rows land, NOTHING is written — no closure directory, no source copy, no generated code, no table, no scoring, no build — until the user has seen the enumerated proposal and replied. Reading the source is allowed; answering a technical delivery question is not approval; "use your judgement" licenses authoring the proposal, not skipping the turn.
+- **Compile the approved `dp-spec.md`; never re-derive or exceed it.** `Models` and `Transform` define the plan, `Outputs` define the public surface, and `Decisions` is copied row for row with `provenance` **never recomputed**. A ruling in the closure that appears in no spec section is one the user never approved. The IR lives beside the closure and is never referenced from it by a `../` path (Phase C fails that); the approved revision travels inside as the byte-copied `dp-spec.approved.md`, and outcomes — row counts, blockers, review rounds — never go back into the IR.
 - **The self-heal loop may change generated code; it may NEVER change the IR.** A compiler does not edit your source to make the build pass. Fix `spec.py` / `models.py` / `transform/main.py` / the landed data as often as the caps allow (remap ≤ ~2 per question, regenerate ≤ ~3 total, counted from `build-record.json` `attempts[]` rather than estimated), but if green is only reachable by changing the plan — narrowing the population to dodge a bad join, dropping a model whose grain will not resolve, relaxing a threshold, weakening a criterion — **stop**: that is a spec edit requiring re-approval, not a heal. Escalate it as `blocker.spec_edit_required`. Every attempt records `spec_hash_before` and `spec_hash_after`, so a heal that moved the hash is caught mechanically instead of trusted. A build-time blocker is an `open_questions` entry discovered LATE: write it back into the live `dp-spec.md`, which un-approves the spec and puts it in the same "needs your input" queue as a pre-build gap — never invent a second mechanism for it. Typed heal exits: `healed`, `healed_with_concessions`, `caps_exhausted`, `blocked`, `retry_environmental`; non-convergence is reported, never looped on silently and never abandoned silently.
 - **FORBIDDEN versus DISCOURAGED — a heal loop may not relitigate an absolute.** FORBIDDEN, never done even to reach green, escalated as a blocker instead: hand-writing `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` (`blocker.forbidden_handwritten_yaml`); hand-rolling a durable watermark instead of `transform_state` (`blocker.forbidden_manual_watermark`); `write_disposition="replace"` while yielding a delta (`blocker.forbidden_replace_disposition`); loosening an assert into restating its own arithmetic (`blocker.forbidden_assert_restates_arithmetic`); and reaching green only by changing the plan (`blocker.spec_edit_required`). DISCOURAGED is permissible, but the run is then green **with a disclosed concession** — recorded in `build-record.json` `concessions[]` and said to the user in plain words: what was done, what it cost, the alternative you rejected, in that order, with an offer to redo it. **A green run carrying an undisclosed concession is the worst state in this design, because it reads as materialized.** And `materialized` is the word — never `correct`: a green run means the approved plan compiled, ran and published, never that the numbers are right. The term is the pack's, backed by a `dp_diagnostics.py materialized` subcommand. Codes, the full split, the record's schema and the naming rule itself: **nxd-run-job-loop**'s `reference/build-record.md`.
 - **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.

@@ -34,6 +34,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import dp_diagnostics as dpd  # noqa: E402
+import dp_spec_v2 as dpv2  # noqa: E402
 
 pytest.importorskip("yaml")
 
@@ -44,22 +45,24 @@ def _run(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _spec_text() -> str:
+def _proposed_spec_text() -> str:
     blocks = re.findall(
         r"^```markdown\n(.*?)^```", WORKED_EXAMPLE.read_text(encoding="utf-8"), re.S | re.M
     )
     assert len(blocks) == 1
-    return blocks[0].replace("status: proposed", "status: approved", 1)
+    return blocks[0]
+
+
+def _approved_spec_text() -> str:
+    parsed = dpv2.parse(_proposed_spec_text())
+    return dpv2.approve(parsed, base_hash=dpv2.semantic_hash(parsed))
 
 
 @pytest.fixture
 def workflow(tmp_path) -> dict:
     """The layout the design specifies: the IR beside, the closure below it."""
     spec = tmp_path / "dp-spec.md"
-    spec.write_text(_spec_text(), encoding="utf-8")
-    prompt = tmp_path / "prompts" / "score_candidate.md"
-    prompt.parent.mkdir(parents=True, exist_ok=True)
-    prompt.write_text("Score one candidate against the rubric.\n", encoding="utf-8")
+    spec.write_text(_approved_spec_text(), encoding="utf-8")
     closure = tmp_path / "closure"
     result = _run(str(DIAG), "lock", "write", str(spec), str(closure))
     assert result.returncode == 0, result.stderr
@@ -78,7 +81,7 @@ def test_lock_write_byte_copies_the_spec(workflow):
         "be compared"
     )
     lock = json.loads(workflow["lock"].read_text())
-    assert lock["schema"] == "nxd-dp-spec-lock-v1"
+    assert lock["schema"] == "nxd-dp-spec-lock-v2"
     # Read the version rather than pinning it: the assertion under test is that
     # the lock records the compiler that produced it, not which release that
     # happens to be. A literal here fails every version bump for no defect.
@@ -97,7 +100,7 @@ def test_lock_write_byte_copies_the_spec(workflow):
 
 def test_lock_write_rejects_an_unapproved_spec_without_creating_artifacts(tmp_path):
     spec = tmp_path / "dp-spec.md"
-    spec.write_text(_spec_text().replace("status: approved", "status: proposed", 1), encoding="utf-8")
+    spec.write_text(_proposed_spec_text(), encoding="utf-8")
     closure = tmp_path / "closure"
 
     result = _run(str(DIAG), "lock", "write", str(spec), str(closure), "--json")
@@ -131,34 +134,10 @@ def test_plugin_version_rejects_a_foreign_standalone_stamp(tmp_path):
     assert dpd._plugin_version(tmp_path) == "unknown"
 
 
-def test_prompt_refs_are_mirrored_at_the_same_relative_path(workflow):
-    """A byte copy would otherwise carry a path resolving outside the closure —
-    a dangling pointer by another name. The relative path is preserved, so the
-    copied spec stays correct without being rewritten and the hash stays valid."""
-    mirrored = workflow["closure"] / "prompts" / "score_candidate.md"
-    assert mirrored.is_file()
+def test_lock_has_no_legacy_prompt_reference_surface(workflow):
+    """V2 resolves procedures through Models; it has no prompt-ref section."""
     lock = json.loads(workflow["lock"].read_text())
-    assert lock["resolved_refs"] == [
-        {
-            "spec_ref": "prompts/score_candidate.md",
-            "closure_path": "prompts/score_candidate.md",
-            "sha256": dpd.raw_sha256(mirrored.read_bytes()),
-        }
-    ]
-
-
-def test_an_escaping_prompt_ref_blocks_the_snapshot(tmp_path):
-    """Fix the IR, do not rewrite the copy."""
-    spec = tmp_path / "dp-spec.md"
-    spec.write_text(
-        _spec_text().replace("prompts/score_candidate.md", "../prompts/score.md"),
-        encoding="utf-8",
-    )
-    result = _run(str(DIAG), "lock", "write", str(spec), str(tmp_path / "closure"), "--json")
-    assert result.returncode == 1
-    codes = [d["code"] for d in json.loads(result.stdout)["diagnostics"]]
-    assert codes == ["closure.escaping_reference"]
-    assert not (tmp_path / "closure" / "dp-spec.lock.json").exists()
+    assert "resolved_refs" not in lock
 
 
 def test_lock_verify_passes_and_catches_a_moved_live_spec(workflow):
@@ -169,7 +148,7 @@ def test_lock_verify_passes_and_catches_a_moved_live_spec(workflow):
     assert both.returncode == 0, both.stdout + both.stderr
 
     workflow["spec"].write_text(
-        _spec_text().replace("weight: 0.25", "weight: 0.30", 1), encoding="utf-8"
+        _proposed_spec_text().replace("finance review", "finance audit", 1), encoding="utf-8"
     )
     moved = _run(
         str(DIAG), "lock", "verify", str(workflow["closure"]), "--spec",
@@ -190,15 +169,12 @@ def test_lock_verify_catches_an_edited_snapshot(workflow):
     assert "closure.spec_hash_mismatch" in codes
 
 
-def test_lock_verify_missing_pyyaml_is_an_environment_failure(workflow, monkeypatch, capsys):
-    monkeypatch.setattr(dpd, "yaml", None)
-
-    assert dpd.main(["lock", "verify", str(workflow["closure"]), "--json"]) == 2
+def test_lock_verify_does_not_require_pyyaml(workflow, capsys):
+    assert dpd.main(["lock", "verify", str(workflow["closure"]), "--json"]) == 0
 
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "environment.dependency_missing" in captured.err
-    assert "closure.lock_unparseable" not in captured.err
+    assert json.loads(captured.out)["ok"] is True
+    assert captured.err == ""
 
 
 @pytest.mark.parametrize("snapshot", ("/tmp/foreign-spec.md", "../foreign-spec.md"))
@@ -228,37 +204,6 @@ def test_lock_verify_rejects_a_snapshot_symlink_outside_the_closure(workflow, tm
     diagnostics = json.loads(result.stdout)["diagnostics"]
     assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
     assert diagnostics[0]["evidence"] == {"found": "dp-spec.approved.md"}
-
-
-@pytest.mark.parametrize("closure_path", ("/tmp/foreign-ref.md", "../foreign-ref.md"))
-def test_lock_verify_rejects_resolved_ref_paths_outside_the_closure(workflow, closure_path):
-    lock = json.loads(workflow["lock"].read_text())
-    lock["resolved_refs"][0]["closure_path"] = closure_path
-    workflow["lock"].write_text(json.dumps(lock), encoding="utf-8")
-
-    result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
-
-    assert result.returncode == 1
-    diagnostics = json.loads(result.stdout)["diagnostics"]
-    assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
-    assert diagnostics[0]["evidence"] == {"found": closure_path}
-
-
-def test_lock_verify_rejects_a_resolved_ref_symlink_outside_the_closure(workflow, tmp_path):
-    mirrored = workflow["closure"] / "prompts" / "score_candidate.md"
-    external_dir = tmp_path / "external-prompts"
-    external_dir.mkdir()
-    (external_dir / mirrored.name).write_bytes(mirrored.read_bytes())
-    mirrored.unlink()
-    mirrored.parent.rmdir()
-    mirrored.parent.symlink_to(external_dir, target_is_directory=True)
-
-    result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
-
-    assert result.returncode == 1
-    diagnostics = json.loads(result.stdout)["diagnostics"]
-    assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
-    assert diagnostics[0]["evidence"] == {"found": "prompts/score_candidate.md"}
 
 
 def test_record_init_fills_s0_spec(workflow):
@@ -314,13 +259,14 @@ def test_record_init_on_an_unparseable_snapshot_records_it(workflow):
     record = json.loads(workflow["record"].read_text())
     s0 = record["stages"]["s0_spec"]
     assert s0["status"] == "failed"
-    assert [d["code"] for d in s0["diagnostics"]] == ["spec.frontmatter.unparseable"]
+    assert [d["code"] for d in s0["diagnostics"]] == ["spec.v2.invalid"]
+    assert s0["diagnostics"][0]["evidence"]["validator_code"] == "spec.parse.invalid"
     assert dpd.validate_build_record(record) == []
 
 
 def test_spec_report_against_different_bytes_exits_two(workflow, tmp_path):
     other = tmp_path / "other.md"
-    other.write_text(_spec_text().replace("weight: 0.25", "weight: 0.30", 1), encoding="utf-8")
+    other.write_text(_proposed_spec_text().replace("finance review", "finance audit", 1), encoding="utf-8")
     report = _run(str(VALIDATOR), str(other), "--json")
     report_path = tmp_path / "report.json"
     report_path.write_text(report.stdout, encoding="utf-8")
@@ -352,7 +298,7 @@ def test_record_init_redacts_external_spec_report_diagnostics(workflow, tmp_path
     diagnostic = dpd.diagnostic(
         "spec.frontmatter.bad_name",
         message="invalid name",
-        path="spec:frontmatter.name",
+        path="v2:frontmatter.name",
         evidence={},
     ).to_dict()
     diagnostic["message"] = f"invalid name from {url}"
@@ -367,7 +313,7 @@ def test_record_init_redacts_external_spec_report_diagnostics(workflow, tmp_path
     report.write_text(
         json.dumps(
             {
-                "schema": "nxd-diagnostic-report-v1",
+                "schema": "nxd-diagnostic-report-v2",
                 "tool": "validate_dp_spec",
                 "target": str(workflow["spec"]),
                 "ok": False,
@@ -405,7 +351,7 @@ def test_record_append_to_s0_spec_is_rejected(workflow, tmp_path):
     report.write_text(
         json.dumps(
             {
-                "schema": "nxd-diagnostic-report-v1",
+                "schema": "nxd-diagnostic-report-v2",
                 "tool": "validate_dp_spec",
                 "target": "x",
                 "ok": True,
@@ -433,7 +379,7 @@ def test_record_append_rejects_a_tool_that_cannot_produce_the_stage(workflow, tm
     report.write_text(
         json.dumps(
             {
-                "schema": "nxd-diagnostic-report-v1",
+                "schema": "nxd-diagnostic-report-v2",
                 "tool": "self_check",
                 "target": "x",
                 "ok": True,
@@ -461,7 +407,7 @@ def test_a_loop_report_merges_and_the_record_stays_valid(workflow, tmp_path):
     report.write_text(
         json.dumps(
             {
-                "schema": "nxd-diagnostic-report-v1",
+                "schema": "nxd-diagnostic-report-v2",
                 "tool": "loop",
                 "target": "build_data_product",
                 "ok": False,
@@ -524,7 +470,7 @@ def test_record_append_redacts_incoming_diagnostic_url_credentials(workflow, tmp
     report.write_text(
         json.dumps(
             {
-                "schema": "nxd-diagnostic-report-v1",
+                "schema": "nxd-diagnostic-report-v2",
                 "tool": "loop",
                 "target": "build_data_product",
                 "ok": False,

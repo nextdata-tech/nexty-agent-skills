@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """The shared diagnostic core for the nxd job loop.
 
-Every producer in the pipeline — `validate_dp_spec.py`, `self_check.py`, and the
-loop agent itself — emits the SAME diagnostic shape, differing only in which
-stage produced it. That single shape is what keeps the tooling small: one
-record, one registry of codes, one canonicalization, one build record.
+Pipeline producers emit the closed `nxd-diagnostic-v2` shape. The
+user-facing `validate_dp_spec.py` report additionally uses the closed,
+field-addressed `nxd-dp-spec-diagnostic-v2` shape so a form can bind stable
+paths and controls; record ingestion adapts those findings to the pipeline
+diagnostic envelope.
 
 What lives here:
 
-* the spec vocabularies (`REQUIRED_SECTIONS`, `MODEL_KINDS`, `SOURCE_TYPES`,
-  `DECISION_PROVENANCE`, …) — defined ONCE, imported by `validate_dp_spec.py`
-  and emitted by `schema --json`, so a harness never re-types them and cannot
-  drift from them;
+* the v2 spec schema — imported by `validate_dp_spec.py` and emitted by
+  `schema --json`, so a harness never re-types it and cannot drift from it;
 * `CODES` — the closed registry. A code carries its stage, severity, owner,
   form control and a summary. `owner` comes from here and ONLY from here;
-* `Diagnostic` / `Report` — the `nxd-diagnostic-v1` record and its envelope;
-* `canonicalize()` / `spec_hash()` / `emit()` — `nxd-dp-spec-canon-v1`, the
+* `Diagnostic` / `Report` — the `nxd-diagnostic-v2` record and its envelope;
+* `canonicalize()` / `spec_hash()` / `emit()` — `nxd-dp-spec-canon-v2`, the
   semantic hash of a spec. Whitespace, comments and key order do not move it;
-  a value, a list order or `status` does;
+  a semantic value or list order does; lifecycle status is excluded from the
+  approval binding.
 * the lock writer/verifier (`dp-spec.lock.json`) and the build record
   (`build-record.json`), including INVARIANT-D2 and the materialization
   predicate.
@@ -57,78 +57,35 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
 import hashlib
 import json
 import re
 import shutil
 import sys
 import time
-import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover - environment guard
-    yaml = None  # canonicalization needs it; the record/schema paths do not
+import dp_spec_v2 as _v2
 
 
 # ---------------------------------------------------------------------------
 # Spec vocabularies — one definition, two consumers (§8.2)
 # ---------------------------------------------------------------------------
 
-SPEC_VERSION = 1
+SPEC_VERSION = 2
 
 REQUIRED_FRONTMATTER = ("dp_spec_version", "name", "workflow", "status")
 STATUS_VALUES = ("draft", "proposed", "approved")
 
-REQUIRED_SECTIONS = ("intent", "questions", "sources", "population", "models")
-KNOWN_SECTIONS = REQUIRED_SECTIONS + (
-    "expectations",
-    "promises",
-    "gates",
-    "criteria",
-    "verdicts",
-    "judgments",
-    "schedule",
-    "outputs",
-    "decisions",
-    "open_questions",
+REQUIRED_SECTIONS = (
+    "intent", "questions", "scope", "inputs", "models", "transform",
+    "outputs", "delivery", "decisions", "open_questions",
 )
+KNOWN_SECTIONS = REQUIRED_SECTIONS
 
-MODEL_KINDS = ("base", "derived", "view", "reference")
-SOURCE_TYPES = ("csv", "file", "database", "api")
-
-# A contract's authority is the whole reason these sections exist. `user_stated`
-# is a guarantee the user asserted in their own words; it is theirs to weaken or
-# withdraw, never the agent's, which is why every `user_stated` contract is
-# owner: user and not agent_fillable. `inferred` is a constraint the agent read
-# off the data or the schema — real, but it belongs in models.py and an ordinary
-# .promise(model), not here. Recording the difference is what stops a profiling
-# artefact from being replayed back to the user as their own promise.
-CONTRACT_AUTHORITY = ("user_stated", "inferred")
-
-# Where a contract runs. An expectation guards the input before the transform
-# reads it; a promise guards the output after the transform wrote it. The phase
-# is not a preference — it decides whether a violation stops the build before
-# any derived row exists or blocks publication of rows already computed.
-CONTRACT_PHASE = ("pre_transform", "post_transform")
-
-DECISION_STATUS = ("confirmed", "proposed", "blocked")
-DECISION_PROVENANCE = (
-    "user_confirmed",
-    "agent_authored",
-    "source_derived",
-    "deferred",
-)
-
-PRODUCED_BY = ("agent", "user", "source")
-RERUNS = ("incremental", "full")
 DISPOSITIONS = ("blocked", "deferred", "answered")
-OUTPUT_KINDS = ("semantic_port", "static_artifact")
-SCHEDULE_TRIGGERS = ("manual", "cron", "on_new_data")
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -152,31 +109,17 @@ CREDENTIAL_PLACEHOLDERS = frozenset(
     {"null", "none", "~", "<redacted>", "redacted", "[]", "{}", "''", '""', "..."}
 )
 
-# Fields an entry must carry filled. Present-but-empty is the pre-fill trap
-# (RULE-PREFILL): a field the agent has no basis for becomes an open question,
-# never a blank control in a form.
-REQUIRED_ENTRY_FIELDS = {
-    "sources": ("type", "location", "scope"),
-    "models": ("name", "kind", "description", "grain", "key"),
-    "criteria": ("weight", "scale", "anchors"),
-    "gates": ("rule", "unknown"),
-    "decisions": ("status", "provenance", "ruling"),
-    "open_questions": ("question",),
-    "expectations": ("name", "authority", "model", "guarantee", "rule"),
-    "promises": ("name", "authority", "model", "guarantee", "rule"),
-}
-
-
 # ---------------------------------------------------------------------------
 # Diagnostic vocabularies (§1)
 # ---------------------------------------------------------------------------
 
-DIAGNOSTIC_SCHEMA_ID = "nxd-diagnostic-v1"
-REPORT_SCHEMA_ID = "nxd-diagnostic-report-v1"
-BUILD_RECORD_SCHEMA_ID = "nxd-build-record-v1"
-LOCK_SCHEMA_ID = "nxd-dp-spec-lock-v1"
-CANONICALIZATION = "nxd-dp-spec-canon-v1"
-SPEC_SCHEMA_ID = "nxd-dp-spec-schema-v1"
+DIAGNOSTIC_SCHEMA_ID = "nxd-diagnostic-v2"
+REPORT_SCHEMA_ID = "nxd-diagnostic-report-v2"
+BUILD_RECORD_SCHEMA_ID = "nxd-build-record-v2"
+LOCK_SCHEMA_ID = "nxd-dp-spec-lock-v2"
+CANONICALIZATION = "nxd-dp-spec-canon-v2"
+SPEC_SCHEMA_ID = "nxd-dp-spec-schema-v2"
+SPEC_DIAGNOSTIC_SCHEMA_ID = _v2.SPEC_DIAGNOSTIC_SCHEMA_ID
 
 # Ordered. The `s<N>_` prefix makes the ordinal recoverable by int(stage[1])
 # and makes a lexicographic sort equal pipeline order.
@@ -344,6 +287,8 @@ _register_table(
     (
         ("spec.encoding.not_utf8", "error", "agent", "none", False,
          "the file is not valid UTF-8"),
+        ("spec.v2.invalid", "error", "agent", "none", False,
+         "the v2 validator found a field-addressed spec error"),
         ("spec.frontmatter.unparseable", "error", "agent", "none", True,
          "frontmatter missing, unterminated, not parseable as YAML, or not a "
          "mapping"),
@@ -554,6 +499,28 @@ _register_table(
     ),
 )
 
+# The historical registry table above is retained only as a source-compatible
+# fixture during the v2 cutover. Runtime support is deliberately narrowed to
+# diagnostics emitted by the v2 parser/lock boundary; the removed source,
+# criteria, contract, verdict, judgment, schedule, and population codes are
+# not valid v2 diagnostics.
+_V2_PIPELINE_SPEC_CODES = frozenset({
+    "spec.encoding.not_utf8",
+    "spec.v2.invalid",
+    "spec.frontmatter.unparseable",
+    "spec.frontmatter.missing_key",
+    "spec.frontmatter.bad_version",
+    "spec.frontmatter.bad_name",
+    "spec.frontmatter.bad_status",
+    "spec.section.missing",
+    "spec.section.empty",
+    "spec.section.unknown",
+    "spec.section.unparseable",
+})
+for _code in tuple(CODES):
+    if _code.startswith("spec.") and _code not in _V2_PIPELINE_SPEC_CODES:
+        del CODES[_code]
+
 # --- domain `struct.` — stage s1_structure (Phase A) -------------------------
 for _code in (
     "struct.import_not_public_dsl",
@@ -760,8 +727,6 @@ _register_table(
          "self-check could not merge build-record.json"),
         ("closure.readme_missing", "error", "agent", "none", False,
          "README.md — the reopen recipe — is missing"),
-        ("closure.resolved_ref_missing", "error", "agent", "none", False,
-         "a mirrored prompt_ref is missing or its bytes changed"),
         ("closure.escaping_reference", "error", "agent", "none", False,
          "a closure file points outside the closure"),
         ("closure.gitignore_missing", "error", "agent", "none", False,
@@ -787,8 +752,8 @@ _register_table(
          "a verifier carries a literal secret assignment"),
         ("closure.contract_duplicate_name", "error", "agent", "none", False,
          "two custom contracts share a name — they race for one verifier file"),
-        ("closure.contract_spec_drift", "error", "agent", "none", False,
-         "the closure's custom contracts do not match the approved spec's"),
+        ("closure.contract_inventory_mismatch", "error", "agent", "none", False,
+         "wired custom contracts do not match the approved v2 contract inventory"),
         # The desktop runtime-binding faults below are NOT contract-wiring
         # faults. They were folded into closure.contract_not_wired at first,
         # which made a harness render a contract-shaped repair control for an
@@ -1080,28 +1045,14 @@ class SpecReadError(Exception):
         self.reason = reason
 
 
-class DependencyError(SpecReadError):
-    """A required runtime dependency is unavailable. Exit 2, never report it as spec input."""
-
-    def __init__(self, message: str):
-        super().__init__(message, code="environment.dependency_missing")
-
-
 # Everything a "could not read the spec" CLI path may legally raise, so it exits
-# 2 with a message instead of a traceback. `yaml.YAMLError` is NOT a subclass of
-# `ValueError` — that is exactly how a bad-frontmatter spec escaped `record
-# init`'s handler and produced a traceback. Naming the tuple once keeps every
-# such handler in agreement instead of relying on each one remembering.
-_READ_FAILURES: tuple[type[BaseException], ...] = (
-    (SpecReadError, OSError, ValueError)
-    if yaml is None
-    else (SpecReadError, OSError, ValueError, yaml.YAMLError)
-)
+# 2 with a message instead of a traceback. The v2 parser is stdlib-only.
+_READ_FAILURES: tuple[type[BaseException], ...] = (SpecReadError, OSError, ValueError)
 
 
 @dataclass(frozen=True)
 class Diagnostic:
-    """One `nxd-diagnostic-v1` finding.
+    """One `nxd-diagnostic-v2` finding.
 
     Build these with `diagnostic()` rather than by hand — the factory is what
     pins `owner` to the registry. `owner` decides whether the human hears about
@@ -1212,7 +1163,7 @@ def diagnostic(
 
 
 def validate_diagnostic(obj: Any) -> list[str]:
-    """Return every reason `obj` is not a legal `nxd-diagnostic-v1` record."""
+    """Return every reason `obj` is not a legal `nxd-diagnostic-v2` record."""
     problems: list[str] = []
     if not isinstance(obj, dict):
         return ["diagnostic is not an object"]
@@ -1296,7 +1247,7 @@ def validate_diagnostic(obj: Any) -> list[str]:
 
 
 class Report:
-    """A buffer of diagnostics that serializes as `nxd-diagnostic-report-v1`.
+    """A buffer of diagnostics that serializes as `nxd-diagnostic-report-v2`.
 
     `validate_dp_spec.py` fills one of these; so does `lock verify`. The
     envelope is the same either way, which is the point — one shape, every
@@ -1369,32 +1320,128 @@ class Report:
         }
 
 
+def validate_spec_diagnostic(obj: Any) -> list[str]:
+    """Validate the form-facing, field-addressed v2 spec finding shape."""
+    problems: list[str] = []
+    if not isinstance(obj, dict):
+        return ["spec diagnostic is not an object"]
+    required = (
+        "schema", "code", "path", "severity", "owner", "control",
+        "stage", "origin", "message",
+    )
+    for key in required:
+        if key not in obj:
+            problems.append(f"missing required key {key!r}")
+    for key in obj:
+        if key not in required:
+            problems.append(f"unknown key {key!r} — an unknown key is a producer bug")
+    if problems:
+        return problems
+    if obj["schema"] != SPEC_DIAGNOSTIC_SCHEMA_ID:
+        problems.append(f"schema must be {SPEC_DIAGNOSTIC_SCHEMA_ID!r}")
+    if not isinstance(obj["code"], str) or not obj["code"]:
+        problems.append("code must be a non-empty string")
+    if not isinstance(obj["path"], str) or not obj["path"]:
+        problems.append("path must be a non-empty string")
+    if obj["severity"] != "error":
+        problems.append("severity must be 'error'")
+    if obj["owner"] not in ("agent", "user"):
+        problems.append("owner must be 'agent' or 'user'")
+    if obj["control"] not in CONTROLS:
+        problems.append(f"unknown control {obj['control']!r}")
+    if obj["stage"] != "s0_spec":
+        problems.append("stage must be 's0_spec'")
+    if obj["origin"] != "tool_computed":
+        problems.append("origin must be 'tool_computed'")
+    if not isinstance(obj["message"], str) or not obj["message"]:
+        problems.append("message must be a non-empty string")
+    return problems
+
+
 def validate_report(obj: Any) -> list[str]:
-    """Return every reason `obj` is not a legal `nxd-diagnostic-report-v1`."""
+    """Return every reason ``obj`` is not a legal diagnostic report."""
     problems: list[str] = []
     if not isinstance(obj, dict):
         return ["report is not an object"]
     if obj.get("schema") != REPORT_SCHEMA_ID:
         problems.append(f"schema must be {REPORT_SCHEMA_ID!r}")
+    required = {"schema", "tool", "target", "ok", "counts", "spec_hash", "diagnostics"}
+    problems.extend(f"missing required key {key!r}" for key in sorted(required - set(obj)))
+    problems.extend(f"unknown key {key!r}" for key in sorted(set(obj) - required))
+    if problems:
+        return problems
     tool = obj.get("tool")
-    if tool not in REPORT_TOOLS:
-        problems.append(
-            f"tool {tool!r} is outside the closed enum "
-            f"({', '.join(sorted(REPORT_TOOLS))})"
-        )
-    diags = obj.get("diagnostics")
-    if not isinstance(diags, list):
+    if not isinstance(obj.get("target"), (str, type(None))):
+        problems.append("target must be a string or null")
+    if not isinstance(obj.get("ok"), bool):
+        problems.append("ok must be a boolean")
+    if not isinstance(obj.get("spec_hash"), (str, type(None))):
+        problems.append("spec_hash must be a string or null")
+    counts = obj.get("counts")
+    if not isinstance(counts, dict):
+        problems.append("counts must be an object")
+        counts = {}
+    else:
+        if set(counts) != set(SEVERITIES):
+            problems.append("counts must contain exactly error, warning, and info")
+        if any(
+            key not in SEVERITIES or not isinstance(value, int)
+            or isinstance(value, bool) or value < 0
+            for key, value in counts.items()
+        ):
+            problems.append("counts values must be non-negative integers")
+    if not isinstance(obj.get("diagnostics"), list):
         problems.append("diagnostics must be a list")
         return problems
-    for i, diag in enumerate(diags):
-        for problem in validate_diagnostic(diag):
-            problems.append(f"diagnostics[{i}]: {problem}")
-        if tool in REPORT_TOOLS and isinstance(diag, dict):
-            if diag.get("stage") not in REPORT_TOOLS[tool]:
-                problems.append(
-                    f"diagnostics[{i}]: tool {tool!r} may not carry stage "
-                    f"{diag.get('stage')!r}"
+    diags = obj["diagnostics"]
+    actual_counts = {severity: 0 for severity in SEVERITIES}
+    if tool == "validate_dp_spec":
+        for i, diag in enumerate(diags):
+            if not isinstance(diag, dict):
+                problems.append(f"diagnostics[{i}] must be an object")
+                continue
+            if diag.get("schema") == SPEC_DIAGNOSTIC_SCHEMA_ID:
+                problems.extend(
+                    f"diagnostics[{i}]: {problem}"
+                    for problem in validate_spec_diagnostic(diag)
                 )
+                if diag.get("severity") in actual_counts:
+                    actual_counts[diag["severity"]] += 1
+                continue
+            if diag.get("schema") == DIAGNOSTIC_SCHEMA_ID:
+                problems.extend(f"diagnostics[{i}]: {problem}" for problem in validate_diagnostic(diag))
+                if diag.get("severity") in actual_counts:
+                    actual_counts[diag["severity"]] += 1
+                continue
+            problems.append(
+                f"diagnostics[{i}]: schema must be {SPEC_DIAGNOSTIC_SCHEMA_ID!r} "
+                f"or {DIAGNOSTIC_SCHEMA_ID!r}"
+            )
+    else:
+        if tool not in REPORT_TOOLS:
+            problems.append(
+                f"tool {tool!r} is outside the closed enum "
+                f"({', '.join(sorted(REPORT_TOOLS))})"
+            )
+        for i, diag in enumerate(diags):
+            for problem in validate_diagnostic(diag):
+                problems.append(f"diagnostics[{i}]: {problem}")
+            if isinstance(diag, dict) and diag.get("severity") in actual_counts:
+                actual_counts[diag["severity"]] += 1
+            if tool in REPORT_TOOLS and isinstance(diag, dict):
+                if diag.get("stage") not in REPORT_TOOLS[tool]:
+                    problems.append(
+                        f"diagnostics[{i}]: tool {tool!r} may not carry stage "
+                        f"{diag.get('stage')!r}"
+                    )
+    if isinstance(counts, dict) and counts != actual_counts:
+        problems.append(
+            f"counts do not match diagnostics: expected {actual_counts}, got {counts}"
+        )
+    if isinstance(obj.get("ok"), bool) and isinstance(counts, dict):
+        expected_ok = counts.get("error") == 0
+        if obj["ok"] != expected_ok:
+            problems.append(f"ok must equal (counts.error == 0), expected {expected_ok}")
     return problems
 
 
@@ -1419,69 +1466,32 @@ def entry_identity(entry: Any, index: int) -> str:
 
 
 def spec_path(section: str, identity: str | None = None, *rest: str) -> str:
-    """Build a `spec:` path: `spec:criteria[C1].anchors`."""
+    """Build a stable v2 field path: `v2:models[orders].fields`."""
     head = section if identity is None else f"{section}[{identity}]"
-    return "spec:" + ".".join([head, *[r for r in rest if r]])
+    return "v2:" + ".".join([head, *[r for r in rest if r]])
 
 
 # ---------------------------------------------------------------------------
-# nxd-dp-spec-canon-v1 — canonicalization, hash, emitter (§3.4, §8.3)
+# nxd-dp-spec-canon-v2 — canonicalization, hash, emitter
 # ---------------------------------------------------------------------------
-
-def _require_yaml():
-    if yaml is None:  # pragma: no cover - environment guard
-        raise DependencyError(
-            "environment.dependency_missing: canonicalization needs PyYAML: "
-            "pip install pyyaml",
-        )
-    return yaml
-
 
 def split_frontmatter(text: str) -> tuple[dict, str]:
-    """Return (frontmatter dict, body). Raises SpecReadError when absent/invalid.
-
-    The canonicalizer and the validator MUST split identically, or the hash
-    describes a different document than the one that was validated. This is the
-    ONLY definition: `validate_dp_spec.py` imports this function rather than
-    keeping a copy, because a copy is a thing that drifts — and the drift that
-    actually happened was a missing `yaml.YAMLError` guard, which turned a
-    field-addressed diagnostic into a raw traceback.
-
-    Every raise carries a `reason` from the closed enum documented on
-    `SpecReadError`; the validator surfaces it as `evidence.reason`.
-    """
-    _require_yaml()
-    if not text.startswith("---"):
-        raise SpecReadError(
-            "no YAML frontmatter — the file must open with '---'", reason="missing"
-        )
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        raise SpecReadError(
-            "unterminated YAML frontmatter — needs a closing '---'",
-            reason="unterminated",
-        )
+    """Return v2 frontmatter and the body; old versions fail closed."""
     try:
-        loaded = yaml.safe_load(parts[1])
-    except yaml.YAMLError as exc:
-        raise SpecReadError(
-            f"frontmatter is not parseable as YAML: {exc}", reason="unparseable"
-        ) from exc
-    if not isinstance(loaded, dict):
-        raise SpecReadError(
-            "frontmatter is not a YAML mapping", reason="not_mapping"
-        )
-    return loaded, parts[2]
+        parsed = _v2.parse(text)
+    except _v2.UnsupportedVersionError as exc:
+        raise SpecReadError(str(exc), reason="unsupported_version") from exc
+    except _v2.ParseError as exc:
+        raise SpecReadError(str(exc), reason="unparseable") from exc
+    document = parsed.document
+    marker = "\n---"
+    close = text.find(marker, text.find("---") + 3)
+    body = text[close + len(marker):] if close >= 0 else ""
+    return document.frontmatter.to_dict(), body
 
 
 def split_sections(body: str) -> dict[str, str]:
-    """Split the body on '## ' headings. Later duplicates overwrite earlier.
-
-    Two consequences of this exact behaviour, stated so nobody 'improves' on it:
-    body text BEFORE the first '## ' heading is dropped and therefore never
-    moves the hash; and only '## ' starts a section, so '### ' subheadings stay
-    inside their parent's body and are hashed as part of it.
-    """
+    """Split v2 body headings for legacy callers without interpreting YAML."""
     sections: dict[str, str] = {}
     current: str | None = None
     buf: list[str] = []
@@ -1498,99 +1508,23 @@ def split_sections(body: str) -> dict[str, str]:
     return sections
 
 
-def _normalize(value: Any, where: str = "") -> Any:
-    """Step 9 of nxd-dp-spec-canon-v1, applied recursively."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        for key, val in value.items():
-            skey = str(key)
-            if skey in out:
-                # A silent drop would change the hash of a spec whose content
-                # did not change. Raise instead.
-                raise SpecReadError(
-                    f"canonicalization: mapping at {where or '<root>'} carries "
-                    f"two keys that collide as {skey!r} after str() coercion"
-                )
-            out[skey] = _normalize(val, f"{where}.{skey}" if where else skey)
-        return {k: out[k] for k in sorted(out, key=lambda s: s.encode("utf-8"))}
-    if isinstance(value, (list, tuple)):
-        # Order is semantic — criteria order, band precedence, decisions order.
-        # Never sort a list.
-        return [_normalize(v, f"{where}[{i}]") for i, v in enumerate(value)]
-    if isinstance(value, (set, frozenset)):
-        # A YAML `!!set` is genuinely unordered, so — unlike a list — its
-        # canonical form IS sorted, and it MUST be: Python set iteration order
-        # is PYTHONHASHSEED-randomized, so without this branch a `!!set` fell
-        # through to `str(value)` below and produced a different spec hash on
-        # every interpreter start. That silently breaks both guarantees the
-        # hash exists for: skip-if-unchanged (a spec nobody touched looks
-        # changed) and tamper-evidence (an approved hash stops matching itself).
-        # Sort on the JSON form of the NORMALIZED element so the order is a
-        # total one across mixed element types.
-        return sorted(
-            (_normalize(v, f"{where}{{}}") for v in value),
-            key=lambda n: json.dumps(n, sort_keys=True, ensure_ascii=False),
-        )
-    if isinstance(value, str):
-        return re.sub(r"\s+", " ", value, flags=re.UNICODE).strip()
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        if value == 0.0:
-            return 0
-        if value.is_integer():
-            return int(value)
-        return format(value, ".10g")
-    if value is None:
-        return None
-    if isinstance(value, (_dt.datetime, _dt.date)):
-        return value.isoformat()
-    return str(value)
-
-
 def canonical_object(raw: bytes) -> dict:
-    """The canonical object for a dp-spec.md. See §3.4 for the algorithm."""
-    _require_yaml()
+    """The v2 typed canonical object for a dp-spec.md."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise SpecReadError(
-            f"the spec is not valid UTF-8: {exc}", code="spec.encoding.not_utf8"
-        ) from exc
-
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = unicodedata.normalize("NFC", text)
-
-    fm, body = split_frontmatter(text)
-
-    sections: dict[str, Any] = {}
-    for name, rawbody in split_sections(body).items():
-        try:
-            sections[name] = yaml.safe_load(rawbody) if rawbody else None
-        except yaml.YAMLError:
-            # Same fallback the validator uses for prose sections: the stripped
-            # raw string.
-            sections[name] = rawbody.strip()
-
-    obj = {
-        "dp_spec_version": fm.get("dp_spec_version"),
-        "frontmatter": fm,
-        "sections": sections,
-    }
-    return _normalize(obj)
+        raise SpecReadError(f"the spec is not valid UTF-8: {exc}", code="spec.encoding.not_utf8") from exc
+    try:
+        return _v2.canonical_object(text)
+    except _v2.UnsupportedVersionError as exc:
+        raise SpecReadError(str(exc), reason="unsupported_version") from exc
+    except _v2.ParseError as exc:
+        raise SpecReadError(str(exc), reason="unparseable") from exc
 
 
 def canonical_bytes(raw: bytes) -> bytes:
-    """The exact bytes the hash is taken over."""
-    return json.dumps(
-        canonical_object(raw),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+    """The exact v2 semantic bytes the hash is taken over."""
+    return json.dumps(canonical_object(raw), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
 def canonicalize(raw: bytes) -> bytes:
@@ -1599,7 +1533,7 @@ def canonicalize(raw: bytes) -> bytes:
 
 
 def spec_hash(raw: bytes) -> str:
-    """`sha256:<hex>` over the canonical form. Semantic, not byte, identity."""
+    """`sha256:<hex>` over v2 semantic content, excluding lifecycle metadata."""
     return "sha256:" + hashlib.sha256(canonical_bytes(raw)).hexdigest()
 
 
@@ -1612,87 +1546,12 @@ def spec_hash_of(path: Path) -> str:
     return spec_hash(path.read_bytes())
 
 
-def _emit_scalar_block(value: str) -> str:
-    """A YAML literal block scalar, so prose round-trips as prose.
-
-    Emitting bare prose would let a line containing ': ' reparse as a mapping,
-    which would break the idempotence law for a document nobody edited.
-    """
-    lines = value.split("\n")
-    indented = "\n".join(("  " + line) if line else "" for line in lines)
-    return "|-\n" + indented
-
-
-_CANON_FLOAT_RE = re.compile(r"^-?\d+(\.\d+)?([eE][-+]?\d+)?$")
-
-
-def _unstringify_numbers(value: Any) -> Any:
-    """Undo step 9's float-to-string, and ONLY where it is provably reversible.
-
-    Canonicalization renders a non-integral float as a string (`0.25` ->
-    `"0.25"`), which is fine for hashing and wrong for a markdown file a human
-    reads and a validator re-reads: `weight: '0.25'` is not a number. A string is
-    turned back into a float only when `format(float(s), ".10g") == s` and the
-    float is non-integral — exactly the strings the float branch can produce, so
-    the canonical form is unchanged either way.
-    """
-    if isinstance(value, dict):
-        return {k: _unstringify_numbers(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_unstringify_numbers(v) for v in value]
-    if isinstance(value, str) and _CANON_FLOAT_RE.match(value):
-        try:
-            number = float(value)
-        except ValueError:  # pragma: no cover - the regex already guards this
-            return value
-        if not number.is_integer() and format(number, ".10g") == value:
-            return number
-    return value
-
-
 def emit(obj: dict) -> str:
-    """Render a canonical object back to dp-spec.md markdown.
-
-    Law: `canonicalize(emit(canonicalize(x))) == canonicalize(x)`.
-
-    TRAP: the round trip is canonical, not byte-exact — comments, wrapping and
-    key order are lost. This must therefore NEVER overwrite a hand-edited
-    dp-spec.md wholesale. It writes a proposal the user reviews, or a targeted
-    edit. Silently reformatting the user's own file is the same class of failure
-    as silently correcting their values.
-    """
-    _require_yaml()
-    if not isinstance(obj, dict) or "frontmatter" not in obj:
-        raise SpecReadError("not a canonical dp-spec object")
-
-    out = ["---"]
-    fm_text = yaml.safe_dump(
-        _unstringify_numbers(obj.get("frontmatter") or {}),
-        sort_keys=True,
-        allow_unicode=True,
-        default_flow_style=False,
-    ).rstrip("\n")
-    out.append(fm_text)
-    out.append("---")
-
-    for name, value in (obj.get("sections") or {}).items():
-        out.append("")
-        out.append(f"## {name}")
-        out.append("")
-        if value is None:
-            continue
-        if isinstance(value, str):
-            out.append(_emit_scalar_block(value))
-        else:
-            out.append(
-                yaml.safe_dump(
-                    _unstringify_numbers(value),
-                    sort_keys=True,
-                    allow_unicode=True,
-                    default_flow_style=False,
-                ).rstrip("\n")
-            )
-    return "\n".join(out) + "\n"
+    """Render a v2 canonical object as a reviewed proposal."""
+    try:
+        return _v2.emit(obj)
+    except (TypeError, ValueError) as exc:
+        raise SpecReadError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1724,18 +1583,6 @@ def _plugin_version(root: Path | None = None) -> str:
     return "unknown"
 
 
-def _prompt_refs(raw: bytes) -> list[str]:
-    """Every `judgments[].prompt_ref` in a spec, in document order."""
-    obj = canonical_object(raw)
-    refs: list[str] = []
-    judgments = (obj.get("sections") or {}).get("judgments")
-    if isinstance(judgments, list):
-        for entry in judgments:
-            if isinstance(entry, dict) and entry.get("prompt_ref"):
-                refs.append(str(entry["prompt_ref"]))
-    return refs
-
-
 def write_lock(
     spec: Path,
     closure: Path,
@@ -1752,13 +1599,35 @@ def write_lock(
     """
     report = Report("dp_diagnostics", target=str(closure))
     raw = spec.read_bytes()
-    fm, _ = split_frontmatter(raw.decode("utf-8").replace("\r\n", "\n"))
+    try:
+        parsed_v2 = _v2.parse(raw.decode("utf-8"))
+    except _v2.UnsupportedVersionError as exc:
+        report.error(str(exc), code="spec.frontmatter.bad_version", path="v2:frontmatter.dp_spec_version", stage="s0_spec")
+        return {}, report
+    except (_v2.ParseError, UnicodeDecodeError) as exc:
+        report.error(str(exc), code="spec.frontmatter.unparseable", path="spec", stage="s0_spec")
+        return {}, report
+    fm = parsed_v2.document.frontmatter.to_dict()
+    semantic_issues = _v2.validate(parsed_v2)
+    if semantic_issues:
+        # ``Report`` is the pipeline envelope with a deliberately closed
+        # diagnostic registry. The v2 validator's field-addressed findings
+        # are carried by validate_dp_spec; lock write only needs to reject an
+        # invalid source without pretending every v2 code is a pipeline code.
+        detail = "; ".join(f"{issue.path}: {issue.message}" for issue in semantic_issues)
+        report.error(
+            f"v2 spec validation failed: {detail}",
+            code="pin.spec_compile_error",
+            path="spec",
+            stage="s4_pin",
+        )
+        return {}, report
     if fm.get("status") != "approved":
         report.error(
             f"the spec status is {fm.get('status')!r}, not 'approved' — approve "
             "the plan before snapshotting it into a closure",
             code="closure.lock_status_not_approved",
-            path="spec:frontmatter.status",
+            path="v2:frontmatter.status",
             evidence={"expected": "approved", "found": fm.get("status")},
             stage="s3_closure",
         )
@@ -1766,42 +1635,6 @@ def write_lock(
 
     closure.mkdir(parents=True, exist_ok=True)
     snapshot = closure / CLOSURE_SNAPSHOT
-
-    resolved: list[dict] = []
-    for ref in _prompt_refs(raw):
-        if ref.startswith("/") or ref.startswith("../") or ".." in Path(ref).parts:
-            report.error(
-                f"prompt_ref {ref!r} resolves outside the spec's own directory — "
-                "fix the IR; never rewrite the copy",
-                code="closure.escaping_reference",
-                path="spec:judgments.prompt_ref",
-                evidence={"found": ref},
-                stage="s3_closure",
-            )
-            continue
-        src = (spec.parent / ref).resolve()
-        if not src.is_file():
-            report.error(
-                f"prompt_ref {ref!r} names no file beside the spec",
-                code="closure.resolved_ref_missing",
-                path="spec:judgments.prompt_ref",
-                evidence={"found": ref},
-                stage="s3_closure",
-            )
-            continue
-        dest = closure / ref
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dest)
-        resolved.append(
-            {
-                "spec_ref": ref,
-                "closure_path": ref,
-                "sha256": raw_sha256(dest.read_bytes()),
-            }
-        )
-
-    if not report.ok:
-        return {}, report
 
     # Idempotent: re-running `lock write` over an unchanged spec rewrites the
     # same bytes and the same hash.
@@ -1816,16 +1649,19 @@ def write_lock(
         "dp_spec_version": fm.get("dp_spec_version"),
         "name": fm.get("name"),
         "workflow": fm.get("workflow"),
+        "contract_names": sorted(
+            str(item.get("name") or entity_id)
+            for entity_id, item in _v2.canonical_object(parsed_v2).get("contracts", {}).items()
+        ),
         # A basename, never a path: storing a `../`-shaped string inside the
         # closure is exactly the pointer this design removes.
         "source_basename": spec.name,
         "compiler_version": {
             "plugin": plugin_version or _plugin_version(),
             "generator_skill": generator_skill,
-            "self_check": "nxd-self-check-v1",
+            "self_check": "nxd-self-check-v2",
         },
         "copied_at_unix_ms": now_ms if now_ms is not None else int(time.time() * 1000),
-        "resolved_refs": resolved,
     }
     (closure / CLOSURE_LOCK).write_text(
         json.dumps(lock, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -1835,6 +1671,50 @@ def write_lock(
 
 def read_lock(closure: Path) -> dict:
     return json.loads((closure / CLOSURE_LOCK).read_text(encoding="utf-8"))
+
+
+def validate_lock(lock: Any) -> list[str]:
+    """Validate the complete v2 lock envelope before any artifact is trusted."""
+    if not isinstance(lock, dict):
+        return ["lock is not an object"]
+    required = {
+        "schema", "spec_hash", "canonicalization", "snapshot", "snapshot_sha256",
+        "spec_status_at_copy", "dp_spec_version", "name", "workflow",
+        "source_basename", "contract_names", "compiler_version", "copied_at_unix_ms",
+    }
+    problems = [f"missing required key {key!r}" for key in sorted(required - set(lock))]
+    problems.extend(f"unknown key {key!r}" for key in sorted(set(lock) - required))
+    if problems:
+        return problems
+    if lock.get("schema") != LOCK_SCHEMA_ID:
+        problems.append(f"schema must be {LOCK_SCHEMA_ID!r}")
+    if not isinstance(lock.get("spec_hash"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", lock["spec_hash"]):
+        problems.append("spec_hash must be sha256:<64 lowercase hex>")
+    if lock.get("canonicalization") != CANONICALIZATION:
+        problems.append(f"canonicalization must be {CANONICALIZATION!r}")
+    if not isinstance(lock.get("snapshot"), str) or not lock["snapshot"]:
+        problems.append("snapshot must be a non-empty string")
+    if not isinstance(lock.get("snapshot_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", lock["snapshot_sha256"]):
+        problems.append("snapshot_sha256 must be 64 lowercase hex")
+    if lock.get("spec_status_at_copy") not in STATUS_VALUES:
+        problems.append("spec_status_at_copy is outside the v2 status vocabulary")
+    if lock.get("dp_spec_version") != SPEC_VERSION:
+        problems.append(f"dp_spec_version must be {SPEC_VERSION}")
+    for key in ("name", "workflow", "source_basename"):
+        if not isinstance(lock.get(key), str) or not lock[key]:
+            problems.append(f"{key} must be a non-empty string")
+    if not isinstance(lock.get("contract_names"), list) or any(
+        not isinstance(item, str) or not item for item in lock["contract_names"]
+    ) or len(set(lock["contract_names"])) != len(lock["contract_names"]):
+        problems.append("contract_names must be a unique list of non-empty strings")
+    compiler = lock.get("compiler_version")
+    if not isinstance(compiler, dict) or set(compiler) != {"plugin", "generator_skill", "self_check"}:
+        problems.append("compiler_version must contain exactly plugin, generator_skill, self_check")
+    elif any(not isinstance(compiler[key], str) or not compiler[key] for key in compiler):
+        problems.append("compiler_version values must be non-empty strings")
+    if not isinstance(lock.get("copied_at_unix_ms"), int) or isinstance(lock["copied_at_unix_ms"], bool):
+        problems.append("copied_at_unix_ms must be an integer")
+    return problems
 
 
 def _stays_within_closure(closure: Path, target: Path) -> bool:
@@ -1850,8 +1730,7 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
     """The canonical half of the verification split (§3.5).
 
     Phase C does the byte check inside the closure with `hashlib` alone; this
-    does the canonical one, because comparing against the LIVE IR needs PyYAML
-    and the live IR is outside the closure by construction.
+    compares the v2 semantic hash against the LIVE IR outside the closure.
     """
     report = Report("dp_diagnostics", target=str(closure))
     lock_path = closure / CLOSURE_LOCK
@@ -1873,11 +1752,12 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
             stage="s3_closure",
         )
         return report
-    if lock.get("schema") != LOCK_SCHEMA_ID:
+    lock_problems = validate_lock(lock)
+    if lock_problems:
         report.error(
-            f"{CLOSURE_LOCK} schema is {lock.get('schema')!r}, not {LOCK_SCHEMA_ID!r}",
+            f"{CLOSURE_LOCK} is not a complete v2 lock: {'; '.join(lock_problems)}",
             code="closure.lock_unparseable",
-            path=f"closure:{CLOSURE_LOCK}:schema",
+            path=f"closure:{CLOSURE_LOCK}",
             stage="s3_closure",
         )
         return report
@@ -1933,8 +1813,6 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
 
     try:
         snapshot_hash = spec_hash(raw)
-    except DependencyError:
-        raise
     except SpecReadError as exc:
         report.error(
             f"the snapshot could not be canonicalized: {exc}",
@@ -1952,45 +1830,6 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
             evidence={"expected": lock.get("spec_hash"), "actual": snapshot_hash},
             stage="s3_closure",
         )
-
-    for ref in lock.get("resolved_refs") or []:
-        closure_path = str(ref.get("closure_path", ""))
-        if Path(closure_path).is_absolute() or ".." in Path(closure_path).parts:
-            report.error(
-                f"mirrored reference {closure_path!r} points outside the closure",
-                code="closure.escaping_reference",
-                path=f"closure:{CLOSURE_LOCK}:resolved_refs",
-                evidence={"found": closure_path},
-                stage="s3_closure",
-            )
-            continue
-
-        target = closure / closure_path
-        if not _stays_within_closure(closure, target):
-            report.error(
-                f"mirrored reference {closure_path!r} resolves outside the closure",
-                code="closure.escaping_reference",
-                path=f"closure:{CLOSURE_LOCK}:resolved_refs",
-                evidence={"found": closure_path},
-                stage="s3_closure",
-            )
-            continue
-        if not target.is_file():
-            report.error(
-                f"mirrored reference {ref.get('closure_path')!r} is missing",
-                code="closure.resolved_ref_missing",
-                path=f"closure:{ref.get('closure_path')}",
-                stage="s3_closure",
-            )
-        elif raw_sha256(target.read_bytes()) != ref.get("sha256"):
-            report.error(
-                f"mirrored reference {ref.get('closure_path')!r} no longer matches "
-                "the sha256 recorded at snapshot time",
-                code="closure.resolved_ref_missing",
-                path=f"closure:{ref.get('closure_path')}",
-                evidence={"expected": ref.get("sha256")},
-                stage="s3_closure",
-            )
 
     if spec is not None:
         if not spec.is_file():
@@ -2049,6 +1888,9 @@ def new_build_record(
     produce no signal at all. A record whose later stages are `not_reached` is
     normal and honest.
     """
+    lock_problems = validate_lock(lock)
+    if lock_problems:
+        raise ValueError("cannot create a build record from an invalid v2 lock: " + "; ".join(lock_problems))
     stamp = now_ms if now_ms is not None else _now_ms()
     return {
         "schema": BUILD_RECORD_SCHEMA_ID,
@@ -2061,8 +1903,8 @@ def new_build_record(
             "generator_skill": (lock.get("compiler_version") or {}).get(
                 "generator_skill", "nxd-generate-data-product"
             ),
-            "dp_spec_version": lock.get("dp_spec_version"),
-            "canonicalization": lock.get("canonicalization", CANONICALIZATION),
+            "dp_spec_version": SPEC_VERSION,
+            "canonicalization": CANONICALIZATION,
         },
         "generated_at_unix_ms": stamp,
         "generator_model": generator_model,
@@ -2110,7 +1952,7 @@ def merge_report(
     status: str | None = None,
     now_ms: int | None = None,
 ) -> list[str]:
-    """Merge an `nxd-diagnostic-report-v1` into a record's `stages`.
+    """Merge an `nxd-diagnostic-report-v2` into a record's `stages`.
 
     Every stage the report carries diagnostics for is filled; `stage` (when
     given) is additionally recorded even if it produced no diagnostics, because
@@ -2233,7 +2075,7 @@ def append_attempt(record: dict, attempt: dict) -> list[str]:
                 "blocks": [],
                 "disposition": "blocked",
                 "stage": entry.get("stage", "s0_spec"),
-                "path": "spec:frontmatter.status",
+                "path": "v2:frontmatter.status",
                 "discovered": "build_time",
                 "written_back": False,
                 "at_unix_ms": _now_ms(),
@@ -2379,7 +2221,7 @@ def recompute_caps(record: dict) -> dict:
 
 
 def validate_build_record(record: Any) -> list[str]:
-    """Structural validation of `nxd-build-record-v1`.
+    """Structural validation of `nxd-build-record-v2`.
 
     Hand-written rather than JSON-Schema-driven because this repo's scripts are
     stdlib-only and `jsonschema` is not a dependency. `BUILD_RECORD_SCHEMA` is
@@ -2416,6 +2258,20 @@ def validate_build_record(record: Any) -> list[str]:
     for key in record:
         if key not in required:
             problems.append(f"unknown key {key!r}")
+
+    compiler = record.get("compiler_version")
+    if not isinstance(compiler, dict):
+        problems.append("compiler_version must be an object")
+    else:
+        if set(compiler) != {"plugin", "generator_skill", "dp_spec_version", "canonicalization"}:
+            problems.append("compiler_version must contain exactly plugin, generator_skill, dp_spec_version, canonicalization")
+        if compiler.get("dp_spec_version") != SPEC_VERSION:
+            problems.append(f"compiler_version.dp_spec_version must be {SPEC_VERSION}")
+        if compiler.get("canonicalization") != CANONICALIZATION:
+            problems.append(f"compiler_version.canonicalization must be {CANONICALIZATION!r}")
+        for key in ("plugin", "generator_skill"):
+            if not isinstance(compiler.get(key), str) or not compiler[key]:
+                problems.append(f"compiler_version.{key} must be a non-empty string")
 
     stages = record.get("stages")
     if not isinstance(stages, dict):
@@ -3003,6 +2859,29 @@ DIAGNOSTIC_SCHEMA = {
     },
 }
 
+SPEC_DIAGNOSTIC_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": SPEC_DIAGNOSTIC_SCHEMA_ID,
+    "title": "Field-addressed v2 dp-spec diagnostic",
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema", "code", "path", "severity", "owner", "control",
+        "stage", "origin", "message",
+    ],
+    "properties": {
+        "schema": {"const": SPEC_DIAGNOSTIC_SCHEMA_ID},
+        "code": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "severity": {"const": "error"},
+        "owner": {"enum": ["agent", "user"]},
+        "control": {"enum": list(CONTROLS)},
+        "stage": {"const": "s0_spec"},
+        "origin": {"const": "tool_computed"},
+        "message": {"type": "string", "minLength": 1},
+    },
+}
+
 REPORT_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": REPORT_SCHEMA_ID,
@@ -3017,11 +2896,21 @@ REPORT_SCHEMA = {
         "counts": {
             "type": "object",
             "additionalProperties": False,
-            "properties": {sev: {"type": "integer"} for sev in SEVERITIES},
+            "required": list(SEVERITIES),
+            "properties": {sev: {"type": "integer", "minimum": 0} for sev in SEVERITIES},
         },
         "spec_hash": {"type": ["string", "null"]},
-        "diagnostics": {"type": "array", "items": {"$ref": DIAGNOSTIC_SCHEMA_ID}},
+        "diagnostics": {
+            "type": "array",
+            "items": {
+                "anyOf": [
+                    {"$ref": DIAGNOSTIC_SCHEMA_ID},
+                    {"$ref": "#/$defs/spec_diagnostic"},
+                ]
+            },
+        },
     },
+    "$defs": {"spec_diagnostic": SPEC_DIAGNOSTIC_SCHEMA},
 }
 
 LOCK_SCHEMA = {
@@ -3040,21 +2929,22 @@ LOCK_SCHEMA = {
         "name",
         "workflow",
         "source_basename",
+        "contract_names",
         "compiler_version",
         "copied_at_unix_ms",
-        "resolved_refs",
     ],
     "properties": {
         "schema": {"const": LOCK_SCHEMA_ID},
         "spec_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "canonicalization": {"const": CANONICALIZATION},
-        "snapshot": {"const": CLOSURE_SNAPSHOT},
+        "snapshot": {"type": "string", "minLength": 1},
         "snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "spec_status_at_copy": {"enum": list(STATUS_VALUES)},
-        "dp_spec_version": {"type": "integer"},
+        "dp_spec_version": {"const": SPEC_VERSION},
         "name": {"type": "string"},
         "workflow": {"type": "string"},
         "source_basename": {"type": "string"},
+        "contract_names": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "compiler_version": {
             "type": "object",
             "additionalProperties": False,
@@ -3066,19 +2956,6 @@ LOCK_SCHEMA = {
             },
         },
         "copied_at_unix_ms": {"type": "integer"},
-        "resolved_refs": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["spec_ref", "closure_path", "sha256"],
-                "properties": {
-                    "spec_ref": {"type": "string"},
-                    "closure_path": {"type": "string"},
-                    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                },
-            },
-        },
     },
 }
 
@@ -3121,7 +2998,7 @@ BUILD_RECORD_SCHEMA = {
             "properties": {
                 "plugin": {"type": "string"},
                 "generator_skill": {"type": "string"},
-                "dp_spec_version": {"type": "integer"},
+                "dp_spec_version": {"const": SPEC_VERSION},
                 "canonicalization": {"const": CANONICALIZATION},
             },
         },
@@ -3454,95 +3331,9 @@ BUILD_RECORD_SCHEMA = {
 }
 
 
-_SECTION_SHAPES = {
-    "intent": ("prose", "one paragraph naming what the product is for"),
-    "questions": ("list_of_prose", "the questions the product must answer"),
-    "sources": ("list_of_mappings", "where the rows come from, and their scope"),
-    "population": ("mapping", "the full row set, the sample rule, the excludes"),
-    "models": ("list_of_mappings", "every promised model, its grain and its key"),
-    "expectations": ("list_of_mappings",
-                     "guarantees the user stated about the input, verified "
-                     "before the transform reads it"),
-    "promises": ("list_of_mappings",
-                 "guarantees the user stated about the output, verified after "
-                 "the transform wrote it"),
-    "gates": ("list_of_mappings", "pass/fail rules, each with an unknown: rule"),
-    "criteria": ("list_of_mappings", "weighted criteria with a fully anchored scale"),
-    "verdicts": ("mapping", "the verdict vocabulary, its bands and precedence"),
-    "judgments": ("list_of_mappings", "which models carry agent judgement, under which rubric"),
-    "schedule": ("mapping", "trigger, cron, incrementality and its cursor"),
-    "outputs": ("list_of_mappings", "the semantic port and any static artifact"),
-    "decisions": ("list_of_mappings", "every ruling, with status and provenance"),
-    "open_questions": ("list_of_mappings", "what is still unanswered, and what it blocks"),
-}
-
-# What makes an optional section required. This is the progressive-disclosure
-# form spec the validator already encodes.
-_CONDITIONAL = {
-    "verdicts": ["criteria"],
-    "decisions": ["criteria", "verdicts", "gates", "population.sample_rule"],
-}
-
-
 def spec_schema() -> dict:
-    """Emit the machine-readable spec schema FROM the Python constants.
-
-    The vocabularies are never re-typed here — a harness that reads this can
-    never drift from what the validator enforces, because there is one
-    definition and two consumers.
-    """
-    return {
-        "schema": SPEC_SCHEMA_ID,
-        "dp_spec_version": SPEC_VERSION,
-        "frontmatter": {
-            "required": list(REQUIRED_FRONTMATTER),
-            "keys": {
-                "dp_spec_version": {"type": "integer", "const": SPEC_VERSION},
-                "name": {"type": "string", "pattern": NAME_RE.pattern},
-                "workflow": {"type": "string"},
-                "status": {"enum": list(STATUS_VALUES), "control": "enum"},
-                "rubric_version": {
-                    "type": "string",
-                    "required_when": "judgments is present",
-                },
-            },
-        },
-        "sections": [
-            {
-                "name": name,
-                "required": name in REQUIRED_SECTIONS,
-                "kind": _SECTION_SHAPES[name][0],
-                "summary": _SECTION_SHAPES[name][1],
-                "conditional_required_by": _CONDITIONAL.get(name, []),
-                "required_entry_fields": list(REQUIRED_ENTRY_FIELDS.get(name, ())),
-            }
-            for name in KNOWN_SECTIONS
-        ],
-        "vocabularies": {
-            "status": list(STATUS_VALUES),
-            "model_kinds": list(MODEL_KINDS),
-            "source_types": list(SOURCE_TYPES),
-            "decision_status": list(DECISION_STATUS),
-            "decision_provenance": list(DECISION_PROVENANCE),
-            "produced_by": list(PRODUCED_BY),
-            "reruns": list(RERUNS),
-            "dispositions": list(DISPOSITIONS),
-            "output_kinds": list(OUTPUT_KINDS),
-            "schedule_triggers": list(SCHEDULE_TRIGGERS),
-        },
-        "codes": [
-            {
-                "code": code,
-                "stage": entry["stage"],
-                "severity": entry["severity"],
-                "owner": entry["owner"],
-                "control": entry["control"],
-                "agent_fillable": entry["agent_fillable"],
-                "summary": entry["summary"],
-            }
-            for code, entry in sorted(CODES.items())
-        ],
-    }
+    """Emit the single section-specific v2 schema used by the harness."""
+    return _v2.SCHEMA
 
 
 # ---------------------------------------------------------------------------
@@ -3571,6 +3362,11 @@ def record_init(
     `s0_spec` regression.
     """
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock_problems = validate_lock(lock)
+    if lock_problems:
+        raise SpecReadError(
+            f"{CLOSURE_LOCK} is not a complete v2 lock: {'; '.join(lock_problems)}"
+        )
     closure = record_path.parent
     record = new_build_record(
         lock, closure, generator_model=generator_model, now_ms=now_ms
@@ -3599,7 +3395,7 @@ def record_init(
                 f"{spec_report.get('spec_hash')} != {lock.get('spec_hash')}"
             )
 
-    diags = [redact(diag) for diag in spec_report.get("diagnostics") or []]
+    diags = _record_s0_diagnostics(spec_report)
     record["stages"]["s0_spec"].update(
         {
             "status": status_for(diags),
@@ -3632,7 +3428,40 @@ def _validate_snapshot(snapshot: Path) -> dict:
             "--spec-report <report.json>. Writing s0_spec as not_reached would "
             "quietly recreate the hole record init exists to close."
         ) from exc
-    return validate_dp_spec.validate(snapshot).to_dict()
+    report = validate_dp_spec.validate(snapshot)
+    return report.to_dict() if hasattr(report, "to_dict") else report
+
+
+def _record_s0_diagnostics(report: dict) -> list[dict]:
+    """Adapt the v2 validator envelope to the build-record diagnostic shape.
+
+    ``validate_dp_spec`` deliberately exposes field-addressed v2 findings so a
+    Claude Desktop form can bind them to controls. Build records, however,
+    carry the shared pipeline ``Diagnostic`` shape. Preserve the original v2
+    code/path in evidence while using one registered bridge code; otherwise an
+    invalid spec would make the record itself structurally invalid.
+    """
+    stored: list[dict] = []
+    for item in report.get("diagnostics") or []:
+        if isinstance(item, dict) and item.get("schema") == DIAGNOSTIC_SCHEMA_ID:
+            stored.append(redact(item))
+            continue
+        if not isinstance(item, dict):
+            item = {"message": str(item)}
+        stored.append(
+            diagnostic(
+                "spec.v2.invalid",
+                message=str(item.get("message") or "v2 spec validation failed"),
+                path=str(item.get("path") or "spec"),
+                evidence={
+                    "validator_code": str(item.get("code") or "unknown"),
+                    "validator_owner": str(item.get("owner") or "agent"),
+                    "validator_control": str(item.get("control") or "text"),
+                },
+                stage="s0_spec",
+            ).to_dict()
+        )
+    return stored
 
 
 def read_record(path: Path) -> dict:
@@ -3760,7 +3589,9 @@ def cmd_emit(args) -> int:
 
 
 def cmd_schema(args) -> int:
-    if args.diagnostic:
+    if args.spec_diagnostic:
+        _print_json(SPEC_DIAGNOSTIC_SCHEMA)
+    elif args.diagnostic:
         _print_json(DIAGNOSTIC_SCHEMA)
     elif args.record:
         _print_json(BUILD_RECORD_SCHEMA)
@@ -4011,6 +3842,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_schema = sub.add_parser("schema", help="machine-readable schemas")
     p_schema.add_argument("--json", action="store_true", help="the spec schema (default)")
     p_schema.add_argument("--diagnostic", action="store_true")
+    p_schema.add_argument("--spec-diagnostic", action="store_true")
     p_schema.add_argument("--record", action="store_true")
     p_schema.add_argument("--lock", action="store_true")
     p_schema.set_defaults(func=cmd_schema)

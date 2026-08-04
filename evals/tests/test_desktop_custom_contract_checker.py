@@ -65,90 +65,130 @@ ASYNC_VERIFIER_ERROR = (
 DIAG = (Path(__file__).parents[2] / "src" / "nxd-run-job-loop" / "scripts" /
         "dp_diagnostics.py")
 SELF_CHECK = Path(__file__).parents[2] / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
+sys.path.insert(0, str(DIAG.parent))
+import dp_spec_v2 as dpv2  # noqa: E402
+sys.path.pop(0)
 
-# The approved IR these fixtures compile from. Its `## expectations` and
-# `## promises` names must match the custom(...) names the generated spec.py
-# wires, or Phase C reports contract drift — which is the point of that check.
-EXPECTATIONS_BLOCK = """## expectations
-
-- name: accepted-currency
-  authority: user_stated
-  model: orders
-  phase: pre_transform
-  guarantee: |
-    Every order is priced in EUR or USD.
-  rule: |
-    currency in ('EUR', 'USD')
-
-"""
-
+# The user-owned v2 IR these fixtures compile from. Custom executable
+# contracts are explicit, typed v2 entities; there are no legacy
+# expectations/promises sections or standalone policy payload.
 _FIXTURE_SPEC_TEMPLATE = """---
-dp_spec_version: 1
+dp_spec_version: 2
 name: orders
 workflow: orders
-status: approved
+status: proposed
 ---
 
-## intent
+## Intent
 
 Reconcile order totals against their line totals.
 
-## questions
+## Questions
 
-- q1: Does every order total equal the sum of its line totals?
+### Question `order_total_reconciliation`
 
-## sources
+Does every order total equal the sum of its line totals?
 
-- label: orders
-  type: csv
-  location: data/orders
-  scope: |
-    Every exported order line.
+## Scope
 
-## population
+Every exported order line is included.
 
-population: |
-  Every order line in the export.
-sample_rule: null
-excludes: |
-  Nothing.
+## Inputs
 
-## models
+### Input `orders_csv`
+- Type: `csv`
+- Location: `data/orders`
+- Description: Every exported order line.
 
-- name: orders
-  kind: base
-  grain: |
-    One row per order line.
-  key: [line_id]
-  answers: [q1]
-  description: |
-    Order lines as exported.
+## Models
 
-{expectations}## promises
+### Model `orders`
+- Kind: `base`
+- Input: `orders_csv`
+- Description: Order lines as exported.
+- Grain: one row per order line
+- Key: `line_id`
+- Fields: `line_id, order_id, line_total, order_total, currency`
 
-- name: order-total-reconciles
-  authority: user_stated
-  model: orders
-  phase: post_transform
-  guarantee: |
-    Each order total equals the sum of its line totals.
-  rule: |
-    sum(line_total) grouped by order_id == order_total
+### Model `order_totals`
+- Kind: `derived`
+- Description: One row per order with total reconciliation fields.
+- Grain: one row per order
+- Key: `order_id`
+- Fields: `order_id, order_total, line_total`
+- Produced by: `aggregate_order_totals`
 
-## decisions
+## Transform
 
-- decision_id: d1
-  status: confirmed
-  provenance: user_confirmed
-  ruling: |
-    The full export is taken every run.
-  applies_to: population
-  detail: |
-    The user asked for every order line.
+### Step `aggregate_order_totals`
+- Operation: `aggregate`
+- Inputs: `orders`
+- Output: `order_totals`
+- Group by: `orders.order_id, orders.order_total`
+- Measures: `line_total=sum(orders.line_total)`
+- Null handling: `ignore`
+
+## Outputs
+
+### Output `order_totals_port`
+- Model: `order_totals`
+- Questions: `order_total_reconciliation`
+- Projection: `order_id, order_total, line_total`
+- Order by: `order_id asc`
+- Delivery refs: `orders_port`
+
+## Delivery
+
+### Delivery `orders_port`
+- Kind: `semantic_port`
+- Target: `orders/reconciliation`
+- Description: Reconciled order totals.
+
+## Contracts
+
+### Contract `accepted_currency`
+- Name: `accepted-currency`
+- Attachment: `input:orders_csv`
+- Model: `orders`
+- Phase: `pre_transform`
+- Guarantee: Every order uses an accepted currency.
+- Rule: currency is EUR or USD.
+- Fields: `currency`
+
+### Contract `order_total_reconciles`
+- Name: `order-total-reconciles`
+- Attachment: `output:order_totals_port`
+- Model: `order_totals`
+- Phase: `post_transform`
+- Guarantee: Output totals reconcile to line totals.
+- Rule: order_total equals line_total.
+- Fields: `order_total, line_total`
+
+## Decisions
+
+### Decision `full_export`
+- Target: `input:orders_csv`
+- Status: `confirmed`
+- Provenance: `user_confirmed`
+- Ruling: The full export is taken every run.
+
+## Open Questions
 """
 
-FIXTURE_SPEC = _FIXTURE_SPEC_TEMPLATE.format(expectations=EXPECTATIONS_BLOCK)
-FIXTURE_SPEC_OUTPUT_ONLY = _FIXTURE_SPEC_TEMPLATE.format(expectations="")
+FIXTURE_SPEC = _FIXTURE_SPEC_TEMPLATE
+FIXTURE_SPEC_OUTPUT_ONLY = _FIXTURE_SPEC_TEMPLATE.replace(
+    """### Contract `accepted_currency`
+- Name: `accepted-currency`
+- Attachment: `input:orders_csv`
+- Model: `orders`
+- Phase: `pre_transform`
+- Guarantee: Every order uses an accepted currency.
+- Rule: currency is EUR or USD.
+- Fields: `currency`
+
+""",
+    "",
+)
 
 
 def _write_closure_record(root: Path, *, spec_text: str = FIXTURE_SPEC) -> None:
@@ -159,7 +199,11 @@ def _write_closure_record(root: Path, *, spec_text: str = FIXTURE_SPEC) -> None:
     `dp_diagnostics.py` actually writes.
     """
     spec = root.parent / f"{root.name}-dp-spec.md"
-    spec.write_text(spec_text, encoding="utf-8")
+    parsed = dpv2.parse(spec_text)
+    spec.write_text(
+        dpv2.approve(parsed, base_hash=dpv2.semantic_hash(parsed)),
+        encoding="utf-8",
+    )
     lock = subprocess.run(
         [sys.executable, str(DIAG), "lock", "write", str(spec), str(root)],
         capture_output=True, text=True,
@@ -828,72 +872,6 @@ def test_complete_self_check_scans_nested_verifiers_for_escape_paths(tmp_path: P
     proc = complete_self_check(tmp_path, nested_escape=True)
     assert proc.returncode != 0
     assert "contracts/expectations/accepted.py: references '../../POLICY.md'" in proc.stdout
-
-# --- contract_spec_drift entry parsing ------------------------------------
-#
-# The drift check reads contract names out of dp-spec.approved.md WITHOUT
-# PyYAML (CONSTRAINT-1: self_check.py is copied into the closure and runs
-# there). Two shapes the spec itself teaches will silently poison a naive
-# reader, and both produce the SAME damage: one contract reported missing and
-# the real one reported as "a guarantee the user never approved", pointing the
-# repair loop at deleting something the user approved.
-
-def _drift_names(snapshot: str) -> set[str]:
-    """Run self_check's entry-block parser over a snapshot, standalone."""
-    src = SELF_CHECK.read_text()
-    block = re.search(
-        r"        spec_named = set\(\)\n        section = None\n"
-        r"        block: list\[str\] = \[\]\n\n(        def _flush.*?)"
-        r"\n        for line in snap_bytes.*?block\.append\(line\)",
-        src, re.S)
-    assert block, "the drift parser moved; update this extraction"
-    body = block.group(0)
-    fn = "def parse(snap):\n    spec_named=set()\n    section=None\n    block=[]\n"
-    fn += "\n".join(l[4:] if l.startswith("    ") else l
-                    for l in body.splitlines()[3:])
-    fn = fn.replace('snap_bytes.decode("utf-8", "replace")', "snap")
-    fn = fn.replace("CONTRACT_DIRS", '{"expectations": 1, "promises": 1}')
-    fn += "\n    _flush(block)\n    return spec_named\n"
-    ns: dict = {"re": re}
-    exec(fn, ns)
-    return ns["parse"](snapshot)
-
-
-@pytest.mark.parametrize("label,snapshot,expected", [
-    ("name is the first key",
-     "## expectations\n- name: a\n  rule: x\n", {"a"}),
-    # YAML mapping key order is free and validate_dp_spec.py uses yaml.safe_load,
-    # so nothing makes `name` come first.
-    ("name is NOT the first key",
-     "## expectations\n- authority: user_stated\n  name: a\n", {"a"}),
-    # `fields:` is a nested list of mappings; its `- name:` is a FIELD.
-    ("a nested fields list precedes name",
-     "## expectations\n- authority: u\n  fields:\n    - name: amount\n"
-     "      type: decimal\n  name: amount_positive\n", {"amount_positive"}),
-    # `rule: |` prose may legally begin "name:" and is not a key at all.
-    ("block scalar prose containing 'name:'",
-     "## expectations\n- id: E1\n  rule: |\n    Every row must satisfy:\n"
-     "    name: is prose not a key\n  name: real\n", {"real"}),
-    ("folded scalar opened on the dash line",
-     "## expectations\n- description: >\n    name: prose\n  name: real\n",
-     {"real"}),
-    ("scalar with a chomping indicator",
-     "## expectations\n- rule: |-\n    name: prose\n  name: real\n", {"real"}),
-    ("both contract sections",
-     "## expectations\n- authority: u\n  name: a\n\n## promises\n- name: b\n",
-     {"a", "b"}),
-    ("stops at the next section",
-     "## expectations\n- name: a\n\n## gates\n- name: g1\n", {"a"}),
-    # The dp-spec.md template annotates `name:` exactly this way, so a closure
-    # built from the DOCUMENTED example must not drift against itself.
-    ("inline comment after the name, as the reference doc writes it",
-     "## expectations\n- name: accepted-currency      # selects the verifier "
-     "filename\n  authority: user_stated\n", {"accepted-currency"}),
-    ("a quoted name may contain '#'",
-     "## expectations\n- name: \"has#hash\"  # trailing comment\n", {"has#hash"}),
-])
-def test_drift_parser_reads_the_entry_name(label, snapshot, expected):
-    assert _drift_names(snapshot) == expected, label
 
 def _secret_literal_stmt() -> str:
     """The `SECRET_LITERAL = re.compile(...)` statement out of self_check.py."""

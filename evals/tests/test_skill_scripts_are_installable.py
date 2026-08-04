@@ -38,7 +38,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 
-HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py", "self_check.py")
+HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py", "dp_spec_v2.py", "self_check.py")
 VERSION_STAMP = ".nexty-plugin-version.json"
 SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
 WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
@@ -138,7 +138,7 @@ def _assert_helpers_run(skill_dir: Path) -> None:
         text=True,
         check=True,
     )
-    assert json.loads(schema.stdout)["schema"] == "nxd-dp-spec-schema-v1"
+    assert json.loads(schema.stdout)["schema"] == "nxd-dp-spec-schema-v2"
 
     examples = WORKED_SPEC.findall(
         (SRC / "nxd-run-job-loop" / "reference" / "dp-spec.md").read_text(encoding="utf-8")
@@ -162,11 +162,14 @@ def _assert_helpers_run(skill_dir: Path) -> None:
 def _lock_plugin_version(skill_dir: Path) -> str:
     """Exercise the installed diagnostic script, not the source import."""
     spec = skill_dir.parent / "approved-dp-spec.md"
-    spec.write_text(
-        "---\ndp_spec_version: 1\nname: install_test\nworkflow: install-test\n"
-        "status: approved\n---\n\n## intent\n\nInstalled helper version test.\n",
-        encoding="utf-8",
-    )
+    worked = (skill_dir / "reference" / "dp-spec.md").read_text(encoding="utf-8")
+    example = WORKED_SPEC.findall(worked)
+    assert len(example) == 1
+    spec.write_text(example[0], encoding="utf-8")
+    sys.path.insert(0, str(skill_dir / "scripts"))
+    import dp_spec_v2  # noqa: PLC0415
+    proposed = dp_spec_v2.parse(spec.read_text(encoding="utf-8"))
+    spec.write_text(dp_spec_v2.approve(proposed, base_hash=dp_spec_v2.semantic_hash(proposed)), encoding="utf-8")
     closure = skill_dir.parent / "closure"
     result = subprocess.run(
         [sys.executable, str(skill_dir / "scripts" / "dp_diagnostics.py"), "lock", "write",

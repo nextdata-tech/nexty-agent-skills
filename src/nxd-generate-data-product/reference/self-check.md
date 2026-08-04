@@ -77,7 +77,7 @@ those two phases rather than an accident of how they were added.
   phase checks:
   - `dp-spec.approved.md` is present at the closure root;
   - `dp-spec.lock.json` is present, parses, and carries schema
-    `nxd-dp-spec-lock-v1`;
+    `nxd-dp-spec-lock-v2`;
   - the snapshot's raw bytes hash to the lock's `snapshot_sha256` — the **tamper
     check**. The snapshot is evidence, and evidence edited after it was written
     is not evidence. This is the mechanical half of "once approved, the spec is
@@ -85,12 +85,10 @@ those two phases rather than an accident of how they were added.
   - the lock records `spec_status_at_copy: approved` — a snapshot of an
     unapproved spec is a build nobody signed off;
   - `build-record.json` is present, parses, carries schema
-    `nxd-build-record-v1`, and its `compiled_from` equals the lock's
+    `nxd-build-record-v2`, and its `compiled_from` equals the lock's
     `spec_hash` — the record must describe a build of *this* plan;
   - `README.md` is present (the reopen recipe and the credential key names —
     the one thing a cold reader needs that is neither plan nor outcome);
-  - every `resolved_refs[]` entry in the lock — the `prompt_ref` files mirrored
-    in at snapshot time — exists in the closure with a matching sha256;
   - no closure file references a contract/design doc by a `../`-rooted path
     that escapes the closure. The snapshot **is** scanned: a `../`-rooted
     reference inside the approved plan is exactly the dangling pointer this
@@ -103,14 +101,12 @@ those two phases rather than an accident of how they were added.
     because a check that prints the secret it found turns a contained file leak
     into a transcript leak.
 
-  Phase C checks the snapshot's **bytes**, which is sufficient *inside* the
-  closure: those bytes are the ones the canonical hash was computed from, so a
-  byte match means the canonical hash still holds by construction. The
-  **canonical** hash — the one that answers "did the plan change?" — needs PyYAML
-  and the live `dp-spec.md`, which lives outside the closure by design. Step 7
-  therefore runs `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec
-  <dp-spec.md>` as well, and Phase C emits an informational diagnostic naming
-  that command so a reader of the JSON can never mistake one check for the other.
+  Phase C checks the snapshot's **bytes**, while the shared v2 parser computes
+  the canonical hash without a YAML dependency. Step 7 still runs
+  `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec
+  <dp-spec.md>` to compare the live IR and the approved snapshot, and Phase C
+  emits an informational diagnostic naming that command so a reader of the JSON
+  can never mistake the two checks.
   (Note: the naming invariant that Phase A enforces already requires every
   promised model to be in `PHYSICAL_MODELS`, so a model cannot be
   *promised-but-deferred*; a deferred contract belongs to a model not yet
@@ -194,9 +190,9 @@ python self_check.py --json                              # report to stdout
 python self_check.py --json --record build-record.json   # and merge stages 1-3
 ```
 
-- **`--json`** prints exactly one `nxd-diagnostic-report-v1` object and nothing
+- **`--json`** prints exactly one `nxd-diagnostic-report-v2` object and nothing
   else. The prose is suppressed, so stdout is parseable in full. Every phase
-  emits the same `nxd-diagnostic-v1` shape — `{schema, stage, code, severity,
+  emits the same `nxd-diagnostic-v2` shape — `{schema, stage, code, severity,
   owner, origin, path, message, evidence, fix?}` — differing only in which stage
   produced it: `s1_structure` (Phase A), `s2_transform` (Phase B and the
   read-back), `s3_closure` (Phases C and D, which share a stage because both are

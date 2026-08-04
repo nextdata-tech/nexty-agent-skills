@@ -1,9 +1,10 @@
 # Making the desktop helper scripts reachable
 
-`dp_diagnostics.py` and `validate_dp_spec.py` ship with **nxd-run-job-loop** at
-`scripts/`. They are not copied into a generated closure, and a closure is not
-the current directory from which to address them. A bare `scripts/...` path is
-therefore invalid once the skill is installed.
+`dp_diagnostics.py`, `validate_dp_spec.py`, and the shared
+`dp_spec_v2.py` core ship with **nxd-run-job-loop** at `scripts/`. They are
+not copied into a generated closure, and a closure is not the current directory
+from which to address them. A bare `scripts/...` path is therefore invalid once
+the skill is installed.
 
 ## Resolve `JOB_HELPER_DIR` once
 
@@ -30,6 +31,7 @@ for root in roots:
     skill = root / "SKILL.md"
     if ((root / "scripts/dp_diagnostics.py").is_file()
             and (root / "scripts/validate_dp_spec.py").is_file()
+            and (root / "scripts/dp_spec_v2.py").is_file()
             and (root / "scripts/self_check.py").is_file()
             and skill.is_file()):
         print(root.resolve())
@@ -53,7 +55,12 @@ environment that has installed that file's requirements. For example:
 python3 -m pip install -r "$JOB_HELPER_DIR/scripts/requirements.txt"
 python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <workflow>/dp-spec.md --json
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> \
-  --spec <workflow>/dp-spec.md
+    --spec <workflow>/dp-spec.md
+
+# The v2 parser is the only active spec contract; the diagnostics entry point
+# delegates to the same core.
+python3 "$JOB_HELPER_DIR/scripts/dp_spec_v2.py" validate <workflow>/dp-spec.md
+python3 "$JOB_HELPER_DIR/scripts/dp_spec_v2.py" schema
 ```
 
 The adversarial-review dispatch is deliberately different: it receives only the

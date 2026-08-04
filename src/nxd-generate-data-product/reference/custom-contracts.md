@@ -10,29 +10,26 @@
 
 ## What belongs in a custom contract
 
-**The contract inventory is not yours to author.** It lives in the approved
-`dp-spec.md`, in its `## expectations` and `## promises` sections, and this
-skill *compiles* it. Codegen never invents a guarantee and never edits the IR:
-a contract that appears in the closure but in no spec section is a guarantee
-the user never approved, and Phase C rejects it as
-`closure.contract_spec_drift`. See
-[`dp-spec.md`](../../nxd-run-job-loop/reference/dp-spec.md) for the entry shape;
-what follows is how each entry becomes code.
+The active `dp-spec.md` is v2 Markdown. It has no legacy `expectations` or
+`promises` sections and no standalone policy payload. If a custom verifier is
+needed, its name, attachment, model, phase, guarantee, rule, and fields belong
+in the typed **Contracts** section of the approved spec. The lock records that
+inventory and the v2 self-check compares it with actual `spec.py` wiring.
 
-Each entry already carries what generation needs:
+The settled handoff carries what generation needs:
 
-| spec key | what it decides here |
+| handoff value | what it decides here |
 |---|---|
-| `name` | the verifier filename — `contracts/expectations/<name>.py` |
+| `name` | the verifier filename under `contracts/` |
 | `model` | which model the verifier reads |
-| `phase` | restates the section's phase — `pre_transform` in `## expectations`, `post_transform` in `## promises`. Optional, and a cross-check only: the SECTION decides the kind, and a `phase` contradicting its section is an error, not a reclassification |
+| `phase` | whether the verifier runs before or after the transform |
 | `guarantee` | the user's words; the contract's `.description(...)` |
 | `rule` | the executable body |
 | `fields` | which columns the rule reads |
 
-The section a contract sits in decides the kind. An `## expectations` entry is
-an input expectation; a `## promises` entry is an output promise. Do not infer
-the kind from the wording of the rule.
+The handoff must state the attachment point and phase. Do not infer either one
+from the wording of the rule. An input expectation and an output promise must
+be attached at the phase stated in the handoff.
 
 **A contract never replaces a Step-3b assert.** They check different things: a
 contract checks what the user guaranteed about a value, an assert checks the
@@ -41,19 +38,15 @@ because a contract covers the same column removes the only check that would
 catch a wrong derivation. Contract names are unique across **both** sections —
 the name selects the verifier filename, so a collision silently overwrites.
 
-**Authority is already settled by the spec.** The validator rejects
-`authority: inferred`, so every contract reaching codegen is `user_stated`. A
-type, nullability, key or enum you inferred from profiling is a real constraint
-but is **not** a contract: it belongs in `models.py` and an ordinary
-`.promise(model)`. Do not promote one into `contracts/` — that relabels your own
-inference as the user's guarantee.
+**Authority is settled in the handoff.** A type, nullability, key or enum
+inferred from profiling is a real constraint but is **not** a custom contract:
+it belongs in the model and an ordinary `.promise(model)`. Do not promote one
+into `contracts/` — that relabels your own inference as the user's guarantee.
 
 If a guarantee is missing a threshold, accepted set, time zone, tolerance or
-reconciliation population, that gap belongs back in the spec as an
-`open_questions` entry, not filled in here. The validator already rejects a
-rule carrying an unfilled placeholder
-(`spec.contract.unbound_threshold`); do not work around it by choosing a number
-at codegen time.
+reconciliation population, that gap belongs back in the spec as an **Open
+Questions** entry, not filled in here. Do not work around it by choosing a
+number at codegen time.
 
 ## CSV-first support boundary
 
