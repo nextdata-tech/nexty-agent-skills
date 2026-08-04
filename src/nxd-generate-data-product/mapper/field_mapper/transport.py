@@ -378,9 +378,14 @@ def _import_anthropic() -> Any:
     attempted, so it BLOCKS.
     """
     try:
-        import importlib
-
-        anthropic = importlib.import_module("anthropic")
+        # A STATEMENT, not importlib. This has to stay an `ast.Import` node:
+        # the generate-dp self-check's Phase E walks `contracts/**/*.py` for
+        # model-SDK imports, and a harness tree copied under `contracts/` is
+        # caught only because this line is statically visible. Routing it
+        # through `importlib.import_module` hides the harness's one model
+        # dependency from every AST gate in the repo. Deliberately
+        # function-local so importing this module costs nothing.
+        import anthropic  # pyright: ignore[reportMissingImports]  # optional dep, absent from the type-check env
     except ImportError as exc:
         raise DependencyMissingError(
             "The `anthropic` package is not installed, so the field mapper "

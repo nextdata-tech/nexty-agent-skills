@@ -1949,10 +1949,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     target = Path(args.target) if args.target else default_root
 
     try:
-        if args.command == "verify":
-            return cmd_verify(target if target.is_dir() else default_root, args)
-        if args.command == "pins":
-            return cmd_pins(target if target.is_dir() else default_root, args)
+        if args.command in ("verify", "pins"):
+            # A NAMED target that is not a directory is a usage error, never a
+            # silent fall back to the packaged fixtures. These two commands
+            # exist to answer "is this harness intact?", so verifying something
+            # other than what the caller named — and printing 13/13 for it —
+            # is the one wrong answer they must not give. Omitting the target
+            # still defaults to the packaged samples, which is what makes the
+            # bare invocation work from any install.
+            if args.target and not target.is_dir():
+                print(f"not a fixture directory: {target}", file=sys.stderr)
+                return EXIT_USAGE
+            return cmd_verify(target, args) if args.command == "verify" else cmd_pins(target, args)
         # `spec-id` and `grant-check` take FILE paths, not a fixture directory,
         # and deliberately do not go through `Fixture.load`: a closure carries a
         # spec and a grant under contracts/ with no inputs.json, no recorded.json
