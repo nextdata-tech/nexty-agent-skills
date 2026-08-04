@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from _harness import harness_path, requires_harness
+
 
 CHECKER = (Path(__file__).parents[1] / "public" / "desktop-custom-contracts" /
            "fixtures" / "check_custom_contracts.py")
@@ -21,7 +23,8 @@ checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
 
 REPO = Path(__file__).parents[2]
-MAPPER_SRC = REPO / "src" / "nxd-generate-data-product" / "mapper" / "field_mapper"
+# The harness lives in the nxd monorepo; only the fixtures are carried here.
+MAPPER_SRC = harness_path()
 MAPPER_SAMPLE = REPO / "src" / "nxd-generate-data-product" / "mapper" / "samples" / "01-row-scores"
 
 
@@ -32,7 +35,12 @@ def _stage_harness(closure: Path) -> None:
     under the closure — the subprocess cwd — makes the import and the
     `python -m` oracle resolve exactly as they will from site-packages, without
     requiring the monorepo wheel to be installed here.
+
+    Every caller of this helper drives the real `self_check.py` far enough to
+    reach the harness, so all of them carry `requires_harness` and the source
+    is guaranteed present.
     """
+    assert MAPPER_SRC is not None  # guaranteed by @requires_harness
     pkg = closure / "nxd" / "experimental"
     pkg.mkdir(parents=True, exist_ok=True)
     (closure / "nxd" / "__init__.py").write_text("", encoding="utf-8")
@@ -662,6 +670,7 @@ if __name__ == "__main__":
     return subprocess.run([sys.executable, str(SELF_CHECK)], cwd=tmp_path, text=True, capture_output=True)
 
 
+@requires_harness
 def test_real_self_check_denies_ungranted_mapper_before_phase_b(tmp_path: Path) -> None:
     """The whole real script, on a vendored mapper with no grant.
 
@@ -678,6 +687,7 @@ def test_real_self_check_denies_ungranted_mapper_before_phase_b(tmp_path: Path) 
     assert "PHASE B FAILED" not in proc.stdout, out
 
 
+@requires_harness
 def test_real_self_check_denies_a_mapper_imported_from_a_closure_root_module(
         tmp_path: Path) -> None:
     """A root module holding the import is still this closure mapping.
@@ -702,6 +712,7 @@ def test_real_self_check_denies_a_mapper_imported_from_a_closure_root_module(
     assert "PHASE B FAILED" not in proc.stdout, out
 
 
+@requires_harness
 def test_real_self_check_green_with_matching_grant(tmp_path: Path) -> None:
     """A gate that can only deny is indistinguishable from one that is broken."""
     proc = complete_self_check(tmp_path / "full", vendor_mapper=True, mapper_grant=True)

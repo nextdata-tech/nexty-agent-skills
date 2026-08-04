@@ -2,7 +2,7 @@
 id: 2026-08-04-field-mapper-static-signal-and-usage-errors
 date: 2026-08-04
 label: "nxd-generate-data-product: restore the mapper's static import signal and stop verify falling back"
-plugin_version: 0.35.1
+plugin_version: 0.35.2
 status: NO_EVAL
 scenarios: []
 record: null
@@ -61,6 +61,33 @@ bare invocation still exits 0 with 13/13 — and the restored import was confirm
 visible to an `ast.walk` over `transport.py`, which is the property the gate
 actually depends on.
 
-The two harness files here must be mirrored into the nxd package copy, which is
-the canonical one. That mirror is a paired PR against the monorepo; nothing in
-this repo enforces it, which remains the standing residual.
+## The duplicate is gone
+
+The two fixes above had to be applied twice, to two byte-identical trees, which
+is the defect underneath them. That is now closed: `mapper/field_mapper/` is
+deleted from this repo, and the gate tests resolve the monorepo copy through
+`evals/tests/_harness.py` — an env var (`NXD_REPO`), falling back to a sibling
+checkout, and `pytest.mark.skipif` when neither is present.
+
+Seven tests carry that marker. They are the ones that need the harness to
+*judge*: the matching-grant pass, the expired grant, the wrong-model grant, the
+malformed-grants parity test, and the three that drive the real `self_check.py`
+end to end. Everything else keeps running here, against a stand-in that answers
+`spec-id` with a hash of the spec and `grant-check` with "no problems". That
+line is deliberate and load-bearing: a stand-in that hashes drifts from nothing,
+whereas a stand-in that *judges* would be a second copy of the consent rules —
+the exact defect the gate exists to prevent. So the verdict tests skip rather
+than being faked.
+
+Deleting the tree without that split would have been worse than the duplication:
+a first attempt to fake the whole harness was abandoned because two of those
+tests are the only pins on the harness's message-prefix→kind mapping, where a
+reworded `GrantError` silently flips `grant.expired` (owner: user, stop and
+re-consent) into `grant.invalid` (owner: agent, auto-repair).
+
+The cost is that those seven skip in this repo's CI, which is air-gapped from
+the monorepo — no submodule points at nxd, and its wheels publish to a private
+registry rather than PyPI. They run in a developer checkout and in the
+monorepo's CI, which already vendors this repo. Verified both ways: 609 passed
+with the harness reachable, 602 passed and 8 skipped without it, no failures and
+no collection errors in either mode.
