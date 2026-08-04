@@ -12,7 +12,10 @@ record: null
 ## Notes
 
 No eval arm can distinguish this change, and the attempt to build one is the most
-useful thing this entry records.
+useful thing this entry records. (The one runtime change — a wrong FAIL reason in
+`certify.py` — is guarded by a unit test instead, named in Evidence; no scenario
+observes a `certify` reason string, so a scenario built to grade it would be
+manufactured rather than measured.)
 
 The bulk of the diff is terminology: `data product` in prose where skills wrote
 bare `DP` or title-case `Data Product`, `infra profile` where the hyphenated form
@@ -105,9 +108,19 @@ evidence about that client, not about the API.
 
 ## Evidence
 
+- `evals/nxd_eval/tests/test_report_certify.py::test_certify_fail_reason_does_not_claim_the_mean_cleared_when_it_did_not`
+  — the carrying test for the one runtime change here. `certify.py` hardcoded a
+  FAIL reason asserting "the point estimate clears the bar", which is false when
+  `p_hat < target` — the same misstatement this PR corrects in the verdict docs,
+  left live in the code that prints it. The reason now branches on
+  `card.p_hat >= target`. Verified to fail against the previous implementation
+  (255/300 = 0.850 against a 0.90 target, powered to a ~0.040 half-width so it
+  reaches FAIL rather than REFUSE).
 - `python3 scripts/validate_skills.py --root .` — passes.
-- `python3 -m pytest evals/tests` — 610 passed (610 on `origin/main`; this PR adds
-  no test and changes two existing fixtures to the new gloss literal).
+- `python3 -m pytest evals/tests` — 610 passed (610 on `origin/main`; the two
+  changed fixtures carry the new gloss literal).
+- `uv run --project evals/nxd_eval python -m pytest evals/nxd_eval/tests/test_report_certify.py`
+  — 26 passed (25 on `origin/main`; this PR adds the one named above).
 - `evals/tests/test_static_artifact_lifecycle_gate.py` — the carrying test. Its
   gloss tuple asserts the exact literal the skill greps for; it fails against this
   PR's `src/` change if the fixtures are left on the old string, which is precisely
