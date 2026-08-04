@@ -80,11 +80,12 @@ model tokens. Add the label to any PR that changes skill behavior — a green
 unlabelled PR means the scenarios never ran, not that they passed. The label can
 be added after the PR is open and will fire a run on its own.
 
-The unconditional gate is at release, not on the PR: tagging `vX.Y.Z` runs the
-full public suite on the tagged commit, and only a green run publishes the
-`evals.json` release asset that the nxd monorepo requires before it will merge a
-submodule bump. See "What runs in CI vs. what only runs locally" in
-`evals/README.md`.
+The unconditional gate is at release, not on the PR: tagging `vX.Y.Z` runs every
+runnable public scenario on the tagged commit, and a confirmed regression fails
+the release outright. A green run additionally attaches the `evals.json` asset
+that the nxd monorepo requires before it will merge a submodule bump — so an
+emergency `skip_evals` release still publishes, but cannot reach the monorepo.
+See "What runs in CI vs. what only runs locally" in `evals/README.md`.
 
 When a PR changes a skill's behavior (not pure packaging/typo fixes), benchmark
 it and commit the evidence: run the relevant eval scenario(s) before and after

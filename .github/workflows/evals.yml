@@ -119,10 +119,14 @@ jobs:
   # from running; it does not retract a result already reported.
   # ---------------------------------------------------------------------------
   evals-pr:
+    # The `labeled` trigger fires on *any* label, so the event-action clause
+    # keeps adding an unrelated label (`bug`, `documentation`) to an
+    # already-labelled PR from re-running the whole selection at full token cost.
     if: >-
       github.event_name == 'pull_request'
       && github.event.pull_request.draft == false
       && contains(github.event.pull_request.labels.*.name, 'run-evals')
+      && (github.event.action != 'labeled' || github.event.label.name == 'run-evals')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

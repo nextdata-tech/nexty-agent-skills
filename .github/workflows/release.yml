@@ -44,7 +44,12 @@ jobs:
   # run is too noisy to block a release on.
   # ---------------------------------------------------------------------------
   release-evals:
-    if: ${{ !inputs.skip_evals }}
+    # Written as an explicit event check rather than `!inputs.skip_evals`. On a
+    # tag push there is no `inputs` context, so that form works only because the
+    # input is declared `type: boolean` and null is falsy. Redeclaring it as a
+    # string would make `!"false"` evaluate to false, silently skipping the gate
+    # on every release. Naming the event removes that footgun.
+    if: ${{ github.event_name == 'push' || inputs.skip_evals != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -91,10 +96,74 @@ jobs:
           EVAL_CODEX_AGENT_SANDBOX: danger-full-access
         run: |
           set -euo pipefail
-          python3 evals/run.py --suite public --report evals.json \
-            --agent-backend codex --judge-backend codex \
-            --skill-set current_pack \
-            --concurrency 4
+          # Select the CI-runnable scenarios rather than passing a bare
+          # `--suite public`. `run.py` does not read `ci_skip` — only
+          # affected_scenarios.py does — so a bare suite run would include the
+          # scenarios that need a live desktop supervisor, a semantic MCP server,
+          # or multi-turn (which the codex backend cannot drive). Those cells
+          # ERROR, and because they are absent from evals/baselines/public.json
+          # compare_baseline.py reports them as ungated `NEW`. The gate would go
+          # green having measured nothing about them — a fail-open gate in the
+          # one place this workflow exists to guarantee something.
+          #
+          # Asking affected_scenarios.py with a harness path reuses its existing
+          # "everything except ci_skip" branch, so ci_skip stays defined in one
+          # place instead of being duplicated here and drifting.
+          echo '.github/workflows/evals.yml' > release-changed.txt
+          python3 evals/affected_scenarios.py --changed-file release-changed.txt > selection.json
+          python3 -c '
+          import json
+          print("\n".join(json.load(open("selection.json"))["scenarios"]))
+          ' > runnable.txt
+          echo "Scenarios selected for the release gate:"; sed 's/^/  - /' runnable.txt
+          if [ ! -s runnable.txt ]; then
+            echo "::error::no runnable scenarios selected — the release gate would pass vacuously"
+            exit 1
+          fi
+
+          args=(--suite public --report evals.json
+                --agent-backend codex --judge-backend codex
+                --skill-set current_pack
+                --concurrency 4)
+          while IFS= read -r scenario; do
+            [ -n "$scenario" ] && args+=(--scenario "$scenario")
+          done < runnable.txt
+          python3 evals/run.py "${args[@]}"
+
+      # Release-only strictness, deliberately not pushed into compare_baseline.py.
+      # That script treats an ERROR cell as carrying no signal and an unbaselined
+      # cell as ungated, which is right for a PR: an infrastructure blip should
+      # not red someone's unrelated change. It is wrong here. This run is the
+      # published evidence, so a cell that never produced a verdict means the
+      # evidence is incomplete, and shipping it as proof would be a lie of
+      # omission. Only ~10 of the cells are baselined, so without this check a
+      # release could go green on a report that is mostly ERROR.
+      - name: Require every selected cell to have produced a verdict
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, sys
+          # Same shape compare_baseline.load_report expects: {"results": [...]}.
+          data = json.load(open("evals.json"))
+          results = data.get("results")
+          if not isinstance(results, list):
+              sys.exit("evals.json: report has no `results` list")
+          bad = []
+          for r in results:
+              key = f"{r.get('skill_set')}/{r.get('scenario')}"
+              metrics = r.get("metrics") or {}
+              if not r.get("ok", False) or r.get("error"):
+                  bad.append((key, r.get("error") or "did not complete"))
+              elif metrics.get("sandbox_blocked"):
+                  bad.append((key, "sandbox blocked every shell call"))
+          print(f"{len(results)} cell(s) in the release report; {len(bad)} without a verdict")
+          for key, why in bad:
+              print(f"  ERROR  {key}: {why}")
+          if bad:
+              print("::error::the release eval report contains cells that never produced "
+                    "a verdict — it cannot serve as evidence that this version was measured")
+              sys.exit(1)
+          PY
 
       - name: Gate on regression vs baseline
         id: gate
@@ -142,21 +211,42 @@ jobs:
       # Only reached when the gate passed, so this artifact exists if and only if
       # the tagged commit's evals are green. The release job publishes it as the
       # evals.json asset, and nxd's bump treats its presence as the gate.
+      # evals.json alone, so `if-no-files-found: error` actually means what it
+      # says. Listing evals-retry.json here too would make the check set-wide:
+      # on a healthy release there is no retry, and a run that produced only the
+      # retry report would still "succeed" and hand a retry-only artifact on.
       - name: Upload the eval report for the release job
         uses: actions/upload-artifact@v4
         with:
           name: release-evals
-          path: |
-            evals.json
-            evals-retry.json
+          path: evals.json
           if-no-files-found: error
+
+      - name: Upload the retry report
+        if: steps.gate.outputs.retry == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evals-retry
+          path: evals-retry.json
+          if-no-files-found: warn
 
   release:
     needs: release-evals
     # `needs` on a skipped job makes the dependent skip too, so a skip_evals
     # dispatch must explicitly allow the skipped result through. `failure()` and
     # `cancelled()` are still excluded: only success-or-deliberately-skipped runs.
-    if: ${{ always() && (needs.release-evals.result == 'success' || (inputs.skip_evals && needs.release-evals.result == 'skipped')) }}
+    #
+    # The skip branch requires the dispatch event as well as the input, so a
+    # release-evals job skipped for any *other* reason (a paths filter added
+    # later, the job disabled) can never be mistaken for a deliberate opt-out on
+    # a tag push. See the release-evals `if` for why `inputs` is not trusted bare.
+    if: >-
+      ${{ always() && (
+        needs.release-evals.result == 'success'
+        || (github.event_name == 'workflow_dispatch'
+            && inputs.skip_evals == true
+            && needs.release-evals.result == 'skipped')
+      ) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -222,6 +312,9 @@ jobs:
       # skill keeps its own zip too (built into build/ by build-skills.sh).
       - name: Assemble release assets
         id: assets
+        env:
+          # Empty on the tag-push path, where there is no `inputs` context.
+          SKIP_EVALS: ${{ inputs.skip_evals }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -230,17 +323,28 @@ jobs:
           for z in build/*.zip; do
             cp "$z" "dist/$(basename "$z")"
           done
-          # Combined pack: bundle every per-skill zip into one archive. Done
-          # before evals.json lands in dist/ so the glob picks up zips only.
-          ( cd dist && zip -q "nexty-agent-skills-${tag}.zip" ./*.zip )
+          # Combined pack: bundle every per-skill zip into one archive. Sourced
+          # from build/ rather than dist/ so the contents do not depend on what
+          # else has been copied into dist/ yet — a later edit that moves the
+          # evals.json copy above this line cannot nest the report in the pack.
+          ( cd build && zip -q "../dist/nexty-agent-skills-${tag}.zip" ./*.zip )
           # Eval evidence, published as its own asset. Its presence is the
           # contract nxd checks; a skip_evals release deliberately has none.
           if [ -f eval-report/evals.json ]; then
             cp eval-report/evals.json dist/evals.json
             echo "evals=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "${SKIP_EVALS:-}" = "true" ]; then
             echo "evals=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::publishing without evals.json — the nxd bump PR will open blocked."
+            echo "::warning::publishing without evals.json (skip_evals) — the nxd bump PR will open blocked."
+          else
+            # release-evals succeeded (the job `if` guarantees it on this path),
+            # so the report must exist. Reaching here means the plumbing between
+            # the two jobs is broken — artifact name drift, a partial download.
+            # Publishing anyway would ship a release stamped "evals NOT RUN"
+            # while the suite had in fact passed, and would quietly relocate the
+            # whole guarantee into nxd's re-check. Fail instead.
+            echo "::error::evals.json is missing though the eval gate passed — the release/eval plumbing is broken."
+            exit 1
           fi
           echo "Assets:"
           ls -la dist/

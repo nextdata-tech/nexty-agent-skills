@@ -35,10 +35,16 @@ There are three ways the suite runs, and only one of them is unconditional:
 | | PR with the `run-evals` label | Release (`v*` tag) | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | the whole suite, minus `ci_skip` | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | every runnable scenario (19 of 31; the 12 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | `current_pack` | any | any |
 | **Backend** | `codex` both sides | `codex` both sides | any | any |
-| **Gate** | fails on regression vs. baseline | fails the release on regression | reports drift, never fails | — |
+| **Gate** | fails on regression vs. the 10 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
+
+One caveat that applies to both gating columns: `evals/baselines/public.json` records
+10 cells, of which 5 are `PASS`. Gating is on regression from a baselined `PASS`
+(see below), so unbaselined cells run and are reported but cannot fail anything —
+the effective gating surface is those 5 cells, not the whole suite. Widening it
+means recording more cells in the baseline, not changing the workflows.
 
 **Pull requests are opt-in.** Add the `run-evals` label to a PR and the affected
 scenarios run and gate on regression, exactly as before; adding the label to an
@@ -46,10 +52,10 @@ already-open PR fires a run immediately. Without the label the `evals-pr` job
 is skipped. Use it on any change that could move a verdict — the label is how
 you say "measure this one", not a formality.
 
-**Releases are not opt-in.** `release.yml` runs the full public suite on the
-tagged commit before publishing anything, and a confirmed regression fails the
-release. Only if the suite is green does the release carry an `evals.json`
-asset, and the nxd monorepo requires that asset before its
+**Releases are not opt-in.** `release.yml` runs every runnable public scenario
+on the tagged commit before publishing anything, and a confirmed regression
+fails the release. Only if that run is green does the release carry an
+`evals.json` asset, and the nxd monorepo requires that asset before its
 `external/nexty-agent-skills` submodule bump PR can merge (see
 `.github/workflows/nxd.bump-nexty-skills.yml` over there). So the guarantee is
 about what *ships*: unmeasured skills can sit on main, but they cannot reach the
@@ -774,20 +780,37 @@ arbitrary backend/model combination is expected to diverge from the PR gate's
 baseline.
 
 **Release (`v*` tag).** The `release-evals` job in `.github/workflows/release.yml`
-runs the *whole* public suite on the tagged commit, with the same
+runs every runnable public scenario on the tagged commit, with the same
 retry-then-confirm regression gate the PR path uses. Nothing is published unless
 it passes. This is the run whose evidence leaves the repo: the report ships as
 the release's `evals.json` asset, and nxd's submodule bump requires it.
 
-It is a full-suite run rather than an affected-scenarios one deliberately. At
-release time there is no single "changed skill" to narrow by — the diff since the
-previous tag can span the whole pack — and this is the one run whose result is
-published as the version's evidence, so it should not be scoped by a heuristic.
+It runs the whole runnable set rather than an affected-scenarios subset
+deliberately. At release time there is no single "changed skill" to narrow by —
+the diff since the previous tag can span the whole pack — and this is the one run
+whose result is published as the version's evidence, so it should not be scoped
+by a heuristic.
 
-Two consequences worth stating plainly. Tagging a release now costs a full suite
-run, which is the point: it is the only place the pack is measured end to end.
-And because PR evals are opt-in, a commit can reach `main` unmeasured; the
-release gate is what stops it reaching the monorepo, not the PR gate.
+"Runnable" excludes the 12 `ci_skip` scenarios. It has to: `run.py` does not read
+`ci_skip` (only `affected_scenarios.py` does), so a bare `--suite public` would
+run the scenarios that need a live desktop supervisor or a semantic MCP server,
+they would all ERROR, and since none of them are in the baseline
+`compare_baseline.py` would report them as ungated `NEW` — the gate would go
+green having measured nothing about them. The job therefore asks
+`affected_scenarios.py` for the runnable list and passes explicit `--scenario`
+flags, which also keeps `ci_skip` defined in exactly one place.
+
+For the same reason the release job additionally fails on any cell that produced
+no verdict at all. `compare_baseline.py` treats an ERROR cell as carrying no
+signal, which is right for a PR — an infrastructure blip should not red an
+unrelated change — and wrong for the run whose report is published as proof that
+this version was measured.
+
+Two consequences worth stating plainly. Tagging a release now costs a full
+runnable-suite run, which is the point: it is the only place the pack is measured
+end to end. And because PR evals are opt-in, a commit can reach `main`
+unmeasured; the release gate is what stops it reaching the monorepo, not the PR
+gate.
 
 Credentials: both the PR gate and the release gate use the `OPENAI_API_KEY` repo
 secret (codex backend). The manual job additionally reads `ANTHROPIC_API_KEY`
