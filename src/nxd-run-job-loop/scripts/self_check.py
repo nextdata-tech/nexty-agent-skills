@@ -1210,9 +1210,22 @@ for vpath in sorted(p for p in Path("contracts").rglob("*.py")
         # Same reasoning as Phase E's verifier scan: an unreadable verifier is
         # Phase C's finding. "Could not scan" is not a consent verdict.
         continue
-    if any(denied_hit(m, {MAPPER_ROOT}) for m in gv_imports):
+    # BOTH spellings. The legacy scan above walks t_modules — transform/ plus a
+    # non-recursive closure root — and contracts/ is in neither, so a verifier
+    # carrying the retired `import field_mapper` would match nothing anywhere.
+    # Before the harness moved into the package MAPPER_ROOT *was* "field_mapper"
+    # and this loop caught it; narrowing the root to the dotted path alone would
+    # have retired the coverage along with the spelling. A verifier that maps is
+    # the worst case either way — it re-decides pass/fail against a live model
+    # on every run — so it is denied whichever way it reaches the harness.
+    v_hit = next((h for m in gv_imports
+                  if (h := denied_hit(m, {MAPPER_ROOT, LEGACY_MAPPER_ROOT}))),
+                 None)
+    if v_hit:
+        # The hit, not MAPPER_ROOT: interpolating the constant would name the
+        # dotted path in a finding raised by a legacy import.
         gerr("grant.verifier_maps",
-             f"{vpath} imports {MAPPER_ROOT!r}. A contract verifier decides "
+             f"{vpath} imports {v_hit!r}. A contract verifier decides "
              f"pass/fail from data that has already landed; it never calls a "
              f"model. No grant authorizes this — consent covers mapping in the "
              f"transform, and a verifier that maps re-decides the answer every "

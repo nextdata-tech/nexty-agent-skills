@@ -502,6 +502,28 @@ def test_verifier_importing_field_mapper_is_denied(tmp_path):
     assert "contracts/x.py" in out
 
 
+def test_verifier_importing_the_legacy_vendored_name_is_denied(tmp_path):
+    """The retired spelling must not become an exemption inside contracts/.
+
+    The legacy denial walks `t_modules` — transform/ plus a non-recursive
+    closure root — and contracts/ is in neither, so this case reaches the gate
+    only through the verifier loop. Before the harness moved into the package
+    `MAPPER_ROOT` was "field_mapper" and that loop caught it; matching the
+    dotted path alone would retire the coverage along with the spelling and
+    leave a verifier free to map against a live model on every run with both
+    gates green.
+    """
+    (tmp_path / "contracts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "contracts" / "x.py").write_text(
+        "import field_mapper\ndef check(df): return True\n", encoding="utf-8")
+    out = _run_phase_g(tmp_path, expect_exit=1, transform_src=CLEAN_TRANSFORM)
+    assert _codes(out) == ["grant.verifier_maps"], _codes(out)
+    # The finding must name what was actually imported, not the constant: a
+    # legacy hit reported as `nxd.experimental.field_mapper` sends the reader
+    # looking for an import their verifier does not contain.
+    assert "'field_mapper'" in out, out
+
+
 def test_broken_harness_package_is_a_finding_not_a_traceback(tmp_path):
     """A subprocess failure must not take the whole self-check with it."""
     _vendor(tmp_path)
