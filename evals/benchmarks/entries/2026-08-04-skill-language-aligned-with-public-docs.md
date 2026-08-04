@@ -88,11 +88,14 @@ this PR "corrected" the DP REST auth header from `x-nextdata-token` to
 `Authorization: Bearer`, on the evidence that
 `nxd-query-data-product/scripts/nxd_api.py:353` sends Bearer. That is one
 client's implementation, not the server contract, and generalising from it was
-the error: `components/docs` uses `x-nextdata-token` for REST throughout
-(`how-to/infra-profiles/provisioning.md`, `dp_development/model-orchestration.md`,
-`dp_development/mcp_tools.md`, `operations/automation_identity.md`), and the
-vendored public examples do the same. `Authorization: Bearer` appears there only
-for SCIM. The original text also hedged "or `Authorization: Bearer` on
+the error. Checkable from inside this repo: the vendored public examples send
+`x-nextdata-token` against DP endpoints — see
+`src/nxd-build-data-product/reference/nextdata-public-examples/data_products/competitor_growth_analysis/assets/rag_chatbot.py:67`
+and `.../example_mcp/notebooks/03-mcp-tutorial.ipynb:154`. The platform docs
+agree (in the `nxd` repo, `components/docs`:
+`how-to/infra-profiles/provisioning.md`, `dp_development/model-orchestration.md`,
+`dp_development/mcp_tools.md`, `operations/automation_identity.md`), where
+`Authorization: Bearer` appears only for SCIM. The original text also hedged "or `Authorization: Bearer` on
 multi-domain environments" — a distinction that does not apply under
 single-domain, which is the deployment in question. All four edits
 (`nxd-query-data-product/SKILL.md` ×2, its `reference/troubleshooting.md`, and
