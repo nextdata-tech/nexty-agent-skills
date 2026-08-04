@@ -7,7 +7,7 @@ and writes a combined inventory JSON. Credentials are read from the profile
 in-process and never printed.
 
 Driver plugins live in `drivers/` — one file per service type. Built-in:
-s3, snowflake. To support another service type, add `drivers/<name>.py`.
+s3, snowflake, adls. To support another service type, add `drivers/<name>.py`.
 
 Usage:
     inspect_service.py <profile.yaml> <service> [<service> ...] [--out FILE] [--api-url URL]

@@ -64,7 +64,7 @@ This skill is read-only. It never writes to a data product's output store.
 The user may pass any of these in the request — collect the rest interactively:
 
 - **Mesh** — which configured mesh to query. nxd-setup-cli owns mesh selection; the active mesh + its api/app host come from `~/.nxd` (see Step 1). Do not hardcode a mesh host — derive it.
-- **data product** — `fullName` (illustrative example: `<dp-name>`, e.g. an embeddings DP). If missing, prompt with the list from `gateway_tools.py list-dps`. You can also scope by **domain** (`--domain`) when many DPs span domains — ask the user to narrow by domain rather than scrolling a long list.
+- **Data product** — `fullName` (illustrative example: `<dp-name>`, e.g. an embeddings DP). If missing, prompt with the list from `gateway_tools.py list-dps`. You can also scope by **domain** (`--domain`) when many DPs span domains — ask the user to narrow by domain rather than scrolling a long list.
 - **Output port** — port `name` (illustrative examples: a `pgvector` port, an `adls` file port, a relational `*-out` port). If missing, prompt with `gateway_tools.py details --dp <dp> --outputs` (data ports) + `gateway_tools.py tools --dp <dp>` (MCP/RPC tools).
 - **Infra-profile** — only needed when a port's `connect` returns `unsupported` (Step 5). Derive it from the port / mesh — `nxd ls infra-profiles` against the active mesh — or ask the user; do not assume a local file (see Step 5).
 - **Query** — natural-language question, or a SQL string, or a vector-search description, or an MCP function + args. If missing, ask.
@@ -373,10 +373,7 @@ wire header differs and `mcp_http.py` / `nxd_api.py` handle it for you:
   sent on **`X-Nextdata-Token`** — the only auth the gateway accepts. A plain
   OAuth session token (from `nxd login`) 403s here even though it authenticates
   fine against REST — see **Step 1** and the troubleshooting table.
-- **DP REST API** (`list_*`, `connect_port.py`, …) — accepts either token kind, but
-  on a **different header from the gateway**: `Authorization: Bearer <token>`, which
-  is what the shipped `scripts/nxd_api.py` sends. `X-Nextdata-Token` is the gateway's
-  header — do not carry it across to REST.
+- **DP REST API** (`list_*`, `connect_port.py`, …) — accepts either token kind on `x-nextdata-token`.
 
 A `401` on either surface means the token is missing/expired: refresh a PAT
 (`nxd mcp config`) or an OAuth session token (`nxd whoami`), then retry. A

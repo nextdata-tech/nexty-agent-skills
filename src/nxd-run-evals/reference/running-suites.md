@@ -45,19 +45,26 @@ Agent and grader may be different vendors.
 
 ## The three variants
 
-`run_suite(..., variant=...)` selects the agent's skill context and is recorded on
-the run metadata so a report can pair variants on the same cases:
+`run_suite(..., variant=...)` **labels** the run on its metadata so a report can
+pair variants on the same cases. It is a validated label, not a switch:
+`run_suite` never installs or removes skills, so **you must arrange the agent's
+skill context yourself** before the run. Passing two different variants without
+doing so runs the identical agent twice, and any "lift" the report shows is
+measuring nothing. `evals/run.py --skill-set` is the layer that actually swaps
+packs.
 
-| variant | Agent context |
+| variant | The agent context the label claims |
 |---|---|
 | `no_skills` | baseline — no Nexty skills installed |
 | `current_pack` | the shipped skill pack |
 | `candidate_pack` | the shipped pack plus any skill under evaluation |
 
-To measure the *value of the pack*, run the same suite under `no_skills` and
-`current_pack`, then `certify --baseline` one log against the other for a paired
-McNemar delta. A typo in `variant` fails loudly — only those three strings are
-accepted.
+To measure the *value of the pack*, run the same suite once with the skills
+installed and once without — arranging that yourself, or via
+`evals/run.py --skill-set` — labelling each run with the matching `variant`, then
+`certify --baseline` one log against the other for a paired McNemar delta. The
+label alone does not create the two conditions. A typo in `variant` fails loudly
+— only those three strings are accepted.
 
 ## Getting an MCP URL
 

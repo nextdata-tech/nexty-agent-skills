@@ -1,13 +1,13 @@
 ---
 id: 2026-08-04-skill-language-aligned-with-public-docs
 date: 2026-08-04
-label: "user-facing skill language aligned with the public docs; nine review findings fixed"
+label: "user-facing skill language aligned with the public docs; eight review findings fixed"
 plugin_version: 0.35.3
 status: NO_EVAL
 scenarios: []
 record: null
 ---
-# Benchmark — user-facing skill language aligned with the public docs; nine review findings fixed
+# Benchmark — user-facing skill language aligned with the public docs; eight review findings fixed
 
 ## Notes
 
@@ -82,6 +82,23 @@ against the source before being applied. Roughly half the raised findings were
 rejected as wrong on inspection — notably a claim that the mandatory self-check
 command is broken, which reads the `python3 self_check.py` line without the
 `cp "$JOB_HELPER_DIR/scripts/self_check.py"` immediately preceding it.
+
+**One accepted finding was wrong and has been reverted.** An earlier revision of
+this PR "corrected" the DP REST auth header from `x-nextdata-token` to
+`Authorization: Bearer`, on the evidence that
+`nxd-query-data-product/scripts/nxd_api.py:353` sends Bearer. That is one
+client's implementation, not the server contract, and generalising from it was
+the error: `components/docs` uses `x-nextdata-token` for REST throughout
+(`how-to/infra-profiles/provisioning.md`, `dp_development/model-orchestration.md`,
+`dp_development/mcp_tools.md`, `operations/automation_identity.md`), and the
+vendored public examples do the same. `Authorization: Bearer` appears there only
+for SCIM. The original text also hedged "or `Authorization: Bearer` on
+multi-domain environments" — a distinction that does not apply under
+single-domain, which is the deployment in question. All four edits
+(`nxd-query-data-product/SKILL.md` ×2, its `reference/troubleshooting.md`, and
+two sibling files in `nxd-build-data-product`) are reverted to the original
+wording. The lesson is narrow and worth keeping: a shipped client's header is
+evidence about that client, not about the API.
 
 ## Evidence
 
