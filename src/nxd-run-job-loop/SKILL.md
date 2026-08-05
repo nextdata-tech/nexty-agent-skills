@@ -76,12 +76,10 @@ Choose this order before invoking any runtime command:
    — use them for the entire discover, build, resume, describe, and query
    sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
    on-demand handoffs. **`inspect_run` is the failed-build diagnostic**: call it
-   **once** with the failed `run_id` for that run's status and its bounded,
-   path-redacted child diagnostic (omit `run_id` to list recent failures). It
-   takes no ownership lock, starts no runtime, and returns no source data or
-   credentials. Use it instead of classifying from the build error text — see
-   [reference/failure-handling.md](reference/failure-handling.md) § After a failed
-   build. This is the supported route for Claude Desktop and Claude Cowork. Read-only `nxd://`
+   **once** with the failed `run_id` rather than classifying from the build error
+   text — [reference/failure-handling.md](reference/failure-handling.md) § After a
+   failed build has the contract and the rules.
+   This is the supported route for Claude Desktop and Claude Cowork. Read-only `nxd://`
    **resources** — with tool bridges where a client exposes none — expose what a
    release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use
