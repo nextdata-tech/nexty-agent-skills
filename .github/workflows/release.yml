@@ -378,8 +378,18 @@ jobs:
             notes="${notes}"$'\n\n''**Evals: NOT RUN.** Published with `skip_evals`. The nxd submodule bump for this version will open blocked until evals are recorded.'
           fi
           # Create the tag-backed release if it doesn't exist yet, then upload assets.
+          #
+          # Re-running a release over an existing tag is the documented recovery
+          # from a `skip_evals` publish: add credits, re-run with the gate on, and
+          # the green `evals.json` lands on the release nxd already queries. The
+          # notes MUST be rewritten alongside the assets. Uploading `evals.json`
+          # while leaving notes that still say "Evals: NOT RUN" leaves the release
+          # page contradicting its own asset — and since the notes are what a human
+          # reads, the recovery would look like it never happened. `--notes` is
+          # therefore applied on both paths, not just on create.
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --notes "$notes"
           else
             gh release create "$tag" dist/* \
               --title "$tag" \
