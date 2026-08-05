@@ -53,6 +53,46 @@ Both are **media-direct** — media with no landed text — so every citation la
 in coverage: `validate.py` returns `UNVERIFIED` whenever `landed_text is None`, so
 no model output can change it.
 
+### Decision: the documented surface follows the implementation, not the reverse
+
+Until 2026-08-05 `CONTRACT.md` advertised `map_inputs(inputs, *, spec, deps)`
+in its public-surface table. **No `deps` argument, object, or module ever
+existed.** The installed signature has always been
+`map_inputs(inputs, *, spec, grant, run_dir, call, ...)`, and the table also
+omitted `MapperInput` — the type every caller must construct first — entirely.
+
+A Claude Desktop mapper build failed on exactly that gap. The generated closure
+called `MapperInput(document_id=doc_id, fields={"text": text})` and died with
+`MapperInput.__init__() got an unexpected keyword argument 'document_id'`
+*before* `map_inputs` was entered: no model call, no spend, nothing published.
+With no documented constructor, "one keyword per source column" is the natural
+guess, and the advertised `deps` argument could not have worked either.
+
+Two ways to reconcile it were available:
+
+1. **Build the `deps` abstraction** the contract described — bundle
+   `grant`/`run_dir`/`call` into one object and accept it.
+2. **Correct the contract and every example** to the installed API.
+
+Option 2 was taken, on the smallest-safe-change rule. `deps` had no
+implementation, no caller, and no test anywhere in either repository; it was a
+documentation error, not a deprecated API. Building it would have churned a
+working, acceptance-tested primitive and every fixture to satisfy a line no code
+ever honoured — and left two spellings of the same call for generated code to
+choose between. The four-slot `MapperInput` constructor is likewise kept as-is:
+`input_id`, `identity`, `fields` and `landed_text` each carry a distinct
+guarantee, and a `**kwargs` that absorbed unknown columns would have accepted
+the incident's code while silently leaving `identity` empty, so nothing would
+bind.
+
+What changed is therefore documentation plus enforcement: the corrected surface
+is normative in both `CONTRACT.md` copies, and
+`test_field_mapper_generated_call_shape.py` pins the call shape, asserts `deps`
+is absent, and fails against the incident's exact construction. Generated code
+must never introspect these signatures to decide how to call them — a mapper
+that adapts to whatever is installed turns a loud `TypeError` into a silent
+behavioural difference between two runtimes.
+
 ## What it relaxes
 
 `nxd-generate-data-product/SKILL.md` states: *"The transform never calls a model."* This

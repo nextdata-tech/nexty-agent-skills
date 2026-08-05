@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-05 | nxd-generate-data-product + nxd-run-job-loop: pin the mapper call shape, add a mandatory preflight, and fix failure reporting | NO_EVAL | — | [`2026-08-05-mapper-call-shape-preflight-and-run-status`](entries/2026-08-05-mapper-call-shape-preflight-and-run-status.md) |
 | 2026-08-04 | user-facing skill language aligned with the public docs; eight review findings fixed | NO_EVAL | — | [`2026-08-04-skill-language-aligned-with-public-docs`](entries/2026-08-04-skill-language-aligned-with-public-docs.md) |
 | 2026-08-04 | nxd-generate-data-product: restore the mapper's static import signal and stop verify falling back | NO_EVAL | — | [`2026-08-04-field-mapper-static-signal-and-usage-errors`](entries/2026-08-04-field-mapper-static-signal-and-usage-errors.md) |
 | 2026-08-03 | nxd-generate-data-product: self-check shipped as an installed file, not a transcribed fence | NO_EVAL | — | [`2026-08-03-self-check-vendored-not-transcribed`](entries/2026-08-03-self-check-vendored-not-transcribed.md) |

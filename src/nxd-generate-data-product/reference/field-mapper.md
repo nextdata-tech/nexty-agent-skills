@@ -28,6 +28,19 @@ itself produces**, so no fixed CSV can be authored ahead of it. It brings real
 cost: a consent grant the user must author, and live model calls during the
 self-check.
 
+## Before you build: run the preflight
+
+A mapper build has two prerequisites that fail *outside* your generated code —
+the `anthropic` SDK and an API key visible to the MCP child process — and
+several that fail inside it before any model is contacted. All of them are
+checkable offline in under a second.
+
+**Run the preflight in [mapper-preflight.md](mapper-preflight.md) before every
+mapper build**, and report its `MAPPER RUN STATUS` block before and after the
+attempt. It is mandatory, it never calls the model, and it exists because a real
+build spent a full cycle to discover a missing SDK, then another to discover a
+wrong `MapperInput` call — both free to catch beforehand.
+
 ## Importing it in a closure
 
 The harness ships inside the `nxd` package the runtime already installs. There
@@ -128,6 +141,54 @@ A mapping transform is **two** `pipeline.run` calls, not one:
 The order is load-bearing. Mapping before run 1 maps rows that may never land;
 landing derived rows before the gate publishes judgements the thresholds would
 have rejected.
+
+### Step 3, exactly: build `MapperInput`s, then call
+
+Copy this shape. It is the whole of the API a closure touches, and getting it
+wrong is the single most common mapper build failure — a real Desktop build died
+at `MapperInput.__init__() got an unexpected keyword argument 'document_id'`
+before any model was contacted.
+
+```python
+from nxd.experimental.field_mapper import Grant, MapperInput, MapperSpec, map_inputs
+
+inputs = [
+    MapperInput(
+        input_id=str(document_id),              # this record's handle
+        identity={"document_id": document_id},  # the spec's identity_fields
+        fields={"document_id": document_id},    # other context the model may read
+        landed_text=text,                       # the substring haystack
+        document_class="invoice",
+    )
+    for document_id, text in rows
+]
+
+result = map_inputs(
+    inputs,
+    spec=MapperSpec.load("contracts/mapper_spec.json"),
+    grant=Grant.load("contracts/mapper_grant.json"),
+    run_dir=str(run_dir),
+    call=call,          # the injected model callable
+)
+```
+
+**`MapperInput` takes no arbitrary keyword per source column.** There is no
+`MapperInput(document_id=...)`, and there is no `deps` argument to `map_inputs` —
+an older revision of `mapper/CONTRACT.md` described one, and it never existed.
+
+The four slots are not interchangeable:
+
+| Slot | Holds | Why it cannot be merged |
+|---|---|---|
+| `input_id` | this record's handle | keys the ledger and the recorded responses |
+| `identity` | the spec's `identity_fields` | what the grant and `input_snapshot_id` bind to — empty means nothing binds |
+| `fields` | other context the model may read | un-bound: changing it does not revoke a review |
+| `landed_text` | text already landed in the closure | the only surface `verify_quote` checks a quote against |
+
+Putting the document identity **only** in `fields` leaves `identity` empty and
+silently unbinds every review. Never introspect these signatures to decide how to
+call them: a closure that adapts to whatever is installed converts a loud
+`TypeError` into a silent difference between two runtimes.
 
 `mapper/examples/e2e/` in this skill's repo checkout holds both proofs —
 `run_e2e.py` for the data chain and `transform_main.py` for the platform
