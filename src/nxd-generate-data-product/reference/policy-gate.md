@@ -25,8 +25,11 @@ verdict, a gate outcome, or which rows land**:
 - a gate whose UNKNOWN / missing / inferred value could change the outcome;
 - evidence with no provenance rule, or no missing-evidence rule.
 
-`"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"` detects every one of these mechanically over the
-IR, which is why the read-back is a structured file rather than a paragraph.
+The v3 authoring boundary checks the Markdown structure and the typed proposal's
+Transform and reference-Model procedure interpretation. It does not interpret
+the business contents of an opaque procedure body, so the read-back remains a
+user-facing review of those contents rather than a claim that the validator
+proved them. Existing v2 closure evidence is verified through the legacy path.
 
 **A fully specified procedure** still gets read back and confirmed, but expect
 one short turn. **No procedure in the request** means this gate does not fire —

@@ -382,7 +382,7 @@ def test_a_blocked_and_written_back_run_is_not_accused_of_editing_the_ir(record)
             "blocks": ["total_opex"],
             "disposition": "blocked",
             "stage": "s6_run",
-            "path": "spec:open_questions[fx_rates]",
+            "path": "v2:open_questions[fx_rates]",
             "written_back": True,
         },
     ) == []

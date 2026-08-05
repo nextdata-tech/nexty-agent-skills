@@ -106,13 +106,13 @@ bound does not make the closure known-bad; it means you stop retrying and say so
 ## A blocker is an open question found late
 
 There is **no second mechanism** for "I need something from you at build time."
-A build-time blocker is an `## open_questions` entry discovered late, and it goes
+A build-time blocker is an `## Open Questions` entry discovered late, and it goes
 where every other one goes:
 
 1. Record the attempt with `exit: "blocked"` **first**.
 2. Record the blocker.
 3. **Then** write the question back into the live `dp-spec.md`'s
-   `## open_questions`, with a `blocks:` list naming what it stops.
+   `## Open Questions`, with a `blocks:` list naming what it stops.
 4. That **un-approves** the spec — the plan the closure was built from no longer
    matches the live plan — so re-enter Step 1b: ask, get the ruling, re-approve,
    regenerate.

@@ -4,10 +4,9 @@
 
 - [What the generator emits, and why](#what-the-generator-emits-and-why)
 - [1. Byte-copy the approved spec](#1-byte-copy-the-approved-spec)
-- [2. Mirror every `prompt_ref`](#2-mirror-every-prompt_ref)
-- [3. Write the lock](#3-write-the-lock)
-- [4. Open the build record](#4-open-the-build-record)
-- [5. Render `README.md`](#5-render-readmemd)
+- [2. Write the lock](#2-write-the-lock)
+- [3. Open the build record](#3-open-the-build-record)
+- [4. Render `README.md`](#4-render-readmemd)
 - [Required-capture fields: the plan half and the observed half](#required-capture-fields-the-plan-half-and-the-observed-half)
 - [`contracts/<name>.md` — one per model still to build](#contractsnamemd--one-per-model-still-to-build)
 
@@ -22,7 +21,8 @@ at generation time, **after** approval, the approved spec is copied in and hashe
 | file | what it is | written by |
 |---|---|---|
 | `dp-spec.approved.md` | byte-identical copy of the approved `dp-spec.md` | `cp` / `shutil.copyfile` |
-| `dp-spec.lock.json` | its canonical hash, the compiler version, the resolved refs | `dp_diagnostics.py lock write` |
+| `dp-spec.proposal.approved.json` | exact typed interpretation approved by the user (v3 only) | `dp_diagnostics.py lock write` |
+| `dp-spec.lock.json` | its canonical hash, snapshot hash, and compiler version | `dp_diagnostics.py lock write` |
 | `build-record.json` | what happened: stages, review rounds, attempts, concessions, blockers | `dp_diagnostics.py record …` |
 | `README.md` | the reopen recipe, and a credentials block when one is needed | this skill, from the template below |
 | `contracts/<name>.md` | the contract for a model still to be built | this skill, from the template below |
@@ -55,39 +55,23 @@ Three preconditions, all hard:
   was true at copy time, and the self-check fails a snapshot that was not.
 - `"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"` passes against that spec. A spec that does not
   validate is not a settled plan.
-- The copy happens **after** the policy read-back gate, at generation. That is
+- The copy happens **after** the approval read-back gate, at generation. That is
   precisely what keeps the gate's bright line intact — "nothing under `closure/`"
   before approval still holds, because there is nothing under `closure/` yet.
 
-## 2. Mirror every `prompt_ref`
-
-`judgments[].prompt_ref` is relative to **the IR file**, not to the closure. A
-byte copy therefore carries a path that would resolve outside the closure — a
-dangling pointer by another name.
-
-Resolve each ref against the live IR's directory and copy the file into the
-closure **at the same relative path** (`prompts/score.md` →
-`<closure>/prompts/score.md`). Preserving the relative path is what lets the
-snapshot stay correct without being rewritten, so its hash stays valid.
-`lock write` records each copy in `resolved_refs[]` with its own sha256, and the
-self-check confirms every one still exists and still matches.
-
-An **absolute** or `../`-rooted `prompt_ref` is a closure-escaping reference and
-**blocks generation**. Fix the IR and have it re-approved; never rewrite the copy
-to make the path resolve.
-
-## 3. Write the lock
+## 2. Write the lock
 
 ```bash
-python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir>
+python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir> \
+  --proposal <workflow>/dp-spec.proposal.json  # required for v3
 ```
 
-`dp-spec.lock.json` carries the canonical `spec_hash`, the raw
-`snapshot_sha256`, `spec_status_at_copy`, the compiler version and
-`resolved_refs[]`. It deliberately stores **no path back to the live IR**: the
-workflow id plus the `…/nxd-jobs/<workflow>/dp-spec.md` convention recovers it,
-and a `../`-shaped string stored inside the closure is exactly the pointer this
-layout exists to remove.
+`dp-spec.lock.json` carries the v3 canonical `spec_hash` and typed proposal hash
+for new prose-first plans (or the v2 canonical `spec_hash` for an existing
+closure), raw
+`snapshot_sha256`, `spec_status_at_copy`, and compiler version. It deliberately
+stores **no path back to the live IR**: the workflow id plus the
+`…/nxd-jobs/<workflow>/dp-spec.md` convention recovers it.
 
 What the hash buys, concretely: regeneration is skippable when nothing changed;
 *"once approved, the spec is frozen for that build"* stops being honour-system
@@ -97,7 +81,7 @@ separate axis — it lives in `build-record.json` `evidence.source_state` and ne
 merges with this one, because a correctly built product whose input is a day old
 is not a broken product.
 
-## 4. Open the build record
+## 3. Open the build record
 
 ```bash
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init \
@@ -122,7 +106,7 @@ There is no section for you to fill in, and no prose to keep in sync — which i
 the whole point: the outcomes are a pure product of the build, so nobody should
 be transcribing them.
 
-## 5. Render `README.md`
+## 4. Render `README.md`
 
 `README.md` at the closure root carries **exactly two things**: the reopen recipe
 and, when a source holds live credentials, the credentials block. No plan

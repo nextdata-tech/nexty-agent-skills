@@ -4,12 +4,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # ------------------------------------------------------------ diagnostics ---
-# Every phase emits the same record shape ("nxd-diagnostic-v1") alongside the
+# Every phase emits the same record shape ("nxd-diagnostic-v2") alongside the
 # prose it has always printed. Two output paths, and they do not mix:
 #   * default  — stdout is byte-for-byte what it was. evals/run.py's
 #                deterministic check and every scenario checker key on those
 #                lines, so a stray print here breaks graders, not just readers.
-#   * --json   — ONE "nxd-diagnostic-report-v1" object on stdout and nothing
+#   * --json   — ONE "nxd-diagnostic-report-v2" object on stdout and nothing
 #                else, so it can be piped straight into a build record.
 #
 # This file is COPIED INTO THE CLOSURE and run there with a bare interpreter, so
@@ -52,14 +52,16 @@ _codes("error", "agent",
        "closure.build_record_missing", "closure.build_record_invalid",
        "closure.build_record_hash_mismatch", "closure.build_record_merge_failed",
        "closure.readme_missing",
-       "closure.resolved_ref_missing", "closure.escaping_reference",
+       "closure.escaping_reference",
        "closure.gitignore_missing", "closure.sensitive_missing",
        "closure.gitignore_not_naming_profile",
        "closure.contract_not_wired", "closure.contract_verifier_missing",
        "closure.contract_verifier_malformed", "closure.contract_verifier_inert",
        "closure.contract_verifier_unreferenced",
        "closure.contract_verifier_secret", "closure.contract_duplicate_name",
-       "closure.contract_spec_drift",
+       "closure.contract_inventory_mismatch",
+       "closure.terms_hash_mismatch", "closure.contract_inventory_hash_mismatch",
+       "closure.decision_inventory_mismatch",
        "closure.profile_service_missing", "closure.profile_driver_mismatch",
        "closure.profile_name_mismatch", "closure.port_storage_mismatch",
        "closure.input_service_mismatch", "closure.csv_root_invalid",
@@ -142,7 +144,7 @@ def cpath(at):
 
 def diag(stage, code, message, *, path="", evidence=None, fix=None):
     sev, owner = CODES[code]
-    d = {"schema": "nxd-diagnostic-v1", "stage": stage, "code": code,
+    d = {"schema": "nxd-diagnostic-v2", "stage": stage, "code": code,
          "severity": sev, "owner": owner, "origin": "tool_computed",
          "path": path, "message": redact(message),
          "evidence": redact(evidence or {})}
@@ -247,7 +249,7 @@ def finish(exit_code):
                 Path("dp-spec.lock.json").read_text(encoding="utf-8")).get("spec_hash")
         except Exception:
             spec_hash = None
-        print(json.dumps({"schema": "nxd-diagnostic-report-v1",
+        print(json.dumps({"schema": "nxd-diagnostic-report-v2",
                           "tool": "self_check", "target": str(Path.cwd()),
                           "ok": exit_code == 0, "counts": counts,
                           "spec_hash": spec_hash, "diagnostics": DIAGS},
@@ -1689,8 +1691,7 @@ def cerr(code, msg, at="", ev=None):
 # C11 first, so it is in the report whatever else happens: Phase C compares the
 # snapshot's BYTES, which is sufficient inside the closure (the bytes are the
 # ones the canonical hash was computed from) and needs nothing but hashlib. The
-# CANONICAL hash — the one that answers "did the plan change?" — needs PyYAML
-# and the live IR, both of which are outside the closure.
+# semantic comparison against the live IR is a separate v2 lock verification.
 diag("s3_closure", "closure.canonical_hash_deferred",
      "Phase C checked the snapshot's raw bytes against dp-spec.lock.json. The "
      "canonical (semantic) hash and the comparison against the live dp-spec.md "
@@ -1708,6 +1709,8 @@ if snap_bytes is None:
          "reader cannot tell what it was supposed to build. Byte-copy the "
          "approved dp-spec.md in at generation (Step 6a).", "dp-spec.approved.md")
 lock = None
+is_v3_lock = False
+v3_approved_contracts = set()
 lockp = Path("dp-spec.lock.json")
 if not lockp.exists():
     cerr("closure.lock_missing",
@@ -1720,9 +1723,37 @@ else:
         lock = json.loads(lockp.read_text(encoding="utf-8"))
         if not isinstance(lock, dict):
             raise ValueError("not a JSON object")
-        if lock.get("schema") != "nxd-dp-spec-lock-v1":
-            raise ValueError(f"schema is {lock.get('schema')!r}, expected "
-                             f"'nxd-dp-spec-lock-v1'")
+        is_v3_lock = lock.get("schema") == "nxd-dp-spec-lock-v3"
+        if lock.get("schema") not in {"nxd-dp-spec-lock-v2", "nxd-dp-spec-lock-v3"}:
+            raise ValueError(f"unsupported lock schema {lock.get('schema')!r}")
+        lock_keys = ({
+            "schema", "spec_hash", "proposal_hash", "canonicalization", "snapshot", "snapshot_sha256",
+            "proposal_snapshot", "proposal_snapshot_sha256", "spec_status_at_copy", "dp_spec_version",
+            "name", "workflow", "terms_hash", "contract_inventory_hash", "locked_decisions_hash", "delivery_profile",
+            "source_basename", "compiler_version", "copied_at_unix_ms",
+        } if is_v3_lock else {
+            "schema", "spec_hash", "canonicalization", "snapshot", "snapshot_sha256",
+            "spec_status_at_copy", "dp_spec_version", "name", "workflow",
+            "source_basename", "contract_names", "compiler_version", "copied_at_unix_ms",
+        })
+        if set(lock) != lock_keys:
+            raise ValueError("lock keys do not match the complete v2/v3 envelope")
+        expected_version = 3 if is_v3_lock else 2
+        expected_canon = "nxd-dp-spec-canon-v3" if is_v3_lock else "nxd-dp-spec-canon-v2"
+        if lock.get("dp_spec_version") != expected_version:
+            raise ValueError(f"dp_spec_version is not {expected_version}")
+        if lock.get("canonicalization") != expected_canon:
+            raise ValueError(f"canonicalization is not {expected_canon}")
+        if is_v3_lock and lock.get("delivery_profile") != "desktop-local-duckdb-semantic-query":
+            raise ValueError("delivery_profile is not the fixed desktop-local DuckDB semantic-query profile")
+        compiler = lock.get("compiler_version")
+        if not isinstance(compiler, dict) or set(compiler) != {"plugin", "generator_skill", "self_check"}:
+            raise ValueError("compiler_version is not the complete v2/v3 lock shape")
+        if any(not isinstance(compiler[key], str) or not compiler[key]
+               for key in ("plugin", "generator_skill", "self_check")):
+            raise ValueError("compiler_version values must be non-empty strings")
+        if is_v3_lock and compiler.get("self_check") != "nxd-self-check-v3":
+            raise ValueError("v3 compiler_version.self_check is not nxd-self-check-v3")
     except Exception as exc:
         lock = None
         cerr("closure.lock_unparseable",
@@ -1733,6 +1764,26 @@ else:
 # written is not evidence. This is the mechanical half of "once approved, the
 # spec is frozen for that build", which used to be honour-system.
 if lock is not None and snap_bytes is not None:
+    snapshot_version_match = re.search(
+        rb"^dp_spec_version:\s*(\d+)\s*$", snap_bytes, re.MULTILINE
+    )
+    snapshot_version = int(snapshot_version_match.group(1)) if snapshot_version_match else None
+    expected_snapshot_version = 3 if is_v3_lock else 2
+    if snapshot_version != expected_snapshot_version:
+        cerr("closure.spec_hash_mismatch",
+             f"dp-spec.approved.md declares dp_spec_version={snapshot_version!r}, "
+             f"but the lock envelope is for version {expected_snapshot_version}.",
+             "dp-spec.approved.md",
+             {"expected": expected_snapshot_version, "actual": snapshot_version})
+    if is_v3_lock:
+        for field in ("name", "workflow"):
+            match = re.search(rb"^" + field.encode("ascii") + rb":\s*(.+?)\s*$", snap_bytes, re.MULTILINE)
+            snapshot_value = match.group(1).decode("utf-8") if match else None
+            if snapshot_value != lock.get(field):
+                cerr("closure.spec_hash_mismatch",
+                     f"dp-spec.approved.md {field} does not match the v3 lock.",
+                     "dp-spec.approved.md",
+                     {"expected": lock.get(field), "actual": snapshot_value})
     got = hashlib.sha256(snap_bytes).hexdigest()
     want = lock.get("snapshot_sha256")
     if got != want:
@@ -1742,6 +1793,107 @@ if lock is not None and snap_bytes is not None:
              f"written. The plan a build was compiled from is not editable "
              f"in place: change the live dp-spec.md, re-approve, regenerate.",
              "dp-spec.approved.md", {"expected": want, "actual": got})
+    if is_v3_lock:
+        proposal_path = Path(str(lock.get("proposal_snapshot", "")))
+        try:
+            proposal_path.resolve().relative_to(Path.cwd().resolve())
+            inside_closure = True
+        except (OSError, RuntimeError, ValueError):
+            inside_closure = False
+        if proposal_path.is_absolute() or ".." in proposal_path.parts or not inside_closure:
+            cerr("closure.escaping_reference",
+                 "the v3 typed proposal snapshot points outside the closure.",
+                 "dp-spec.lock.json")
+            proposal_path = Path("")
+        proposal_bytes = proposal_path.read_bytes() if proposal_path.is_file() else None
+        if proposal_bytes is None:
+            cerr("closure.spec_snapshot_missing",
+                 "the v3 typed proposal snapshot is missing from the closure.",
+                 "dp-spec.proposal.approved.json")
+        elif hashlib.sha256(proposal_bytes).hexdigest() != lock.get("proposal_snapshot_sha256"):
+            cerr("closure.lock_snapshot_byte_mismatch",
+                 "dp-spec.proposal.approved.json does not match its lock hash.",
+                 "dp-spec.proposal.approved.json")
+        else:
+            try:
+                proposal = json.loads(proposal_bytes.decode("utf-8"))
+                v3_approved_contracts = {
+                    item.get("id") for item in proposal.get("proposal", {}).get("contracts", [])
+                    if isinstance(item, dict) and isinstance(item.get("id"), str)
+                }
+                proposal_payload = {
+                    key: proposal[key] for key in proposal
+                    if key not in {"hashes", "proposal_hash"}
+                }
+                proposal_hash = "sha256:" + hashlib.sha256(json.dumps(
+                    proposal_payload, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if proposal_hash != lock.get("proposal_hash"):
+                    cerr("closure.spec_hash_mismatch",
+                         "the typed proposal hash does not match the v3 lock.",
+                         "dp-spec.proposal.approved.json")
+                proposal_body = proposal.get("proposal")
+                if not isinstance(proposal_body, dict):
+                    raise ValueError("the v3 typed proposal payload is not an object")
+                terms = proposal_body.get("terms", [])
+                if not isinstance(terms, list):
+                    raise ValueError("the v3 Terms inventory is not a list")
+                canonical_terms = sorted(
+                    (item for item in terms if isinstance(item, dict)),
+                    key=lambda item: str(item.get("id", "")),
+                )
+                terms_hash = hashlib.sha256(json.dumps(
+                    canonical_terms, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if terms_hash != lock.get("terms_hash"):
+                    cerr("closure.terms_hash_mismatch",
+                         "the inline Terms inventory does not match its v3 lock hash.",
+                         "dp-spec.proposal.approved.json")
+                contracts = proposal_body.get("contracts", [])
+                if not isinstance(contracts, list):
+                    raise ValueError("the v3 contract inventory is not a list")
+                canonical_contracts = sorted(
+                    ({
+                        **{key: item.get(key) for key in ("id", "attachment", "model", "phase", "guarantee", "rule")},
+                        "fields": sorted(item.get("fields", [])),
+                    }
+                     for item in contracts if isinstance(item, dict)),
+                    key=lambda item: str(item.get("id", "")),
+                )
+                contract_hash = hashlib.sha256(json.dumps(
+                    canonical_contracts, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if contract_hash != lock.get("contract_inventory_hash"):
+                    cerr("closure.contract_inventory_hash_mismatch",
+                         "the compiled contract inventory does not match its v3 lock hash.",
+                         "dp-spec.proposal.approved.json")
+                decisions = proposal_body.get("decisions", [])
+                if not isinstance(decisions, list):
+                    raise ValueError("the v3 decision inventory is not a list")
+                canonical_decisions = sorted(
+                    ({key: item[key] for key in ("id", "target", "ruling", "status")}
+                     for item in decisions
+                     if isinstance(item, dict)
+                     and item.get("status") == "locked"
+                     and all(key in item for key in ("id", "target", "ruling", "status"))),
+                    key=lambda item: str(item.get("id", "")),
+                )
+                decisions_hash = hashlib.sha256(json.dumps(
+                    canonical_decisions, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if decisions_hash != lock.get("locked_decisions_hash"):
+                    cerr("closure.decision_inventory_mismatch",
+                         "the settled locked-decision inventory does not match its v3 lock hash.",
+                         "dp-spec.proposal.approved.json")
+            except Exception as exc:
+                cerr("closure.lock_unparseable",
+                     f"the v3 typed proposal snapshot is invalid: "
+                     f"{type(exc).__name__}: {exc}",
+                     "dp-spec.proposal.approved.json")
 
 # C4 — a snapshot of an unapproved spec is a build nobody signed off.
 if lock is not None and lock.get("spec_status_at_copy") != "approved":
@@ -1769,9 +1921,30 @@ else:
         record = json.loads(recp.read_text(encoding="utf-8"))
         if not isinstance(record, dict):
             raise ValueError("not a JSON object")
-        if record.get("schema") != "nxd-build-record-v1":
+        if record.get("schema") != "nxd-build-record-v2":
             raise ValueError(f"schema is {record.get('schema')!r}, expected "
-                             f"'nxd-build-record-v1'")
+                             f"'nxd-build-record-v2'")
+        record_keys = {
+            "schema", "workflow", "data_product", "closure_path", "compiled_from",
+            "compiler_version", "generated_at_unix_ms", "generator_model", "stages",
+            "attempts", "review_rounds", "concessions", "blockers", "readback",
+            "evidence", "caps", "narrative",
+        }
+        if set(record) != record_keys:
+            raise ValueError("build record keys do not match the complete v2 envelope")
+        compiler = record.get("compiler_version")
+        if not isinstance(compiler, dict) or set(compiler) != {
+                "plugin", "generator_skill", "dp_spec_version", "canonicalization"}:
+            raise ValueError("compiler_version is not the complete v2 build-record shape")
+        record_version = compiler.get("dp_spec_version")
+        if record_version not in {2, 3}:
+            raise ValueError("compiler_version.dp_spec_version is not 2 or 3")
+        expected_record_canon = "nxd-dp-spec-canon-v3" if record_version == 3 else "nxd-dp-spec-canon-v2"
+        if compiler.get("canonicalization") != expected_record_canon:
+            raise ValueError(f"compiler_version.canonicalization is not {expected_record_canon}")
+        if any(not isinstance(compiler[key], str) or not compiler[key]
+               for key in ("plugin", "generator_skill")):
+            raise ValueError("compiler_version plugin/generator_skill values must be non-empty strings")
     except Exception as exc:
         record = None
         cerr("closure.build_record_invalid",
@@ -1795,26 +1968,7 @@ if not Path("README.md").exists():
          "recipe and the credential key names, and nothing else does.",
          "README.md")
 
-# C8 — prompt_ref files are relative to the LIVE IR, so a byte copy would carry
-# a path resolving outside the closure. They are mirrored in at snapshot time
-# and recorded in the lock; here we check the mirror actually landed.
-for ref in (lock or {}).get("resolved_refs") or []:
-    rel = (ref or {}).get("closure_path") or ""
-    rp = Path(rel) if rel else None
-    if not rel or not rp.exists():
-        cerr("closure.resolved_ref_missing",
-             f"dp-spec.approved.md references {(ref or {}).get('spec_ref')!r} "
-             f"and the lock says it was mirrored to {rel!r}, but that file is "
-             f"not in the closure — the snapshot points at nothing.", rel)
-        continue
-    got = hashlib.sha256(rp.read_bytes()).hexdigest()
-    if got != ref.get("sha256"):
-        cerr("closure.resolved_ref_missing",
-             f"{rel} does not match the sha256 recorded in dp-spec.lock.json — "
-             f"the mirrored copy was edited after it was written.", rel,
-             {"expected": ref.get("sha256"), "actual": got})
-
-# C9 — escape scan. Any closure file that references a design/contract doc by a
+# C8 — escape scan. Any closure file that references a design/contract doc by a
 # path escaping the closure (a ../-rooted markdown reference) is a dangling
 # cross-boundary pointer. The snapshot IS scanned: a ../-rooted reference inside
 # the approved plan is exactly the dangling pointer this design removes, and no
@@ -1886,12 +2040,11 @@ if profile.exists():
                  "file that must never be committed. Ignore it by name, never `*`.",
                  ".gitignore")
 
-# C12 — the custom-contract gate. A `## expectations` / `## promises` entry in
-# the approved spec compiles to an executable verifier under contracts/. This
-# proves the compilation happened and produced something that can actually
-# fail: a contract that parses but can never return FAILED is decorative, and a
-# decorative contract is worse than none — it reports a guarantee as enforced
-# while enforcing nothing.
+# C12 — the custom-contract gate. Explicit custom-contract wiring in spec.py
+# compiles to an executable verifier under contracts/. This proves the wiring
+# produced something that can actually fail: a contract that parses but can
+# never return FAILED is decorative, and a decorative contract is worse than
+# none — it reports a guarantee as enforced while enforcing nothing.
 #
 # The gate is STRUCTURAL and offline. A pass means every declared contract is
 # wired once, names a verifier that exists under contracts/, and that verifier
@@ -1983,6 +2136,20 @@ except SyntaxError:
 
 if _spec_tree is not None:
     contracts, unnamed, dupes, contract_meta = _verify_scripts(_spec_tree)
+    approved_contracts = (
+        v3_approved_contracts
+        if is_v3_lock
+        else set(lock.get("contract_names") or []) if isinstance(lock, dict) else set()
+    )
+    wired_contracts = set(contracts)
+    if approved_contracts != wired_contracts:
+        cerr(
+            "closure.contract_inventory_mismatch",
+            f"spec.py custom contracts {sorted(wired_contracts)} do not match "
+            f"the approved contract inventory {sorted(approved_contracts)}.",
+            "spec.py",
+            {"approved": sorted(approved_contracts), "wired": sorted(wired_contracts)},
+        )
 
     if unnamed:
         cerr("closure.contract_not_wired",
@@ -2292,101 +2459,6 @@ if _spec_tree is not None:
                      f"infra-profile.yaml: {svc} must use {driver}, got "
                      f"{block.group(1)}.", "infra-profile.yaml",
                      {"service": svc, "found": block.group(1)})
-
-    # The closure's contracts must be exactly the approved spec's. A contract in
-    # the closure that no spec section declares is a guarantee the user never
-    # approved; one in the spec with no verifier was silently dropped.
-    if snap_bytes is not None:
-        # Take `name:` from anywhere in an entry, but ONLY at the entry's own
-        # depth. YAML mapping key order is free — validate_dp_spec.py reads
-        # these with yaml.safe_load — so requiring `name` on the `- ` line made
-        # a legal spec parse as declaring no contracts, and Phase C then told
-        # the agent to DELETE a contract the user had approved.
-        #
-        # Depth is load-bearing and CANNOT be recovered after .strip():
-        #   - `fields:` is a nested list of mappings whose `- name:` is a FIELD
-        #   - `rule: |` and `description: |` are block scalars whose PROSE may
-        #     begin "name:" and is not a key at all
-        # Either one, read as the contract's name, produces the same double
-        # drift error this check exists to prevent: one contract reported
-        # missing and the real one reported as never approved.
-        #
-        # No YAML parse here: CONSTRAINT-1 — this file is copied into the
-        # closure and runs there, so it cannot depend on PyYAML.
-        spec_named = set()
-        section = None
-        block: list[str] = []
-
-        def _flush(entry):
-            if not entry:
-                return
-            # Base indent of the entry's keys: the column just past "- ".
-            base = len(entry[0]) - len(entry[0].lstrip(" "))
-            key_indent = base + 2
-            scalar_indent = None
-            for entry_line in entry:
-                stripped = entry_line.strip()
-                indent = len(entry_line) - len(entry_line.lstrip(" "))
-                if not stripped:
-                    continue
-                # Inside a block scalar every line is content, never a key.
-                # Content is anything indented deeper than the KEY depth — a
-                # scalar opened on the `- ` line sits at `base`, so comparing
-                # against the opener's own indent would swallow the next key.
-                if scalar_indent is not None:
-                    if indent > key_indent:
-                        continue
-                    scalar_indent = None
-                if indent not in (base, key_indent):
-                    continue            # nested list item or deeper mapping
-                m = re.match(r"(?:-\s+)?([A-Za-z_][\w-]*):\s*(.*)$", stripped)
-                if not m:
-                    continue
-                key, value = m.group(1), m.group(2).strip()
-                if value in ("|", ">", "|-", ">-", "|+", ">+"):
-                    scalar_indent = indent
-                    continue
-                # Strip a trailing inline comment. The `## expectations`
-                # template in nxd-run-job-loop/reference/dp-spec.md — the shape
-                # agents copy — annotates `name:` exactly this way, so keeping
-                # the comment made a closure built from the documented example
-                # report BOTH halves of contract drift against itself. Only
-                # outside quotes: a quoted name may legally contain '#'.
-                if value[:1] in ("'", '"'):
-                    close = value.find(value[0], 1)
-                    value = value[:close + 1] if close > 0 else value
-                else:
-                    value = value.split("#", 1)[0].strip()
-                if key == "name" and value:
-                    spec_named.add(value.strip("\"'"))
-                    return
-
-        for line in snap_bytes.decode("utf-8", "replace").splitlines():
-            if line.startswith("## "):
-                _flush(block)
-                block = []
-                section = line[3:].strip().lower()
-            elif section in CONTRACT_DIRS:
-                if line.startswith("- "):
-                    _flush(block)
-                    block = [line]
-                elif block:
-                    block.append(line)
-        _flush(block)
-        missing = spec_named - set(contracts)
-        extra = set(contracts) - spec_named
-        if missing:
-            cerr("closure.contract_spec_drift",
-                 f"dp-spec.approved.md declares contract(s) {sorted(missing)} "
-                 f"that spec.py does not wire — an approved guarantee was "
-                 f"dropped during generation.", "spec.py",
-                 {"missing": sorted(missing)})
-        if extra:
-            cerr("closure.contract_spec_drift",
-                 f"spec.py wires contract(s) {sorted(extra)} that "
-                 f"dp-spec.approved.md does not declare — a guarantee the user "
-                 f"never approved. Contracts originate in the IR.",
-                 "spec.py", {"extra": sorted(extra)})
 
 if cerrors:
     say("\nPHASE C FAILED — closure-record gate (approved spec snapshot, lock, "

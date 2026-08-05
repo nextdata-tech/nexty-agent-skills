@@ -54,7 +54,7 @@ closure carries its own answer, and the check is two commands.
 | file at the closure root | what it is |
 |---|---|
 | `dp-spec.approved.md` | a byte copy of the approved `dp-spec.md` this closure was compiled from |
-| `dp-spec.lock.json` | that copy's canonical hash, the compiler version, the resolved prompt refs |
+| `dp-spec.lock.json` | that copy's v2 canonical hash, snapshot hash, and compiler version |
 | `build-record.json` | what happened: stages, attempts, concessions, blockers, the read-back |
 
 ```bash

@@ -34,7 +34,8 @@ FROZEN_CODES = (
   'closure.build_record_invalid', 'closure.build_record_merge_failed',
   'closure.build_record_missing',
   'closure.canonical_hash_deferred', 'closure.contract_duplicate_name',
-  'closure.contract_not_wired', 'closure.contract_spec_drift',
+  'closure.contract_not_wired',
+  'closure.contract_inventory_mismatch',
   'closure.contract_verifier_inert', 'closure.contract_verifier_malformed',
   'closure.contract_verifier_missing', 'closure.contract_verifier_secret',
   'closure.contract_verifier_unreferenced', 'closure.csv_root_invalid',
@@ -45,8 +46,10 @@ FROZEN_CODES = (
   'closure.lock_unparseable', 'closure.model_path_unresolved',
   'closure.port_storage_mismatch', 'closure.profile_driver_mismatch',
   'closure.profile_name_mismatch', 'closure.profile_service_missing',
-  'closure.readme_missing', 'closure.resolved_ref_missing',
+  'closure.readme_missing',
   'closure.sensitive_missing', 'closure.spec_hash_mismatch',
+  'closure.terms_hash_mismatch', 'closure.contract_inventory_hash_mismatch',
+  'closure.decision_inventory_mismatch',
   'closure.spec_snapshot_missing', 'concession.assert_weakened',
   'concession.dependency_repinned', 'concession.derived_model_left_inert',
   'concession.incidental_column_dropped', 'concession.other',
@@ -122,7 +125,7 @@ FROZEN_CODES = (
   'spec.source.credential_value', 'spec.source.label_duplicate',
   'spec.source.label_missing', 'spec.source.no_entries',
   'spec.source.no_location', 'spec.source.no_scope',
-  'spec.source.not_mapping', 'spec.verdict.band_no_verdict',
+  'spec.source.not_mapping', 'spec.v2.invalid', 'spec.verdict.band_no_verdict',
   'spec.verdict.band_unknown_verdict', 'spec.verdict.band_unreachable',
   'spec.verdict.missing', 'spec.verdict.no_precedence',
   'spec.verdict.no_values', 'spec.verdict.not_mapping',
@@ -143,9 +146,24 @@ FROZEN_CODES = (
   'struct.view_empty_schema', 'struct.view_field_not_metric_field'
 )
 
+# v2-only registry: the frozen historical list above is intentionally filtered
+# here so this test cannot reintroduce the removed v1 spec domains.
+_V2_SPEC_CODES = {
+    'spec.encoding.not_utf8', 'spec.v2.invalid',
+    'spec.frontmatter.unparseable', 'spec.frontmatter.missing_key',
+    'spec.frontmatter.bad_version', 'spec.frontmatter.bad_name',
+    'spec.frontmatter.bad_status', 'spec.section.missing',
+    'spec.section.empty', 'spec.section.unknown', 'spec.section.unparseable',
+}
+FROZEN_CODES = tuple(sorted(
+    code for code in FROZEN_CODES
+    if (not code.startswith('spec.') or code in _V2_SPEC_CODES)
+))
+
 
 SCHEMAS = {
     "diagnostic": dpd.DIAGNOSTIC_SCHEMA,
+    "spec_diagnostic": dpd.SPEC_DIAGNOSTIC_SCHEMA,
     "report": dpd.REPORT_SCHEMA,
     "record": dpd.BUILD_RECORD_SCHEMA,
     "lock": dpd.LOCK_SCHEMA,
@@ -154,13 +172,13 @@ SCHEMAS = {
 
 def _diag(**overrides) -> dict:
     base = {
-        "schema": "nxd-diagnostic-v1",
+        "schema": "nxd-diagnostic-v2",
         "stage": "s0_spec",
-        "code": "spec.criteria.incomplete_scale",
+        "code": "spec.v2.invalid",
         "severity": "error",
         "owner": "agent",
         "origin": "tool_computed",
-        "path": "spec:criteria[C1].anchors",
+        "path": "v2:models[orders].fields",
         "message": "scale 1-5 has no anchor for level(s) [2, 3, 4]",
         "evidence": {"expected": [1, 2, 3, 4, 5], "found": [1, 5]},
     }
@@ -197,6 +215,15 @@ def test_diagnostic_schema_matches_the_frozen_field_list():
     assert props["severity"]["enum"] == list(dpd.SEVERITIES)
     assert props["owner"]["enum"] == list(dpd.OWNERS)
     assert props["origin"]["enum"] == list(dpd.ORIGINS)
+
+
+def test_spec_diagnostic_schema_is_closed_and_form_addressable():
+    assert dpd.SPEC_DIAGNOSTIC_SCHEMA["required"] == [
+        "schema", "code", "path", "severity", "owner", "control",
+        "stage", "origin", "message",
+    ]
+    assert dpd.SPEC_DIAGNOSTIC_SCHEMA["properties"]["schema"]["const"] == dpd.SPEC_DIAGNOSTIC_SCHEMA_ID
+    assert dpd.SPEC_DIAGNOSTIC_SCHEMA["properties"]["stage"]["const"] == "s0_spec"
 
 
 def test_the_nine_stages_and_the_offline_set():
@@ -254,11 +281,9 @@ def test_pin_build_failed_is_agent_owned_by_construction():
     assert dpd.CODES["pin.build_failed"]["owner"] == "agent"
 
 
-def test_credential_codes_are_user_owned():
-    """Only the user can decide whether a leaked secret must now be rotated, and
-    silently rewriting the file would erase the evidence that it leaked."""
-    assert dpd.CODES["spec.source.credential_value"]["owner"] == "user"
-    assert dpd.CODES["spec.source.credential_key_mapping"]["owner"] == "user"
+def test_user_owned_frontmatter_codes_are_user_owned():
+    """Lifecycle decisions remain user-owned and cannot be rewritten silently."""
+    assert dpd.CODES["spec.frontmatter.bad_status"]["owner"] == "user"
 
 
 # --- construction rules -----------------------------------------------------
@@ -271,7 +296,7 @@ def test_owner_is_never_producer_overridable():
 
 def test_severity_may_be_relaxed_downward_but_never_raised():
     relaxed = dpd.diagnostic(
-        "spec.criteria.incomplete_scale", message="x", severity="warning"
+        "spec.v2.invalid", message="x", severity="warning"
     )
     assert relaxed.severity == "warning"
     with pytest.raises(dpd.DiagnosticError):
@@ -366,7 +391,7 @@ def test_a_tool_may_not_carry_a_stage_it_cannot_produce():
         report.add(dpd.diagnostic("pin.build_failed", message="x"))
     problems = dpd.validate_report(
         {
-            "schema": "nxd-diagnostic-report-v1",
+            "schema": "nxd-diagnostic-report-v2",
             "tool": "self_check",
             "target": None,
             "ok": False,
@@ -380,13 +405,43 @@ def test_a_tool_may_not_carry_a_stage_it_cannot_produce():
 
 def test_report_envelope_shape():
     report = dpd.Report("validate_dp_spec", target="dp-spec.md", spec_hash="sha256:" + "0" * 64)
-    report.error("no anchor for 2", code="spec.criteria.incomplete_scale", path="spec:criteria[C1].anchors")
-    report.warn("prose", code="spec.population.prose", path="spec:population")
+    report.error("invalid v2 field", code="spec.v2.invalid", path="v2:models[orders].fields")
+    report.warn("invalid v2 field", code="spec.v2.invalid", path="v2:models[orders].fields")
     payload = report.to_dict()
-    assert payload["schema"] == "nxd-diagnostic-report-v1"
+    assert payload["schema"] == "nxd-diagnostic-report-v2"
     assert payload["ok"] is False
     assert payload["counts"] == {"error": 1, "warning": 1, "info": 0}
     assert not dpd.validate_report(payload)
+
+
+def test_report_rejects_incomplete_green_envelope():
+    assert dpd.validate_report({
+        "schema": dpd.REPORT_SCHEMA_ID,
+        "tool": "validate_dp_spec",
+        "ok": True,
+        "spec_hash": None,
+    })
+
+
+def test_lock_and_build_record_are_v2_only():
+    lock = {
+        "schema": dpd.LOCK_SCHEMA_ID,
+        "spec_hash": "sha256:" + "a" * 64,
+        "canonicalization": dpd.CANONICALIZATION,
+        "snapshot": dpd.CLOSURE_SNAPSHOT,
+        "snapshot_sha256": "b" * 64,
+        "spec_status_at_copy": "approved",
+        "dp_spec_version": 1,
+        "name": "x",
+        "workflow": "x",
+        "source_basename": "dp-spec.md",
+        "contract_names": [],
+        "compiler_version": {"plugin": "x", "generator_skill": "x", "self_check": "x"},
+        "copied_at_unix_ms": 1,
+    }
+    assert any("dp_spec_version" in problem for problem in dpd.validate_lock(lock))
+    with pytest.raises(ValueError, match="invalid v2 lock"):
+        dpd.new_build_record(lock, Path("/tmp/closure"))
 
 
 # --- redaction --------------------------------------------------------------
@@ -395,9 +450,9 @@ def test_redaction_is_applied_to_message_and_evidence():
     """A check that prints the secret it found turns a contained file leak into
     a transcript leak."""
     diag = dpd.diagnostic(
-        "spec.source.credential_value",
+        "spec.frontmatter.unparseable",
         message="looks like a credential VALUE (api_key: sk-live-1234567890)",
-        path="spec:sources",
+        path="v2:inputs",
         evidence={"found": "password= hunter2"},
     )
     assert "sk-live-1234567890" not in diag.message
@@ -451,6 +506,6 @@ def test_identity_beats_index():
 
 
 def test_spec_path_grammar():
-    assert dpd.spec_path("criteria", "C1", "anchors") == "spec:criteria[C1].anchors"
-    assert dpd.spec_path("frontmatter", None, "status") == "spec:frontmatter.status"
-    assert dpd.spec_path("sources", "#0", "location") == "spec:sources[#0].location"
+    assert dpd.spec_path("models", "orders", "fields") == "v2:models[orders].fields"
+    assert dpd.spec_path("frontmatter", None, "status") == "v2:frontmatter.status"
+    assert dpd.spec_path("inputs", "#0", "location") == "v2:inputs[#0].location"

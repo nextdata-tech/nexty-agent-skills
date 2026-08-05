@@ -65,7 +65,7 @@ once, and every producer conforms.
 
 ```jsonc
 {
-  "schema":   "nxd-diagnostic-v1",
+  "schema":   "nxd-diagnostic-v2",
   "stage":    "s2_transform",
   "code":     "runtime.assert_failed",
   "severity": "error",                  // error | warning | info
@@ -167,9 +167,8 @@ unbacked hunch from reaching `environment_suspect`.
 ### `path` — address the field, by identity
 
 ```
-spec:criteria[C1].anchors
-spec:models[scored_candidates].key
-spec:open_questions[fx_rates].disposition
+v2:models[scored_candidates].key
+v2:open_questions[fx_rates].target
 closure:transform/main.py:214
 closure:models.py:scored_candidates.verdict
 tool:build_data_product.error
@@ -200,13 +199,13 @@ Any tool whose primary output is diagnostics emits:
 
 ```jsonc
 {
-  "schema": "nxd-diagnostic-report-v1",
+  "schema": "nxd-diagnostic-report-v2",
   "tool":   "self_check",
   "target": "…/closure",
   "ok":     false,
   "counts": { "error": 1, "warning": 0, "info": 12 },
   "spec_hash": "sha256:…",
-  "diagnostics": [ /* nxd-diagnostic-v1 records */ ]
+  "diagnostics": [ /* nxd-diagnostic-v2 records */ ]
 }
 ```
 
@@ -231,7 +230,7 @@ disguise an observation as a measurement. `record append` rejects a report whose
 
 ```jsonc
 {
-  "schema": "nxd-build-record-v1",
+  "schema": "nxd-build-record-v2",
   "workflow": "candidate-scoring",
   "data_product": "candidate_scoring",
   "closure_path": "/abs/path/to/closure",
@@ -239,8 +238,8 @@ disguise an observation as a measurement. `record append` rejects a report whose
   "compiler_version": {
     "plugin": "0.29.0",
     "generator_skill": "nxd-generate-data-product",
-    "dp_spec_version": 1,
-    "canonicalization": "nxd-dp-spec-canon-v1"
+    "dp_spec_version": 2,
+    "canonicalization": "nxd-dp-spec-canon-v2"
   },
   "generated_at_unix_ms": 1769904000000,
   "generator_model": "claude-opus-5",
@@ -299,7 +298,7 @@ Keyed by the nine stage ids, every key present at all times.
   "ordinal": 2,
   "at_unix_ms": 1769904012345,
   "origin": "tool_computed",
-  "diagnostics": [ /* nxd-diagnostic-v1 */ ],
+  "diagnostics": [ /* nxd-diagnostic-v2 */ ],
   "detail": { "models_counted": 4, "unverified": 1 }
 }
 ```
@@ -377,7 +376,7 @@ and nothing in the artifact reveals the difference.
   "blocks": ["total_opex"],
   "disposition": "blocked",       // blocked | deferred | answered
   "stage": "s6_run",
-  "path": "spec:open_questions[fx_rates]",
+  "path": "v2:open_questions[fx_rates]",
   "discovered": "build_time",     // pre_build | build_time
   "written_back": true,           // written into the LIVE dp-spec.md
   "at_unix_ms": 1769904090000,
@@ -385,7 +384,7 @@ and nothing in the artifact reveals the difference.
 }
 ```
 
-**A build-time blocker is an `open_questions` entry discovered late, and there
+**A build-time blocker is an **Open Questions** entry discovered late, and there
 is no second mechanism.** The spec section already has the right vocabulary — a
 question, a `blocks:` list, and a `blocked | deferred | answered` disposition —
 and it already carries the rule that a measurement you must not propose belongs
@@ -697,8 +696,7 @@ reachable — the live IR:
 
 **Fully materialized** =
 
-- the lock is intact (snapshot present and byte-matching, status `approved`,
-  resolved refs present), and
+- the lock is intact (snapshot present and byte-matching, status `approved`), and
 - `record.compiled_from == lock.spec_hash`, and
 - the live spec's canonical hash still equals `lock.spec_hash`, and
 - stages `s0`–`s6` are `passed` or `passed_with_warnings`; `s7_publish` is one
@@ -792,7 +790,7 @@ a dry run. R3.
 
 ```jsonc
 {"stage":"s6_run","code":"blocker.open_question","severity":"error",
- "owner":"user","origin":"agent_observed","path":"spec:open_questions[fx_rates]",
+ "owner":"user","origin":"agent_observed","path":"v2:open_questions[fx_rates]",
  "message":"total_opex mixes EUR and USD invoices; no rate column exists in any source",
  "evidence":{"models":["total_opex"],"currencies":["EUR","USD"]},
  "fix":"ask for the rate source and date range"}
@@ -850,7 +848,7 @@ python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" hash         <spec.md>
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" canonicalize <spec.md>
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" emit         <canonical.json>
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" schema       [--json|--diagnostic|--record]
-python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write   <spec.md> <closure-dir>
+python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write   <spec.md> <closure-dir> [--proposal <proposal.json>]
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify  <closure-dir> [--spec <spec.md>]
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init   --record <path> --lock <path> [--spec-report <report.json>]
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record append --record <path> --stage <id> --from <report.json>
