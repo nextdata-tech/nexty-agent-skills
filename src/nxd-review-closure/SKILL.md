@@ -7,7 +7,7 @@ allowed-tools:
   - Grep
 metadata:
   author: nextdata
-  version: 0.35.3
+  version: 0.35.4
 ---
 
 # Review a generated closure — adversarially
