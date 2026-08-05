@@ -75,10 +75,11 @@ Choose this order before invoking any runtime command:
    `mcp__nxd-desktop__run_semantic_query`, and `mcp__nxd-desktop__inspect_run`
    — use them for the entire discover, build, resume, describe, and query
    sequence, plus a read-only `mcp__nxd-desktop__export_data_product` for
-   on-demand handoffs. **`inspect_run` is unbound** — no step calls it, no doc
-   describes what it returns, and supervisor-side run detail is recorded as
-   having no producer until one exists; don't invent a contract for it. This is
-   the supported route for Claude Desktop and Claude Cowork. Read-only `nxd://`
+   on-demand handoffs. **`inspect_run` is the failed-build diagnostic**: call it
+   **once** with the failed `run_id` rather than classifying from the build error
+   text — [reference/failure-handling.md](reference/failure-handling.md) § After a
+   failed build has the contract and the rules.
+   This is the supported route for Claude Desktop and Claude Cowork. Read-only `nxd://`
    **resources** — with tool bridges where a client exposes none — expose what a
    release *declares*: [reference/catalog-resources.md](reference/catalog-resources.md).
 2. **Direct CLI only on a confirmed host-local Darwin shell.** Use

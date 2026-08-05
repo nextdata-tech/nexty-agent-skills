@@ -8,6 +8,7 @@
 - [Classification fails closed](#classification-fails-closed)
 - [Typed exits, and caps you count instead of estimate](#typed-exits-and-caps-you-count-instead-of-estimate)
 - [A blocker is an open question found late](#a-blocker-is-an-open-question-found-late)
+- [After a failed build: inspect once, then classify](#after-a-failed-build-inspect-once-then-classify)
 - [What the user hears](#what-the-user-hears)
 - [The commands](#the-commands)
 
@@ -124,6 +125,71 @@ you of cheating on an entirely correct blocked exit.
 The consequence worth internalizing: the elicitation contract is a **loop**, not
 a pre-build gate. The same "I need something from you" queue serves a gap found
 while authoring the spec and a gap found while running it.
+
+## After a failed build: inspect once, then classify
+
+A failed `build_data_product` returns an error string. That string is the
+**outermost** frame — it is routinely a generic timeout or "transform execution
+failed" wording that says nothing about which stage died. Do not classify from
+it, and do not retry on it.
+
+1. **Call `mcp__nxd-desktop__inspect_run` once**, passing the failed `run_id`.
+   It returns that run's status plus the bounded, path-redacted child failure
+   diagnostic — the actual exception from inside the transform. It takes no
+   ownership lock and starts no runtime, so it is safe while another session
+   builds. Omit `run_id` only to list recent failed-run summaries when you do
+   not have one. **Once**, not in a loop: it is a read of a recorded diagnostic,
+   so a second identical call cannot return anything new.
+2. **Classify by the stage it died in**, using the ladder above — never by
+   matching the exception text. If no `run_id` is available, say that; do not
+   substitute the outer error string for the diagnostic you could not read.
+3. **Preserve the artifact.** Keep the failing closure and its diagnostic. They
+   are the evidence for the report, and re-running destroys the state that
+   explains the failure.
+
+### Do not retry a deterministic failure
+
+A retry is only ever justified when the failure could plausibly resolve on its
+own. **These never do**, and retrying them unchanged burns time and spend while
+producing the identical error:
+
+- A `TypeError`, `AttributeError`, or unexpected-keyword-argument error from
+  generated code — the call shape is wrong and will be wrong next run.
+- An import error for a missing dependency — the runtime is under-provisioned
+  until someone provisions it.
+- A grant or spec-hash mismatch — the binding is wrong, not flaky.
+- Anything that died in `s0_spec`, `s1_structure`, `s2_transform` or `s3_closure`:
+  those stages are offline and deterministic, so **there is nothing to retry**.
+
+Fix the cause, or escalate it as a blocker. "Retrying unchanged would not help"
+is itself a finding worth stating.
+
+### Say whether the model was contacted
+
+For a mapper build, the user's first real question is whether it spent money and
+whether anything was published. Answer it explicitly and separately, every time:
+
+- **model dispatch: not reached / reached** — a failure constructing
+  `MapperInput`, resolving credentials, or checking the grant happens **before**
+  any dispatch. No calls, no spend.
+- **publication: yes / no** — `map_inputs` returns proposals in memory; nothing
+  is published until the second dlt run lands them, after the gate.
+
+Never describe a passing self-check, a green consent gate, or a dispatched build
+as a successful mapper run. Those are different claims, and collapsing them is
+how a failed run gets reported as a working one.
+
+### A patched closure is not evidence
+
+If a closure was edited by hand to get past a failure — even a correct edit —
+the run that failed and the code that now exists no longer match. Do **not**
+re-run the patched copy and present the result as proof the original defect is
+fixed.
+
+- Use a **fresh closure generated from the corrected source** for the next
+  acceptance run.
+- Label the patched one **failed evidence**, and keep it alongside its
+  diagnostic.
 
 ## What the user hears
 

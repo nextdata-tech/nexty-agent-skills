@@ -103,7 +103,8 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 
 | Symbol | Module | Purpose |
 |---|---|---|
-| `map_inputs(inputs, *, spec, deps) -> MapResult` | `field_mapper` | the N→M primitive |
+| `map_inputs(inputs, *, spec, grant, run_dir, call, ...) -> MapResult` | `field_mapper` | the N→M primitive |
+| `MapperInput(input_id, identity, ...)` | `field_mapper` | one source record handed to the mapper |
 | `MapperSpec.load(path)` / `.mapper_spec_id` | `spec` | landed spec → runtime object |
 | `MapperProposal` / `MapperReview` / `MapperEvidence` | `records` | the three record types |
 | `ValueStatus` | `records` | the enum in §3 |
@@ -115,6 +116,50 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 
 Everything else is private. `transport.Client` is deliberately **not** public —
 Layer 2 must not be able to make an unbudgeted, unledgered call.
+
+#### The exact call, and the exact construction
+
+Both signatures are normative and are what the installed package accepts. An
+earlier revision of this table documented `map_inputs(inputs, *, spec, deps)`;
+**no `deps` argument, object, or module has ever existed** in the
+implementation. The documented surface was the error, and it is corrected here
+rather than by wrapping the working function — see
+`docs/architecture/field-mapper.md`.
+
+```python
+result = map_inputs(
+    inputs,                 # Sequence[MapperInput]
+    spec=spec,              # MapperSpec.load(...)
+    grant=grant,            # Grant.load(...)
+    run_dir=str(run_dir),   # where the ledger lands
+    call=call,              # the injected model callable
+)
+```
+
+`MapperInput` takes **no arbitrary keyword per source column.** `input_id` and
+`identity` are required; everything else is optional:
+
+```python
+MapperInput(
+    input_id=str(document_id),              # the mapper's handle for this record
+    identity={"document_id": document_id},  # the spec's declared identity fields
+    fields={"document_id": document_id},    # everything else the adapter exposes
+    landed_text=text,                       # the substring haystack — NOT model output
+    document_class="invoice",
+)
+```
+
+`MapperInput(document_id=...)` raises
+`TypeError: MapperInput.__init__() got an unexpected keyword argument 'document_id'`.
+The four slots are not interchangeable and collapsing them breaks a specific
+guarantee each: `input_id` is the handle, `identity` is what the grant and
+`input_snapshot_id` bind to, `fields` is un-bound context, and `landed_text` is
+the only surface `verify_quote` can check a quote against. Putting the document
+identity **only** in `fields` leaves `identity` empty, so nothing binds.
+
+Generated code must **not** introspect these signatures to decide how to call
+them. A mapper that adapts itself to whatever is installed converts a loud,
+immediate `TypeError` into a silent behavioural difference between two runtimes.
 
 `map_inputs` returns a `MapResult` carrying proposals + evidence + ledger handle
 **in one in-memory bundle** (design §7). There is no API that returns proposals
