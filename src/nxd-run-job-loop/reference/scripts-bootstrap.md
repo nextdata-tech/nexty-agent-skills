@@ -1,7 +1,8 @@
 # Making the desktop helper scripts reachable
 
-`dp_diagnostics.py`, `validate_dp_spec.py`, and the shared
-`dp_spec_v2.py` core ship with **nxd-run-job-loop** at `scripts/`. They are
+`dp_diagnostics.py`, `validate_dp_spec.py`, `dp_spec_authoring.py`, and the
+legacy closure verifier `dp_spec_v2.py` ship with **nxd-run-job-loop** at
+`scripts/`. They are
 not copied into a generated closure, and a closure is not the current directory
 from which to address them. A bare `scripts/...` path is therefore invalid once
 the skill is installed.
@@ -31,6 +32,7 @@ for root in roots:
     skill = root / "SKILL.md"
     if ((root / "scripts/dp_diagnostics.py").is_file()
             and (root / "scripts/validate_dp_spec.py").is_file()
+            and (root / "scripts/dp_spec_authoring.py").is_file()
             and (root / "scripts/dp_spec_v2.py").is_file()
             and (root / "scripts/self_check.py").is_file()
             and skill.is_file()):
@@ -57,9 +59,12 @@ python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <workflow>/dp-spec.md --js
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> \
     --spec <workflow>/dp-spec.md
 
-# The v2 parser is the only active spec contract; the diagnostics entry point
-# delegates to the same core.
-python3 "$JOB_HELPER_DIR/scripts/dp_spec_v2.py" validate <workflow>/dp-spec.md
+# The v3 parser owns user-facing authoring. v2 remains only for verifying old
+# closure evidence; v1 is rejected by both paths.
+python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <workflow>/dp-spec.md --json
+
+# Only when inspecting an existing v2 closure artifact:
+python3 "$JOB_HELPER_DIR/scripts/dp_spec_v2.py" validate <legacy-v2-spec.md>
 python3 "$JOB_HELPER_DIR/scripts/dp_spec_v2.py" schema
 ```
 

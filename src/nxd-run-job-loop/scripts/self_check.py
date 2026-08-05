@@ -60,6 +60,8 @@ _codes("error", "agent",
        "closure.contract_verifier_unreferenced",
        "closure.contract_verifier_secret", "closure.contract_duplicate_name",
        "closure.contract_inventory_mismatch",
+       "closure.terms_hash_mismatch", "closure.contract_inventory_hash_mismatch",
+       "closure.decision_inventory_mismatch",
        "closure.profile_service_missing", "closure.profile_driver_mismatch",
        "closure.profile_name_mismatch", "closure.port_storage_mismatch",
        "closure.input_service_mismatch", "closure.csv_root_invalid",
@@ -1707,6 +1709,8 @@ if snap_bytes is None:
          "reader cannot tell what it was supposed to build. Byte-copy the "
          "approved dp-spec.md in at generation (Step 6a).", "dp-spec.approved.md")
 lock = None
+is_v3_lock = False
+v3_approved_contracts = set()
 lockp = Path("dp-spec.lock.json")
 if not lockp.exists():
     cerr("closure.lock_missing",
@@ -1719,26 +1723,37 @@ else:
         lock = json.loads(lockp.read_text(encoding="utf-8"))
         if not isinstance(lock, dict):
             raise ValueError("not a JSON object")
-        if lock.get("schema") != "nxd-dp-spec-lock-v2":
-            raise ValueError(f"schema is {lock.get('schema')!r}, expected "
-                             f"'nxd-dp-spec-lock-v2'")
-        lock_keys = {
+        is_v3_lock = lock.get("schema") == "nxd-dp-spec-lock-v3"
+        if lock.get("schema") not in {"nxd-dp-spec-lock-v2", "nxd-dp-spec-lock-v3"}:
+            raise ValueError(f"unsupported lock schema {lock.get('schema')!r}")
+        lock_keys = ({
+            "schema", "spec_hash", "proposal_hash", "canonicalization", "snapshot", "snapshot_sha256",
+            "proposal_snapshot", "proposal_snapshot_sha256", "spec_status_at_copy", "dp_spec_version",
+            "name", "workflow", "terms_hash", "contract_inventory_hash", "locked_decisions_hash", "delivery_profile",
+            "source_basename", "compiler_version", "copied_at_unix_ms",
+        } if is_v3_lock else {
             "schema", "spec_hash", "canonicalization", "snapshot", "snapshot_sha256",
             "spec_status_at_copy", "dp_spec_version", "name", "workflow",
             "source_basename", "contract_names", "compiler_version", "copied_at_unix_ms",
-        }
+        })
         if set(lock) != lock_keys:
-            raise ValueError("lock keys do not match the complete v2 envelope")
-        if lock.get("dp_spec_version") != 2:
-            raise ValueError("dp_spec_version is not 2")
-        if lock.get("canonicalization") != "nxd-dp-spec-canon-v2":
-            raise ValueError("canonicalization is not nxd-dp-spec-canon-v2")
+            raise ValueError("lock keys do not match the complete v2/v3 envelope")
+        expected_version = 3 if is_v3_lock else 2
+        expected_canon = "nxd-dp-spec-canon-v3" if is_v3_lock else "nxd-dp-spec-canon-v2"
+        if lock.get("dp_spec_version") != expected_version:
+            raise ValueError(f"dp_spec_version is not {expected_version}")
+        if lock.get("canonicalization") != expected_canon:
+            raise ValueError(f"canonicalization is not {expected_canon}")
+        if is_v3_lock and lock.get("delivery_profile") != "desktop-local-duckdb-semantic-query":
+            raise ValueError("delivery_profile is not the fixed desktop-local DuckDB semantic-query profile")
         compiler = lock.get("compiler_version")
         if not isinstance(compiler, dict) or set(compiler) != {"plugin", "generator_skill", "self_check"}:
-            raise ValueError("compiler_version is not the complete v2 lock shape")
+            raise ValueError("compiler_version is not the complete v2/v3 lock shape")
         if any(not isinstance(compiler[key], str) or not compiler[key]
                for key in ("plugin", "generator_skill", "self_check")):
             raise ValueError("compiler_version values must be non-empty strings")
+        if is_v3_lock and compiler.get("self_check") != "nxd-self-check-v3":
+            raise ValueError("v3 compiler_version.self_check is not nxd-self-check-v3")
     except Exception as exc:
         lock = None
         cerr("closure.lock_unparseable",
@@ -1749,6 +1764,26 @@ else:
 # written is not evidence. This is the mechanical half of "once approved, the
 # spec is frozen for that build", which used to be honour-system.
 if lock is not None and snap_bytes is not None:
+    snapshot_version_match = re.search(
+        rb"^dp_spec_version:\s*(\d+)\s*$", snap_bytes, re.MULTILINE
+    )
+    snapshot_version = int(snapshot_version_match.group(1)) if snapshot_version_match else None
+    expected_snapshot_version = 3 if is_v3_lock else 2
+    if snapshot_version != expected_snapshot_version:
+        cerr("closure.spec_hash_mismatch",
+             f"dp-spec.approved.md declares dp_spec_version={snapshot_version!r}, "
+             f"but the lock envelope is for version {expected_snapshot_version}.",
+             "dp-spec.approved.md",
+             {"expected": expected_snapshot_version, "actual": snapshot_version})
+    if is_v3_lock:
+        for field in ("name", "workflow"):
+            match = re.search(rb"^" + field.encode("ascii") + rb":\s*(.+?)\s*$", snap_bytes, re.MULTILINE)
+            snapshot_value = match.group(1).decode("utf-8") if match else None
+            if snapshot_value != lock.get(field):
+                cerr("closure.spec_hash_mismatch",
+                     f"dp-spec.approved.md {field} does not match the v3 lock.",
+                     "dp-spec.approved.md",
+                     {"expected": lock.get(field), "actual": snapshot_value})
     got = hashlib.sha256(snap_bytes).hexdigest()
     want = lock.get("snapshot_sha256")
     if got != want:
@@ -1758,6 +1793,107 @@ if lock is not None and snap_bytes is not None:
              f"written. The plan a build was compiled from is not editable "
              f"in place: change the live dp-spec.md, re-approve, regenerate.",
              "dp-spec.approved.md", {"expected": want, "actual": got})
+    if is_v3_lock:
+        proposal_path = Path(str(lock.get("proposal_snapshot", "")))
+        try:
+            proposal_path.resolve().relative_to(Path.cwd().resolve())
+            inside_closure = True
+        except (OSError, RuntimeError, ValueError):
+            inside_closure = False
+        if proposal_path.is_absolute() or ".." in proposal_path.parts or not inside_closure:
+            cerr("closure.escaping_reference",
+                 "the v3 typed proposal snapshot points outside the closure.",
+                 "dp-spec.lock.json")
+            proposal_path = Path("")
+        proposal_bytes = proposal_path.read_bytes() if proposal_path.is_file() else None
+        if proposal_bytes is None:
+            cerr("closure.spec_snapshot_missing",
+                 "the v3 typed proposal snapshot is missing from the closure.",
+                 "dp-spec.proposal.approved.json")
+        elif hashlib.sha256(proposal_bytes).hexdigest() != lock.get("proposal_snapshot_sha256"):
+            cerr("closure.lock_snapshot_byte_mismatch",
+                 "dp-spec.proposal.approved.json does not match its lock hash.",
+                 "dp-spec.proposal.approved.json")
+        else:
+            try:
+                proposal = json.loads(proposal_bytes.decode("utf-8"))
+                v3_approved_contracts = {
+                    item.get("id") for item in proposal.get("proposal", {}).get("contracts", [])
+                    if isinstance(item, dict) and isinstance(item.get("id"), str)
+                }
+                proposal_payload = {
+                    key: proposal[key] for key in proposal
+                    if key not in {"hashes", "proposal_hash"}
+                }
+                proposal_hash = "sha256:" + hashlib.sha256(json.dumps(
+                    proposal_payload, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if proposal_hash != lock.get("proposal_hash"):
+                    cerr("closure.spec_hash_mismatch",
+                         "the typed proposal hash does not match the v3 lock.",
+                         "dp-spec.proposal.approved.json")
+                proposal_body = proposal.get("proposal")
+                if not isinstance(proposal_body, dict):
+                    raise ValueError("the v3 typed proposal payload is not an object")
+                terms = proposal_body.get("terms", [])
+                if not isinstance(terms, list):
+                    raise ValueError("the v3 Terms inventory is not a list")
+                canonical_terms = sorted(
+                    (item for item in terms if isinstance(item, dict)),
+                    key=lambda item: str(item.get("id", "")),
+                )
+                terms_hash = hashlib.sha256(json.dumps(
+                    canonical_terms, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if terms_hash != lock.get("terms_hash"):
+                    cerr("closure.terms_hash_mismatch",
+                         "the inline Terms inventory does not match its v3 lock hash.",
+                         "dp-spec.proposal.approved.json")
+                contracts = proposal_body.get("contracts", [])
+                if not isinstance(contracts, list):
+                    raise ValueError("the v3 contract inventory is not a list")
+                canonical_contracts = sorted(
+                    ({
+                        **{key: item.get(key) for key in ("id", "attachment", "model", "phase", "guarantee", "rule")},
+                        "fields": sorted(item.get("fields", [])),
+                    }
+                     for item in contracts if isinstance(item, dict)),
+                    key=lambda item: str(item.get("id", "")),
+                )
+                contract_hash = hashlib.sha256(json.dumps(
+                    canonical_contracts, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if contract_hash != lock.get("contract_inventory_hash"):
+                    cerr("closure.contract_inventory_hash_mismatch",
+                         "the compiled contract inventory does not match its v3 lock hash.",
+                         "dp-spec.proposal.approved.json")
+                decisions = proposal_body.get("decisions", [])
+                if not isinstance(decisions, list):
+                    raise ValueError("the v3 decision inventory is not a list")
+                canonical_decisions = sorted(
+                    ({key: item[key] for key in ("id", "target", "ruling", "status")}
+                     for item in decisions
+                     if isinstance(item, dict)
+                     and item.get("status") == "locked"
+                     and all(key in item for key in ("id", "target", "ruling", "status"))),
+                    key=lambda item: str(item.get("id", "")),
+                )
+                decisions_hash = hashlib.sha256(json.dumps(
+                    canonical_decisions, sort_keys=True, ensure_ascii=False,
+                    separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                if decisions_hash != lock.get("locked_decisions_hash"):
+                    cerr("closure.decision_inventory_mismatch",
+                         "the settled locked-decision inventory does not match its v3 lock hash.",
+                         "dp-spec.proposal.approved.json")
+            except Exception as exc:
+                cerr("closure.lock_unparseable",
+                     f"the v3 typed proposal snapshot is invalid: "
+                     f"{type(exc).__name__}: {exc}",
+                     "dp-spec.proposal.approved.json")
 
 # C4 — a snapshot of an unapproved spec is a build nobody signed off.
 if lock is not None and lock.get("spec_status_at_copy") != "approved":
@@ -1800,10 +1936,12 @@ else:
         if not isinstance(compiler, dict) or set(compiler) != {
                 "plugin", "generator_skill", "dp_spec_version", "canonicalization"}:
             raise ValueError("compiler_version is not the complete v2 build-record shape")
-        if compiler.get("dp_spec_version") != 2:
-            raise ValueError("compiler_version.dp_spec_version is not 2")
-        if compiler.get("canonicalization") != "nxd-dp-spec-canon-v2":
-            raise ValueError("compiler_version.canonicalization is not nxd-dp-spec-canon-v2")
+        record_version = compiler.get("dp_spec_version")
+        if record_version not in {2, 3}:
+            raise ValueError("compiler_version.dp_spec_version is not 2 or 3")
+        expected_record_canon = "nxd-dp-spec-canon-v3" if record_version == 3 else "nxd-dp-spec-canon-v2"
+        if compiler.get("canonicalization") != expected_record_canon:
+            raise ValueError(f"compiler_version.canonicalization is not {expected_record_canon}")
         if any(not isinstance(compiler[key], str) or not compiler[key]
                for key in ("plugin", "generator_skill")):
             raise ValueError("compiler_version plugin/generator_skill values must be non-empty strings")
@@ -1998,13 +2136,17 @@ except SyntaxError:
 
 if _spec_tree is not None:
     contracts, unnamed, dupes, contract_meta = _verify_scripts(_spec_tree)
-    approved_contracts = set(lock.get("contract_names") or []) if isinstance(lock, dict) else set()
+    approved_contracts = (
+        v3_approved_contracts
+        if is_v3_lock
+        else set(lock.get("contract_names") or []) if isinstance(lock, dict) else set()
+    )
     wired_contracts = set(contracts)
     if approved_contracts != wired_contracts:
         cerr(
             "closure.contract_inventory_mismatch",
             f"spec.py custom contracts {sorted(wired_contracts)} do not match "
-            f"the approved v2 contract inventory {sorted(approved_contracts)}.",
+            f"the approved contract inventory {sorted(approved_contracts)}.",
             "spec.py",
             {"approved": sorted(approved_contracts), "wired": sorted(wired_contracts)},
         )

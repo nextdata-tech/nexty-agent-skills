@@ -1,117 +1,149 @@
-# `dp-spec.md` — the editable plan between intent and generated data product
+# `dp-spec.md` — the user-owned plan between intent and a local data product
 
 ## Contents
 
 - [Authoring contract](#authoring-contract)
 - [Frontmatter](#frontmatter)
 - [Sections](#sections)
-- [Transform vocabulary](#transform-vocabulary)
+- [Terms](#terms)
+- [Interpretation and approval](#interpretation-and-approval)
 - [Claude Desktop form contract](#claude-desktop-form-contract)
-- [Worked v2 example](#worked-v2-example)
+- [Worked example](#worked-example)
 
-`dp-spec.md` is the user-owned intermediate representation for the local data
-product loop. It is ordinary Markdown with a deliberately tiny frontmatter
-block. A user can edit the prose, lists, and labelled fields directly; the
-validator reports exact stable paths instead of silently repairing meaning.
+`dp-spec.md` is the document the user writes and edits. It is ordinary
+Markdown with fixed top-level navigation and free prose inside each section.
+The user is never expected to author or inspect the terse typed proposal used
+by the compiler.
 
 ## Authoring contract
 
-- Claude Desktop pre-fills this document from the user's request and source
-  material. The user reviews and edits it; an empty form is not the normal path.
-- Required information that cannot be inferred becomes an entry in **Open
-  Questions**, not a blank field or an invented default.
-- `status: approved` is a separate user decision. A semantic patch to an
-  approved document atomically changes it to `proposed` and clears its approval
-  binding. Approval binds the semantic content hash, excluding lifecycle fields.
-- The parser preserves untouched bytes, comments, Unicode, and LF line endings
-  for supported targeted patches. It rejects CRLF rather than normalizing it.
-  Stable paths support scalar/prose replacement; entity/list structure changes
-  are reviewed proposal edits and are not silently applied. Targeted scalar and
-  prose patches currently accept one-line values only; a multiline change is a
-  reviewed proposal/emit operation so the form cannot accidentally change the
-  Markdown structure.
-- The active contract is version 2. Older version values fail with
-  `unsupported_version`; no migration or fallback parser exists.
+- Claude Desktop pre-fills the document from the request and source material;
+  the user reviews and edits that prose rather than completing an empty schema.
+- The only fixed syntax is the frontmatter and the ordered `##` headings below.
+  Prose, lists, tables, examples, and code blocks are allowed inside sections.
+- The authoring parser records headings, section text, and source spans. It does
+  not interpret business meaning and it does not reject natural-language
+  colons or list-shaped prose as pseudo-YAML.
+- An external AI extraction step produces a typed proposal for deterministic
+  validation. That proposal is an internal artifact, not a user-facing file.
+- Missing information becomes an **Open Question**. The AI must not invent a
+  behavior merely to satisfy a typed field.
+- `status: approved` means the user approved the natural-language
+  interpretation shown in the echo-back. Approval binds both the source hash
+  and the exact typed proposal hash.
+- Version 1 is unsupported. Version 3 is the prose-first authoring contract;
+  the older v2 parser is retained only for read-only verification of existing
+  v2 closure evidence while it remains present.
 
 ## Frontmatter
 
 ```yaml
 ---
-dp_spec_version: 2
+dp_spec_version: 3
 name: monthly_revenue
 workflow: monthly-revenue
 status: proposed
 ---
 ```
 
-Only these lifecycle fields are allowed, plus `approved_content_hash` on an
-approved document. The content hash includes the name, workflow, and complete
-body semantics, but excludes `status` and `approved_content_hash`.
+The required lifecycle fields are `dp_spec_version`, `name`, `workflow`, and
+`status`. An approved document also carries `approved_content_hash` and
+`approved_proposal_hash`. When an approved document is edited, the resulting
+`status: proposed` document retains `prior_approved_proposal_hash`; the next
+approval must supply that prior typed snapshot so locked Decisions cannot be
+silently replaced. Lifecycle fields are excluded from the source semantic
+hash.
 
 ## Sections
 
-The document has exactly these headings. Body content is Markdown, not a YAML
-payload:
+The document has exactly these top-level headings, in this order:
 
-1. **Intent** — the outcome and audience.
-2. **Questions** — stable question IDs and the natural-language questions that
-   outputs must answer.
+1. **Intent** — the outcome, audience, and desired use.
+2. **Questions** — the natural-language questions the product should answer.
 3. **Scope** — inclusions, exclusions, grain boundaries, and assumptions.
-4. **Inputs** — source bindings, type, location, and description.
-5. **Models** — named relations and their fields, each with exactly one origin:
-   base/reference from an input, derived from one transform step, or a typed
-   view expression.
-6. **Transform** — an acyclic graph of named steps. Each step writes exactly
-   one declared derived model.
-7. **Outputs** — the user-visible products. Each output names one model,
-   non-empty question references, a projection, ordering, and delivery refs.
-8. **Delivery** — runtime channel, target, and delivery semantics.
-9. **Contracts** (optional) — typed executable guarantees attached to an Input
-   or Output; their approved inventory is locked with the spec hash.
-10. **Decisions** — provenance and rationale only; it is not executable policy.
-11. **Open Questions** — unresolved questions, their target, and whether they
-    block approval/materialization.
+4. **Terms** — definitions used by this document and the product.
+5. **Inputs** — source material and expectations about accepted data.
+6. **Models** — named relations or concepts needed by the result.
+7. **Transform** — business logic, joins, aggregation, procedures, and model
+   orchestration. Decisions belong here when they affect computation.
+8. **Outputs** — user-visible products and promises about their behavior.
+9. **Decisions** — rationale and provenance for explicit decisions that can be
+   locked after approval.
+10. **Open Questions** — unresolved questions, their target, and whether they
+    block approval or materialization.
 
-Every question must reach an output, and every delivery must be used by an
-output. A standalone `Policy` heading is invalid. Decision procedures belong
-to a Transform step or a reference Model and are represented by a versioned
-`id@version` procedure reference.
+There is deliberately no user-authored `Delivery` section: local DPs currently
+produce a DuckDB-backed semantic-query result. There is no user-authored
+`Contracts` section: executable contracts are compiled internally from Input
+expectations and Output promises. A request for unsupported delivery is an
+Open Question, not a user-selectable transport setting.
 
-## Transform vocabulary
+## Terms
 
-The first release uses only these closed operations:
+Terms are inline. A term may use a simple `###` heading and natural prose:
 
-`filter`, `project`, `derive`, `join`, `aggregate`, `union`, `deduplicate`, and
-`apply_procedure`. An `apply_procedure` step has one data input; its versioned
-`Procedure` is metadata for the operation, not a second item in `Inputs`. A
-reference Model may carry the same procedure reference when it is the named
-owner of that decision logic.
+```text
+## Terms
 
-The operation-specific fields are typed and validated. Field references in a
-transform are qualified as `model.field`. Joins declare type, cardinality,
-join keys, and unmatched-row behavior. Aggregates declare grouping and null
-handling. Unions declare alignment and missing-field behavior. Deduplication
-declares keys, ordering, and the winner rule. Join null-key behavior is
-explicit. A procedure step also declares its output `Fields`; its result shape
-is not inferred from an opaque procedure body. Derived expressions are a small
-closed vocabulary of field copy and named scalar functions; arbitrary SQL or
-free-form expressions are rejected.
+### Customer
+
+A customer is the person or organization responsible for an order.
+Also known as an account holder. Examples include a company buying a plan.
+```
+
+The extraction layer derives a stable local id and NXD-compatible metadata:
+`name`, `definition`, `synonyms`, `related_terms`, `examples`, `term_values`,
+`priority`, and an NXD glossary string-to-string `tags` map. `related_terms` must resolve to another
+term in this document. External glossary DPs, URLs, and implicit external
+definitions are not supported. Omitted priority uses NXD's P3 default and is
+disclosed in the echo-back.
+
+## Interpretation and approval
+
+The lifecycle is:
+
+```text
+Markdown structure and spans
+  → AI typed proposal with provenance
+  → deterministic validation
+  → natural-language echo-back and Open Questions
+  → user approval
+  → self-contained closure snapshots
+```
+
+Every approval-relevant typed value records `explicit`, `inferred`, or
+`platform_fixed` provenance. Inferred values must be covered by the echo-back.
+Blocking Open Questions prevent approval.
+
+Each approved Decision is locked by id and hash. Extraction cannot overwrite a
+locked Decision. A conflicting edit becomes an explicit proposed change and
+revokes the approval; it is never silently merged.
+
+Formatting-only edits may retain approval only after re-extraction proves the
+typed proposal is unchanged. Behavioral edits, Terms edits, contract-inventory
+edits, or delivery-profile changes require a new approval. The closure stores
+the byte-identical `dp-spec.approved.md` and the approved typed proposal JSON;
+it never points back to the live document.
 
 ## Claude Desktop form contract
 
-The harness should render the parser's source-map paths as controls and group
-them in the same section order. It should show a prefilled read-back first,
-highlight validation findings inline, keep unknown/unresolved material visible,
-and offer explicit **Propose patch**, **Approve**, and **Reject** actions.
-Approval is disabled while validation has errors or a blocking Open Question.
-The harness must never overwrite the user's whole file from a canonical emit;
-it uses a stale-hash-checked targeted patch or presents a reviewed proposal.
+The form layer should:
 
-## Worked v2 example
+- show the prefilled Markdown/read-back before asking for field completion;
+- group controls by the same section order as this document;
+- use stable paths such as `v3:inputs[orders].text` and source spans for inline
+  diagnostics and focused edits;
+- keep inferred values and Open Questions visible;
+- offer **Propose**, **Approve**, and **Reject** actions separately;
+- disable approval while validation errors or blocking Open Questions remain;
+- apply stale-hash-checked targeted patches or present a reviewed proposal;
+- never replace the whole user document with a canonical typed emit.
+
+## Worked example
 
 ```markdown
 ---
-dp_spec_version: 2
+dp_spec_version: 3
 name: monthly_revenue
 workflow: monthly-revenue
 status: proposed
@@ -123,75 +155,61 @@ Provide an auditable monthly revenue relation for finance review.
 
 ## Questions
 
-### Question `monthly_revenue_by_customer`
-
-What was monthly revenue for each customer?
+What was monthly revenue for each customer and month?
 
 ## Scope
 
-Includes paid orders only and excludes refunds until a separately declared model adds them.
+Include completed paid orders. Exclude refunds until their timing rule is
+decided.
+
+## Terms
+
+### Customer
+
+A person or organization responsible for an order. Also known as an account
+holder.
 
 ## Inputs
 
-### Input `orders_csv`
-- Type: `csv`
-- Location: `data/orders.csv`
-- Description: Order rows supplied by finance.
+### Orders
+
+Load completed orders from the monthly export.
+
+#### Expectations
+
+Rows have an order identifier. Amounts are expressed in EUR.
 
 ## Models
 
-### Model `orders`
-- Kind: `base`
-- Input: `orders_csv`
-- Description: Pristine order relation.
-- Grain: one row per order
-- Key: `order_id`
-- Fields: `order_id, customer_id, month, amount_usd`
+### Monthly revenue
 
-### Model `monthly_customer_revenue`
-- Kind: `derived`
-- Description: Monthly revenue per customer.
-- Grain: one row per customer and month
-- Key: `customer_id, month`
-- Fields: `customer_id, month, revenue`
-- Produced by: `aggregate_monthly_revenue`
+Revenue grouped by customer and month.
 
 ## Transform
 
-### Step `aggregate_monthly_revenue`
-- Operation: `aggregate`
-- Inputs: `orders`
-- Output: `monthly_customer_revenue`
-- Group by: `orders.customer_id, orders.month`
-- Measures: `revenue=sum(orders.amount_usd)`
-- Null handling: `ignore`
+Group accepted orders by customer and month and sum their amounts. Apply the
+refund decision here when its timing rule is answered.
 
 ## Outputs
 
-### Output `monthly_revenue_port`
-- Model: `monthly_customer_revenue`
-- Questions: `monthly_revenue_by_customer`
-- Projection: `customer_id, month, revenue`
-- Order by: `month desc, customer_id asc`
-- Delivery refs: `finance_semantic_port`
+### Monthly revenue by customer
 
-## Delivery
+The user-visible monthly revenue relation.
 
-### Delivery `finance_semantic_port`
-- Kind: `semantic_port`
-- Target: `finance/monthly-revenue`
-- Description: Governed finance semantic port.
+#### Promises
+
+Refunds are excluded and accepted rows reconcile to the result.
 
 ## Decisions
 
-### Decision `aggregate_definition`
-- Target: `model:monthly_customer_revenue`
-- Status: `proposed`
-- Provenance: `agent_authored`
-- Ruling: Revenue is the sum of order amount_usd grouped by customer and month.
+### Refund treatment
+
+Exclude refunds until a timing rule is supplied.
 
 ## Open Questions
+
+When should refunds be applied? This blocks approval of the output.
 ```
 
-This example is intentionally proposed. The approval operation writes the
-content binding after the user confirms it.
+The AI should echo the interpretation and ask the refund question before
+approval. It should not ask the user to inspect the typed proposal.

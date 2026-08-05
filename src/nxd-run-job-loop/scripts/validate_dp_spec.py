@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Validate the canonical human-editable dp-spec v2 Markdown document.
+"""Validate a prose-first dp-spec document and its typed proposal.
 
-This entry point deliberately has no legacy parser.  The loop, lock writer and
-generator all consume the same ``dp_spec_v2`` AST and diagnostics.
+Version 3 is the user-authoring boundary. Version 2 remains available here for
+read-only verification of existing closure artifacts.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import dp_spec_v2 as v2  # noqa: E402
+import dp_spec_authoring as v3  # noqa: E402
 
 
 def _issue(issue: v2.ValidationIssue) -> dict[str, str]:
@@ -33,10 +35,49 @@ def _issue(issue: v2.ValidationIssue) -> dict[str, str]:
     }
 
 
-def validate(path: Path) -> dict:
+def _version(raw: str) -> int | None:
+    match = re.search(r"^dp_spec_version:\s*(\d+)\s*$", raw, flags=re.MULTILINE)
+    return int(match.group(1)) if match else None
+
+
+def _v3_issue(issue: v3.ValidationIssue) -> dict[str, str]:
+    return {
+        "schema": v3.DIAGNOSTIC_SCHEMA_ID,
+        "code": issue.code,
+        "path": issue.path,
+        "severity": "error",
+        "owner": issue.owner,
+        "control": issue.control,
+        "stage": "s0_spec",
+        "origin": "tool_computed",
+        "message": issue.message,
+    }
+
+
+def validate(path: Path, proposal_path: Path | None = None) -> dict:
     """Return the stable report envelope used by lock/build-record tooling."""
     try:
         raw = path.read_text(encoding="utf-8")
+        if _version(raw) == v3.SPEC_VERSION:
+            parsed = v3.parse(raw)
+            proposal = None
+            if proposal_path is not None:
+                try:
+                    proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, ValueError) as exc:
+                    raise v3.ParseError(f"proposal JSON is invalid: {exc}") from exc
+            issues = v3.validate(parsed) if proposal is None else v3.validate_proposal(parsed, proposal)
+            diagnostics = [_v3_issue(issue) for issue in issues]
+            return {
+                "schema": "nxd-diagnostic-report-v3",
+                "tool": "validate_dp_spec",
+                "target": str(path),
+                "ok": not diagnostics,
+                "spec_hash": v3.semantic_hash(parsed),
+                "proposal_hash": v3.proposal_hash(proposal) if isinstance(proposal, dict) else None,
+                "counts": {"error": len(diagnostics), "warning": 0, "info": 0},
+                "diagnostics": diagnostics,
+            }
         parsed = v2.parse(raw)
         issues = v2.validate(parsed)
         diagnostics = [_issue(issue) for issue in issues]
@@ -69,6 +110,27 @@ def validate(path: Path) -> dict:
                 "message": str(exc),
             }],
         }
+    except v3.ParseError as exc:
+        return {
+            "schema": "nxd-diagnostic-report-v3",
+            "tool": "validate_dp_spec",
+            "target": str(path),
+            "ok": False,
+            "spec_hash": None,
+            "proposal_hash": None,
+            "counts": {"error": 1, "warning": 0, "info": 0},
+            "diagnostics": [{
+                "schema": v3.DIAGNOSTIC_SCHEMA_ID,
+                "code": "v3.parse.invalid",
+                "path": "v3:document",
+                "severity": "error",
+                "owner": "user",
+                "control": "text",
+                "stage": "s0_spec",
+                "origin": "tool_computed",
+                "message": str(exc),
+            }],
+        }
     except (OSError, UnicodeError, v2.ParseError) as exc:
         return {
             "schema": "nxd-diagnostic-report-v2",
@@ -94,9 +156,10 @@ def validate(path: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("spec", type=Path)
+    parser.add_argument("--proposal", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    report = validate(args.spec)
+    report = validate(args.spec, args.proposal)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:

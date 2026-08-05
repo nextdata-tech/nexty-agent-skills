@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.35.4
+.36.0
 ---
 
 # nxd-generate-data-product skill
@@ -364,8 +364,9 @@ and `secrets[...]` key — take those from `reference/` (`file-source.md`,
 
 `spec.py` is the author-facing source compiled into deployment YAML: it declares
 the infra profile, transform, every landed physical model, and query-time views.
-Bind service references by relative `infra-profile.yaml` paths. Explicit v2
-`Inputs`, `Models`, `Transform`, and `Outputs` are compiled here; custom contracts are closure-side wiring ([reference/custom-contracts.md](reference/custom-contracts.md)). Worked `spec.py`: [reference/models-example.md](reference/models-example.md).
+Bind service references by relative `infra-profile.yaml` paths. The v3 prose
+proposal's `Inputs`, `Models`, `Transform`, and `Outputs` are compiled here;
+custom contracts are closure-side wiring ([reference/custom-contracts.md](reference/custom-contracts.md)). Worked `spec.py`: [reference/models-example.md](reference/models-example.md).
 
 `Outputs` is authoritative for user-facing projections, questions, and delivery channels. DuckDB still publishes all landed physical models, including internal support relations; do not call one user-facing unless listed in `Outputs`.
 
@@ -427,11 +428,14 @@ cold reader has only the closure. So after approval — and only after — the a
 spec is **byte-copied in** and hashed, beside a generated record of what the build
 did. Preconditions, procedure, and the `README.md` and `contracts/<name>.md` templates: [reference/closure-record.md](reference/closure-record.md).
 
-1. `cp <workflow>/dp-spec.md <closure>/dp-spec.approved.md`, **byte-identical** and
-   never re-serialized — the snapshot is evidence; requires `status: approved`, a
-   matching `approved_content_hash`, and a validator pass. There is no legacy
-   section or migration path to mirror.
-2. `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure>` → `dp-spec.lock.json`, then `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init --record <closure>/build-record.json --lock <closure>/dp-spec.lock.json`, before Step 7 reads the record.
+1. For a v3 plan, keep the exact typed proposal produced for the echo-back at
+   `<workflow>/dp-spec.proposal.json`. Then run
+   `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure> --proposal <workflow>/dp-spec.proposal.json`.
+   The command byte-copies both `dp-spec.approved.md` and
+   `dp-spec.proposal.approved.json`, requires `status: approved`, and verifies
+   the source/proposal hashes. Existing v2 closures continue using the same
+   command without `--proposal`.
+2. Run `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init --record <closure>/build-record.json --lock <closure>/dp-spec.lock.json`, before Step 7 reads the record.
 3. Render `README.md`: the reopen recipe plus, only for a credentialed source, the
    credentials block. No plan sections, no outcomes.
 
@@ -466,14 +470,13 @@ means a name diverged — fix the NAME (`models.py`, `.promise`, `PHYSICAL_MODEL
 and `data/<name>/` for base models), never quote around it. A derived model's
 reconciliation assert (Step 3b) firing means the derivation is wrong — fix the
 LOGIC, never loosen the assert.
-
 **Database/API connectors need live credentials to dry-run.** With credentials,
 run each type's own connectivity check per its reference doc (`database-source.md`
 asserts `row_count > 0` per model; `api-source.md` a parseable response) — never
 an exact fixture count. Without credentials, report it **not run**.
 ## Invariants — NEVER violate these
-
-- **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore` (the companion artifact is per the connector-types table in Overview; the credential guards are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. The active `dp-spec.md` is v2-only and has no legacy expectations/promises or policy payload.
+Verify the complete closure file set: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore`.
+- **Python-only closure**: emit `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, `dp-spec.approved.md`, the v3 `dp-spec.proposal.approved.json` when using the prose-first authoring path, `dp-spec.lock.json`, `build-record.json`, `README.md`, the connector companion artifact — and, for a credentialed source, `SENSITIVE` and `.gitignore` (the companion artifact is per the connector-types table in Overview; the credential guards are part of the closure, not cruft — never delete them). NEVER hand-write `deployment-spec.yaml` / `manifest.yaml` / `models.yaml` — the supervisor compiles those from the Python at pin time. The active `dp-spec.md` is v3 prose-first: expectations and promises are authored under Inputs and Outputs, while executable contracts and fixed local delivery remain internal.
 - **Custom contracts are executable, not decorative** — each compiles to a verifier that must be able to FAIL, and a custom promise never replaces the ordinary `.promise(model)`. Create only contracts explicitly requested and wired to the relevant generated input/output; wiring is Step 4 and [reference/custom-contracts.md](reference/custom-contracts.md).
 - **Self-contained closure — no cross-boundary contract pointers** (Step 6a): the approved `dp-spec.md` is byte-copied in as `dp-spec.approved.md` and bound by `dp-spec.lock.json`, so everything a later session needs to continue the work lives INSIDE the closure and self-containment is hash-checkable rather than a discipline anyone has to remember. A promised derived model's contract (rubric, thresholds, output schema, verdict set) is materialized in the closure — in the approved spec, as `contracts/<name>.md`, or as the inert derived model itself — NEVER referenced by a `../`-rooted path to a doc outside the closure, `../dp-spec.md` included. Phase C fails a missing snapshot, lock, `build-record.json` or `README.md`, a snapshot whose bytes no longer match the lock, and any closure-escaping contract reference.
 - **Scope is part of the contract, not an incidental choice**: if the source is sampled rather than taken whole, the selection rule is stated in `Scope` (and so travels in `dp-spec.approved.md`), reproducible over the same source, and MUST NOT drop rows on which a downstream model or step depends.
@@ -494,5 +497,4 @@ an exact fixture count. Without credentials, report it **not run**.
 - **Place, don't redesign**: semantic roles come from nxd-build-semantic-data-product. Preserve a file connector's supplied export exactly, and treat a database or API connector as read-only — cleaning, dedupe, reclassification and regrain happen ONLY in derived models downstream of pristine sources, never by editing the source export. Use an existing validated key for base models or surface the missing-key problem. Promise base and derived models, register metric views with `.model(...)`, and add no marker model on desktop.
 - **Reference data is landed, never hardcoded**: FX rates, merchant→category rulings, account mappings and similar judgements that exist in no source data are user-confirmed and landed as their own model, so they stay queryable and reviewable. **This includes any agent- or LLM-inferred score, verdict, or classification** — landed as data (`status = proposed`, `provenance = agent_authored`); a per-entity judgement literal in transform code is hardcoded even when the downstream arithmetic is computed. Never bake reference data into transform code as a constant dict or `if` ladder. With no user available to confirm, land the mapping anyway as PROPOSED, recorded as a row in the closure's landed `nxd_decisions` model — never a `DECISIONS.md` file — see [reference/derivation-plan.md](reference/derivation-plan.md) and, for agent judgement, [reference/llm-judgments.md](reference/llm-judgments.md). **The transform never calls a model**: judging is agent-side and lands as CSV before the build; no model call, API key, or network in `transform/main.py` — inferring from inside the transform is nondeterministic and re-judges every rerun. Self-check **Phase E enforces this mechanically** before the transform is imported, and it is a tripwire rather than a sandbox: it denies an enumerated list of model-SDK and transport imports there, and model-SDK imports in `contracts/**/*.py` too, so a green Phase E means "no *listed* SDK", not "provably offline" (see [reference/self-check.md](reference/self-check.md) § What Phase E cannot see). **Phase G** is the narrow, separate exception, and it is a *consent* check rather than a reach one: a closure that imports the field-mapper harness — `nxd.experimental.field_mapper`, shipped inside the installed `nxd` package, per [reference/field-mapper.md](reference/field-mapper.md) — may map, but only under a grant in `contracts/` binding the hash of each mapper spec kept there. Reach for it only when the mapping must run over rows the transform itself produces; when the judgements are a fixed set you can enumerate once, [reference/llm-judgments.md](reference/llm-judgments.md) is the cheaper path and needs no grant, no consent record, and no model call at build time. The harness computes that id itself, and the three consent codes are `owner: user` because you cannot consent on the user's behalf, extend an expiry, or decide a drifted rubric is still acceptable (see § What Phase G cannot see).
 - **Proven pins**: `dlt[duckdb]==1.28.2`, `duckdb==1.5.4`, pandas, the nxd wheel; Python `>=3.12,<3.13`.
-
 **Related skills:** **`nxd-run-job-loop`** owns the conversation and invokes this skill; **`nxd-build-semantic-data-product`** produces the inferred model it places; **`nxd-build-data-product`** is the k8s/cloud path.

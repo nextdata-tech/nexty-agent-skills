@@ -21,6 +21,7 @@ at generation time, **after** approval, the approved spec is copied in and hashe
 | file | what it is | written by |
 |---|---|---|
 | `dp-spec.approved.md` | byte-identical copy of the approved `dp-spec.md` | `cp` / `shutil.copyfile` |
+| `dp-spec.proposal.approved.json` | exact typed interpretation approved by the user (v3 only) | `dp_diagnostics.py lock write` |
 | `dp-spec.lock.json` | its canonical hash, snapshot hash, and compiler version | `dp_diagnostics.py lock write` |
 | `build-record.json` | what happened: stages, review rounds, attempts, concessions, blockers | `dp_diagnostics.py record …` |
 | `README.md` | the reopen recipe, and a credentials block when one is needed | this skill, from the template below |
@@ -61,10 +62,13 @@ Three preconditions, all hard:
 ## 2. Write the lock
 
 ```bash
-python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir>
+python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir> \
+  --proposal <workflow>/dp-spec.proposal.json  # required for v3
 ```
 
-`dp-spec.lock.json` carries the v2 canonical `spec_hash`, raw
+`dp-spec.lock.json` carries the v3 canonical `spec_hash` and typed proposal hash
+for new prose-first plans (or the v2 canonical `spec_hash` for an existing
+closure), raw
 `snapshot_sha256`, `spec_status_at_copy`, and compiler version. It deliberately
 stores **no path back to the live IR**: the workflow id plus the
 `…/nxd-jobs/<workflow>/dp-spec.md` convention recovers it.

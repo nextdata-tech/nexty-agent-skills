@@ -48,6 +48,8 @@ FROZEN_CODES = (
   'closure.profile_name_mismatch', 'closure.profile_service_missing',
   'closure.readme_missing',
   'closure.sensitive_missing', 'closure.spec_hash_mismatch',
+  'closure.terms_hash_mismatch', 'closure.contract_inventory_hash_mismatch',
+  'closure.decision_inventory_mismatch',
   'closure.spec_snapshot_missing', 'concession.assert_weakened',
   'concession.dependency_repinned', 'concession.derived_model_left_inert',
   'concession.incidental_column_dropped', 'concession.other',

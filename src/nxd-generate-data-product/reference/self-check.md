@@ -77,7 +77,7 @@ those two phases rather than an accident of how they were added.
   phase checks:
   - `dp-spec.approved.md` is present at the closure root;
   - `dp-spec.lock.json` is present, parses, and carries schema
-    `nxd-dp-spec-lock-v2`;
+    the matching `nxd-dp-spec-lock-v2` or `nxd-dp-spec-lock-v3` envelope;
   - the snapshot's raw bytes hash to the lock's `snapshot_sha256` — the **tamper
     check**. The snapshot is evidence, and evidence edited after it was written
     is not evidence. This is the mechanical half of "once approved, the spec is

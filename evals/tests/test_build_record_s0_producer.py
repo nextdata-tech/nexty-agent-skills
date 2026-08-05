@@ -17,7 +17,6 @@ predicate at false and sticks a fully green, published product at
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,7 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
 DIAG = SCRIPTS / "dp_diagnostics.py"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
-WORKED_EXAMPLE = REPO / "src" / "nxd-run-job-loop" / "reference" / "dp-spec.md"
+WORKED_EXAMPLE = REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md"
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -46,11 +45,7 @@ def _run(*args: str) -> subprocess.CompletedProcess:
 
 
 def _proposed_spec_text() -> str:
-    blocks = re.findall(
-        r"^```markdown\n(.*?)^```", WORKED_EXAMPLE.read_text(encoding="utf-8"), re.S | re.M
-    )
-    assert len(blocks) == 1
-    return blocks[0]
+    return WORKED_EXAMPLE.read_text(encoding="utf-8")
 
 
 def _approved_spec_text() -> str:

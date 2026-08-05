@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -11,7 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
-WORKED_EXAMPLE = REPO / "src" / "nxd-run-job-loop" / "reference" / "dp-spec.md"
+WORKED_EXAMPLE = REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md"
 sys.path.insert(0, str(SCRIPTS))
 
 import dp_spec_v2 as v2  # noqa: E402
@@ -19,9 +18,7 @@ import dp_diagnostics as dpd  # noqa: E402
 
 
 def sample() -> str:
-    blocks = re.findall(r"^```markdown\n(.*?)^```", WORKED_EXAMPLE.read_text(encoding="utf-8"), re.S | re.M)
-    assert len(blocks) == 1
-    return blocks[0]
+    return WORKED_EXAMPLE.read_text(encoding="utf-8")
 
 
 def test_shared_entry_point_uses_v2_content_hash():

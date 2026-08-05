@@ -25,10 +25,11 @@ verdict, a gate outcome, or which rows land**:
 - a gate whose UNKNOWN / missing / inferred value could change the outcome;
 - evidence with no provenance rule, or no missing-evidence rule.
 
-The v2 validator checks that the typed Transform and reference-Model procedure
-references are structurally valid. It does not interpret the business contents
-of an opaque procedure body, so the read-back remains a user-facing review of
-those contents rather than a claim that the validator proved them.
+The v3 authoring boundary checks the Markdown structure and the typed proposal's
+Transform and reference-Model procedure interpretation. It does not interpret
+the business contents of an opaque procedure body, so the read-back remains a
+user-facing review of those contents rather than a claim that the validator
+proved them. Existing v2 closure evidence is verified through the legacy path.
 
 **A fully specified procedure** still gets read back and confirmed, but expect
 one short turn. **No procedure in the request** means this gate does not fire —

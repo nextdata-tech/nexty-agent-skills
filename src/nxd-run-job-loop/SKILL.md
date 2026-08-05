@@ -1,6 +1,6 @@
 ---
 name: nxd-run-job-loop
-description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request starts HERE, not in nxd-generate-data-product: this skill gathers intent, sources, questions, models, transform logic, explicit outputs, delivery, decisions, and open questions into the editable dp-spec.md, then invokes the generator. Going straight to the generator skips the co-authoring checkpoint. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-query-data-product.
+description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request starts HERE, not in nxd-generate-data-product: this skill gathers intent, sources, questions, models, transform logic, explicit inputs and outputs, inline terms, decisions, and open questions into the prose-first editable dp-spec.md, then invokes the generator. Going straight to the generator skips the co-authoring checkpoint. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-query-data-product.
 allowed-tools:
   - Bash
   - Read
@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.35.4
+.36.0
 ---
 
 # nxd-run-job-loop skill
@@ -147,44 +147,53 @@ which also carries the absolute **fidelity here; derivation downstream** rule �
 landed rows are byte-exact, and every correction is a derived model beside the
 pristine source, never an edit to it.
 
-### Step 1b — Author `dp-spec.md`, the intermediate representation
+### Step 1b — Author `dp-spec.md`, the prose-first user plan
 
 Write what Step 1 gathered into **`dp-spec.md`** at
 `…/nxd-jobs/<workflow>/dp-spec.md`, beside the closure (which lands at
-`closure/`). It is the user-editable IR with the fixed sections Intent,
-Questions, Scope, Inputs, Models, Transform, Outputs, Delivery, Decisions, and
-Open Questions. Outputs are explicit: every question must reach one, and every
-delivery must be used. Schema, editing rules, and the Claude Desktop form
-contract: [reference/dp-spec.md](reference/dp-spec.md). It is **not a closure
-file**, so writing it is not a materialization.
+`closure/`). The user-facing document uses the fixed, ordered sections Intent,
+Questions, Scope, Terms, Inputs, Models, Transform, Outputs, Decisions, and
+Open Questions. Keep the headings strict but allow ordinary prose, lists,
+tables, examples, and code blocks within them. The user must never be asked to
+write or inspect the terse typed proposal. Schema, Terms behavior, editing
+rules, and the Claude Desktop form contract are in
+[reference/dp-spec.md](reference/dp-spec.md).
 
-**If the user supplied a doc** — a build spec, a rubric page — translate it onto
-the schema rather than asking them to re-type it. Their values are the
-specification: encode them verbatim, add what is missing as an Open Question or
-clearly agent-authored Decision, and **show what you filled in**. Never change a
-value they wrote. Draft the whole file when they only described it; edit and
-re-approve an existing one on a later pass. Then **validate** — `python3
-"$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-spec.md` after resolving
-`JOB_HELPER_DIR` with [scripts bootstrap](reference/scripts-bootstrap.md) — which
-checks typed model origins, transform operations, qualified field references,
-explicit Outputs and Delivery, procedure versions, and approval blockers. Fix
-each issue, or carry it as an Open Question, before showing the spec.
+**If the user supplied a doc** — a build spec, a rubric page, or a prose
+description — preserve its meaning in the Markdown and show what you filled in.
+Do not force the user to translate it into labelled fields. Put expectations
+under Inputs, promises under Outputs, and behavior-affecting decisions in
+Transform. Terms are inline in this document; do not create or depend on an
+external Glossary DP. Delivery is the platform-fixed local DuckDB semantic
+query path, not a user-authored section. Executable contracts are compiled
+internally from the Input expectations and Output promises.
 
-**This file is the policy read-back.** When the request carried a procedure with
-a result-changing gap, show the spec, name every value you authored, and wait —
-the gate in Step 3's skill is discharged by the user's reply to *this*. **A
-validator pass is not approval**, and `status: approved` is the user's to set.
-With no procedure in play the spec is still written (it is the generator's input)
-but needs no approval turn. **The approved revision is what gets snapshotted** —
-byte-copied into the closure and hashed at generation, so the plan a build came
-from stays recoverable. A ruling only the user can make, discovered *later*
-during the build, is an open question found late: write it back into
-`## Open Questions` here, which **un-approves** the spec and re-enters this step.
+After writing or editing the document, run the structural validator:
+
+```bash
+python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-spec.md --json
+python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <path>/dp-spec.md --json
+```
+
+The deterministic parser only checks headings, free prose, source spans, and
+lifecycle metadata. Then have the AI produce a typed proposal with
+`explicit`, `inferred`, or `platform_fixed` provenance, source spans, compiled
+contracts, the fixed delivery profile, and a complete natural-language
+echo-back. Deterministic proposal validation must turn underspecification into
+an Open Question; it must never accept confidence as correctness.
+
+**Approval is approval of the echo-back.** A validator pass is not approval,
+and `status: approved` is the user's decision. Approval binds the Markdown and
+typed proposal hashes plus Terms, contract-inventory, compiler, and delivery
+metadata. Lock each approved Decision by id and hash; extraction may not
+overwrite it. A conflicting edit becomes an explicit change proposal and
+revokes approval. The approved Markdown and typed proposal are byte-snapshotted
+into the closure, never referenced through `../dp-spec.md`.
 
 When a question needs a judgement read from each entity's evidence, model that
-decision as a versioned `apply_procedure` Transform step or reference Model. The
-result is a named Model and must be exposed through an Output; the Decisions
-ledger remains provenance only.
+decision as a versioned `apply_procedure` Transform step or reference Model.
+The result is a named Model exposed through an Output; the Decisions ledger
+remains provenance only.
 
 ### Step 2 — Infer the semantic model
 

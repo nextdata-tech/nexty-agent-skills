@@ -10,11 +10,12 @@
 
 ## What belongs in a custom contract
 
-The active `dp-spec.md` is v2 Markdown. It has no legacy `expectations` or
-`promises` sections and no standalone policy payload. If a custom verifier is
-needed, its name, attachment, model, phase, guarantee, rule, and fields belong
-in the typed **Contracts** section of the approved spec. The lock records that
-inventory and the v2 self-check compares it with actual `spec.py` wiring.
+The active `dp-spec.md` is v3 prose-first Markdown. A user expresses guarantees
+as natural-language **Expectations** under an Input and **Promises** under an
+Output; there is no user-authored `Contracts`, `Delivery`, or standalone policy
+payload. The compiler derives the internal contract inventory from those
+expectations and promises. The v3 lock records that inventory and the self-check
+compares it with actual `spec.py` wiring.
 
 The settled handoff carries what generation needs:
 
@@ -27,9 +28,11 @@ The settled handoff carries what generation needs:
 | `rule` | the executable body |
 | `fields` | which columns the rule reads |
 
-The handoff must state the attachment point and phase. Do not infer either one
-from the wording of the rule. An input expectation and an output promise must
-be attached at the phase stated in the handoff.
+The handoff must state the attachment point and phase. The extraction layer may
+derive those fields from the prose, but must show the interpretation in the
+echo-back and ask an Open Question when the attachment is ambiguous. An input
+expectation and an output promise must be attached at the phase stated in the
+approved proposal.
 
 **A contract never replaces a Step-3b assert.** They check different things: a
 contract checks what the user guaranteed about a value, an assert checks the

@@ -2,15 +2,14 @@
 """The shared diagnostic core for the nxd job loop.
 
 Pipeline producers emit the closed `nxd-diagnostic-v2` shape. The
-user-facing `validate_dp_spec.py` report additionally uses the closed,
-field-addressed `nxd-dp-spec-diagnostic-v2` shape so a form can bind stable
-paths and controls; record ingestion adapts those findings to the pipeline
-diagnostic envelope.
+user-facing `validate_dp_spec.py` report uses the v2 or v3 field-addressed
+diagnostic shape so a form can bind stable paths and controls; record ingestion
+adapts those findings to the pipeline diagnostic envelope.
 
 What lives here:
 
-* the v2 spec schema — imported by `validate_dp_spec.py` and emitted by
-  `schema --json`, so a harness never re-types it and cannot drift from it;
+* the v2 closure schema and v3 authoring/lock dispatch — v2 remains for old
+  closure evidence, while v3 owns new prose-first plans;
 * `CODES` — the closed registry. A code carries its stage, severity, owner,
   form control and a summary. `owner` comes from here and ONLY from here;
 * `Diagnostic` / `Report` — the `nxd-diagnostic-v2` record and its envelope;
@@ -41,7 +40,7 @@ Usage:
     python3 scripts/dp_diagnostics.py canonicalize <spec.md>
     python3 scripts/dp_diagnostics.py emit         <canonical.json>
     python3 scripts/dp_diagnostics.py schema       [--json|--diagnostic|--record|--lock]
-    python3 scripts/dp_diagnostics.py lock write   <spec.md> <closure-dir>
+    python3 scripts/dp_diagnostics.py lock write   <spec.md> <closure-dir> [--proposal <proposal.json>]
     python3 scripts/dp_diagnostics.py lock verify  <closure-dir> [--spec <spec.md>]
     python3 scripts/dp_diagnostics.py record init   --record <path> --lock <path>
     python3 scripts/dp_diagnostics.py record append --record <path> --stage <id> --from <report.json>
@@ -67,6 +66,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+import dp_spec_authoring as _v3
 import dp_spec_v2 as _v2
 
 
@@ -75,6 +75,7 @@ import dp_spec_v2 as _v2
 # ---------------------------------------------------------------------------
 
 SPEC_VERSION = 2
+SUPPORTED_SPEC_VERSIONS = (2, 3)
 
 REQUIRED_FRONTMATTER = ("dp_spec_version", "name", "workflow", "status")
 STATUS_VALUES = ("draft", "proposed", "approved")
@@ -115,11 +116,13 @@ CREDENTIAL_PLACEHOLDERS = frozenset(
 
 DIAGNOSTIC_SCHEMA_ID = "nxd-diagnostic-v2"
 REPORT_SCHEMA_ID = "nxd-diagnostic-report-v2"
+V3_REPORT_SCHEMA_ID = "nxd-diagnostic-report-v3"
 BUILD_RECORD_SCHEMA_ID = "nxd-build-record-v2"
 LOCK_SCHEMA_ID = "nxd-dp-spec-lock-v2"
 CANONICALIZATION = "nxd-dp-spec-canon-v2"
 SPEC_SCHEMA_ID = "nxd-dp-spec-schema-v2"
 SPEC_DIAGNOSTIC_SCHEMA_ID = _v2.SPEC_DIAGNOSTIC_SCHEMA_ID
+V3_LOCK_SCHEMA_ID = "nxd-dp-spec-lock-v3"
 
 # Ordered. The `s<N>_` prefix makes the ordinal recoverable by int(stage[1])
 # and makes a lexicographic sort equal pipeline order.
@@ -713,6 +716,12 @@ _register_table(
          "the snapshot's bytes do not match lock.snapshot_sha256 — edited after copy"),
         ("closure.spec_hash_mismatch", "error", "agent", "none", False,
          "the snapshot's canonical hash does not match lock.spec_hash"),
+        ("closure.terms_hash_mismatch", "error", "agent", "none", False,
+         "the v3 Terms inventory does not match lock.terms_hash"),
+        ("closure.contract_inventory_hash_mismatch", "error", "agent", "none", False,
+         "the v3 compiled contract inventory does not match lock.contract_inventory_hash"),
+        ("closure.decision_inventory_mismatch", "error", "agent", "none", False,
+         "the v3 proposal does not carry the settled locked-decision inventory bound by the proposal hash"),
         ("closure.live_spec_diverged", "error", "agent", "none", False,
          "the live IR's canonical hash has moved away from lock.spec_hash"),
         ("closure.lock_status_not_approved", "error", "user", "confirm", False,
@@ -1358,14 +1367,32 @@ def validate_spec_diagnostic(obj: Any) -> list[str]:
     return problems
 
 
+def validate_v3_spec_diagnostic(obj: Any) -> list[str]:
+    """Validate the v3 field-addressed spec finding shape."""
+    problems = [
+        problem
+        for problem in validate_spec_diagnostic(obj)
+        if not problem.startswith("schema must be")
+    ]
+    if not isinstance(obj, dict):
+        return problems
+    if obj.get("schema") != _v3.DIAGNOSTIC_SCHEMA_ID:
+        problems.append(f"schema must be {_v3.DIAGNOSTIC_SCHEMA_ID!r}")
+    return problems
+
+
 def validate_report(obj: Any) -> list[str]:
     """Return every reason ``obj`` is not a legal diagnostic report."""
     problems: list[str] = []
     if not isinstance(obj, dict):
         return ["report is not an object"]
-    if obj.get("schema") != REPORT_SCHEMA_ID:
-        problems.append(f"schema must be {REPORT_SCHEMA_ID!r}")
+    report_schema = obj.get("schema")
+    is_v3_report = report_schema == V3_REPORT_SCHEMA_ID
+    if report_schema not in {REPORT_SCHEMA_ID, V3_REPORT_SCHEMA_ID}:
+        problems.append(f"schema must be {REPORT_SCHEMA_ID!r} or {V3_REPORT_SCHEMA_ID!r}")
     required = {"schema", "tool", "target", "ok", "counts", "spec_hash", "diagnostics"}
+    if is_v3_report:
+        required.add("proposal_hash")
     problems.extend(f"missing required key {key!r}" for key in sorted(required - set(obj)))
     problems.extend(f"unknown key {key!r}" for key in sorted(set(obj) - required))
     if problems:
@@ -1377,6 +1404,11 @@ def validate_report(obj: Any) -> list[str]:
         problems.append("ok must be a boolean")
     if not isinstance(obj.get("spec_hash"), (str, type(None))):
         problems.append("spec_hash must be a string or null")
+    if is_v3_report and (
+        not isinstance(obj.get("proposal_hash"), (str, type(None)))
+        or (isinstance(obj.get("proposal_hash"), str) and not re.fullmatch(r"sha256:[0-9a-f]{64}", obj["proposal_hash"]))
+    ):
+        problems.append("proposal_hash must be sha256:<64 lowercase hex> or null")
     counts = obj.get("counts")
     if not isinstance(counts, dict):
         problems.append("counts must be an object")
@@ -1400,10 +1432,14 @@ def validate_report(obj: Any) -> list[str]:
             if not isinstance(diag, dict):
                 problems.append(f"diagnostics[{i}] must be an object")
                 continue
-            if diag.get("schema") == SPEC_DIAGNOSTIC_SCHEMA_ID:
+            if diag.get("schema") in {SPEC_DIAGNOSTIC_SCHEMA_ID, _v3.DIAGNOSTIC_SCHEMA_ID}:
                 problems.extend(
                     f"diagnostics[{i}]: {problem}"
-                    for problem in validate_spec_diagnostic(diag)
+                    for problem in (
+                        validate_spec_diagnostic(diag)
+                        if diag.get("schema") == SPEC_DIAGNOSTIC_SCHEMA_ID
+                        else validate_v3_spec_diagnostic(diag)
+                    )
                 )
                 if diag.get("severity") in actual_counts:
                     actual_counts[diag["severity"]] += 1
@@ -1414,8 +1450,8 @@ def validate_report(obj: Any) -> list[str]:
                     actual_counts[diag["severity"]] += 1
                 continue
             problems.append(
-                f"diagnostics[{i}]: schema must be {SPEC_DIAGNOSTIC_SCHEMA_ID!r} "
-                f"or {DIAGNOSTIC_SCHEMA_ID!r}"
+                f"diagnostics[{i}]: schema must be {SPEC_DIAGNOSTIC_SCHEMA_ID!r}, "
+                f"{_v3.DIAGNOSTIC_SCHEMA_ID!r} or {DIAGNOSTIC_SCHEMA_ID!r}"
             )
     else:
         if tool not in REPORT_TOOLS:
@@ -1490,6 +1526,11 @@ def split_frontmatter(text: str) -> tuple[dict, str]:
     return document.frontmatter.to_dict(), body
 
 
+def _spec_version(text: str) -> int | None:
+    match = re.search(r"^dp_spec_version:\s*(\d+)\s*$", text, flags=re.MULTILINE)
+    return int(match.group(1)) if match else None
+
+
 def split_sections(body: str) -> dict[str, str]:
     """Split v2 body headings for legacy callers without interpreting YAML."""
     sections: dict[str, str] = {}
@@ -1509,12 +1550,14 @@ def split_sections(body: str) -> dict[str, str]:
 
 
 def canonical_object(raw: bytes) -> dict:
-    """The v2 typed canonical object for a dp-spec.md."""
+    """Return the canonical object for either active authoring generation."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SpecReadError(f"the spec is not valid UTF-8: {exc}", code="spec.encoding.not_utf8") from exc
     try:
+        if _spec_version(text) == _v3.SPEC_VERSION:
+            return _v3.canonical_object(text)
         return _v2.canonical_object(text)
     except _v2.UnsupportedVersionError as exc:
         raise SpecReadError(str(exc), reason="unsupported_version") from exc
@@ -1533,7 +1576,7 @@ def canonicalize(raw: bytes) -> bytes:
 
 
 def spec_hash(raw: bytes) -> str:
-    """`sha256:<hex>` over v2 semantic content, excluding lifecycle metadata."""
+    """`sha256:<hex>` over semantic content, excluding lifecycle metadata."""
     return "sha256:" + hashlib.sha256(canonical_bytes(raw)).hexdigest()
 
 
@@ -1559,6 +1602,248 @@ def emit(obj: dict) -> str:
 # ---------------------------------------------------------------------------
 
 PACKAGED_VERSION_STAMP = ".nexty-plugin-version.json"
+V3_PROPOSAL_SNAPSHOT = "dp-spec.proposal.approved.json"
+
+
+def _json_sha256(value: Any) -> str:
+    raw = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _write_v3_lock(
+    spec: Path,
+    closure: Path,
+    proposal_path: Path | None,
+    *,
+    plugin_version: str | None = None,
+    generator_skill: str = "nxd-generate-data-product",
+    now_ms: int | None = None,
+) -> tuple[dict, Report]:
+    report = Report("dp_diagnostics", target=str(closure))
+    try:
+        raw = spec.read_text(encoding="utf-8")
+        parsed = _v3.parse(raw)
+    except (_v3.ParseError, OSError, UnicodeError) as exc:
+        report.error(str(exc), code="pin.spec_compile_error", path="spec", stage="s4_pin")
+        return {}, report
+    if parsed.frontmatter.status != "approved":
+        report.error(
+            f"the spec status is {parsed.frontmatter.status!r}, not 'approved' — approve the plan before snapshotting it into a closure",
+            code="closure.lock_status_not_approved",
+            path="v3:frontmatter.status",
+            evidence={"expected": "approved", "found": parsed.frontmatter.status},
+            stage="s3_closure",
+        )
+        return {}, report
+    if proposal_path is None:
+        report.error(
+            "a v3 lock requires the exact typed proposal snapshot used for approval",
+            code="pin.spec_compile_error",
+            path="v3:proposal",
+            stage="s4_pin",
+        )
+        return {}, report
+    try:
+        proposal_raw = proposal_path.read_bytes()
+        proposal = json.loads(proposal_raw.decode("utf-8"))
+        if not isinstance(proposal, dict):
+            raise ValueError("the typed proposal must be a JSON object")
+    except (OSError, UnicodeError, ValueError) as exc:
+        report.error(str(exc), code="pin.spec_compile_error", path="v3:proposal", stage="s4_pin")
+        return {}, report
+    issues = _v3.validate_approval(parsed, proposal)
+    if issues:
+        detail = "; ".join(f"{issue.path}: {issue.message}" for issue in issues)
+        report.error(f"v3 proposal validation failed: {detail}", code="pin.spec_compile_error", path="spec", stage="s4_pin")
+        return {}, report
+
+    closure.mkdir(parents=True, exist_ok=True)
+    snapshot = closure / CLOSURE_SNAPSHOT
+    proposal_snapshot = closure / V3_PROPOSAL_SNAPSHOT
+    shutil.copyfile(spec, snapshot)
+    proposal_snapshot.write_bytes(proposal_raw)
+    payload = proposal.get("proposal", {})
+    lock = {
+        "schema": V3_LOCK_SCHEMA_ID,
+        "spec_hash": _v3.semantic_hash(parsed),
+        "proposal_hash": _v3.proposal_hash(proposal),
+        "canonicalization": _v3.CANONICALIZATION,
+        "snapshot": CLOSURE_SNAPSHOT,
+        "snapshot_sha256": raw_sha256(snapshot.read_bytes()),
+        "proposal_snapshot": V3_PROPOSAL_SNAPSHOT,
+        "proposal_snapshot_sha256": raw_sha256(proposal_raw),
+        "spec_status_at_copy": parsed.frontmatter.status,
+        "dp_spec_version": parsed.frontmatter.dp_spec_version,
+        "name": parsed.frontmatter.name,
+        "workflow": parsed.frontmatter.workflow,
+        "terms_hash": _json_sha256(_v3.canonical_terms(payload)),
+        "contract_inventory_hash": _json_sha256(_v3.canonical_contract_inventory(payload)),
+        "locked_decisions_hash": _json_sha256(_v3.locked_decision_inventory(proposal)),
+        "delivery_profile": _v3.FIXED_DELIVERY_PROFILE,
+        "source_basename": spec.name,
+        "compiler_version": {
+            "plugin": plugin_version or _plugin_version(),
+            "generator_skill": generator_skill,
+            "self_check": "nxd-self-check-v3",
+        },
+        "copied_at_unix_ms": now_ms if now_ms is not None else int(time.time() * 1000),
+    }
+    (closure / CLOSURE_LOCK).write_text(json.dumps(lock, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return lock, report
+
+
+def _validate_v3_lock(lock: Any) -> list[str]:
+    if not isinstance(lock, dict):
+        return ["lock is not an object"]
+    required = {
+        "schema", "spec_hash", "proposal_hash", "canonicalization", "snapshot", "snapshot_sha256",
+        "proposal_snapshot", "proposal_snapshot_sha256", "spec_status_at_copy", "dp_spec_version",
+        "name", "workflow", "terms_hash", "contract_inventory_hash", "locked_decisions_hash", "delivery_profile",
+        "source_basename", "compiler_version", "copied_at_unix_ms",
+    }
+    problems = [f"missing required key {key!r}" for key in sorted(required - set(lock))]
+    problems.extend(f"unknown key {key!r}" for key in sorted(set(lock) - required))
+    if problems:
+        return problems
+    if lock.get("schema") != V3_LOCK_SCHEMA_ID:
+        problems.append(f"schema must be {V3_LOCK_SCHEMA_ID!r}")
+    if not isinstance(lock.get("spec_hash"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", lock["spec_hash"]):
+        problems.append("spec_hash must be sha256:<64 lowercase hex>")
+    if not isinstance(lock.get("proposal_hash"), str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", lock["proposal_hash"]):
+        problems.append("proposal_hash must be sha256:<64 lowercase hex>")
+    if lock.get("canonicalization") != _v3.CANONICALIZATION:
+        problems.append(f"canonicalization must be {_v3.CANONICALIZATION!r}")
+    if lock.get("delivery_profile") != _v3.FIXED_DELIVERY_PROFILE:
+        problems.append(f"delivery_profile must be {_v3.FIXED_DELIVERY_PROFILE!r}")
+    for key in ("snapshot", "proposal_snapshot", "source_basename", "name", "workflow", "delivery_profile"):
+        if not isinstance(lock.get(key), str) or not lock[key]:
+            problems.append(f"{key} must be a non-empty string")
+    for key in ("snapshot_sha256", "proposal_snapshot_sha256", "terms_hash", "contract_inventory_hash", "locked_decisions_hash"):
+        if not isinstance(lock.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", lock[key]):
+            problems.append(f"{key} must be 64 lowercase hex")
+    if lock.get("spec_status_at_copy") != "approved":
+        problems.append("spec_status_at_copy must be 'approved'")
+    if lock.get("dp_spec_version") != _v3.SPEC_VERSION:
+        problems.append(f"dp_spec_version must be {_v3.SPEC_VERSION}")
+    compiler = lock.get("compiler_version")
+    if not isinstance(compiler, dict) or set(compiler) != {"plugin", "generator_skill", "self_check"}:
+        problems.append("compiler_version must contain exactly plugin, generator_skill, self_check")
+    elif any(not isinstance(compiler[key], str) or not compiler[key] for key in compiler):
+        problems.append("compiler_version values must be non-empty strings")
+    elif compiler.get("self_check") != "nxd-self-check-v3":
+        problems.append("compiler_version.self_check must be 'nxd-self-check-v3'")
+    if not isinstance(lock.get("copied_at_unix_ms"), int) or isinstance(lock["copied_at_unix_ms"], bool):
+        problems.append("copied_at_unix_ms must be an integer")
+    return problems
+
+
+def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
+    report = Report("dp_diagnostics", target=str(closure))
+    lock_path = closure / CLOSURE_LOCK
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        report.error(str(exc), code="closure.lock_unparseable", path=f"closure:{CLOSURE_LOCK}", stage="s3_closure")
+        return report
+    problems = _validate_v3_lock(lock)
+    if problems:
+        report.error(
+            f"{CLOSURE_LOCK} is not a complete v3 lock: {'; '.join(problems)}",
+            code="closure.lock_unparseable",
+            path=f"closure:{CLOSURE_LOCK}",
+            stage="s3_closure",
+        )
+        return report
+    for field in ("snapshot", "proposal_snapshot"):
+        reference = Path(str(lock[field]))
+        if reference.is_absolute() or ".." in reference.parts or not _stays_within_closure(closure, closure / reference):
+            report.error(
+                f"{field} {str(reference)!r} points outside the closure",
+                code="closure.escaping_reference",
+                path=f"closure:{CLOSURE_LOCK}:{field}",
+                stage="s3_closure",
+            )
+    if report.errors:
+        return report
+    snapshot = closure / str(lock["snapshot"])
+    proposal_snapshot = closure / str(lock["proposal_snapshot"])
+    if not snapshot.is_file() or not proposal_snapshot.is_file():
+        report.error("the v3 approved snapshots are incomplete", code="closure.spec_snapshot_missing", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+        return report
+    raw = snapshot.read_bytes()
+    proposal_raw = proposal_snapshot.read_bytes()
+    if raw_sha256(raw) != lock["snapshot_sha256"]:
+        report.error("the approved Markdown snapshot bytes do not match the lock", code="closure.lock_snapshot_byte_mismatch", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+    if raw_sha256(proposal_raw) != lock["proposal_snapshot_sha256"]:
+        report.error("the typed proposal snapshot bytes do not match the lock", code="closure.lock_snapshot_byte_mismatch", path=f"closure:{V3_PROPOSAL_SNAPSHOT}", stage="s3_closure")
+    try:
+        parsed = _v3.parse(raw.decode("utf-8"))
+        proposal = json.loads(proposal_raw.decode("utf-8"))
+        if not isinstance(proposal, dict):
+            raise ValueError("the typed proposal snapshot is not a JSON object")
+        if _v3.semantic_hash(parsed) != lock["spec_hash"] or _v3.proposal_hash(proposal) != lock["proposal_hash"]:
+            report.error("the v3 snapshot hash does not match the lock", code="closure.spec_hash_mismatch", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+        if parsed.frontmatter.name != lock["name"] or parsed.frontmatter.workflow != lock["workflow"]:
+            report.error("the v3 snapshot metadata does not match the lock", code="closure.spec_hash_mismatch", path=f"closure:{CLOSURE_LOCK}", stage="s3_closure")
+        payload = proposal.get("proposal")
+        if not isinstance(payload, dict):
+            raise ValueError("the typed proposal payload is not an object")
+        actual_terms_hash = _json_sha256(_v3.canonical_terms(payload))
+        if actual_terms_hash != lock["terms_hash"]:
+            report.error(
+                "the v3 Terms inventory does not match the lock",
+                code="closure.terms_hash_mismatch",
+                path=f"closure:{CLOSURE_LOCK}:terms_hash",
+                stage="s3_closure",
+            )
+        actual_contract_hash = _json_sha256(_v3.canonical_contract_inventory(payload))
+        if actual_contract_hash != lock["contract_inventory_hash"]:
+            report.error(
+                "the v3 compiled contract inventory does not match the lock",
+                code="closure.contract_inventory_hash_mismatch",
+                path=f"closure:{CLOSURE_LOCK}:contract_inventory_hash",
+                stage="s3_closure",
+            )
+        decisions = payload.get("decisions")
+        locked_decisions = _v3.locked_decision_inventory(proposal)
+        actual_decisions_hash = _json_sha256(locked_decisions)
+        if (
+            not isinstance(decisions, list)
+            or len(locked_decisions) != len(decisions)
+            or actual_decisions_hash != lock["locked_decisions_hash"]
+        ):
+            report.error(
+                "the v3 locked-decision inventory does not match the lock",
+                code="closure.decision_inventory_mismatch",
+                path=(
+                    f"closure:{CLOSURE_LOCK}:locked_decisions_hash"
+                    if actual_decisions_hash != lock["locked_decisions_hash"]
+                    else f"closure:{CLOSURE_LOCK}:proposal_hash"
+                ),
+                stage="s3_closure",
+            )
+        # proposal_hash covers the complete typed envelope, including every
+        # locked decision's id, target, ruling, and status. The explicit
+        # inventory check above prevents an approved snapshot from silently
+        # regressing to proposed decisions while this hash check binds the
+        # complete inventory to the lock.
+        issues = _v3.validate_approval(parsed, proposal)
+        if issues:
+            report.error("the approved v3 proposal no longer validates", code="closure.spec_hash_mismatch", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+    except (OSError, UnicodeError, ValueError) as exc:
+        report.error(str(exc), code="closure.lock_unparseable", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+    if spec is not None:
+        try:
+            live = spec_hash(spec.read_bytes())
+        except _READ_FAILURES as exc:
+            report.error(str(exc), code="closure.spec_snapshot_missing", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+        else:
+            report.spec_hash = live
+            if live != lock["spec_hash"]:
+                report.error("the live spec has moved away from the approved v3 plan", code="closure.live_spec_diverged", path=f"closure:{CLOSURE_LOCK}:spec_hash", stage="s3_closure")
+    else:
+        report.spec_hash = lock["spec_hash"]
+    return report
 
 
 def _plugin_version(root: Path | None = None) -> str:
@@ -1587,6 +1872,7 @@ def write_lock(
     spec: Path,
     closure: Path,
     *,
+    proposal: Path | None = None,
     plugin_version: str | None = None,
     generator_skill: str = "nxd-generate-data-product",
     now_ms: int | None = None,
@@ -1597,6 +1883,20 @@ def write_lock(
     reformatting. The snapshot is evidence, and evidence that was reformatted on
     the way in cannot be compared.
     """
+    try:
+        version = _spec_version(spec.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        version = None
+    if version == _v3.SPEC_VERSION:
+        return _write_v3_lock(
+            spec,
+            closure,
+            proposal,
+            plugin_version=plugin_version,
+            generator_skill=generator_skill,
+            now_ms=now_ms,
+        )
+
     report = Report("dp_diagnostics", target=str(closure))
     raw = spec.read_bytes()
     try:
@@ -1675,6 +1975,8 @@ def read_lock(closure: Path) -> dict:
 
 def validate_lock(lock: Any) -> list[str]:
     """Validate the complete v2 lock envelope before any artifact is trusted."""
+    if isinstance(lock, dict) and lock.get("schema") == V3_LOCK_SCHEMA_ID:
+        return _validate_v3_lock(lock)
     if not isinstance(lock, dict):
         return ["lock is not an object"]
     required = {
@@ -1732,8 +2034,15 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
     Phase C does the byte check inside the closure with `hashlib` alone; this
     compares the v2 semantic hash against the LIVE IR outside the closure.
     """
-    report = Report("dp_diagnostics", target=str(closure))
     lock_path = closure / CLOSURE_LOCK
+    try:
+        lock_probe = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        lock_probe = None
+    if isinstance(lock_probe, dict) and lock_probe.get("schema") == V3_LOCK_SCHEMA_ID:
+        return _verify_v3_lock(closure, spec)
+
+    report = Report("dp_diagnostics", target=str(closure))
     if not lock_path.is_file():
         report.error(
             f"{CLOSURE_LOCK} is missing from {closure}",
@@ -1903,8 +2212,8 @@ def new_build_record(
             "generator_skill": (lock.get("compiler_version") or {}).get(
                 "generator_skill", "nxd-generate-data-product"
             ),
-            "dp_spec_version": SPEC_VERSION,
-            "canonicalization": CANONICALIZATION,
+            "dp_spec_version": lock.get("dp_spec_version"),
+            "canonicalization": lock.get("canonicalization"),
         },
         "generated_at_unix_ms": stamp,
         "generator_model": generator_model,
@@ -2265,10 +2574,15 @@ def validate_build_record(record: Any) -> list[str]:
     else:
         if set(compiler) != {"plugin", "generator_skill", "dp_spec_version", "canonicalization"}:
             problems.append("compiler_version must contain exactly plugin, generator_skill, dp_spec_version, canonicalization")
-        if compiler.get("dp_spec_version") != SPEC_VERSION:
-            problems.append(f"compiler_version.dp_spec_version must be {SPEC_VERSION}")
-        if compiler.get("canonicalization") != CANONICALIZATION:
-            problems.append(f"compiler_version.canonicalization must be {CANONICALIZATION!r}")
+        version = compiler.get("dp_spec_version")
+        expected_canonicalization = {
+            2: CANONICALIZATION,
+            3: _v3.CANONICALIZATION,
+        }.get(version)
+        if expected_canonicalization is None:
+            problems.append("compiler_version.dp_spec_version must be 2 or 3")
+        elif compiler.get("canonicalization") != expected_canonicalization:
+            problems.append(f"compiler_version.canonicalization must be {expected_canonicalization!r}")
         for key in ("plugin", "generator_skill"):
             if not isinstance(compiler.get(key), str) or not compiler[key]:
                 problems.append(f"compiler_version.{key} must be a non-empty string")
@@ -2998,8 +3312,8 @@ BUILD_RECORD_SCHEMA = {
             "properties": {
                 "plugin": {"type": "string"},
                 "generator_skill": {"type": "string"},
-                "dp_spec_version": {"const": SPEC_VERSION},
-                "canonicalization": {"const": CANONICALIZATION},
+                "dp_spec_version": {"enum": [2, _v3.SPEC_VERSION]},
+                "canonicalization": {"enum": [CANONICALIZATION, _v3.CANONICALIZATION]},
             },
         },
         "generated_at_unix_ms": {"type": "integer"},
@@ -3368,12 +3682,23 @@ def record_init(
             f"{CLOSURE_LOCK} is not a complete v2 lock: {'; '.join(lock_problems)}"
         )
     closure = record_path.parent
+    if lock.get("schema") == V3_LOCK_SCHEMA_ID:
+        for field in ("snapshot", "proposal_snapshot"):
+            reference = Path(str(lock[field]))
+            if reference.is_absolute() or ".." in reference.parts or not _stays_within_closure(closure, closure / reference):
+                raise SpecReadError(
+                    f"the v3 lock {field} reference escapes the closure: {reference}"
+                )
     record = new_build_record(
         lock, closure, generator_model=generator_model, now_ms=now_ms
     )
 
     if spec_report is None:
-        spec_report = _validate_snapshot(closure / str(lock.get("snapshot") or CLOSURE_SNAPSHOT))
+        snapshot_path = closure / str(lock.get("snapshot") or CLOSURE_SNAPSHOT)
+        proposal_path = None
+        if lock.get("schema") == V3_LOCK_SCHEMA_ID:
+            proposal_path = closure / str(lock.get("proposal_snapshot") or V3_PROPOSAL_SNAPSHOT)
+        spec_report = _validate_snapshot(snapshot_path, proposal_path)
     else:
         problems = validate_report(spec_report)
         if problems:
@@ -3394,6 +3719,17 @@ def record_init(
                 "the lock names: "
                 f"{spec_report.get('spec_hash')} != {lock.get('spec_hash')}"
             )
+    if lock.get("schema") == V3_LOCK_SCHEMA_ID:
+        if spec_report.get("spec_hash") != lock.get("spec_hash"):
+            raise SpecReadError(
+                "the generated v3 spec report does not match the lock's spec hash: "
+                f"{spec_report.get('spec_hash')} != {lock.get('spec_hash')}"
+            )
+        if spec_report.get("proposal_hash") != lock.get("proposal_hash"):
+            raise SpecReadError(
+                "the generated v3 spec report typed proposal hash does not match the lock: "
+                f"{spec_report.get('proposal_hash')} != {lock.get('proposal_hash')}"
+            )
 
     diags = _record_s0_diagnostics(spec_report)
     record["stages"]["s0_spec"].update(
@@ -3409,7 +3745,7 @@ def record_init(
     return record
 
 
-def _validate_snapshot(snapshot: Path) -> dict:
+def _validate_snapshot(snapshot: Path, proposal: Path | None = None) -> dict:
     """Run the validator in-process against the snapshot.
 
     IMPORT DIRECTION: `validate_dp_spec` imports this module at module top, so
@@ -3428,7 +3764,7 @@ def _validate_snapshot(snapshot: Path) -> dict:
             "--spec-report <report.json>. Writing s0_spec as not_reached would "
             "quietly recreate the hole record init exists to close."
         ) from exc
-    report = validate_dp_spec.validate(snapshot)
+    report = validate_dp_spec.validate(snapshot, proposal)
     return report.to_dict() if hasattr(report, "to_dict") else report
 
 
@@ -3570,8 +3906,9 @@ def _print_report(report: dict) -> None:
 def cmd_hash(args) -> int:
     raw = args.spec.read_bytes()
     value = spec_hash(raw)
+    canonicalization = _v3.CANONICALIZATION if _spec_version(raw.decode("utf-8")) == _v3.SPEC_VERSION else CANONICALIZATION
     if args.json:
-        _print_json({"spec": str(args.spec), "spec_hash": value, "canonicalization": CANONICALIZATION})
+        _print_json({"spec": str(args.spec), "spec_hash": value, "canonicalization": canonicalization})
     else:
         print(value)
     return 0
@@ -3603,7 +3940,12 @@ def cmd_schema(args) -> int:
 
 
 def cmd_lock_write(args) -> int:
-    lock, report = write_lock(args.spec, args.closure, plugin_version=args.plugin_version)
+    lock, report = write_lock(
+        args.spec,
+        args.closure,
+        proposal=args.proposal,
+        plugin_version=args.plugin_version,
+    )
     if not report.ok:
         if args.json:
             _print_json(report.to_dict())
@@ -3853,6 +4195,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_lw = lock_sub.add_parser("write", help="snapshot an approved spec into a closure")
     p_lw.add_argument("spec", type=Path)
     p_lw.add_argument("closure", type=Path)
+    p_lw.add_argument("--proposal", type=Path, default=None, help="v3 typed proposal JSON snapshot")
     p_lw.add_argument("--plugin-version", default=None)
     p_lw.add_argument("--json", action="store_true")
     p_lw.set_defaults(func=cmd_lock_write)

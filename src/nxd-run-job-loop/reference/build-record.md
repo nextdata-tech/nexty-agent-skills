@@ -848,7 +848,7 @@ python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" hash         <spec.md>
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" canonicalize <spec.md>
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" emit         <canonical.json>
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" schema       [--json|--diagnostic|--record]
-python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write   <spec.md> <closure-dir>
+python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write   <spec.md> <closure-dir> [--proposal <proposal.json>]
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify  <closure-dir> [--spec <spec.md>]
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init   --record <path> --lock <path> [--spec-report <report.json>]
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record append --record <path> --stage <id> --from <report.json>

@@ -38,7 +38,13 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 
-HELPERS = ("dp_diagnostics.py", "validate_dp_spec.py", "dp_spec_v2.py", "self_check.py")
+HELPERS = (
+    "dp_diagnostics.py",
+    "validate_dp_spec.py",
+    "dp_spec_authoring.py",
+    "dp_spec_v2.py",
+    "self_check.py",
+)
 VERSION_STAMP = ".nexty-plugin-version.json"
 SCRIPT_PATH = re.compile(r"scripts/([\w-]+\.py)")
 WORKED_SPEC = re.compile(r"^```markdown\n(.*?)^```", re.S | re.M)
@@ -129,6 +135,7 @@ def _assert_helpers_run(skill_dir: Path) -> None:
     assert validator.is_file()
     assert diagnostics.is_file()
     assert self_check.is_file()
+    assert (scripts / "dp_spec_authoring.py").is_file()
     assert (scripts / "requirements.txt").read_text(encoding="utf-8") == "PyYAML>=6.0,<7\n"
 
     schema = subprocess.run(
@@ -140,9 +147,9 @@ def _assert_helpers_run(skill_dir: Path) -> None:
     )
     assert json.loads(schema.stdout)["schema"] == "nxd-dp-spec-schema-v2"
 
-    examples = WORKED_SPEC.findall(
-        (SRC / "nxd-run-job-loop" / "reference" / "dp-spec.md").read_text(encoding="utf-8")
-    )
+    examples = [
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    ]
     assert len(examples) == 1
     worked_spec = skill_dir.parent / "worked-dp-spec.md"
     worked_spec.write_text(examples[0], encoding="utf-8")
@@ -162,9 +169,9 @@ def _assert_helpers_run(skill_dir: Path) -> None:
 def _lock_plugin_version(skill_dir: Path) -> str:
     """Exercise the installed diagnostic script, not the source import."""
     spec = skill_dir.parent / "approved-dp-spec.md"
-    worked = (skill_dir / "reference" / "dp-spec.md").read_text(encoding="utf-8")
-    example = WORKED_SPEC.findall(worked)
-    assert len(example) == 1
+    example = [
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    ]
     spec.write_text(example[0], encoding="utf-8")
     sys.path.insert(0, str(skill_dir / "scripts"))
     import dp_spec_v2  # noqa: PLC0415
@@ -277,6 +284,7 @@ def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
         assert "scripts/dp_diagnostics.py" in zf.namelist()
         assert "scripts/validate_dp_spec.py" in zf.namelist()
         assert "scripts/self_check.py" in zf.namelist()
+        assert "scripts/dp_spec_authoring.py" in zf.namelist()
         assert "scripts/requirements.txt" in zf.namelist()
         skill_dir = (
             tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
