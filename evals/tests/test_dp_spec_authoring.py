@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import dp_spec_authoring as v3  # noqa: E402
 import dp_diagnostics as dpd  # noqa: E402
+import dp_spec_v2 as v2  # noqa: E402
 import validate_dp_spec as vds  # noqa: E402
 
 
@@ -927,3 +928,72 @@ def test_validate_dp_spec_still_accepts_a_v2_spec_without_a_proposal(tmp_path: P
     report = vds.validate(spec)
     assert report["ok"] is True
     assert dpd.validate_report(report) == []
+
+
+def _approved_v2_spec(tmp_path: Path) -> Path:
+    raw = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    parsed = v2.parse(raw)
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(v2.approve(parsed, base_hash=v2.semantic_hash(parsed)), encoding="utf-8")
+    return spec
+
+
+def test_lock_write_rejects_a_proposal_supplied_against_a_v2_spec(tmp_path: Path):
+    """The mirror of `_write_v3_lock`'s "a v3 lock requires the proposal" guard.
+
+    `lock write` is the command that writes the binding, so accepting a
+    `--proposal` it never opens pins a closure the caller believes carries a
+    proposal snapshot it does not have.
+    """
+    spec = _approved_v2_spec(tmp_path)
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    closure = tmp_path / "closure"
+    closure.mkdir()
+    lock, report = dpd.write_lock(spec, closure, proposal=proposal)
+    assert report.ok is False
+    assert lock == {}
+    assert list(closure.iterdir()) == []
+
+
+def test_lock_write_still_writes_a_v2_lock_without_a_proposal(tmp_path: Path):
+    spec = _approved_v2_spec(tmp_path)
+    closure = tmp_path / "closure"
+    closure.mkdir()
+    lock, report = dpd.write_lock(spec, closure, now_ms=1769904000000)
+    assert report.ok is True, report.to_dict()
+    assert lock["schema"] == "nxd-dp-spec-lock-v2"
+    assert sorted(p.name for p in closure.iterdir()) == ["dp-spec.approved.md", "dp-spec.lock.json"]
+
+
+@pytest.mark.parametrize(
+    ("label", "source", "expected"),
+    [
+        ("v1", "---\ndp_spec_version: 1\nname: x\nworkflow: x\nstatus: proposed\n---\n", "spec.frontmatter.unsupported_version"),
+        ("no frontmatter", "hello\n", "spec.parse.invalid"),
+        ("broken frontmatter", "---\ndp_spec_version: \n", "spec.parse.invalid"),
+    ],
+)
+def test_proposal_rejection_never_masks_the_reason_a_spec_cannot_be_read(
+    tmp_path: Path, label: str, source: str, expected: str
+):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(source, encoding="utf-8")
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    report = vds.validate(spec, proposal)
+    assert report["ok"] is False
+    assert [d["code"] for d in report["diagnostics"]] == [expected], label
+
+
+def test_the_rejected_proposal_message_names_only_a_parsed_version(tmp_path: Path):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    message = vds.validate(spec, proposal)["diagnostics"][0]["message"]
+    assert "dp_spec_version 2" in message
+    assert "None" not in message

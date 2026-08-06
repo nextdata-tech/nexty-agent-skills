@@ -1907,6 +1907,19 @@ def write_lock(
     except (_v2.ParseError, UnicodeDecodeError) as exc:
         report.error(str(exc), code="spec.frontmatter.unparseable", path="spec", stage="s0_spec")
         return {}, report
+    if proposal is not None:
+        # The mirror of `_write_v3_lock`'s "a v3 lock requires the typed
+        # proposal" guard above. A v2 lock has no proposal to bind, and this is
+        # the command that writes the binding: accepting the path and never
+        # opening it would pin a closure the caller believes carries a proposal
+        # snapshot it does not have.
+        report.error(
+            "a v2 lock binds no typed proposal; --proposal is a v3 input",
+            code="pin.spec_compile_error",
+            path="v2:proposal",
+            stage="s4_pin",
+        )
+        return {}, report
     fm = parsed_v2.document.frontmatter.to_dict()
     semantic_issues = _v2.validate(parsed_v2)
     if semantic_issues:
