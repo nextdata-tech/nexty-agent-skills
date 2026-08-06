@@ -2191,24 +2191,23 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
         )
 
     if spec is not None:
-        if not spec.is_file():
+        # No `is_file()` pre-check: the read itself raises `FileNotFoundError`,
+        # which `_READ_FAILURES` catches, so a missing live spec and an
+        # uncanonicalizable one report the same code at the same path as they
+        # do in `_verify_v3_lock`. The pre-check that stood here reported
+        # `closure.spec_snapshot_missing` against the closure snapshot — a file
+        # that is present and fine — for a fault in the live spec.
+        try:
+            live = spec_hash(spec.read_bytes())
+        except _READ_FAILURES as exc:
             report.error(
-                f"the live IR {spec} could not be read",
-                code="closure.spec_snapshot_missing",
-                path=f"closure:{snapshot.name}",
+                f"the live IR {spec} could not be canonicalized: {exc}",
+                code="closure.live_spec_unparseable",
+                path="spec",
                 stage="s3_closure",
             )
+            return report
         else:
-            try:
-                live = spec_hash(spec.read_bytes())
-            except _READ_FAILURES as exc:
-                report.error(
-                    f"the live IR {spec} could not be canonicalized: {exc}",
-                    code="closure.live_spec_unparseable",
-                    path="spec",
-                    stage="s3_closure",
-                )
-                return report
             report.spec_hash = live
             if live != lock.get("spec_hash"):
                 report.error(

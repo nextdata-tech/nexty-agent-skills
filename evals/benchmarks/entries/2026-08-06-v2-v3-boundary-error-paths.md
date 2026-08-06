@@ -41,11 +41,16 @@ being misread:
    catches the wider `_READ_FAILURES` — but without it the next caller that
    reasonably catches `SpecReadError` reintroduces the escape.
 5. Vocabulary: `spec.proposal.unsupported` and `closure.live_spec_unparseable`
-   are registered, so one user mistake reports one code across both commands and
-   both lock generations answer an uncanonicalizable live spec identically.
-   Previously `write_lock` reported `pin.spec_compile_error` ("the supervisor
-   could not compile the spec") for a wrong flag, and the two generations
-   disagreed, neither matching its registry summary.
+   are registered, so one user mistake reports one code *and one path* across
+   both commands, and both lock generations answer a live spec they cannot read
+   identically. Previously `write_lock` reported `pin.spec_compile_error` ("the
+   supervisor could not compile the spec") for a wrong flag, and the two
+   generations disagreed, neither matching its registry summary. The v2
+   verifier's `is_file()` pre-check is gone with them: it answered a missing
+   live spec with `closure.spec_snapshot_missing` addressed at the closure
+   snapshot, a file that is present and intact, where v3 let the read raise and
+   reported the live-spec fault. Letting the read raise in both places makes the
+   missing and the unparseable case agree across generations.
 6. The `spec.` table's header claimed a bidirectional invariant that
    `test_validator_code_coverage.py` does not enforce — it exercises the `v2.*`
    vocabulary — which is why nothing noticed that `spec.parse.invalid` and
@@ -54,7 +59,7 @@ being misread:
 
 ## Evidence
 
-`evals/tests/test_dp_spec_authoring.py` carries the change. Eight tests fail
+`evals/tests/test_dp_spec_authoring.py` carries the change. Nine tests fail
 against the pre-#164 implementation and pass after it, covering every arm above:
 
 - `test_v2_lock_verify_reports_an_unparseable_v3_snapshot_instead_of_raising`
@@ -71,9 +76,10 @@ against the pre-#164 implementation and pass after it, covering every arm above:
 - `test_canonical_object_raises_only_spec_read_error_for_a_bad_v3_source` — the
   only cover for the normalization; before it, `_v3.ParseError` propagated and
   `pytest.raises(SpecReadError)` fails (arm 4).
-- `test_one_user_mistake_reports_one_code_across_both_commands` and
-  `test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spec`
-  — both build real closures and assert the shared code (arm 5).
+- `test_one_user_mistake_reports_one_code_across_both_commands`,
+  `test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spec`,
+  and `test_both_lock_generations_report_one_code_for_a_missing_live_spec` — all
+  three build real closures and assert the shared code, stage, and path (arm 5).
 
 Three further tests pass against both implementations and hold the fixes to
 their scope: `test_v2_lock_verify_still_crashes_on_nothing_for_a_well_formed_closure`

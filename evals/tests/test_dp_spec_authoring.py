@@ -1031,6 +1031,10 @@ def test_one_user_mistake_reports_one_code_across_both_commands(tmp_path: Path):
     assert [d.code for d in write_report.errors] == ["spec.proposal.unsupported"]
     assert [d["code"] for d in validate_report["diagnostics"]] == ["spec.proposal.unsupported"]
     assert [d.stage for d in write_report.errors] == ["s0_spec"]
+    # The address must agree too: a form binds findings by `path`, so one code
+    # at two paths is still two answers for one mistake.
+    assert [d.path for d in write_report.errors] == ["v2:proposal"]
+    assert [d["path"] for d in validate_report["diagnostics"]] == ["v2:proposal"]
 
 
 def test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spec(tmp_path: Path):
@@ -1065,3 +1069,35 @@ def test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spe
     assert "closure.live_spec_unparseable" in v3_codes
     assert "closure.spec_snapshot_missing" not in v3_codes
     assert dpd.validate_report(v3_report) == []
+
+
+def test_both_lock_generations_report_one_code_for_a_missing_live_spec(tmp_path: Path):
+    """A missing live spec is the live spec's fault, not the snapshot's.
+
+    The v2 verifier used to answer this with `closure.spec_snapshot_missing`
+    addressed at `closure:dp-spec.approved.md` — a file that is present and
+    intact — while v3, which has no pre-check, let the read raise and reported
+    the live-spec code. Same fault, two answers.
+    """
+    missing = tmp_path / "does-not-exist.md"
+
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    v2_report = dpd.verify_lock(v2_closure, missing).to_dict()
+
+    text = sample()
+    proposal = proposal_for(text)
+    v3_spec = tmp_path / "v3-dp-spec.md"
+    v3_spec.write_text(v3.approve(v3.parse(text), proposal, base_hash=v3.semantic_hash(text)), encoding="utf-8")
+    v3_proposal = tmp_path / "v3-proposal.json"
+    v3_proposal.write_text(json.dumps(proposal, indent=2) + "\n", encoding="utf-8")
+    v3_closure = tmp_path / "v3-closure"
+    dpd.write_lock(v3_spec, v3_closure, proposal=v3_proposal)
+    v3_report = dpd.verify_lock(v3_closure, missing).to_dict()
+
+    for report in (v2_report, v3_report):
+        live = [d for d in report["diagnostics"] if d["code"] == "closure.live_spec_unparseable"]
+        assert live, [d["code"] for d in report["diagnostics"]]
+        assert live[0]["path"] == "spec"
+        assert "closure.spec_snapshot_missing" not in [d["code"] for d in report["diagnostics"]]
+        assert dpd.validate_report(report) == []

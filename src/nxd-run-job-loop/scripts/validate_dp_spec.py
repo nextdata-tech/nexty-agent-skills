@@ -100,7 +100,10 @@ def validate(path: Path, proposal_path: Path | None = None) -> dict:
                 "diagnostics": [{
                     "schema": v2.SPEC_DIAGNOSTIC_SCHEMA_ID,
                     "code": "spec.proposal.unsupported",
-                    "path": "v2:document",
+                    # `v2:proposal`, matching `write_lock`'s arm: one mistake
+                    # gets one address as well as one code, and the address
+                    # names the flag at fault rather than the whole document.
+                    "path": "v2:proposal",
                     "severity": "error",
                     "owner": "agent",
                     "control": "text",
