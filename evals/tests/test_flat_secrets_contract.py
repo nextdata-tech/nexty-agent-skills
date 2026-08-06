@@ -45,6 +45,9 @@ MULTI = REF / "multi-source.md"
 GENERATE_SKILL = REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md"
 # The sibling skill restates the connector keys, so it drifts independently.
 DLT = REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "dlt.md"
+# The profile doc is where `attributes` is defined, so it must say what the
+# supervisor does with them.
+INFRA = REF / "infra-profile.md"
 API_CHECKER = (REPO_ROOT / "evals" / "public" / "authenticated-api-source-build"
                / "fixtures" / "check_authenticated_api_source.py")
 
@@ -167,7 +170,7 @@ def test_generate_skill_table_does_not_advertise_service_keyed_secrets():
 def test_no_doc_routes_labeled_instances_to_a_per_service_key():
     """The first gate checked only multi-source.md, so the same falsified keys
     survived in the two connector docs that point *at* it."""
-    for doc in (API, DB, MULTI, GENERATE_SKILL, DLT):
+    for doc in (API, DB, MULTI, GENERATE_SKILL, DLT, INFRA):
         text = doc.read_text()
         for dead in ("api_source_<label>", "db_source_<label>"):
             assert dead not in text, (
@@ -215,6 +218,30 @@ def test_judge_rubrics_do_not_require_the_nested_read():
                 f"{rel}/checks.json still instructs the judge to require the "
                 "nested read"
             )
+
+
+def test_infra_profile_doc_explains_attribute_delivery():
+    """`attributes` is defined here, so this is where a reader learns it is live
+    input rather than annotation — and that `public:` does not gate the transform."""
+    text = INFRA.read_text()
+    lowered = text.lower()
+    assert ".secrets([...])" in text, (
+        "infra-profile.md must say which services' attributes are delivered"
+    )
+    assert 'secrets["host"]' in text, (
+        "infra-profile.md must show the flat read"
+    )
+    assert "keyerror" in lowered, (
+        "infra-profile.md must name what a nested read produces"
+    )
+    assert "collide" in lowered and "multi-source.md" in text, (
+        "infra-profile.md must carry the collision hazard and point at the rule"
+    )
+    # The flag is about export, not about what the transform can see. Reading it
+    # as an access control is the natural mistake and it inverts the risk.
+    assert "export_data_product" in text, (
+        "infra-profile.md must scope `public:` to export redaction"
+    )
 
 
 def test_eval_harness_materializes_with_a_flat_secrets_dict():
