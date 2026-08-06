@@ -63,7 +63,7 @@ Three preconditions, all hard:
 
 ```bash
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir> \
-  --proposal <workflow>/dp-spec.proposal.json  # required for v3
+  --proposal <workflow>/dp-spec.proposal.json  # v3 only: required there, rejected for v2
 ```
 
 `dp-spec.lock.json` carries the v3 canonical `spec_hash` and typed proposal hash

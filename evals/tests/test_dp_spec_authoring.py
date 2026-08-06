@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +17,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 import dp_spec_authoring as v3  # noqa: E402
 import dp_diagnostics as dpd  # noqa: E402
+import dp_spec_v2 as v2  # noqa: E402
+import validate_dp_spec as vds  # noqa: E402
 
 
 def sample(status: str = "proposed") -> str:
@@ -846,3 +850,296 @@ def test_authoring_validate_cli_without_proposal_returns_json_without_traceback(
     assert report["ok"] is True
     assert report["proposal_hash"] is None
     assert "Traceback" not in result.stderr
+
+
+# --- the v2/v3 cross-generation boundary ------------------------------------
+#
+# `dp_diagnostics.canonical_object` dispatches on the version it sniffs, so v2
+# call sites can now reach the v3 parser. Both tests below fail against the
+# implementation that shipped the dispatch: the first with an unhandled
+# `dp_spec_authoring.ParseError` in place of a report, the second with
+# `ok: true` for a proposal that was never read.
+
+def _v2_lock_closure(tmp_path: Path, snapshot_text: str) -> Path:
+    """A v2-schema closure whose snapshot bytes match its lock."""
+    closure = tmp_path / "closure"
+    closure.mkdir()
+    snapshot = closure / "dp-spec.approved.md"
+    snapshot.write_text(snapshot_text, encoding="utf-8")
+    lock = json.loads((REPO / "evals" / "tests" / "fixtures" / "golden-dp-spec.lock.json").read_text())
+    lock["snapshot_sha256"] = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    (closure / "dp-spec.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    return closure
+
+
+def test_v2_lock_verify_reports_an_unparseable_v3_snapshot_instead_of_raising(tmp_path: Path):
+    closure = _v2_lock_closure(
+        tmp_path,
+        "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: approved\n---\n\n## Bogus\n",
+    )
+    report = dpd.verify_lock(closure).to_dict()
+    assert report["ok"] is False
+    assert "closure.lock_unparseable" in [d["code"] for d in report["diagnostics"]]
+    assert dpd.validate_report(report) == []
+
+
+def test_v2_lock_verify_reports_an_unparseable_v3_live_spec_instead_of_raising(tmp_path: Path):
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    live = tmp_path / "dp-spec.md"
+    live.write_text(
+        "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n",
+        encoding="utf-8",
+    )
+    report = dpd.verify_lock(closure, live).to_dict()
+    assert report["ok"] is False
+    assert "closure.live_spec_unparseable" in [d["code"] for d in report["diagnostics"]]
+    assert dpd.validate_report(report) == []
+
+
+def test_v2_lock_verify_still_crashes_on_nothing_for_a_well_formed_closure(tmp_path: Path):
+    """The guard must not swallow the genuine hash comparison it wraps."""
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    report = dpd.verify_lock(closure).to_dict()
+    assert "closure.spec_hash_mismatch" in [d["code"] for d in report["diagnostics"]]
+    assert "closure.lock_unparseable" not in [d["code"] for d in report["diagnostics"]]
+
+
+def test_validate_dp_spec_rejects_a_proposal_supplied_against_a_v2_spec(tmp_path: Path):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong", "proposal": {}}', encoding="utf-8")
+    report = vds.validate(spec, proposal)
+    assert report["ok"] is False
+    assert [d["code"] for d in report["diagnostics"]] == ["spec.proposal.unsupported"]
+    assert dpd.validate_report(report) == []
+
+
+def test_validate_dp_spec_still_accepts_a_v2_spec_without_a_proposal(tmp_path: Path):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    report = vds.validate(spec)
+    assert report["ok"] is True
+    assert dpd.validate_report(report) == []
+
+
+def _approved_v2_spec(tmp_path: Path) -> Path:
+    raw = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    parsed = v2.parse(raw)
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(v2.approve(parsed, base_hash=v2.semantic_hash(parsed)), encoding="utf-8")
+    return spec
+
+
+def test_lock_write_rejects_a_proposal_supplied_against_a_v2_spec(tmp_path: Path):
+    """The mirror of `_write_v3_lock`'s "a v3 lock requires the proposal" guard.
+
+    `lock write` is the command that writes the binding, so accepting a
+    `--proposal` it never opens pins a closure the caller believes carries a
+    proposal snapshot it does not have.
+    """
+    spec = _approved_v2_spec(tmp_path)
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    closure = tmp_path / "closure"
+    closure.mkdir()
+    lock, report = dpd.write_lock(spec, closure, proposal=proposal)
+    assert report.ok is False
+    assert [d.code for d in report.errors] == ["spec.proposal.unsupported"]
+    assert lock == {}
+    assert list(closure.iterdir()) == []
+
+
+def test_lock_write_still_writes_a_v2_lock_without_a_proposal(tmp_path: Path):
+    spec = _approved_v2_spec(tmp_path)
+    closure = tmp_path / "closure"
+    closure.mkdir()
+    lock, report = dpd.write_lock(spec, closure, now_ms=1769904000000)
+    assert report.ok is True, report.to_dict()
+    assert lock["schema"] == "nxd-dp-spec-lock-v2"
+    assert sorted(p.name for p in closure.iterdir()) == ["dp-spec.approved.md", "dp-spec.lock.json"]
+
+
+@pytest.mark.parametrize(
+    ("label", "source", "expected"),
+    [
+        ("v1", "---\ndp_spec_version: 1\nname: x\nworkflow: x\nstatus: proposed\n---\n", "spec.frontmatter.unsupported_version"),
+        ("no frontmatter", "hello\n", "spec.parse.invalid"),
+        ("broken frontmatter", "---\ndp_spec_version: \n", "spec.parse.invalid"),
+    ],
+)
+def test_proposal_rejection_never_masks_the_reason_a_spec_cannot_be_read(
+    tmp_path: Path, label: str, source: str, expected: str
+):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(source, encoding="utf-8")
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    report = vds.validate(spec, proposal)
+    assert report["ok"] is False
+    assert [d["code"] for d in report["diagnostics"]] == [expected], label
+
+
+def test_the_rejected_proposal_message_names_only_a_parsed_version(tmp_path: Path):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    message = vds.validate(spec, proposal)["diagnostics"][0]["message"]
+    assert "dp_spec_version 2" in message
+    assert "None" not in message
+
+
+def test_canonical_object_raises_only_spec_read_error_for_a_bad_v3_source():
+    """`SpecReadError` is the canonicalizer's single failure type.
+
+    A caller that catches it must not also have to know the version dispatch
+    can surface `dp_spec_authoring.ParseError` — that gap is what let the two
+    verifier sites above escape uncaught.
+    """
+    bad = b"---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n"
+    with pytest.raises(dpd.SpecReadError) as caught:
+        dpd.canonical_object(bad)
+    assert caught.value.reason == "unparseable"
+
+
+def test_one_user_mistake_reports_one_code_across_both_commands(tmp_path: Path):
+    """`--proposal` against a v2 spec is the same mistake at either command.
+
+    A consumer keying on `code` should not have to learn a second vocabulary
+    because the mistake was made at `lock write` rather than at `validate`.
+    """
+    spec = _approved_v2_spec(tmp_path)
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    closure = tmp_path / "closure"
+    closure.mkdir()
+
+    _, write_report = dpd.write_lock(spec, closure, proposal=proposal)
+    validate_report = vds.validate(spec, proposal)
+
+    assert [d.code for d in write_report.errors] == ["spec.proposal.unsupported"]
+    assert [d["code"] for d in validate_report["diagnostics"]] == ["spec.proposal.unsupported"]
+    assert [d.stage for d in write_report.errors] == ["s0_spec"]
+    # The address must agree too: a form binds findings by `path`, so one code
+    # at two paths is still two answers for one mistake.
+    assert [d.path for d in write_report.errors] == ["v2:proposal"]
+    assert [d["path"] for d in validate_report["diagnostics"]] == ["v2:proposal"]
+
+
+def test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spec(tmp_path: Path):
+    """The v2 and v3 verifiers answer the same failure with the same code.
+
+    Both closures are real and internally consistent; only the live spec they
+    are verified against is the same unparseable v3 document.
+    """
+    live = tmp_path / "dp-spec.md"
+    live.write_text(
+        "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n",
+        encoding="utf-8",
+    )
+
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    v2_codes = [d["code"] for d in dpd.verify_lock(v2_closure, live).to_dict()["diagnostics"]]
+
+    text = sample()
+    proposal = proposal_for(text)
+    v3_spec = tmp_path / "v3-dp-spec.md"
+    v3_spec.write_text(v3.approve(v3.parse(text), proposal, base_hash=v3.semantic_hash(text)), encoding="utf-8")
+    v3_proposal = tmp_path / "v3-proposal.json"
+    v3_proposal.write_text(json.dumps(proposal, indent=2) + "\n", encoding="utf-8")
+    v3_closure = tmp_path / "v3-closure"
+    _, write_report = dpd.write_lock(v3_spec, v3_closure, proposal=v3_proposal)
+    assert write_report.ok is True, write_report.to_dict()
+    v3_report = dpd.verify_lock(v3_closure, live).to_dict()
+    v3_codes = [d["code"] for d in v3_report["diagnostics"]]
+
+    assert "closure.live_spec_unparseable" in v2_codes
+    assert "closure.live_spec_unparseable" in v3_codes
+    assert "closure.spec_snapshot_missing" not in v3_codes
+    assert dpd.validate_report(v3_report) == []
+
+
+def test_both_lock_generations_report_one_code_for_a_missing_live_spec(tmp_path: Path):
+    """A missing live spec is the live spec's fault, not the snapshot's.
+
+    The v2 verifier used to answer this with `closure.spec_snapshot_missing`
+    addressed at `closure:dp-spec.approved.md` — a file that is present and
+    intact — while v3, which has no pre-check, let the read raise and reported
+    the live-spec code. Same fault, two answers.
+    """
+    missing = tmp_path / "does-not-exist.md"
+
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    v2_report = dpd.verify_lock(v2_closure, missing).to_dict()
+
+    text = sample()
+    proposal = proposal_for(text)
+    v3_spec = tmp_path / "v3-dp-spec.md"
+    v3_spec.write_text(v3.approve(v3.parse(text), proposal, base_hash=v3.semantic_hash(text)), encoding="utf-8")
+    v3_proposal = tmp_path / "v3-proposal.json"
+    v3_proposal.write_text(json.dumps(proposal, indent=2) + "\n", encoding="utf-8")
+    v3_closure = tmp_path / "v3-closure"
+    dpd.write_lock(v3_spec, v3_closure, proposal=v3_proposal)
+    v3_report = dpd.verify_lock(v3_closure, missing).to_dict()
+
+    for report in (v2_report, v3_report):
+        live = [d for d in report["diagnostics"] if d["code"] == "closure.live_spec_unparseable"]
+        assert live, [d["code"] for d in report["diagnostics"]]
+        assert live[0]["path"] == "spec"
+        assert "closure.spec_snapshot_missing" not in [d["code"] for d in report["diagnostics"]]
+        assert dpd.validate_report(report) == []
+
+
+def test_validate_dp_spec_emits_only_registered_codes():
+    """The direction the `spec.` table's comment used to claim was enforced.
+
+    `Report.error` rejects an unknown code, but `validate_dp_spec.py` hand-builds
+    its envelopes and bypasses that check — which is how `spec.parse.invalid` and
+    `spec.frontmatter.unsupported_version`, the two most reachable outcomes of
+    the validator, shipped unregistered. A consumer resolving `owner`, `control`
+    or `summary` from the registry got a `KeyError` on the common failure.
+    """
+    source = (SCRIPTS / "validate_dp_spec.py").read_text(encoding="utf-8")
+    emitted = set(re.findall(r'"code":\s*"(spec\.[a-z0-9_.]+)"', source))
+    assert emitted, "the scan found no spec.* codes — the pattern has drifted"
+    unregistered = sorted(code for code in emitted if code not in dpd.CODES)
+    assert unregistered == [], f"validate_dp_spec.py emits unregistered codes: {unregistered}"
+
+    # The `spec.*` scope is deliberate, so pin the other half of it: the `v2.*`
+    # and `v3.*` vocabularies are self-describing and must stay out of the
+    # registry, which is why this scan does not cover them.
+    assert [code for code in dpd.CODES if code.startswith(("v2.", "v3."))] == []
+    assert "v3.parse.invalid" in source and "v3.parse.invalid" not in dpd.CODES
+
+
+def test_registered_rows_agree_with_the_envelopes_that_emit_them():
+    """A registry row that contradicts its emitter is worse than no row.
+
+    The registry is where a form resolves the control to render; if the envelope
+    says one thing and the row another, a consumer's behavior depends on which
+    it happened to read.
+    """
+    source = (SCRIPTS / "validate_dp_spec.py").read_text(encoding="utf-8")
+    blocks = re.findall(
+        r'"code":\s*"(spec\.[a-z0-9_.]+)".*?"owner":\s*"([a-z]+)".*?"control":\s*"([a-z]+)"',
+        source,
+        flags=re.DOTALL,
+    )
+    assert blocks, "the scan found no emitter blocks — the pattern has drifted"
+    for code, owner, control in blocks:
+        assert dpd.CODES[code]["owner"] == owner, code
+        assert dpd.CODES[code]["control"] == control, code

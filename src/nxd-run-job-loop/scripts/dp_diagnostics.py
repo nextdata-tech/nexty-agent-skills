@@ -280,16 +280,36 @@ def _register_table(stage: str, rows: Iterable[tuple], **defaults) -> None:
 
 
 # --- domain `spec.` — stage s0_spec, produced by validate_dp_spec.py ---------
-# Every check in validate_dp_spec.py maps to exactly one code, and every code
-# here is produced by at least one check. Both directions are enforced by
-# evals/tests/test_validator_code_coverage.py, with one declared exemption:
-# `spec.encoding.not_utf8` is raised at the file-read boundary, before a Report
-# exists.
+# Every code here is produced by at least one check in validate_dp_spec.py, and
+# every `spec.*` code that file can emit appears here. The scope is deliberate:
+# that file also emits `v2.*` and `v3.*` codes, and no code in either vocabulary
+# belongs in this registry. Those are self-describing — a `ValidationIssue`
+# carries its own `owner` and `control` — so a consumer reads them off the
+# diagnostic rather than resolving them here.
+#
+# The second direction is the one that had rotted. A comment here used to claim
+# `test_validator_code_coverage.py` enforced both; it exercises the `v2.*`
+# field-addressed vocabulary instead, so nothing noticed that
+# `spec.parse.invalid` and `spec.frontmatter.unsupported_version` — the two most
+# reachable outcomes of the validator — shipped unregistered. `Report.error`
+# rejects an unknown code, so they only escaped because `validate_dp_spec.py`
+# hand-builds its envelopes and bypasses that check; a consumer resolving
+# `owner`/`control`/`summary` from the registry hit a `KeyError` on the common
+# failure. Both are registered now, and
+# `test_validate_dp_spec_emits_only_registered_codes` enforces the direction the
+# stale comment claimed. `spec.encoding.not_utf8` is an exemption the other way:
+# it is raised at the file-read boundary, before a Report exists.
 _register_table(
     "s0_spec",
     (
         ("spec.encoding.not_utf8", "error", "agent", "none", False,
          "the file is not valid UTF-8"),
+        ("spec.parse.invalid", "error", "user", "text", False,
+         "the document could not be read or split into frontmatter and body"),
+        ("spec.frontmatter.unsupported_version", "error", "user", "enum", False,
+         "dp_spec_version names a generation this boundary does not parse"),
+        ("spec.proposal.unsupported", "error", "agent", "none", False,
+         "--proposal is a v3 input; the source is not a v3 spec"),
         ("spec.v2.invalid", "error", "agent", "none", False,
          "the v2 validator found a field-addressed spec error"),
         ("spec.frontmatter.unparseable", "error", "agent", "none", True,
@@ -509,6 +529,9 @@ _register_table(
 # not valid v2 diagnostics.
 _V2_PIPELINE_SPEC_CODES = frozenset({
     "spec.encoding.not_utf8",
+    "spec.frontmatter.unsupported_version",
+    "spec.parse.invalid",
+    "spec.proposal.unsupported",
     "spec.v2.invalid",
     "spec.frontmatter.unparseable",
     "spec.frontmatter.missing_key",
@@ -724,6 +747,8 @@ _register_table(
          "the v3 proposal does not carry the settled locked-decision inventory bound by the proposal hash"),
         ("closure.live_spec_diverged", "error", "agent", "none", False,
          "the live IR's canonical hash has moved away from lock.spec_hash"),
+        ("closure.live_spec_unparseable", "error", "agent", "none", False,
+         "the live IR cannot be canonicalized, so no hash comparison is possible"),
         ("closure.lock_status_not_approved", "error", "user", "confirm", False,
          "the snapshot was copied from a spec that was not approved"),
         ("closure.build_record_missing", "error", "agent", "none", False,
@@ -1563,6 +1588,16 @@ def canonical_object(raw: bytes) -> dict:
         raise SpecReadError(str(exc), reason="unsupported_version") from exc
     except _v2.ParseError as exc:
         raise SpecReadError(str(exc), reason="unparseable") from exc
+    except _v3.UnsupportedVersionError as exc:
+        raise SpecReadError(str(exc), reason="unsupported_version") from exc
+    except _v3.ParseError as exc:
+        # The v3 arm is normalized for the same reason the v2 arms are:
+        # `SpecReadError` is this function's single failure type, and a caller
+        # catching it should not also have to know that the version dispatch
+        # above can surface the authoring module's own `ValueError`. Without
+        # this clause the next caller that reasonably catches `SpecReadError`
+        # reintroduces the escape this PR fixes at two sites.
+        raise SpecReadError(str(exc), reason="unparseable") from exc
 
 
 def canonical_bytes(raw: bytes) -> bytes:
@@ -1836,7 +1871,16 @@ def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
         try:
             live = spec_hash(spec.read_bytes())
         except _READ_FAILURES as exc:
-            report.error(str(exc), code="closure.spec_snapshot_missing", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+            # Same failure, same code as the v2 verifier's arm: the live IR
+            # will not canonicalize. `closure.spec_snapshot_missing` said the
+            # closure snapshot was absent, which is a different fault in a
+            # different file, and it disagreed with the v2 generation besides.
+            report.error(
+                f"the live IR {spec} could not be canonicalized: {exc}",
+                code="closure.live_spec_unparseable",
+                path="spec",
+                stage="s3_closure",
+            )
         else:
             report.spec_hash = live
             if live != lock["spec_hash"]:
@@ -1906,6 +1950,19 @@ def write_lock(
         return {}, report
     except (_v2.ParseError, UnicodeDecodeError) as exc:
         report.error(str(exc), code="spec.frontmatter.unparseable", path="spec", stage="s0_spec")
+        return {}, report
+    if proposal is not None:
+        # The mirror of `_write_v3_lock`'s "a v3 lock requires the typed
+        # proposal" guard above. A v2 lock has no proposal to bind, and this is
+        # the command that writes the binding: accepting the path and never
+        # opening it would pin a closure the caller believes carries a proposal
+        # snapshot it does not have.
+        report.error(
+            "a v2 lock binds no typed proposal; --proposal is a v3 input",
+            code="spec.proposal.unsupported",
+            path="v2:proposal",
+            stage="s0_spec",
+        )
         return {}, report
     fm = parsed_v2.document.frontmatter.to_dict()
     semantic_issues = _v2.validate(parsed_v2)
@@ -2122,7 +2179,15 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
 
     try:
         snapshot_hash = spec_hash(raw)
-    except SpecReadError as exc:
+    except _READ_FAILURES as exc:
+        # Catching only `SpecReadError` let a v3-shaped snapshot under a v2 lock
+        # escape as an unhandled exception — no report, no diagnostic for a form
+        # to render — because `canonical_object` dispatches on the sniffed
+        # version and its v3 arm raised `_v3.ParseError` unnormalized. That arm
+        # is normalized now, so `SpecReadError` alone would suffice today;
+        # `_READ_FAILURES` stays because it is what every sibling site in this
+        # module uses, and because the next dispatch arm added upstream should
+        # not be able to reopen this hole by forgetting to normalize.
         report.error(
             f"the snapshot could not be canonicalized: {exc}",
             code="closure.lock_unparseable",
@@ -2141,15 +2206,23 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
         )
 
     if spec is not None:
-        if not spec.is_file():
+        # No `is_file()` pre-check: the read itself raises `FileNotFoundError`,
+        # which `_READ_FAILURES` catches, so a missing live spec and an
+        # uncanonicalizable one report the same code at the same path as they
+        # do in `_verify_v3_lock`. The pre-check that stood here reported
+        # `closure.spec_snapshot_missing` against the closure snapshot — a file
+        # that is present and fine — for a fault in the live spec.
+        try:
+            live = spec_hash(spec.read_bytes())
+        except _READ_FAILURES as exc:
             report.error(
-                f"the live IR {spec} could not be read",
-                code="closure.spec_snapshot_missing",
-                path=f"closure:{snapshot.name}",
+                f"the live IR {spec} could not be canonicalized: {exc}",
+                code="closure.live_spec_unparseable",
+                path="spec",
                 stage="s3_closure",
             )
+            return report
         else:
-            live = spec_hash(spec.read_bytes())
             report.spec_hash = live
             if live != lock.get("spec_hash"):
                 report.error(

@@ -79,6 +79,46 @@ def validate(path: Path, proposal_path: Path | None = None) -> dict:
                 "diagnostics": diagnostics,
             }
         parsed = v2.parse(raw)
+        if proposal_path is not None:
+            # v2 is a read-only verifier for closure evidence written before the
+            # v3 cutover; it has no typed proposal to bind. Accepting the flag
+            # and ignoring it would report `ok: true` for a spec whose supplied
+            # proposal was never looked at — the one outcome an approval flow
+            # binding proposal hashes must never see.
+            #
+            # This runs *after* `v2.parse`, so a source that is unparseable or
+            # names an unsupported version reports that instead. A flag-usage
+            # complaint must never mask the reason the document cannot be read,
+            # and the version named below is only ever one the parser accepted.
+            return {
+                "schema": "nxd-diagnostic-report-v2",
+                "tool": "validate_dp_spec",
+                "target": str(path),
+                "ok": False,
+                "spec_hash": None,
+                "counts": {"error": 1, "warning": 0, "info": 0},
+                "diagnostics": [{
+                    "schema": v2.SPEC_DIAGNOSTIC_SCHEMA_ID,
+                    "code": "spec.proposal.unsupported",
+                    # `v2:proposal`, matching `write_lock`'s arm: one mistake
+                    # gets one address as well as one code, and the address
+                    # names the flag at fault rather than the whole document.
+                    "path": "v2:proposal",
+                    "severity": "error",
+                    "owner": "agent",
+                    # `none`, not `text`: no field in the v2 document can be
+                    # edited to clear this. The repair is to drop the flag, so
+                    # offering a text control invites typing into a field the
+                    # v2 model does not have.
+                    "control": "none",
+                    "stage": "s0_spec",
+                    "origin": "tool_computed",
+                    "message": (
+                        "--proposal is a v3 authoring input; this spec declares "
+                        f"dp_spec_version {v2.SPEC_VERSION}, which carries no typed proposal"
+                    ),
+                }],
+            }
         issues = v2.validate(parsed)
         diagnostics = [_issue(issue) for issue in issues]
         return {
