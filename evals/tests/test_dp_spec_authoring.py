@@ -892,7 +892,7 @@ def test_v2_lock_verify_reports_an_unparseable_v3_live_spec_instead_of_raising(t
     )
     report = dpd.verify_lock(closure, live).to_dict()
     assert report["ok"] is False
-    assert "closure.lock_unparseable" in [d["code"] for d in report["diagnostics"]]
+    assert "closure.live_spec_unparseable" in [d["code"] for d in report["diagnostics"]]
     assert dpd.validate_report(report) == []
 
 
@@ -952,6 +952,7 @@ def test_lock_write_rejects_a_proposal_supplied_against_a_v2_spec(tmp_path: Path
     closure.mkdir()
     lock, report = dpd.write_lock(spec, closure, proposal=proposal)
     assert report.ok is False
+    assert [d.code for d in report.errors] == ["spec.proposal.unsupported"]
     assert lock == {}
     assert list(closure.iterdir()) == []
 
@@ -1010,3 +1011,57 @@ def test_canonical_object_raises_only_spec_read_error_for_a_bad_v3_source():
     with pytest.raises(dpd.SpecReadError) as caught:
         dpd.canonical_object(bad)
     assert caught.value.reason == "unparseable"
+
+
+def test_one_user_mistake_reports_one_code_across_both_commands(tmp_path: Path):
+    """`--proposal` against a v2 spec is the same mistake at either command.
+
+    A consumer keying on `code` should not have to learn a second vocabulary
+    because the mistake was made at `lock write` rather than at `validate`.
+    """
+    spec = _approved_v2_spec(tmp_path)
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
+    closure = tmp_path / "closure"
+    closure.mkdir()
+
+    _, write_report = dpd.write_lock(spec, closure, proposal=proposal)
+    validate_report = vds.validate(spec, proposal)
+
+    assert [d.code for d in write_report.errors] == ["spec.proposal.unsupported"]
+    assert [d["code"] for d in validate_report["diagnostics"]] == ["spec.proposal.unsupported"]
+    assert [d.stage for d in write_report.errors] == ["s0_spec"]
+
+
+def test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spec(tmp_path: Path):
+    """The v2 and v3 verifiers answer the same failure with the same code.
+
+    Both closures are real and internally consistent; only the live spec they
+    are verified against is the same unparseable v3 document.
+    """
+    live = tmp_path / "dp-spec.md"
+    live.write_text(
+        "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n",
+        encoding="utf-8",
+    )
+
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    v2_codes = [d["code"] for d in dpd.verify_lock(v2_closure, live).to_dict()["diagnostics"]]
+
+    text = sample()
+    proposal = proposal_for(text)
+    v3_spec = tmp_path / "v3-dp-spec.md"
+    v3_spec.write_text(v3.approve(v3.parse(text), proposal, base_hash=v3.semantic_hash(text)), encoding="utf-8")
+    v3_proposal = tmp_path / "v3-proposal.json"
+    v3_proposal.write_text(json.dumps(proposal, indent=2) + "\n", encoding="utf-8")
+    v3_closure = tmp_path / "v3-closure"
+    _, write_report = dpd.write_lock(v3_spec, v3_closure, proposal=v3_proposal)
+    assert write_report.ok is True, write_report.to_dict()
+    v3_report = dpd.verify_lock(v3_closure, live).to_dict()
+    v3_codes = [d["code"] for d in v3_report["diagnostics"]]
+
+    assert "closure.live_spec_unparseable" in v2_codes
+    assert "closure.live_spec_unparseable" in v3_codes
+    assert "closure.spec_snapshot_missing" not in v3_codes
+    assert dpd.validate_report(v3_report) == []

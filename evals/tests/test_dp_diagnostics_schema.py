@@ -41,7 +41,8 @@ FROZEN_CODES = (
   'closure.contract_verifier_unreferenced', 'closure.csv_root_invalid',
   'closure.escaping_reference', 'closure.gitignore_missing',
   'closure.gitignore_not_naming_profile', 'closure.input_service_mismatch',
-  'closure.live_spec_diverged', 'closure.lock_missing',
+  'closure.live_spec_diverged', 'closure.live_spec_unparseable',
+  'closure.lock_missing',
   'closure.lock_snapshot_byte_mismatch', 'closure.lock_status_not_approved',
   'closure.lock_unparseable', 'closure.model_path_unresolved',
   'closure.port_storage_mismatch', 'closure.profile_driver_mismatch',
@@ -115,6 +116,7 @@ FROZEN_CODES = (
   'spec.open_question.not_mapping', 'spec.output.bad_kind',
   'spec.output.no_name', 'spec.output.not_mapping',
   'spec.output.unknown_model', 'spec.population.missing',
+  'spec.proposal.unsupported',
   'spec.population.not_mapping', 'spec.population.prose',
   'spec.prefill.empty_required_field', 'spec.question.unanswered',
   'spec.schedule.bad_trigger', 'spec.schedule.no_cron',
@@ -149,7 +151,7 @@ FROZEN_CODES = (
 # v2-only registry: the frozen historical list above is intentionally filtered
 # here so this test cannot reintroduce the removed v1 spec domains.
 _V2_SPEC_CODES = {
-    'spec.encoding.not_utf8', 'spec.v2.invalid',
+    'spec.encoding.not_utf8', 'spec.proposal.unsupported', 'spec.v2.invalid',
     'spec.frontmatter.unparseable', 'spec.frontmatter.missing_key',
     'spec.frontmatter.bad_version', 'spec.frontmatter.bad_name',
     'spec.frontmatter.bad_status', 'spec.section.missing',
