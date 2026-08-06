@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Map changed files to the eval scenarios that exercise them.
 
-CI runs the eval suite on pull requests, but running all 15 scenarios on every
-PR is slow and expensive. Each scenario's ``checks.json`` declares the skills it
-exercises under ``skills``; this script inverts that mapping so a PR touching
-``src/<skill>/**`` runs only the scenarios that actually cover that skill.
+When the eval suite does run on a pull request — it is opt-in, gated on the
+``run-evals`` label — running every scenario is slow and expensive. Each
+scenario's ``checks.json`` declares the skills it exercises under ``skills``;
+this script inverts that mapping so a PR touching ``src/<skill>/**`` runs only
+the scenarios that actually cover that skill. The release gate uses the same
+inversion to select every runnable scenario.
 
 Two changed-path classes select the *whole* suite rather than a subset, because
 they can change any scenario's outcome:
