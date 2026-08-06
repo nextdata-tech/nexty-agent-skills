@@ -39,8 +39,8 @@ this skill treats as unrecoverable.
 |---|---|---|---|
 | CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |
 | Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
-| Database — `reference/database-source.md` | `db-source` | `db_source` | `db-source-tables`, no `data/` |
-| REST API — `reference/api-source.md` | `api-source` | `api_source` | `api-source-endpoints`, no `data/` |
+| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` |
+| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, … | `api-source-endpoints`, no `data/` |
 
 The output is a directory the **desktop supervisor** compiles, pins, boots, and
 publishes: it **compiles `spec.py` into the kernel definition YAML at create
@@ -294,9 +294,9 @@ the Invariants, where the full reasoning lives):
 - `PHYSICAL_MODELS` names exactly the models passed to `.promise(...)` — base
   and derived. Do **not** iterate `duckdb.model_tables`: it can include
   `.model(...)` views with neither `data/<view>/` nor a physical table.
-- The connector config arrives in `secrets["<type>_source"]`, **keyed to the
-  connector this closure declares** (Overview table): `csv_source` is the CSV
-  default, and an api-source closure reading it gets `KeyError: 'csv_source'`.
+- The connector config arrives in `secrets` (Overview table) — for
+  `db-source`/`api-source` the supervisor's **FLAT** merge of every service's
+  `attributes` keys, service name not among them: `secrets["base_url"]`, never nested.
   Never hard-code an absolute path. Writes go **through the port**
   (`dlt.destinations.duckdb(credentials=duckdb.path)` + `dataset_name=duckdb.schema`),
   never raw `duckdb.connect(...)`, DDL, or a hardcoded staging path.

@@ -83,8 +83,19 @@ config is a non-secret path; for a REST API it necessarily includes a real
 credential (bearer token, API key, or OAuth client secret). That value is
 delivered by writing it into the `api-source` service's `attributes` in
 `infra-profile.yaml` — the desktop supervisor's `generic-secrets` driver
-reads it from there and exposes it to the transform as `secrets["api_source"]`.
+reads it from there and merges it into the transform's `secrets` dict.
+**`secrets` is FLAT.** The supervisor merges every service named in
+`.secrets([...])` into one map. For a `generic-secrets` service the keys are
+exactly the `attributes` you wrote — the service name is not among them — so an `api-source` attribute `base_url` arrives as
+`secrets["base_url"]`, never `secrets["api_source"]["base_url"]`. A nested read
+raises `KeyError: 'api_source'` at transform time, after the credential has
+already been resolved.
 
+- **When this closure names more than one service in `.secrets([...])`, check
+  for key collisions before writing the profile.** The merge is flat, so a key
+  declared by two services resolves to one value and the loser vanishes with no
+  error — prefix the attribute `key` (`orders_base_url`) to separate them. Full
+  rule: `reference/multi-source.md`.
 - The companion file `api-source-endpoints` holds **only non-secret
   topology** — one line per model, `<model>=<endpoint path>`.
 - The `api-source` service's `attributes` list carries the live payload as
@@ -108,7 +119,7 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   | `oauth2_client_credentials` | `auth_client_id`, `auth_client_secret`, `auth_token_url` |
 
   Omitting `auth_type` (and its fields) entirely means
-  `secrets["api_source"]` has no `"auth_type"` key, not an empty one. See
+  `secrets` has no `"auth_type"` key, not an empty one. See
   the worked example below and the `auth_type` dispatch in the transform
   diff, which assembles these flat fields into the structured dict dlt
   expects.
@@ -116,7 +127,7 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   types (ints, bools) are not preserved; cast in the transform if needed.
 - **Mark each attribute by sensitivity.** The `public:` flag controls **only**
   `export_data_product` redaction — the transform reads every attribute via
-  `secrets["api_source"]` regardless. Secrets and identity —
+  `secrets` regardless. Secrets and identity —
   `auth_token`, `auth_username`, `auth_password`, `auth_api_key`,
   `auth_client_id`, `auth_client_secret` — are `public: false` (redacted
   fail-closed on export). Non-secret topology/config — `base_url`, `auth_type`,
@@ -153,16 +164,18 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
 ## Naming
 
 - Infra-profile service: `api-source`, driver `nxd:generic-secrets:1.0.0`.
-- Transform secrets key: `secrets["api_source"]` — a dict with `base_url`
-  (always present) and, only when the API requires authentication,
-  `auth_type` plus that type's own fields (see Credential handling).
+- Transform secrets keys: the attribute keys themselves, flat on `secrets` —
+  `secrets["base_url"]` (always present) and, only when the API requires
+  authentication, `secrets["auth_type"]` plus that type's own fields (see
+  Credential handling). There is no `secrets["api_source"]` level.
 - Companion file: `api-source-endpoints` — one line per model,
   `<model>=<endpoint path>` (non-secret topology only).
 
 These names are for exactly **one** API source. When this closure needs two
 or more APIs (or mixes an API with another connector type), label each
 instance instead — see `reference/multi-source.md` for the full
-`api-source-<label>` / `api_source_<label>` / `api-source-<label>-endpoints`
+`api-source-<label>` / label-prefixed attribute keys (`orders_base_url`) /
+`api-source-<label>-endpoints`
 pattern.
 
 ## `transform/main.py` diff from the CSV template
@@ -174,32 +187,33 @@ template. Only the ingestion body changes:
 ```python
 from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig
 
-api_secrets = secrets["api_source"]  # dict: base_url (always), auth_type (+its fields) if needed
+# `secrets` is the FLAT merge of every service in `.secrets([...])` — read the
+# attribute keys directly. There is no per-service level to index first.
 endpoint_map = _load_api_source_endpoints()  # parses the api-source-endpoints companion file
 
-client_config = {"base_url": api_secrets["base_url"]}
-auth_type = api_secrets.get("auth_type")
+client_config = {"base_url": secrets["base_url"]}
+auth_type = secrets.get("auth_type")
 if auth_type == "bearer":
-    client_config["auth"] = {"type": "bearer", "token": api_secrets["auth_token"]}
+    client_config["auth"] = {"type": "bearer", "token": secrets["auth_token"]}
 elif auth_type == "http_basic":
     client_config["auth"] = {
         "type": "http_basic",
-        "username": api_secrets["auth_username"],
-        "password": api_secrets["auth_password"],
+        "username": secrets["auth_username"],
+        "password": secrets["auth_password"],
     }
 elif auth_type == "api_key":
     client_config["auth"] = {
         "type": "api_key",
-        "name": api_secrets["auth_key_name"],
-        "api_key": api_secrets["auth_api_key"],
-        "location": api_secrets.get("auth_key_location", "header"),
+        "name": secrets["auth_key_name"],
+        "api_key": secrets["auth_api_key"],
+        "location": secrets.get("auth_key_location", "header"),
     }
 elif auth_type == "oauth2_client_credentials":
     client_config["auth"] = {
         "type": "oauth2_client_credentials",
-        "access_token_url": api_secrets["auth_token_url"],
-        "client_id": api_secrets["auth_client_id"],
-        "client_secret": api_secrets["auth_client_secret"],
+        "access_token_url": secrets["auth_token_url"],
+        "client_id": secrets["auth_client_id"],
+        "client_secret": secrets["auth_client_secret"],
     }
 elif auth_type is not None:
     # Do NOT drop this branch, and do not collapse the dispatch to whichever
@@ -208,7 +222,7 @@ elif auth_type is not None:
     # instead of sending a wrong-scheme request and reading the 401 as a
     # credential problem.
     raise ValueError(
-        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"unsupported auth_type {auth_type!r} in secrets — "
         f"add a branch above, or fix the infra-profile attribute"
     )
 
@@ -238,7 +252,7 @@ for model in PHYSICAL_MODELS:
 pipeline.run(readers, write_disposition="replace")
 ```
 
-Build the `RESTAPIConfig` from `secrets["api_source"]` at runtime — never
+Build the `RESTAPIConfig` from `secrets` at runtime — never
 hard-code a base URL or credential in the transform source. The `auth_type`
 dispatch assembles dlt's structured `auth` dict from the flat secret
 fields, the same way `_build_connection_string` in `database-source.md`
@@ -260,14 +274,14 @@ branch that reads it must fail loudly on a value it does not handle:
 ```python
 elif auth_type is not None:
     raise ValueError(
-        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"unsupported auth_type {auth_type!r} in secrets — "
         f"add a branch above, or fix the infra-profile attribute"
     )
 ```
 
 **`auth_type is None` is the one value that must NOT raise.** It means the
 profile configures no authentication, which is why the template reads the field
-with `api_secrets.get("auth_type")` and why `secrets["api_source"]` carries
+with `secrets.get("auth_type")` and why `secrets` carries
 `auth_type` *only when the API requires authentication* (see the attributes list
 above). A bare `else: raise` fails every unauthenticated api-source closure at
 transform time, with a message pointing the author at a profile attribute that is
@@ -339,7 +353,8 @@ add it explicitly rather than assuming it's already covered.
   **No `data/` directory, no path file** — `api-source-endpoints` is the
   only companion artifact, and it stays non-secret topology only. For 2+ API
   sources, add one labeled service per instance instead (`api-source-<label>`
-  / `secrets["api_source_<label>"]`) — see `reference/multi-source.md`.
+  / label-prefixed attribute keys such as `secrets["orders_base_url"]`) —
+  see `reference/multi-source.md`.
 
 ## Self-check (connectivity smoke test)
 
@@ -370,7 +385,7 @@ def _redact(exc: BaseException, secrets: dict) -> str:
 try:
     ...  # the bounded GET
 except Exception as exc:
-    raise SystemExit(f"connectivity check failed: {_redact(exc, api_secrets)}") from None
+    raise SystemExit(f"connectivity check failed: {_redact(exc, secrets)}") from None
 ```
 
 `from None` is mandatory: without it Python chains the original exception as

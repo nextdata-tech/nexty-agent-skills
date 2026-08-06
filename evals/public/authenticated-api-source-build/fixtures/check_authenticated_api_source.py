@@ -166,7 +166,7 @@ def auth_is_dispatched_on_auth_type(transform_src: str) -> tuple[bool, str]:
     reads = bool(re.search(r"""\[["']auth_type["']\]|\.get\(\s*["']auth_type["']""",
                            transform_src))
     if not reads:
-        return False, ('transform never reads secrets["api_source"]["auth_type"] — '
+        return False, ('transform never reads secrets["auth_type"] — '
                        "the auth dict is hardcoded to one scheme while the profile "
                        "carries auth_type as a configurable attribute")
     branches = bool(re.search(r"\bif\b[^\n]*auth_type|\belif\b[^\n]*auth_type",
@@ -239,7 +239,7 @@ def resolve_result_col(checks_cols: list[str]) -> str | None:
 
 def no_hardcoded_base_url_or_path(transform_src: str) -> tuple[bool, str]:
     if "127.0.0.1" in transform_src or "localhost" in transform_src:
-        return False, "transform hardcodes the stub host instead of reading secrets['api_source']['base_url']"
+        return False, "transform hardcodes the stub host instead of reading secrets['base_url']"
     if "/v1/checks" in transform_src or "/v1/monitors" in transform_src:
         return False, "transform hardcodes an endpoint path instead of reading the api-source-endpoints companion file"
     return True, ""
@@ -270,8 +270,12 @@ from transform.main import PHYSICAL_MODELS, ingest
 
 out = DuckDbOutput(path=sys.argv[1], schema="main",
                    model_tables={m: m for m in PHYSICAL_MODELS})
-api_secrets = {"base_url": sys.argv[2], "auth_type": "bearer", "auth_token": sys.argv[3]}
-ingest(duckdb=out, secrets={"api_source": api_secrets})
+# The supervisor merges every service in `.secrets([...])` into ONE flat map
+# keyed by the raw attribute key (local_python_compute.rs: prepare_execution_context
+# flat_maps each handler's values into a single serde_json::Map). Passing a
+# nested {"api_source": ...} here would grade the wrong contract.
+secrets = {"base_url": sys.argv[2], "auth_type": "bearer", "auth_token": sys.argv[3]}
+ingest(duckdb=out, secrets=secrets)
 '''
 
 _UNINSTALLABLE_PREFIXES = ("nxd",)
