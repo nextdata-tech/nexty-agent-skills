@@ -344,8 +344,8 @@ npx skills add ./src -g -a claude-code -s '*' -y
 You should see output similar to:
 
 ```text
-Found 11 skills
-Installed 11 skills
+Found 17 skills
+Installed 17 skills
 ```
 
 The `-g` flag installs the skills globally for your user, so Claude Code can use them from any project directory. The `-a claude-code` flag targets Claude Code only. If you use `--all -g`, the Skills CLI may also try agents that do not support global installs and print unrelated failures such as `PromptScript does not support global skill installation`.
@@ -482,15 +482,16 @@ python3 scripts/validate_skills.py
 ./build-skills.sh
 ```
 
-This creates one ZIP per skill at the repository root, for example:
+This creates one ZIP per skill under `build/` — one for every directory in
+`src/`, for example:
 
 ```text
-nxd-build-data-product.zip
-nxd-setup-cli.zip
-nxd-add-inputs.zip
-nxd-add-outputs.zip
-nxd-add-expectations-and-promises.zip
-nxd-debug-data-product.zip
+build/nxd-build-data-product.zip
+build/nxd-setup-cli.zip
+build/nxd-add-inputs.zip
+build/nxd-add-outputs.zip
+build/nxd-add-expectations-and-promises.zip
+build/nxd-debug-data-product.zip
 ```
 
 #### 2. Install the ZIPs in Claude Desktop
@@ -515,6 +516,10 @@ For a full data product build test, install at least:
 - `nxd-add-outputs.zip`
 - `nxd-add-expectations-and-promises.zip`
 - `nxd-debug-data-product.zip`
+
+To test the local job-loop build path, add `nxd-run-job-loop.zip` and
+`nxd-generate-data-product.zip` — install both, since the generator uses the
+job loop's validator, lock writer, and build-record helpers at runtime.
 
 If your organization uses Team or Enterprise skill provisioning, an admin can upload the ZIPs once through organization settings instead of every user uploading them individually.
 
@@ -668,7 +673,7 @@ These are enforced by `scripts/validate_skills.py` in CI (`.github/workflows/ci.
 - Skill names: lowercase, hyphens only, 1-64 chars, and the `name:` field **must match the directory name**
 - Descriptions must be specific, stay under 1024 characters, include a clear `Use when ...` trigger clause, and contain **no angle-bracket placeholders** (e.g. `<DP>`)
 - `allowed-tools` must be present and non-empty, listing only known Claude Code tools (`Bash`, `Read`, `Write`, `Edit`, `MultiEdit`, `Glob`, `Grep`, `AskUserQuestion`, `Agent`, `Task`, `TodoWrite`, `WebFetch`, `WebSearch`, `NotebookEdit`)
-- `metadata.version`, if set, must be semver (`X.Y.Z`)
+- `metadata.version` must be semver (`X.Y.Z`) and **equal the `.claude-plugin/plugin.json` version** — skill versions move in lockstep, they are not bumped individually
 - Keep `SKILL.md` under 500 lines for context efficiency
 - Move detailed references to `reference/` (singular only — `references/` is rejected) for progressive disclosure
 - Add a `## Contents` section near the top of reference files longer than 100 lines

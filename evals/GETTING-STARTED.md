@@ -12,7 +12,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Query loop** | `evals/query-loop/run_query_loop.py` | borrows `nxd_eval`'s venv | Multi-turn query refinement against a pharma mesh fixture. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 18 of the 30 public scenarios.**
+installs and covers 19 of the 31 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -110,7 +110,7 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-18 of 30 public scenarios. The remaining 12 declare `ci_skip` in their
+19 of 31 public scenarios. The remaining 12 declare `ci_skip` in their
 `checks.json`. Ten need a Tier 2 or Tier 3 install; one is gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 
@@ -169,9 +169,8 @@ inspect_eval(task, model="openai/gpt-5.6-luna")          # OpenAI
 inspect_eval(task, model="anthropic/claude-sonnet-4-5")  # Anthropic
 ```
 
-The project is `package = false`, so there is no console script — the module
-entry point is the supported CLI, and it covers reporting/certification rather
-than launching runs:
+The project ships no console script — the module entry point is the supported
+CLI, and it covers reporting/certification rather than launching runs:
 
 ```sh
 uv run --project evals/nxd_eval python -m nxd_eval certify \

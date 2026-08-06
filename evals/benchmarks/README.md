@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-08-06 | nxd-run-job-loop: v2/v3 cross-generation error paths return diagnostics | NO_EVAL | — | [`2026-08-06-v2-v3-boundary-error-paths`](entries/2026-08-06-v2-v3-boundary-error-paths.md) |
+| 2026-08-06 | nxd-run-job-loop: correct the build record's stale inspect_run unbound claim | NO_EVAL | — | [`2026-08-06-inspect-run-binding-documented`](entries/2026-08-06-inspect-run-binding-documented.md) |
 | 2026-08-06 | nxd-run-job-loop: resolve Cowork helper scripts from mounted plugin cache | NO_EVAL | — | [`2026-08-06-cowork-helper-resolver-mounted-cache`](entries/2026-08-06-cowork-helper-resolver-mounted-cache.md) |
 | 2026-08-05 | nxd-generate-data-product + nxd-run-job-loop: pin the mapper call shape, add a mandatory preflight, and fix failure reporting | NO_EVAL | — | [`2026-08-05-mapper-call-shape-preflight-and-run-status`](entries/2026-08-05-mapper-call-shape-preflight-and-run-status.md) |
 | 2026-08-05 | nxd-run-job-loop: prose-first v3 dp-spec authoring boundary | NO_EVAL | — | [`2026-08-05-dp-spec-prose-first-authoring`](entries/2026-08-05-dp-spec-prose-first-authoring.md) |
