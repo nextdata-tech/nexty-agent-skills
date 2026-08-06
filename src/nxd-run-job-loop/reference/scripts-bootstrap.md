@@ -12,7 +12,10 @@ the skill is installed.
 Run this exact stdlib-only resolver before the first helper call. It emits one
 absolute directory or fails; it never guesses from the workflow or closure cwd.
 The supported install surfaces are Claude Code global/project and plugin installs,
-Cowork marketplace cache, and Claude Desktop's uploaded-skill store.
+Cowork marketplace cache, and Claude Desktop's uploaded-skill store. Cowork's
+Bash sandbox may expose its mount as either `$HOME/.local-plugins/cache/nexty/...`
+or `$HOME/mnt/.local-plugins/cache/nexty/<plugin>/<version>/...`; older Desktop
+sessions use the `cowork_plugins/cache` path below.
 
 ```bash
 JOB_HELPER_DIR="$(python3 - "$HOME" "$PWD" <<'PY'
@@ -25,6 +28,17 @@ roots += [parent / ".claude" / "skills" / "nxd-run-job-loop" for parent in (cwd,
 plugins = home / ".claude" / "plugins"
 roots += list(plugins.glob("**/src/nxd-run-job-loop"))
 roots += list(plugins.glob("**/skills/nxd-run-job-loop"))
+for mount in (home, home / "mnt"):
+    local_plugins = mount / ".local-plugins"
+    cached = list(local_plugins.glob(
+        "cache/nexty/nexty-agent-skills/*/skills/nxd-run-job-loop"
+    ))
+    def _version_key(root):
+        parts = root.parents[1].name.split(".")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts):
+            return (-1, -1, -1)
+        return tuple(int(part) for part in parts)
+    roots += sorted(cached, key=_version_key, reverse=True)
 claude = home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
 roots += list(claude.glob("*/*/cowork_plugins/cache/nexty/nexty-agent-skills/*/skills/nxd-run-job-loop"))
 roots += list(claude.glob("skills-plugin/*/*/*/skills/nxd-run-job-loop"))

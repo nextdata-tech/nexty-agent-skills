@@ -276,6 +276,42 @@ def test_desktop_cache_install_includes_and_invokes_desktop_helpers(tmp_path: Pa
     assert _lock_plugin_version(skill_dir) == version
 
 
+@pytest.mark.parametrize("mount_prefix", (Path(), Path("mnt")))
+def test_cowork_local_plugins_cache_resolves_desktop_helpers(
+    tmp_path: Path, mount_prefix: Path
+):
+    """Cowork exposes .local-plugins/cache directly or beneath its mnt mount."""
+    version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+    skill_dir = (
+        tmp_path / mount_prefix / ".local-plugins" / "cache" / "nexty" / "nexty-agent-skills"
+        / version / "skills" / "nxd-run-job-loop"
+    )
+    shutil.copytree(SRC / "nxd-run-job-loop", skill_dir)
+    outside = tmp_path / f"outside-local-plugins-{mount_prefix or 'root'}"
+    outside.mkdir()
+    assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
+    _assert_helpers_run(skill_dir)
+
+
+@pytest.mark.parametrize("mount_prefix", (Path(), Path("mnt")))
+def test_cowork_local_plugins_cache_prefers_highest_semver(
+    tmp_path: Path, mount_prefix: Path
+):
+    """A mounted cache may retain several versions after plugin upgrades."""
+    cache = tmp_path / mount_prefix / ".local-plugins" / "cache" / "nexty" / "nexty-agent-skills"
+    for version in ("0.9.0", "0.36.2", "0.10.0"):
+        shutil.copytree(
+            SRC / "nxd-run-job-loop",
+            cache / version / "skills" / "nxd-run-job-loop",
+        )
+    outside = tmp_path / f"outside-versioned-cache-{mount_prefix or 'root'}"
+    outside.mkdir()
+
+    assert _bootstrap_resolves(tmp_path, outside) == (
+        cache / "0.36.2" / "skills" / "nxd-run-job-loop"
+    ).resolve()
+
+
 def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
     subprocess.run(["bash", "build-skills.sh"], cwd=REPO, check=True, capture_output=True, text=True)
     archive = REPO / "build" / "nxd-run-job-loop.zip"
