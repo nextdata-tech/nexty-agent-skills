@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -15,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import dp_spec_authoring as v3  # noqa: E402
 import dp_diagnostics as dpd  # noqa: E402
+import validate_dp_spec as vds  # noqa: E402
 
 
 def sample(status: str = "proposed") -> str:
@@ -846,3 +848,82 @@ def test_authoring_validate_cli_without_proposal_returns_json_without_traceback(
     assert report["ok"] is True
     assert report["proposal_hash"] is None
     assert "Traceback" not in result.stderr
+
+
+# --- the v2/v3 cross-generation boundary ------------------------------------
+#
+# `dp_diagnostics.canonical_object` dispatches on the version it sniffs, so v2
+# call sites can now reach the v3 parser. Both tests below fail against the
+# implementation that shipped the dispatch: the first with an unhandled
+# `dp_spec_authoring.ParseError` in place of a report, the second with
+# `ok: true` for a proposal that was never read.
+
+def _v2_lock_closure(tmp_path: Path, snapshot_text: str) -> Path:
+    """A v2-schema closure whose snapshot bytes match its lock."""
+    closure = tmp_path / "closure"
+    closure.mkdir()
+    snapshot = closure / "dp-spec.approved.md"
+    snapshot.write_text(snapshot_text, encoding="utf-8")
+    lock = json.loads((REPO / "evals" / "tests" / "fixtures" / "golden-dp-spec.lock.json").read_text())
+    lock["snapshot_sha256"] = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    (closure / "dp-spec.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    return closure
+
+
+def test_v2_lock_verify_reports_an_unparseable_v3_snapshot_instead_of_raising(tmp_path: Path):
+    closure = _v2_lock_closure(
+        tmp_path,
+        "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: approved\n---\n\n## Bogus\n",
+    )
+    report = dpd.verify_lock(closure).to_dict()
+    assert report["ok"] is False
+    assert "closure.lock_unparseable" in [d["code"] for d in report["diagnostics"]]
+    assert dpd.validate_report(report) == []
+
+
+def test_v2_lock_verify_reports_an_unparseable_v3_live_spec_instead_of_raising(tmp_path: Path):
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    live = tmp_path / "dp-spec.md"
+    live.write_text(
+        "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n",
+        encoding="utf-8",
+    )
+    report = dpd.verify_lock(closure, live).to_dict()
+    assert report["ok"] is False
+    assert "closure.lock_unparseable" in [d["code"] for d in report["diagnostics"]]
+    assert dpd.validate_report(report) == []
+
+
+def test_v2_lock_verify_still_crashes_on_nothing_for_a_well_formed_closure(tmp_path: Path):
+    """The guard must not swallow the genuine hash comparison it wraps."""
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
+    report = dpd.verify_lock(closure).to_dict()
+    assert "closure.spec_hash_mismatch" in [d["code"] for d in report["diagnostics"]]
+    assert "closure.lock_unparseable" not in [d["code"] for d in report["diagnostics"]]
+
+
+def test_validate_dp_spec_rejects_a_proposal_supplied_against_a_v2_spec(tmp_path: Path):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text('{"schema": "totally-wrong", "proposal": {}}', encoding="utf-8")
+    report = vds.validate(spec, proposal)
+    assert report["ok"] is False
+    assert [d["code"] for d in report["diagnostics"]] == ["spec.proposal.unsupported"]
+    assert dpd.validate_report(report) == []
+
+
+def test_validate_dp_spec_still_accepts_a_v2_spec_without_a_proposal(tmp_path: Path):
+    spec = tmp_path / "dp-spec.md"
+    spec.write_text(
+        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    report = vds.validate(spec)
+    assert report["ok"] is True
+    assert dpd.validate_report(report) == []

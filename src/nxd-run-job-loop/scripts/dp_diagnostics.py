@@ -2122,7 +2122,12 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
 
     try:
         snapshot_hash = spec_hash(raw)
-    except SpecReadError as exc:
+    except _READ_FAILURES as exc:
+        # `_READ_FAILURES`, not `SpecReadError`: `canonical_object` dispatches on
+        # the sniffed version, so a snapshot naming v3 raises `_v3.ParseError`
+        # here rather than the v2 boundary's `SpecReadError`. Catching only the
+        # narrower type let a v3-shaped snapshot under a v2 lock escape as an
+        # unhandled exception — no report, no diagnostic for a form to render.
         report.error(
             f"the snapshot could not be canonicalized: {exc}",
             code="closure.lock_unparseable",
@@ -2149,7 +2154,16 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
                 stage="s3_closure",
             )
         else:
-            live = spec_hash(spec.read_bytes())
+            try:
+                live = spec_hash(spec.read_bytes())
+            except _READ_FAILURES as exc:
+                report.error(
+                    f"the live IR could not be canonicalized: {exc}",
+                    code="closure.lock_unparseable",
+                    path=f"closure:{snapshot.name}",
+                    stage="s3_closure",
+                )
+                return report
             report.spec_hash = live
             if live != lock.get("spec_hash"):
                 report.error(

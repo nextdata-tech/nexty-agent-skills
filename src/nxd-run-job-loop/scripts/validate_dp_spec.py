@@ -78,6 +78,34 @@ def validate(path: Path, proposal_path: Path | None = None) -> dict:
                 "counts": {"error": len(diagnostics), "warning": 0, "info": 0},
                 "diagnostics": diagnostics,
             }
+        if proposal_path is not None:
+            # v2 is a read-only verifier for closure evidence written before the
+            # v3 cutover; it has no typed proposal to bind. Accepting the flag
+            # and ignoring it would report `ok: true` for a spec whose supplied
+            # proposal was never looked at — the one outcome an approval flow
+            # binding proposal hashes must never see.
+            return {
+                "schema": "nxd-diagnostic-report-v2",
+                "tool": "validate_dp_spec",
+                "target": str(path),
+                "ok": False,
+                "spec_hash": None,
+                "counts": {"error": 1, "warning": 0, "info": 0},
+                "diagnostics": [{
+                    "schema": v2.SPEC_DIAGNOSTIC_SCHEMA_ID,
+                    "code": "spec.proposal.unsupported",
+                    "path": "v2:document",
+                    "severity": "error",
+                    "owner": "agent",
+                    "control": "text",
+                    "stage": "s0_spec",
+                    "origin": "tool_computed",
+                    "message": (
+                        "--proposal is a v3 authoring input; this spec declares "
+                        f"dp_spec_version {_version(raw)}, which carries no typed proposal"
+                    ),
+                }],
+            }
         parsed = v2.parse(raw)
         issues = v2.validate(parsed)
         diagnostics = [_issue(issue) for issue in issues]
