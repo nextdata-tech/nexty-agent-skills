@@ -9,6 +9,8 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 |---|---|---|---|---|
 | 2026-08-06 | nxd-run-job-loop: v2/v3 cross-generation error paths return diagnostics | NO_EVAL | — | [`2026-08-06-v2-v3-boundary-error-paths`](entries/2026-08-06-v2-v3-boundary-error-paths.md) |
 | 2026-08-06 | nxd-run-job-loop / nxd-generate-dp: correct stale inspect_run and v2-era closure claims | NO_EVAL | — | [`2026-08-06-inspect-run-binding-documented`](entries/2026-08-06-inspect-run-binding-documented.md) |
+| 2026-08-06 | docs: retract the desktop 'only durable gate' claim from skill text and judge rubric | PASS | generate-runnable-dp-from-intent | [`2026-08-06-desktop-gate-claim-rubric-verified`](entries/2026-08-06-desktop-gate-claim-rubric-verified.md) |
+| 2026-08-06 | nxd-generate-data-product: retract the "only durable data-quality gate" claim | NO_EVAL | — | [`2026-08-06-desktop-contract-gate-claim-corrected`](entries/2026-08-06-desktop-contract-gate-claim-corrected.md) |
 | 2026-08-06 | nxd-run-job-loop: resolve Cowork helper scripts from mounted plugin cache | NO_EVAL | — | [`2026-08-06-cowork-helper-resolver-mounted-cache`](entries/2026-08-06-cowork-helper-resolver-mounted-cache.md) |
 | 2026-08-05 | nxd-generate-data-product + nxd-run-job-loop: pin the mapper call shape, add a mandatory preflight, and fix failure reporting | NO_EVAL | — | [`2026-08-05-mapper-call-shape-preflight-and-run-status`](entries/2026-08-05-mapper-call-shape-preflight-and-run-status.md) |
 | 2026-08-05 | nxd-run-job-loop: prose-first v3 dp-spec authoring boundary | NO_EVAL | — | [`2026-08-05-dp-spec-prose-first-authoring`](entries/2026-08-05-dp-spec-prose-first-authoring.md) |

@@ -197,13 +197,31 @@ transform's arithmetic as its own proof is called out by name as the usual way
 this gets violated.
 
 Underneath Step 3b (inside the transform itself, not the self-check script),
-every derived model carries **mandatory in-transform asserts** that are the
-only durable data-quality gate on desktop (the local driver's verify is a
-no-op and platform-side contract verification doesn't run locally): Tier 1
+every derived model carries **mandatory in-transform asserts**: Tier 1
 (declared-key uniqueness + grain-derived row count vs. independently-read
 source) always, Tier 2 (signed measure total reconciled per-currency in
 `Decimal`, every intentional divergence itemized) whenever a measure column is
 present.
+
+These asserts are **no longer the only durable data-quality gate on desktop**.
+The desktop runtime now *executes* user-authored contracts: custom input
+expectations run before the transform, and custom output promises run after the
+DuckDB writes and **block publication when violated** — the supervisor's promise
+gate refuses to publish a run whose declared contracts failed, and a failed
+verdict aborts the run before promotion. Contract evidence survives restart and
+resume. The `desktop-custom-contracts` scenario covers the generated form.
+
+The two gates are complementary, and neither substitutes for the other: an
+assert runs *inside* the transform and can check intermediate state a promise
+never sees, while a promise is enforced by the runtime against the materialized
+output and cannot be loosened by editing the transform. The assert rules below
+still stand on their own terms — in particular, never restate the transform's
+arithmetic as its own proof.
+
+One caveat worth carrying: the promise gate depends on the local Python compute
+driver being `OneShot`, which routes it through `BatchCompute` so the run
+reaches the kernel's verification phase. Under `Streaming` no
+`AllPromisesChecked` event is emitted at all.
 
 At the **pack level** (not specific to desktop, but desktop's skills are subject
 to it), `scripts/validate_skills.py` enforces the mechanical conventions in
