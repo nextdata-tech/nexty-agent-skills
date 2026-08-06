@@ -1563,6 +1563,16 @@ def canonical_object(raw: bytes) -> dict:
         raise SpecReadError(str(exc), reason="unsupported_version") from exc
     except _v2.ParseError as exc:
         raise SpecReadError(str(exc), reason="unparseable") from exc
+    except _v3.UnsupportedVersionError as exc:
+        raise SpecReadError(str(exc), reason="unsupported_version") from exc
+    except _v3.ParseError as exc:
+        # The v3 arm is normalized for the same reason the v2 arms are:
+        # `SpecReadError` is this function's single failure type, and a caller
+        # catching it should not also have to know that the version dispatch
+        # above can surface the authoring module's own `ValueError`. Without
+        # this clause the next caller that reasonably catches `SpecReadError`
+        # reintroduces the escape this PR fixes at two sites.
+        raise SpecReadError(str(exc), reason="unparseable") from exc
 
 
 def canonical_bytes(raw: bytes) -> bytes:

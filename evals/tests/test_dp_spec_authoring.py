@@ -997,3 +997,16 @@ def test_the_rejected_proposal_message_names_only_a_parsed_version(tmp_path: Pat
     message = vds.validate(spec, proposal)["diagnostics"][0]["message"]
     assert "dp_spec_version 2" in message
     assert "None" not in message
+
+
+def test_canonical_object_raises_only_spec_read_error_for_a_bad_v3_source():
+    """`SpecReadError` is the canonicalizer's single failure type.
+
+    A caller that catches it must not also have to know the version dispatch
+    can surface `dp_spec_authoring.ParseError` — that gap is what let the two
+    verifier sites above escape uncaught.
+    """
+    bad = b"---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n"
+    with pytest.raises(dpd.SpecReadError) as caught:
+        dpd.canonical_object(bad)
+    assert caught.value.reason == "unparseable"
