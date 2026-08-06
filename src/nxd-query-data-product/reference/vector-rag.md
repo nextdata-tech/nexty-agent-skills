@@ -18,7 +18,7 @@ steps for cheap one-shot queries; enable them when recall or precision are weak.
 Credentials come from the leased `<port_credentials_file>` (Step 5 of SKILL.md —
 the gateway has no lease tool, so this path stays on REST `connect_port.py`).
 
-**Step 1 — Discover the chunk schema and embedding model.**
+### Step 1 — Discover the chunk schema and embedding model
 
 Read the data product's `description` **and** its models in one gateway call:
 `gateway_tools.py details --dp <dp> --models` passes `proxy__get_data_product_details`
@@ -33,7 +33,7 @@ different or staler schema. Learn:
 
 Surface the embedding model to the user and confirm before proceeding — querying with a different model from the one used at ingest gives nonsense results.
 
-**Step 2 — Query rewriting (LLM-driven, no script).**
+### Step 2 — Query rewriting (LLM-driven, no script)
 
 Before embedding, you (Claude) draft 1–3 candidate query strings derived from the user's natural-language question:
 
@@ -43,7 +43,7 @@ Before embedding, you (Claude) draft 1–3 candidate query strings derived from 
 
 Run each candidate through steps 3–5 and fuse results (dedup by primary key, sum RRF scores). For one-shot simple queries skip this — embed the user's question directly.
 
-**Step 3 — Metadata pre-filter (optional).**
+### Step 3 — Metadata pre-filter (optional)
 
 If the user's question carries obvious filters (e.g. "in the NXD project", "resolved tickets only", "from last quarter"), apply them as a `WHERE` on the metadata JSON before the similarity search. This is faster and more accurate than letting the vector search return cross-project chunks you then have to discard.
 
@@ -55,7 +55,7 @@ Pass `--filter '<json>'` to `vector_search.py`. The keys/values are whatever met
 
 Equality for scalars, IN-list for arrays. Translates to e.g. `langchain_metadata->>'<field>' = '<value>' AND langchain_metadata->>'<status_field>' IN ('<value-a>','<value-b>')`.
 
-**Step 4 — Retrieve (vector-only or hybrid).**
+### Step 4 — Retrieve (vector-only or hybrid)
 
 Compute the query embedding once per candidate query:
 
@@ -89,7 +89,7 @@ Then retrieve. Two modes:
 
   Pinecone hybrid is **not** wired up here — pgvector only.
 
-**Step 5 — Abstain on low confidence (optional).**
+### Step 5 — Abstain on low confidence (optional)
 
 Pass `--min-score <f>` to set a floor on the best result's score (RRF score for hybrid, `1/(1+L2)` for vector-only). If no result clears the bar, the script returns `"abstain": true` with empty `rows`. When that fires, **tell the user "no good match in the data product"** rather than hallucinating from weak chunks. The data-quality / expectation model that governs when to trust a port's data is documented at `<app_url>/docs/#/tutorials/guides/05-expectations`.
 
@@ -99,11 +99,11 @@ Reasonable starting thresholds:
 
 Tune per DP — log a few real queries first.
 
-**Step 6 — Generate the answer (LLM, in the conversation).**
+### Step 6 — Generate the answer (LLM, in the conversation)
 
 Pass the surviving rows — text chunk + metadata — back into the conversation. You (Claude) synthesise prose for the user's original question. Always **cite** by the metadata that identifies each chunk's source (`key`, `url`, `created`, `assignee`). Cite the chunks you actually used, not the whole top-k. If the script returned `"abstain": true`, say so plainly.
 
-**Step 7 — Agentic loop (optional, LLM-driven, no script).**
+### Step 7 — Agentic loop (optional, LLM-driven, no script)
 
 If the first retrieval is partial or weak, refine and re-search — up to 3 rounds. Use the existing tools, don't add new ones. Refinement strategies:
 

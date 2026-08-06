@@ -422,8 +422,9 @@ predicate false either way.
   "source_state": { "origin": "agent_observed",
     "cursor_field": "created_at", "watermark": "2026-07-30T00:00:00Z",
     "note": "SOURCE DATA STALENESS — a separate axis. Never participates in materialization." },
-  "supervisor_detail": { "origin": "unbound",
-    "note": "stage-4 traceback / per-attempt identity; no producer bound yet" }
+  "supervisor_detail": { "origin": "supervisor_reported",
+    "path": "tool:inspect_run.run.stdout_tail",
+    "note": "verbatim path-redacted traceback quoted from inspect_run; per-attempt identity remains unbound" }
 }
 ```
 
@@ -893,12 +894,17 @@ letting a reader assume otherwise.
 - **`concessions[].what` / `.why` / `.alternative_rejected` are LLM prose too.**
   The *existence* of a concession and its `code` are checkable; the account of
   it is not.
-- **Some fields have no producer yet.** Stage-4 supervisor tracebacks and
-  per-attempt supervisor identity are schema with `origin: "unbound"`. The pack
-  names a run-inspection tool once and never uses it — no schema, no reference
-  doc, no step, no test — so nothing here is designed around a guess about what
-  it returns. The field exists so a producer can bind to it later without a
-  schema change.
+- **Supervisor tracebacks now have a producer; per-attempt identity does not.**
+  `mcp__nxd-desktop__inspect_run`, called once with the failed `run_id`, returns
+  a `run.stdout_tail` carrying the verbatim, path-redacted traceback from inside
+  the user transform — enough to fill `supervisor_detail` with
+  `origin: "supervisor_reported"`, quoting that payload and naming
+  `tool:inspect_run.run.stdout_tail` as its path. See
+  [failure-handling.md](failure-handling.md) § After a failed build.
+  **Per-attempt supervisor identity is still `origin: "unbound"`**, as is stage
+  attribution: the supervisor emits no `code`/`stage`/`severity`/`owner`, so the
+  stage remains an agent inference over supervisor-authored evidence. Those
+  fields exist so a producer can bind to them later without a schema change.
 
 The design move is deliberate: **define the schema now, bind the producer
 later.** Every field carries its origin, so an agent-inferred value is visibly

@@ -41,10 +41,13 @@ There are three ways the suite runs, and only one of them is unconditional:
 | **Gate** | fails on regression vs. the 10 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
 
 One caveat that applies to both gating columns: `evals/baselines/public.json` records
-10 cells, of which 5 are `PASS`. Gating is on regression from a baselined `PASS`
-(see below), so unbaselined cells run and are reported but cannot fail anything —
-the effective gating surface is those 5 cells, not the whole suite. Widening it
-means recording more cells in the baseline, not changing the workflows.
+10 cells, of which 5 are `PASS`. Two cells are marked `flaky`
+(`false-pass-validation`, which is one of those five, and `nxd-setup-headless-auth`
+on the `FAIL` side); a flaky cell never gates in either direction, so it can neither
+regress nor be recorded as an improvement. Gating is on regression from a baselined,
+non-flaky `PASS` (see below), so unbaselined cells run and are reported but cannot
+fail anything — the effective gating surface is 4 cells, not the whole suite.
+Widening it means recording more cells in the baseline, not changing the workflows.
 
 **Pull requests are opt-in.** Add the `run-evals` label to a PR and the affected
 scenarios run and gate on regression, exactly as before; adding the label to an
@@ -205,10 +208,11 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 6 of 30 public scenarios use this today
-(`coauthor-executable-policy-readback`, `coauthor-supplied-rubric`,
-`derive-models-from-questions`, `dp-static-artifact-lifecycle`,
-`desktop-custom-contracts`, `treasury-yield-curve`). It is the strongest signal available — prefer it
+Only 7 of 31 public scenarios use this today
+(`authenticated-api-source-build`, `coauthor-executable-policy-readback`,
+`coauthor-supplied-rubric`, `derive-models-from-questions`,
+`dp-static-artifact-lifecycle`, `desktop-custom-contracts`,
+`treasury-yield-curve`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)
@@ -220,7 +224,7 @@ than for being wrong — and it flips run to run with how chatty the agent
 happened to be.
 
 Declaring `workspace_files` makes the harness read those files out of the
-workspace and quote them to the judge as authoritative. Used by 5 scenarios.
+workspace and quote them to the judge as authoritative. Used by 6 scenarios.
 Full detail, and the two traps that produced confident wrong verdicts before
 being fixed, in [Writing checks that can actually be
 graded](#writing-checks-that-can-actually-be-graded).
@@ -411,7 +415,7 @@ record: null
 
 Give the body a title, Notes that plainly explain why there is no eval arm, and
 Evidence naming an existing carrying test file path such as
-`evals/tests/test_diagnostic.py` (prefer tests verified to fail against the
+`evals/tests/test_self_check_diagnostic_vocab.py` (prefer tests verified to fail against the
 previous implementation). Then run
 `python3 evals/benchmark_record.py --rebuild-index`. `--rebuild-index` validates
 all entries and rewrites the generated index; `--check` validates them and fails

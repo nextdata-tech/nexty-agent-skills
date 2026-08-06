@@ -318,14 +318,27 @@ open tracked issue or a documented note in the eval ledger:
 
 The old **prose/`nxd_decisions` drift gap is closed**: the hand-written prose
 record is retired, and the ledger is a projection of a snapshot whose hash the
-lock pins and Phase C checks (see "Context capture" above). What remains
-unbound is the **supervisor-side** half of the build record — which stage a
-build failure died in, the supervisor traceback, per-attempt identity. The
-schema carries those fields with an `origin` marking them
-`supervisor_reported`, but nothing binds `mcp__nxd-desktop__inspect_run` yet, so
-they are populated agent-side or not at all. That is deliberately fail-closed:
-an agent-inferred field is visibly weaker evidence than a supervisor-reported
-one, and an unbacked "the environment was bad" claim cannot reach
+lock pins and Phase C checks (see "Context capture" above).
+
+The **supervisor-side** half of the build record is now bound too.
+`mcp__nxd-desktop__inspect_run` is called **once** with the failed `run_id`, and
+the loop classifies from that recorded diagnostic rather than from the
+`build_data_product` error string — which is only the outermost frame and
+routinely a generic timeout that names no stage. The call takes no ownership
+lock and starts no runtime, so it is safe while another session builds. Its
+`run.stdout_tail` carries the verbatim, path-redacted traceback from inside the
+user transform, which is what backs an `origin: supervisor_reported` field with
+real supervisor-authored evidence. See
+`src/nxd-run-job-loop/reference/failure-handling.md` § After a failed build.
+
+Two limits survive that binding. Stage **attribution** is still an agent
+inference over supervisor-authored evidence: the supervisor emits no
+`code`/`stage`/`severity`/`owner`, and while `s4_pin`, `s6_run` and `s7_publish`
+are distinguishable from the `phases` timeline plus `staging_present` /
+`child_exit`, **`s5_serve` is not**. Per-attempt identity is still not
+supervisor-reported. Those remaining gaps stay deliberately fail-closed: an
+agent-inferred field is visibly weaker evidence than a supervisor-reported one,
+and an unbacked "the environment was bad" claim cannot reach
 `environment_suspect`.
 
 ## Where things live
