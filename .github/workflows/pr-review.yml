@@ -6,18 +6,25 @@ name: pr-review
 # minus the Codex job, with an inline prompt (this repo has no /pr-review skill).
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-review-${{ github.event.pull_request.number }}
+  # Keep unrelated label events from cancelling a running review before the job
+  # guard can skip them. The review-high-stakes label shares the normal PR group
+  # so it supersedes an in-flight review rather than racing it.
+  group: pr-review-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review-high-stakes' && github.run_id || 'review' }}
   cancel-in-progress: true
 
 jobs:
   claude-review:
-    if: github.event.pull_request.draft == false
+    if: >-
+      ${{ github.actor != 'dependabot[bot]' &&
+          github.event.pull_request.draft == false &&
+          !contains(github.event.pull_request.labels.*.name, 'skip-claude-review') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'review-high-stakes') }}
     runs-on: ubuntu-latest
     # Advisory only — review failures must never block merge. Do not mark this a required check.
     continue-on-error: true
@@ -34,7 +41,76 @@ jobs:
           submodules: recursive   # validator needs the examples submodule
           ref: ${{ github.event.pull_request.head.sha }}
 
+      # Profile the full PR diff, not the incremental slice: a small follow-up
+      # push must not downgrade a PR that already touched an invariant surface.
+      - id: review-profile
+        env:
+          FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'review-high-stakes') && 'true' || 'false' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Seed full/xhigh first so a classifier crash leaves the safe tier in
+          # place — later writes to $GITHUB_OUTPUT win over these.
+          {
+            echo "profile=full"
+            echo "effort=xhigh"
+            echo "reason=classifier-error"
+            echo "file_count=0"
+            echo "changed_lines=0"
+          } >>"$GITHUB_OUTPUT"
+
+          # Run the classifier from the BASE revision, never the PR head: the
+          # head is untrusted and could otherwise downgrade its own review.
+          trusted_profile_script="$RUNNER_TEMP/pr-review-profile.sh"
+          if git show "$BASE_SHA:.github/scripts/pr-review-profile.sh" >"$trusted_profile_script"; then
+            if ! bash "$trusted_profile_script" "$BASE_SHA" "$HEAD_SHA" "$FORCE_FULL"; then
+              echo "Trusted PR review classifier failed; retaining full/xhigh defaults." >&2
+            fi
+          else
+            echo "Trusted PR review classifier is unavailable; retaining full/xhigh defaults." >&2
+          fi
+
+      - name: Record review profile
+        env:
+          PROFILE: ${{ steps.review-profile.outputs.profile }}
+          EFFORT: ${{ steps.review-profile.outputs.effort }}
+          REASON: ${{ steps.review-profile.outputs.reason }}
+          FILE_COUNT: ${{ steps.review-profile.outputs.file_count }}
+          CHANGED_LINES: ${{ steps.review-profile.outputs.changed_lines }}
+        shell: bash
+        run: |
+          printf "Claude review profile: \`%s\` (Opus/%s; reason=%s; files=%s; changed lines=%s).\n" \
+            "$PROFILE" "$EFFORT" "$REASON" "$FILE_COUNT" "$CHANGED_LINES" >>"$GITHUB_STEP_SUMMARY"
+
+      # Only synchronized pushes need a settling window. Cancel-in-progress
+      # already discards a superseded run, but it does so after the review has
+      # burned tokens; this skips before Claude starts.
+      - id: stale-check
+        if: github.event.action == 'synchronize'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "stale=false" >>"$GITHUB_OUTPUT"
+          sleep 60
+
+          if current_head="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)"; then
+            if [ "$current_head" != "$EVENT_HEAD" ]; then
+              echo "stale=true" >>"$GITHUB_OUTPUT"
+              printf 'Claude review skipped: a newer PR head arrived during the synchronize debounce.\n' >>"$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            printf 'Warning: unable to check the current PR head after debounce; continuing with review.\n' >>"$GITHUB_STEP_SUMMARY"
+          fi
+
       - id: claude
+        if: steps.stale-check.outputs.stale != 'true'
         uses: anthropics/claude-code-action@v1
         continue-on-error: true
         with:
@@ -49,6 +125,30 @@ jobs:
             PR #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
             Base: ${{ github.event.pull_request.base.sha }}
             Head: ${{ github.event.pull_request.head.sha }}
+            Event: ${{ github.event.action }}
+            Review profile: ${{ steps.review-profile.outputs.profile }}
+            Profile reason: ${{ steps.review-profile.outputs.reason }}
+
+            Review scope (do this FIRST, before reading anything else):
+              1. List prior reviews with
+                 `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews`.
+                 Find the most recent whose author login is `claude[bot]` (or
+                 `github-actions[bot]` for legacy reviews). Note its `commit_id` (PRIOR_SHA),
+                 `state` (PRIOR_STATE), and `id` (PRIOR_REVIEW_ID).
+              2. If this is the `review-high-stakes` label event, review the full PR diff
+                 regardless of PRIOR_SHA; still retain PRIOR_STATE and PRIOR_REVIEW_ID.
+              3. Otherwise, if PRIOR_SHA exists and differs from the current head, scope the
+                 review to `git diff PRIOR_SHA..HEAD` only. Do not re-flag findings against
+                 code that did not change since the prior review.
+              4. If no prior review exists, review the full PR diff.
+
+            Depth (the supplied profile is a minimum — never downgrade `full`):
+              - `compact`: the diff touches only prose and non-invariant files. Review the
+                changed lines for correctness and convention drift. You may skip re-verifying
+                pack invariants that no changed file can affect, and skip reading files
+                outside the diff unless a finding depends on them.
+              - `full`: the diff touches a version surface, a SKILL.md, the pack manifests,
+                CI/build machinery, or is large. Run every check below in full.
 
             1. Run: python3 scripts/validate_skills.py --root .
                Report any failures as findings (each is a hard convention violation).
@@ -74,8 +174,18 @@ jobs:
                gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews
                Use REQUEST_CHANGES for any high-severity finding, COMMENT
                otherwise. APPROVE is unavailable to GitHub Apps and silently
-               degrades to COMMENT, so do not request it. If clean, post a
-               minimal COMMENT "✅ No findings."
+               degrades to COMMENT, so do not request it.
+
+               Skip-if-clean — with zero findings and no architectural concerns:
+                 - No PRIOR_SHA (this is the initial review): post a minimal COMMENT
+                   review with body "✅ No findings."
+                 - PRIOR_SHA exists and PRIOR_STATE is COMMENT: post nothing at all.
+                   Repeating "no findings" on every push is pure noise. Say so in your
+                   final message instead.
+                 - PRIOR_SHA exists and PRIOR_STATE is CHANGES_REQUESTED: the incremental
+                   diff resolved the earlier findings, so post a COMMENT review whose body
+                   states that the prior requested changes appear addressed, and reference
+                   PRIOR_REVIEW_ID.
 
             Posting shape for inline comments (MANDATORY when you have any):
             The action's per-prefix Bash permission engine rejects compound
@@ -89,13 +199,13 @@ jobs:
             Do NOT use `echo > file`, `printf > file`, `cat <<EOF`, or `--input -`.
           claude_args: |
             --model opus
-            --effort high
+            --effort ${{ steps.review-profile.outputs.effort }}
             --allowedTools "Bash(gh api:*),Bash(gh pr:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(python3:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(ls:*),Bash(wc:*),Bash(mkdir:*),Read,Write,Grep,Glob,Agent"
 
       # Fallback: continue-on-error swallows a failed action step, leaving the PR
       # with no review. Post a visible comment so reviewers know the bot didn't run.
       - name: Post fallback comment on action failure
-        if: steps.claude.outcome == 'failure'
+        if: steps.stale-check.outputs.stale != 'true' && steps.claude.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
