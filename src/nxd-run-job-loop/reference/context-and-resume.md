@@ -22,9 +22,10 @@ Draw the line clearly, because the recovery path depends on it:
 **Durable (survives the session):**
 
 - The **closure directory** at `…/nxd-jobs/<workflow>/closure/` on the file-writing
-  surface — the source copy, `spec.py`, `models.py`, `transform/`, and the four
+  surface — the source copy, `spec.py`, `models.py`, `transform/`, and the
   generated record files: `dp-spec.approved.md`, `dp-spec.lock.json`,
-  `build-record.json` and `README.md`. This is the one key a later session always
+  `build-record.json`, `README.md`, and — for a v3 closure —
+  `dp-spec.proposal.approved.json`. This is the one key a later session always
   has.
 - The **live `dp-spec.md`**, *beside* the closure at
   `…/nxd-jobs/<workflow>/dp-spec.md` — the hand-edited plan, with its drafting
@@ -54,7 +55,8 @@ closure carries its own answer, and the check is two commands.
 | file at the closure root | what it is |
 |---|---|
 | `dp-spec.approved.md` | a byte copy of the approved `dp-spec.md` this closure was compiled from |
-| `dp-spec.lock.json` | that copy's v2 canonical hash, snapshot hash, and compiler version |
+| `dp-spec.lock.json` | that copy's v3 canonical hash (v2 for an existing legacy closure), snapshot hash, and compiler version |
+| `dp-spec.proposal.approved.json` | v3 closures: the typed proposal snapshot, byte-hashed into the lock. Phase C fails if it is missing or does not match |
 | `build-record.json` | what happened: stages, attempts, concessions, blockers, the read-back |
 
 ```bash

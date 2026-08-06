@@ -101,7 +101,8 @@ those two phases rather than an accident of how they were added.
     because a check that prints the secret it found turns a contained file leak
     into a transcript leak.
 
-  Phase C checks the snapshot's **bytes**, while the shared v2 parser computes
+  Phase C checks the snapshot's **bytes**, while the shared canonicalizer
+  (v2 or v3, dispatched on `dp_spec_version`) computes
   the canonical hash without a YAML dependency. Step 7 still runs
   `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec
   <dp-spec.md>` to compare the live IR and the approved snapshot, and Phase C

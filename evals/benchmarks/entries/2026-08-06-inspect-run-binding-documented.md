@@ -1,13 +1,13 @@
 ---
 id: 2026-08-06-inspect-run-binding-documented
 date: 2026-08-06
-label: "nxd-run-job-loop: correct the build record's stale inspect_run unbound claim"
+label: "nxd-run-job-loop / nxd-generate-dp: correct stale inspect_run and v2-era closure claims"
 plugin_version: 0.36.1
 status: NO_EVAL
 scenarios: []
 record: null
 ---
-# Benchmark — nxd-run-job-loop: correct the build record's stale inspect_run unbound claim
+# Benchmark — nxd-run-job-loop / nxd-generate-dp: correct stale inspect_run and v2-era closure claims
 
 ## Notes
 
@@ -33,6 +33,24 @@ attribution remains an agent inference (the supervisor emits no
 genuinely `origin: "unbound"` — so that row of the origin vocabulary table stays
 valid.
 
+A second class of staleness is corrected in the same pass: docs written before
+the v3 authoring cutover that still describe the v2 artifact set as the only one.
+`reference/context-and-resume.md` — the doc a cold session reads to learn what
+persists — described `dp-spec.lock.json` as carrying "that copy's v2 canonical
+hash" and listed "the four generated record files", omitting
+`dp-spec.proposal.approved.json` entirely. `dp_diagnostics.py:1702-1709` writes a
+v3 lock for every new prose-first plan, and `self_check.py:1797-1896` makes that
+proposal snapshot's presence and hash a **blocking** Phase C failure — so the
+file a resuming session most needs was missing from the inventory, and the count
+was wrong for a v3 closure. `self-check.md:104` likewise named "the shared v2
+parser" where `dp_diagnostics.py:1577-1600` now dispatches on `dp_spec_version`.
+
+No v2 mention was deleted. `dp_spec_v2.py` still ships, and every doc calling it
+a legacy read-only verifier is accurate; the schema identifier strings
+(`nxd-diagnostic-v2`, `nxd-build-record-v2`, `nxd-dp-spec-lock-v2`) are literal
+wire-format names the code still emits. Only claims that presented the v2-era
+artifact set as current were reworded.
+
 ## Evidence
 
 `evals/tests/test_build_record_schema.py` pins the build-record schema and the
@@ -42,3 +60,9 @@ valid.
 `origin: supervisor_reported` must meet, and
 `evals/tests/test_build_record_s0_producer.py` covers producer binding. All 104
 tests across the three files pass with the corrected example.
+
+For the v3 closure claims, `evals/tests/test_dp_spec_authoring.py` is the
+carrying test: `:632` pins `lock["schema"] == "nxd-dp-spec-lock-v3"` and `:634`
+pins the `dp-spec.proposal.approved.json` snapshot bytes against the lock, with
+tamper cases at `:663-679` — exactly the file set and lock generation that
+`context-and-resume.md` now inventories. 57 tests, all passing.
