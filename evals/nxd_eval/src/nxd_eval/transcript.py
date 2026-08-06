@@ -29,6 +29,17 @@ from typing import Any
 
 QUERY_TOOL = "run_semantic_query"
 
+# The mesh MCP gateway multiplexes every data product's tools behind a single
+# server, so it re-exports each DP's tool under a 10-character deterministic
+# suffix derived from the DP output port (``run_semantic_query__grtmoib26y``).
+# Anchored so a hypothetical distinct tool (``run_semantic_query_v2``) is not
+# swept in by a bare ``startswith`` check.
+_QUERY_TOOL_RE = re.compile(rf"^{re.escape(QUERY_TOOL)}(?:__[a-z0-9]+)?$")
+
+
+def _is_query_tool(name: object) -> bool:
+    return isinstance(name, str) and bool(_QUERY_TOOL_RE.match(name))
+
 # Verbalized-confidence line the agent is asked to emit (QA-Calibration, ICLR
 # 2025): a trailing ``CONFIDENCE: 0.NN`` self-report in [0, 1]. Matched
 # case-insensitively anywhere in the final answer; the LAST occurrence wins so a
@@ -78,10 +89,37 @@ class QueryCall:
 
     @property
     def rows(self) -> list[dict] | None:
+        """Parsed rows as ``list[dict]``, keyed by ``columns``.
+
+        The production gateway returns ``rows`` as ``list[str]`` — each a
+        JSON-encoded positional array — with the field names carried
+        separately in ``columns``. Zips the two together; a payload that does
+        not match that shape (arity mismatch, unparsable row, no columns) is
+        passed through untouched so a future contract change fails loudly
+        rather than being silently remapped.
+        """
         if self.result is None:
             return None
         rows = self.result.get("rows")
-        return rows if isinstance(rows, list) else None
+        if not isinstance(rows, list):
+            return None
+        columns = self.result.get("columns")
+        if not isinstance(columns, list) or not columns:
+            return rows
+        out: list[dict] = []
+        for row in rows:
+            if isinstance(row, dict):
+                out.append(row)
+                continue
+            if isinstance(row, str):
+                try:
+                    row = json.loads(row)
+                except ValueError:
+                    return rows
+            if not isinstance(row, list) or len(row) != len(columns):
+                return rows
+            out.append(dict(zip(columns, row)))
+        return out
 
     @property
     def compiled_sql(self) -> str | None:
@@ -184,7 +222,7 @@ def extract(state: Any) -> Transcript:
     for msg in messages:
         if getattr(msg, "role", None) != "tool":
             continue
-        if getattr(msg, "function", None) != QUERY_TOOL:
+        if not _is_query_tool(getattr(msg, "function", None)):
             continue
         parsed = _parse_result(_message_text(msg))
         ordered_results.append(parsed)
@@ -196,7 +234,7 @@ def extract(state: Any) -> Transcript:
     fallback_idx = 0
     for msg in messages:
         for tc in getattr(msg, "tool_calls", None) or []:
-            if getattr(tc, "function", None) != QUERY_TOOL:
+            if not _is_query_tool(getattr(tc, "function", None)):
                 continue
             args = getattr(tc, "arguments", None)
             args = dict(args) if isinstance(args, dict) else {}
@@ -208,7 +246,8 @@ def extract(state: Any) -> Transcript:
             else:
                 result = None
             fallback_idx += 1
-            errored = result is not None and isinstance(result.get("error"), str)
+            err = result.get("error") if result is not None else None
+            errored = isinstance(err, str) and bool(err.strip())
             calls.append(QueryCall(arguments=args, result=result, errored=errored))
 
     # Final free-text answer: last assistant message with non-empty text.
