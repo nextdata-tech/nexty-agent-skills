@@ -2165,11 +2165,14 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
     try:
         snapshot_hash = spec_hash(raw)
     except _READ_FAILURES as exc:
-        # `_READ_FAILURES`, not `SpecReadError`: `canonical_object` dispatches on
-        # the sniffed version, so a snapshot naming v3 raises `_v3.ParseError`
-        # here rather than the v2 boundary's `SpecReadError`. Catching only the
-        # narrower type let a v3-shaped snapshot under a v2 lock escape as an
-        # unhandled exception — no report, no diagnostic for a form to render.
+        # Catching only `SpecReadError` let a v3-shaped snapshot under a v2 lock
+        # escape as an unhandled exception — no report, no diagnostic for a form
+        # to render — because `canonical_object` dispatches on the sniffed
+        # version and its v3 arm raised `_v3.ParseError` unnormalized. That arm
+        # is normalized now, so `SpecReadError` alone would suffice today;
+        # `_READ_FAILURES` stays because it is what every sibling site in this
+        # module uses, and because the next dispatch arm added upstream should
+        # not be able to reopen this hole by forgetting to normalize.
         report.error(
             f"the snapshot could not be canonicalized: {exc}",
             code="closure.lock_unparseable",
