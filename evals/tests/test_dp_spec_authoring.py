@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1101,3 +1102,38 @@ def test_both_lock_generations_report_one_code_for_a_missing_live_spec(tmp_path:
         assert live[0]["path"] == "spec"
         assert "closure.spec_snapshot_missing" not in [d["code"] for d in report["diagnostics"]]
         assert dpd.validate_report(report) == []
+
+
+def test_validate_dp_spec_emits_only_registered_codes():
+    """The direction the `spec.` table's comment used to claim was enforced.
+
+    `Report.error` rejects an unknown code, but `validate_dp_spec.py` hand-builds
+    its envelopes and bypasses that check — which is how `spec.parse.invalid` and
+    `spec.frontmatter.unsupported_version`, the two most reachable outcomes of
+    the validator, shipped unregistered. A consumer resolving `owner`, `control`
+    or `summary` from the registry got a `KeyError` on the common failure.
+    """
+    source = (SCRIPTS / "validate_dp_spec.py").read_text(encoding="utf-8")
+    emitted = set(re.findall(r'"code":\s*"(spec\.[a-z0-9_.]+)"', source))
+    assert emitted, "the scan found no spec.* codes — the pattern has drifted"
+    unregistered = sorted(code for code in emitted if code not in dpd.CODES)
+    assert unregistered == [], f"validate_dp_spec.py emits unregistered codes: {unregistered}"
+
+
+def test_registered_rows_agree_with_the_envelopes_that_emit_them():
+    """A registry row that contradicts its emitter is worse than no row.
+
+    The registry is where a form resolves the control to render; if the envelope
+    says one thing and the row another, a consumer's behavior depends on which
+    it happened to read.
+    """
+    source = (SCRIPTS / "validate_dp_spec.py").read_text(encoding="utf-8")
+    blocks = re.findall(
+        r'"code":\s*"(spec\.[a-z0-9_.]+)".*?"owner":\s*"([a-z]+)".*?"control":\s*"([a-z]+)"',
+        source,
+        flags=re.DOTALL,
+    )
+    assert blocks, "the scan found no emitter blocks — the pattern has drifted"
+    for code, owner, control in blocks:
+        assert dpd.CODES[code]["owner"] == owner, code
+        assert dpd.CODES[code]["control"] == control, code

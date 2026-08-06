@@ -51,16 +51,26 @@ being misread:
    snapshot, a file that is present and intact, where v3 let the read raise and
    reported the live-spec fault. Letting the read raise in both places makes the
    missing and the unparseable case agree across generations.
+   `spec.proposal.unsupported` carries `control: "none"`: no field in the v2
+   document can be edited to clear it, since the repair is to drop the flag.
 6. The `spec.` table's header claimed a bidirectional invariant that
    `test_validator_code_coverage.py` does not enforce — it exercises the `v2.*`
    vocabulary — which is why nothing noticed that `spec.parse.invalid` and
-   `spec.frontmatter.unsupported_version` are emitted without being registered.
-   The comment now states what actually runs.
+   `spec.frontmatter.unsupported_version`, the two most reachable outcomes of
+   the validator, shipped unregistered. `Report.error` rejects an unknown code;
+   those two escaped only because `validate_dp_spec.py` hand-builds its
+   envelopes and bypasses that check, so a consumer resolving
+   `owner`/`control`/`summary` from the registry hit a `KeyError` on the common
+   failure and a clean lookup on the rare one. Both are registered now, with the
+   `owner` and `control` their envelopes already emit, and the claimed direction
+   is enforced by a test rather than asserted by a comment.
 
 ## Evidence
 
-`evals/tests/test_dp_spec_authoring.py` carries the change. Nine tests fail
-against the pre-#164 implementation and pass after it, covering every arm above:
+`evals/tests/test_dp_spec_authoring.py` carries the change. Eleven tests fail
+against the pre-#164 implementation and pass after it, covering every arm above.
+The list is taken from an actual run with the scripts checked out at `cf9102f`
+(`11 failed, 46 passed`), not from reasoning about which arms ought to move:
 
 - `test_v2_lock_verify_reports_an_unparseable_v3_snapshot_instead_of_raising`
   and `test_v2_lock_verify_reports_an_unparseable_v3_live_spec_instead_of_raising`
@@ -69,10 +79,6 @@ against the pre-#164 implementation and pass after it, covering every arm above:
   `test_the_rejected_proposal_message_names_only_a_parsed_version`, and
   `test_lock_write_rejects_a_proposal_supplied_against_a_v2_spec` — `ok: true`
   for a proposal that was never opened (arms 2 and 3).
-- `test_proposal_rejection_never_masks_the_reason_a_spec_cannot_be_read`,
-  parametrized over a v1, a headerless, and a broken-frontmatter source — the
-  rejection ran before the parse, so an unreadable document was answered with a
-  flag-usage complaint naming a version it never declared (arm 2).
 - `test_canonical_object_raises_only_spec_read_error_for_a_bad_v3_source` — the
   only cover for the normalization; before it, `_v3.ParseError` propagated and
   `pytest.raises(SpecReadError)` fails (arm 4).
@@ -80,12 +86,22 @@ against the pre-#164 implementation and pass after it, covering every arm above:
   `test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spec`,
   and `test_both_lock_generations_report_one_code_for_a_missing_live_spec` — all
   three build real closures and assert the shared code, stage, and path (arm 5).
+- `test_validate_dp_spec_emits_only_registered_codes` and
+  `test_registered_rows_agree_with_the_envelopes_that_emit_them` — on base the
+  first reports `spec.parse.invalid` unregistered and the second raises
+  `KeyError` on the same code (arm 6). Both were mutation-checked: renaming an
+  emitted code and flipping one envelope's `control` are each caught.
 
-Three further tests pass against both implementations and hold the fixes to
-their scope: `test_v2_lock_verify_still_crashes_on_nothing_for_a_well_formed_closure`
+Four further tests pass against both implementations and hold the fixes to
+their scope. `test_v2_lock_verify_still_crashes_on_nothing_for_a_well_formed_closure`
 and `test_validate_dp_spec_still_accepts_a_v2_spec_without_a_proposal` guard the
-widened `except` against swallowing the hash comparison it wraps, and
+widened `except` against swallowing the hash comparison it wraps;
 `test_lock_write_still_writes_a_v2_lock_without_a_proposal` keeps the ordinary
-v2 pin path writing both closure artifacts. The registry additions are pinned by
+v2 pin path writing both closure artifacts; and
+`test_proposal_rejection_never_masks_the_reason_a_spec_cannot_be_read`,
+parametrized over a v1, a headerless, and a broken-frontmatter source, pins the
+ordering of arm 2 — it passes on base because base has no rejection to mask
+anything, so it guards against a regression this fix could have introduced
+rather than demonstrating one it removed. The registry additions are pinned by
 `FROZEN_CODES` in `evals/tests/test_dp_diagnostics_schema.py`, which failed until
 both codes were added deliberately.

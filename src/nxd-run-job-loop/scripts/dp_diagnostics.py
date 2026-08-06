@@ -280,22 +280,31 @@ def _register_table(stage: str, rows: Iterable[tuple], **defaults) -> None:
 
 
 # --- domain `spec.` — stage s0_spec, produced by validate_dp_spec.py ---------
-# Every code here is produced by at least one check in validate_dp_spec.py.
+# Every code here is produced by at least one check in validate_dp_spec.py, and
+# every code that file can emit appears here.
 #
-# The reverse direction is NOT enforced, and the comment that once claimed it
-# was had gone stale: `test_validator_code_coverage.py` exercises the `v2.*`
-# field-addressed vocabulary, not this table, so nothing noticed that
-# `spec.parse.invalid` and `spec.frontmatter.unsupported_version` are emitted
-# by the envelope builders without appearing here. Say what is actually
-# checked rather than leave the next reader trusting a guarantee that does not
-# run. `spec.encoding.not_utf8` is a further exemption in the other direction:
+# The second direction is the one that had rotted. A comment here used to claim
+# `test_validator_code_coverage.py` enforced both; it exercises the `v2.*`
+# field-addressed vocabulary instead, so nothing noticed that
+# `spec.parse.invalid` and `spec.frontmatter.unsupported_version` — the two most
+# reachable outcomes of the validator — shipped unregistered. `Report.error`
+# rejects an unknown code, so they only escaped because `validate_dp_spec.py`
+# hand-builds its envelopes and bypasses that check; a consumer resolving
+# `owner`/`control`/`summary` from the registry hit a `KeyError` on the common
+# failure. Both are registered now, and
+# `test_validate_dp_spec_emits_only_registered_codes` enforces the direction the
+# stale comment claimed. `spec.encoding.not_utf8` is an exemption the other way:
 # it is raised at the file-read boundary, before a Report exists.
 _register_table(
     "s0_spec",
     (
         ("spec.encoding.not_utf8", "error", "agent", "none", False,
          "the file is not valid UTF-8"),
-        ("spec.proposal.unsupported", "error", "agent", "text", False,
+        ("spec.parse.invalid", "error", "user", "text", False,
+         "the document could not be read or split into frontmatter and body"),
+        ("spec.frontmatter.unsupported_version", "error", "user", "enum", False,
+         "dp_spec_version names a generation this boundary does not parse"),
+        ("spec.proposal.unsupported", "error", "agent", "none", False,
          "--proposal is a v3 input; the source is not a v3 spec"),
         ("spec.v2.invalid", "error", "agent", "none", False,
          "the v2 validator found a field-addressed spec error"),
@@ -516,6 +525,8 @@ _register_table(
 # not valid v2 diagnostics.
 _V2_PIPELINE_SPEC_CODES = frozenset({
     "spec.encoding.not_utf8",
+    "spec.frontmatter.unsupported_version",
+    "spec.parse.invalid",
     "spec.proposal.unsupported",
     "spec.v2.invalid",
     "spec.frontmatter.unparseable",

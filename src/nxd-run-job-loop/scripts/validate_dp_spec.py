@@ -106,7 +106,11 @@ def validate(path: Path, proposal_path: Path | None = None) -> dict:
                     "path": "v2:proposal",
                     "severity": "error",
                     "owner": "agent",
-                    "control": "text",
+                    # `none`, not `text`: no field in the v2 document can be
+                    # edited to clear this. The repair is to drop the flag, so
+                    # offering a text control invites typing into a field the
+                    # v2 model does not have.
+                    "control": "none",
                     "stage": "s0_spec",
                     "origin": "tool_computed",
                     "message": (

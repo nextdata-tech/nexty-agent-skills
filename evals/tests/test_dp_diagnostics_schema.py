@@ -103,6 +103,7 @@ FROZEN_CODES = (
   'spec.frontmatter.bad_name', 'spec.frontmatter.bad_status',
   'spec.frontmatter.bad_version', 'spec.frontmatter.missing_key',
   'spec.frontmatter.rubric_version_missing', 'spec.frontmatter.unparseable',
+  'spec.frontmatter.unsupported_version',
   'spec.gate.no_rule', 'spec.gate.no_unknown', 'spec.gate.not_mapping',
   'spec.gate.unknown_is_fail', 'spec.judgment.bad_produced_by',
   'spec.judgment.bad_reruns', 'spec.judgment.evidence_disabled',
@@ -115,7 +116,8 @@ FROZEN_CODES = (
   'spec.open_question.bad_disposition', 'spec.open_question.no_question',
   'spec.open_question.not_mapping', 'spec.output.bad_kind',
   'spec.output.no_name', 'spec.output.not_mapping',
-  'spec.output.unknown_model', 'spec.population.missing',
+  'spec.output.unknown_model', 'spec.parse.invalid',
+  'spec.population.missing',
   'spec.population.not_mapping', 'spec.population.prose',
   'spec.prefill.empty_required_field', 'spec.proposal.unsupported',
   'spec.question.unanswered',
@@ -151,7 +153,9 @@ FROZEN_CODES = (
 # v2-only registry: the frozen historical list above is intentionally filtered
 # here so this test cannot reintroduce the removed v1 spec domains.
 _V2_SPEC_CODES = {
-    'spec.encoding.not_utf8', 'spec.proposal.unsupported', 'spec.v2.invalid',
+    'spec.encoding.not_utf8', 'spec.parse.invalid',
+    'spec.frontmatter.unsupported_version',
+    'spec.proposal.unsupported', 'spec.v2.invalid',
     'spec.frontmatter.unparseable', 'spec.frontmatter.missing_key',
     'spec.frontmatter.bad_version', 'spec.frontmatter.bad_name',
     'spec.frontmatter.bad_status', 'spec.section.missing',
