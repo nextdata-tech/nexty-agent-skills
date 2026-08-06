@@ -1119,6 +1119,12 @@ def test_validate_dp_spec_emits_only_registered_codes():
     unregistered = sorted(code for code in emitted if code not in dpd.CODES)
     assert unregistered == [], f"validate_dp_spec.py emits unregistered codes: {unregistered}"
 
+    # The `spec.*` scope is deliberate, so pin the other half of it: the `v2.*`
+    # and `v3.*` vocabularies are self-describing and must stay out of the
+    # registry, which is why this scan does not cover them.
+    assert [code for code in dpd.CODES if code.startswith(("v2.", "v3."))] == []
+    assert "v3.parse.invalid" in source and "v3.parse.invalid" not in dpd.CODES
+
 
 def test_registered_rows_agree_with_the_envelopes_that_emit_them():
     """A registry row that contradicts its emitter is worse than no row.

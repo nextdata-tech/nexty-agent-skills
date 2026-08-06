@@ -281,7 +281,11 @@ def _register_table(stage: str, rows: Iterable[tuple], **defaults) -> None:
 
 # --- domain `spec.` — stage s0_spec, produced by validate_dp_spec.py ---------
 # Every code here is produced by at least one check in validate_dp_spec.py, and
-# every code that file can emit appears here.
+# every `spec.*` code that file can emit appears here. The scope is deliberate:
+# that file also emits `v2.*` and `v3.*` codes, and no code in either vocabulary
+# belongs in this registry. Those are self-describing — a `ValidationIssue`
+# carries its own `owner` and `control` — so a consumer reads them off the
+# diagnostic rather than resolving them here.
 #
 # The second direction is the one that had rotted. A comment here used to claim
 # `test_validator_code_coverage.py` enforced both; it exercises the `v2.*`
