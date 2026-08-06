@@ -86,8 +86,18 @@ def _sample_metadata(case: "Case", suite: "Suite") -> dict:
         "judge_checks": list(suite.checks.get(case.expect, []))
         + list(suite.checks.get("judge", [])),
     }
+    # The intended slot selection for slot_match, read off the gold record the
+    # case points at. scorers._gold_selection reads this exact shape back out.
+    if case.gold_id and case.gold_id in suite.gold:
+        rec = suite.gold[case.gold_id]
+        meta["gold_selection"] = {
+            "measures": list(rec.get("measures") or []),
+            "group_by": list(rec.get("group_by") or []),
+            "filters": list(rec.get("filters") or []),
+        }
     # Judge-only context (why / gold_note / raw check text) rides along for the
     # scorer; it is NOT part of the Sample input, so the agent never sees it.
+    # Placed last so a case can still override the derived gold_selection.
     meta.update(case.metadata)
     return meta
 
