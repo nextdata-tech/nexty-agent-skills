@@ -4,7 +4,7 @@
 - Runtime delivery
 - Requirements
 - Matched wheel versions
-- Base-table transform
+- Transform and output wiring
 - Tool discovery
 - Cross-DP lineage
 

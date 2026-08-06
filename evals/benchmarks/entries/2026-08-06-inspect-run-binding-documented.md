@@ -51,6 +51,24 @@ a legacy read-only verifier is accurate; the schema identifier strings
 wire-format names the code still emits. Only claims that presented the v2-era
 artifact set as current were reworded.
 
+A third pass swept the remaining superseded-entity classes across all 91
+reference files and 17 SKILL.md. Two navigation defects were repaired:
+`runtime-and-dependencies.md:7` listed a `Base-table transform` section that had
+been renamed to `Transform and output wiring`, and `vector-rag.md` had all seven
+of its `## Contents` anchors resolving to nothing, because the `Step N` sections
+they target were bold paragraphs rather than headings — promoted to `###` so the
+existing links resolve and the file meets the AGENTS.md Contents convention for
+100+ line references. A repo-wide check now reports zero broken same-file
+anchors.
+
+The other classes in that sweep came back clean and are recorded here so the
+next audit need not redo them: every documented CLI invocation of this repo's
+own scripts matches its current parser (`dp_diagnostics.py`'s full
+subcommand/flag surface across 14 call sites, plus the query, analyze-mesh, and
+evals scripts), all 7 `mcp__nxd-desktop__*` tool names match the supervisor, no
+doc names a renamed skill or a nonexistent symbol, and every documented `EVAL_*`
+/ `NXD_*` / `JOB_*` env var is read somewhere in code.
+
 ## Evidence
 
 `evals/tests/test_build_record_schema.py` pins the build-record schema and the
