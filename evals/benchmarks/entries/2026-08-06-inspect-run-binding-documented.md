@@ -2,7 +2,7 @@
 id: 2026-08-06-inspect-run-binding-documented
 date: 2026-08-06
 label: "nxd-run-job-loop / nxd-generate-dp: correct stale inspect_run and v2-era closure claims"
-plugin_version: 0.36.1
+plugin_version: 0.36.2
 status: NO_EVAL
 scenarios: []
 record: null
