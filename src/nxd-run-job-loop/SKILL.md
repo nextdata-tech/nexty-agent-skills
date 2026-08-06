@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.36.5
+  version: 0.36.6
 ---
 
 # nxd-run-job-loop skill
@@ -406,7 +406,9 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   table/endpoint the user didn't name, never invent or narrate a raw credential.
   A real credential lands in exactly one place — the generated
   `infra-profile.yaml` connector service's `attributes` — never elsewhere, never
-  in chat, never in `dp-spec.md`, which names key names only. Once landed, **the
+  in chat, never in `dp-spec.md`, which names key names only. **"Never in chat"
+  covers a value you invited there**: ask for *slot names*; the value reaches the
+  profile off-transcript, via a placeholder the user fills in ([reference/source-materialization.md](reference/source-materialization.md)). Once landed, **the
   closure directory itself is sensitive**: don't commit, zip, attach, or reuse it
   as a template without first clearing the old credential, and *share* it only
   through `export_data_product` — never a hand-zip, because its fail-closed

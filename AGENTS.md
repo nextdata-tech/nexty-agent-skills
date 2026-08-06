@@ -16,7 +16,27 @@ pack-level invariants CI cannot check on its own.
 - `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` — plugin and
   marketplace manifests for the Claude Code distribution path.
 - `evals/skill-sets.yaml` — named skill packs used by the eval harness.
-- `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip and assembles the uploadable whole-pack plugin zip.
+- `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip and
+  assembles the uploadable whole-pack plugin zip,
+  `build/nexty-agent-skills-v<version>.zip`, in the Desktop/Cowork layout:
+  `./skills/<name>/` trees plus a `.claude-plugin/plugin.json` with the `skills`
+  override stripped, because Desktop auto-discovers `./skills`.
+- `build-plugin.sh` — packages `.claude-plugin/plugin.json` + `src/` + `README.md`
+  into one Claude Code plugin zip,
+  `build/nexty-agent-skills-plugin-v<version>.zip`, in the documented plugin
+  format: plugin-root contents at the archive root, loadable with
+  `claude --plugin-dir <zip>` / `--plugin-url <url>`. This is the sibling of the
+  whole-pack zip above, not a duplicate of it — same skills, the other
+  distribution path, which is why it keeps the `skills` → `./src/` override
+  Desktop drops. `marketplace.json` is excluded on purpose — it describes the
+  marketplace *containing* this plugin (the git install path), and bundling it
+  makes `claude plugin validate` resolve the directory as a marketplace and skip
+  the plugin manifest. Not a release asset: `release.yml` publishes only the
+  `build-skills.sh` zips above. It keeps the examples submodule whole (no
+  200-entry cap on this path), validates the unpacked artifact with
+  `claude plugin validate --strict` when the CLI is present, and fails closed
+  when the submodule is uninitialized, when the two manifest versions disagree,
+  or when `plugin.json`'s `skills` field no longer points at `./src/`.
 - `.github/workflows/release.yml` — publishes those zips on a `v*` tag.
 - `experiments/<name>/` — self-contained prototypes. **Not part of the shipped
   pack**: nothing under `src/` imports them, `build-skills.sh` does not package
