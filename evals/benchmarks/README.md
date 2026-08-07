@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-07 | Claude Desktop plugin bundle and installer boundary amendments | NO_EVAL | — | [`2026-08-07-desktop-plugin-bundle-installer-boundaries`](entries/2026-08-07-desktop-plugin-bundle-installer-boundaries.md) |
 | 2026-08-06 | nxd-run-job-loop: v2/v3 cross-generation error paths return diagnostics | NO_EVAL | — | [`2026-08-06-v2-v3-boundary-error-paths`](entries/2026-08-06-v2-v3-boundary-error-paths.md) |
 | 2026-08-06 | nxd-run-job-loop / nxd-generate-dp: correct stale inspect_run and v2-era closure claims | NO_EVAL | — | [`2026-08-06-inspect-run-binding-documented`](entries/2026-08-06-inspect-run-binding-documented.md) |
 | 2026-08-06 | docs: retract the desktop 'only durable gate' claim from skill text and judge rubric | PASS | generate-runnable-dp-from-intent | [`2026-08-06-desktop-gate-claim-rubric-verified`](entries/2026-08-06-desktop-gate-claim-rubric-verified.md) |

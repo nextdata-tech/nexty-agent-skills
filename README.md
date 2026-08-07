@@ -191,7 +191,10 @@ asset and works on macOS and Windows; the script does not edit Claude's
 `local-agent-mode-sessions` state.
 
 To remove it, use the same Customize → Plugins screen. `uninstall --desktop` prints
-that guidance but cannot remove a UI-managed upload.
+that guidance but cannot remove a UI-managed upload. `status --desktop` and
+`uninstall --desktop` also report recognizable legacy-format app-state evidence
+read-only; they leave Claude-owned registries, caches, and uploaded skill state
+untouched.
 
 ### Manual install
 

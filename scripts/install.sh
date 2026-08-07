@@ -10,11 +10,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC_DIR="$ROOT/src"
 PLUGIN_JSON="$ROOT/.claude-plugin/plugin.json"
+DESKTOP_SUPPORT="$HOME/Library/Application Support/Claude"
+PLUGIN_NAME="nexty-agent-skills"
+MP_NAME="nexty"
 
 SUBCMD="install"
 declare -a TARGETS=()
 SCOPE="global"
 declare -a SKILLS=()
+SKILLS_REQUESTED=0
 DO_VALIDATE=1
 DO_SUBMODULE=1
 ASSUME_YES=0
@@ -73,6 +77,7 @@ parse_args() {
       --uninstall) SUBCMD="uninstall" ;;
       --skills)
         shift; [[ $# -gt 0 ]] || die "--skills needs an argument"
+        SKILLS_REQUESTED=1
         # shellcheck disable=SC2206
         SKILLS=($1)
         ;;
@@ -88,15 +93,21 @@ parse_args() {
     shift
   done
   [[ "$SUBCMD" == "help" ]] && { usage; exit 0; }
-  [[ ${#TARGETS[@]} -eq 0 ]] && TARGETS=("code")
+  if [[ -z "${TARGETS[0]+set}" ]]; then
+    TARGETS=("code")
+  fi
   dbg "assume-yes=$ASSUME_YES"
 
   local -A seen=()
   local -a unique=()
-  for target in "${TARGETS[@]}"; do
-    [[ -n "${seen[$target]:-}" ]] || { unique+=("$target"); seen[$target]=1; }
-  done
-  TARGETS=("${unique[@]}")
+  if [[ -n "${TARGETS[0]+set}" ]]; then
+    for target in "${TARGETS[@]}"; do
+      [[ -n "${seen[$target]:-}" ]] || { unique+=("$target"); seen[$target]=1; }
+    done
+  fi
+  if [[ -n "${unique[0]+set}" ]]; then
+    TARGETS=("${unique[@]}")
+  fi
 }
 
 require_cmd() {
@@ -106,7 +117,7 @@ require_cmd() {
 }
 
 selected_skills() {
-  if [[ ${#SKILLS[@]} -gt 0 ]]; then
+  if [[ -n "${SKILLS[0]+set}" ]]; then
     printf '%s\n' "${SKILLS[@]}"
   else
     for directory in "$SRC_DIR"/*/; do basename "$directory"; done
@@ -114,9 +125,24 @@ selected_skills() {
 }
 
 validate_skill_names() {
+  [[ ${#SKILLS[@]} -gt 0 ]] || return 0
   for skill in "${SKILLS[@]}"; do
     [[ -f "$SRC_DIR/$skill/SKILL.md" ]] || die "unknown skill: $skill (see $SRC_DIR/*/)"
   done
+}
+
+validate_target_options() {
+  local has_desktop=0
+  if [[ -n "${TARGETS[0]+set}" ]]; then
+    for target in "${TARGETS[@]}"; do
+      case "$target" in
+        desktop|cowork) has_desktop=1 ;;
+      esac
+    done
+  fi
+  if [[ "$has_desktop" -eq 1 && "$SKILLS_REQUESTED" -eq 1 ]]; then
+    die "--skills is only supported for Claude Code; Desktop/Cowork use the complete plugin pack"
+  fi
 }
 
 run_validation() {
@@ -230,7 +256,7 @@ plugin_pack_path() {
 }
 
 desktop_zip() {
-  [[ ${#SKILLS[@]} -eq 0 ]] || die "--skills is only supported for Claude Code; Desktop/Cowork use the complete plugin pack"
+  [[ "$SKILLS_REQUESTED" -eq 0 ]] || die "--skills is only supported for Claude Code; Desktop/Cowork use the complete plugin pack"
   local pack; pack="$(plugin_pack_path)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '\033[35m[dry-run]\033[0m build %s\n' "$pack" >&2
@@ -257,6 +283,106 @@ desktop_uninstall() {
 Claude Desktop / Cowork installs are managed by Claude Desktop.
 Remove “Nexty AI Pro” from Settings → Customize → Plugins, then restart Claude Desktop.
 EOF
+  report_legacy_desktop_state
+}
+
+legacy_desktop_state_hits() {
+  local -a support_roots=("$DESKTOP_SUPPORT")
+  [[ -n "${APPDATA:-}" ]] && support_roots+=("$APPDATA/Claude")
+  [[ -n "${LOCALAPPDATA:-}" ]] && support_roots+=("$LOCALAPPDATA/Claude")
+  python3 - "$PLUGIN_NAME" "$MP_NAME" "${support_roots[@]}" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+plugin_name = sys.argv[1]
+marketplace_name = sys.argv[2]
+plugin_key = f"{plugin_name}@{marketplace_name}"
+hits = set()
+
+
+def emit(kind, path):
+    hits.add((kind, str(path)))
+
+
+def read_json(path):
+    try:
+        with path.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            raise ValueError("top-level JSON value is not an object")
+        return data, None
+    except (OSError, UnicodeError, ValueError) as exc:
+        return None, exc
+
+
+for support_root in sys.argv[3:]:
+    root = Path(support_root) / "local-agent-mode-sessions"
+    if not root.is_dir():
+        continue
+    # A session pair is app-owned state. Enumerate every pair rather than
+    # guessing the account/device selected by an old installer.
+    for account in sorted(path for path in root.iterdir() if path.is_dir()):
+        for pair in sorted(path for path in account.iterdir() if path.is_dir()):
+            cowork_plugins = pair / "cowork_plugins"
+            settings = pair / "cowork_settings.json"
+            if settings.is_file():
+                data, error = read_json(settings)
+                if error is not None:
+                    emit("legacy-format unreadable cowork_settings.json", settings)
+                elif plugin_key in (data or {}).get("enabledPlugins", {}):
+                    emit("legacy-format enabledPlugins registration", settings)
+            if not cowork_plugins.is_dir():
+                continue
+
+            installed = cowork_plugins / "installed_plugins.json"
+            if installed.is_file():
+                data, error = read_json(installed)
+                if error is not None:
+                    emit("legacy-format unreadable installed_plugins.json", installed)
+                elif plugin_key in (data or {}).get("plugins", {}):
+                    emit("legacy-format installed_plugins registration", installed)
+
+            known = cowork_plugins / "known_marketplaces.json"
+            if known.is_file():
+                data, error = read_json(known)
+                if error is not None:
+                    emit("legacy-format unreadable known_marketplaces.json", known)
+                elif marketplace_name in (data or {}):
+                    emit("legacy-format known_marketplaces registration", known)
+
+            cache = cowork_plugins / "cache" / marketplace_name / plugin_name
+            if cache.is_dir():
+                versions = sorted(path for path in cache.iterdir() if path.is_dir())
+                if versions:
+                    for version in versions:
+                        emit("legacy-format cache artifact", version)
+                else:
+                    emit("legacy-format cache artifact", cache)
+
+            marketplace = cowork_plugins / "marketplaces" / marketplace_name
+            if marketplace.is_dir():
+                emit("legacy-format marketplace artifact", marketplace)
+
+    # The resolver still recognizes this older uploaded-skill store. Report it
+    # as evidence without implying which component created it.
+    for skill_root in sorted(root.glob("skills-plugin/*/*/*/skills/nxd-run-job-loop")):
+        if skill_root.is_dir():
+            emit("legacy-format uploaded skill artifact", skill_root)
+
+for kind, path in sorted(hits):
+    print(f"{kind}: {path}")
+PY
+}
+
+report_legacy_desktop_state() {
+  local hits; hits="$(legacy_desktop_state_hits)"
+  [[ -n "$hits" ]] || return 0
+  echo "Legacy-format Claude app-state evidence detected (read-only; left untouched):" >&2
+  while IFS= read -r hit; do
+    echo "  $hit" >&2
+  done <<<"$hits"
+  echo "  Claude Desktop/Cowork owns this state; this command does not edit or delete it." >&2
 }
 
 desktop_status() {
@@ -267,21 +393,25 @@ desktop_status() {
   else
     echo "  · local plugin pack not built (run scripts/install.sh --desktop)"
   fi
+  report_legacy_desktop_state
 }
 
 main() {
   parse_args "$@"
   require_cmd python3
-  validate_skill_names
 
   local has_code=0 has_desktop=0
-  for target in "${TARGETS[@]}"; do
-    case "$target" in
-      code) has_code=1 ;;
-      desktop|cowork) has_desktop=1 ;;
-      *) die "unknown target: $target" ;;
-    esac
-  done
+  if [[ -n "${TARGETS[0]+set}" ]]; then
+    for target in "${TARGETS[@]}"; do
+      case "$target" in
+        code) has_code=1 ;;
+        desktop|cowork) has_desktop=1 ;;
+        *) die "unknown target: $target" ;;
+      esac
+    done
+  fi
+  validate_target_options
+  validate_skill_names
 
   case "$SUBCMD" in
     install)

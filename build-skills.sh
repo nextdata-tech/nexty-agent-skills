@@ -131,7 +131,7 @@ for skill_dir in "$SRC_DIR"/*/; do
   (
     cd "$skill_dir"
     zip_args=(. "${ZIP_EXCLUDE_ARGS[@]}")
-    if [[ "${#prune_args[@]}" -gt 0 ]]; then
+    if [[ -n "${prune_args[0]+set}" ]]; then
       zip_args+=("${prune_args[@]}")
     fi
     zip -qrD "$zip_path" "${zip_args[@]}"
@@ -171,17 +171,19 @@ with open(dst, "w", encoding="utf-8") as fh:
     json.dump(plugin, fh, indent=2)
     fh.write("\n")
 PY
-for zip_path in "${SKILL_ZIPS[@]}"; do
-  skill="$(basename "$zip_path" .zip)"
-  mkdir -p "$PACK_STAGING/skills/$skill"
-  unzip -q "$zip_path" -d "$PACK_STAGING/skills/$skill"
-done
+if [[ -n "${SKILL_ZIPS[0]+set}" ]]; then
+  for zip_path in "${SKILL_ZIPS[@]}"; do
+    skill="$(basename "$zip_path" .zip)"
+    mkdir -p "$PACK_STAGING/skills/$skill"
+    unzip -q "$zip_path" -d "$PACK_STAGING/skills/$skill"
+  done
+fi
 
 rm -f "$PACK_PATH"
 (
   cd "$PACK_STAGING"
   zip -qrD "$PACK_PATH" .
 )
-pack_files="$(unzip -l "$PACK_PATH" | awk 'NR>3 && $NF!~/\/$/' | wc -l | tr -d ' ')"
+pack_files="$(unzip -Z1 "$PACK_PATH" | wc -l | tr -d ' ')"
 pack_size="$(du -h "$PACK_PATH" | awk '{print $1}')"
 echo "Plugin pack: ${PACK_PATH} (${pack_files} files, ${pack_size})"
