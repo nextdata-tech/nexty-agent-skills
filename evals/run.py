@@ -45,6 +45,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 import tempfile
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -2680,8 +2681,27 @@ def main() -> int:
             try:
                 res = fut.result()
             except Exception as exc:  # never let one cell kill the run
-                res = RunResult(skill_set=ss.name, scenario=sc.name, ok=False,
-                                error=f"unexpected: {exc}")
+                # `fut.result()` re-raises with the original traceback, so this
+                # is the real failure site — a NUL byte reaching argv used to
+                # arrive here as a bare "unexpected: embedded null byte" with the
+                # traceback and every gathered metric discarded, unattributable
+                # to any line of code. Log the full traceback so the cause is
+                # recoverable, and carry both the exception type and the
+                # traceback tail in the emitted result's metrics so the JSON
+                # report preserves them instead of collapsing to a one-liner.
+                tb = traceback.format_exc()
+                print(
+                    f"[unexpected] {ss.name} :: {sc.name}\n{tb}",
+                    file=sys.stderr, flush=True,
+                )
+                res = RunResult(
+                    skill_set=ss.name, scenario=sc.name, ok=False,
+                    error=f"unexpected {type(exc).__name__}: {exc}",
+                    metrics={
+                        "unexpected_exception": f"{type(exc).__name__}: {exc}",
+                        "traceback": tb[-4000:],
+                    },
+                )
             results.append(res)
             emit(res)
 
