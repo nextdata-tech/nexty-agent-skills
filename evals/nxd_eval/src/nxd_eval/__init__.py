@@ -17,10 +17,11 @@ from __future__ import annotations
 from .case import Case, Suite, load_suite
 from .certify import CertifyResult, certify
 from .checks import checks, load_checks_json
+from .dependencies import DependencyCheckError
 from .gold import gold
 from .metrics import reliability_score, wilson_accuracy
 from .report import BucketCard, BucketDelta, Report
-from .task import run_suite
+from .task import MCPConnectionError, run_suite
 from .stats import (
     ConfidenceInterval,
     McNemarResult,
@@ -42,6 +43,7 @@ __all__ = [
     "checks",
     "load_checks_json",
     "gold",
+    "DependencyCheckError",
     # statistics contract
     "ConfidenceInterval",
     "McNemarResult",
@@ -58,6 +60,7 @@ __all__ = [
     "wilson_accuracy",
     "reliability_score",
     # run + report + certify (the read side)
+    "MCPConnectionError",
     "run_suite",
     "Report",
     "BucketCard",
