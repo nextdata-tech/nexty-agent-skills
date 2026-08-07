@@ -84,6 +84,31 @@ def timeout_stdout(exc: subprocess.TimeoutExpired) -> str:
         return raw.decode("utf-8", errors="replace")
     return raw if isinstance(raw, str) else ""
 
+
+# argv rejects an embedded NUL outright — execv treats it as the end of the
+# string — so a single stray binary byte that finds its way into a trace, and
+# thence into the judge prompt built from that trace, makes the whole CLI
+# invocation raise ValueError("embedded null byte") before the process even
+# starts. That escapes the `except subprocess.TimeoutExpired` guards below and
+# collapses an otherwise-gradeable cell into an unattributable one-liner. Every
+# free-text string that reaches a claude argv slot is passed through this first.
+# Tab, newline and carriage return are the whitespace controls real transcripts
+# legitimately carry, so they stay; NUL, the rest of the C0 controls, and DEL
+# are dropped. Stripping rather than rejecting keeps the run gradeable: a stray
+# byte in a tool result should not fail the judge, only be scrubbed from the
+# text it reasons over. Codex takes its prompt on stdin, which has no such
+# restriction, so this is wired only into the argv paths that need it.
+_ARGV_CONTROL_CHARS = (
+    "".join(chr(c) for c in range(0x20) if c not in (0x09, 0x0A, 0x0D)) + "\x7f"
+)
+_ARGV_CONTROL_RE = re.compile(f"[{re.escape(_ARGV_CONTROL_CHARS)}]")
+
+
+def strip_argv_control_chars(text: str) -> str:
+    """Remove NUL and other non-printable control bytes from argv-bound text."""
+    return _ARGV_CONTROL_RE.sub("", text)
+
+
 # Multi-turn scenarios instruct the agent to emit this marker when it is
 # stopping to wait on a user answer. No structural signal in the CLI's result
 # event distinguishes "asked and waiting" from "task complete" — both report the
@@ -511,7 +536,9 @@ class ClaudeBackend:
                 followup_turns=followup_turns,
                 source_audit_markers=source_audit_markers,
             )
-        cmd = [executable or self.executable, "-p", prompt] + self._agent_command(
+        cmd = [
+            executable or self.executable, "-p", strip_argv_control_chars(prompt),
+        ] + self._agent_command(
             ws, model, extra_dirs=extra_dirs, effort=effort,
             skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
         )
@@ -916,12 +943,15 @@ class ClaudeBackend:
         timeout_s: int,
         effort: str = "",
     ) -> dict:
+        # The judge prompt is built from the agent trace, so a stray binary byte
+        # in a tool result rides straight into this argv slot; scrub both the
+        # trace-derived prompt and the system prompt before they get there.
         cmd = [
-            self.executable, "-p", prompt,
+            self.executable, "-p", strip_argv_control_chars(prompt),
             "--output-format", "json",
             "--model", model,
             "--setting-sources", "project",
-            "--append-system-prompt", system,
+            "--append-system-prompt", strip_argv_control_chars(system),
             "--allowedTools", "",   # judge reasons over given text; no tools
         ]
         if effort:
