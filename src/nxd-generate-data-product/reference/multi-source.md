@@ -24,14 +24,27 @@ CSV single-source path in particular is regression-tested by literal string
 assertions, so never label a source that is the only instance of its type.
 
 **Once a type has two or more instances**, each instance gets an
-author-chosen **source label**: short, lowercase, hyphen-separated (e.g.
-`orders`, `users`, `crm`), unique among instances of *that* type — and **no
-label may be a prefix of another** (`orders` with `orders_eu` is illegal),
-because the transform separates instances by `<label>_` key prefix and
-`orders_` would swallow every `orders_eu_*` key. Reusing a
-label across different types is harmless (`db-source-orders` and
-`api-source-orders` don't collide as service names) but avoid it for
-clarity. **desktop source-aligned inputs are the exception:** this is a
+author-chosen **source label**: short, lowercase, hyphen-separated and
+carrying **no underscore** (e.g. `orders`, `users`, `crm`, `orders-eu`),
+unique across **every labeled instance in the closure — not merely within its
+own type**. Both halves of that rule exist for one reason: the transform
+separates instances by `<label>_` key prefix over a single flat `secrets` map
+that spans every service.
+
+- **No underscore in a label** is what keeps `<label>_` unambiguous. Because
+  labels use hyphens, `orders_` cannot match an `orders-eu_*` key and the two
+  instances partition cleanly. Sneak an underscore in and that stops holding:
+  `orders` alongside `orders_eu` is illegal, because `orders_` then matches
+  every `orders_eu_*` key and silently folds the two together.
+- **Unique across types, not per type**, because the prefix is the label
+  alone — the type is not part of it. `db-source-orders` and
+  `api-source-orders` both prefix their keys `orders_`, so one recovery loop
+  drags both services' fields into a single instance's dict, and any attribute
+  the two happen to share (`region`, `user`, `token`) collides outright in the
+  merge. Distinct *service* names do not rescue this: the service name is
+  discarded before the transform sees anything (see Colliding keys below).
+
+**desktop source-aligned inputs are the exception:** this is a
 transform-service naming rule for labeled CSVs, not permission to bind
 `.input(...).source(_csv_<label>)`; those inputs use the one unlabeled `_csv`.
 
@@ -200,9 +213,10 @@ for label, tables_file in (
 ):
     # `secrets` is ONE flat map across every service, so each instance's fields
     # are recovered by their `<label>_` prefix — there is no per-service level.
-    # This is only a partition because no label is a prefix of another (see the
-    # label rule): with `orders` and `orders_eu`, `orders_` also matches every
-    # `orders_eu_*` key and silently folds the two instances together.
+    # This is only a partition because labels carry no underscore and are unique
+    # closure-wide (see the label rule): an `orders_eu` label would make
+    # `orders_` match every `orders_eu_*` key, and an `api-source-orders` reusing
+    # the `orders` label would fold its fields into this dict too.
     db_secrets = {k[len(label) + 1:]: v for k, v in secrets.items()
                   if k.startswith(f"{label}_")}
     connection_string = _build_connection_string(db_secrets)

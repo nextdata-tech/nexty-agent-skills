@@ -256,8 +256,9 @@ Build the `RESTAPIConfig` from `secrets` at runtime — never
 hard-code a base URL or credential in the transform source. The `auth_type`
 dispatch assembles dlt's structured `auth` dict from the flat secret
 fields, the same way `_build_connection_string` in `database-source.md`
-assembles a connection string from flat `db_source` fields — never pass a
-flat secret value straight through as `auth`.
+assembles a connection string from the flat `host` / `port` / `user` /
+`password` entries in `secrets` — never pass a flat secret value straight
+through as `auth`.
 
 **Keep the dispatch, and end it with an explicit `elif auth_type is not None:
 raise`.** Writing only

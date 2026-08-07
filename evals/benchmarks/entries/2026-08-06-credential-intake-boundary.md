@@ -2,7 +2,7 @@
 id: 2026-08-06-credential-intake-boundary
 date: 2026-08-06
 label: "credential intake asks for slot names; the value reaches infra-profile.yaml off-transcript"
-plugin_version: 0.36.4
+plugin_version: 0.36.6
 status: NO_EVAL
 scenarios: []
 record: null
@@ -74,14 +74,17 @@ is exactly the placeholder state route 1 produces; and the `SENSITIVE` /
   src/nxd-run-job-loop/reference/source-materialization.md`), including the two
   negative assertions that pin removal of the "live token/key" and "live
   credentials supplied now" intake instructions.
-- `python3 -m pytest evals/tests` — 654 passed, 1 skipped (649 before; this
-  change adds exactly the 5 tests named above and modifies no existing test).
+- `python3 -m pytest evals/tests` — green on the rebased branch (688 passed,
+  1 skipped). This change contributes exactly the 5 tests named above and
+  modifies no existing test; the absolute total also carries the flat-secrets
+  work and everything merged from `main`, so the 5-test delta, not the total, is
+  what this entry claims.
 - `python3 scripts/validate_skills.py --root .` — passes for every tracked skill;
   `src/nxd-run-job-loop/SKILL.md` is 500 lines, at the cap (main was 498), which
   constrained how much of the routing prose could live there rather than in the
   reference.
 - `./build-skills.sh` — packages, 200-entry cap respected.
-- Version lockstep: 0.36.3 → **0.36.4** (patch — a behavior tightening in an
+- Version lockstep: 0.36.5 → **0.36.6** (patch — a behavior tightening in an
   existing skill, matching `0e93e3e`'s precedent for the `api-source.md` auth
   dispatch fix), synced across `.claude-plugin/plugin.json`,
   `.claude-plugin/marketplace.json`, and all 17 `src/*/SKILL.md`

@@ -195,14 +195,29 @@ def test_worked_example_profile_prefixes_its_keys():
 
 def test_db_probe_redaction_is_not_a_fixed_key_list():
     """Under prefixing, ("password", "user") matches nothing — and a redactor
-    that matches nothing is indistinguishable from no redactor at all."""
+    that matches nothing is indistinguishable from no redactor at all.
+
+    The fix is to redact by DEFAULT and exempt the known-public topology, not to
+    blank every value in the map: host/port/database/schema are the probe's
+    entire diagnostic, and a short public value (schema `public`, port `5432`)
+    also corrupts unrelated text by substring when substituted.
+    """
     code = _code_blocks(DB.read_text())
-    assert 'for value in secrets.values():' in code, (
-        "database-source.md's _redact must substitute every value in the flat map"
+    assert 'for key, value in secrets.items():' in code, (
+        "database-source.md's _redact must walk the flat map by key AND value, "
+        "so it can tell a credential from public topology"
     )
     assert 'for key in ("password", "user")' not in code, (
         "database-source.md's _redact still keys on unprefixed field names, so it "
         "silently redacts nothing and a failed probe leaks the live password"
+    )
+    assert "_PUBLIC_SUFFIXES" in code, (
+        "the redactor must exempt public topology by key name, since the "
+        "profile's `public:` flag does not survive the flat merge"
+    )
+    assert 'key.endswith(f"_{p}")' in code, (
+        "the public-topology exemption must match the key SUFFIX, or it stops "
+        "holding for a labeled instance's `orders_host`"
     )
 
 

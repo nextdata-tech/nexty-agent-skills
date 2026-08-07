@@ -88,12 +88,21 @@ the value:
    `SENSITIVE` — it is the surface designed to hold the value. Wait for their
    confirmation, then run the connectivity check. This is the human-boundary form
    of the subagent's placeholder + `credential_slots` hand-back.
-2. **An environment variable.** The user exports it; you substitute it when
-   writing the profile by reading `os.environ` **inside** the script — never as a
-   shell-expanded `$TOKEN` on a command line, which lands the value in the
-   transcript exactly as a paste would. `generic-secrets` stores a literal string
-   and does not interpolate, so the substitution happens at write time, not at
-   run time.
+2. **An environment variable already visible to your own tooling.** This route is
+   narrower than it sounds. A variable the user exports in their interactive
+   shell *after* the session starts is not visible to your tool calls, which run
+   in a separate process: reading it raises `KeyError`, or yields an empty string
+   you would then write into the profile as though it were the credential. It
+   works only when the variable is already in the environment your tools inherit
+   — set in the user's shell profile, or exported before the session began.
+   Given that, substitute it when writing the profile by reading `os.environ`
+   **inside** the script — never as a shell-expanded `$TOKEN` on a command line,
+   which lands the value in the transcript exactly as a paste would. Have that
+   script fail loudly on a missing or empty key rather than write a profile with
+   a hollow credential in it, and when the variable turns out not to be visible,
+   fall back to route 1 rather than asking the user to re-export and retry.
+   `generic-secrets` stores a literal string and does not interpolate, so the
+   substitution happens at write time, not at run time.
 3. **Pasted into chat — last resort.** If the user supplies it this way anyway,
    do not echo it back, and say plainly that it now lives in conversation history
    where no closure guard reaches it, so the credential should be rotated after

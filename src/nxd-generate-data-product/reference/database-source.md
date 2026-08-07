@@ -284,15 +284,31 @@ remediate it. Wrap the probe so the failure is substituted from the known
 secret values, never pattern-matched:
 
 ```python
+# The profile's `public:` flag does NOT survive the flat merge — the transform
+# sees only key -> value — so mirror it by key name here. Suffix-matched, because
+# with two instances every key carries a label prefix (`orders_host`).
+_PUBLIC_SUFFIXES = ("host", "port", "database", "schema",
+                    "base_url", "auth_type", "region")
+
 def _redact(exc: BaseException, secrets: dict) -> str:
     text = str(exc)
-    # Substitute EVERY value in the flat map, never a fixed key list: with two
-    # instances the keys are prefixed (`orders_password`), so `("password",
-    # "user")` matches nothing and redacts nothing — a silent no-op that leaks
-    # the live password into chat on the first failed probe.
-    for value in secrets.values():
-        if value:
-            text = text.replace(str(value), "<redacted>")
+    # Redact by DEFAULT and exempt the known-public topology, rather than
+    # matching a fixed list of secret keys: an equality test against
+    # ("password", "user") matches nothing once the keys are prefixed, and a
+    # redactor that matches nothing is indistinguishable from no redactor — it
+    # leaks the live password into chat on the first failed probe. Defaulting to
+    # redact also fails closed on a field nobody thought of.
+    #
+    # But do not blank the whole map either: host/port/database/schema ARE the
+    # diagnostic, and "could not connect to <redacted>:<redacted>" tells the user
+    # nothing they can act on. Short public values would also corrupt unrelated
+    # text by substring — schema `public`, port `5432`.
+    for key, value in secrets.items():
+        if not value:
+            continue
+        if any(key == p or key.endswith(f"_{p}") for p in _PUBLIC_SUFFIXES):
+            continue
+        text = text.replace(str(value), "<redacted>")
     return text
 
 try:
