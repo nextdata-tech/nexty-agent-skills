@@ -351,14 +351,13 @@ def child_directories(path):
     return sorted(children, key=str)
 
 
-def has_registration(data, field, key, path, kind):
-    container = (data or {}).get(field, {})
+def report_registration(data, field, key, path, kind):
+    container = data.get(field, {})
     if not isinstance(container, dict):
         emit(f"legacy-format unreadable {path.name}", path)
-        return False
+        return
     if key in container:
         emit(kind, path)
-    return False
 
 
 for support_root in sys.argv[3:]:
@@ -376,7 +375,7 @@ for support_root in sys.argv[3:]:
                 if error is not None:
                     emit("legacy-format unreadable cowork_settings.json", settings)
                 else:
-                    has_registration(
+                    report_registration(
                         data,
                         "enabledPlugins",
                         plugin_key,
@@ -392,7 +391,7 @@ for support_root in sys.argv[3:]:
                 if error is not None:
                     emit("legacy-format unreadable installed_plugins.json", installed)
                 else:
-                    has_registration(
+                    report_registration(
                         data,
                         "plugins",
                         plugin_key,

@@ -541,3 +541,20 @@ def test_desktop_commands_report_legacy_app_state_without_mutation(
     assert "account-f/device-f/cowork_plugins/installed_plugins.json" in output
     assert "left untouched" in output
     assert _snapshot_tree(support) == before
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_unreadable_session_directory_is_reported_not_fatal(tmp_path: Path):
+    support, _ = _write_legacy_app_state(tmp_path)
+    locked = support / "local-agent-mode-sessions" / "account-a"
+    original_mode = locked.stat().st_mode & 0o777
+    locked.chmod(0o000)
+    try:
+        result = _run_installer(tmp_path, "status", "--desktop")
+    finally:
+        locked.chmod(original_mode)
+
+    assert result.returncode == 0, result.stderr
+    output = result.stdout + result.stderr
+    assert "legacy-format unreadable directory" in output
+    assert str(locked) in output
