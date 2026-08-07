@@ -172,6 +172,39 @@ def test_backends_declare_the_capability():
     assert eb.CodexBackend.supports_multi_turn is False
 
 
+@pytest.mark.parametrize(
+    ("backend", "executable"),
+    [(eb.ClaudeBackend(), "claude"), (eb.CodexBackend(), "codex")],
+)
+def test_backend_dependency_check_reports_missing_cli(monkeypatch, backend, executable):
+    monkeypatch.setattr(eb.shutil, "which", lambda _name: None)
+
+    with pytest.raises(eb.BackendDependencyError) as excinfo:
+        backend.check_dependencies()
+
+    message = str(excinfo.value)
+    assert f"requires the {executable!r} CLI" in message
+    assert "not found on PATH" in message
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [eb.ClaudeBackend(), eb.CodexBackend()],
+)
+def test_backend_dependency_check_accepts_resolved_cli(monkeypatch, backend):
+    seen = []
+
+    def _fake_which(name):
+        seen.append(name)
+        return f"/usr/local/bin/{name}"
+
+    monkeypatch.setattr(eb.shutil, "which", _fake_which)
+
+    backend.check_dependencies()
+
+    assert seen == [backend.executable]
+
+
 # --------------------------------------------------------------------------- #
 # Single-turn path is untouched
 # --------------------------------------------------------------------------- #

@@ -40,6 +40,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -292,6 +293,20 @@ def _merge_turn_metrics(per_turn: list[dict]) -> dict:
 # --------------------------------------------------------------------------- #
 # Interfaces
 # --------------------------------------------------------------------------- #
+class BackendDependencyError(RuntimeError):
+    """Raised when a selected backend cannot run in this environment."""
+
+
+def _require_executable(name: str, executable: str, install_hint: str) -> None:
+    """Fail clearly when a backend's required CLI is not on PATH."""
+    if shutil.which(executable) is not None:
+        return
+    raise BackendDependencyError(
+        f"backend {name!r} requires the {executable!r} CLI, but it was not "
+        f"found on PATH. {install_hint}"
+    )
+
+
 class AgentBackend(Protocol):
     """Drives the agent-under-test over one scenario workspace."""
 
@@ -299,11 +314,18 @@ class AgentBackend(Protocol):
     #: the cache key so switching providers invalidates cached transcripts.
     name: str
 
+    #: Executable the backend shells by default.
+    executable: str
+
     #: Whether this provider can drive scripted follow-up turns. A provider that
     #: cannot MUST reject ``followup_turns`` loudly rather than running turn 1
     #: and returning: that would grade a multi-turn scenario against a
     #: single-turn transcript and report a bogus pass rate.
     supports_multi_turn: bool
+
+    def check_dependencies(self, *, executable: str | None = None) -> None:
+        """Raise ``BackendDependencyError`` if this backend cannot be launched."""
+        ...
 
     def run_agent(
         self,
@@ -347,6 +369,11 @@ class JudgeBackend(Protocol):
     """Grades an agent transcript against a scenario's checks."""
 
     name: str
+    executable: str
+
+    def check_dependencies(self, *, executable: str | None = None) -> None:
+        """Raise ``BackendDependencyError`` if this backend cannot be launched."""
+        ...
 
     def run_judge(
         self,
@@ -392,7 +419,16 @@ class ClaudeBackend:
     """Agent + judge via the Claude Code CLI (``claude -p``)."""
 
     name = "claude"
+    executable = "claude"
     supports_multi_turn = True
+
+    def check_dependencies(self, *, executable: str | None = None) -> None:
+        _require_executable(
+            self.name,
+            executable or self.executable,
+            "Install Claude Code and make sure `claude` is available in the "
+            "environment running evals/run.py.",
+        )
 
     # -- agent ----------------------------------------------------------------
     def _agent_command(
@@ -475,7 +511,7 @@ class ClaudeBackend:
                 followup_turns=followup_turns,
                 source_audit_markers=source_audit_markers,
             )
-        cmd = [executable or "claude", "-p", prompt] + self._agent_command(
+        cmd = [executable or self.executable, "-p", prompt] + self._agent_command(
             ws, model, extra_dirs=extra_dirs, effort=effort,
             skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
         )
@@ -545,7 +581,7 @@ class ClaudeBackend:
         # other turn, so the turn loop has exactly one code path.
         session_id = str(uuid.uuid4())
         cmd = [
-            "claude", "-p",
+            self.executable, "-p",
             "--input-format", "stream-json",
             "--session-id", session_id,
         ] + self._agent_command(
@@ -881,7 +917,7 @@ class ClaudeBackend:
         effort: str = "",
     ) -> dict:
         cmd = [
-            "claude", "-p", prompt,
+            self.executable, "-p", prompt,
             "--output-format", "json",
             "--model", model,
             "--setting-sources", "project",
@@ -980,11 +1016,20 @@ class CodexBackend:
     """
 
     name = "codex"
+    executable = "codex"
     # Concatenating a scenario's turns into one prompt would run without error
     # while measuring a different thing entirely: an agent told the correction
     # up front never has to stop and ask, which is usually the behaviour under
     # test. So multi-turn is refused, not approximated.
     supports_multi_turn = False
+
+    def check_dependencies(self, *, executable: str | None = None) -> None:
+        _require_executable(
+            self.name,
+            executable or self.executable,
+            "Install the OpenAI Codex CLI and make sure `codex` is available in "
+            "the environment running evals/run.py.",
+        )
 
     # -- agent ----------------------------------------------------------------
     def run_agent(
@@ -1023,7 +1068,7 @@ class CodexBackend:
         # the prompt, because Codex cannot load a plugin dir. Accepting the arg
         # keeps the AgentBackend interface uniform across providers.
         cmd = [
-            executable or "codex", "exec",
+            executable or self.executable, "exec",
             "--json",
             "--model", model,
             "--sandbox", CODEX_AGENT_SANDBOX,
@@ -1218,7 +1263,7 @@ class CodexBackend:
             schema_path.write_text(json.dumps(_VERDICT_SCHEMA), encoding="utf-8")
             last_msg_path = Path(tmp) / "last.txt"
             cmd = [
-                "codex", "exec",
+                self.executable, "exec",
                 "--json",
                 "--model", model,
                 "--sandbox", CODEX_JUDGE_SANDBOX,

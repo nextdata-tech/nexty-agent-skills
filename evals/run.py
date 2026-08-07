@@ -51,6 +51,7 @@ from pathlib import Path
 from eval_backends import (
     AGENT_BACKENDS,
     JUDGE_BACKENDS,
+    BackendDependencyError,
     TURN_BOUNDARY_SENTINEL as AWAITING_INPUT_MARKER,
     FollowupTurn,
     get_agent_backend,
@@ -2640,6 +2641,13 @@ def main() -> int:
 
     if not scenarios:
         print("No scenarios selected.", file=sys.stderr)
+        return 2
+
+    try:
+        get_agent_backend(args.agent_backend).check_dependencies()
+        get_judge_backend(args.judge_backend).check_dependencies()
+    except BackendDependencyError as exc:
+        print(f"eval dependency check failed: {exc}", file=sys.stderr)
         return 2
 
     cells = [(ss, sc) for ss in selected_sets for sc in scenarios]
