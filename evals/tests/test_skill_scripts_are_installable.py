@@ -1,9 +1,10 @@
 """A script a skill tells the agent to run must survive installation.
 
-Every install path copies ONLY `src/<skill>/` trees:
+Claude Code installs copy only `src/<skill>/` trees. Desktop/Cowork builds the
+same trees into an uploadable plugin archive:
 
   * `scripts/install.sh --code`    -> `copy_skill_tree "$SRC_DIR/$s"`
-  * `scripts/install.sh --desktop` -> `copy_skill_tree "$SRC_DIR/$s" "$cache/skills/$s"`
+  * `scripts/install.sh --desktop` -> `build-skills.sh` plus the whole-pack plugin ZIP
   * `build-skills.sh`              -> `cd "$skill_dir"; zip -qrD`
   * `.claude-plugin/plugin.json`   -> `"skills": "./src/"`
 
@@ -214,22 +215,101 @@ def test_bootstrap_resolver_has_no_hardcoded_plugin_version():
 def _install(target: str, home: Path, *args: str) -> None:
     env = os.environ | {"HOME": str(home)}
     if target == "desktop":
-        # Exercise the macOS-only cache installer on every test platform.
+        # Exercise the Desktop branch on every test platform.
         fake_bin = home / "bin"
         fake_bin.mkdir()
         uname = fake_bin / "uname"
         uname.write_text("#!/usr/bin/env sh\necho Darwin\n")
         uname.chmod(0o755)
         env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    command = ["bash", "scripts/install.sh", f"--{target}"]
+    if target == "code":
+        command += ["--skills", "nxd-run-job-loop"]
+    command += ["--no-validate", "--no-submodule", "--yes", *args]
     subprocess.run(
-        ["bash", "scripts/install.sh", f"--{target}", "--skills", "nxd-run-job-loop",
-         "--no-validate", "--no-submodule", "--yes", *args],
+        command,
         cwd=REPO,
         env=env,
         capture_output=True,
         text=True,
         check=True,
     )
+
+
+def _run_installer(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ | {"HOME": str(home)}
+    return subprocess.run(
+        ["bash", "scripts/install.sh", *args],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _snapshot_tree(root: Path) -> dict[str, tuple[bool, int, int, bytes | None]]:
+    snapshot = {}
+    for path in sorted(root.rglob("*")):
+        stat = path.stat()
+        snapshot[str(path.relative_to(root))] = (
+            path.is_dir(),
+            stat.st_mode,
+            stat.st_mtime_ns,
+            None if path.is_dir() else path.read_bytes(),
+        )
+    return snapshot
+
+
+def _write_legacy_app_state(home: Path) -> tuple[Path, Path]:
+    support = home / "Library" / "Application Support" / "Claude"
+    first_pair = support / "local-agent-mode-sessions" / "account-a" / "device-a"
+    first_cowork = first_pair / "cowork_plugins"
+    cache = first_cowork / "cache" / "nexty" / "nexty-agent-skills" / "0.36.4"
+    cache.mkdir(parents=True)
+    (first_cowork / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": {"nexty-agent-skills@nexty": [{"version": "0.36.4"}]}}),
+        encoding="utf-8",
+    )
+    (first_cowork / "known_marketplaces.json").write_text(
+        json.dumps({"nexty": {"source": {"source": "github"}}}), encoding="utf-8"
+    )
+    (first_pair / "cowork_settings.json").write_text(
+        json.dumps({"enabledPlugins": {"nexty-agent-skills@nexty": True}}),
+        encoding="utf-8",
+    )
+
+    second_pair = support / "local-agent-mode-sessions" / "account-b" / "device-b"
+    second_cache = second_pair / "cowork_plugins" / "cache" / "nexty" / "nexty-agent-skills" / "0.36.3"
+    second_cache.mkdir(parents=True)
+
+    malformed_pair = support / "local-agent-mode-sessions" / "account-c" / "device-c"
+    malformed_cowork = malformed_pair / "cowork_plugins"
+    malformed_cowork.mkdir(parents=True)
+    (malformed_cowork / "installed_plugins.json").write_text("{not-json", encoding="utf-8")
+
+    unrelated_pair = support / "local-agent-mode-sessions" / "account-d" / "device-d"
+    unrelated_cowork = unrelated_pair / "cowork_plugins"
+    unrelated_cowork.mkdir(parents=True)
+    (unrelated_cowork / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {"other-plugin@other": [{"version": "1.0.0"}]}}),
+        encoding="utf-8",
+    )
+    settings_only_pair = support / "local-agent-mode-sessions" / "account-e" / "device-e"
+    settings_only_pair.mkdir(parents=True)
+    (settings_only_pair / "cowork_settings.json").write_text(
+        json.dumps({"enabledPlugins": {"nexty-agent-skills@nexty": True}}),
+        encoding="utf-8",
+    )
+    malformed_shape_pair = support / "local-agent-mode-sessions" / "account-f" / "device-f"
+    malformed_shape_cowork = malformed_shape_pair / "cowork_plugins"
+    malformed_shape_cowork.mkdir(parents=True)
+    (malformed_shape_pair / "cowork_settings.json").write_text(
+        json.dumps({"enabledPlugins": None}), encoding="utf-8"
+    )
+    (malformed_shape_cowork / "installed_plugins.json").write_text(
+        json.dumps({"plugins": None}), encoding="utf-8"
+    )
+    return support, cache
 
 
 def test_code_install_includes_and_invokes_desktop_helpers(tmp_path: Path):
@@ -258,20 +338,26 @@ def test_claude_code_plugin_install_layout_resolves_desktop_helpers(
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
 
 
-def test_desktop_cache_install_includes_and_invokes_desktop_helpers(tmp_path: Path):
-    account, device = "test-account", "test-device"
-    support = tmp_path / "Library" / "Application Support" / "Claude"
-    (support / "local-agent-mode-sessions" / account / device / "cowork_plugins").mkdir(parents=True)
-    (support / "cowork-enabled-cli-ops.json").write_text(json.dumps({"ownerAccountId": account}))
-    (support / "config.json").write_text(json.dumps({f"dxt:allowlistEnabled:{device}": True}))
-
+def test_desktop_install_builds_uploadable_plugin_pack(tmp_path: Path):
     _install("desktop", tmp_path)
+    app_state = tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
+    assert not app_state.exists()
     version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
-    cache = support / "local-agent-mode-sessions" / account / device / "cowork_plugins" / "cache"
-    skill_dir = cache / "nexty" / "nexty-agent-skills" / version / "skills" / "nxd-run-job-loop"
-    outside = tmp_path / "outside-cowork"
-    outside.mkdir()
-    assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
+    archive = REPO / "build" / f"nexty-agent-skills-v{version}.zip"
+    assert archive.is_file()
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+        assert ".claude-plugin/plugin.json" in names
+        assert "skills/nxd-run-job-loop/SKILL.md" in names
+        assert "skills/nxd-run-job-loop/scripts/dp_diagnostics.py" in names
+        assert not any(name.endswith(".zip") for name in names)
+        plugin = json.loads(zf.read(".claude-plugin/plugin.json"))
+        assert "skills" not in plugin
+
+        plugin_root = tmp_path / "uploaded-plugin"
+        zf.extractall(plugin_root)
+        skill_dir = plugin_root / "skills" / "nxd-run-job-loop"
+
     _assert_helpers_run(skill_dir)
     assert _lock_plugin_version(skill_dir) == version
 
@@ -323,11 +409,152 @@ def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
         assert "scripts/dp_spec_authoring.py" in zf.namelist()
         assert "scripts/requirements.txt" in zf.namelist()
         skill_dir = (
-            tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
-            / "skills-plugin" / "test-account" / "test-device" / "test-session" / "skills" / "nxd-run-job-loop"
+            tmp_path / ".claude" / "plugins" / "uploaded-plugin" / "skills" / "nxd-run-job-loop"
         )
         zf.extractall(skill_dir)
     outside = tmp_path / "outside-zip"
     outside.mkdir()
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
     _assert_helpers_run(skill_dir)
+
+
+@pytest.mark.parametrize(
+    "target_args",
+    (
+        ("--desktop",),
+        ("--cowork",),
+        ("--all",),
+        ("--code", "--desktop"),
+    ),
+)
+def test_desktop_targets_reject_skill_filters_before_code_mutation(
+    tmp_path: Path, target_args: tuple[str, ...]
+):
+    result = _run_installer(
+        tmp_path,
+        *target_args,
+        "--skills",
+        "nxd-run-job-loop",
+        "--no-validate",
+        "--no-submodule",
+        "--yes",
+    )
+    assert result.returncode != 0
+    assert "--skills is only supported for Claude Code" in result.stderr
+    assert not (tmp_path / ".claude" / "skills").exists()
+
+
+@pytest.mark.parametrize("subcommand", ("uninstall", "status"))
+def test_desktop_skill_filter_rejection_also_precedes_code_action(
+    tmp_path: Path, subcommand: str
+):
+    skill = tmp_path / ".claude" / "skills" / "nxd-run-job-loop"
+    skill.mkdir(parents=True)
+    (skill / "marker.txt").write_text("keep", encoding="utf-8")
+    before = _snapshot_tree(tmp_path / ".claude")
+
+    result = _run_installer(tmp_path, subcommand, "--all", "--skills", "nxd-run-job-loop")
+
+    assert result.returncode != 0
+    assert "--skills is only supported for Claude Code" in result.stderr
+    assert _snapshot_tree(tmp_path / ".claude") == before
+
+
+@pytest.mark.parametrize("skills_arg", ("", "   "))
+def test_empty_skill_filter_is_still_rejected_for_desktop_targets(
+    tmp_path: Path, skills_arg: str
+):
+    result = _run_installer(
+        tmp_path,
+        "--desktop",
+        "--skills",
+        skills_arg,
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode != 0
+    assert "--skills is only supported for Claude Code" in result.stderr
+
+
+@pytest.mark.parametrize("subcommand", ("install", "uninstall"))
+@pytest.mark.parametrize("skills_arg", ("", "   "))
+def test_empty_skill_filter_is_rejected_for_code_targets(
+    tmp_path: Path, subcommand: str, skills_arg: str
+):
+    result = _run_installer(
+        tmp_path,
+        subcommand,
+        "--code",
+        "--skills",
+        skills_arg,
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode != 0
+    assert "--skills was given but named no skills" in result.stderr
+    assert not (tmp_path / ".claude" / "skills").exists()
+
+
+def test_old_bash_empty_arrays_are_guarded_before_expansion():
+    installer = (REPO / "scripts" / "install.sh").read_text(encoding="utf-8")
+    builder = (REPO / "build-skills.sh").read_text(encoding="utf-8")
+    assert '[[ ${#SKILLS[@]} -gt 0 ]] || return 0' in installer
+    assert 'if [[ -n "${TARGETS[0]+set}" ]]; then' in installer
+    assert 'if [[ -n "${SKILL_ZIPS[0]+set}" ]]; then' in builder
+    assert 'if [[ -n "${prune_args[0]+set}" ]]; then' in builder
+
+
+def test_whole_pack_report_count_matches_archive_members():
+    result = subprocess.run(
+        ["bash", "build-skills.sh"], cwd=REPO, capture_output=True, text=True, check=True
+    )
+    version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
+    archive = REPO / "build" / f"nexty-agent-skills-v{version}.zip"
+    match = re.search(r"Plugin pack: .* \((\d+) files,", result.stdout)
+    assert match, result.stdout
+    with zipfile.ZipFile(archive) as zf:
+        members = zf.infolist()
+        expected = sum(not item.is_dir() for item in members)
+        assert len({item.filename for item in members}) == len(members)
+    assert int(match.group(1)) == expected
+
+
+@pytest.mark.parametrize("subcommand", ("status", "uninstall"))
+def test_desktop_commands_report_legacy_app_state_without_mutation(
+    tmp_path: Path, subcommand: str
+):
+    support, cache = _write_legacy_app_state(tmp_path)
+    before = _snapshot_tree(support)
+
+    result = _run_installer(tmp_path, subcommand, "--desktop")
+
+    assert result.returncode == 0, result.stderr
+    output = result.stdout + result.stderr
+    assert "Legacy-format Claude app-state evidence detected" in output
+    assert "legacy-format installed_plugins registration" in output
+    assert "legacy-format enabledPlugins registration" in output
+    assert "legacy-format cache artifact" in output
+    assert str(cache) in output
+    assert "account-e/device-e/cowork_settings.json" in output
+    assert "legacy-format unreadable installed_plugins.json" in output
+    assert "account-f/device-f/cowork_settings.json" in output
+    assert "account-f/device-f/cowork_plugins/installed_plugins.json" in output
+    assert "left untouched" in output
+    assert _snapshot_tree(support) == before
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_unreadable_session_directory_is_reported_not_fatal(tmp_path: Path):
+    support, _ = _write_legacy_app_state(tmp_path)
+    locked = support / "local-agent-mode-sessions" / "account-a"
+    original_mode = locked.stat().st_mode & 0o777
+    locked.chmod(0o000)
+    try:
+        result = _run_installer(tmp_path, "status", "--desktop")
+    finally:
+        locked.chmod(original_mode)
+
+    assert result.returncode == 0, result.stderr
+    output = result.stdout + result.stderr
+    assert "legacy-format unreadable directory" in output
+    assert str(locked) in output

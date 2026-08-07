@@ -16,7 +16,7 @@ pack-level invariants CI cannot check on its own.
 - `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` — plugin and
   marketplace manifests for the Claude Code distribution path.
 - `evals/skill-sets.yaml` — named skill packs used by the eval harness.
-- `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip.
+- `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip and assembles the uploadable whole-pack plugin zip.
 - `.github/workflows/release.yml` — publishes those zips on a `v*` tag.
 - `experiments/<name>/` — self-contained prototypes. **Not part of the shipped
   pack**: nothing under `src/` imports them, `build-skills.sh` does not package
@@ -65,7 +65,7 @@ table is a release defect — the pack ships incomplete.
 - `SKILL.md` under 500 lines; detail goes to `reference/`.
 - Reference files over 100 lines start with a `## Contents` section in the first
   20 lines.
-- Each skill zip stays under the **200-entry Claude Desktop cap** (`build-skills.sh`).
+- Each individual skill zip stays under the **200-entry Claude Desktop cap** (`build-skills.sh`).
 
 ## Before opening a PR
 

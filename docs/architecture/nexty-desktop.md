@@ -227,8 +227,10 @@ At the **pack level** (not specific to desktop, but desktop's skills are subject
 to it), `scripts/validate_skills.py` enforces the mechanical conventions in
 `AGENTS.md` — frontmatter shape, `metadata.version` lockstep with the plugin
 version, reference-file `## Contents` headers, no angle-bracket placeholders —
-and `build-skills.sh` enforces the 200-entry Claude Desktop zip cap. Both run
-in CI and before any PR per `AGENTS.md`.
+and `build-skills.sh` enforces the 200-entry cap on each individual skill ZIP.
+The same build also assembles the whole-pack plugin ZIP, which is uploaded through
+Claude Desktop's Customize → Plugins → Add plugin → Upload plugin flow. Both run in
+CI and before any PR per `AGENTS.md`.
 
 ## Evals that exercise this loop
 

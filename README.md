@@ -75,8 +75,8 @@ From a clone of this repo, the first-party installer handles every Claude target
 git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
 cd nexty-agent-skills
 ./scripts/install.sh --code        # Claude Code: copy skills to ~/.claude/skills
-./scripts/install.sh --desktop     # Claude Desktop / Cowork: install + enable (no upload)
-./scripts/install.sh --all         # all targets
+./scripts/install.sh --desktop     # Claude Desktop / Cowork: build one plugin ZIP to upload
+./scripts/install.sh --all         # Code install + one Desktop/Cowork plugin ZIP
 ```
 
 `scripts/install.sh` validates the pack (`scripts/validate_skills.py`), initializes the
@@ -145,7 +145,8 @@ The official Anthropic & Partners directory is separate from the community marke
 ### Installer (`scripts/install.sh`)
 
 The first-party installer is the canonical path. It is pure bash + `python3` (no `npx`,
-no `jq`), validates the pack before installing, and supports a clean uninstall.
+no `jq`), validates the pack before installing, and cleanly removes Claude Code
+installs; Desktop/Cowork uploads must be removed from the Desktop UI.
 
 ```bash
 scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
@@ -156,7 +157,7 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 | Target | What it does |
 |--------|--------------|
 | `--code` | Copies each skill to `~/.claude/skills/<skill>/` (global) or `./.claude/skills/` with `--project`. Full submodule, no size cap. Idempotent (`rsync --delete`). |
-| `--desktop` / `--cowork` | Both are "local-agent-mode". Installs the pack as a local marketplace plugin and enables it — no manual upload. Restart Claude Desktop to load it. `--zip` switches to the build-zip + manual-upload fallback. macOS only. |
+| `--desktop` / `--cowork` | Builds one `nexty-agent-skills-v<version>.zip` containing the complete plugin. Upload that ZIP in Claude Desktop's Plugins UI on macOS or Windows. |
 
 **Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
 
@@ -167,31 +168,33 @@ scripts/install.sh --code                       # global Claude Code install (de
 scripts/install.sh --code --project             # current project only
 scripts/install.sh --code --skills "nxd-setup-cli nxd-build-data-product"
 scripts/install.sh --code --skills "nxd-run-job-loop nxd-generate-data-product" # generator + its runtime helper skill
-scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
-scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
+scripts/install.sh --desktop                    # build the one Desktop/Cowork plugin ZIP
+scripts/install.sh --desktop --zip              # same flow; --zip is a compatibility alias
 scripts/install.sh --all                        # every target
 scripts/install.sh status --code                # show what's installed
-scripts/install.sh uninstall --desktop          # remove + disable the Desktop/Cowork plugin
+scripts/install.sh uninstall --desktop          # show where to remove it in Desktop
 scripts/install.sh --code --dry-run             # print actions, change nothing
 ```
 
-Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
-`-y/--yes`, `--verbose`.
+Other options: `--no-validate`, `--no-submodule`, `-y/--yes`, `--verbose`.
 
 When selecting `nxd-generate-data-product`, include `nxd-run-job-loop`: the generator
 uses its installed validator, lock writer, and build-record helpers at runtime.
 
 #### How the Claude Desktop / Cowork install works
 
-Desktop and Cowork ("local-agent-mode") load plugins from a local marketplace store
-under `~/Library/Application Support/Claude/local-agent-mode-sessions/<accountId>/<deviceId>/`.
-The installer mirrors what the **Browse plugins** UI writes to disk — it materializes a
-marketplace checkout and a plugin cache, then registers the plugin across
-`known_marketplaces.json`, `installed_plugins.json`, and `cowork_settings.json`
-(which carries the `enabledPlugins` flag, so the plugin installs **enabled**, not disabled).
-Every file is backed up before it's edited, and `uninstall --desktop` reverses all of it.
-Restart Claude Desktop after installing for it to pick up the change. macOS only;
-use `--zip` for the manual-upload fallback.
+`scripts/install.sh --desktop` and `--cowork` build the complete plugin at
+`build/nexty-agent-skills-v<version>.zip`. Upload that one file from Claude Desktop's
+Customize → Plugins → Add plugin → Upload plugin, confirm it is enabled, fully quit/reopen Claude Desktop,
+and start a new Cowork task. This is the same plugin layout used by the hosted release
+asset and works on macOS and Windows; the script does not edit Claude's
+`local-agent-mode-sessions` state.
+
+To remove it, use the same Customize → Plugins screen. `uninstall --desktop` prints
+that guidance but cannot remove a UI-managed upload. `status --desktop` and
+`uninstall --desktop` also report recognizable legacy-format app-state evidence
+read-only; they leave Claude-owned registries, caches, and uploaded skill state
+untouched.
 
 ### Manual install
 
@@ -473,7 +476,7 @@ If `nxd validate` was not run, the README must include the exact blocker and the
 
 Claude Desktop is useful for testing the skill behavior and generating downloadable starter artifacts. It is not the cleanest path for proving a data product was built in a local folder, because Desktop conversations often return files as artifacts/downloads instead of writing into your terminal's current directory.
 
-#### 1. Build the ZIP files
+#### 1. Build the plugin ZIP
 
 ```bash
 cd ~/src/nexty-agent-skills
@@ -482,46 +485,33 @@ python3 scripts/validate_skills.py
 ./build-skills.sh
 ```
 
-This creates one ZIP per skill under `build/` — one for every directory in
-`src/`, for example:
+This creates individual skill ZIPs for compatibility and one uploadable whole-pack
+plugin ZIP under `build/`:
 
 ```text
-build/nxd-build-data-product.zip
-build/nxd-setup-cli.zip
-build/nxd-add-inputs.zip
-build/nxd-add-outputs.zip
-build/nxd-add-expectations-and-promises.zip
-build/nxd-debug-data-product.zip
+build/nexty-agent-skills-v<version>.zip
 ```
 
-#### 2. Install the ZIPs in Claude Desktop
+#### 2. Install the plugin ZIP in Claude Desktop
 
-Claude Desktop does not use `npx skills add ./src --all -y` for this flow. Install the generated ZIP files through the Desktop UI.
+Claude Desktop does not use `npx skills add ./src --all -y` for this flow. Upload the
+generated whole-pack plugin ZIP through the Desktop UI.
 
 In Claude Desktop:
 
 1. Open `Customize`.
-2. Open `Skills`.
-3. Click `+`.
-4. Choose `Create skill`.
-5. Choose `Upload a skill`.
-6. Upload each `nxd-*.zip` file you want to test.
-7. Confirm the skills are enabled.
+2. Open `Plugins`.
+3. Choose `Add plugin`.
+4. Choose `Upload plugin`.
+5. Upload `build/nexty-agent-skills-v<version>.zip`.
+6. Confirm the plugin is enabled.
 
-For a full data product build test, install at least:
+The whole-pack ZIP is a plugin archive, not a single skill archive. Do not upload it
+through `Create skill` → `Upload a skill`; that path applies the per-skill 200-entry
+limit. The individual `build/<skill>.zip` artifacts remain available for one-skill
+installs through the Skills UI.
 
-- `nxd-build-data-product.zip`
-- `nxd-setup-cli.zip`
-- `nxd-add-inputs.zip`
-- `nxd-add-outputs.zip`
-- `nxd-add-expectations-and-promises.zip`
-- `nxd-debug-data-product.zip`
-
-To test the local job-loop build path, add `nxd-run-job-loop.zip` and
-`nxd-generate-data-product.zip` — install both, since the generator uses the
-job loop's validator, lock writer, and build-record helpers at runtime.
-
-If your organization uses Team or Enterprise skill provisioning, an admin can upload the ZIPs once through organization settings instead of every user uploading them individually.
+If your organization uses Team or Enterprise skill provisioning, an admin can upload the plugin ZIP once through organization settings instead of every user uploading it individually.
 
 #### 3. Start a new Claude Desktop chat
 
@@ -677,12 +667,12 @@ These are enforced by `scripts/validate_skills.py` in CI (`.github/workflows/ci.
 - Keep `SKILL.md` under 500 lines for context efficiency
 - Move detailed references to `reference/` (singular only — `references/` is rejected) for progressive disclosure
 - Add a `## Contents` section near the top of reference files longer than 100 lines
-- Each skill zip stays under the 200-entry Claude Desktop cap (enforced via `build-skills.sh` in CI)
-- Run `python3 scripts/validate_skills.py` and `./build-skills.sh` before sharing updated ZIPs
+- Each individual skill zip stays under the 200-entry Claude Desktop cap (enforced via `build-skills.sh` in CI)
+- Run `python3 scripts/validate_skills.py` and `./build-skills.sh` before sharing the plugin ZIP
 
 ### Claude Desktop packaging limits
 
-Claude Desktop rejects skills that violate either of these. Use `./build-skills.sh` to package; it strips noise and reports per-skill file counts.
+Claude Desktop rejects skills that violate either of these. Use `./build-skills.sh` to package; it strips noise, reports per-skill file counts, and assembles the whole-pack plugin ZIP.
 
 - **Max 200 entries per skill zip.** Counts files + directory entries. The build script passes `zip -D` to drop empty dir entries and excludes VCS/caches/lockfiles/OS junk. If a bundled examples repo pushes you over, strip per-DP housekeeping (`README.md`, `.python-version`, `pyproject.toml`, `notebooks/`, `tests/`) before code.
 - **No XML / angle-bracket tags in the SKILL.md `description` field.** Placeholders like `<DP>` or `<table>` in the frontmatter description trip the loader. Use plain wording (`a named DP`, `the table`) instead. Body content is fine; only the YAML frontmatter `description:` is parsed strictly.
