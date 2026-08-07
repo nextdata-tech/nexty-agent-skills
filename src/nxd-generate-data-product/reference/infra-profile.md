@@ -1,5 +1,11 @@
 # The desktop-local infra profile
 
+## Contents
+
+- The profile shape (this section)
+- What the supervisor does with `attributes`
+- `csv-source-path`
+
 Step 5 of nxd-generate-data-product. The desktop closure ships its own infra profile
 declaring the three local services `spec.py` references. Emit it **verbatim in
 this shape** — the driver ids and service names are fixed and only rarely does
@@ -62,9 +68,13 @@ closure that assumed otherwise:
 - **Only declared services contribute.** A populated `attributes` list on a
   service absent from `.secrets([...])` delivers nothing. The profile declares
   what exists; `spec.py` decides what the transform receives.
-- **`attributes: []` contributes nothing**, which is why `csv-source` and
-  `file-source` need their companion path file — they have no attribute to carry
-  the export root in.
+- **`attributes: []` contributes no attribute *keys*** — but the service is not
+  therefore absent from the map. `csv-source` and `file-source` receive their
+  export root as a single key contributed by their own driver, so an ordinary
+  CSV closure still reads `secrets["csv_source"]` (see `csv-source-path` below,
+  and `transform-template.md`). Their companion path file exists for an
+  unrelated reason: the path must be authored **relative** so the supervisor can
+  resolve it inside the pinned snapshot.
 - **`public:` does not gate the transform.** It controls `export_data_product`
   redaction only; the transform reads every attribute regardless of the flag.
   Marking a credential `public: true` does not hide it from anything — it

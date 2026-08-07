@@ -27,9 +27,10 @@ assertions, so never label a source that is the only instance of its type.
 author-chosen **source label**: short, lowercase, hyphen-separated and
 carrying **no underscore** (e.g. `orders`, `users`, `crm`, `orders-eu`),
 unique across **every labeled instance in the closure — not merely within its
-own type**. Both halves of that rule exist for one reason: the transform
-separates instances by `<label>_` key prefix over a single flat `secrets` map
-that spans every service.
+own type**. Both halves of that rule are driven by the `generic-secrets`
+connectors — `db-source` and `api-source` — because those are the instances the
+transform separates by `<label>_` key prefix over a single flat `secrets` map
+spanning every service.
 
 - **No underscore in a label** is what keeps `<label>_` unambiguous. Because
   labels use hyphens, `orders_` cannot match an `orders-eu_*` key and the two
@@ -43,6 +44,15 @@ that spans every service.
   the two happen to share (`region`, `user`, `token`) collides outright in the
   merge. Distinct *service* names do not rescue this: the service name is
   discarded before the transform sees anything (see Colliding keys below).
+
+**`csv-source` / `file-source` instances separate by a different mechanism**, so
+neither constraint is load-bearing for them: their key is contributed by their
+own driver in the *suffix* form `csv_source_<label>` / `file_source_<label>` (as
+the naming table below shows), which means there is no `attributes` entry to
+prefix and no prefix scan to confuse. Both rules still apply to them, but only
+as harmless over-strictness — `csv_source_orders` never matches an `orders_`
+scan either way, and one label namespace across the whole closure is easier to
+keep right than a per-type one.
 
 **desktop source-aligned inputs are the exception:** this is a
 transform-service naming rule for labeled CSVs, not permission to bind
@@ -75,11 +85,14 @@ collision. It is an authoring-time check because it is not a runtime one.
 **Fix it by prefixing the attribute `key` in the profile**, since the key is the
 only thing that survives the merge:
 
-- **Two or more instances of the same type** — prefix *every* key of each
-  instance with its label: `orders_host`, `orders_password`, `users_host`,
-  `users_base_url`. Uniform prefixing keeps the transform's recovery loop
-  regular (`k.startswith(f"{label}_")`, as in the worked example below) and
-  survives someone later adding a field to one instance.
+- **Two or more `generic-secrets` instances of the same type** (`db-source`,
+  `api-source`) — prefix *every* key of each instance with its label:
+  `orders_host`, `orders_password`, `users_host`, `users_base_url`. Uniform
+  prefixing keeps the transform's recovery loop regular
+  (`k.startswith(f"{label}_")`, as in the worked example below) and survives
+  someone later adding a field to one instance. There is nothing to do here for
+  labeled `csv-source` / `file-source` instances: their driver already emits a
+  distinct `csv_source_<label>` / `file_source_<label>` key per instance.
 - **Mixed types that happen to share a key** — a `db-source` and an `api-source`
   that both carry `region`, `user`, or a `token`. The canonical field sets do not
   overlap, so this arises from fields *you* add. Prefix at least the colliding

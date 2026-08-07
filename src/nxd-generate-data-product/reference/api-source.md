@@ -373,14 +373,30 @@ sharper risk than the database case: `requests` puts the full URL in
 `HTTPError`/`ConnectionError` messages, so an API keyed by query string
 (`?api_key=…`) or basic auth leaks the live credential into chat the moment a
 probe fails — and chat is the one place the user cannot remediate. Redact by
-substituting the known secret values, never by pattern-matching:
+substituting every value that is not known-public topology, never by
+pattern-matching:
 
 ```python
+# The same exemption list as database-source.md's _redact — one pattern, two
+# call sites. It matters here too: `secrets` is the whole flat map, so a closure
+# naming both an api-source and a db-source hands this probe the db's host, port
+# and schema as well.
+_PUBLIC_SUFFIXES = ("host", "port", "database", "schema",
+                    "base_url", "auth_type", "region")
+
 def _redact(exc: BaseException, secrets: dict) -> str:
     text = str(exc)
-    for value in secrets.values():            # every live value, keys vary per API
-        if value:
-            text = text.replace(str(value), "<redacted>")
+    # Redact by DEFAULT and exempt public topology, rather than listing secret
+    # names: the credential key varies per API (`api_key`, `token`, `bearer`,
+    # whatever this one calls it), so any fixed list misses the one that matters.
+    # Exempting base_url is what keeps the failing URL readable while the
+    # credential inside its query string still goes.
+    for key, value in secrets.items():
+        if not value:
+            continue
+        if any(key == p or key.endswith(f"_{p}") for p in _PUBLIC_SUFFIXES):
+            continue
+        text = text.replace(str(value), "<redacted>")
     return text
 
 try:
