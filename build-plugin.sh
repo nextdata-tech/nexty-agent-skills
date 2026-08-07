@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Package the Claude Code plugin into a single zip:
-#   build/nexty-agent-skills-plugin-v<version>.zip
+#   build/plugin/nexty-agent-skills-plugin-v<version>.zip
 #
 # Layout is the documented plugin format (https://code.claude.com/docs/en/plugins):
 # the PLUGIN ROOT's contents sit at the archive root — `.claude-plugin/plugin.json`
@@ -18,11 +18,22 @@
 # which installs one skill per zip and caps each at 200 entries; it therefore
 # prunes the bundled examples submodule down to a curated set. Claude Code
 # installs the whole plugin and has no such cap, so this bundle keeps the
-# submodule intact. Both can coexist in build/.
+# submodule intact.
+#
+# Output lands in build/plugin/, NOT build/. Two sibling globs own `build/*.zip`
+# and both would bite silently:
+#   - build-skills.sh opens with `rm -f build/*.zip` so a removed skill or a
+#     previous version's pack cannot ship. At the top level that deletes this
+#     bundle out from under anyone who runs the two scripts in that order — the
+#     zip simply is not there afterwards, with no error from either script.
+#   - release.yml uploads `for z in build/*.zip`, so a stray local build would
+#     ride along as a release asset. The Desktop zips are the release; this one
+#     is a local/CI convenience.
+# Both globs are non-recursive, so a subdirectory is the whole fix.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-OUT_DIR="$ROOT_DIR/build"
+OUT_DIR="$ROOT_DIR/build/plugin"
 PLUGIN_JSON="$ROOT_DIR/.claude-plugin/plugin.json"
 MARKETPLACE_JSON="$ROOT_DIR/.claude-plugin/marketplace.json"
 # The submodule bundled into this skill. Uninitialized, it packages as an empty
@@ -78,15 +89,26 @@ CONTENTS=(.claude-plugin/plugin.json src README.md)
 EXCLUDES=(
   '*/.git/*'          '*/.git'
   '*/.gitmodules'
+  '*/.gitignore'      '*/.nxdignore'      '*/.nxdignore/*'
+  '*/.github/*'
   '*/__pycache__/*'   '__pycache__/*'
   '*.pyc'             '*.pyo'
   '.DS_Store'         '*/.DS_Store'
   'Thumbs.db'         '*/Thumbs.db'
   '*/.pytest_cache/*'
+  '*/.pre-commit-hooks/*'  '*/.pre-commit-config.yaml'
+  '*/.tool-versions'  '*/uv.lock'
   '*.zip'             '*/*.zip'
-  # Field-mapper e2e proof needs an nxd monorepo checkout no consumer has; its
-  # run ledgers and live-API credentials must never leave the machine. zip reads
-  # the filesystem, not git, so gitignored artifacts need excluding here too.
+  # The field-mapper harness is not in this repo — it ships in the nxd package as
+  # `nxd.experimental.field_mapper`. zip reads the filesystem rather than git, so
+  # a stray local checkout under `mapper/` must be excluded here exactly as in
+  # build-skills.sh, or this path would ship executable source that one does not.
+  # `mapper/CONTRACT.md` and `mapper/samples/` DO ship: the contract is the
+  # normative record of the harness's behaviour and cites those fixtures case by
+  # case, so the prose is uncheckable without them.
+  '*/mapper/field_mapper/*'
+  # Its e2e proof needs an nxd monorepo checkout no consumer has; the run ledgers
+  # and live-API credentials must never leave the machine.
   '*/mapper/examples/*'
   '*/mapper/runs/*'
   '*/.venv-live/*'

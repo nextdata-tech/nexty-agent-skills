@@ -23,16 +23,20 @@ pack-level invariants CI cannot check on its own.
   override stripped, because Desktop auto-discovers `./skills`.
 - `build-plugin.sh` — packages `.claude-plugin/plugin.json` + `src/` + `README.md`
   into one Claude Code plugin zip,
-  `build/nexty-agent-skills-plugin-v<version>.zip`, in the documented plugin
-  format: plugin-root contents at the archive root, loadable with
+  `build/plugin/nexty-agent-skills-plugin-v<version>.zip`, in the documented
+  plugin format: plugin-root contents at the archive root, loadable with
   `claude --plugin-dir <zip>` / `--plugin-url <url>`. This is the sibling of the
   whole-pack zip above, not a duplicate of it — same skills, the other
   distribution path, which is why it keeps the `skills` → `./src/` override
   Desktop drops. `marketplace.json` is excluded on purpose — it describes the
   marketplace *containing* this plugin (the git install path), and bundling it
   makes `claude plugin validate` resolve the directory as a marketplace and skip
-  the plugin manifest. Not a release asset: `release.yml` publishes only the
-  `build-skills.sh` zips above. It keeps the examples submodule whole (no
+  the plugin manifest. Not a release asset, and it writes to `build/plugin/` to
+  stay that way: `release.yml` uploads `build/*.zip` and `build-skills.sh` opens
+  by deleting `build/*.zip`, so at the top level this bundle would both ride
+  along as a release asset and get silently wiped depending on run order. Both
+  globs are non-recursive, so the subdirectory settles it. It keeps the
+  examples submodule whole (no
   200-entry cap on this path), validates the unpacked artifact with
   `claude plugin validate --strict` when the CLI is present, and fails closed
   when the submodule is uninitialized, when the two manifest versions disagree,
