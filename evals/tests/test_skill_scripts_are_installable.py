@@ -300,6 +300,15 @@ def _write_legacy_app_state(home: Path) -> tuple[Path, Path]:
         json.dumps({"enabledPlugins": {"nexty-agent-skills@nexty": True}}),
         encoding="utf-8",
     )
+    malformed_shape_pair = support / "local-agent-mode-sessions" / "account-f" / "device-f"
+    malformed_shape_cowork = malformed_shape_pair / "cowork_plugins"
+    malformed_shape_cowork.mkdir(parents=True)
+    (malformed_shape_pair / "cowork_settings.json").write_text(
+        json.dumps({"enabledPlugins": None}), encoding="utf-8"
+    )
+    (malformed_shape_cowork / "installed_plugins.json").write_text(
+        json.dumps({"plugins": None}), encoding="utf-8"
+    )
     return support, cache
 
 
@@ -467,6 +476,25 @@ def test_empty_skill_filter_is_still_rejected_for_desktop_targets(
     assert "--skills is only supported for Claude Code" in result.stderr
 
 
+@pytest.mark.parametrize("subcommand", ("install", "uninstall"))
+@pytest.mark.parametrize("skills_arg", ("", "   "))
+def test_empty_skill_filter_is_rejected_for_code_targets(
+    tmp_path: Path, subcommand: str, skills_arg: str
+):
+    result = _run_installer(
+        tmp_path,
+        subcommand,
+        "--code",
+        "--skills",
+        skills_arg,
+        "--no-validate",
+        "--no-submodule",
+    )
+    assert result.returncode != 0
+    assert "--skills was given but named no skills" in result.stderr
+    assert not (tmp_path / ".claude" / "skills").exists()
+
+
 def test_old_bash_empty_arrays_are_guarded_before_expansion():
     installer = (REPO / "scripts" / "install.sh").read_text(encoding="utf-8")
     builder = (REPO / "build-skills.sh").read_text(encoding="utf-8")
@@ -509,5 +537,7 @@ def test_desktop_commands_report_legacy_app_state_without_mutation(
     assert str(cache) in output
     assert "account-e/device-e/cowork_settings.json" in output
     assert "legacy-format unreadable installed_plugins.json" in output
+    assert "account-f/device-f/cowork_settings.json" in output
+    assert "account-f/device-f/cowork_plugins/installed_plugins.json" in output
     assert "left untouched" in output
     assert _snapshot_tree(support) == before

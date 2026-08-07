@@ -125,6 +125,9 @@ selected_skills() {
 }
 
 validate_skill_names() {
+  if [[ "$SKILLS_REQUESTED" -eq 1 && -z "${SKILLS[0]+set}" ]]; then
+    die "--skills was given but named no skills"
+  fi
   [[ ${#SKILLS[@]} -gt 0 ]] || return 0
   for skill in "${SKILLS[@]}"; do
     [[ -f "$SRC_DIR/$skill/SKILL.md" ]] || die "unknown skill: $skill (see $SRC_DIR/*/)"
@@ -316,44 +319,98 @@ def read_json(path):
         return None, exc
 
 
+def safe_is_dir(path):
+    try:
+        return path.is_dir()
+    except OSError:
+        emit("legacy-format unreadable directory", path)
+        return False
+
+
+def safe_is_file(path):
+    try:
+        return path.is_file()
+    except OSError:
+        emit("legacy-format unreadable file", path)
+        return False
+
+
+def child_directories(path):
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        emit("legacy-format unreadable directory", path)
+        return []
+    children = []
+    for child in entries:
+        try:
+            if child.is_dir():
+                children.append(child)
+        except OSError:
+            emit("legacy-format unreadable directory", child)
+    return sorted(children, key=str)
+
+
+def has_registration(data, field, key, path, kind):
+    container = (data or {}).get(field, {})
+    if not isinstance(container, dict):
+        emit(f"legacy-format unreadable {path.name}", path)
+        return False
+    if key in container:
+        emit(kind, path)
+    return False
+
+
 for support_root in sys.argv[3:]:
     root = Path(support_root) / "local-agent-mode-sessions"
-    if not root.is_dir():
+    if not safe_is_dir(root):
         continue
     # A session pair is app-owned state. Enumerate every pair rather than
     # guessing the account/device selected by an old installer.
-    for account in sorted(path for path in root.iterdir() if path.is_dir()):
-        for pair in sorted(path for path in account.iterdir() if path.is_dir()):
+    for account in child_directories(root):
+        for pair in child_directories(account):
             cowork_plugins = pair / "cowork_plugins"
             settings = pair / "cowork_settings.json"
-            if settings.is_file():
+            if safe_is_file(settings):
                 data, error = read_json(settings)
                 if error is not None:
                     emit("legacy-format unreadable cowork_settings.json", settings)
-                elif plugin_key in (data or {}).get("enabledPlugins", {}):
-                    emit("legacy-format enabledPlugins registration", settings)
-            if not cowork_plugins.is_dir():
+                else:
+                    has_registration(
+                        data,
+                        "enabledPlugins",
+                        plugin_key,
+                        settings,
+                        "legacy-format enabledPlugins registration",
+                    )
+            if not safe_is_dir(cowork_plugins):
                 continue
 
             installed = cowork_plugins / "installed_plugins.json"
-            if installed.is_file():
+            if safe_is_file(installed):
                 data, error = read_json(installed)
                 if error is not None:
                     emit("legacy-format unreadable installed_plugins.json", installed)
-                elif plugin_key in (data or {}).get("plugins", {}):
-                    emit("legacy-format installed_plugins registration", installed)
+                else:
+                    has_registration(
+                        data,
+                        "plugins",
+                        plugin_key,
+                        installed,
+                        "legacy-format installed_plugins registration",
+                    )
 
             known = cowork_plugins / "known_marketplaces.json"
-            if known.is_file():
+            if safe_is_file(known):
                 data, error = read_json(known)
                 if error is not None:
                     emit("legacy-format unreadable known_marketplaces.json", known)
-                elif marketplace_name in (data or {}):
+                elif marketplace_name in data:
                     emit("legacy-format known_marketplaces registration", known)
 
             cache = cowork_plugins / "cache" / marketplace_name / plugin_name
-            if cache.is_dir():
-                versions = sorted(path for path in cache.iterdir() if path.is_dir())
+            if safe_is_dir(cache):
+                versions = child_directories(cache)
                 if versions:
                     for version in versions:
                         emit("legacy-format cache artifact", version)
@@ -361,14 +418,8 @@ for support_root in sys.argv[3:]:
                     emit("legacy-format cache artifact", cache)
 
             marketplace = cowork_plugins / "marketplaces" / marketplace_name
-            if marketplace.is_dir():
+            if safe_is_dir(marketplace):
                 emit("legacy-format marketplace artifact", marketplace)
-
-    # The resolver still recognizes this older uploaded-skill store. Report it
-    # as evidence without implying which component created it.
-    for skill_root in sorted(root.glob("skills-plugin/*/*/*/skills/nxd-run-job-loop")):
-        if skill_root.is_dir():
-            emit("legacy-format uploaded skill artifact", skill_root)
 
 for kind, path in sorted(hits):
     print(f"{kind}: {path}")
