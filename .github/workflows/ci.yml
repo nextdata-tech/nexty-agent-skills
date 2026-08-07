@@ -43,10 +43,12 @@ jobs:
       - name: Harness unit tests
         run: uv run --no-project --with pytest --with duckdb --with pyyaml python -m pytest evals/tests -q
 
-      # nxd_eval is an isolated uv project, so its package tests are not covered
-      # by the stdlib scenario-suite harness test above.
+      # nxd_eval's own unit tests (stats/scoring/transcript/task-wiring). The
+      # `dev` group pins pytest with no provider SDK required, so this installs
+      # and runs with no model credentials — see evals/nxd_eval/pyproject.toml.
       - name: nxd_eval unit tests
-        run: uv run --project evals/nxd_eval python -m pytest evals/nxd_eval/tests -q
+        working-directory: evals/nxd_eval
+        run: uv run pytest -q
 
       # Benchmark evidence is source-controlled like the skills: validate the
       # stdlib recorder directly and fail if an entry or generated index drifts.
