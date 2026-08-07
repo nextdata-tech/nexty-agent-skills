@@ -1,25 +1,14 @@
 # Making the desktop helper scripts reachable
 
-`dp_diagnostics.py`, `validate_dp_spec.py`, `dp_spec_authoring.py`, and the
-legacy closure verifier `dp_spec_v2.py` ship with **nxd-run-job-loop** at
-`scripts/`. They are
-not copied into a generated closure, and a closure is not the current directory
-from which to address them. A bare `scripts/...` path is therefore invalid once
-the skill is installed.
+The helper scripts ship with **nxd-run-job-loop** at `scripts/`; they are not
+copied into generated closures. Resolve their installed directory before calling
+one. A bare `scripts/...` path is invalid after installation.
 
 ## Resolve `JOB_HELPER_DIR` once
 
-Run this exact stdlib-only resolver before the first helper call. It emits one
-absolute directory or fails; it never guesses from the workflow or closure cwd.
-The supported install surfaces are Claude Code global/project and plugin installs,
-Cowork marketplace cache, and Claude Desktop's uploaded-skill store. Cowork's
-Bash sandbox may expose its mount as either `$HOME/.local-plugins/cache/nexty/...`
-or `$HOME/mnt/.local-plugins/cache/nexty/<plugin>/<version>/...`; older Desktop
-sessions use the `cowork_plugins/cache` path below.
-Claude may place an uploaded plugin in an app-managed session or plugin store;
-the fallbacks below only discover such a copy. They are read-only lookup paths —
-do not create or edit `local-agent-mode-sessions` or any other Claude app state
-from a skill or installer.
+Run this stdlib-only resolver before the first helper call. It emits one absolute
+directory or fails. It only discovers installed copies; it does not create or
+edit Claude app state.
 
 ```bash
 JOB_HELPER_DIR="$(python3 - "$HOME" "$PWD" <<'PY'
