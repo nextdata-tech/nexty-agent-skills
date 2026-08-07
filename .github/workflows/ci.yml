@@ -25,6 +25,8 @@ jobs:
 
       # build-skills.sh only prints an "OVER CAP" status column; it does not
       # exit non-zero. Capture its output and fail if any skill is over cap.
+      # Also assert that the whole-pack artifact is a real plugin ZIP rather
+      # than a ZIP containing the individual skill ZIPs.
       - name: Build skill zips and enforce the 200-entry cap
         run: |
           set -euo pipefail
@@ -32,6 +34,19 @@ jobs:
           echo "$out"
           if grep -q "OVER CAP" <<<"$out"; then
             echo "::error::one or more skills exceed the 200-entry Claude Desktop cap"
+            exit 1
+          fi
+          version="$(python3 -c 'import json;print(json.load(open(".claude-plugin/plugin.json"))["version"])')"
+          pack="build/nexty-agent-skills-v${version}.zip"
+          test -f "$pack"
+          unzip -p "$pack" .claude-plugin/plugin.json | python3 -c '
+          import json, sys
+          plugin = json.load(sys.stdin)
+          assert "skills" not in plugin
+          assert "skills/" in "".join(__import__("subprocess").check_output(["unzip", "-Z1", sys.argv[1]], text=True))
+          ' "$pack"
+          if unzip -Z1 "$pack" | grep -q '\.zip$'; then
+            echo "::error::whole-pack plugin ZIP must not contain nested ZIPs"
             exit 1
           fi
 

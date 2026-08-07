@@ -1,9 +1,9 @@
 name: release
 
 # Package every skill in src/ into a Claude Desktop-installable zip and publish
-# them as a GitHub Release. Claude Desktop installs a skill by uploading its zip
-# (Settings > Capabilities > Skills, or drag into chat), so the release assets are
-# one zip per skill plus a combined pack zip for whole-pack installs.
+# them as a GitHub Release. Claude Desktop installs individual skills through the
+# Skills UI, while the whole pack is uploaded through Customize > Plugins, so the
+# release assets are one zip per skill plus one uploadable whole-pack plugin zip.
 #
 # A release is also the point where the eval suite runs for real. PR evals are
 # opt-in (the `run-evals` label, see evals.yml), so a released commit may never
@@ -286,8 +286,9 @@ jobs:
       - name: Validate skills
         run: python3 scripts/validate_skills.py --root .
 
-      # build-skills.sh writes one zip per skill into build/<skill>.zip.
-      # It only prints an "OVER CAP" status; it never exits non-zero, so we grep.
+      # build-skills.sh writes one zip per skill plus the uploadable whole-pack
+      # plugin zip into build/. It only prints an "OVER CAP" status; it never
+      # exits non-zero, so we grep.
       - name: Build skill zips and enforce the 200-entry Claude Desktop cap
         run: |
           set -euo pipefail
@@ -308,8 +309,8 @@ jobs:
           name: release-evals
           path: eval-report
 
-      # Combined whole-pack zip for users who want every skill in one upload. Each
-      # skill keeps its own zip too (built into build/ by build-skills.sh).
+      # Publish both the individual skill zips and the single whole-pack plugin
+      # zip. The latter is the supported Claude Desktop/Cowork upload path.
       - name: Assemble release assets
         id: assets
         env:
@@ -318,16 +319,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          tag="${{ steps.tag.outputs.tag }}"
-          # Per-skill zips (built into build/ by build-skills.sh)
+          # Per-skill zips and nexty-agent-skills-v<version>.zip (both built by
+          # build-skills.sh). The pack is a real plugin ZIP, not a zip of zips.
           for z in build/*.zip; do
             cp "$z" "dist/$(basename "$z")"
           done
-          # Combined pack: bundle every per-skill zip into one archive. Sourced
-          # from build/ rather than dist/ so the contents do not depend on what
-          # else has been copied into dist/ yet — a later edit that moves the
-          # evals.json copy above this line cannot nest the report in the pack.
-          ( cd build && zip -q "../dist/nexty-agent-skills-${tag}.zip" ./*.zip )
           # Eval evidence, published as its own asset. Its presence is the
           # contract nxd checks; a skip_evals release deliberately has none.
           if [ -f eval-report/evals.json ]; then
@@ -362,8 +358,8 @@ jobs:
           below, then upload it under Settings → Capabilities → Skills (or drag it
           into a chat).
 
-          **Install the whole pack:** download `nexty-agent-skills-<tag>.zip` and
-          upload each contained skill zip.
+          **Install the whole pack:** download `nexty-agent-skills-<tag>.zip`, then
+          use Customize → Plugins → Add plugin → Upload plugin.
 
           **Claude Code users:** prefer the plugin/marketplace flow in the README;
           these zips target Claude Desktop.

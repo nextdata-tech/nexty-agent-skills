@@ -1,13 +1,32 @@
 #!/usr/bin/env bash
 # Package each skill in src/ into a zip, excluding noise (VCS, CI, caches,
-# pre-commit hooks, lockfiles, OS junk). Report file count + size per skill.
-# Output zips land in the build/ directory: build/<skill>.zip.
+# pre-commit hooks, lockfiles, OS junk). Also assemble one uploadable plugin zip
+# containing the whole pack. Report file count + size per skill.
+# Output zips land in the build/ directory: build/<skill>.zip and
+# build/nexty-agent-skills-v<version>.zip.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$ROOT_DIR/src"
 OUT_DIR="$ROOT_DIR/build"
 mkdir -p "$OUT_DIR"
+# The directory is generated output. Clear old archives so a release or local
+# rebuild cannot publish a removed skill or a pack from a previous version.
+rm -f "$OUT_DIR"/*.zip
+
+PLUGIN_VERSION="$(python3 - "$ROOT_DIR/.claude-plugin/plugin.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    version = json.load(fh).get("version")
+if not isinstance(version, str) or not version:
+    raise SystemExit(".claude-plugin/plugin.json has no version")
+print(version)
+PY
+)"
+PACK_PATH="$OUT_DIR/nexty-agent-skills-v${PLUGIN_VERSION}.zip"
+SKILL_ZIPS=()
 
 # Exclusion globs (matched by `zip -x`). Patterns are relative to the skill
 # root once we cd into it; '*/' covers any depth.
@@ -125,7 +144,44 @@ for skill_dir in "$SRC_DIR"/*/; do
   status="ok"
   if [[ "$total" -gt "$CAP" ]]; then status="OVER CAP ($CAP)"; fi
   printf '%-32s %6d %5d %6d %8s %s\n' "$skill" "$files" "$dirs" "$total" "$size" "$status"
+  SKILL_ZIPS+=("$zip_path")
 done
 
 echo
 echo "Skill zips written to ${OUT_DIR}/"
+
+# Assemble the same layout that Claude Desktop/Cowork accepts as one plugin
+# upload and that nxd's Desktop cache uses: ./skills/<name>/ plus
+# ./.claude-plugin/plugin.json. The source plugin manifest points at ./src for
+# Claude Code; Desktop auto-discovers ./skills instead, so remove that
+# override (and the schema URL, which the Desktop installer does not need).
+PACK_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/nexty-agent-skills-pack.XXXXXX")"
+trap 'rm -rf "$PACK_STAGING"' EXIT
+mkdir -p "$PACK_STAGING/.claude-plugin" "$PACK_STAGING/skills"
+python3 - "$ROOT_DIR/.claude-plugin/plugin.json" "$PACK_STAGING/.claude-plugin/plugin.json" <<'PY'
+import json
+import sys
+
+src, dst = sys.argv[1:]
+with open(src, encoding="utf-8") as fh:
+    plugin = json.load(fh)
+plugin.pop("skills", None)
+plugin.pop("$schema", None)
+with open(dst, "w", encoding="utf-8") as fh:
+    json.dump(plugin, fh, indent=2)
+    fh.write("\n")
+PY
+for zip_path in "${SKILL_ZIPS[@]}"; do
+  skill="$(basename "$zip_path" .zip)"
+  mkdir -p "$PACK_STAGING/skills/$skill"
+  unzip -q "$zip_path" -d "$PACK_STAGING/skills/$skill"
+done
+
+rm -f "$PACK_PATH"
+(
+  cd "$PACK_STAGING"
+  zip -qrD "$PACK_PATH" .
+)
+pack_files="$(unzip -l "$PACK_PATH" | awk 'NR>3 && $NF!~/\/$/' | wc -l | tr -d ' ')"
+pack_size="$(du -h "$PACK_PATH" | awk '{print $1}')"
+echo "Plugin pack: ${PACK_PATH} (${pack_files} files, ${pack_size})"

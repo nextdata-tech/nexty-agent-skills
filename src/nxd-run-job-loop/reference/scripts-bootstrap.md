@@ -16,6 +16,10 @@ Cowork marketplace cache, and Claude Desktop's uploaded-skill store. Cowork's
 Bash sandbox may expose its mount as either `$HOME/.local-plugins/cache/nexty/...`
 or `$HOME/mnt/.local-plugins/cache/nexty/<plugin>/<version>/...`; older Desktop
 sessions use the `cowork_plugins/cache` path below.
+Claude may place an uploaded plugin in an app-managed session or plugin store;
+the fallbacks below only discover such a copy. They are read-only lookup paths —
+do not create or edit `local-agent-mode-sessions` or any other Claude app state
+from a skill or installer.
 
 ```bash
 JOB_HELPER_DIR="$(python3 - "$HOME" "$PWD" <<'PY'

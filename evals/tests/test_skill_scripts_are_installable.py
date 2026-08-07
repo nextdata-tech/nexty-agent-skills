@@ -1,9 +1,10 @@
 """A script a skill tells the agent to run must survive installation.
 
-Every install path copies ONLY `src/<skill>/` trees:
+Claude Code installs copy only `src/<skill>/` trees. Desktop/Cowork builds the
+same trees into an uploadable plugin archive:
 
   * `scripts/install.sh --code`    -> `copy_skill_tree "$SRC_DIR/$s"`
-  * `scripts/install.sh --desktop` -> `copy_skill_tree "$SRC_DIR/$s" "$cache/skills/$s"`
+  * `scripts/install.sh --desktop` -> `build-skills.sh` plus the whole-pack plugin ZIP
   * `build-skills.sh`              -> `cd "$skill_dir"; zip -qrD`
   * `.claude-plugin/plugin.json`   -> `"skills": "./src/"`
 
@@ -214,16 +215,19 @@ def test_bootstrap_resolver_has_no_hardcoded_plugin_version():
 def _install(target: str, home: Path, *args: str) -> None:
     env = os.environ | {"HOME": str(home)}
     if target == "desktop":
-        # Exercise the macOS-only cache installer on every test platform.
+        # Exercise the Desktop branch on every test platform.
         fake_bin = home / "bin"
         fake_bin.mkdir()
         uname = fake_bin / "uname"
         uname.write_text("#!/usr/bin/env sh\necho Darwin\n")
         uname.chmod(0o755)
         env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    command = ["bash", "scripts/install.sh", f"--{target}"]
+    if target == "code":
+        command += ["--skills", "nxd-run-job-loop"]
+    command += ["--no-validate", "--no-submodule", "--yes", *args]
     subprocess.run(
-        ["bash", "scripts/install.sh", f"--{target}", "--skills", "nxd-run-job-loop",
-         "--no-validate", "--no-submodule", "--yes", *args],
+        command,
         cwd=REPO,
         env=env,
         capture_output=True,
@@ -258,20 +262,26 @@ def test_claude_code_plugin_install_layout_resolves_desktop_helpers(
     assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
 
 
-def test_desktop_cache_install_includes_and_invokes_desktop_helpers(tmp_path: Path):
-    account, device = "test-account", "test-device"
-    support = tmp_path / "Library" / "Application Support" / "Claude"
-    (support / "local-agent-mode-sessions" / account / device / "cowork_plugins").mkdir(parents=True)
-    (support / "cowork-enabled-cli-ops.json").write_text(json.dumps({"ownerAccountId": account}))
-    (support / "config.json").write_text(json.dumps({f"dxt:allowlistEnabled:{device}": True}))
-
+def test_desktop_install_builds_uploadable_plugin_pack(tmp_path: Path):
     _install("desktop", tmp_path)
+    app_state = tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
+    assert not app_state.exists()
     version = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())["version"]
-    cache = support / "local-agent-mode-sessions" / account / device / "cowork_plugins" / "cache"
-    skill_dir = cache / "nexty" / "nexty-agent-skills" / version / "skills" / "nxd-run-job-loop"
-    outside = tmp_path / "outside-cowork"
-    outside.mkdir()
-    assert _bootstrap_resolves(tmp_path, outside) == skill_dir.resolve()
+    archive = REPO / "build" / f"nexty-agent-skills-v{version}.zip"
+    assert archive.is_file()
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+        assert ".claude-plugin/plugin.json" in names
+        assert "skills/nxd-run-job-loop/SKILL.md" in names
+        assert "skills/nxd-run-job-loop/scripts/dp_diagnostics.py" in names
+        assert not any(name.endswith(".zip") for name in names)
+        plugin = json.loads(zf.read(".claude-plugin/plugin.json"))
+        assert "skills" not in plugin
+
+        plugin_root = tmp_path / "uploaded-plugin"
+        zf.extractall(plugin_root)
+        skill_dir = plugin_root / "skills" / "nxd-run-job-loop"
+
     _assert_helpers_run(skill_dir)
     assert _lock_plugin_version(skill_dir) == version
 
@@ -323,8 +333,7 @@ def test_desktop_zip_includes_and_invokes_desktop_helpers(tmp_path: Path):
         assert "scripts/dp_spec_authoring.py" in zf.namelist()
         assert "scripts/requirements.txt" in zf.namelist()
         skill_dir = (
-            tmp_path / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
-            / "skills-plugin" / "test-account" / "test-device" / "test-session" / "skills" / "nxd-run-job-loop"
+            tmp_path / ".claude" / "plugins" / "uploaded-plugin" / "skills" / "nxd-run-job-loop"
         )
         zf.extractall(skill_dir)
     outside = tmp_path / "outside-zip"
