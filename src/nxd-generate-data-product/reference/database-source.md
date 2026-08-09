@@ -196,7 +196,15 @@ source = sql_database(
     table_names=list(table_map.values()),
 )
 readers = []
-for model in PHYSICAL_MODELS:
+# The models this connector actually serves are the ones the companion maps —
+# NOT PHYSICAL_MODELS. That tuple also holds derived models (Step 3a) and any
+# landed reference data (`nxd_decisions`, FX rates), neither of which has a
+# `db-source-tables` entry, so indexing `table_map[model]` over it raises
+# `KeyError` on a closure that is otherwise correct — and the message points at
+# the companion file as though an entry were missing there. Both reach the same
+# `pipeline.run` as their own `@dlt.resource` appended to this list.
+# The labeled multi-DB body in `multi-source.md` already iterates this way.
+for model in table_map:
     table_name = duckdb.model_tables[model]
     resource = source.resources[table_map[model]]
     readers.append(resource.with_name(table_name))

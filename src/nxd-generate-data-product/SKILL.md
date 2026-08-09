@@ -39,8 +39,8 @@ this skill treats as unrecoverable.
 |---|---|---|---|
 | CSV (proven, fully-inlined default below) | `csv-source` | `csv_source` | `csv-source-path` + `data/` |
 | Other file (JSON/JSONL/Parquet) — `reference/file-source.md` | `file-source` | `file_source` | `file-source-path` + `data/` |
-| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` |
-| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | **none** — endpoints are `endpoint_<model>` attributes on the service, no `data/` |
+| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |
+| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | **none** — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |
 
 The output is a directory the **desktop supervisor** compiles, pins, boots, and
 publishes: it **compiles `spec.py` into the kernel definition YAML at create
@@ -69,7 +69,7 @@ The author emits **Python and prerequisite config only**:
     └── data/              # the connector export: data/<base_model>/*.csv
         └── <base_model>/… # base models only — derived models have no data dir
 ```
-_(CSV layout, the proven default; other types swap the companion artifact per the Overview connector-types table.)_
+_(CSV layout, the proven default; other types swap the companion artifact per the Overview connector-types table. "No `data/` **export**" there is about the connector, not the closure: a `db-source`/`api-source` closure brings no source export, but may still carry `data/` for reference data it authored — pinned like any other, and landed via its own `@dlt.resource`, not the reader loop. See `reference/api-source.md` § "Landed reference data in an API closure".)_
 
 **The author NEVER writes `deployment-spec.yaml`, `manifest.yaml`, or
 `models.yaml`.** The supervisor compiles those three from `spec.py` +

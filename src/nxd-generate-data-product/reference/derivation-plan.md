@@ -421,16 +421,12 @@ nxd_decisions_metrics = semantic_view(
    reference data in an API closure" has the worked version, including how to
    reach the CSV without a `secrets["csv_source"]` to anchor on.
 
-   **Appending the resource is necessary but not sufficient on `db-source`.**
-   Its template loop (`database-source.md`) iterates `PHYSICAL_MODELS` and
-   indexes `table_map[model]`, so it raises `KeyError: '<name>'` on your
-   reference model *before* your resource ever runs — pointing at the
-   `db-source-tables` companion as though an entry were missing there. Scope
-   that loop to the models the companion actually maps (`for model in
-   table_map:`, which the labeled multi-DB body in `multi-source.md` already
-   uses). `api-source` needs no such edit: its loop iterates `API_MODELS`, which
-   is already derived from the endpoint attributes — there the model is dropped
-   silently instead, and the read-back assert is what names it.
+   Both connector templates already scope their reader loops to the models the
+   remote actually serves — `db-source` iterates `table_map`, `api-source`
+   iterates `API_MODELS` — so appending the resource is the whole change. Do not
+   "fix" either loop back to `PHYSICAL_MODELS`: that is what made a reference
+   model raise `KeyError` out of `table_map[model]`, pointing at the
+   `db-source-tables` companion as though an entry were missing there.
 
    It stays a base model in every other respect — promised, declared in
    `models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. Only how its rows

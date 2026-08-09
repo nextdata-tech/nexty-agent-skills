@@ -313,12 +313,15 @@ never landed.
 
 **Still write the CSV, at `data/<name>/<name>.csv`.** "No `data/` directory"
 above means this connector brings no *export* — it does not mean the closure may
-not carry one, and `pin` materializes `data/` for every closure regardless of
-connector, so the file travels. Do **not** inline the rows as a literal in the
-transform instead: `SKILL.md`'s "Reference data is landed, never hardcoded"
-invariant forbids exactly that, and it does not relax by connector.
+not carry one. The supervisor materializes `transform/` and `data/` into the
+pinned snapshot for every closure, by path and not by connector type, so a
+`data/` tree an api closure authors itself travels with it. Do **not** inline
+the rows as a literal in the transform instead: `SKILL.md`'s "Reference data is
+landed, never hardcoded" invariant forbids exactly that, and it does not relax
+by connector.
 
-What changes is only how those rows reach the port. Read the CSV yourself with
+The rows reach the port differently, **and so do their types** — see the cast
+rule below; this is not a pure change of route. Read the CSV yourself with
 stdlib `csv` and yield them as your own resource, appended to the same `readers`
 list before the one `pipeline.run(...)` — the form is in `derived-models.md`
 § "The resource template":
@@ -327,11 +330,17 @@ list before the one `pipeline.run(...)` — the form is in `derived-models.md`
 import csv, os
 from pathlib import Path
 
-# Anchor on the execution root, not the working directory. The compute driver
-# exports NXD_TRANSFORM_ROOT as the materialized closure root and also chdir's
-# there, but only the env var is contractual — a relative open works today and
-# is not guaranteed to. Never an authoring-checkout absolute path: it escapes
-# the pinned snapshot and fails.
+# Anchor on the execution root, not the working directory. The local Python
+# compute driver exports NXD_TRANSFORM_ROOT on every desktop transform run,
+# unconditionally, set to the materialized closure root; it also chdir's there,
+# so a relative open happens to work — but the working directory is an
+# implementation detail of how the child is spawned, and the env var is the
+# stated contract. Never an authoring-checkout absolute path: it escapes the
+# pinned snapshot and fails.
+#
+# Desktop only. The k8s compute driver does not export it, which is fine here —
+# this skill emits desktop closures — but do not carry this line into a k8s
+# data product.
 root = Path(os.environ["NXD_TRANSFORM_ROOT"])
 
 # Read it yourself with stdlib csv: dlt's filesystem reader streams straight to
@@ -351,12 +360,24 @@ readers.append(nxd_decisions_resource())
 
 `secrets["csv_source"]` is **not** available here — that key is supplied by the
 `csv-source` service, which an api-source closure does not name in
-`.secrets([...])`. `NXD_TRANSFORM_ROOT` is the connector-independent anchor.
+`.secrets([...])`. `NXD_TRANSFORM_ROOT` is the anchor that does not depend on a
+connector service being present.
+
+**Cast the measures — this read does not type them for you.** A file
+connector's `read_csv()` infers column types; `csv.DictReader` yields strings
+for every column, so a reference model landed this way reaches DuckDB as
+VARCHAR throughout. That is invisible for an all-`string()` model like
+`nxd_decisions`, and wrong the moment the model promises a number — the
+`fx_rates(currency, month, rate)` case `derivation-plan.md` routes down this
+same path, or a judgement model whose `score` is `field(number(), ...)` under an
+`Agg.AVG`. `derived-models.md` § "Reading the sources yourself" is the rule:
+convert measures, not identifiers; `Decimal` for money, cast to `float` only in
+the final dict.
 
 It is still a base model everywhere else — promised in `spec.py`, declared in
-`models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. Only how the rows
-reach the port changes, because on this connector there is no reader loop to
-carry them.
+`models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. What changes is how
+the rows reach the port, because on this connector there is no reader loop to
+carry them — and, because you are now reading the file yourself, their types.
 
 Build the `RESTAPIConfig` from `secrets` at runtime — never
 hard-code a base URL or credential in the transform source. The `auth_type`
