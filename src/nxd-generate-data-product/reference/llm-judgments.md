@@ -405,6 +405,11 @@ candidate_judgments_metrics = semantic_view(
    like any other — a composite `primary_key()` across the four key columns, and
    the naming invariant applies unchanged.
 
+   On an `api-source` or `db-source` closure, `BASE_MODELS` alone does not land
+   it: those connectors have no `data/` reader loop, so the rows need their own
+   `@dlt.resource` appended to the same `readers` list. Same carve-out and same
+   reasoning as `derivation-plan.md` § "Landing it" step 3.
+
 ## What the transform does with it (deferred)
 
 The derived score model — join facts + judgements + rubric, resolve

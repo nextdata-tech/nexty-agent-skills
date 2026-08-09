@@ -408,9 +408,25 @@ nxd_decisions_metrics = semantic_view(
 ```
 
 3. `.promise(nxd_decisions)` and `.model(nxd_decisions_metrics)` in `spec.py`,
-   and add `"nxd_decisions"` to `BASE_MODELS` in the transform. It flows
-   through the same dlt reader loop as every other base model — no special
-   casing anywhere.
+   and add `"nxd_decisions"` to `BASE_MODELS` in the transform. On a **file
+   connector** (CSV/JSON/JSONL/Parquet) it then flows through the same dlt
+   reader loop as every other base model — no special casing anywhere.
+
+   **On an `api-source` or `db-source` closure there is no such reader loop.**
+   Neither has a `data/` directory: their ingest bodies pull each model from the
+   remote, so a reference model that exists only as your CSV has nothing to
+   carry it. Add it as its own `@dlt.resource`, appended to the same `readers`
+   list before the one `pipeline.run(...)` — the form is in `derived-models.md`
+   § "The resource template", with a worked example in `api-source.md` § "Landed
+   reference data in an API closure". The two connectors fail differently if you
+   skip this, and neither message names the fix: `api-source` drops the model
+   silently until the read-back assert reports a table that never landed, while
+   `db-source` raises `KeyError` out of its `table_map[model]` lookup, pointing
+   at the `db-source-tables` companion as though an entry were missing there.
+
+   It stays a base model in every other respect — promised, declared in
+   `models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. Only how its rows
+   reach the port changes.
 
 The name is reserved. If a source file would snake_case to `nxd_decisions`,
 that is the naming collision the Step-1 ambiguity rule already covers: stop and

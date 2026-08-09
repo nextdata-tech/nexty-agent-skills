@@ -299,6 +299,33 @@ for model in API_MODELS:
 pipeline.run(readers, write_disposition="replace")
 ```
 
+### Landed reference data in an API closure
+
+`derivation-plan.md` and `llm-judgments.md` tell you to write
+`data/<name>/<name>.csv`, add the model to `BASE_MODELS`, and let it flow
+through the reader loop with "no special casing anywhere". **That instruction is
+written for a file connector and does not hold here.** An api-source closure has
+no `data/` directory, and the loop above iterates `API_MODELS` — so a reference
+model added to `BASE_MODELS` and nothing else is neither fetched nor read, and
+drops out silently until the read-back assert reports a table that never landed.
+
+Land it as its own resource instead, appended to the same `readers` list before
+the one `pipeline.run(...)` — the form is in `derived-models.md`
+§ "The resource template":
+
+```python
+@dlt.resource(name=duckdb.model_tables["nxd_decisions"])
+def nxd_decisions_resource() -> Iterator[dict[str, Any]]:
+    yield from decision_rows          # flat scalar dicts, read from your own CSV
+
+readers.append(nxd_decisions_resource())
+```
+
+It is still a base model everywhere else — promised in `spec.py`, declared in
+`models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. Only how the rows
+reach the port changes, because on this connector there is no reader loop to
+carry them.
+
 Build the `RESTAPIConfig` from `secrets` at runtime — never
 hard-code a base URL or credential in the transform source. The `auth_type`
 dispatch assembles dlt's structured `auth` dict from the flat secret
