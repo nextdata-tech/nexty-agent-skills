@@ -92,7 +92,7 @@ and the `model_tables` identity map from these — you do not author them):
 | `spec.py` | `.promise(<name>)` — imported from `models` | yes | yes |
 | `transform/main.py` | listed in `PHYSICAL_MODELS` | yes | yes |
 | the physical table | what dlt writes: `main.<name>` | yes | yes |
-| the connector's per-model reference | `data/<name>/` for a file connector (CSV/JSON/JSONL/Parquet); a `db-source-tables` entry for a database connector; an `endpoint_<name>` infra-profile attribute for a REST API connector | yes | **no** |
+| the connector's per-model reference | `data/<name>/` for a file connector (CSV/JSON/JSONL/Parquet); a `db-source-tables` entry for a database connector; an `endpoint_<name>` infra-profile attribute for a REST API connector | yes — **except** reference data the closure lands itself on a `db-source`/`api-source` connector, which has none: do NOT invent one (`reference/api-source.md` § "Landed reference data in an API closure") | **no** |
 
 `PHYSICAL_MODELS` is the set of **landed tables**, not data directories: base
 models (backed by `data/<name>/`) **plus** derived models (Step 3a, no data

@@ -429,8 +429,12 @@ nxd_decisions_metrics = semantic_view(
    `db-source-tables` companion as though an entry were missing there.
 
    It stays a base model in every other respect — promised, declared in
-   `models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. Only how its rows
-   reach the port changes.
+   `models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. What changes is
+   how its rows reach the port **and their types**: a file connector's
+   `read_csv()` infers column types, stdlib `csv` does not, so a `rate` yielded
+   straight through reaches DuckDB as VARCHAR while `models.py` promises
+   `number()`. Cast the measures — `api-source.md` § "Landed reference data in
+   an API closure" has the rule.
 
 The name is reserved. If a source file would snake_case to `nxd_decisions`,
 that is the naming collision the Step-1 ambiguity rule already covers: stop and
