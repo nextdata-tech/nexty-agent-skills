@@ -405,6 +405,23 @@ def declared_models(root: Path) -> dict[str, str]:
     return {path: model for model, path in declared_endpoints(root).items()}
 
 
+def endpoints_not_public(root: Path) -> list[str]:
+    """Endpoint attribute keys that will NOT survive an export.
+
+    Asserts the POSITIVE. Export redaction is fail-closed: the supervisor keeps
+    an attribute's value only when it carries `public: true` literally
+    (`export.rs` compares against `Some(Bool(true))`), so an attribute with no
+    `public:` line at all is stripped exactly like `public: false`. A scan for
+    an explicit "false" would miss that case -- and the omitted flag is the more
+    likely authoring slip of the two.
+    """
+    fields, public_flags = profile_attributes(root)
+    return sorted(
+        key for key in fields
+        if ENDPOINT_PREFIX in key and public_flags.get(key) != "true"
+    )
+
+
 def find_table(tables: list[str], hint: str, other_hint: str | None = None) -> str | None:
     """Fallback resolution when the profile declares no usable endpoint map.
 
@@ -498,20 +515,17 @@ def main() -> int:
         "belongs on the api-source service, one attribute per model, not in a "
         "companion file beside the transform",
     )
-    # An endpoint path is topology, not a credential. Marked `public: false` it
-    # is stripped from an export, and the recipient gets a closure that cannot
-    # run until they work out what the paths were -- a silent failure at their
-    # end, not the sender's, so nothing here would otherwise catch it.
-    _, public_flags = profile_attributes(root)
-    non_public = sorted(
-        key for key, flag in public_flags.items()
-        if ENDPOINT_PREFIX in key and flag == "false"
-    )
+    # An endpoint path is topology, not a credential. Stripped from an export,
+    # the recipient gets a closure that cannot run until they work out what the
+    # paths were -- a silent failure at their end, not the sender's, so nothing
+    # here would otherwise catch it.
+    non_public = endpoints_not_public(root)
     check(
         "closure:endpoints-public",
         not non_public,
-        f"{non_public} marked public: false — an endpoint path is non-secret "
-        f"topology and must survive export",
+        f"{non_public} not marked public: true — an endpoint path is non-secret "
+        f"topology and must survive export; redaction is fail-closed, so an "
+        f"omitted public: flag strips it just as public: false does",
     )
     check(
         "closure:no-endpoints-companion",

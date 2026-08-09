@@ -217,22 +217,22 @@ from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig
 # `secrets` is the FLAT merge of every service in `.secrets([...])` — read the
 # attribute keys directly. There is no per-service level to index first.
 #
-# One `endpoint_<model>` attribute per API-backed model. Check them all up front
-# rather than letting the comprehension below raise a bare KeyError on the first
-# one missing: the fix is the same for every absent key (add the attribute to
-# infra-profile.yaml), so naming them together saves a round trip.
+# The API-backed models are exactly the ones the profile gives an endpoint for.
 #
-# BASE_MODELS, not PHYSICAL_MODELS. A derived model (Step 3a) is computed in
-# Python from the fetched rows and has no endpoint to fetch it from — asking the
-# API for one would 404, and demanding an `endpoint_<derived>` attribute would
-# send the author to the profile to invent a path that does not exist.
-missing = [model for model in BASE_MODELS if f"endpoint_{model}" not in secrets]
-if missing:
-    raise KeyError(
-        f"no endpoint attribute in secrets for {missing} — add one "
-        f"`endpoint_<model>` attribute per API-backed model to the api-source "
-        f"service in infra-profile.yaml"
-    )
+# Not PHYSICAL_MODELS and not BASE_MODELS. A derived model (Step 3a) is computed
+# in Python and has no endpoint. But neither is every BASE_MODEL fetched: landed
+# reference data — `nxd_decisions`, agent judgement rulings, anything from
+# `derivation-plan.md` / `llm-judgments.md` — is a base model too, and reaches
+# the port as its own `@dlt.resource` rather than over HTTP. Iterating either
+# tuple asks the API for a model it does not serve, or demands an
+# `endpoint_<model>` attribute for a path that does not exist.
+#
+# A model that SHOULD be fetched but whose attribute you forgot drops out here
+# rather than raising. That is caught: the mandatory read-back assert at the end
+# of the transform compares what landed against PHYSICAL_MODELS and names the
+# missing table. Do not delete that assert — here it is the only thing standing
+# between a typo'd attribute key and a silently empty model.
+API_MODELS = tuple(model for model in BASE_MODELS if f"endpoint_{model}" in secrets)
 
 client_config = {"base_url": secrets["base_url"]}
 auth_type = secrets.get("auth_type")
@@ -273,7 +273,7 @@ config: RESTAPIConfig = {
     "client": client_config,
     "resources": [
         {"name": model, "endpoint": {"path": secrets[f"endpoint_{model}"]}}
-        for model in BASE_MODELS
+        for model in API_MODELS
     ],
 }
 # rest_api_resources returns a LIST of DltResource, not a DltSource. Verified
@@ -288,11 +288,12 @@ config: RESTAPIConfig = {
 # `rest_api_source` DOES return a DltSource whose `.resources` mapping is real.
 # Pick one and stay with it; the two names differ by one word and not by shape.
 resources = {r.name: r for r in rest_api_resources(config)}
-# BASE_MODELS again, matching the resource list above. Derived models reach the
-# same `pipeline.run` as `@dlt.resource` generators appended to this same list
-# (Step 3a) — they are landed in the one run, just not fetched over HTTP.
+# API_MODELS again, matching the resource list above. Everything else promised —
+# derived models (Step 3a) and landed reference data — reaches the same
+# `pipeline.run` as `@dlt.resource` generators appended to this same list. They
+# are landed in the one run, just not fetched over HTTP.
 readers = []
-for model in BASE_MODELS:
+for model in API_MODELS:
     table_name = duckdb.model_tables[model]
     readers.append(resources[model].with_name(table_name))
 pipeline.run(readers, write_disposition="replace")

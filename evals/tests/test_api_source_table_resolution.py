@@ -125,6 +125,41 @@ def test_retired_companion_file_is_not_read(tmp_path: Path):
     assert got == "monitors"
 
 
+def test_an_endpoint_marked_public_true_survives_export(tmp_path: Path):
+    write_profile(tmp_path, {"endpoint_checks": "/v1/checks"}, public="true")
+    assert checker.endpoints_not_public(tmp_path) == []
+
+
+def test_an_endpoint_marked_public_false_is_flagged(tmp_path: Path):
+    write_profile(tmp_path, {"endpoint_checks": "/v1/checks"}, public="false")
+    assert checker.endpoints_not_public(tmp_path) == ["endpoint_checks"]
+
+
+def test_an_endpoint_with_no_public_flag_is_flagged(tmp_path: Path):
+    """Export redaction is fail-closed — the supervisor keeps a value only on a
+    literal `public: true`, so an omitted flag strips the path exactly as
+    `public: false` does. A check scanning for an explicit "false" passes this
+    closure and then the recipient gets an export that cannot run."""
+    (tmp_path / "infra-profile.yaml").write_text(
+        "metadata:\n"
+        "  name: desktop-local\n"
+        "services:\n"
+        "  - name: api-source\n"
+        "    driver: nxd:generic-secrets:1.0.0\n"
+        "    attributes:\n"
+        "      - key: endpoint_checks\n"
+        "        value: /v1/checks\n",
+        encoding="utf-8",
+    )
+    assert checker.endpoints_not_public(tmp_path) == ["endpoint_checks"]
+
+
+def test_non_endpoint_attributes_are_not_required_to_be_public(tmp_path: Path):
+    """`auth_token` is correctly public: false. The rule is scoped to endpoints."""
+    write_profile(tmp_path, {"auth_token": "t0ken"}, public="false")
+    assert checker.endpoints_not_public(tmp_path) == []
+
+
 def test_no_declaration_falls_back(tmp_path: Path):
     got, _ = checker.resolve_table(
         tmp_path, LANDED_TABLES, "/v1/checks", "check", "monitor")
