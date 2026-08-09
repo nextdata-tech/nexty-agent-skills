@@ -14,8 +14,10 @@
 
 This is a sibling of the proven CSV connector documented inline in
 `SKILL.md` — same closure shape (`duckdb` port, `PHYSICAL_MODELS`,
-read-back assert, `.transform-complete`), no `data/` directory, no local
-file export.
+read-back assert, `.transform-complete`), no `data/` export, no local
+file export. "No `data/`" is about the *connector*: this type brings no
+export of its own. A closure may still carry `data/` for landed reference
+data it authored — see § "Landed reference data in an API closure".
 
 ## Scope
 
@@ -303,23 +305,53 @@ pipeline.run(readers, write_disposition="replace")
 
 `derivation-plan.md` and `llm-judgments.md` tell you to write
 `data/<name>/<name>.csv`, add the model to `BASE_MODELS`, and let it flow
-through the reader loop with "no special casing anywhere". **That instruction is
-written for a file connector and does not hold here.** An api-source closure has
-no `data/` directory, and the loop above iterates `API_MODELS` — so a reference
-model added to `BASE_MODELS` and nothing else is neither fetched nor read, and
-drops out silently until the read-back assert reports a table that never landed.
+through the reader loop with "no special casing anywhere". **Step 1 still
+applies; the reader-loop half does not.** The loop above iterates `API_MODELS`,
+so a reference model added to `BASE_MODELS` and nothing else is neither fetched
+nor read, and drops out silently until the read-back assert reports a table that
+never landed.
 
-Land it as its own resource instead, appended to the same `readers` list before
-the one `pipeline.run(...)` — the form is in `derived-models.md`
+**Still write the CSV, at `data/<name>/<name>.csv`.** "No `data/` directory"
+above means this connector brings no *export* — it does not mean the closure may
+not carry one, and `pin` materializes `data/` for every closure regardless of
+connector, so the file travels. Do **not** inline the rows as a literal in the
+transform instead: `SKILL.md`'s "Reference data is landed, never hardcoded"
+invariant forbids exactly that, and it does not relax by connector.
+
+What changes is only how those rows reach the port. Read the CSV yourself with
+stdlib `csv` and yield them as your own resource, appended to the same `readers`
+list before the one `pipeline.run(...)` — the form is in `derived-models.md`
 § "The resource template":
 
 ```python
+import csv, os
+from pathlib import Path
+
+# Anchor on the execution root, not the working directory. The compute driver
+# exports NXD_TRANSFORM_ROOT as the materialized closure root and also chdir's
+# there, but only the env var is contractual — a relative open works today and
+# is not guaranteed to. Never an authoring-checkout absolute path: it escapes
+# the pinned snapshot and fails.
+root = Path(os.environ["NXD_TRANSFORM_ROOT"])
+
+# Read it yourself with stdlib csv: dlt's filesystem reader streams straight to
+# the destination and cannot hand rows back to Python (same rule as Step 3a).
+# sorted() because glob order is filesystem-dependent.
+decision_rows: list[dict[str, str]] = []
+for path in sorted((root / "data" / "nxd_decisions").glob("*.csv")):
+    with path.open(newline="", encoding="utf-8") as handle:
+        decision_rows.extend(csv.DictReader(handle))
+
 @dlt.resource(name=duckdb.model_tables["nxd_decisions"])
 def nxd_decisions_resource() -> Iterator[dict[str, Any]]:
-    yield from decision_rows          # flat scalar dicts, read from your own CSV
+    yield from decision_rows          # flat scalar dicts only
 
 readers.append(nxd_decisions_resource())
 ```
+
+`secrets["csv_source"]` is **not** available here — that key is supplied by the
+`csv-source` service, which an api-source closure does not name in
+`.secrets([...])`. `NXD_TRANSFORM_ROOT` is the connector-independent anchor.
 
 It is still a base model everywhere else — promised in `spec.py`, declared in
 `models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. Only how the rows

@@ -413,16 +413,24 @@ nxd_decisions_metrics = semantic_view(
    reader loop as every other base model — no special casing anywhere.
 
    **On an `api-source` or `db-source` closure there is no such reader loop.**
-   Neither has a `data/` directory: their ingest bodies pull each model from the
+   Neither brings a `data/` export: their ingest bodies pull each model from the
    remote, so a reference model that exists only as your CSV has nothing to
-   carry it. Add it as its own `@dlt.resource`, appended to the same `readers`
-   list before the one `pipeline.run(...)` — the form is in `derived-models.md`
-   § "The resource template", with a worked example in `api-source.md` § "Landed
-   reference data in an API closure". The two connectors fail differently if you
-   skip this, and neither message names the fix: `api-source` drops the model
-   silently until the read-back assert reports a table that never landed, while
-   `db-source` raises `KeyError` out of its `table_map[model]` lookup, pointing
-   at the `db-source-tables` companion as though an entry were missing there.
+   carry it. Still write the CSV — add it as its own `@dlt.resource`, appended
+   to the same `readers` list before the one `pipeline.run(...)`. The form is in
+   `derived-models.md` § "The resource template"; `api-source.md` § "Landed
+   reference data in an API closure" has the worked version, including how to
+   reach the CSV without a `secrets["csv_source"]` to anchor on.
+
+   **Appending the resource is necessary but not sufficient on `db-source`.**
+   Its template loop (`database-source.md`) iterates `PHYSICAL_MODELS` and
+   indexes `table_map[model]`, so it raises `KeyError: '<name>'` on your
+   reference model *before* your resource ever runs — pointing at the
+   `db-source-tables` companion as though an entry were missing there. Scope
+   that loop to the models the companion actually maps (`for model in
+   table_map:`, which the labeled multi-DB body in `multi-source.md` already
+   uses). `api-source` needs no such edit: its loop iterates `API_MODELS`, which
+   is already derived from the endpoint attributes — there the model is dropped
+   silently instead, and the read-back assert is what names it.
 
    It stays a base model in every other respect — promised, declared in
    `models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. Only how its rows
