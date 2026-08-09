@@ -24,7 +24,8 @@ SRC = REPO / "src"
 FILE_LIST = (
     "`spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, "
     "`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, "
-    "`build-record.json`, `README.md`, the connector companion artifact — and, "
+    "`build-record.json`, `README.md`, the connector companion artifact where the "
+    "type has one — and, "
     "for a credentialed source, `SENSITIVE` and `.gitignore`"
 )
 

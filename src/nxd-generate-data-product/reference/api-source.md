@@ -6,6 +6,7 @@
 - The `RESTAPIConfig` / `rest_api_resources` shape
 - Credential handling — read this before shipping
 - Naming
+- Why the endpoints live in the profile
 - `transform/main.py` diff from the CSV template
 - `requirements.txt`
 - `spec.py` / `infra-profile.yaml` diffs
@@ -96,8 +97,10 @@ already been resolved.
   declared by two services resolves to one value and the loser vanishes with no
   error — prefix the attribute `key` (`orders_base_url`) to separate them. Full
   rule: `reference/multi-source.md`.
-- The companion file `api-source-endpoints` holds **only non-secret
-  topology** — one line per model, `<model>=<endpoint path>`.
+- **Endpoint paths are attributes too, one per model**: `endpoint_<model>`,
+  marked `public: true`. They are non-secret topology and belong beside
+  `base_url` in the same service — **not** in a companion file. See "Why the
+  endpoints live in the profile" below.
 - The `api-source` service's `attributes` list carries the live payload as
   **one entry per property**, each shaped `{"key": <property>, "value":
   <live value>, "public": <bool>}` — never one attribute holding a nested
@@ -168,15 +171,39 @@ already been resolved.
   `secrets["base_url"]` (always present) and, only when the API requires
   authentication, `secrets["auth_type"]` plus that type's own fields (see
   Credential handling). There is no `secrets["api_source"]` level.
-- Companion file: `api-source-endpoints` — one line per model,
-  `<model>=<endpoint path>` (non-secret topology only).
+- Endpoint paths: `secrets["endpoint_<model>"]`, one attribute per API-backed
+  model (non-secret topology, `public: true`). **No companion file.**
 
 These names are for exactly **one** API source. When this closure needs two
 or more APIs (or mixes an API with another connector type), label each
 instance instead — see `reference/multi-source.md` for the full
-`api-source-<label>` / label-prefixed attribute keys (`orders_base_url`) /
-`api-source-<label>-endpoints`
-pattern.
+`api-source-<label>` / label-prefixed attribute keys (`orders_base_url`,
+`orders_endpoint_<model>`) pattern.
+
+## Why the endpoints live in the profile
+
+An earlier revision of this reference had the author write an
+`api-source-endpoints` file beside the transform, one `<model>=<endpoint path>`
+line each. Do not do that, and do not reintroduce it under another name.
+
+The endpoint map is **configuration**, and this closure already has exactly one
+configuration channel: the `api-source` service's `attributes`, which the
+supervisor merges flat into `secrets`. `base_url` travels that way already, and
+an endpoint path is the same kind of value — non-secret topology the recipient
+of an export needs to see and may need to change. Splitting it into a sidecar
+file bought nothing and cost two things: the file had to survive closure
+materialization to be readable at transform time (it did not, for a while), and
+an export had to decide separately whether it should travel.
+
+On the platform (k8s) path the model→source-object binding lives in the
+manifest — `target-tables` / `target-files` — or in a source-aligned input's
+`.config(attributes={...})` bag. **Neither is available here.** The desktop
+runtime ships exactly one input storage driver, `nxd:local/file/storage:0.1.0`,
+which reads CSVs out of the pinned definition's `data/` directory; there is no
+local driver that can back a source-aligned input pointed at a REST API, and an
+api-source closure declares no input at all — the transform reaches the API
+itself through dlt. That leaves the profile attributes, which is where a flat,
+string-valued, per-model key belongs on this runtime.
 
 ## `transform/main.py` diff from the CSV template
 
@@ -189,7 +216,23 @@ from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig
 
 # `secrets` is the FLAT merge of every service in `.secrets([...])` — read the
 # attribute keys directly. There is no per-service level to index first.
-endpoint_map = _load_api_source_endpoints()  # parses the api-source-endpoints companion file
+#
+# One `endpoint_<model>` attribute per API-backed model. Check them all up front
+# rather than letting the comprehension below raise a bare KeyError on the first
+# one missing: the fix is the same for every absent key (add the attribute to
+# infra-profile.yaml), so naming them together saves a round trip.
+#
+# BASE_MODELS, not PHYSICAL_MODELS. A derived model (Step 3a) is computed in
+# Python from the fetched rows and has no endpoint to fetch it from — asking the
+# API for one would 404, and demanding an `endpoint_<derived>` attribute would
+# send the author to the profile to invent a path that does not exist.
+missing = [model for model in BASE_MODELS if f"endpoint_{model}" not in secrets]
+if missing:
+    raise KeyError(
+        f"no endpoint attribute in secrets for {missing} — add one "
+        f"`endpoint_<model>` attribute per API-backed model to the api-source "
+        f"service in infra-profile.yaml"
+    )
 
 client_config = {"base_url": secrets["base_url"]}
 auth_type = secrets.get("auth_type")
@@ -229,8 +272,8 @@ elif auth_type is not None:
 config: RESTAPIConfig = {
     "client": client_config,
     "resources": [
-        {"name": model, "endpoint": {"path": endpoint_map[model]}}
-        for model in PHYSICAL_MODELS
+        {"name": model, "endpoint": {"path": secrets[f"endpoint_{model}"]}}
+        for model in BASE_MODELS
     ],
 }
 # rest_api_resources returns a LIST of DltResource, not a DltSource. Verified
@@ -245,8 +288,11 @@ config: RESTAPIConfig = {
 # `rest_api_source` DOES return a DltSource whose `.resources` mapping is real.
 # Pick one and stay with it; the two names differ by one word and not by shape.
 resources = {r.name: r for r in rest_api_resources(config)}
+# BASE_MODELS again, matching the resource list above. Derived models reach the
+# same `pipeline.run` as `@dlt.resource` generators appended to this same list
+# (Step 3a) — they are landed in the one run, just not fetched over HTTP.
 readers = []
-for model in PHYSICAL_MODELS:
+for model in BASE_MODELS:
     table_name = duckdb.model_tables[model]
     readers.append(resources[model].with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
@@ -293,10 +339,12 @@ different shape: it raises on exactly the case the `elif` exists to let through.
 An `auth_type` the transform does not handle is a closure that cannot
 authenticate. Discovering that as a raise at transform time beats discovering it
 as an HTTP 401 whose body is someone else's error page.
-`_load_api_source_endpoints` is **not** a dlt or stdlib function — the author
-must write it, parsing the `api-source-endpoints` companion file's
-`<model>=<endpoint path>` lines into a dict. A transform that calls it
-without defining it raises `NameError` at runtime.
+**Never open a file to find an endpoint path.** Every value the ingestion body
+needs — base URL, auth fields, endpoint paths — arrives in `secrets`. A helper
+that reads a sidecar file beside the transform (`_load_api_source_endpoints` and
+friends) is not a dlt or stdlib function, has to be hand-written, and is
+reaching for a channel this closure does not use; § "Why the endpoints live in
+the profile" above has the reasoning.
 
 ## `requirements.txt`
 
@@ -323,7 +371,19 @@ add it explicitly rather than assuming it's already covered.
         - key: base_url
           value: https://aidevboard.com/api/v1
           public: true
+        - key: endpoint_checks
+          value: /v1/checks
+          public: true
+        - key: endpoint_monitors
+          value: /v1/monitors
+          public: true
   ```
+
+  One `endpoint_<model>` per API-backed model, `<model>` byte-identical to the
+  name in `PHYSICAL_MODELS` (the naming invariant reaches this attribute key,
+  not a companion file). Always `public: true` — an endpoint path is topology,
+  and redacting it would hand the recipient of an export a closure they cannot
+  run without asking what the paths were.
 
   When the API needs authentication, add `auth_type` plus that type's own
   flat fields alongside `base_url` — never nest a whole credential under
@@ -336,6 +396,12 @@ add it explicitly rather than assuming it's already covered.
       attributes:
         - key: base_url
           value: https://aidevboard.com/api/v1
+          public: true
+        - key: endpoint_checks
+          value: /v1/checks
+          public: true
+        - key: endpoint_monitors
+          value: /v1/monitors
           public: true
         - key: auth_type
           value: bearer
@@ -351,10 +417,11 @@ add it explicitly rather than assuming it's already covered.
   `public:` per the sensitivity classification (secrets `false`, non-secret
   config like `auth_key_name`/`auth_key_location` `true`).
 
-  **No `data/` directory, no path file** — `api-source-endpoints` is the
-  only companion artifact, and it stays non-secret topology only. For 2+ API
-  sources, add one labeled service per instance instead (`api-source-<label>`
-  / label-prefixed attribute keys such as `secrets["orders_base_url"]`) —
+  **No `data/` directory, no path file, no companion artifact of any kind** —
+  an api-source closure ships none. Everything the transform needs is an
+  attribute on this service. For 2+ API sources, add one labeled service per
+  instance instead (`api-source-<label>` / label-prefixed attribute keys such
+  as `secrets["orders_base_url"]` and `secrets["orders_endpoint_<model>"]`) —
   see `reference/multi-source.md`.
 
 ## Self-check (connectivity smoke test)
@@ -383,6 +450,14 @@ pattern-matching:
 # and schema as well.
 _PUBLIC_SUFFIXES = ("host", "port", "database", "schema",
                     "base_url", "auth_type", "region")
+# Endpoint keys are `endpoint_<model>` (or `<label>_endpoint_<model>`), so the
+# suffix rule below cannot reach them — the model name is the tail, and it is
+# author-chosen and therefore unbounded. Match the segment instead. Leaving them
+# out is not fail-safe here, it is just unhelpful: `.replace()` would rewrite the
+# path out of the middle of the failing URL, so a 404 on the wrong endpoint —
+# the single most likely thing to go wrong at this step — would print as
+# `https://api.example.com<redacted>` and name neither the endpoint nor the model.
+_PUBLIC_SEGMENTS = ("endpoint_",)
 
 def _redact(exc: BaseException, secrets: dict) -> str:
     text = str(exc)
@@ -395,6 +470,8 @@ def _redact(exc: BaseException, secrets: dict) -> str:
         if not value:
             continue
         if any(key == p or key.endswith(f"_{p}") for p in _PUBLIC_SUFFIXES):
+            continue
+        if any(seg in key for seg in _PUBLIC_SEGMENTS):
             continue
         text = text.replace(str(value), "<redacted>")
     return text

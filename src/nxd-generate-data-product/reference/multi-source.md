@@ -116,8 +116,8 @@ must be mirrored here.
 | 2+ databases, labeled | `db-source-<label>` | `<label>_<field>` — `orders_host`, … | `db-source-<label>-tables` | `_db_<label>` |
 | One file source (unchanged) | `file-source` | `file_source` | `file-source-path` | `_file` |
 | 2+ file sources, labeled | `file-source-<label>` | `file_source_<label>` | `file-source-<label>-path` | `_file_<label>` |
-| One API (unchanged) | `api-source` | the attribute keys — `base_url`, … | `api-source-endpoints` | `_api` |
-| 2+ APIs, labeled | `api-source-<label>` | `<label>_<attr>` — `orders_base_url`, … | `api-source-<label>-endpoints` | `_api_<label>` |
+| One API (unchanged) | `api-source` | the attribute keys — `base_url`, `endpoint_<model>`, … | none | `_api` |
+| 2+ APIs, labeled | `api-source-<label>` | `<label>_<attr>` — `orders_base_url`, `orders_endpoint_<model>`, … | none | `_api_<label>` |
 | One CSV (unchanged) | `csv-source` | `csv_source` | `csv-source-path` | `_csv` |
 | 2+ CSVs, labeled, transform-only | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
 
