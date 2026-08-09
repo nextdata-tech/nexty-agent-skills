@@ -256,7 +256,9 @@ This recipe lands the **judgement model** only. Land the `scoring_rubric` and
 
 The judgement model is a **base reference model**, landed exactly like
 `merchant_categories` or `nxd_decisions` — authored as data, flowing through the
-same dlt reader loop with no special casing:
+same dlt reader loop with no special casing (on a file connector; an
+`api-source` / `db-source` closure has no such loop and needs its own
+`@dlt.resource` — see step 3 below):
 
 1. Write judgement rows to `data/<name>/batch-00N.csv` (one file per batch).
 2. Declare the model in `models.py` with a metric view beside it so the rows are
