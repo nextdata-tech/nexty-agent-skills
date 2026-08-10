@@ -271,7 +271,7 @@ def no_hardcoded_base_url_or_path(transform_src: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 _MATERIALIZE_HARNESS = '''
-import sys, types
+import json, sys, types
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -295,6 +295,12 @@ out = DuckDbOutput(path=sys.argv[1], schema="main",
 # flat_maps each handler's values into a single serde_json::Map). Passing a
 # nested {"api_source": ...} here would grade the wrong contract.
 secrets = {"base_url": sys.argv[2], "auth_type": "bearer", "auth_token": sys.argv[3]}
+# The endpoint map arrives the same way -- one `endpoint_<model>` attribute per
+# API-backed model, flattened into the very same map. Withholding it here while
+# the checker separately forbids a hardcoded endpoint path would leave the
+# closure no legal source for the path at all: a correct transform would raise
+# KeyError and be reported as a broken closure.
+secrets.update(json.loads(sys.argv[4]))
 ingest(duckdb=out, secrets=secrets)
 '''
 
@@ -317,7 +323,9 @@ def closure_requirements(root: Path) -> list[str]:
     return specs
 
 
-def materialize_closure(root: Path, base_url: str, token: str) -> tuple[Path | None, str]:
+def materialize_closure(
+    root: Path, base_url: str, token: str, endpoints: dict[str, str]
+) -> tuple[Path | None, str]:
     try:
         import duckdb  # noqa: F401, PLC0415
     except ImportError:
@@ -331,7 +339,7 @@ def materialize_closure(root: Path, base_url: str, token: str) -> tuple[Path | N
     cmd = ["uv", "run", "--no-project"]
     for spec in closure_requirements(root):
         cmd += ["--with", spec]
-    cmd += ["python", str(harness), str(db), base_url, token]
+    cmd += ["python", str(harness), str(db), base_url, token, json.dumps(endpoints)]
     try:
         proc = subprocess.run(
             cmd, cwd=str(root), capture_output=True, text=True,
@@ -420,6 +428,22 @@ def endpoints_not_public(root: Path) -> list[str]:
         key for key in fields
         if ENDPOINT_PREFIX in key and public_flags.get(key) != "true"
     )
+
+
+def endpoint_secrets(root: Path) -> dict[str, str]:
+    """The endpoint attributes as the transform will see them in `secrets`.
+
+    Keyed by the RAW profile key, not by the model name `declared_endpoints`
+    parses out: the label-prefixed multi-source spelling (`orders_endpoint_checks`)
+    reaches the transform under that full key, and rebuilding it as
+    `endpoint_<model>` would hand a correct labeled closure a key it never asked
+    for while withholding the one it did.
+    """
+    fields, _ = profile_attributes(root)
+    return {
+        key: value for key, value in fields.items()
+        if ENDPOINT_PREFIX in key and value
+    }
 
 
 def find_table(tables: list[str], hint: str, other_hint: str | None = None) -> str | None:
@@ -575,7 +599,8 @@ def main() -> int:
             print_report()
             return 1
 
-        db, why = materialize_closure(root, base_url, stub.VALID_TOKEN)
+        db, why = materialize_closure(
+            root, base_url, stub.VALID_TOKEN, endpoint_secrets(root))
         if db is None:
             check("closure:materializes", False, why)
             # A closure that never even calls the endpoint cannot be
