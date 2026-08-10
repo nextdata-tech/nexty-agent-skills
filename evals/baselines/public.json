@@ -4,6 +4,10 @@
     "current_pack/api-to-vector-data-product-build": {
       "verdict": "FAIL"
     },
+    "current_pack/authenticated-api-source-build": {
+      "verdict": "PASS",
+      "note": "Recorded on ONE observation (15/15 checks, deterministic exit 0) taken immediately after the materialize harness was fixed to pass the endpoint attributes into the transform's secrets map. The two observations before that fix both failed on the same KeyError: 'endpoint_checks', and both were harness fault, not skill fault: all three contract checks (endpoints-in-profile, endpoints-public, no-endpoints-companion) passed in every run, including the failing ones, so the skill placed the endpoints correctly throughout. A single observation is thin evidence for a gating cell — if this flips once, suspect variance and re-measure before treating it as a skill regression."
+    },
     "current_pack/debug-failed-data-product": {
       "verdict": "FAIL"
     },
