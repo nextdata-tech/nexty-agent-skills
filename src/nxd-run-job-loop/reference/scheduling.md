@@ -229,10 +229,12 @@ path to `build_data_product` unverified: confirm the path resolves on the
 supervisor's **host** surface and that
 `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
 `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
-`build-record.json`, `README.md`, the connector companion artifact — and,
+`build-record.json`, `README.md`, the connector companion artifact where the type has one — and,
 for a credentialed source, `SENSITIVE` and `.gitignore`
 — all exist under it. The connector companion artifact is a file source's `data/`
-export, or the db/API mapping file. `infra-profile.yaml` matters most: it is the
+export, or a database source's mapping file; an **API source has none** — its
+endpoint map is `endpoint_<model>` attributes in the profile, so there is nothing
+extra to look for. `infra-profile.yaml` matters most: it is the
 file host-side credential injection writes into, so a closure missing it passes a
 naive check and then fails the build. The three generated record files matter
 next: `dp-spec.approved.md` is the byte copy of the approved plan the closure was

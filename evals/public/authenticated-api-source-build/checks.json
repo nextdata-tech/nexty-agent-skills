@@ -28,7 +28,7 @@
     },
     {
       "id": "rest-connector-not-hand-rolled",
-      "check": "CRITICAL. Ingestion goes through dlt's REST connector -- rest_api_source / rest_api_resources with a RESTAPIConfig, per the api-source skill reference -- with an api-source service in infra-profile.yaml and an api-source-endpoints companion file (one line per model, <model>=<endpoint path>). FAIL if the transform hand-rolls fetching with requests/urllib in a loop and feeds rows to dlt as a plain generator, and FAIL if base_url or either endpoint path is a literal in transform/main.py rather than read from the flat secrets map (secrets['base_url'], the attribute key itself -- NOT secrets['api_source']) and the companion file."
+      "check": "CRITICAL. Ingestion goes through dlt's REST connector -- rest_api_source / rest_api_resources with a RESTAPIConfig, per the api-source skill reference -- with an api-source service in infra-profile.yaml carrying one endpoint_<model> attribute per model (public: true) and NO api-source-endpoints companion file. FAIL if the transform hand-rolls fetching with requests/urllib in a loop and feeds rows to dlt as a plain generator, and FAIL if base_url or either endpoint path is a literal in transform/main.py rather than read from the flat secrets map (secrets['base_url'] and secrets['endpoint_<model>'], the attribute keys themselves -- NOT secrets['api_source'])."
     },
     {
       "id": "auth-dispatch-builds-structured-auth-dict",

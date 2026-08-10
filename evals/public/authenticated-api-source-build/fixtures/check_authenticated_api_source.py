@@ -87,22 +87,23 @@ def no_literal_secret_in_source(root: Path) -> tuple[bool, str]:
     return not hits, f"token literal found in {hits}" if hits else ""
 
 
-def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
-    """infra-profile.yaml's api-source service must carry auth_type: bearer +
-    auth_token as flat attributes -- never the whole credential nested under
-    one opaque value, and never omitted (this API requires auth)."""
+def profile_attributes(root: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Every `key:`/`value:`/`public:` attribute in infra-profile.yaml, flat.
+
+    Returns ({key: value}, {key: public-flag-lowercased}). Recovered with a
+    permissive line-based read -- this is a fixture-authored YAML, not a
+    document we need a real parser for.
+
+    Flat across services on purpose: that is exactly what the supervisor does
+    when it merges every service in `.secrets([...])` into the transform's
+    `secrets` map, so a checker keyed on service boundaries would be measuring
+    a structure the transform never sees. Returns empty maps for a missing file
+    -- callers check for the file itself.
+    """
     profile = root / "infra-profile.yaml"
     if not profile.is_file():
-        return False, "infra-profile.yaml missing", {}
+        return {}, {}
     text = profile.read_text(encoding="utf-8", errors="replace")
-    if "api-source" not in text:
-        return False, "no api-source service declared", {}
-    if "auth_type" not in text or "bearer" not in text:
-        return False, "no auth_type: bearer attribute found", {}
-    if "auth_token" not in text:
-        return False, "no auth_token attribute found", {}
-    # Recover the token value and base_url with a permissive line-based read --
-    # this is a fixture-authored YAML, not a document we need a real parser for.
     fields: dict[str, str] = {}
     public_flags: dict[str, str] = {}
     cur_key = None
@@ -121,6 +122,24 @@ def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
         m = re.match(r"^\s*public:\s*(\S+)", line)
         if m and cur_key:
             public_flags[cur_key] = m.group(1).strip("'\"").lower()
+    return fields, public_flags
+
+
+def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
+    """infra-profile.yaml's api-source service must carry auth_type: bearer +
+    auth_token as flat attributes -- never the whole credential nested under
+    one opaque value, and never omitted (this API requires auth)."""
+    profile = root / "infra-profile.yaml"
+    if not profile.is_file():
+        return False, "infra-profile.yaml missing", {}
+    text = profile.read_text(encoding="utf-8", errors="replace")
+    if "api-source" not in text:
+        return False, "no api-source service declared", {}
+    if "auth_type" not in text or "bearer" not in text:
+        return False, "no auth_type: bearer attribute found", {}
+    if "auth_token" not in text:
+        return False, "no auth_token attribute found", {}
+    fields, public_flags = profile_attributes(root)
     if fields.get("auth_token") != VALID_TOKEN:
         return False, f"auth_token attribute does not match the brief's token (got {fields.get('auth_token')!r})", fields
     if "base_url" not in fields:
@@ -241,7 +260,8 @@ def no_hardcoded_base_url_or_path(transform_src: str) -> tuple[bool, str]:
     if "127.0.0.1" in transform_src or "localhost" in transform_src:
         return False, "transform hardcodes the stub host instead of reading secrets['base_url']"
     if "/v1/checks" in transform_src or "/v1/monitors" in transform_src:
-        return False, "transform hardcodes an endpoint path instead of reading the api-source-endpoints companion file"
+        return False, ("transform hardcodes an endpoint path instead of reading "
+                       "secrets['endpoint_<model>']")
     return True, ""
 
 
@@ -251,7 +271,7 @@ def no_hardcoded_base_url_or_path(transform_src: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 _MATERIALIZE_HARNESS = '''
-import sys, types
+import json, sys, types
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -275,6 +295,12 @@ out = DuckDbOutput(path=sys.argv[1], schema="main",
 # flat_maps each handler's values into a single serde_json::Map). Passing a
 # nested {"api_source": ...} here would grade the wrong contract.
 secrets = {"base_url": sys.argv[2], "auth_type": "bearer", "auth_token": sys.argv[3]}
+# The endpoint map arrives the same way -- one `endpoint_<model>` attribute per
+# API-backed model, flattened into the very same map. Withholding it here while
+# the checker separately forbids a hardcoded endpoint path would leave the
+# closure no legal source for the path at all: a correct transform would raise
+# KeyError and be reported as a broken closure.
+secrets.update(json.loads(sys.argv[4]))
 ingest(duckdb=out, secrets=secrets)
 '''
 
@@ -297,7 +323,9 @@ def closure_requirements(root: Path) -> list[str]:
     return specs
 
 
-def materialize_closure(root: Path, base_url: str, token: str) -> tuple[Path | None, str]:
+def materialize_closure(
+    root: Path, base_url: str, token: str, endpoints: dict[str, str]
+) -> tuple[Path | None, str]:
     try:
         import duckdb  # noqa: F401, PLC0415
     except ImportError:
@@ -311,7 +339,7 @@ def materialize_closure(root: Path, base_url: str, token: str) -> tuple[Path | N
     cmd = ["uv", "run", "--no-project"]
     for spec in closure_requirements(root):
         cmd += ["--with", spec]
-    cmd += ["python", str(harness), str(db), base_url, token]
+    cmd += ["python", str(harness), str(db), base_url, token, json.dumps(endpoints)]
     try:
         proc = subprocess.run(
             cmd, cwd=str(root), capture_output=True, text=True,
@@ -352,26 +380,74 @@ def rowcount(db: Path, table: str) -> int:
     return con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
 
 
-def declared_models(root: Path) -> dict[str, str]:
-    """Parse the `api-source-endpoints` companion (`<model>=<endpoint path>`)
-    into {endpoint path: model name}. Missing/malformed lines are skipped."""
-    companion = root / "api-source-endpoints"
-    if not companion.is_file():
-        return {}
+ENDPOINT_PREFIX = "endpoint_"
+
+
+def declared_endpoints(root: Path) -> dict[str, str]:
+    """The closure's endpoint map, as {model name: endpoint path}.
+
+    Read from infra-profile.yaml's `endpoint_<model>` attributes. An earlier
+    revision of the api-source skill had the closure write an
+    `api-source-endpoints` companion file instead; that channel is gone, and
+    reading it here would silently pass a closure built to the retired contract.
+
+    The label-prefixed multi-source spelling (`orders_endpoint_checks`) is
+    matched too -- this scenario is single-source, but a checker that only
+    recognized the unlabeled form would report a correct labeled closure as
+    having declared nothing and fall through to the substring heuristic.
+    """
+    fields, _ = profile_attributes(root)
     mapping: dict[str, str] = {}
-    for raw in companion.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line or "=" not in line:
-            continue
-        model, _, path = line.partition("=")
-        model, path = model.strip(), path.strip()
-        if model and path:
-            mapping[path] = model
+    for key, value in fields.items():
+        # partition() returns an empty tail for a key that does not contain the
+        # prefix at all, so the emptiness check covers both "not an endpoint
+        # attribute" and the degenerate key named exactly `endpoint_`.
+        _, _, model = key.partition(ENDPOINT_PREFIX)
+        if model and value:
+            mapping[model] = value
     return mapping
 
 
+def declared_models(root: Path) -> dict[str, str]:
+    """The endpoint map inverted: {endpoint path: model name}."""
+    return {path: model for model, path in declared_endpoints(root).items()}
+
+
+def endpoints_not_public(root: Path) -> list[str]:
+    """Endpoint attribute keys that will NOT survive an export.
+
+    Asserts the POSITIVE. Export redaction is fail-closed: the supervisor keeps
+    an attribute's value only when it carries `public: true` literally
+    (`export.rs` compares against `Some(Bool(true))`), so an attribute with no
+    `public:` line at all is stripped exactly like `public: false`. A scan for
+    an explicit "false" would miss that case -- and the omitted flag is the more
+    likely authoring slip of the two.
+    """
+    fields, public_flags = profile_attributes(root)
+    return sorted(
+        key for key in fields
+        if ENDPOINT_PREFIX in key and public_flags.get(key) != "true"
+    )
+
+
+def endpoint_secrets(root: Path) -> dict[str, str]:
+    """The endpoint attributes as the transform will see them in `secrets`.
+
+    Keyed by the RAW profile key, not by the model name `declared_endpoints`
+    parses out: the label-prefixed multi-source spelling (`orders_endpoint_checks`)
+    reaches the transform under that full key, and rebuilding it as
+    `endpoint_<model>` would hand a correct labeled closure a key it never asked
+    for while withholding the one it did.
+    """
+    fields, _ = profile_attributes(root)
+    return {
+        key: value for key, value in fields.items()
+        if ENDPOINT_PREFIX in key and value
+    }
+
+
 def find_table(tables: list[str], hint: str, other_hint: str | None = None) -> str | None:
-    """Fallback resolution when the endpoints companion is absent/malformed.
+    """Fallback resolution when the profile declares no usable endpoint map.
 
     Substring-first resolution collides whenever a derived model happens to
     contain BOTH hints (e.g. `check_monitor_resolution` matches "monitor" and
@@ -409,8 +485,8 @@ def resolve_table(root: Path, tables: list[str], endpoint: str, hint: str,
         hit = next((t for t in tables if t.lower() == model.lower()), None)
         if hit:
             return hit, ""
-        return None, (f"api-source-endpoints declares {endpoint} -> model "
-                      f"{model!r}, but no such table landed; tables were {tables}")
+        return None, (f"infra-profile.yaml declares endpoint_{model} = {endpoint}, "
+                      f"but no table named {model!r} landed; tables were {tables}")
     return find_table(tables, hint, other_hint), str(tables)
 
 
@@ -455,11 +531,31 @@ def main() -> int:
 
     for rel in ("spec.py", "models.py", "infra-profile.yaml", "requirements.txt"):
         check(f"closure:{rel}", (root / rel).is_file())
+    endpoints = declared_endpoints(root)
     check(
-        "closure:endpoints-companion",
-        (root / "api-source-endpoints").is_file(),
-        "api-source-endpoints companion file missing (one line per model, "
-        "<model>=<endpoint path>)",
+        "closure:endpoints-in-profile",
+        bool(endpoints),
+        "no endpoint_<model> attributes in infra-profile.yaml — the endpoint map "
+        "belongs on the api-source service, one attribute per model, not in a "
+        "companion file beside the transform",
+    )
+    # An endpoint path is topology, not a credential. Stripped from an export,
+    # the recipient gets a closure that cannot run until they work out what the
+    # paths were -- a silent failure at their end, not the sender's, so nothing
+    # here would otherwise catch it.
+    non_public = endpoints_not_public(root)
+    check(
+        "closure:endpoints-public",
+        not non_public,
+        f"{non_public} not marked public: true — an endpoint path is non-secret "
+        f"topology and must survive export; redaction is fail-closed, so an "
+        f"omitted public: flag strips it just as public: false does",
+    )
+    check(
+        "closure:no-endpoints-companion",
+        not (root / "api-source-endpoints").is_file(),
+        "closure still ships an api-source-endpoints companion file; the endpoint "
+        "map moved to infra-profile.yaml attributes",
     )
 
     # ---- credential handling ----------------------------------------------
@@ -503,7 +599,8 @@ def main() -> int:
             print_report()
             return 1
 
-        db, why = materialize_closure(root, base_url, stub.VALID_TOKEN)
+        db, why = materialize_closure(
+            root, base_url, stub.VALID_TOKEN, endpoint_secrets(root))
         if db is None:
             check("closure:materializes", False, why)
             # A closure that never even calls the endpoint cannot be

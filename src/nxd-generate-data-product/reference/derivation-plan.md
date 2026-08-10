@@ -408,9 +408,33 @@ nxd_decisions_metrics = semantic_view(
 ```
 
 3. `.promise(nxd_decisions)` and `.model(nxd_decisions_metrics)` in `spec.py`,
-   and add `"nxd_decisions"` to `BASE_MODELS` in the transform. It flows
-   through the same dlt reader loop as every other base model — no special
-   casing anywhere.
+   and add `"nxd_decisions"` to `BASE_MODELS` in the transform. On a **file
+   connector** (CSV/JSON/JSONL/Parquet) it then flows through the same dlt
+   reader loop as every other base model — no special casing anywhere.
+
+   **On an `api-source` or `db-source` closure there is no such reader loop.**
+   Neither brings a `data/` export: their ingest bodies pull each model from the
+   remote, so a reference model that exists only as your CSV has nothing to
+   carry it. Still write the CSV — add it as its own `@dlt.resource`, appended
+   to the same `readers` list before the one `pipeline.run(...)`. The form is in
+   `derived-models.md` § "The resource template"; `api-source.md` § "Landed
+   reference data in an API closure" has the worked version, including how to
+   reach the CSV without a `secrets["csv_source"]` to anchor on.
+
+   Both connector templates already scope their reader loops to the models the
+   remote actually serves — `db-source` iterates `table_map`, `api-source`
+   iterates `API_MODELS` — so appending the resource is the whole change. Do not
+   "fix" either loop back to `PHYSICAL_MODELS`: that is what made a reference
+   model raise `KeyError` out of `table_map[model]`, pointing at the
+   `db-source-tables` companion as though an entry were missing there.
+
+   It stays a base model in every other respect — promised, declared in
+   `models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. What changes is
+   how its rows reach the port **and their types**: a file connector's
+   `read_csv()` infers column types, stdlib `csv` does not, so a `rate` yielded
+   straight through reaches DuckDB as VARCHAR while `models.py` promises
+   `number()`. Cast the measures — `api-source.md` § "Landed reference data in
+   an API closure" has the rule.
 
 The name is reserved. If a source file would snake_case to `nxd_decisions`,
 that is the naming collision the Step-1 ambiguity rule already covers: stop and

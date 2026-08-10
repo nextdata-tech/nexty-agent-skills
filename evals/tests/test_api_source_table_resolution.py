@@ -56,9 +56,29 @@ def test_fallback_reports_ambiguity_instead_of_guessing():
     assert any("landed:table-resolution-ambiguous" in f for f in checker.FAILURES)
 
 
+def write_profile(root: Path, attributes: dict[str, str], *, public: str = "true") -> None:
+    """An infra-profile.yaml carrying `attributes` on its api-source service.
+
+    Shaped like the one `reference/api-source.md` tells the author to emit, so
+    the checker is exercised against the documented layout rather than a
+    convenient flat one.
+    """
+    lines = [
+        "metadata:",
+        "  name: desktop-local",
+        "services:",
+        "  - name: api-source",
+        "    driver: nxd:generic-secrets:1.0.0",
+        "    attributes:",
+    ]
+    for key, value in attributes.items():
+        lines += [f"      - key: {key}", f"        value: {value}", f"        public: {public}"]
+    (root / "infra-profile.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def test_declared_endpoints_win_over_substring(tmp_path: Path):
-    (tmp_path / "api-source-endpoints").write_text(
-        "monitors=/v1/monitors\nchecks=/v1/checks\n", encoding="utf-8")
+    write_profile(tmp_path, {"endpoint_monitors": "/v1/monitors",
+                             "endpoint_checks": "/v1/checks"})
     got, detail = checker.resolve_table(
         tmp_path, LANDED_TABLES, "/v1/monitors", "monitor", "check")
     assert (got, detail) == ("monitors", "")
@@ -67,9 +87,25 @@ def test_declared_endpoints_win_over_substring(tmp_path: Path):
     assert (got, detail) == ("checks", "")
 
 
+def test_label_prefixed_endpoint_keys_are_recognized(tmp_path: Path):
+    """A multi-source closure prefixes every key with its label
+    (`reference/multi-source.md`). Unrecognized, those declarations would read as
+    "declares nothing" and fall through to the substring heuristic — which
+    returns the same answer here, so only the declared map proves it was read."""
+    write_profile(tmp_path, {"orders_base_url": "https://example.test",
+                             "orders_endpoint_monitors": "/v1/monitors"})
+    assert checker.declared_endpoints(tmp_path) == {"monitors": "/v1/monitors"}
+
+
+def test_non_endpoint_attributes_are_not_mistaken_for_endpoints(tmp_path: Path):
+    write_profile(tmp_path, {"base_url": "https://example.test",
+                             "auth_type": "bearer",
+                             "endpoint_checks": "/v1/checks"})
+    assert checker.declared_endpoints(tmp_path) == {"checks": "/v1/checks"}
+
+
 def test_declared_model_with_no_landed_table_fails_loudly(tmp_path: Path):
-    (tmp_path / "api-source-endpoints").write_text(
-        "monitor_feed=/v1/monitors\n", encoding="utf-8")
+    write_profile(tmp_path, {"endpoint_monitor_feed": "/v1/monitors"})
     got, detail = checker.resolve_table(
         tmp_path, LANDED_TABLES, "/v1/monitors", "monitor", "check")
     assert got is None
@@ -77,7 +113,54 @@ def test_declared_model_with_no_landed_table_fails_loudly(tmp_path: Path):
     assert "monitors" in detail
 
 
-def test_companion_absent_falls_back(tmp_path: Path):
+def test_retired_companion_file_is_not_read(tmp_path: Path):
+    """The endpoint map moved to the profile. A closure built to the retired
+    contract must fall through to the heuristic, not be silently accepted —
+    otherwise the checker keeps passing the shape the skill no longer emits."""
+    (tmp_path / "api-source-endpoints").write_text(
+        "monitor_feed=/v1/monitors\n", encoding="utf-8")
+    assert checker.declared_endpoints(tmp_path) == {}
+    got, _ = checker.resolve_table(
+        tmp_path, LANDED_TABLES, "/v1/monitors", "monitor", "check")
+    assert got == "monitors"
+
+
+def test_an_endpoint_marked_public_true_survives_export(tmp_path: Path):
+    write_profile(tmp_path, {"endpoint_checks": "/v1/checks"}, public="true")
+    assert checker.endpoints_not_public(tmp_path) == []
+
+
+def test_an_endpoint_marked_public_false_is_flagged(tmp_path: Path):
+    write_profile(tmp_path, {"endpoint_checks": "/v1/checks"}, public="false")
+    assert checker.endpoints_not_public(tmp_path) == ["endpoint_checks"]
+
+
+def test_an_endpoint_with_no_public_flag_is_flagged(tmp_path: Path):
+    """Export redaction is fail-closed — the supervisor keeps a value only on a
+    literal `public: true`, so an omitted flag strips the path exactly as
+    `public: false` does. A check scanning for an explicit "false" passes this
+    closure and then the recipient gets an export that cannot run."""
+    (tmp_path / "infra-profile.yaml").write_text(
+        "metadata:\n"
+        "  name: desktop-local\n"
+        "services:\n"
+        "  - name: api-source\n"
+        "    driver: nxd:generic-secrets:1.0.0\n"
+        "    attributes:\n"
+        "      - key: endpoint_checks\n"
+        "        value: /v1/checks\n",
+        encoding="utf-8",
+    )
+    assert checker.endpoints_not_public(tmp_path) == ["endpoint_checks"]
+
+
+def test_non_endpoint_attributes_are_not_required_to_be_public(tmp_path: Path):
+    """`auth_token` is correctly public: false. The rule is scoped to endpoints."""
+    write_profile(tmp_path, {"auth_token": "t0ken"}, public="false")
+    assert checker.endpoints_not_public(tmp_path) == []
+
+
+def test_no_declaration_falls_back(tmp_path: Path):
     got, _ = checker.resolve_table(
         tmp_path, LANDED_TABLES, "/v1/checks", "check", "monitor")
     assert got == "checks"
