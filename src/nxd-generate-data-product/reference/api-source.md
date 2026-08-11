@@ -626,6 +626,17 @@ in-session, report the connectivity self-check as **not run** — do not
 claim it passed. Structural checks (naming invariant, no
 `.semantic_tools()`, import correctness) still run regardless.
 
+**The probe is a standalone script beside the closure — never inside
+`transform/`.** It runs once, at authoring time, from the author's shell. A
+probe living in `transform/main.py` (or any `transform/*.py`) instead runs on
+every materialization the supervisor performs, doubling the request count
+against an upstream you were careful to rate-limit, and it puts an HTTP client
+on the ingestion path where the only thing that should reach the wire is the
+dlt connector. Keep `transform/` free of `requests` / `urllib.request` /
+`httpx` entirely: if something under `transform/` is fetching, that is
+ingestion by hand, whatever it is named. (`urllib.parse` is fine — it is string
+manipulation and touches no socket.)
+
 **Never let a probe's traceback reach the transcript unredacted.** This is a
 sharper risk than the database case: `requests` puts the full URL in
 `HTTPError`/`ConnectionError` messages, so an API keyed by query string

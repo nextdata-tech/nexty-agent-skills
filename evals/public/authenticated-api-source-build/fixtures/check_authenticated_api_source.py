@@ -215,7 +215,30 @@ def header_marked_public(root: Path) -> tuple[bool, str]:
     return False, "header_user_agent carries no public: flag"
 
 
-def headers_built_from_secrets(transform_src: str) -> tuple[bool, str]:
+def _docstring_nodes(tree: ast.Module) -> set[int]:
+    """id()s of the Constant nodes that are docstrings, not code."""
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+            continue
+        body = getattr(node, "body", None)
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            out.add(id(body[0].value))
+    return out
+
+
+def _string_literals(tree: ast.Module) -> list[str]:
+    """Every string literal that is real code, docstrings excluded."""
+    skip = _docstring_nodes(tree)
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in skip]
+
+
+def headers_built_from_secrets(root: Path) -> tuple[bool, str]:
     """The transform must assemble dlt's `client["headers"]` from the flat
     `header_*` secrets, not hardcode the User-Agent.
 
@@ -223,18 +246,49 @@ def headers_built_from_secrets(transform_src: str) -> tuple[bool, str]:
     fixes differ: never configuring headers at all (the closure 403s), versus
     configuring them from a literal (the closure works today and breaks the
     moment the profile changes, exactly like a hardcoded base_url).
+
+    The hardcode test reads STRING LITERALS via the AST, docstrings excluded --
+    not the file text. A correct closure that documents why the header exists
+    ("Beacon rejects any client not sending User-Agent: nexty-test-client/1.0")
+    is explaining the requirement, not hardcoding it, and a substring scan
+    reports that comment as the very defect the comment is warning about. Same
+    reasoning the connector gate uses, and the same reasoning `self-check.md`
+    gives for reading `spec.py`'s literals via the AST rather than its text.
+
+    Scans every `transform/*.py` for the same reason the connector gate does:
+    a closure that factors `_headers_from` into `transform/http.py` and calls it
+    from `main.py` is correct, and a main-only scan calls it a closure that
+    never reads a header.
     """
-    if REQUIRED_USER_AGENT in transform_src:
+    sources = sorted((root / "transform").glob("*.py")) if (root / "transform").is_dir() else []
+    if not sources:
+        return False, "no transform/*.py sources"
+
+    literals: list[str] = []
+    text_of: list[str] = []
+    for path in sources:
+        src = path.read_text(encoding="utf-8", errors="replace")
+        text_of.append(src)
+        try:
+            literals += _string_literals(ast.parse(src))
+        except SyntaxError as exc:
+            return False, f"{path.name} does not parse: {exc}"
+
+    hardcoded = [lit for lit in literals if REQUIRED_USER_AGENT in lit]
+    if hardcoded:
         return False, (f"transform hardcodes {REQUIRED_USER_AGENT!r} instead of reading "
                        f"it from the flat secrets map (secrets['header_user_agent'])")
+
+    joined = "\n".join(text_of)
     reads_header_secrets = bool(
-        re.search(r"""startswith\(\s*['"]header_""", transform_src)
-        or re.search(r"""secrets\s*(?:\.get\s*\(\s*|\[\s*)['"]header_\w+['"]""", transform_src)
+        re.search(r"""startswith\(\s*['"]header_""", joined)
+        or re.search(r"""secrets\s*(?:\.get\s*\(\s*|\[\s*)['"]header_\w+['"]""", joined)
+        or any(lit.startswith("header_") for lit in literals)
     )
     if not reads_header_secrets:
         return False, ("transform never reads a header_* key from secrets — the API "
                        "requires a User-Agent and rejects the request without it")
-    sets_headers = bool(re.search(r"""['"]headers['"]\s*\]?\s*[=:]""", transform_src))
+    sets_headers = bool(re.search(r"""['"]headers['"]\s*\]?\s*[=:]""", joined))
     if not sets_headers:
         return False, ("transform reads header_* secrets but never assigns them to the "
                        "RESTAPIConfig client's `headers` key")
@@ -318,7 +372,9 @@ def auth_is_dispatched_on_auth_type(transform_src: str) -> tuple[bool, str]:
 # connector, and it lands rows through a plain generator exactly the same way.
 _HTTP_CLIENT_MODULES = (
     "requests", "httpx", "aiohttp", "urllib3", "httplib2",
-    "urllib.request", "http.client",
+    "urllib.request", "urllib.error", "http.client",
+    # dlt's own requests wrapper -- see above.
+    "dlt.sources.helpers.requests",
 )
 
 
@@ -335,6 +391,11 @@ def _dotted(node: ast.AST) -> str:
     return ".".join(reversed(parts))
 
 
+def _is_http_module(path: str) -> bool:
+    """True when a resolved dotted path lies inside an HTTP client module."""
+    return any(path == m or path.startswith(f"{m}.") for m in _HTTP_CLIENT_MODULES)
+
+
 def _http_client_calls(tree: ast.Module) -> list[str]:
     """Hand-rolled HTTP calls in one module, resolved through import aliases.
 
@@ -342,31 +403,47 @@ def _http_client_calls(tree: ast.Module) -> list[str]:
     `requests` and `urllib` in prose, and a closure that quotes that guidance in
     a docstring or comment must not be failed for describing the thing it
     correctly avoided.
+
+    Resolution is on the FULL dotted path, not the bound root name. `import
+    urllib` binds the root `urllib`, under which `urllib.request.urlopen` is a
+    network call and `urllib.parse.quote` is string manipulation -- so keying on
+    the root flags a correct closure for quoting a URL path. This repo already
+    refuses to make that trade in the self-check's own transport scan
+    (`reference/self-check.md`: "`urllib` would also catch `urllib.parse`, which
+    is pure string manipulation with no network and is used by shipped example
+    transforms"), and a rule that fires on correct closures gets deleted rather
+    than obeyed. Resolving the whole path keeps `urllib.request` denied and
+    `urllib.parse` free.
     """
     aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
-                if any(a.name == m or a.name.startswith(f"{m}.")
-                       or m.startswith(f"{a.name}.") for m in _HTTP_CLIENT_MODULES):
-                    # `import urllib.request` binds the ROOT name `urllib`.
-                    aliases[(a.asname or a.name.split(".")[0])] = a.name
+                # `import urllib.request` binds the root `urllib`, but the alias
+                # maps to the root MODULE so a later `.request.urlopen` resolves
+                # back to the full path. `import x as y` binds y to all of x.
+                if a.asname:
+                    aliases[a.asname] = a.name
+                else:
+                    root = a.name.split(".")[0]
+                    aliases.setdefault(root, root)
         elif isinstance(node, ast.ImportFrom):
             mod = node.module or ""
             for a in node.names:
-                full = f"{mod}.{a.name}"
-                if any(mod == m or mod.startswith(f"{m}.") or full == m
-                       for m in _HTTP_CLIENT_MODULES):
-                    aliases[a.asname or a.name] = full
-                # dlt's own requests wrapper: still hand-rolled ingestion.
-                elif mod.startswith("dlt.sources.helpers") and a.name == "requests":
-                    aliases[a.asname or a.name] = full
+                aliases[a.asname or a.name] = f"{mod}.{a.name}" if mod else a.name
     hits: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            name = _dotted(node.func)
-            if name and name.split(".")[0] in aliases:
-                hits.add(name)
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted(node.func)
+        if not name:
+            continue
+        root, _, rest = name.partition(".")
+        if root not in aliases:
+            continue
+        resolved = aliases[root] + (f".{rest}" if rest else "")
+        if _is_http_module(resolved):
+            hits.add(name)
     return sorted(hits)
 
 
@@ -406,9 +483,17 @@ def uses_rest_api_resources(root: Path) -> tuple[bool, str]:
     checked, moving the fetch loop into a sibling module defeats the gate
     without changing the architecture at all.
 
-    No exemption for a connectivity probe. `api-source.md`'s self-check is a
-    standalone script (it exits via `SystemExit`), not part of the transform,
-    so a transform reaching for an HTTP client is doing ingestion by hand.
+    No exemption for a connectivity probe, because `api-source.md`'s Self-check
+    section states the rule this enforces: the probe is a standalone script
+    beside the closure, never inside `transform/`. A probe under `transform/`
+    would re-run on every materialization the supervisor performs.
+
+    This does NOT contradict `reference/self-check.md`'s waiver of the transport
+    family for api-source closures. That waiver covers IMPORTS -- dlt's REST
+    source is built on `requests`/`httpx`/`urllib3`, so a reach scan fires on
+    every correct API closure. This gate keys on CALLS the closure's own source
+    makes: a correct dlt closure never calls `requests.get` itself, because dlt
+    does that inside dlt. Imports are waived; hand-written calls are not.
     """
     transform_dir = root / "transform"
     if not transform_dir.is_dir():
@@ -800,7 +885,7 @@ def main() -> int:
     ok, detail = header_marked_public(root)
     check("header:non-secret-marked-public", ok, detail)
 
-    ok, detail = headers_built_from_secrets(transform_src)
+    ok, detail = headers_built_from_secrets(root)
     check("header:built-from-secrets", ok, detail)
 
     # ---- ingestion mechanism ------------------------------------------------

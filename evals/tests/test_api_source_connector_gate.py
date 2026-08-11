@@ -147,6 +147,40 @@ def test_aliased_and_bare_imports_resolve(tmp_path: Path, alias_src: str, expect
     assert expected in detail
 
 
+def test_urllib_parse_is_not_a_network_call(tmp_path: Path):
+    """`import urllib` + `urllib.parse.quote` must PASS.
+
+    Keying on the bound root name flags this, because `import urllib` binds
+    `urllib` and `urllib.request` lives under it. `reference/self-check.md`
+    documents the same trap and refuses to make it: `urllib.parse` "is pure
+    string manipulation with no network and is used by shipped example
+    transforms". Resolution has to be on the full dotted path.
+    """
+    src = '''
+import urllib
+from dlt.sources.rest_api import rest_api_resources
+
+def ingest(duckdb, secrets):
+    path = urllib.parse.quote(secrets["endpoint_checks"])
+    return {r.name: r for r in rest_api_resources({"client": {}, "resources": []})}
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert ok, f"urllib.parse is string manipulation, not a network call: {detail}"
+
+
+def test_urllib_request_under_a_bare_root_import_is_still_caught(tmp_path: Path):
+    # The other side of the same fix: full-path resolution must not let the
+    # network submodule escape just because the root was imported bare.
+    src = '''
+import urllib
+def ingest(duckdb, secrets):
+    return urllib.request.urlopen(secrets["base_url"]).read()
+'''
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=src))
+    assert not ok
+    assert "urllib.request.urlopen" in detail
+
+
 def test_missing_transform_dir_reports_clearly(tmp_path: Path):
     ok, detail = checker.uses_rest_api_resources(tmp_path)
     assert not ok
@@ -159,3 +193,97 @@ def test_unparseable_transform_is_not_a_silent_pass(tmp_path: Path):
     )
     assert not ok
     assert "does not parse" in detail
+
+
+# ---------------------------------------------------------------------------
+# header:built-from-secrets — same two properties, same reasoning
+# ---------------------------------------------------------------------------
+
+_GOOD_HEADERS = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def _headers_from(secrets):
+    out = {}
+    for key, value in secrets.items():
+        if key.startswith("header_"):
+            out["-".join(p.title() for p in key[7:].split("_"))] = str(value)
+    return out
+
+def ingest(duckdb, secrets):
+    client = {"base_url": secrets["base_url"], "headers": _headers_from(secrets)}
+    return rest_api_resources({"client": client, "resources": []})
+'''
+
+
+def test_documenting_the_required_header_is_not_hardcoding_it(tmp_path: Path):
+    """A comment naming the required User-Agent must not read as a hardcode.
+
+    The substring form of this check failed a fully correct closure for
+    explaining, in a comment, the requirement it correctly satisfied.
+    """
+    src = _GOOD_HEADERS.replace(
+        "def ingest(duckdb, secrets):",
+        "# Beacon rejects any client not sending User-Agent: nexty-test-client/1.0;\n"
+        "# supplied via the header_user_agent profile attribute.\n"
+        "def ingest(duckdb, secrets):",
+    )
+    ok, detail = checker.headers_built_from_secrets(_closure(tmp_path, main=src))
+    assert ok, f"a comment explaining the requirement is not a hardcode: {detail}"
+
+
+def test_docstring_naming_the_header_is_not_hardcoding_it(tmp_path: Path):
+    src = _GOOD_HEADERS.replace(
+        'def ingest(duckdb, secrets):\n    client',
+        'def ingest(duckdb, secrets):\n'
+        '    """Ingest. Beacon requires User-Agent: nexty-test-client/1.0."""\n'
+        '    client',
+    )
+    ok, detail = checker.headers_built_from_secrets(_closure(tmp_path, main=src))
+    assert ok, f"a docstring is documentation, not configuration: {detail}"
+
+
+def test_a_real_hardcode_is_still_caught(tmp_path: Path):
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def ingest(duckdb, secrets):
+    client = {"headers": {"User-Agent": "nexty-test-client/1.0"}}
+    return rest_api_resources({"client": client, "resources": []})
+'''
+    ok, detail = checker.headers_built_from_secrets(_closure(tmp_path, main=src))
+    assert not ok
+    assert "hardcodes" in detail
+
+
+def test_headers_helper_in_a_sibling_module_passes(tmp_path: Path):
+    """Factoring _headers_from into transform/http.py is correct, not a defect."""
+    main = '''
+from dlt.sources.rest_api import rest_api_resources
+from .http import build_headers
+
+def ingest(duckdb, secrets):
+    client = {"base_url": secrets["base_url"], "headers": build_headers(secrets)}
+    return rest_api_resources({"client": client, "resources": []})
+'''
+    http = '''
+def build_headers(secrets):
+    out = {}
+    for key, value in secrets.items():
+        if key.startswith("header_"):
+            out["-".join(p.title() for p in key[7:].split("_"))] = str(value)
+    return out
+'''
+    ok, detail = checker.headers_built_from_secrets(_closure(tmp_path, main=main, http=http))
+    assert ok, f"a header helper in a sibling module still reaches the wire: {detail}"
+
+
+def test_no_headers_at_all_is_still_caught(tmp_path: Path):
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def ingest(duckdb, secrets):
+    return rest_api_resources({"client": {"base_url": secrets["base_url"]}, "resources": []})
+'''
+    ok, detail = checker.headers_built_from_secrets(_closure(tmp_path, main=src))
+    assert not ok
+    assert "never reads a header_*" in detail
