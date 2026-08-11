@@ -547,6 +547,7 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
                         wrong_profile_name=False, nested_escape=False,
                         without_input_custom=False, output_only=False,
                         multiple_inputs=False, labeled_input=False,
+                        labeled_roots=False,
                         wrong_csv_driver=False, no_arg_verifier=False,
                         async_verifier=False, nonliteral_secret_fields=False,
                         literal_secret=False,
@@ -568,6 +569,15 @@ def complete_self_check(tmp_path: Path, *, dead_verifier=False, absolute_model_p
     (tmp_path / "data" / "orders" / "orders.csv").write_text(
         "line_id,order_id,currency,order_total,line_total\no-1-1,o-1,EUR,10.00,10.00\n"
     )
+    if labeled_roots:
+        shutil.rmtree(tmp_path / "data")
+        (tmp_path / "data-orders" / "orders").mkdir(parents=True)
+        (tmp_path / "data-orders" / "orders" / "orders.csv").write_text(
+            "line_id,order_id,currency,order_total,line_total\n"
+            "o-1-1,o-1,EUR,10.00,10.00\n"
+        )
+        (tmp_path / "csv-source-orders-path").write_text("data-orders\n")
+        (tmp_path / "companion-files").write_text("data-orders\n")
     (tmp_path / "models.py").write_text((CHECKER.parent / "models.py").read_text())
     # The checker parses, but does not import, this spec. The scripts are nested
     # custom verifiers and must not be constrained to transform/main.py.
@@ -619,7 +629,10 @@ spec = (
             "nxd:local/duckdb/storage:0.1.0",
         ))
     (tmp_path / "transform").mkdir()
-    (tmp_path / "transform" / "main.py").write_text('''from pathlib import Path\nBASE_MODELS = ("orders",)\nPHYSICAL_MODELS = ("orders",)\ndef ingest(duckdb, secrets):\n    import duckdb as db\n    con = db.connect(duckdb.path); con.execute("create table orders (order_id varchar, currency varchar)"); con.execute("insert into orders values ('o-1', 'EUR')"); con.close(); Path(duckdb.path).parent.joinpath(".transform-complete").touch()\n''')
+    transform_source = '''from pathlib import Path\nBASE_MODELS = ("orders",)\nPHYSICAL_MODELS = ("orders",)\ndef ingest(duckdb, secrets):\n    import duckdb as db\n    con = db.connect(duckdb.path); con.execute("create table orders (order_id varchar, currency varchar)"); con.execute("insert into orders values ('o-1', 'EUR')"); con.close(); Path(duckdb.path).parent.joinpath(".transform-complete").touch()\n'''
+    if labeled_roots:
+        transform_source = '''import os\nfrom pathlib import Path\nBASE_MODELS = ("orders",)\nPHYSICAL_MODELS = ("orders",)\ndef ingest(duckdb, secrets):\n    root = Path(os.environ["NXD_TRANSFORM_ROOT"])\n    assert (root / "data-orders" / "orders" / "orders.csv").is_file()\n    import duckdb as db\n    con = db.connect(duckdb.path); con.execute("create table orders (order_id varchar, currency varchar)"); con.execute("insert into orders values ('o-1', 'EUR')"); con.close(); Path(duckdb.path).parent.joinpath(".transform-complete").touch()\n'''
+    (tmp_path / "transform" / "main.py").write_text(transform_source)
     if dead_verifier:
         (tmp_path / "contracts" / "expectations" / "accepted.py").write_text('''from nxd import data_product
 from nxd.core.context import VerifyResult, VerifyResultEnum
@@ -858,6 +871,12 @@ def test_complete_self_check_accepts_multiple_inputs_sharing_unlabeled_csv(tmp_p
 
 def test_complete_self_check_accepts_output_only_promise_without_csv_artifacts(tmp_path: Path) -> None:
     proc = complete_self_check(tmp_path, output_only=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SELF-CHECK OK" in proc.stdout
+
+
+def test_complete_self_check_accepts_labeled_companion_root(tmp_path: Path) -> None:
+    proc = complete_self_check(tmp_path, output_only=True, labeled_roots=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SELF-CHECK OK" in proc.stdout
 

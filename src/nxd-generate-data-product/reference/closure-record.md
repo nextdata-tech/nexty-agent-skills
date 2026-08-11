@@ -130,6 +130,10 @@ The plan this closure was built from is `dp-spec.approved.md`, bound by
 Reattach first. A rebuild is the fallback, taken only when the published
 artifact is genuinely gone.
 
+For a multi-source CSV/file closure that uses directory companion declarations,
+use a desktop supervisor with directory-companion support before step 1. Do not
+fall back to an undeclared export root.
+
 1. `list_data_products` — is this workflow published, and is `artifact_status`
    `available`?
 2. `resume_data_product(workflow="<workflow-id>")` — reattaches to the published

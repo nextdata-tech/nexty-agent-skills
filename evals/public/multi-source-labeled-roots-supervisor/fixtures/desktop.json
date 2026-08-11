@@ -1,0 +1,5 @@
+{
+  "requires": "nxd-desktop-supervisor",
+  "workflow": "labeled-orders-users-supervisor",
+  "description": "Run this opt-in scenario against the compatible desktop supervisor runtime."
+}

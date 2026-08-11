@@ -6,7 +6,7 @@
     },
     "current_pack/authenticated-api-source-build": {
       "verdict": "PASS",
-      "note": "Recorded on ONE observation (15/15 checks, deterministic exit 0) taken immediately after the materialize harness was fixed to pass the endpoint attributes into the transform's secrets map. The two observations before that fix both failed on the same KeyError: 'endpoint_checks', and both were harness fault, not skill fault: all three contract checks (endpoints-in-profile, endpoints-public, no-endpoints-companion) passed in every run, including the failing ones, so the skill placed the endpoints correctly throughout. A single observation is thin evidence for a gating cell — if this flips once, suspect variance and re-measure before treating it as a skill regression."
+      "note": "Recorded on ONE observation (15/15 checks, deterministic exit 0) taken immediately after the materialize harness was fixed to pass the endpoint attributes into the transform's secrets map. The two observations before that fix both failed on the same KeyError: 'endpoint_checks', and both were harness fault, not skill fault: all three contract checks (endpoints-in-profile, endpoints-public, no-endpoints-companion) passed in every run, including the failing ones, so the skill placed the endpoints correctly throughout. A single observation is thin evidence for a gating cell \u2014 if this flips once, suspect variance and re-measure before treating it as a skill regression."
     },
     "current_pack/debug-failed-data-product": {
       "verdict": "FAIL"
@@ -17,22 +17,26 @@
     "current_pack/false-pass-validation": {
       "verdict": "PASS",
       "flaky": true,
-      "note": "Passed 1 of 6 observations (xhigh: F P F; medium: F F F), always failing the same check, records-not-run-with-next-step. The agent records NOT RUN and explains the authentication cause every run but inconsistently names the next command. The recorded PASS came from the single lucky observation, which made this the weakest entry in the gate: it blocked a pull request that changed nothing about it. Marked flaky until the check is split (see the tracked issue) — the substantive half is worth gating on, the naming half is what flakes."
+      "note": "Passed 1 of 6 observations (xhigh: F P F; medium: F F F), always failing the same check, records-not-run-with-next-step. The agent records NOT RUN and explains the authentication cause every run but inconsistently names the next command. The recorded PASS came from the single lucky observation, which made this the weakest entry in the gate: it blocked a pull request that changed nothing about it. Marked flaky until the check is split (see the tracked issue) \u2014 the substantive half is worth gating on, the naming half is what flakes."
     },
     "current_pack/generate-runnable-dp-from-intent": {
       "verdict": "PASS"
     },
     "current_pack/generate-semantic-layer-dp-from-schema": {
       "verdict": "PASS",
-      "note": "Measured [P P P P P], pass_rate 1.0 over five CI runs of the same commit — no longer flaky, so this cell gates. Its ten checks assert on file CONTENT and were previously graded from a truncated transcript, where a correct file the agent did not echo back was indistinguishable from one never written. It now opts into workspace_files and the judge reads the produced files directly. The skill was correct throughout; every earlier failure was harness measurement error."
+      "note": "Measured [P P P P P], pass_rate 1.0 over five CI runs of the same commit \u2014 no longer flaky, so this cell gates. Its ten checks assert on file CONTENT and were previously graded from a truncated transcript, where a correct file the agent did not echo back was indistinguishable from one never written. It now opts into workspace_files and the judge reads the produced files directly. The skill was correct throughout; every earlier failure was harness measurement error."
     },
     "current_pack/generate-semantic-layer-from-live-source-and-questions": {
       "verdict": "FAIL"
     },
+    "current_pack/multi-source-labeled-roots": {
+      "verdict": "PASS",
+      "note": "Recorded from one final uncached Codex current-pack observation: 9/9 checks passed and the deterministic structural checker exited 0. The no-skills origin/main arm scored 8/9 because its transform did not prove that the labeled path files feed the filesystem readers; that is baseline behavior, not a current-pack regression. Re-measure before treating a future flip as a skill regression."
+    },
     "current_pack/nxd-setup-headless-auth": {
       "verdict": "FAIL",
       "flaky": true,
-      "note": "Measured over 5 CI runs of the same commit: [P P F P P], pass_rate 0.8. The original bundled whoami check was split in two and both halves passed all 5 runs, so that fix holds. The remaining flip is genuine agent variance, not a check defect — the one failing run exported shell variables across separate calls, which this scenario establishes do not persist, and omitted the fresh-device-code-on-expiry requirement. Both checks caught real defects and should not be loosened. Kept flaky because a 1-in-5 verdict cannot gate; the fix is skill-side reliability, not check wording."
+      "note": "Measured over 5 CI runs of the same commit: [P P F P P], pass_rate 0.8. The original bundled whoami check was split in two and both halves passed all 5 runs, so that fix holds. The remaining flip is genuine agent variance, not a check defect \u2014 the one failing run exported shell variables across separate calls, which this scenario establishes do not persist, and omitted the fresh-device-code-on-expiry requirement. Both checks caught real defects and should not be loosened. Kept flaky because a 1-in-5 verdict cannot gate; the fix is skill-side reliability, not check wording."
     },
     "current_pack/pgvector-embedding-type-failure": {
       "verdict": "PASS"

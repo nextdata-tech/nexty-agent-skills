@@ -12,7 +12,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Query loop** | `evals/query-loop/run_query_loop.py` | borrows `nxd_eval`'s venv | Multi-turn query refinement against a pharma mesh fixture. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 19 of the 31 public scenarios.**
+installs and covers 20 of the 33 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -110,8 +110,8 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-19 of 31 public scenarios. The remaining 12 declare `ci_skip` in their
-`checks.json`. Ten need a Tier 2 or Tier 3 install; one is gated on the agent
+20 of 33 public scenarios. The remaining 13 declare `ci_skip` in their
+`checks.json`. Eleven need a Tier 2 or Tier 3 install; one is gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 
 | Scenario | Needs |
@@ -125,6 +125,7 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `country-income-trajectory` | live desktop supervisor (Tier 3) |
 | `incremental-multi-model` | live desktop supervisor (Tier 3) |
 | `treasury-yield-curve` | live desktop supervisor (Tier 3) |
+| `multi-source-labeled-roots-supervisor` | compatible live desktop supervisor (Tier 3) |
 | `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
 | `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 | `desktop-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |

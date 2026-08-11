@@ -1,0 +1,21 @@
+{
+  "data_product": "labeled-orders-users",
+  "models": [
+    {
+      "name": "orders",
+      "source_label": "orders",
+      "columns": {
+        "order_id": {"type": "string", "primary_key": true},
+        "amount": {"type": "number", "dimension": true}
+      }
+    },
+    {
+      "name": "users",
+      "source_label": "users",
+      "columns": {
+        "user_id": {"type": "string", "primary_key": true},
+        "region": {"type": "string", "dimension": true}
+      }
+    }
+  ]
+}
