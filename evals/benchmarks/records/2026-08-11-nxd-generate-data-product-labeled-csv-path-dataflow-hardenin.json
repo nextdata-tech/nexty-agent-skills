@@ -1,0 +1,202 @@
+{
+  "id": "2026-08-11-nxd-generate-data-product-labeled-csv-path-dataflow-hardenin",
+  "date": "2026-08-11",
+  "label": "nxd-generate-data-product: labeled CSV path dataflow hardening",
+  "notes": "Final uncached Codex arms after hardening the labeled-root checker. The no-skills baseline scored 8/9 because its transform did not prove path-file dataflow into filesystem readers; current_pack scored 9/9 and the deterministic checker passed.",
+  "plugin_version": "0.36.8",
+  "report_tags": {
+    "before": "before",
+    "measured": "measured"
+  },
+  "reports": {
+    "before": {
+      "elapsed_s": 347.2,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "multi-source-labeled-roots": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "no_skills",
+          "scenario": "multi-source-labeled-roots",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 2619219,
+            "output_tokens": 12469,
+            "reasoning_output_tokens": 2607,
+            "cached_input_tokens": 2381568,
+            "tool_calls": 35,
+            "shell_calls": 33,
+            "sandbox_failures": 0,
+            "shell_successes": 28,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL transform-uses-pinned-root"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "reads-all-source-shapes",
+                "pass": true,
+                "why": "The trace shows a command reading BRIEF.md, inferred_model.json, and looping over all three named CSV export files before any closure-writing action."
+              },
+              {
+                "id": "labeled-csv-wiring",
+                "pass": true,
+                "why": "The authored profile has distinct csv-source-orders and csv-source-users services, the two path files contain relative labeled roots, and the transform reads those files while discarding secrets."
+              },
+              {
+                "id": "nonempty-roots-carried",
+                "pass": true,
+                "why": "The workspace contains both labeled CSV trees with the shown source bytes and companion-files declares exactly data-orders and data-users."
+              },
+              {
+                "id": "empty-root-omitted",
+                "pass": true,
+                "why": "No data-archive tree or manifest entry exists, and transform/main.py only iterates orders and users."
+              },
+              {
+                "id": "manifest-refusals",
+                "pass": true,
+                "why": "The UTF-8 manifest contains the sorted unique relative entries data-orders and data-users only, with no owned-root, child, overlap, or symlink declaration shown."
+              },
+              {
+                "id": "pinned-runtime-resolution",
+                "pass": true,
+                "why": "transform/main.py resolves labeled roots from NXD_TRANSFORM_ROOT, validates relative path-file contents, and does not write companion-files."
+              },
+              {
+                "id": "runtime-floor-documentation",
+                "pass": true,
+                "why": "README.md specifies the companion-directory-probe command shape with published=yes and names both the implementation commit and nxd_version provenance."
+              },
+              {
+                "id": "python-only-desktop-closure",
+                "pass": true,
+                "why": "The workspace has the required Python-only spec/models/profile/transform/requirements shape, uses dlt through DuckDbOutput, and contains none of the prohibited handwritten YAML specifications."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": false,
+                "why": "The harness-authoritative deterministic result exited 1 with FAIL transform-uses-pinned-root, so it did not report ALL CHECKS PASSED despite the agent's claim."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The closure content satisfies the listed static requirements, but the authoritative structural checker failed, so the overall result is not a pass. deterministic check failed: FAIL transform-uses-pinned-root"
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run — this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- README.md (1456 bytes) ---\n# labeled-orders-users\n\nWorkflow id: `labeled-orders-users`\nClosure path: this directory\n\nThe pinned implementation is Python-only and uses the labeled CSV roots\ndeclared by `companion-files`. The source plan and generated outcomes, when\npresent, are recorded separately by the job-loop tooling.\n\n## Reopen\n\nCompatibility precondition: before using this multi-source closure, run a\ndisposable `nxd-desktop-supervisor create` against this closure (or an\nequivalent closure) with a non-empty declared companion directory, using\n`--workflow companion-directory-probe` and a temporary `--data-dir`. Require\n`published=yes`, then run the matching `nxd-desktop-supervisor stop`. If the\ndirectory declaration fails, upgrade or reprovision the desktop runtime first;\ndo not fall back to an undeclared export root.\n\nThe directory-companion implementation provenance is NXD commit\n`da0b75bfc0eed5ae74b66fde35570bc40ed859b3`, with `nxd_version` `0.41.162`.\nThe probe above is the compatibility gate; provenance is not a substitute for\nthat check.\n\n1. Call `list_data_products` and confirm this workflow is published and its\n   artifact is available.\n2. Call `resume_data_product(workflow=\"labeled-orders-users\")`. If the\n   artifact is unavailable, call `build_data_product` with this closure as the\n   definition and the same workflow id.\n3. Use the returned endpoint and bearer with `describe_models`.\n4. Use the same endpoint and bearer with `run_semantic_query`.\n\n--- companion-files (23 bytes) ---\ndata-orders\ndata-users\n\n--- csv-source-orders-path (12 bytes) ---\ndata-orders\n\n--- csv-source-users-path (11 bytes) ---\ndata-users\n\n--- infra-profile.yaml (463 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source-orders\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n    - name: csv-source-users\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- models.py (889 bytes) ---\n\"\"\"Semantic models for the labeled-orders-users desktop data product.\"\"\"\n\nfrom nxd.spec import dimension, field, primary_key, semantic_model\nfrom nxd.spec.data_types import number, string\n\n\norders = (\n    semantic_model(\"orders\")\n    .description(\"One row per order from the labeled orders CSV export.\")\n    .schema(\n        {\n            \"order_id\": field(string(), primary_key()),\n            \"amount\": field(\n                number(),\n                dimension(name=\"amount\", description=\"Order amount.\"),\n            ),\n        }\n    )\n)\n\nusers = (\n    semantic_model(\"users\")\n    .description(\"One row per user from the labeled users CSV export.\")\n    .schema(\n        {\n            \"user_id\": field(string(), primary_key()),\n            \"region\": field(\n                string(),\n                dimension(name=\"region\", description=\"User region.\"),\n            ),\n        }\n    )\n)\n\n--- spec.py (883 bytes) ---\n\"\"\"Python-only desktop specification for labeled-orders-users.\"\"\"\n\nfrom nxd.spec import data_product, data_product_output, script, storage\n\nfrom models import orders, users\n\n\n_csv_orders = \"/infra-profile/desktop-local#/services/csv-source-orders\"\n_csv_users = \"/infra-profile/desktop-local#/services/csv-source-users\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\n_output = (\n    data_product_output()\n    .promise(orders)\n    .promise(users)\n    .port(\"duckdb\", storage(_duckdb))\n)\n\nspec = (\n    data_product(\n        name=\"labeled-orders-users\",\n        domain=\"desktop.local\",\n        version=\"0.0.1\",\n        infra_profile=\"desktop-local\",\n    )\n    .transform(\n        script(\"transform/main.py\")\n        .compute(_compute)\n        .secrets([_csv_orders, _csv_users])\n    )\n    .output(_output)\n)\n\n--- transform/main.py (3667 bytes) ---\n\"\"\"Load both labeled CSV roots into the local DuckDB output port.\"\"\"\n\nfrom __future__ import annotations\n\nimport importlib.util\nimport os\nimport sys\nfrom pathlib import Path\nfrom typing import Any\n\n\ndef _configure_nxd_imports() -> None:\n    \"\"\"Prefer installed wheels; use a compiled source checkout only as fallback.\"\"\"\n    try:\n        installed = all(\n            importlib.util.find_spec(module) is not None\n            for module in (\"nxd.core\", \"nxd.drivers\", \"nxd.data_product\")\n        )\n    except (ImportError, ValueError):\n        installed = False\n    if installed:\n        return\n    repo_root = os.environ.get(\"NXD_DESKTOP_REPO_ROOT\")\n    if not repo_root:\n        return\n    root = Path(repo_root)\n    sources = (\n        root / \"components/nxd_py/data_product\",\n        root / \"components/nxd_py/core\",\n        root / \"components/nxd_py/drivers\",\n    )\n    compiled = (\n        root / \"components/nxd_py/core/nxd/core\",\n        root / \"components/nxd_py/drivers/nxd/drivers\",\n    )\n    if not all(any(directory.glob(\"_bindings*.so\")) for directory in compiled):\n        return\n    for source in reversed(sources):\n        sys.path.insert(0, str(source))\n\n\n_configure_nxd_imports()\n\nimport dlt\nfrom dlt.sources.filesystem import filesystem, read_csv\n\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput\n\n\nBASE_MODELS = (\"orders\", \"users\")\nPHYSICAL_MODELS = BASE_MODELS\n\n\ndef _pinned_source_root(label: str) -> Path:\n    \"\"\"Resolve a labeled root from the immutable execution root only.\"\"\"\n    execution_root = Path(os.environ[\"NXD_TRANSFORM_ROOT\"])\n    path_file = execution_root / f\"csv-source-{label}-path\"\n    relative_root = Path(path_file.read_text(encoding=\"utf-8\").strip())\n    expected_root = Path(f\"data-{label}\")\n    if relative_root != expected_root:\n        raise RuntimeError(\n            f\"path file for {label} must name {expected_root!s}, got {relative_root!s}\"\n        )\n    if not relative_root.parts or relative_root.is_absolute() or \"..\" in relative_root.parts:\n        raise RuntimeError(f\"invalid relative path for {label}: {relative_root!s}\")\n    root = execution_root / expected_root\n    if not root.is_dir():\n        raise RuntimeError(f\"labeled source root is missing for {label}: {root!s}\")\n    return root\n\n\n@data_product.on_transform()\ndef ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:\n    \"\"\"Read both pinned labeled roots and land their promised tables.\"\"\"\n    del secrets  # Labeled CSV roots are carried by the pinned companion tree.\n    run_dir = Path(duckdb.path).parent\n    pipelines_dir = run_dir / \"dlt-pipelines\"\n    pipelines_dir.mkdir(parents=True, exist_ok=True)\n    os.environ[\"DLT_DATA_DIR\"] = str(run_dir / \"dlt-data\")\n\n    pipeline = dlt.pipeline(\n        pipelines_dir=str(pipelines_dir),\n        destination=dlt.destinations.duckdb(credentials=duckdb.path),\n        dataset_name=duckdb.schema,\n    )\n    resources = []\n    for label, model in ((\"orders\", \"orders\"), (\"users\", \"users\")):\n        source_root = _pinned_source_root(label)\n        reader = filesystem(\n            bucket_url=str(source_root / model), file_glob=\"*.csv\"\n        ) | read_csv()\n        resources.append(reader.with_name(duckdb.model_tables[model]))\n\n    pipeline.run(resources, write_disposition=\"replace\")\n\n    actual = set(pipeline.default_schema.data_table_names())\n    expected = {duckdb.model_tables[model] for model in PHYSICAL_MODELS}\n    if actual != expected:\n        raise RuntimeError(\n            f\"dlt produced tables {sorted(actual)!r}, expected {sorted(expected)!r}\"\n        )\n    (run_dir / \".transform-complete\").touch()\n\n\nif __name__ == \"__main__\":\n    data_product.main()\n\n--- data-orders/orders/orders.csv (39 bytes) ---\norder_id,amount\no-100,12.50\no-101,8.25\n\n--- data-users/users/users.csv (33 bytes) ---\nuser_id,region\nu-200,eu\nu-201,us\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL transform-uses-pinned-root\"], \"passed\": false}"
+          ]
+        }
+      ]
+    },
+    "measured": {
+      "elapsed_s": 434.6,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "multi-source-labeled-roots": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "multi-source-labeled-roots",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 4274018,
+            "output_tokens": 16810,
+            "reasoning_output_tokens": 5330,
+            "cached_input_tokens": 4129536,
+            "tool_calls": 39,
+            "shell_calls": 32,
+            "sandbox_failures": 0,
+            "shell_successes": 28,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "reads-all-source-shapes",
+                "pass": true,
+                "why": "Before authoring, the trace shows commands reading BRIEF.md, inferred_model.json, and byte/row shapes for source-orders, source-users, and source-archive."
+              },
+              {
+                "id": "labeled-csv-wiring",
+                "pass": true,
+                "why": "The authored infra profile has distinct csv-source-orders and csv-source-users services, relative labeled path files, and the transform reads both path files while discarding secrets."
+              },
+              {
+                "id": "nonempty-roots-carried",
+                "pass": true,
+                "why": "The harness shows both labeled CSV trees and companion-files declaring exactly data-orders and data-users, while the trace's cmp checks passed."
+              },
+              {
+                "id": "empty-root-omitted",
+                "pass": true,
+                "why": "Neither the manifest nor transform includes archive/data-archive, and the final answer explicitly identifies the empty archive as excluded."
+              },
+              {
+                "id": "manifest-refusals",
+                "pass": true,
+                "why": "companion-files is a UTF-8 two-line sorted unique manifest containing only the non-overlapping relative directory roots data-orders and data-users."
+              },
+              {
+                "id": "pinned-runtime-resolution",
+                "pass": true,
+                "why": "transform/main.py obtains NXD_TRANSFORM_ROOT, validates relative contained path-file values, and resolves both labeled roots beneath that execution root."
+              },
+              {
+                "id": "runtime-floor-documentation",
+                "pass": true,
+                "why": "README.md documents the concrete companion-directory-probe command, requires published=yes, and records commit and nxd_version provenance."
+              },
+              {
+                "id": "python-only-desktop-closure",
+                "pass": true,
+                "why": "The harnessed closure uses spec.py, models.py, infra-profile.yaml, transform/main.py, and the Python dlt-through-DuckDB-port shape without handwritten YAML manifests."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": true,
+                "why": "The authoritative runner-side deterministic check exited 0 with passed=true and no failures, and the final answer explicitly says no live supervisor pin/probe was run."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All process, closure-content, documentation, and authoritative deterministic-check requirements pass."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run — this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- README.md (1582 bytes) ---\n# labeled-orders-users\n\nWorkflow id:   labeled-orders-users\nClosure path:  this directory\n\nThe plan this closure was built from is `dp-spec.approved.md`, bound by\n`dp-spec.lock.json`. Build outcomes are recorded in `build-record.json`.\n\n## Reopen\n\nReattach first. A rebuild is the fallback, taken only when the published\nartifact is genuinely gone.\n\nCompatibility precondition for this multi-source CSV closure: before the first\nreal build, run a disposable `nxd-desktop-supervisor create` against this\nclosure with `--workflow companion-directory-probe` and a temporary\n`--data-dir`. Require `published=yes`, then run the matching `stop`. This\nproves that the compatible desktop runtime copies the non-empty declared\n`data-orders` and `data-users` companion directories. If the probe fails on\ndirectory declarations, upgrade or reprovision the desktop runtime first; do\nnot fall back to an undeclared export root.\n\nThe first implementation's provenance is NXD commit\n`da0b75bfc0eed5ae74b66fde35570bc40ed859b3` with `nxd_version` `0.41.162`.\nThose values are provenance, not a substitute for the compatibility probe.\n\n1. `list_data_products` — confirm this workflow is published and its artifact\n   is available.\n2. `resume_data_product(workflow=\"labeled-orders-users\")` — reattach to the\n   published artifact. If the artifact is unavailable, use\n   `build_data_product(definition=\"<absolute path to this closure>\",\n   workflow=\"labeled-orders-users\")`.\n3. Use the returned endpoint and bearer with `describe_models`.\n4. Use the same endpoint and bearer with `run_semantic_query`.\n\n--- companion-files (23 bytes) ---\ndata-orders\ndata-users\n\n--- csv-source-orders-path (12 bytes) ---\ndata-orders\n\n--- csv-source-users-path (11 bytes) ---\ndata-users\n\n--- infra-profile.yaml (463 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source-orders\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n    - name: csv-source-users\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- models.py (1062 bytes) ---\n\"\"\"Physical models for the labeled CSV sources.\"\"\"\n\nfrom nxd.spec import dimension, field, primary_key, semantic_model\nfrom nxd.spec.data_types import number, string\n\n\norders = (\n    semantic_model(\"orders\")\n    .description(\"One row per order from the orders-labeled CSV export.\")\n    .schema(\n        {\n            \"order_id\": field(string(), primary_key()),\n            \"amount\": field(\n                number(),\n                dimension(\n                    name=\"order_amount\",\n                    description=\"Order amount as supplied by the source export.\",\n                ),\n            ),\n        }\n    )\n)\n\nusers = (\n    semantic_model(\"users\")\n    .description(\"One row per user from the users-labeled CSV export.\")\n    .schema(\n        {\n            \"user_id\": field(string(), primary_key()),\n            \"region\": field(\n                string(),\n                dimension(\n                    name=\"user_region\",\n                    description=\"User region as supplied by the source export.\",\n                ),\n            ),\n        }\n    )\n)\n\n--- spec.py (956 bytes) ---\n\"\"\"Python source definition for the local desktop data product.\"\"\"\n\nfrom nxd.spec import data_product, data_product_output, script, storage\n\nfrom models import orders, users\n\n\n_orders = \"/infra-profile/desktop-local#/services/csv-source-orders\"\n_users = \"/infra-profile/desktop-local#/services/csv-source-users\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\n_output = (\n    data_product_output()\n    .promise(orders)\n    .promise(users)\n    .port(\"duckdb\", storage(_duckdb))\n)\n\nspec = (\n    data_product(\n        name=\"labeled-orders-users\",\n        domain=\"desktop.local\",\n        description=\"A byte-preserving local product for two labeled CSV exports.\",\n        version=\"0.1.0-dev\",\n        infra_profile=\"desktop-local\",\n    )\n    .transform(\n        script(\"transform/main.py\")\n        .compute(_compute)\n        .secrets([_orders, _users])\n    )\n    .output(_output)\n)\n\n--- transform/main.py (2511 bytes) ---\n\"\"\"Load the two labeled CSV roots into the local DuckDB output port.\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nfrom pathlib import Path\nfrom typing import Any\n\nimport dlt\nfrom dlt.sources.filesystem import filesystem, read_csv\n\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput\n\n\nBASE_MODELS = (\"orders\", \"users\")\nDERIVED_MODELS = ()\nPHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS\n\n\ndef _labeled_root(transform_root: Path, path_file: str) -> Path:\n    \"\"\"Resolve a connector path file strictly below the pinned root.\"\"\"\n    relative = (transform_root / path_file).read_text(encoding=\"utf-8\").strip()\n    candidate = Path(relative)\n    if not relative or candidate.is_absolute() or \"..\" in candidate.parts:\n        raise RuntimeError(f\"connector path must be relative and contained: {relative!r}\")\n    return transform_root / candidate\n\n\n@data_product.on_transform()\ndef ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:\n    \"\"\"Read both labeled roots from the immutable supervisor execution root.\"\"\"\n    del secrets  # Labeled CSV roots are carried by path files, not secret keys.\n    transform_root = Path(os.environ[\"NXD_TRANSFORM_ROOT\"])\n    orders_root = _labeled_root(transform_root, \"csv-source-orders-path\")\n    users_root = _labeled_root(transform_root, \"csv-source-users-path\")\n\n    run_dir = Path(duckdb.path).parent\n    pipelines_dir = run_dir / \"dlt-pipelines\"\n    pipelines_dir.mkdir(parents=True, exist_ok=True)\n    os.environ[\"DLT_DATA_DIR\"] = str(run_dir / \"dlt-data\")\n\n    pipeline = dlt.pipeline(\n        pipelines_dir=str(pipelines_dir),\n        destination=dlt.destinations.duckdb(credentials=duckdb.path),\n        dataset_name=duckdb.schema,\n    )\n    resources = [\n        (\n            filesystem(bucket_url=str(orders_root / \"orders\"), file_glob=\"*.csv\")\n            | read_csv()\n        ).with_name(duckdb.model_tables[\"orders\"]),\n        (\n            filesystem(bucket_url=str(users_root / \"users\"), file_glob=\"*.csv\")\n            | read_csv()\n        ).with_name(duckdb.model_tables[\"users\"]),\n    ]\n    pipeline.run(resources, write_disposition=\"replace\")\n\n    actual = set(pipeline.default_schema.data_table_names())\n    expected = {duckdb.model_tables[model] for model in PHYSICAL_MODELS}\n    if actual != expected:\n        raise RuntimeError(\n            f\"dlt produced tables {sorted(actual)!r}, expected {sorted(expected)!r}\"\n        )\n    (run_dir / \".transform-complete\").touch()\n\n\nif __name__ == \"__main__\":\n    data_product.main()\n\n--- data-orders/orders/orders.csv (39 bytes) ---\norder_id,amount\no-100,12.50\no-101,8.25\n\n--- data-users/users/users.csv (33 bytes) ---\nuser_id,region\nu-200,eu\nu-201,us\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -11,6 +11,14 @@ remain distinguishable at runtime. The archive export is deliberately empty;
 it must not become a promised physical model or a runtime input that makes the
 closure fail during pinning.
 
+<!-- The harness keeps this setup text out of the agent-facing task. It records
+the evaluator-owned deliverable details without handing the no-skills arm the
+answer. -->
+The evaluator expects the closure root to contain the labeled path files,
+non-empty `data-<label>/` trees, and the root-level `companion-files` manifest.
+The task below intentionally leaves those artifact names to the applicable
+repository guidance.
+
 ## Task for the agent
 
 Read `BRIEF.md`, `inferred_model.json`, and all three export shapes before
@@ -18,16 +26,12 @@ authoring. Build the complete Python-only NXD desktop closure the brief asks
 for, with the `orders` and `users` sources labeled exactly as requested. Keep
 the supplied non-empty CSV bytes unchanged, use relative connector paths, and
 make the transform read both labeled roots from the pinned execution root.
-Author the closure directly in the workspace root: `spec.py`, `models.py`,
-`infra-profile.yaml`, `requirements.txt`, `transform/main.py`, the two
-`csv-source-*-path` files, `companion-files`, and the `data-*/` trees must all
-be rooted there. Do not put the finished closure under a `data_product/`
-subdirectory.
+Author the complete closure directly in the workspace root. Do not put the
+finished closure under a `data_product/` subdirectory.
 
-Consult the installed `nxd-generate-data-product` multi-source guidance for the
-manifest, runtime floor, and pinning contract. Render the required `README.md`
-reopen recipe, including the concrete `companion-directory-probe` compatibility
-precondition and the known implementation provenance.
+Follow the applicable repository guidance for the pinning contract and render
+the required reopen recipe, including the compatible-runtime precondition and
+implementation provenance.
 The finished closure must be safe for a compatible supervisor to pin and for
 the transform to run after pinning. Work
 autonomously; no user is available to answer a delivery question.

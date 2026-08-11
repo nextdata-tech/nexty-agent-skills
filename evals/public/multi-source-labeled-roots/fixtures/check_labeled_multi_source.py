@@ -101,6 +101,12 @@ def main() -> None:
     check("empty-source-is-empty", empty_source.read_text(encoding="utf-8").count("\n") == 1)
     check("empty-root-not-carried", not (root / "data-archive").exists())
     check("empty-root-not-declared", "data-archive" not in declared)
+    check("empty-path-file-not-carried",
+          not (root / "csv-source-archive-path").exists())
+    profile = (root / "infra-profile.yaml").read_text(encoding="utf-8")
+    spec = (root / "spec.py").read_text(encoding="utf-8")
+    check("empty-profile-service-omitted", "csv-source-archive" not in profile)
+    check("empty-spec-binding-omitted", "csv-source-archive" not in spec)
 
     for label in expected_files:
         path_file = root / f"csv-source-{label}-path"
@@ -147,6 +153,9 @@ def main() -> None:
 
     assignments = [node for node in ast.walk(tree)
                    if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    path_file_names = {
+        f"csv-source-{label}-path" for label in expected_files
+    }
     root_names: set[str] = set()
     for node in assignments:
         value = node.value
@@ -161,6 +170,46 @@ def main() -> None:
                 before = len(root_names)
                 root_names.update(assignment_names(node))
                 changed |= len(root_names) != before
+
+    path_reader_functions: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        parameters = {arg.arg for arg in node.args.args}
+        for child in ast.walk(node):
+            if (isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Attribute)
+                    and child.func.attr == "read_text"
+                    and contains_name(child.func.value, parameters)):
+                path_reader_functions.add(node.name)
+                break
+
+    path_derived_names: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            value = node.value
+            has_path_reader = any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id in path_reader_functions
+                for child in ast.walk(value)
+            )
+            has_direct_path_read = any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "read_text"
+                and any(isinstance(grandchild, ast.Constant)
+                        and grandchild.value in path_file_names
+                        for grandchild in ast.walk(child))
+                for child in ast.walk(value)
+            )
+            if (has_path_reader or has_direct_path_read
+                    or contains_name(value, path_derived_names)):
+                before = len(path_derived_names)
+                path_derived_names.update(assignment_names(node))
+                changed |= len(path_derived_names) != before
 
     def filesystem_bucket_uses_pinned_root() -> bool:
         for node in ast.walk(tree):
@@ -185,28 +234,30 @@ def main() -> None:
         return any(is_pinned_root_lookup(node) for node in ast.walk(tree))
 
     def has_labeled_root_expression(label: str) -> bool:
-        if (f"data-{label}" in string_constants
-                or f"csv-source-{label}-path" in string_constants):
-            return True
+        return f"csv-source-{label}-path" in string_constants
+
+    def filesystem_bucket_uses_path_root() -> bool:
         for node in ast.walk(tree):
-            if not isinstance(node, ast.JoinedStr):
+            if not isinstance(node, ast.Call):
                 continue
-            literals = {
-                value.value for value in node.values
-                if isinstance(value, ast.Constant) and isinstance(value.value, str)
-            }
-            formatted_names = {
-                value.value.id for value in node.values
-                if isinstance(value, ast.FormattedValue)
-                and isinstance(value.value, ast.Name)
-            }
-            if ("data-" in literals and formatted_names & {"label", "model"}
-                    and label in string_constants):
+            function = node.func
+            is_filesystem = (
+                isinstance(function, ast.Name) and function.id == "filesystem"
+            ) or (
+                isinstance(function, ast.Attribute) and function.attr == "filesystem"
+            )
+            if not is_filesystem:
+                continue
+            if any(keyword.arg == "bucket_url"
+                   and contains_name(keyword.value, path_derived_names)
+                   for keyword in node.keywords
+                   if keyword.value is not None):
                 return True
         return False
 
     check("transform-uses-pinned-root", has_pinned_root_lookup()
-          and filesystem_bucket_uses_pinned_root())
+          and filesystem_bucket_uses_pinned_root()
+          and filesystem_bucket_uses_path_root())
     for label in expected_files:
         check(f"transform-opens:{label}", has_labeled_root_expression(label))
     check("transform-does-not-open-empty-root", "data-archive" not in string_constants)

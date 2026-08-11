@@ -75,6 +75,12 @@ closure that assumed otherwise:
   and `transform-template.md`). Their companion path file exists for an
   unrelated reason: the path must be authored **relative** so the supervisor can
   resolve it inside the pinned snapshot.
+- A labeled multi-source CSV closure is the transform-only exception. Its
+  `csv-source-<label>` services do not contribute `csv_source_<label>` keys;
+  each labeled root is resolved from its relative path file below
+  `NXD_TRANSFORM_ROOT` and is carried by its root-level `companion-files`
+  declaration. Keep the ordinary single-source rule above for the unlabeled
+  `csv-source` service.
 - **`public:` does not gate the transform.** It controls `export_data_product`
   redaction only; the transform reads every attribute regardless of the flag.
   Marking a credential `public: true` does not hide it from anything — it

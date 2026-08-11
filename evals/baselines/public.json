@@ -30,7 +30,8 @@
       "verdict": "FAIL"
     },
     "current_pack/multi-source-labeled-roots": {
-      "verdict": "PASS"
+      "verdict": "PASS",
+      "note": "Recorded from one final uncached Codex current-pack observation: 9/9 checks passed and the deterministic structural checker exited 0. The no-skills origin/main arm scored 8/9 because its transform did not prove that the labeled path files feed the filesystem readers; that is baseline behavior, not a current-pack regression. Re-measure before treating a future flip as a skill regression."
     },
     "current_pack/nxd-setup-headless-auth": {
       "verdict": "FAIL",

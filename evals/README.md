@@ -38,15 +38,15 @@ There are three ways the suite runs, and only one of them is unconditional:
 | **Scenarios** | only those covering changed skills, minus 13 `ci_skip` | every runnable scenario (20 of 33; the 13 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | `current_pack` | any | any |
 | **Backend** | `codex` both sides | `codex` both sides | any | any |
-| **Gate** | fails on regression vs. the 10 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
+| **Gate** | fails on regression vs. the 12 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
 
 One caveat that applies to both gating columns: `evals/baselines/public.json` records
-10 cells, of which 5 are `PASS`. Two cells are marked `flaky`
-(`false-pass-validation`, which is one of those five, and `nxd-setup-headless-auth`
+12 cells, of which 7 are `PASS`. Two cells are marked `flaky`
+(`false-pass-validation`, which is one of those seven, and `nxd-setup-headless-auth`
 on the `FAIL` side); a flaky cell never gates in either direction, so it can neither
 regress nor be recorded as an improvement. Gating is on regression from a baselined,
 non-flaky `PASS` (see below), so unbaselined cells run and are reported but cannot
-fail anything — the effective gating surface is 4 cells, not the whole suite.
+fail anything — the effective gating surface is 6 cells, not the whole suite.
 Widening it means recording more cells in the baseline, not changing the workflows.
 
 **Pull requests are opt-in.** Add the `run-evals` label to a PR and the affected

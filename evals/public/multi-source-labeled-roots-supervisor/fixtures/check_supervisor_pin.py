@@ -99,6 +99,9 @@ def transform_uses_pinned_roots(path: Path) -> bool:
     }
     assignments = [node for node in ast.walk(tree)
                    if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    path_file_names = {
+        f"csv-source-{label}-path" for label in ("orders", "users")
+    }
 
     def assignment_names(node: ast.AST) -> set[str]:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -124,6 +127,45 @@ def transform_uses_pinned_roots(path: Path) -> bool:
                 root_names.update(assignment_names(node))
                 changed |= len(root_names) != before
 
+    path_reader_functions: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        parameters = {arg.arg for arg in node.args.args}
+        for child in ast.walk(node):
+            if (isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Attribute)
+                    and child.func.attr == "read_text"
+                    and contains_name(child.func.value, parameters)):
+                path_reader_functions.add(node.name)
+                break
+
+    path_derived_names: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            has_path_reader = any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id in path_reader_functions
+                for child in ast.walk(node.value)
+            )
+            has_direct_path_read = any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "read_text"
+                and any(isinstance(grandchild, ast.Constant)
+                        and grandchild.value in path_file_names
+                        for grandchild in ast.walk(child))
+                for child in ast.walk(node.value)
+            )
+            if (has_path_reader or has_direct_path_read
+                    or contains_name(node.value, path_derived_names)):
+                before = len(path_derived_names)
+                path_derived_names.update(assignment_names(node))
+                changed |= len(path_derived_names) != before
+
     uses_root_in_reader = any(
         isinstance(node, ast.Call)
         and (
@@ -131,12 +173,12 @@ def transform_uses_pinned_roots(path: Path) -> bool:
             or isinstance(node.func, ast.Attribute) and node.func.attr == "filesystem"
         )
         and any(keyword.arg == "bucket_url"
-                and contains_name(keyword.value, root_names)
+                and contains_name(keyword.value, root_names & path_derived_names)
                 for keyword in node.keywords if keyword.value is not None)
         for node in ast.walk(tree)
     )
     return has_root_lookup and uses_root_in_reader and all(
-        f"csv-source-{label}-path" in constants or f"data-{label}" in constants
+        f"csv-source-{label}-path" in constants
         for label in ("orders", "users")
     )
 

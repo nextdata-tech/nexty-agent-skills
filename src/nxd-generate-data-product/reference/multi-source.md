@@ -46,14 +46,13 @@ spanning every service.
   merge. Distinct *service* names do not rescue this: the service name is
   discarded before the transform sees anything (see Colliding keys below).
 
-**`csv-source` / `file-source` instances separate by a different mechanism**, so
-neither constraint is load-bearing for them: their key is contributed by their
-own driver in the *suffix* form `csv_source_<label>` / `file_source_<label>` (as
-the naming table below shows), which means there is no `attributes` entry to
-prefix and no prefix scan to confuse. Both rules still apply to them, but only
-as harmless over-strictness — `csv_source_orders` never matches an `orders_`
-scan either way, and one label namespace across the whole closure is easier to
-keep right than a per-type one.
+**Labeled `csv-source` instances separate by a different mechanism** in the
+transform-only multi-source case: each labeled path file names a relative root
+below the pinned execution root, so the transform does not expect a per-label
+`secrets[...]` entry. The single unlabeled `csv-source` case still receives its
+ordinary driver-supplied `csv_source` key. Do not infer a
+`csv_source_<label>` secret from a labeled service name; the labeled roots are
+carried by their path files and root-level `companion-files` declarations.
 
 **desktop source-aligned inputs are the exception:** this is a
 transform-service naming rule for labeled CSVs, not permission to bind
@@ -91,9 +90,11 @@ only thing that survives the merge:
   `orders_host`, `orders_password`, `users_host`, `users_base_url`. Uniform
   prefixing keeps the transform's recovery loop regular
   (`k.startswith(f"{label}_")`, as in the worked example below) and survives
-  someone later adding a field to one instance. There is nothing to do here for
-  labeled `csv-source` / `file-source` instances: their driver already emits a
-  distinct `csv_source_<label>` / `file_source_<label>` key per instance.
+  someone later adding a field to one instance. Labeled `file-source` instances
+  retain their driver-supplied `file_source_<label>` keys. Labeled
+  transform-only `csv-source` instances are different: their roots are read
+  from the relative path files and pinned `data-<label>/` trees described
+  below, not from per-label `secrets[...]` keys.
 - **Mixed types that happen to share a key** — a `db-source` and an `api-source`
   that both carry `region`, `user`, or a `token`. The canonical field sets do not
   overlap, so this arises from fields *you* add. Prefix at least the colliding
@@ -120,7 +121,7 @@ must be mirrored here.
 | One API (unchanged) | `api-source` | the attribute keys — `base_url`, `endpoint_<model>`, … | none | `_api` |
 | 2+ APIs, labeled | `api-source-<label>` | `<label>_<attr>` — `orders_base_url`, `orders_endpoint_<model>`, … | none | `_api_<label>` |
 | One CSV (unchanged) | `csv-source` | `csv_source` | `csv-source-path` | `_csv` |
-| 2+ CSVs, labeled, transform-only | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
+| 2+ CSVs, labeled, transform-only | `csv-source-<label>` | none — pinned root from `csv-source-<label>-path` | `csv-source-<label>-path` + `data-<label>/` | `_csv_<label>` |
 
 For CSV instances the driver is `nxd:local/file/storage:0.1.0`; only the
 service name changes. **Runtime boundary:** labeled CSV services may appear in
@@ -254,7 +255,9 @@ it.
 Same shape: swap `db-source-<label>`/`<label>_<field>`/`sql_database` for
 `file-source-<label>`/`file_source_<label>`/the `dlt.sources.filesystem`
 reader, `api-source-<label>`/`<label>_<attr>`/`rest_api_resources`, or
-`csv-source-<label>`/`csv_source_<label>`/`read_csv` **inside the transform**.
+`csv-source-<label>`/its relative path file and pinned `data-<label>/` root /
+`read_csv` **inside the transform**. Labeled CSV roots do not arrive as
+per-label `secrets[...]` keys.
 Labeled CSV roots (`data-<label>/<model>/*.csv`) are transform-only; they do
 not create a labeled desktop source-aligned input. Multiple source-aligned
 inputs instead share `_csv` and `csv-source-path`.

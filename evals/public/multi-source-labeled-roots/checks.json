@@ -22,7 +22,7 @@
     },
     {
       "id": "labeled-csv-wiring",
-      "check": "The closure has distinct labeled CSV connector services/keys and relative csv-source-orders-path and csv-source-users-path files; it does not bind either source through the single unlabeled source path."
+      "check": "The closure has distinct labeled CSV connector services and relative csv-source-orders-path and csv-source-users-path files; the transform consumes those path files rather than expecting per-label secrets or binding either source through the single unlabeled source path."
     },
     {
       "id": "nonempty-roots-carried",
