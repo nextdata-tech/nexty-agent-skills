@@ -3,6 +3,7 @@
   "skills": ["nxd-generate-data-product"],
   "workspace_files": [
     "companion-files",
+    "README.md",
     "spec.py",
     "models.py",
     "infra-profile.yaml",
@@ -25,7 +26,7 @@
     },
     {
       "id": "nonempty-roots-carried",
-      "check": "data-orders/orders/*.csv and data-users/users/*.csv are present byte-for-byte, and the root-level companion-files manifest declares data-orders and data-users as directory roots."
+      "check": "data-orders/orders/*.csv and data-users/users/*.csv are present byte-for-byte, and the root-level companion-files manifest declares data-orders and data-users as directory roots for the structural pin model."
     },
     {
       "id": "empty-root-omitted",
@@ -40,12 +41,16 @@
       "check": "transform/main.py resolves data-orders and data-users below NXD_TRANSFORM_ROOT (or an equivalent pinned execution-root contract), never an absolute authoring path and never by writing/updating companion-files during transform execution."
     },
     {
+      "id": "runtime-floor-documentation",
+      "check": "README.md records the concrete companion-directory-probe with published=yes and the known directory-companion implementation provenance."
+    },
+    {
       "id": "python-only-desktop-closure",
       "check": "The final closure uses spec.py/models.py/infra-profile.yaml/transform/main.py/requirements.txt and the public desktop dlt-through-port shape, without hand-written deployment-spec.yaml, manifest.yaml, or models.yaml."
     },
     {
       "id": "deterministic-check",
-      "check": "The withheld structural checker reports ALL CHECKS PASSED."
+      "check": "The withheld runner-side structural checker reports ALL CHECKS PASSED; the evaluator must not claim that a live supervisor was invoked."
     }
   ]
 }

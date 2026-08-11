@@ -130,6 +130,17 @@ The plan this closure was built from is `dp-spec.approved.md`, bound by
 Reattach first. A rebuild is the fallback, taken only when the published
 artifact is genuinely gone.
 
+For a multi-source CSV/file closure that uses directory companion declarations,
+add this compatibility precondition before step 1: run a disposable
+`nxd-desktop-supervisor create` against a closure containing a non-empty
+declared companion directory, with `--workflow companion-directory-probe` and
+a temporary `--data-dir`; require `published=yes`, then run the matching
+`stop`. The first implementation's provenance is NXD commit
+`da0b75bfc0eed5ae74b66fde35570bc40ed859b3` with `nxd_version` `0.41.162`, but
+the probe is the compatibility gate. If it fails on the directory declaration,
+upgrade/reprovision the desktop runtime first; do not fall back to an
+undeclared export root.
+
 1. `list_data_products` — is this workflow published, and is `artifact_status`
    `available`?
 2. `resume_data_product(workflow="<workflow-id>")` — reattaches to the published

@@ -290,11 +290,26 @@ than represented by a placeholder.
 
 The transform resolves these paths against `NXD_TRANSFORM_ROOT`, for example
 `Path(os.environ["NXD_TRANSFORM_ROOT"]) / "data-orders"`; it must never use the
-mutable authoring checkout's absolute path. Directory declarations require the
-supervisor release that implements directory companions (the #7472 capability).
-An older supervisor refuses the directory declaration rather than safely
-mispinning the closure, so that version range is an explicit floor for generated
-multi-source CSV closures; do not silently fall back to an undeclared root.
+mutable authoring checkout's absolute path. Directory declarations require a
+desktop runtime that accepts and copies a non-empty declared directory. The
+first implementation was built from NXD commit
+`da0b75bfc0eed5ae74b66fde35570bc40ed859b3` with the paired `nxd_version`
+`0.41.162`; those values are provenance, not a semantic comparison rule.
+Before handing the generated closure to the supervisor, run a disposable
+capability probe using the real command:
+
+```bash
+nxd-desktop-supervisor create \
+  --definition <closure-with-a-non-empty-companion-directory> \
+  --workflow companion-directory-probe \
+  --data-dir <temporary-probe-data-dir>
+nxd-desktop-supervisor stop --data-dir <temporary-probe-data-dir>
+```
+
+Require `published=yes`. If the create fails on the declared directory,
+upgrade/reprovision the desktop runtime; never silently fall back to an
+undeclared root. The generated closure README repeats this probe as the
+operational compatibility precondition.
 
 ## What does NOT change
 

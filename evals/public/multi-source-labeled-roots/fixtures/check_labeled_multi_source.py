@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Runner-side structural and pin-copy check for labeled CSV roots."""
+"""Runner-side structural closure check for labeled CSV roots.
+
+This intentionally models the directory-copy shape without invoking a live
+desktop supervisor. Supervisor parser and refusal semantics belong to the
+supervisor's own integration tests.
+"""
 
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import shutil
 import tempfile
@@ -46,7 +52,8 @@ def main() -> None:
     fixtures = args.fixtures.resolve()
 
     required = ["spec.py", "models.py", "infra-profile.yaml",
-                "transform/main.py", "requirements.txt", "companion-files"]
+                "transform/main.py", "requirements.txt", "companion-files",
+                "README.md"]
     for rel in required:
         check(f"required:{rel}", (root / rel).is_file())
 
@@ -101,24 +108,184 @@ def main() -> None:
               path_file.read_text(encoding="utf-8").strip() == f"data-{label}")
 
     transform = (root / "transform/main.py").read_text(encoding="utf-8")
-    check("transform-uses-pinned-root", "NXD_TRANSFORM_ROOT" in transform)
+    try:
+        tree = ast.parse(transform, filename=str(root / "transform/main.py"))
+    except SyntaxError as exc:
+        fail(f"transform-python-syntax: {exc}")
+
+    string_constants = {
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+    def is_pinned_root_lookup(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Subscript):
+            return False
+        target = node.value
+        if not (isinstance(target, ast.Attribute)
+                and target.attr == "environ"
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "os"):
+            return False
+        index = node.slice
+        if isinstance(index, ast.Index):
+            index = index.value
+        return (isinstance(index, ast.Constant)
+                and index.value == "NXD_TRANSFORM_ROOT")
+
+    def contains_name(node: ast.AST, names: set[str]) -> bool:
+        return any(isinstance(child, ast.Name) and child.id in names
+                   for child in ast.walk(node))
+
+    def assignment_names(node: ast.AST) -> set[str]:
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets.extend(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets.append(node.target)
+        return {target.id for target in targets if isinstance(target, ast.Name)}
+
+    assignments = [node for node in ast.walk(tree)
+                   if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    root_names: set[str] = set()
+    for node in assignments:
+        value = node.value
+        if any(is_pinned_root_lookup(child) for child in ast.walk(value)):
+            root_names.update(assignment_names(node))
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            value = node.value
+            if contains_name(value, root_names):
+                before = len(root_names)
+                root_names.update(assignment_names(node))
+                changed |= len(root_names) != before
+
+    def filesystem_bucket_uses_pinned_root() -> bool:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            is_filesystem = (
+                isinstance(function, ast.Name) and function.id == "filesystem"
+            ) or (
+                isinstance(function, ast.Attribute) and function.attr == "filesystem"
+            )
+            if not is_filesystem:
+                continue
+            if any(keyword.arg == "bucket_url"
+                   and contains_name(keyword.value, root_names)
+                   for keyword in node.keywords
+                   if keyword.value is not None):
+                return True
+        return False
+
+    def has_pinned_root_lookup() -> bool:
+        return any(is_pinned_root_lookup(node) for node in ast.walk(tree))
+
+    def has_labeled_root_expression(label: str) -> bool:
+        if (f"data-{label}" in string_constants
+                or f"csv-source-{label}-path" in string_constants):
+            return True
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.JoinedStr):
+                continue
+            literals = {
+                value.value for value in node.values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            }
+            formatted_names = {
+                value.value.id for value in node.values
+                if isinstance(value, ast.FormattedValue)
+                and isinstance(value.value, ast.Name)
+            }
+            if ("data-" in literals and formatted_names & {"label", "model"}
+                    and label in string_constants):
+                return True
+        return False
+
+    check("transform-uses-pinned-root", has_pinned_root_lookup()
+          and filesystem_bucket_uses_pinned_root())
     for label in expected_files:
-        # Accept either explicit roots or the documented `f"data-{label}"`
-        # loop; both preserve the label-specific path at runtime.
-        uses_label = label in transform and ("data-" in transform or
-                                             f"data-{label}" in transform)
-        check(f"transform-opens:{label}", uses_label)
-    check("transform-does-not-open-empty-root", "data-archive" not in transform)
-    check("transform-does-not-write-manifest", "write_text" not in transform or
-          "companion-files" not in transform)
-    check("transform-no-fixture-absolute-path", str(fixtures) not in transform)
+        check(f"transform-opens:{label}", has_labeled_root_expression(label))
+    check("transform-does-not-open-empty-root", "data-archive" not in string_constants)
+
+    manifest_names: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            value = node.value
+            has_manifest_path = (
+                any(isinstance(child, ast.Constant)
+                    and child.value == "companion-files"
+                    for child in ast.walk(value))
+                or contains_name(value, manifest_names)
+            )
+            if has_manifest_path:
+                before = len(manifest_names)
+                manifest_names.update(assignment_names(node))
+                changed |= len(manifest_names) != before
+
+    def references_manifest_path(node: ast.AST) -> bool:
+        return (contains_name(node, manifest_names)
+                or any(isinstance(child, ast.Constant)
+                       and child.value == "companion-files"
+                       for child in ast.walk(node)))
+
+    writes_manifest = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        method = function.attr if isinstance(function, ast.Attribute) else None
+        if method in {"write_text", "write_bytes", "unlink", "rename", "replace"}:
+            writes_manifest |= references_manifest_path(function.value)
+        elif method == "open":
+            mode_nodes = [node.args[0]] if node.args else []
+            mode_nodes.extend(keyword.value for keyword in node.keywords
+                              if keyword.arg == "mode")
+            writes_manifest |= (
+                references_manifest_path(function.value)
+                and any(isinstance(mode, ast.Constant)
+                        and isinstance(mode.value, str)
+                        and set(mode.value) & {"w", "a", "x"}
+                        for mode in mode_nodes)
+            )
+        elif isinstance(function, ast.Name) and function.id == "open":
+            mode_nodes = [node.args[1]] if len(node.args) > 1 else []
+            mode_nodes.extend(keyword.value for keyword in node.keywords
+                              if keyword.arg == "mode")
+            writes_manifest |= (
+                bool(node.args) and references_manifest_path(node.args[0])
+                and any(isinstance(mode, ast.Constant)
+                        and isinstance(mode.value, str)
+                        and set(mode.value) & {"w", "a", "x"}
+                        for mode in mode_nodes)
+            )
+    check("transform-does-not-write-manifest", not writes_manifest)
+    absolute_literals = {
+        value for value in string_constants
+        if value.startswith("/") and not value.startswith("//")
+    }
+    check("transform-no-absolute-path-literals", not absolute_literals,
+          f"found {sorted(absolute_literals)!r}")
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    check("runtime-floor-documented", all(marker in readme for marker in (
+        "companion-directory-probe",
+        "published=yes",
+        "0.41.162",
+        "da0b75bfc0eed5ae74b66fde35570bc40ed859b3",
+    )))
 
     profile = (root / "infra-profile.yaml").read_text(encoding="utf-8")
     for label in expected_files:
         check(f"profile-label:{label}", f"csv-source-{label}" in profile)
 
-    # Exercise the same directory-copy shape the supervisor uses: the manifest
-    # must be sufficient to reproduce both roots at their declared paths.
+    # Exercise a structural directory-copy model. This is deliberately not a
+    # supervisor E2E; supervisor parser/refusal behavior is tested in nxd.
     with tempfile.TemporaryDirectory(prefix="labeled-roots-pin-") as tmp:
         snapshot = Path(tmp)
         shutil.copy2(manifest, snapshot / "companion-files")

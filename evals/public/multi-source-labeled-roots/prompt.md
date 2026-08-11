@@ -25,8 +25,11 @@ be rooted there. Do not put the finished closure under a `data_product/`
 subdirectory.
 
 Consult the installed `nxd-generate-data-product` multi-source guidance for the
-manifest and pinning contract. The finished closure must be safe for the
-supervisor to pin and for the transform to run after pinning. Work
+manifest, runtime floor, and pinning contract. Render the required `README.md`
+reopen recipe, including the concrete `companion-directory-probe` compatibility
+precondition and the known implementation provenance.
+The finished closure must be safe for a compatible supervisor to pin and for
+the transform to run after pinning. Work
 autonomously; no user is available to answer a delivery question.
 
 In the final response, inventory the authored closure files, identify the two
@@ -35,9 +38,11 @@ actually ran.
 
 ## Success checks
 
-The eval grades the landed closure and an authoritative runner-side check. It
-must preserve both non-empty labeled roots through the supervisor's declared
-companion-file channel, omit the empty label, keep the declarations relative
-and non-overlapping, and make the transform resolve the pinned roots rather
-than an authoring checkout. The closure must still use the ordinary Python-only
-desktop shape and label-specific CSV connector paths.
+The eval grades the landed closure and an authoritative runner-side structural
+check. It models the declared directory-copy shape; it does not invoke a live
+supervisor. The closure must preserve both non-empty labeled roots through the
+declared companion-file channel, omit the empty label, keep the declarations
+relative and non-overlapping, document the compatible runtime floor, and make
+the transform resolve the pinned roots rather than an authoring checkout. The
+closure must still use the ordinary Python-only desktop shape and
+label-specific CSV connector paths.

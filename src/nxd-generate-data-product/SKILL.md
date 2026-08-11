@@ -64,12 +64,12 @@ The author emits **Python and prerequisite config only**:
     ├── dp-spec.approved.md # Step 6a: byte copy of the approved IR
     ├── dp-spec.lock.json  # its canonical hash + compiler version
     ├── build-record.json  # generated: stages, attempts, concessions, blockers
-    ├── README.md          # generated: reopen recipe + credentials block ONLY
+    ├── README.md          # generated: reopen recipe (+ runtime floors when applicable) + credentials block ONLY
     ├── csv-source-path    # one line: relative path to the CSV export root
     └── data/              # the connector export: data/<base_model>/*.csv
         └── <base_model>/… # base models only — derived models have no data dir
 ```
-_(CSV layout, the proven default; other types swap the companion artifact per the Overview connector-types table. For 2+ CSV/file sources, `reference/multi-source.md` also requires a root-level `companion-files` manifest for each non-empty labeled export root. "No `data/` **export**" there is about the connector, not the closure: a `db-source`/`api-source` closure brings no source export, but may still carry `data/` for reference data it authored — pinned like any other, and landed via its own `@dlt.resource`, not the reader loop. See `reference/api-source.md` § "Landed reference data in an API closure".)_
+_(CSV layout, the proven default; other types swap the companion artifact per the Overview connector-types table. For 2+ CSV/file sources, `reference/multi-source.md` also requires a root-level `companion-files` manifest for each non-empty labeled export root and a desktop runtime at the documented directory-companion floor. "No `data/` **export**" there is about the connector, not the closure: a `db-source`/`api-source` closure brings no source export, but may still carry `data/` for reference data it authored — pinned like any other, and landed via its own `@dlt.resource`, not the reader loop. See `reference/api-source.md` § "Landed reference data in an API closure".)_
 
 **The author NEVER writes `deployment-spec.yaml`, `manifest.yaml`, or
 `models.yaml`.** The supervisor compiles those three from `spec.py` +

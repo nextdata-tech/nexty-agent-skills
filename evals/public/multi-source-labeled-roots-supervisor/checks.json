@@ -1,0 +1,39 @@
+{
+  "name": "Pin a multi-source labeled CSV closure through the desktop supervisor",
+  "skills": ["nxd-generate-data-product"],
+  "ci_skip": "needs a live compatible desktop supervisor (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON); run locally or via workflow_dispatch",
+  "desktop_verify": false,
+  "workspace_files": [
+    "companion-files",
+    "README.md",
+    "spec.py",
+    "models.py",
+    "infra-profile.yaml",
+    "transform/main.py",
+    "requirements.txt",
+    "csv-source-*-path",
+    "data-*/*/*.csv"
+  ],
+  "deterministic_check": {
+    "script": "check_supervisor_pin.py",
+    "deps": ["duckdb"]
+  },
+  "checks": [
+    {
+      "id": "supervisor-command",
+      "check": "The agent runs nxd-desktop-supervisor create against the authored closure and reports published=yes, then stops the runtime."
+    },
+    {
+      "id": "live-pinned-data",
+      "check": "The authoritative live supervisor checker reports ALL CHECKS PASSED and verifies two orders rows and two users rows in the published DuckDB result; do not substitute the structural directory-copy scenario for this check."
+    },
+    {
+      "id": "empty-root-omitted",
+      "check": "The live-pinned closure omits data-archive from companion-files and the transform; the empty source is not declared or opened."
+    },
+    {
+      "id": "runtime-floor-documentation",
+      "check": "README.md records the concrete companion-directory-probe with published=yes and the known directory-companion implementation provenance."
+    }
+  ]
+}
