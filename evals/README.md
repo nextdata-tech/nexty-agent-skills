@@ -35,7 +35,7 @@ There are three ways the suite runs, and only one of them is unconditional:
 | | PR with the `run-evals` label | Release (`v*` tag) | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | every runnable scenario (19 of 31; the 12 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | every runnable scenario (20 of 32; the 12 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | `current_pack` | any | any |
 | **Backend** | `codex` both sides | `codex` both sides | any | any |
 | **Gate** | fails on regression vs. the 10 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
@@ -208,11 +208,11 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 7 of 31 public scenarios use this today
+Only 8 of 32 public scenarios use this today
 (`authenticated-api-source-build`, `coauthor-executable-policy-readback`,
 `coauthor-supplied-rubric`, `derive-models-from-questions`,
 `dp-static-artifact-lifecycle`, `desktop-custom-contracts`,
-`treasury-yield-curve`). It is the strongest signal available — prefer it
+`multi-source-labeled-roots`, `treasury-yield-curve`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)

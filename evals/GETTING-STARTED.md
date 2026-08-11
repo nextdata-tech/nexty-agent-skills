@@ -12,7 +12,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Query loop** | `evals/query-loop/run_query_loop.py` | borrows `nxd_eval`'s venv | Multi-turn query refinement against a pharma mesh fixture. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 19 of the 31 public scenarios.**
+installs and covers 20 of the 32 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -110,7 +110,7 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-19 of 31 public scenarios. The remaining 12 declare `ci_skip` in their
+20 of 32 public scenarios. The remaining 12 declare `ci_skip` in their
 `checks.json`. Ten need a Tier 2 or Tier 3 install; one is gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 

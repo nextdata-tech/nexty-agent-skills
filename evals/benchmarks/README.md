@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-11 | nxd-generate-data-product: labeled CSV roots carried via companion-files | PASS | multi-source-labeled-roots | [`2026-08-11-nxd-generate-data-product-labeled-csv-roots-carried-via-comp`](entries/2026-08-11-nxd-generate-data-product-labeled-csv-roots-carried-via-comp.md) |
 | 2026-08-10 | nxd-generate-data-product: api-source endpoints move to infra-profile attributes | MIXED | authenticated-api-source-build | [`2026-08-10-nxd-generate-data-product-api-source-endpoints-move-to-infra`](entries/2026-08-10-nxd-generate-data-product-api-source-endpoints-move-to-infra.md) |
 | 2026-08-07 | nxd-generate-data-product: secrets is one flat map, not a per-service dict | MIXED | authenticated-api-source-build | [`2026-08-07-flat-secrets-contract`](entries/2026-08-07-flat-secrets-contract.md) |
 | 2026-08-07 | Claude Desktop plugin bundle and installer boundary amendments | NO_EVAL | — | [`2026-08-07-desktop-plugin-bundle-installer-boundaries`](entries/2026-08-07-desktop-plugin-bundle-installer-boundaries.md) |

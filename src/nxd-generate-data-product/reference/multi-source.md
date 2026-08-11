@@ -7,6 +7,7 @@
 - Naming table
 - Worked example: two database sources
 - Applying the pattern to file / API / CSV sources
+- Labeled CSV export roots and `companion-files`
 - What does NOT change
 
 Every connector type documented elsewhere in this pack (`csv-source` inline
@@ -257,6 +258,43 @@ reader, `api-source-<label>`/`<label>_<attr>`/`rest_api_resources`, or
 Labeled CSV roots (`data-<label>/<model>/*.csv`) are transform-only; they do
 not create a labeled desktop source-aligned input. Multiple source-aligned
 inputs instead share `_csv` and `csv-source-path`.
+
+## Labeled CSV export roots and `companion-files`
+
+The labeled CSV roots are runtime data, not optional authoring directories. After
+materializing the exports and before calling the supervisor, write a UTF-8
+`companion-files` manifest at the closure root. It must contain one sorted line
+per **non-empty** labeled root, using the directory path without a trailing
+slash, for example:
+
+```text
+data-orders
+data-users
+```
+
+Generation time is the only safe point to write this manifest: pin copies the
+declared tree before the transform starts, so a transform cannot repair a
+missing declaration after pin. For each label, first materialize
+`data-<label>/<model>/*.csv`, then inspect the finished tree. If the label's
+models produced no rows, do not create or declare an empty `data-<label>` root.
+Declare a root only when it contains the regular export files that carry rows.
+
+Emit only the root line. Do not also list `data-orders/orders.csv` or any other
+descendant: overlapping declarations are refused by the supervisor. These
+generated roots are safe declaration paths because they are siblings of the
+supervisor-owned `data/`, `transform/`, and `contracts/` trees; never declare
+those trees or anything beneath them. Before writing the manifest, fail closed
+if a root or any member below it is a symlink (do not dereference it), and use
+relative path segments only. A root with no eligible files is omitted rather
+than represented by a placeholder.
+
+The transform resolves these paths against `NXD_TRANSFORM_ROOT`, for example
+`Path(os.environ["NXD_TRANSFORM_ROOT"]) / "data-orders"`; it must never use the
+mutable authoring checkout's absolute path. Directory declarations require the
+supervisor release that implements directory companions (the #7472 capability).
+An older supervisor refuses the directory declaration rather than safely
+mispinning the closure, so that version range is an explicit floor for generated
+multi-source CSV closures; do not silently fall back to an undeclared root.
 
 ## What does NOT change
 

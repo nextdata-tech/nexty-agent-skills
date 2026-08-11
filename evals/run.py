@@ -226,6 +226,7 @@ EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES = {
 # scenario may use the same filename as an ordinary fixture and must keep it.
 SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
+    "multi-source-labeled-roots": frozenset({"check_labeled_multi_source.py"}),
 }
 
 _SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
