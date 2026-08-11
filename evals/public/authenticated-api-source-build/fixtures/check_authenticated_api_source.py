@@ -39,6 +39,11 @@ PASSES: list[str] = []
 
 MATERIALIZE_TIMEOUT_S = 300
 VALID_TOKEN = "bcn_live_9f3ac2e7d84b41f0a6c5d2e19b7f0033"
+# Mirrors stub_beacon_api.REQUIRED_USER_AGENT. Duplicated the same way
+# VALID_TOKEN is, so the static checks can run before the stub is loaded;
+# check_stub_constants_match() below pins the two together so a drift in one
+# fails loudly instead of silently disabling a check.
+REQUIRED_USER_AGENT = "nexty-test-client/1.0"
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -99,6 +104,13 @@ def profile_attributes(root: Path) -> tuple[dict[str, str], dict[str, str]]:
     `secrets` map, so a checker keyed on service boundaries would be measuring
     a structure the transform never sees. Returns empty maps for a missing file
     -- callers check for the file itself.
+
+    Shared by the auth, endpoint and header checks so a profile that fails one
+    is still fully parsed for the others. Folding this back into any single
+    caller re-creates the bug it was extracted to kill: an early bail on a
+    missing auth_token also empties the header check's input, which then
+    reports a present-and-correct header as absent -- one defect surfacing as
+    two, with the second aimed at the wrong file.
     """
     profile = root / "infra-profile.yaml"
     if not profile.is_file():
@@ -151,6 +163,136 @@ def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
         return False, ("auth_token is marked public: true — the credential would "
                        "survive export; a secret attribute must be public: false"), fields
     return True, "", fields
+
+
+def header_declared_in_profile(root: Path) -> tuple[bool, str]:
+    """The required User-Agent must live in the profile as a `header_*`
+    attribute, not in the transform source.
+
+    Per api-source.md's "Custom request headers": one flat attribute per
+    header, `header_<name>` with `-` written as `_`. The header name is
+    case-insensitive (RFC 7230 §3.2) and so is its encoding here, so accept any
+    case for the KEY — but the VALUE must match exactly, since that string is
+    what the upstream matches on.
+    """
+    profile = root / "infra-profile.yaml"
+    if not profile.is_file():
+        return False, "infra-profile.yaml missing"
+    fields, _ = profile_attributes(root)
+    matches = [k for k in fields if k.lower() == "header_user_agent"]
+    if not matches:
+        declared = sorted(k for k in fields if k.lower().startswith("header_"))
+        if declared:
+            return False, (f"no header_user_agent attribute; found {declared} — the "
+                           f"required header is User-Agent")
+        return False, ("no header_user_agent attribute in the api-source service; the "
+                       "API requires User-Agent and it must come from the profile, "
+                       "not from a literal in the transform")
+    got = fields[matches[0]]
+    if got != REQUIRED_USER_AGENT:
+        return False, (f"header_user_agent is {got!r}, but the API requires "
+                       f"{REQUIRED_USER_AGENT!r}")
+    return True, ""
+
+
+def header_marked_public(root: Path) -> tuple[bool, str]:
+    """A non-secret header is `public: true` so it survives an export.
+
+    Separate from `header_declared_in_profile` on purpose: a header marked
+    `public: false` still WORKS (the transform reads every attribute
+    regardless), it just gets redacted out of an export and the recipient has
+    to rediscover it. That is a defect in the export contract, not in
+    ingestion, and merging the two would report it as a broken header.
+    """
+    _, public_flags = profile_attributes(root)
+    for key, flag in public_flags.items():
+        if key.lower() != "header_user_agent":
+            continue
+        if flag == "true":
+            return True, ""
+        return False, (f"header_user_agent is public: {flag} — a non-secret header "
+                       f"should be public: true so it survives export_data_product")
+    return False, "header_user_agent carries no public: flag"
+
+
+def _docstring_nodes(tree: ast.Module) -> set[int]:
+    """id()s of the Constant nodes that are docstrings, not code."""
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+            continue
+        body = getattr(node, "body", None)
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            out.add(id(body[0].value))
+    return out
+
+
+def _string_literals(tree: ast.Module) -> list[str]:
+    """Every string literal that is real code, docstrings excluded."""
+    skip = _docstring_nodes(tree)
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in skip]
+
+
+def headers_built_from_secrets(root: Path) -> tuple[bool, str]:
+    """The transform must assemble dlt's `client["headers"]` from the flat
+    `header_*` secrets, not hardcode the User-Agent.
+
+    Two independent failure modes, distinguished in the detail because the
+    fixes differ: never configuring headers at all (the closure 403s), versus
+    configuring them from a literal (the closure works today and breaks the
+    moment the profile changes, exactly like a hardcoded base_url).
+
+    The hardcode test reads STRING LITERALS via the AST, docstrings excluded --
+    not the file text. A correct closure that documents why the header exists
+    ("Beacon rejects any client not sending User-Agent: nexty-test-client/1.0")
+    is explaining the requirement, not hardcoding it, and a substring scan
+    reports that comment as the very defect the comment is warning about. Same
+    reasoning the connector gate uses, and the same reasoning `self-check.md`
+    gives for reading `spec.py`'s literals via the AST rather than its text.
+
+    Scans every `transform/*.py` for the same reason the connector gate does:
+    a closure that factors `_headers_from` into `transform/http.py` and calls it
+    from `main.py` is correct, and a main-only scan calls it a closure that
+    never reads a header.
+    """
+    sources = sorted((root / "transform").glob("*.py")) if (root / "transform").is_dir() else []
+    if not sources:
+        return False, "no transform/*.py sources"
+
+    literals: list[str] = []
+    text_of: list[str] = []
+    for path in sources:
+        src = path.read_text(encoding="utf-8", errors="replace")
+        text_of.append(src)
+        try:
+            literals += _string_literals(ast.parse(src))
+        except SyntaxError as exc:
+            return False, f"{path.name} does not parse: {exc}"
+
+    hardcoded = [lit for lit in literals if REQUIRED_USER_AGENT in lit]
+    if hardcoded:
+        return False, (f"transform hardcodes {REQUIRED_USER_AGENT!r} instead of reading "
+                       f"it from the flat secrets map (secrets['header_user_agent'])")
+
+    joined = "\n".join(text_of)
+    reads_header_secrets = bool(
+        re.search(r"""startswith\(\s*['"]header_""", joined)
+        or re.search(r"""secrets\s*(?:\.get\s*\(\s*|\[\s*)['"]header_\w+['"]""", joined)
+        or any(lit.startswith("header_") for lit in literals)
+    )
+    if not reads_header_secrets:
+        return False, ("transform never reads a header_* key from secrets — the API "
+                       "requires a User-Agent and rejects the request without it")
+    sets_headers = bool(re.search(r"""['"]headers['"]\s*\]?\s*[=:]""", joined))
+    if not sets_headers:
+        return False, ("transform reads header_* secrets but never assigns them to the "
+                       "RESTAPIConfig client's `headers` key")
+    return True, ""
 
 
 def sensitivity_artifacts_present(root: Path) -> tuple[bool, str]:
@@ -223,12 +365,167 @@ def auth_is_dispatched_on_auth_type(transform_src: str) -> tuple[bool, str]:
     return True, ""
 
 
-def uses_rest_api_resources(transform_src: str) -> tuple[bool, str]:
-    """The transform must go through dlt's REST connector, not a hand-rolled
-    requests/urllib loop fed to dlt as a plain generator."""
-    has_rest_import = bool(re.search(r"from\s+dlt\.sources\.rest_api\s+import", transform_src))
-    has_rest_call = "rest_api_resources(" in transform_src or "rest_api_source(" in transform_src
-    if not (has_rest_import and has_rest_call):
+# Modules whose presence in a transform means the closure is fetching HTTP
+# itself. `urllib.request` and `http.client` are stdlib, the rest are the usual
+# third-party clients; `dlt.sources.helpers.requests` is dlt's OWN requests
+# wrapper, which is still a hand-rolled loop -- dlt-flavored, but not the REST
+# connector, and it lands rows through a plain generator exactly the same way.
+_HTTP_CLIENT_MODULES = (
+    "requests", "httpx", "aiohttp", "urllib3", "httplib2",
+    "urllib.request", "urllib.error", "http.client",
+    # dlt's own requests wrapper -- see above.
+    "dlt.sources.helpers.requests",
+)
+
+
+def _dotted(node: ast.AST) -> str:
+    """`requests.Session` for an Attribute chain, `urlopen` for a bare Name."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    else:
+        return ""
+    return ".".join(reversed(parts))
+
+
+def _is_http_module(path: str) -> bool:
+    """True when a resolved dotted path lies inside an HTTP client module."""
+    return any(path == m or path.startswith(f"{m}.") for m in _HTTP_CLIENT_MODULES)
+
+
+def _http_client_calls(tree: ast.Module) -> list[str]:
+    """Hand-rolled HTTP calls in one module, resolved through import aliases.
+
+    AST rather than substring search on purpose: `api-source.md` discusses
+    `requests` and `urllib` in prose, and a closure that quotes that guidance in
+    a docstring or comment must not be failed for describing the thing it
+    correctly avoided.
+
+    Resolution is on the FULL dotted path, not the bound root name. `import
+    urllib` binds the root `urllib`, under which `urllib.request.urlopen` is a
+    network call and `urllib.parse.quote` is string manipulation -- so keying on
+    the root flags a correct closure for quoting a URL path. This repo already
+    refuses to make that trade in the self-check's own transport scan
+    (`reference/self-check.md`: "`urllib` would also catch `urllib.parse`, which
+    is pure string manipulation with no network and is used by shipped example
+    transforms"), and a rule that fires on correct closures gets deleted rather
+    than obeyed. Resolving the whole path keeps `urllib.request` denied and
+    `urllib.parse` free.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                # `import urllib.request` binds the root `urllib`, but the alias
+                # maps to the root MODULE so a later `.request.urlopen` resolves
+                # back to the full path. `import x as y` binds y to all of x.
+                if a.asname:
+                    aliases[a.asname] = a.name
+                else:
+                    root = a.name.split(".")[0]
+                    aliases.setdefault(root, root)
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            for a in node.names:
+                aliases[a.asname or a.name] = f"{mod}.{a.name}" if mod else a.name
+    hits: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted(node.func)
+        if not name:
+            continue
+        root, _, rest = name.partition(".")
+        if root not in aliases:
+            continue
+        resolved = aliases[root] + (f".{rest}" if rest else "")
+        if _is_http_module(resolved):
+            hits.add(name)
+    return sorted(hits)
+
+
+def _uses_dlt_rest(tree: ast.Module) -> bool:
+    """A `dlt.sources.rest_api` import AND a real call to its entry points."""
+    imported = any(
+        isinstance(n, ast.ImportFrom) and (n.module or "").startswith("dlt.sources.rest_api")
+        for n in ast.walk(tree)
+    )
+    called = any(
+        isinstance(n, ast.Call)
+        and _dotted(n.func).split(".")[-1] in ("rest_api_resources", "rest_api_source")
+        for n in ast.walk(tree)
+    )
+    return imported and called
+
+
+def uses_rest_api_resources(root: Path) -> tuple[bool, str]:
+    """Ingestion goes through dlt's REST connector -- and ONLY through it.
+
+    Two halves, because a closure can fail either independently:
+
+    1. the dlt REST connector is actually used, and
+    2. nothing fetches HTTP beside it.
+
+    The second half is the one that matters in practice. Checking only the
+    first made this fact presence-only: a closure could import
+    `rest_api_resources`, never reach the wire with it, and hand-roll a
+    `requests` loop next to it -- passing a check whose entire purpose is to
+    require the connector architecture. The measured NEX-873 benchmark
+    (`evals/benchmarks/entries/2026-08-11-api-source-custom-client-headers.md`)
+    is what surfaced this: BOTH arms hand-rolled `requests`, and the header
+    gate made hand-rolling *more* attractive, since sending a header is one
+    line there and a config change in dlt.
+
+    Scans every `transform/*.py`, not just `main.py`: with only `main.py`
+    checked, moving the fetch loop into a sibling module defeats the gate
+    without changing the architecture at all.
+
+    No exemption for a connectivity probe, because `api-source.md`'s Self-check
+    section states the rule this enforces: the probe is a standalone script
+    beside the closure, never inside `transform/`. A probe under `transform/`
+    would re-run on every materialization the supervisor performs.
+
+    This does NOT contradict `reference/self-check.md`'s waiver of the transport
+    family for api-source closures. That waiver covers IMPORTS -- dlt's REST
+    source is built on `requests`/`httpx`/`urllib3`, so a reach scan fires on
+    every correct API closure. This gate keys on CALLS the closure's own source
+    makes: a correct dlt closure never calls `requests.get` itself, because dlt
+    does that inside dlt. Imports are waived; hand-written calls are not.
+    """
+    transform_dir = root / "transform"
+    if not transform_dir.is_dir():
+        return False, "no transform/ directory"
+    sources = sorted(transform_dir.glob("*.py"))
+    if not sources:
+        return False, "no transform/*.py sources"
+
+    uses_connector = False
+    hand_rolled: list[str] = []
+    for path in sources:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError as exc:
+            return False, f"{path.name} does not parse: {exc}"
+        uses_connector = uses_connector or _uses_dlt_rest(tree)
+        hand_rolled += [f"{path.name}:{c}" for c in _http_client_calls(tree)]
+
+    if hand_rolled and uses_connector:
+        return False, (
+            f"HYBRID -- imports dlt's REST connector but also fetches HTTP by hand "
+            f"({', '.join(hand_rolled)}). Ingestion must go THROUGH the connector, "
+            f"not beside it; a RESTAPIConfig that exists but does not carry the "
+            f"requests is not the required architecture"
+        )
+    if hand_rolled:
+        return False, (
+            f"ingestion hand-rolls HTTP ({', '.join(hand_rolled)}) instead of "
+            f"dlt's REST connector -- no dlt.sources.rest_api import / "
+            f"rest_api_resources(...) call found"
+        )
+    if not uses_connector:
         return False, "no dlt.sources.rest_api import / rest_api_resources(...) call found"
     return True, ""
 
@@ -300,6 +597,12 @@ secrets = {"base_url": sys.argv[2], "auth_type": "bearer", "auth_token": sys.arg
 # the checker separately forbids a hardcoded endpoint path would leave the
 # closure no legal source for the path at all: a correct transform would raise
 # KeyError and be reported as a broken closure.
+#
+# `header_user_agent` rides the same channel for the same reason. A closure that
+# hardcodes the User-Agent instead still passes THIS harness (it sends the right
+# header either way); what catches that is the static `header:built-from-secrets`
+# check. A closure that ignores headers entirely fails here, because the stub
+# 403s it before it can authenticate.
 secrets.update(json.loads(sys.argv[4]))
 ingest(duckdb=out, secrets=secrets)
 '''
@@ -324,8 +627,15 @@ def closure_requirements(root: Path) -> list[str]:
 
 
 def materialize_closure(
-    root: Path, base_url: str, token: str, endpoints: dict[str, str]
+    root: Path, base_url: str, token: str, extra_secrets: dict[str, str]
 ) -> tuple[Path | None, str]:
+    """Run the closure's own transform against a live stub.
+
+    `extra_secrets` carries every flat attribute beyond base_url/auth that the
+    supervisor would have merged in -- the `endpoint_<model>` paths and the
+    `header_*` request headers -- because the checker forbids hardcoding either
+    and a correct transform must therefore have some legal source for both.
+    """
     try:
         import duckdb  # noqa: F401, PLC0415
     except ImportError:
@@ -339,7 +649,7 @@ def materialize_closure(
     cmd = ["uv", "run", "--no-project"]
     for spec in closure_requirements(root):
         cmd += ["--with", spec]
-    cmd += ["python", str(harness), str(db), base_url, token, json.dumps(endpoints)]
+    cmd += ["python", str(harness), str(db), base_url, token, json.dumps(extra_secrets)]
     try:
         proc = subprocess.run(
             cmd, cwd=str(root), capture_output=True, text=True,
@@ -568,11 +878,21 @@ def main() -> int:
     ok, detail = sensitivity_artifacts_present(root)
     check("secret:sensitivity-artifacts-present", ok, detail)
 
+    # ---- custom client header (NEX-873) -----------------------------------
+    ok, detail = header_declared_in_profile(root)
+    check("header:declared-in-profile", ok, detail)
+
+    ok, detail = header_marked_public(root)
+    check("header:non-secret-marked-public", ok, detail)
+
+    ok, detail = headers_built_from_secrets(root)
+    check("header:built-from-secrets", ok, detail)
+
     # ---- ingestion mechanism ------------------------------------------------
     ok, detail = auth_is_dispatched_on_auth_type(transform_src)
     check("secret:auth-dispatched-on-auth-type", ok, detail)
 
-    ok, detail = uses_rest_api_resources(transform_src)
+    ok, detail = uses_rest_api_resources(root)
     check("ingestion:rest-api-resources-used", ok, detail)
 
     ok, detail = no_hardcoded_base_url_or_path(transform_src)
@@ -580,27 +900,61 @@ def main() -> int:
 
     # ---- live re-materialization: does it actually work end-to-end? --------
     stub = load_stub(fixtures)
+    # The static checks above compare against this module's own copies of the
+    # token and User-Agent. If the stub's values drift from them, those checks
+    # start grading a string the fixture no longer serves — passing or failing
+    # for reasons unrelated to the closure. Fail loudly here instead.
+    if not check("fixture:constants-match-stub",
+                 (VALID_TOKEN, REQUIRED_USER_AGENT)
+                 == (stub.VALID_TOKEN, stub.REQUIRED_USER_AGENT),
+                 "checker constants drifted from stub_beacon_api.py"):
+        print_report()
+        return 1
     server, port, thread = stub.start_server()
     base_url = f"http://127.0.0.1:{port}"
     try:
         # Confirm the STUB itself behaves as documented before blaming the
-        # closure for anything: unauthenticated must 401, authenticated must
-        # 200. This isolates "the fixture is broken" from "the closure is
-        # wrong" in the failure output.
-        try:
-            urllib.request.urlopen(
-                urllib.request.Request(f"{base_url}/v1/monitors"), timeout=5
-            )
-            fixture_ok = False
-        except urllib.error.HTTPError as exc:
-            fixture_ok = exc.code == 401
-        if not check("fixture:stub-enforces-auth", fixture_ok,
-                      "stub did not 401 an unauthenticated request"):
+        # closure for anything. This isolates "the fixture is broken" from "the
+        # closure is wrong" in the failure output. Two gates, probed
+        # separately because they fail for different reasons:
+        #
+        #   no User-Agent            -> 403 (header gate, checked FIRST)
+        #   right UA, no/wrong token -> 401 (credential gate)
+        #
+        # Probing auth requires sending the required UA, since otherwise the
+        # header gate answers first and the auth gate is never reached.
+        def _probe(headers: dict) -> int | None:
+            """Status of a GET /v1/monitors, or None if it unexpectedly succeeded."""
+            try:
+                urllib.request.urlopen(
+                    urllib.request.Request(f"{base_url}/v1/monitors", headers=headers),
+                    timeout=5,
+                )
+                return None
+            except urllib.error.HTTPError as exc:
+                return exc.code
+
+        # urllib sends its own User-Agent by default, which is precisely a
+        # client the stub does not recognize — so an empty header dict is a
+        # faithful "wrong UA" probe.
+        if not check("fixture:stub-enforces-header", _probe({}) == 403,
+                     "stub did not 403 a request with an unrecognized User-Agent"):
+            print_report()
+            return 1
+        if not check("fixture:stub-enforces-auth",
+                     _probe({"User-Agent": stub.REQUIRED_USER_AGENT}) == 401,
+                     "stub did not 401 an unauthenticated request"):
             print_report()
             return 1
 
+        # Drop the probes' own traffic so the wire assertion below measures
+        # only what the CLOSURE sent.
+        stub.reset_observations()
+
+        extra_secrets = dict(endpoint_secrets(root))
+        extra_secrets["header_user_agent"] = stub.REQUIRED_USER_AGENT
         db, why = materialize_closure(
-            root, base_url, stub.VALID_TOKEN, endpoint_secrets(root))
+            root, base_url, stub.VALID_TOKEN, extra_secrets)
         if db is None:
             check("closure:materializes", False, why)
             # A closure that never even calls the endpoint cannot be
@@ -611,6 +965,19 @@ def main() -> int:
             print_report()
             return 1
         check("closure:materializes", True)
+
+        # The header actually reached the outbound request. Materializing at
+        # all already implies it — the stub 403s anything else — but assert it
+        # against observed traffic anyway: if the gate is ever weakened, this
+        # keeps failing instead of quietly passing on a closure that never
+        # sent the header.
+        seen = stub.observations()
+        wire_ok = any(ua == stub.REQUIRED_USER_AGENT and authorized
+                      for _, ua, authorized in seen)
+        distinct = sorted({ua for _, ua, _ in seen})
+        check("header:reaches-outbound-request", wire_ok,
+              f"no authorized request arrived carrying {stub.REQUIRED_USER_AGENT!r}; "
+              f"User-Agents observed: {distinct}")
 
         tables = tables_in(db)
         monitors_table, monitors_detail = resolve_table(

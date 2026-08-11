@@ -1,0 +1,265 @@
+{
+  "id": "2026-08-11-api-source-custom-client-headers",
+  "date": "2026-08-11",
+  "label": "nxd-generate-data-product: custom HTTP client headers on the dlt REST path (NEX-873)",
+  "notes": "Adds the header_<name> profile-attribute convention and the client['headers'] assembly to reference/api-source.md, plus a User-Agent-gated stub and four deterministic header facts. Both arms face the same header-gated fixture and both sit on top of #177, so the recipe is the only variable between them. BOTH ARMS RAN THE CLAUDE BACKEND (sonnet agent, opus judge). That matters more than it looked when these were recorded: the SAME scenario, same commit, scores 16/16 PASS on the CODEX backend the automatic PR gate uses (gpt-5.6-luna / gpt-5.6-terra, run 31538883570, 22 tool calls / 18240 output tokens). So the numbers below measure the recipe's effect on a sonnet agent, not a ceiling on the skill, and the ingestion:rest-api-resources-used failure discussed below is backend-specific rather than universal. FACT-LEVEL before -> after (claude): header:declared-in-profile FAIL -> PASS; header:non-secret-marked-public FAIL -> PASS; ingestion:no-hardcoded-url-or-path FAIL -> PASS; closure:materializes FAIL (HTTP 403) -> PASS; every landed:* unverifiable -> PASS. The before arm hardcoded the User-Agent into transform/main.py and still 403ed under re-materialization, so its 9/16 counts checks the runner could not evaluate, not ones it evaluated and passed; the after arm materializes and every landed-data trap is confirmed against real rows. WHAT THIS DID NOT FIX ON THE CLAUDE BACKEND: ingestion:rest-api-resources-used FAILS on both claude arms -- the agent hand-rolls requests instead of dlt's REST connector. The after arm shows the recipe partly landing anyway: it wrote header_user_agent into the profile, marked it public, and read it back from the flat secrets map -- then passed it to a requests loop. The convention was learned; the architecture was not held. That motivated tightening uses_rest_api_resources from presence-only to a hybrid-rejecting gate (a closure importing rest_api_resources while requests fetches the rows beside it no longer passes), deliberately NOT done mid-benchmark because moving the checker between arms would invalidate this comparison. The codex run above passes that tightened gate, so it is satisfiable, not merely stricter. Carrying tests: evals/tests/test_api_source_header_contract.py, evals/tests/test_api_source_connector_gate.py.",
+  "plugin_version": "0.37.0",
+  "report_tags": {
+    "before-v0.36.7": "before-v0.36.7",
+    "after-v0.37.0": "after-v0.37.0"
+  },
+  "reports": {
+    "before-v0.36.7": {
+      "elapsed_s": 1201.6,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "authenticated-api-source-build": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "authenticated-api-source-build",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 129,
+            "duration_ms": 1127201,
+            "total_cost_usd": 9.32206,
+            "input_tokens": 248,
+            "output_tokens": 97745,
+            "is_error": false,
+            "tool_calls": 126,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL header:declared-in-profile: no header_user_agent attribute in the api-source service; the API requires User-Agent and it must come from the profile, not from a literal in the transform; FAIL header:non-secret-marked-public: header_user_agent carries no public: flag; FAIL header:built-from-secrets: transform hardcodes 'nexty-test-client/1.0' instead of reading it from the flat secrets map (secrets['header_user_agent']); FAIL ingestion:rest-api-resources-used: no dlt.sources.rest_api import / rest_api_resources(...) call found; FAIL ingestion:no-hardcoded-url-or-path: transform hardcodes an endpoint path instead of reading secrets['endpoint_<model>']; FAIL closure:materializes: transform failed: RuntimeError: checks: GET /v1/checks?page=1 failed with HTTP 403: {\"error\": \"forbidden\", \"detail\": \"client is not permitted to access this API\"}"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "payload-inspected-before-authoring",
+                "pass": true,
+                "why": "The trace shows live curl fetches of both /v1/checks (all 4 pages) and /v1/monitors (both pages) with payloads read, well before the first write of models.py or transform/main.py."
+              },
+              {
+                "id": "credential-never-narrated-or-hardcoded",
+                "pass": true,
+                "why": "The runner's secret:not-a-literal-in-source fact is not among the reported failures and the agent's own grep confirms the token exists only in infra-profile.yaml and the fixture BRIEF.md, and the final answer explicitly avoids restating it."
+              },
+              {
+                "id": "structured-auth-attributes",
+                "pass": true,
+                "why": "The authoritative secret:structured-auth-in-profile fact is not in the failure list, so the api-source service carries flat auth_type/auth_token attributes with the correct public flags."
+              },
+              {
+                "id": "sensitivity-artifacts-present",
+                "pass": true,
+                "why": "The authoritative secret:sensitivity-artifacts-present fact is not in the failure list, and the trace shows .gitignore (naming infra-profile.yaml only) and SENSITIVE written alongside the credential."
+              },
+              {
+                "id": "rest-connector-not-hand-rolled",
+                "pass": false,
+                "why": "The runner reports FAIL ingestion:rest-api-resources-used (no dlt.sources.rest_api import or rest_api_resources call) and FAIL ingestion:no-hardcoded-url-or-path, so the transform hand-rolls fetching with hardcoded paths instead of using dlt's REST connector."
+              },
+              {
+                "id": "custom-header-configured-not-hand-rolled",
+                "pass": false,
+                "why": "The runner reports FAIL header:declared-in-profile, FAIL header:non-secret-marked-public and FAIL header:built-from-secrets — the User-Agent is hardcoded in transform/main.py rather than supplied via a header_user_agent profile attribute through dlt's client headers."
+              },
+              {
+                "id": "auth-dispatch-builds-structured-auth-dict",
+                "pass": true,
+                "why": "The authoritative secret:auth-dispatched-on-auth-type fact is not among the reported failures, indicating the transform reads auth_type/auth_token from the flat secrets map and dispatches on the scheme."
+              },
+              {
+                "id": "data-selector-or-envelope-handled",
+                "pass": true,
+                "why": "The agent's own DESCRIBE output shows the checks and monitors tables carrying only row fields (check_id, monitor_id, checked_at, status, latency_ms / id, name, team, target_url) with no page/per_page/total columns, so the envelope's data array is what reaches the resources."
+              },
+              {
+                "id": "pagination-configured",
+                "pass": false,
+                "why": "The landed:pagination-* facts cannot be affirmed because the runner reports FAIL closure:materializes — the transform raised HTTP 403 on GET /v1/checks?page=1, so nothing landed under the authoritative run despite the agent's own claim of 12/37 rows."
+              },
+              {
+                "id": "nested-result-flattened",
+                "pass": false,
+                "why": "The authoritative landed:nested-result-flattened fact could not be established because the closure failed to materialize (403 on the first page fetch), leaving no landed table to verify."
+              },
+              {
+                "id": "tri-state-result-preserved",
+                "pass": false,
+                "why": "The authoritative landed:tri-state-result-preserved fact could not be established because the runner's transform run failed with HTTP 403 and produced no landed rows."
+              },
+              {
+                "id": "orphaned-checks-visible",
+                "pass": false,
+                "why": "The authoritative landed:orphan-monitor-checks-visible fact could not be established because the closure did not materialize under the runner, so the 4 orphaned checks exist only in the agent's ad-hoc manual run."
+              },
+              {
+                "id": "never-polled-monitor-enumerable",
+                "pass": false,
+                "why": "The authoritative landed:never-polled-monitor-enumerable fact could not be established because the runner's transform run raised 403 and landed no monitors table containing legacy-webhook-relay."
+              },
+              {
+                "id": "no-credential-fabricated-beyond-the-brief",
+                "pass": true,
+                "why": "The closure uses only the brief's bearer token with auth_type: bearer, inventing no API key or OAuth flow and narrating no uncertainty about the auth mechanism."
+              },
+              {
+                "id": "connectivity-self-check-run-not-claimed",
+                "pass": true,
+                "why": "The agent ran live connectivity against ENDPOINT_URL (curl probes plus a real end-to-end transform execution fetching 37 checks and 12 monitors) and never claimed the check was skipped for want of credentials."
+              },
+              {
+                "id": "no-secret-in-probe-traceback",
+                "pass": true,
+                "why": "The only failure output surfaced is the API's 403 body ('client is not permitted to access this API'), and no traceback or error message anywhere in the trace contains the literal token value."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent inspected both endpoints first and handled the credential safely, but the runner's deterministic facts show ingestion was hand-rolled instead of using dlt's rest_api_resources, the required User-Agent was hardcoded rather than declared in the profile, and the closure fails to materialize (403), so none of the landed-data checks can be confirmed. deterministic check failed: FAIL header:declared-in-profile: no header_user_agent attribute in the api-source service; the API requires User-Agent and it must come from the profile, not from a literal in the transform; FAIL header:non-secret-marked-public: header_user_agent carries no public: flag; FAIL header:built-from-secrets: transform hardcodes 'nexty-test-client/1.0' instead of reading it from the flat secrets map (secrets['header_user_agent']); FAIL ingestion:rest-api-resources-used: no dlt.sources.rest_api import / rest_api_resources(...) call found; FAIL ingestion:no-hardcoded-url-or-path: transform hardcodes an endpoint path instead of reading secrets['endpoint_<model>']; FAIL closure:materializes: transform failed: RuntimeError: checks: GET /v1/checks?page=1 failed with HTTP 403: {\"error\": \"forbidden\", \"detail\": \"client is not permitted to access this API\"}"
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL header:declared-in-profile: no header_user_agent attribute in the api-source service; the API requires User-Agent and it must come from the profile, not from a literal in the transform\", \"FAIL header:non-secret-marked-public: header_user_agent carries no public: flag\", \"FAIL header:built-from-secrets: transform hardcodes 'nexty-test-client/1.0' instead of reading it from the flat secrets map (secrets['header_user_agent'])\", \"FAIL ingestion:rest-api-resources-used: no dlt.sources.rest_api import / rest_api_resources(...) call found\", \"FAIL ingestion:no-hardcoded-url-or-path: transform hardcodes an endpoint path instead of reading secrets['endpoint_<model>']\", \"FAIL closure:materializes: transform failed: RuntimeError: checks: GET /v1/checks?page=1 failed with HTTP 403: {\\\"error\\\": \\\"forbidden\\\", \\\"detail\\\": \\\"client is not permitted to access this API\\\"}\"], \"passed\": false}"
+          ]
+        }
+      ]
+    },
+    "after-v0.37.0": {
+      "elapsed_s": 974.2,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "authenticated-api-source-build": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "authenticated-api-source-build",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 88,
+            "duration_ms": 911297,
+            "total_cost_usd": 6.7018876,
+            "input_tokens": 164,
+            "output_tokens": 82069,
+            "is_error": false,
+            "tool_calls": 85,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "sonnet",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL header:built-from-secrets: transform reads header_* secrets but never assigns them to the RESTAPIConfig client's `headers` key; FAIL ingestion:rest-api-resources-used: no dlt.sources.rest_api import / rest_api_resources(...) call found"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "payload-inspected-before-authoring",
+                "pass": true,
+                "why": "The trace shows curl fetches of both /v1/monitors and /v1/checks (including subsequent pages) with payloads read well before the first write of dp-spec.md, models.py or transform/main.py."
+              },
+              {
+                "id": "credential-never-narrated-or-hardcoded",
+                "pass": true,
+                "why": "The authoritative secret:not-a-literal-in-source fact is not among the reported failures, and the agent's own prose (including the final handoff) never re-types the token — it appears only inside probe commands and the fixture echo."
+              },
+              {
+                "id": "structured-auth-attributes",
+                "pass": true,
+                "why": "The deterministic fact secret:structured-auth-in-profile is not among the reported failures, and the written infra-profile.yaml carries an api-source service with flat key/value/public attributes."
+              },
+              {
+                "id": "sensitivity-artifacts-present",
+                "pass": true,
+                "why": "The deterministic fact secret:sensitivity-artifacts-present is not among the reported failures, and the trace shows .gitignore (naming infra-profile.yaml only) and SENSITIVE written alongside the credential."
+              },
+              {
+                "id": "rest-connector-not-hand-rolled",
+                "pass": false,
+                "why": "The authoritative fact ingestion:rest-api-resources-used FAILS — no dlt.sources.rest_api import or rest_api_resources call exists, and transform/main.py instead imports requests and hand-rolls the fetch loop."
+              },
+              {
+                "id": "custom-header-configured-not-hand-rolled",
+                "pass": false,
+                "why": "The authoritative fact header:built-from-secrets FAILS — the transform reads header_* secrets but never assigns them to a RESTAPIConfig client 'headers' key, because there is no RESTAPIConfig at all."
+              },
+              {
+                "id": "auth-dispatch-builds-structured-auth-dict",
+                "pass": true,
+                "why": "The authoritative fact secret:auth-dispatched-on-auth-type is not among the reported failures, consistent with the transform's base64 import indicating a scheme dispatch on secrets['auth_type']."
+              },
+              {
+                "id": "data-selector-or-envelope-handled",
+                "pass": true,
+                "why": "The live run of the transform's logic reported exactly 'monitors: 12 checks: 37', showing rows were taken from the envelope's data array rather than landing page/per_page/total as columns or junk rows."
+              },
+              {
+                "id": "pagination-configured",
+                "pass": true,
+                "why": "The landed:pagination-monitors-complete / landed:pagination-checks-complete facts are not among the reported failures, matching the observed full 12-monitor / 37-check pull across all pages."
+              },
+              {
+                "id": "nested-result-flattened",
+                "pass": true,
+                "why": "The landed:nested-result-flattened fact is not among the reported failures, and the agent explicitly identified checks[].result.status as nested and modeled status as a scalar column."
+              },
+              {
+                "id": "tri-state-result-preserved",
+                "pass": true,
+                "why": "The landed:tri-state-result-preserved fact is not among the reported failures, and the agent called out status as 3-valued (up/down/unknown) and kept it as a status dimension rather than a boolean."
+              },
+              {
+                "id": "orphaned-checks-visible",
+                "pass": true,
+                "why": "The landed:orphan-monitor-checks-visible fact is not among the reported failures, and the live run printed 'orphaned: 4' with a monitor_known=false flag preserving those rows."
+              },
+              {
+                "id": "never-polled-monitor-enumerable",
+                "pass": true,
+                "why": "The landed:never-polled-monitor-enumerable fact is not among the reported failures, and monitor_coverage produced 12 rows including legacy-webhook-relay with no checks."
+              },
+              {
+                "id": "no-credential-fabricated-beyond-the-brief",
+                "pass": true,
+                "why": "The closure uses only the brief's bearer token via auth_type: bearer, inventing no API-key or OAuth mechanism and narrating no uncertainty about the auth scheme."
+              },
+              {
+                "id": "connectivity-self-check-run-not-claimed",
+                "pass": true,
+                "why": "The agent actually executed live authenticated fetches against ENDPOINT_URL (pulling 12 monitors/37 checks) and attributed the self_check.py stoppage to the data/ directory gate, never to unavailable credentials."
+              },
+              {
+                "id": "no-secret-in-probe-traceback",
+                "pass": true,
+                "why": "The only tracebacks in the trace are ModuleNotFoundError/FileNotFoundError stacks containing no credential material, so the literal token never appears in a failure trace."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The closure got the payload semantics, credential placement and landed-data correctness right, but failed both critical connector checks: ingestion hand-rolls requests instead of using dlt's rest_api_resources/RESTAPIConfig, and the required User-Agent header is never built into a RESTAPIConfig client from the profile secrets. deterministic check failed: FAIL header:built-from-secrets: transform reads header_* secrets but never assigns them to the RESTAPIConfig client's `headers` key; FAIL ingestion:rest-api-resources-used: no dlt.sources.rest_api import / rest_api_resources(...) call found"
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL header:built-from-secrets: transform reads header_* secrets but never assigns them to the RESTAPIConfig client's `headers` key\", \"FAIL ingestion:rest-api-resources-used: no dlt.sources.rest_api import / rest_api_resources(...) call found\"], \"passed\": false}"
+          ]
+        }
+      ]
+    }
+  }
+}

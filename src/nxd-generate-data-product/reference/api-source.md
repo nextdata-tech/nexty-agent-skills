@@ -5,6 +5,7 @@
 - Scope
 - The `RESTAPIConfig` / `rest_api_resources` shape
 - Credential handling — read this before shipping
+- Custom request headers
 - Naming
 - Why the endpoints live in the profile
 - `transform/main.py` diff from the CSV template
@@ -35,6 +36,7 @@ config: RESTAPIConfig = {
     "client": {
         "base_url": <base_url>,
         "auth": <bearer | http_basic | api_key | oauth2_client_credentials>,
+        "headers": {...},  # non-secret request headers — see Custom request headers
         # paginator: omit and let dlt auto-detect unless the user specifies one
     },
     "resources": [
@@ -128,6 +130,14 @@ already been resolved.
   the worked example below and the `auth_type` dispatch in the transform
   diff, which assembles these flat fields into the structured dict dlt
   expects.
+- **Non-secret request headers use the `header_` prefix** — one attribute per
+  header, `header_<name>` with `-` written as `_` (`header_user_agent` →
+  `User-Agent`), `public: true`. This is the *only* supported way to add a
+  required client header; see **Custom request headers** below for why the
+  prefix exists and how the transform reassembles it. A **secret-valued**
+  header (an API key sent as `X-API-Key`) does NOT go here — it belongs to
+  `auth_type: api_key`, which already sends a header and keeps the value
+  `public: false`.
 - **`value` is always a plain string** on the transform side — dlt/Python
   types (ints, bools) are not preserved; cast in the transform if needed.
 - **Mark each attribute by sensitivity.** The `public:` flag controls **only**
@@ -136,7 +146,7 @@ already been resolved.
   `auth_token`, `auth_username`, `auth_password`, `auth_api_key`,
   `auth_client_id`, `auth_client_secret` — are `public: false` (redacted
   fail-closed on export). Non-secret topology/config — `base_url`, `auth_type`,
-  `auth_key_name`, `auth_key_location`, `region` — is `public: true` so it
+  `auth_key_name`, `auth_key_location`, `region`, and every `header_*` — is `public: true` so it
   survives an export and the recipient only refills the credentials. **Never
   mark a credential `public: true`.** If the user explicitly designates an
   attribute's sensitivity, honor their choice over this default.
@@ -166,13 +176,97 @@ already been resolved.
   `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
   `SecretsHandler` construction — not inferred from a single example.
 
+## Custom request headers
+
+Some APIs reject a request that carries valid credentials, because of a header
+that has nothing to do with authentication. The common case is `User-Agent`:
+**dlt sends `User-Agent: dlt/1.28.2` by default**, and an upstream that
+filters unrecognized clients answers `403 Forbidden` — with an error body about
+permissions, not about the header. The same credentials succeed under `curl`,
+which sends `curl/x.y.z`. That contrast reads as "Python traffic is blocked" or
+"the token is wrong", and the tempting fix — abandon dlt, hand-roll `urllib`
+with a browser-ish `User-Agent` — throws away the connector for a one-line
+config change and fails the acceptance check. **Diagnose a 403 by comparing the
+headers the two clients send before touching the credential.**
+
+`RESTAPIConfig`'s `client` accepts a `headers` mapping (verified by
+introspection against the pinned `dlt==1.28.2`: `ClientConfig.headers` is typed
+`Optional[Dict[str, str]]`). It composes with `auth` rather than replacing it —
+the `Authorization` header the `auth` dispatch builds is still sent on every
+request — and a per-resource `endpoint.headers` **merges with** these rather
+than replacing them, so a resource adding its own header keeps the client's.
+
+### The `header_` prefix
+
+`secrets` is one flat string→string map, so a header mapping cannot be stored
+as a nested object under one attribute. Encode each header as its own flat
+attribute instead:
+
+| Header | Attribute key | `public:` |
+|---|---|---|
+| `User-Agent` | `header_user_agent` | `true` |
+| `Accept` | `header_accept` | `true` |
+| `X-Trace-Id` | `header_x_trace_id` | `true` |
+
+Lowercase the header name and write `-` as `_`. The transform reverses it by
+title-casing each `_`-separated part and rejoining with `-`, so
+`header_x_trace_id` → `X-Trace-Id`. Reconstruction can differ from the upstream
+docs' capitalization (`header_x_api_key` → `X-Api-Key`); that is fine, because
+HTTP header field names are case-insensitive per RFC 7230 §3.2. Do not try to
+preserve exact casing by inventing a second attribute to hold it.
+
+**`header_` is for non-secret values only.** Every `header_*` attribute is
+`public: true` and therefore survives `export_data_product` verbatim. A
+credential sent as a header belongs to `auth_type: api_key`
+(`auth_api_key` + `auth_key_name`, `public: false`), which puts the same header
+on the wire with the value redacted on export. Putting a token in
+`header_authorization` marks a live credential exportable and is the one
+mistake this convention must not invite.
+
+### Transform assembly
+
+```python
+def _headers_from(secrets: dict) -> dict:
+    """Flat `header_<name>` secrets -> the dict dlt's client.headers wants.
+
+    `header_user_agent` -> `User-Agent`. Header names are case-insensitive
+    (RFC 7230 §3.2), so title-casing each part is safe.
+    """
+    headers = {}
+    for key, value in secrets.items():
+        if not key.startswith("header_") or value in (None, ""):
+            continue
+        name = "-".join(part.title() for part in key[len("header_"):].split("_"))
+        headers[name] = str(value)
+    return headers
+```
+
+Then, in the `client_config` build (after the `auth_type` dispatch, so a
+malformed profile fails on the credential first):
+
+```python
+headers = _headers_from(secrets)
+if headers:
+    client_config["headers"] = headers
+```
+
+Assign it **only when non-empty** — `"headers": {}` is accepted but says the
+closure configures headers when it does not, and an empty dict reads in review
+as "the author checked and there are none" rather than "no `header_*` attribute
+was written". Build it from `secrets` like everything else: a `User-Agent`
+hard-coded in `transform/main.py` is the same defect as a hard-coded base URL,
+and it is not fixed by the value being non-secret — the profile is where a
+deployment-varying value belongs.
+
 ## Naming
 
 - Infra-profile service: `api-source`, driver `nxd:generic-secrets:1.0.0`.
 - Transform secrets keys: the attribute keys themselves, flat on `secrets` —
-  `secrets["base_url"]` (always present) and, only when the API requires
+  `secrets["base_url"]` (always present); only when the API requires
   authentication, `secrets["auth_type"]` plus that type's own fields (see
-  Credential handling). There is no `secrets["api_source"]` level.
+  Credential handling); and only when the API requires a non-secret header,
+  one `secrets["header_<name>"]` per header (see Custom request headers).
+  There is no `secrets["api_source"]` level.
 - Endpoint paths: `secrets["endpoint_<model>"]`, one attribute per API-backed
   model (non-secret topology, `public: true`). **No companion file.**
 
@@ -270,6 +364,13 @@ elif auth_type is not None:
         f"unsupported auth_type {auth_type!r} in secrets — "
         f"add a branch above, or fix the infra-profile attribute"
     )
+
+# Non-secret request headers, rebuilt from the flat `header_*` attributes.
+# See "Custom request headers" — this is what keeps a `User-Agent`-gated API on
+# the dlt path instead of a hand-rolled urllib loop.
+headers = _headers_from(secrets)
+if headers:
+    client_config["headers"] = headers
 
 config: RESTAPIConfig = {
     "client": client_config,
@@ -492,6 +593,15 @@ add it explicitly rather than assuming it's already covered.
           public: false
   ```
 
+  When the API also requires a non-secret header, add one `header_*` attribute
+  per header alongside these (`public: true` — see **Custom request headers**):
+
+  ```yaml
+        - key: header_user_agent
+          value: acme-analytics/1.0
+          public: true
+  ```
+
   For the other three types, add that type's fields from the table in
   Credential handling instead of `auth_token` (e.g. `auth_username` +
   `auth_password` for `http_basic`) — one attribute per field, each marked
@@ -516,6 +626,17 @@ in-session, report the connectivity self-check as **not run** — do not
 claim it passed. Structural checks (naming invariant, no
 `.semantic_tools()`, import correctness) still run regardless.
 
+**The probe is a standalone script beside the closure — never inside
+`transform/`.** It runs once, at authoring time, from the author's shell. A
+probe living in `transform/main.py` (or any `transform/*.py`) instead runs on
+every materialization the supervisor performs, doubling the request count
+against an upstream you were careful to rate-limit, and it puts an HTTP client
+on the ingestion path where the only thing that should reach the wire is the
+dlt connector. Keep `transform/` free of `requests` / `urllib.request` /
+`httpx` entirely: if something under `transform/` is fetching, that is
+ingestion by hand, whatever it is named. (`urllib.parse` is fine — it is string
+manipulation and touches no socket.)
+
 **Never let a probe's traceback reach the transcript unredacted.** This is a
 sharper risk than the database case: `requests` puts the full URL in
 `HTTPError`/`ConnectionError` messages, so an API keyed by query string
@@ -531,6 +652,12 @@ pattern-matching:
 # and schema as well.
 _PUBLIC_SUFFIXES = ("host", "port", "database", "schema",
                     "base_url", "auth_type", "region")
+# `header_*` is deliberately NOT exempt. Those values are non-secret by
+# convention, but the exemption list is what stands between a mis-filed
+# credential and the transcript — and `header_authorization` holding a token is
+# exactly the mis-filing the convention warns about. A redacted User-Agent in an
+# error message costs nothing; the reverse mistake cannot be taken back.
+#
 # Endpoint keys are `endpoint_<model>` (or `<label>_endpoint_<model>`), so the
 # suffix rule below cannot reach them — the model name is the tail, and it is
 # author-chosen and therefore unbounded. Match the segment instead. Leaving them
