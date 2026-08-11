@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "nexty-agent-skills",
   "displayName": "Nexty AI Pro",
-  "version": "0.36.8",
+  "version": "0.37.0",
   "description": "Nextdata OS skills: set up the nxd CLI, analyze your data mesh, and build/query Python data products from your editor.",
   "author": {
     "name": "Nextdata"

@@ -39,6 +39,20 @@ default page size. Please look at what these actually return before you
 design anything — the shape is not what the endpoint names alone would
 suggest.
 
+One more thing about Beacon, because it cost me an afternoon: it refuses any
+client it doesn't recognize, and the refusal looks like a permissions problem
+rather than what it is. Every request has to send
+
+```
+User-Agent: nexty-test-client/1.0
+```
+
+Without it you get a 403 and an error body about not being permitted, even
+with a perfectly good token — I went round in circles re-issuing credentials
+before I worked that out. Whatever you build has to send that header on the
+real requests, and I'd rather it came from configuration than be typed into
+the code.
+
 ## What I want to be able to ask
 
 1. **Uptime percentage per monitor, last N checks.** "What's the uptime for

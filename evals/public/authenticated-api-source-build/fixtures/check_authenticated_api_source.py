@@ -39,6 +39,11 @@ PASSES: list[str] = []
 
 MATERIALIZE_TIMEOUT_S = 300
 VALID_TOKEN = "bcn_live_9f3ac2e7d84b41f0a6c5d2e19b7f0033"
+# Mirrors stub_beacon_api.REQUIRED_USER_AGENT. Duplicated the same way
+# VALID_TOKEN is, so the static checks can run before the stub is loaded;
+# check_stub_constants_match() below pins the two together so a drift in one
+# fails loudly instead of silently disabling a check.
+REQUIRED_USER_AGENT = "nexty-test-client/1.0"
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -99,6 +104,13 @@ def profile_attributes(root: Path) -> tuple[dict[str, str], dict[str, str]]:
     `secrets` map, so a checker keyed on service boundaries would be measuring
     a structure the transform never sees. Returns empty maps for a missing file
     -- callers check for the file itself.
+
+    Shared by the auth, endpoint and header checks so a profile that fails one
+    is still fully parsed for the others. Folding this back into any single
+    caller re-creates the bug it was extracted to kill: an early bail on a
+    missing auth_token also empties the header check's input, which then
+    reports a present-and-correct header as absent -- one defect surfacing as
+    two, with the second aimed at the wrong file.
     """
     profile = root / "infra-profile.yaml"
     if not profile.is_file():
@@ -151,6 +163,82 @@ def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
         return False, ("auth_token is marked public: true — the credential would "
                        "survive export; a secret attribute must be public: false"), fields
     return True, "", fields
+
+
+def header_declared_in_profile(root: Path) -> tuple[bool, str]:
+    """The required User-Agent must live in the profile as a `header_*`
+    attribute, not in the transform source.
+
+    Per api-source.md's "Custom request headers": one flat attribute per
+    header, `header_<name>` with `-` written as `_`. The header name is
+    case-insensitive (RFC 7230 §3.2) and so is its encoding here, so accept any
+    case for the KEY — but the VALUE must match exactly, since that string is
+    what the upstream matches on.
+    """
+    profile = root / "infra-profile.yaml"
+    if not profile.is_file():
+        return False, "infra-profile.yaml missing"
+    fields, _ = profile_attributes(root)
+    matches = [k for k in fields if k.lower() == "header_user_agent"]
+    if not matches:
+        declared = sorted(k for k in fields if k.lower().startswith("header_"))
+        if declared:
+            return False, (f"no header_user_agent attribute; found {declared} — the "
+                           f"required header is User-Agent")
+        return False, ("no header_user_agent attribute in the api-source service; the "
+                       "API requires User-Agent and it must come from the profile, "
+                       "not from a literal in the transform")
+    got = fields[matches[0]]
+    if got != REQUIRED_USER_AGENT:
+        return False, (f"header_user_agent is {got!r}, but the API requires "
+                       f"{REQUIRED_USER_AGENT!r}")
+    return True, ""
+
+
+def header_marked_public(root: Path) -> tuple[bool, str]:
+    """A non-secret header is `public: true` so it survives an export.
+
+    Separate from `header_declared_in_profile` on purpose: a header marked
+    `public: false` still WORKS (the transform reads every attribute
+    regardless), it just gets redacted out of an export and the recipient has
+    to rediscover it. That is a defect in the export contract, not in
+    ingestion, and merging the two would report it as a broken header.
+    """
+    _, public_flags = profile_attributes(root)
+    for key, flag in public_flags.items():
+        if key.lower() != "header_user_agent":
+            continue
+        if flag == "true":
+            return True, ""
+        return False, (f"header_user_agent is public: {flag} — a non-secret header "
+                       f"should be public: true so it survives export_data_product")
+    return False, "header_user_agent carries no public: flag"
+
+
+def headers_built_from_secrets(transform_src: str) -> tuple[bool, str]:
+    """The transform must assemble dlt's `client["headers"]` from the flat
+    `header_*` secrets, not hardcode the User-Agent.
+
+    Two independent failure modes, distinguished in the detail because the
+    fixes differ: never configuring headers at all (the closure 403s), versus
+    configuring them from a literal (the closure works today and breaks the
+    moment the profile changes, exactly like a hardcoded base_url).
+    """
+    if REQUIRED_USER_AGENT in transform_src:
+        return False, (f"transform hardcodes {REQUIRED_USER_AGENT!r} instead of reading "
+                       f"it from the flat secrets map (secrets['header_user_agent'])")
+    reads_header_secrets = bool(
+        re.search(r"""startswith\(\s*['"]header_""", transform_src)
+        or re.search(r"""secrets\s*(?:\.get\s*\(\s*|\[\s*)['"]header_\w+['"]""", transform_src)
+    )
+    if not reads_header_secrets:
+        return False, ("transform never reads a header_* key from secrets — the API "
+                       "requires a User-Agent and rejects the request without it")
+    sets_headers = bool(re.search(r"""['"]headers['"]\s*\]?\s*[=:]""", transform_src))
+    if not sets_headers:
+        return False, ("transform reads header_* secrets but never assigns them to the "
+                       "RESTAPIConfig client's `headers` key")
+    return True, ""
 
 
 def sensitivity_artifacts_present(root: Path) -> tuple[bool, str]:
@@ -300,6 +388,12 @@ secrets = {"base_url": sys.argv[2], "auth_type": "bearer", "auth_token": sys.arg
 # the checker separately forbids a hardcoded endpoint path would leave the
 # closure no legal source for the path at all: a correct transform would raise
 # KeyError and be reported as a broken closure.
+#
+# `header_user_agent` rides the same channel for the same reason. A closure that
+# hardcodes the User-Agent instead still passes THIS harness (it sends the right
+# header either way); what catches that is the static `header:built-from-secrets`
+# check. A closure that ignores headers entirely fails here, because the stub
+# 403s it before it can authenticate.
 secrets.update(json.loads(sys.argv[4]))
 ingest(duckdb=out, secrets=secrets)
 '''
@@ -324,8 +418,15 @@ def closure_requirements(root: Path) -> list[str]:
 
 
 def materialize_closure(
-    root: Path, base_url: str, token: str, endpoints: dict[str, str]
+    root: Path, base_url: str, token: str, extra_secrets: dict[str, str]
 ) -> tuple[Path | None, str]:
+    """Run the closure's own transform against a live stub.
+
+    `extra_secrets` carries every flat attribute beyond base_url/auth that the
+    supervisor would have merged in -- the `endpoint_<model>` paths and the
+    `header_*` request headers -- because the checker forbids hardcoding either
+    and a correct transform must therefore have some legal source for both.
+    """
     try:
         import duckdb  # noqa: F401, PLC0415
     except ImportError:
@@ -339,7 +440,7 @@ def materialize_closure(
     cmd = ["uv", "run", "--no-project"]
     for spec in closure_requirements(root):
         cmd += ["--with", spec]
-    cmd += ["python", str(harness), str(db), base_url, token, json.dumps(endpoints)]
+    cmd += ["python", str(harness), str(db), base_url, token, json.dumps(extra_secrets)]
     try:
         proc = subprocess.run(
             cmd, cwd=str(root), capture_output=True, text=True,
@@ -568,6 +669,16 @@ def main() -> int:
     ok, detail = sensitivity_artifacts_present(root)
     check("secret:sensitivity-artifacts-present", ok, detail)
 
+    # ---- custom client header (NEX-873) -----------------------------------
+    ok, detail = header_declared_in_profile(root)
+    check("header:declared-in-profile", ok, detail)
+
+    ok, detail = header_marked_public(root)
+    check("header:non-secret-marked-public", ok, detail)
+
+    ok, detail = headers_built_from_secrets(transform_src)
+    check("header:built-from-secrets", ok, detail)
+
     # ---- ingestion mechanism ------------------------------------------------
     ok, detail = auth_is_dispatched_on_auth_type(transform_src)
     check("secret:auth-dispatched-on-auth-type", ok, detail)
@@ -580,27 +691,61 @@ def main() -> int:
 
     # ---- live re-materialization: does it actually work end-to-end? --------
     stub = load_stub(fixtures)
+    # The static checks above compare against this module's own copies of the
+    # token and User-Agent. If the stub's values drift from them, those checks
+    # start grading a string the fixture no longer serves — passing or failing
+    # for reasons unrelated to the closure. Fail loudly here instead.
+    if not check("fixture:constants-match-stub",
+                 (VALID_TOKEN, REQUIRED_USER_AGENT)
+                 == (stub.VALID_TOKEN, stub.REQUIRED_USER_AGENT),
+                 "checker constants drifted from stub_beacon_api.py"):
+        print_report()
+        return 1
     server, port, thread = stub.start_server()
     base_url = f"http://127.0.0.1:{port}"
     try:
         # Confirm the STUB itself behaves as documented before blaming the
-        # closure for anything: unauthenticated must 401, authenticated must
-        # 200. This isolates "the fixture is broken" from "the closure is
-        # wrong" in the failure output.
-        try:
-            urllib.request.urlopen(
-                urllib.request.Request(f"{base_url}/v1/monitors"), timeout=5
-            )
-            fixture_ok = False
-        except urllib.error.HTTPError as exc:
-            fixture_ok = exc.code == 401
-        if not check("fixture:stub-enforces-auth", fixture_ok,
-                      "stub did not 401 an unauthenticated request"):
+        # closure for anything. This isolates "the fixture is broken" from "the
+        # closure is wrong" in the failure output. Two gates, probed
+        # separately because they fail for different reasons:
+        #
+        #   no User-Agent            -> 403 (header gate, checked FIRST)
+        #   right UA, no/wrong token -> 401 (credential gate)
+        #
+        # Probing auth requires sending the required UA, since otherwise the
+        # header gate answers first and the auth gate is never reached.
+        def _probe(headers: dict) -> int | None:
+            """Status of a GET /v1/monitors, or None if it unexpectedly succeeded."""
+            try:
+                urllib.request.urlopen(
+                    urllib.request.Request(f"{base_url}/v1/monitors", headers=headers),
+                    timeout=5,
+                )
+                return None
+            except urllib.error.HTTPError as exc:
+                return exc.code
+
+        # urllib sends its own User-Agent by default, which is precisely a
+        # client the stub does not recognize — so an empty header dict is a
+        # faithful "wrong UA" probe.
+        if not check("fixture:stub-enforces-header", _probe({}) == 403,
+                     "stub did not 403 a request with an unrecognized User-Agent"):
+            print_report()
+            return 1
+        if not check("fixture:stub-enforces-auth",
+                     _probe({"User-Agent": stub.REQUIRED_USER_AGENT}) == 401,
+                     "stub did not 401 an unauthenticated request"):
             print_report()
             return 1
 
+        # Drop the probes' own traffic so the wire assertion below measures
+        # only what the CLOSURE sent.
+        stub.reset_observations()
+
+        extra_secrets = dict(endpoint_secrets(root))
+        extra_secrets["header_user_agent"] = stub.REQUIRED_USER_AGENT
         db, why = materialize_closure(
-            root, base_url, stub.VALID_TOKEN, endpoint_secrets(root))
+            root, base_url, stub.VALID_TOKEN, extra_secrets)
         if db is None:
             check("closure:materializes", False, why)
             # A closure that never even calls the endpoint cannot be
@@ -611,6 +756,19 @@ def main() -> int:
             print_report()
             return 1
         check("closure:materializes", True)
+
+        # The header actually reached the outbound request. Materializing at
+        # all already implies it — the stub 403s anything else — but assert it
+        # against observed traffic anyway: if the gate is ever weakened, this
+        # keeps failing instead of quietly passing on a closure that never
+        # sent the header.
+        seen = stub.observations()
+        wire_ok = any(ua == stub.REQUIRED_USER_AGENT and authorized
+                      for _, ua, authorized in seen)
+        distinct = sorted({ua for _, ua, _ in seen})
+        check("header:reaches-outbound-request", wire_ok,
+              f"no authorized request arrived carrying {stub.REQUIRED_USER_AGENT!r}; "
+              f"User-Agents observed: {distinct}")
 
         tables = tables_in(db)
         monitors_table, monitors_detail = resolve_table(
