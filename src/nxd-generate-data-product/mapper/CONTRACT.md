@@ -21,6 +21,12 @@ grouping, input-adapter shape, and evidence granularity are Layer 2 and are
 deliberately absent here — they live in the landed mapper spec, versioned by
 `mapper_spec_id`.
 
+**Standalone grant boundary.** This Layer-1 contract governs the standalone
+field-mapper harness: `map_inputs` still requires a user-authored `Grant`, and
+`Grant.check` remains the pre-dispatch guard for that harness. It does not mint
+or prove a human authorization for a Desktop supervisor build; that is a
+separate supervisor-owned admission boundary.
+
 ## Contents
 
 - [1. Module layout](#1-module-layout)
