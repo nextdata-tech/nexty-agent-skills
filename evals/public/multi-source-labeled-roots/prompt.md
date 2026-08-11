@@ -32,8 +32,8 @@ Author the complete closure directly in the workspace root. Do not put the
 finished closure under a `data_product/` subdirectory.
 
 Follow the applicable repository guidance for the pinning contract and render
-the required reopen recipe, including the compatible-runtime precondition and
-implementation provenance.
+the required reopen recipe, including the requirement for a supervisor with
+directory-companion support.
 The finished closure must be safe for a compatible supervisor to pin and for
 the transform to run after pinning. Work
 autonomously; no user is available to answer a delivery question.
@@ -48,7 +48,7 @@ The eval grades the landed closure and an authoritative runner-side structural
 check. It models the declared directory-copy shape; it does not invoke a live
 supervisor. The closure must preserve both non-empty labeled roots through the
 declared companion-file channel, omit the empty label, keep the declarations
-relative and non-overlapping, document the compatible runtime capability probe, and make
+relative and non-overlapping, document the directory-companion supervisor requirement, and make
 the transform resolve the pinned roots rather than an authoring checkout. The
 closure must still use the ordinary Python-only desktop shape and
 label-specific CSV path files and connector service entries.

@@ -33,7 +33,7 @@
     },
     {
       "id": "runtime-capability-documentation",
-      "check": "README.md records the concrete companion-directory-probe with published=yes and the known directory-companion implementation provenance."
+      "check": "README.md states that this closure requires a desktop supervisor with directory-companion support."
     }
   ]
 }

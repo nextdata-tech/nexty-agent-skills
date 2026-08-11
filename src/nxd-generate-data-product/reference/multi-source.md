@@ -302,26 +302,9 @@ execution root and resolves its relative value against `NXD_TRANSFORM_ROOT`
 authoring checkout's absolute path. `NXD_TRANSFORM_ROOT` is mandatory: read it
 with `os.environ["NXD_TRANSFORM_ROOT"]` (or an equivalent fail-closed lookup),
 never with `os.environ.get(..., ".")`, `Path.cwd()`, or another fallback that
-can make an unpinned checkout appear valid. Directory declarations require the
-directory-companion capability; the compatible-runtime probe below is
-authoritative. The first implementation was built from NXD commit
-`da0b75bfc0eed5ae74b66fde35570bc40ed859b3` with the paired `nxd_version`
-`0.41.162`; those values are provenance, not a version comparison rule.
-Before handing the generated closure to the supervisor, run a disposable
-capability probe using the real command:
-
-```bash
-nxd-desktop-supervisor create \
-  --definition <closure-with-a-non-empty-companion-directory> \
-  --workflow companion-directory-probe \
-  --data-dir <temporary-probe-data-dir>
-nxd-desktop-supervisor stop --data-dir <temporary-probe-data-dir>
-```
-
-Require `published=yes`. If the create fails on the declared directory,
-upgrade/reprovision the desktop runtime; never silently fall back to an
-undeclared root. The generated closure README repeats this probe as the
-operational compatibility precondition.
+can make an unpinned checkout appear valid. This closure requires a desktop
+supervisor with directory-companion support; never silently fall back to an
+undeclared root.
 
 ## What does NOT change
 

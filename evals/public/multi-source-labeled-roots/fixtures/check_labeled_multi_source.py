@@ -806,10 +806,8 @@ def main() -> None:
 
     readme = (root / "README.md").read_text(encoding="utf-8")
     check("runtime-capability-documented", all(marker in readme for marker in (
-        "companion-directory-probe",
-        "published=yes",
-        "0.41.162",
-        "da0b75bfc0eed5ae74b66fde35570bc40ed859b3",
+        "directory-companion",
+        "supervisor",
     )))
 
     profile = (root / "infra-profile.yaml").read_text(encoding="utf-8")

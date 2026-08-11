@@ -69,7 +69,7 @@ The author emits **Python and prerequisite config only**:
     └── data/              # the connector export: data/<base_model>/*.csv
         └── <base_model>/… # base models only — derived models have no data dir
 ```
-_(CSV layout, the proven default; other types swap the companion artifact per the Overview connector-types table. For 2+ labeled CSV sources, `reference/multi-source.md` also requires a root-level `companion-files` manifest for each non-empty labeled export root and the documented directory-companion capability probe. "No `data/` **export**" there is about the connector, not the closure: a `db-source`/`api-source` closure brings no source export, but may still carry `data/` for reference data it authored — pinned like any other, and landed via its own `@dlt.resource`, not the reader loop. See `reference/api-source.md` § "Landed reference data in an API closure".)_
+_(CSV layout, the proven default; other types swap the companion artifact per the Overview connector-types table. For 2+ labeled CSV sources, `reference/multi-source.md` also requires a root-level `companion-files` manifest for each non-empty labeled export root and a desktop supervisor with directory-companion support. "No `data/` **export**" there is about the connector, not the closure: a `db-source`/`api-source` closure brings no source export, but may still carry `data/` for reference data it authored — pinned like any other, and landed via its own `@dlt.resource`, not the reader loop. See `reference/api-source.md` § "Landed reference data in an API closure".)_
 
 **The author NEVER writes `deployment-spec.yaml`, `manifest.yaml`, or
 `models.yaml`.** The supervisor compiles those three from `spec.py` +

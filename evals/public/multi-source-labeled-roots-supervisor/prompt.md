@@ -20,8 +20,8 @@ Build the complete Python-only NXD desktop closure at the workspace root. Read
 `BRIEF.md`, `inferred_model.json`, and all three exports before authoring. Keep
 the two non-empty roots byte-for-byte and omit the empty archive source. Follow
 the applicable repository guidance for the pinning contract and render the
-required reopen recipe with its compatibility precondition and implementation
-provenance.
+required reopen recipe with the requirement for a supervisor with
+directory-companion support.
 
 Do not hand-write deployment-spec.yaml, manifest.yaml, or models.yaml. After
 authoring, run the compatible runtime's actual pin path:
