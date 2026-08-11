@@ -311,12 +311,136 @@ def auth_is_dispatched_on_auth_type(transform_src: str) -> tuple[bool, str]:
     return True, ""
 
 
-def uses_rest_api_resources(transform_src: str) -> tuple[bool, str]:
-    """The transform must go through dlt's REST connector, not a hand-rolled
-    requests/urllib loop fed to dlt as a plain generator."""
-    has_rest_import = bool(re.search(r"from\s+dlt\.sources\.rest_api\s+import", transform_src))
-    has_rest_call = "rest_api_resources(" in transform_src or "rest_api_source(" in transform_src
-    if not (has_rest_import and has_rest_call):
+# Modules whose presence in a transform means the closure is fetching HTTP
+# itself. `urllib.request` and `http.client` are stdlib, the rest are the usual
+# third-party clients; `dlt.sources.helpers.requests` is dlt's OWN requests
+# wrapper, which is still a hand-rolled loop -- dlt-flavored, but not the REST
+# connector, and it lands rows through a plain generator exactly the same way.
+_HTTP_CLIENT_MODULES = (
+    "requests", "httpx", "aiohttp", "urllib3", "httplib2",
+    "urllib.request", "http.client",
+)
+
+
+def _dotted(node: ast.AST) -> str:
+    """`requests.Session` for an Attribute chain, `urlopen` for a bare Name."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    else:
+        return ""
+    return ".".join(reversed(parts))
+
+
+def _http_client_calls(tree: ast.Module) -> list[str]:
+    """Hand-rolled HTTP calls in one module, resolved through import aliases.
+
+    AST rather than substring search on purpose: `api-source.md` discusses
+    `requests` and `urllib` in prose, and a closure that quotes that guidance in
+    a docstring or comment must not be failed for describing the thing it
+    correctly avoided.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if any(a.name == m or a.name.startswith(f"{m}.")
+                       or m.startswith(f"{a.name}.") for m in _HTTP_CLIENT_MODULES):
+                    # `import urllib.request` binds the ROOT name `urllib`.
+                    aliases[(a.asname or a.name.split(".")[0])] = a.name
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            for a in node.names:
+                full = f"{mod}.{a.name}"
+                if any(mod == m or mod.startswith(f"{m}.") or full == m
+                       for m in _HTTP_CLIENT_MODULES):
+                    aliases[a.asname or a.name] = full
+                # dlt's own requests wrapper: still hand-rolled ingestion.
+                elif mod.startswith("dlt.sources.helpers") and a.name == "requests":
+                    aliases[a.asname or a.name] = full
+    hits: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _dotted(node.func)
+            if name and name.split(".")[0] in aliases:
+                hits.add(name)
+    return sorted(hits)
+
+
+def _uses_dlt_rest(tree: ast.Module) -> bool:
+    """A `dlt.sources.rest_api` import AND a real call to its entry points."""
+    imported = any(
+        isinstance(n, ast.ImportFrom) and (n.module or "").startswith("dlt.sources.rest_api")
+        for n in ast.walk(tree)
+    )
+    called = any(
+        isinstance(n, ast.Call)
+        and _dotted(n.func).split(".")[-1] in ("rest_api_resources", "rest_api_source")
+        for n in ast.walk(tree)
+    )
+    return imported and called
+
+
+def uses_rest_api_resources(root: Path) -> tuple[bool, str]:
+    """Ingestion goes through dlt's REST connector -- and ONLY through it.
+
+    Two halves, because a closure can fail either independently:
+
+    1. the dlt REST connector is actually used, and
+    2. nothing fetches HTTP beside it.
+
+    The second half is the one that matters in practice. Checking only the
+    first made this fact presence-only: a closure could import
+    `rest_api_resources`, never reach the wire with it, and hand-roll a
+    `requests` loop next to it -- passing a check whose entire purpose is to
+    require the connector architecture. The measured NEX-873 benchmark
+    (`evals/benchmarks/entries/2026-08-11-api-source-custom-client-headers.md`)
+    is what surfaced this: BOTH arms hand-rolled `requests`, and the header
+    gate made hand-rolling *more* attractive, since sending a header is one
+    line there and a config change in dlt.
+
+    Scans every `transform/*.py`, not just `main.py`: with only `main.py`
+    checked, moving the fetch loop into a sibling module defeats the gate
+    without changing the architecture at all.
+
+    No exemption for a connectivity probe. `api-source.md`'s self-check is a
+    standalone script (it exits via `SystemExit`), not part of the transform,
+    so a transform reaching for an HTTP client is doing ingestion by hand.
+    """
+    transform_dir = root / "transform"
+    if not transform_dir.is_dir():
+        return False, "no transform/ directory"
+    sources = sorted(transform_dir.glob("*.py"))
+    if not sources:
+        return False, "no transform/*.py sources"
+
+    uses_connector = False
+    hand_rolled: list[str] = []
+    for path in sources:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError as exc:
+            return False, f"{path.name} does not parse: {exc}"
+        uses_connector = uses_connector or _uses_dlt_rest(tree)
+        hand_rolled += [f"{path.name}:{c}" for c in _http_client_calls(tree)]
+
+    if hand_rolled and uses_connector:
+        return False, (
+            f"HYBRID -- imports dlt's REST connector but also fetches HTTP by hand "
+            f"({', '.join(hand_rolled)}). Ingestion must go THROUGH the connector, "
+            f"not beside it; a RESTAPIConfig that exists but does not carry the "
+            f"requests is not the required architecture"
+        )
+    if hand_rolled:
+        return False, (
+            f"ingestion hand-rolls HTTP ({', '.join(hand_rolled)}) instead of "
+            f"dlt's REST connector -- no dlt.sources.rest_api import / "
+            f"rest_api_resources(...) call found"
+        )
+    if not uses_connector:
         return False, "no dlt.sources.rest_api import / rest_api_resources(...) call found"
     return True, ""
 
@@ -683,7 +807,7 @@ def main() -> int:
     ok, detail = auth_is_dispatched_on_auth_type(transform_src)
     check("secret:auth-dispatched-on-auth-type", ok, detail)
 
-    ok, detail = uses_rest_api_resources(transform_src)
+    ok, detail = uses_rest_api_resources(root)
     check("ingestion:rest-api-resources-used", ok, detail)
 
     ok, detail = no_hardcoded_base_url_or_path(transform_src)
