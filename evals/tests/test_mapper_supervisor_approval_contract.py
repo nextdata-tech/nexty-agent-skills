@@ -88,3 +88,14 @@ def test_client_confirmation_is_the_only_surface_with_exact_subject_reuse_and_fa
         assert diagnostic in field_mapper
     assert "Approval records are session-local" in field_mapper
     assert "do not enforce cumulative call/token/cost budgets across build attempts" in field_mapper
+
+
+def test_generated_mapper_uses_the_budgeted_call_adapter_and_wire_shape() -> None:
+    field_mapper = _normalized(FIELD_MAPPER)
+
+    assert "`make_call` is the only supported provider seam" in field_mapper
+    assert "Do not import `anthropic`" in field_mapper
+    assert "return a raw SDK response" in field_mapper
+    assert '"category": {' in field_mapper
+    assert '"evidence"' in field_mapper
+    assert "content-derived hash" in field_mapper

@@ -210,7 +210,16 @@ at `MapperInput.__init__() got an unexpected keyword argument 'document_id'`
 before any model was contacted.
 
 ```python
-from nxd.experimental.field_mapper import Grant, MapperInput, MapperSpec, map_inputs
+from nxd.experimental.field_mapper import (
+    Grant,
+    MapperInput,
+    MapperSpec,
+    make_call,
+    map_inputs,
+)
+
+spec = MapperSpec.load("contracts/mapper_spec.json")
+grant = Grant.load("contracts/mapper_grant.json")
 
 inputs = [
     MapperInput(
@@ -223,14 +232,40 @@ inputs = [
     for document_id, text in rows
 ]
 
+call = make_call(
+    spec=spec,
+    grant=grant,
+)
+
 result = map_inputs(
     inputs,
-    spec=MapperSpec.load("contracts/mapper_spec.json"),
-    grant=Grant.load("contracts/mapper_grant.json"),
+    spec=spec,
+    grant=grant,
     run_dir=str(run_dir),
     call=call,          # the injected model callable
 )
 ```
+
+`make_call` is the only supported provider seam for generated code. It creates
+the provider client and resolves credentials lazily, after `map_inputs` has
+checked the grant. Do not import `anthropic`, use tool-use output, construct a
+private transport client, or return a raw SDK response. The callable returns a
+parsed object with one nested block per target field:
+
+```json
+{
+  "category": {
+    "value": "Software & Cloud",
+    "evidence": [
+      {"quote": "verbatim source span", "source_field_name": "description"}
+    ]
+  }
+}
+```
+
+`target_row_key` is a content-derived hash, not the source row ID. Keep the
+`MapResult` proposals/evidence together and resolve from that bundle; never
+reconstruct a join from a model response's guessed row key.
 
 **`MapperInput` takes no arbitrary keyword per source column.** There is no
 `MapperInput(document_id=...)`, and there is no `deps` argument to `map_inputs` —
