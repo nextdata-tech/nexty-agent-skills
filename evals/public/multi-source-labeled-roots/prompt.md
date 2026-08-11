@@ -13,7 +13,9 @@ closure fail during pinning.
 
 <!-- The harness keeps this setup text out of the agent-facing task. It records
 the evaluator-owned deliverable details without handing the no-skills arm the
-answer. -->
+answer. The evaluator also checks that transform-only labeled roots do not
+become labeled source-aligned inputs, and that any ordinary source-aligned
+binding uses the runtime's unlabeled CSV service and path file. -->
 The evaluator expects the closure root to contain the labeled path files,
 non-empty `data-<label>/` trees, and the root-level `companion-files` manifest.
 The task below intentionally leaves those artifact names to the applicable
@@ -46,7 +48,7 @@ The eval grades the landed closure and an authoritative runner-side structural
 check. It models the declared directory-copy shape; it does not invoke a live
 supervisor. The closure must preserve both non-empty labeled roots through the
 declared companion-file channel, omit the empty label, keep the declarations
-relative and non-overlapping, document the compatible runtime floor, and make
+relative and non-overlapping, document the compatible runtime capability probe, and make
 the transform resolve the pinned roots rather than an authoring checkout. The
 closure must still use the ordinary Python-only desktop shape and
-label-specific CSV connector paths.
+label-specific CSV path files and connector service entries.

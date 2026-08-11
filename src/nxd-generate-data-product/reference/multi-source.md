@@ -54,9 +54,11 @@ ordinary driver-supplied `csv_source` key. Do not infer a
 `csv_source_<label>` secret from a labeled service name; the labeled roots are
 carried by their path files and root-level `companion-files` declarations.
 
-**desktop source-aligned inputs are the exception:** this is a
-transform-service naming rule for labeled CSVs, not permission to bind
-`.input(...).source(_csv_<label>)`; those inputs use the one unlabeled `_csv`.
+**desktop source-aligned inputs are a separate channel:** this is a
+transform-service naming rule for labeled CSVs, not permission to bind a
+labeled root through `.input(...).source(_csv_<label>)`. The labeled roots do
+not create spec-level inputs; an unrelated ordinary CSV input, when present,
+uses the one unlabeled `_csv`.
 
 ## Colliding keys: prefix in the attribute keys
 
@@ -257,10 +259,10 @@ Same shape: swap `db-source-<label>`/`<label>_<field>`/`sql_database` for
 reader, `api-source-<label>`/`<label>_<attr>`/`rest_api_resources`, or
 `csv-source-<label>`/its relative path file and pinned `data-<label>/` root /
 `read_csv` **inside the transform**. Labeled CSV roots do not arrive as
-per-label `secrets[...]` keys.
-Labeled CSV roots (`data-<label>/<model>/*.csv`) are transform-only; they do
-not create a labeled desktop source-aligned input. Multiple source-aligned
-inputs instead share `_csv` and `csv-source-path`.
+per-label `secrets[...]` keys. Labeled CSV roots
+(`data-<label>/<model>/*.csv`) are transform-only and do not create
+spec-level inputs. If the same closure also has an ordinary single-source CSV
+input, that separate input uses `_csv` and `csv-source-path`.
 
 ## Labeled CSV export roots and `companion-files`
 
@@ -279,25 +281,32 @@ Generation time is the only safe point to write this manifest: pin copies the
 declared tree before the transform starts, so a transform cannot repair a
 missing declaration after pin. For each label, first materialize
 `data-<label>/<model>/*.csv`, then inspect the finished tree. If the label's
-models produced no rows, do not create or declare an empty `data-<label>` root.
-Declare a root only when it contains the regular export files that carry rows.
+models produced no rows, omit the label entirely: do not create its
+`data-<label>` root, `csv-source-<label>-path` file, connector service/spec
+binding, or manifest line. Declare a root only when it contains regular export
+files that carry rows.
 
 Emit only the root line. Do not also list `data-orders/orders.csv` or any other
 descendant: overlapping declarations are refused by the supervisor. These
 generated roots are safe declaration paths because they are siblings of the
 supervisor-owned `data/`, `transform/`, and `contracts/` trees; never declare
 those trees or anything beneath them. Before writing the manifest, fail closed
-if a root or any member below it is a symlink (do not dereference it), and use
-relative path segments only. A root with no eligible files is omitted rather
-than represented by a placeholder.
+if a root or any member below it is a symlink (do not dereference it), a special
+file, or a filename that is not valid UTF-8 and NFC-normalized. Use relative
+path segments only. A root with no eligible files is omitted rather than
+represented by a placeholder.
 
-The transform resolves these paths against `NXD_TRANSFORM_ROOT`, for example
-`Path(os.environ["NXD_TRANSFORM_ROOT"]) / "data-orders"`; it must never use the
-mutable authoring checkout's absolute path. Directory declarations require a
-desktop runtime that accepts and copies a non-empty declared directory. The
-first implementation was built from NXD commit
+The transform reads each `csv-source-<label>-path` file from the pinned
+execution root and resolves its relative value against `NXD_TRANSFORM_ROOT`
+(which yields a path such as `data-orders`); it must never use the mutable
+authoring checkout's absolute path. `NXD_TRANSFORM_ROOT` is mandatory: read it
+with `os.environ["NXD_TRANSFORM_ROOT"]` (or an equivalent fail-closed lookup),
+never with `os.environ.get(..., ".")`, `Path.cwd()`, or another fallback that
+can make an unpinned checkout appear valid. Directory declarations require the
+directory-companion capability; the compatible-runtime probe below is
+authoritative. The first implementation was built from NXD commit
 `da0b75bfc0eed5ae74b66fde35570bc40ed859b3` with the paired `nxd_version`
-`0.41.162`; those values are provenance, not a semantic comparison rule.
+`0.41.162`; those values are provenance, not a version comparison rule.
 Before handing the generated closure to the supervisor, run a disposable
 capability probe using the real command:
 
@@ -318,8 +327,11 @@ operational compatibility precondition.
 
 - The physical-model naming invariant (`models.py` == `.promise` ==
   `PHYSICAL_MODELS` == `main.<name>`) — every model still belongs to exactly
-  one source instance, it just resolves through that instance's labeled
-  companion file instead of an unlabeled one.
+  one source instance. For labeled CSVs, that instance resolves through its
+  labeled path file and pinned root; other connector types retain their own
+  documented reader/configuration channels. In particular, labeled APIs use
+  label-prefixed `endpoint_<model>` profile attributes and have no endpoint
+  companion file.
 - The `duckdb` output port name, `write_disposition="replace"`, and
   `.transform-complete` touch.
 - The single-instance default names for any type that only has one source —

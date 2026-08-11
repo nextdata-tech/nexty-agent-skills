@@ -41,7 +41,7 @@
       "check": "transform/main.py resolves data-orders and data-users below NXD_TRANSFORM_ROOT (or an equivalent pinned execution-root contract), never an absolute authoring path and never by writing/updating companion-files during transform execution."
     },
     {
-      "id": "runtime-floor-documentation",
+      "id": "runtime-capability-documentation",
       "check": "README.md records the concrete companion-directory-probe with published=yes and the known directory-companion implementation provenance."
     },
     {
