@@ -34,6 +34,30 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# The api-source architecture gate lives in one place and is imported by every
+# REST scenario's checker -- see evals/tools/api_connector_gate.py for why a
+# second copy is worse than a shared import. Path-based because this file runs
+# under `uv run --no-project` from an arbitrary cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+from api_connector_gate import (  # noqa: E402
+    ENDPOINT_PREFIX,
+    declared_endpoints,
+    endpoint_secrets,
+    endpoints_not_public,
+    find_closure,
+    no_hardcoded_url_or_path,
+    profile_attributes,
+    string_literals,
+    transform_sources,
+    uses_rest_api_resources,
+)
+
+# The stub's own host and the two endpoint paths the brief names. A closure
+# reading `secrets["base_url"]` and `secrets["endpoint_<model>"]` carries
+# neither as a literal.
+STUB_HOSTS = ("127.0.0.1", "localhost")
+STUB_PATHS = ("/v1/checks", "/v1/monitors")
+
 FAILURES: list[str] = []
 PASSES: list[str] = []
 
@@ -90,51 +114,6 @@ def no_literal_secret_in_source(root: Path) -> tuple[bool, str]:
         if VALID_TOKEN in p.read_text(encoding="utf-8", errors="replace"):
             hits.append(str(p.relative_to(root)))
     return not hits, f"token literal found in {hits}" if hits else ""
-
-
-def profile_attributes(root: Path) -> tuple[dict[str, str], dict[str, str]]:
-    """Every `key:`/`value:`/`public:` attribute in infra-profile.yaml, flat.
-
-    Returns ({key: value}, {key: public-flag-lowercased}). Recovered with a
-    permissive line-based read -- this is a fixture-authored YAML, not a
-    document we need a real parser for.
-
-    Flat across services on purpose: that is exactly what the supervisor does
-    when it merges every service in `.secrets([...])` into the transform's
-    `secrets` map, so a checker keyed on service boundaries would be measuring
-    a structure the transform never sees. Returns empty maps for a missing file
-    -- callers check for the file itself.
-
-    Shared by the auth, endpoint and header checks so a profile that fails one
-    is still fully parsed for the others. Folding this back into any single
-    caller re-creates the bug it was extracted to kill: an early bail on a
-    missing auth_token also empties the header check's input, which then
-    reports a present-and-correct header as absent -- one defect surfacing as
-    two, with the second aimed at the wrong file.
-    """
-    profile = root / "infra-profile.yaml"
-    if not profile.is_file():
-        return {}, {}
-    text = profile.read_text(encoding="utf-8", errors="replace")
-    fields: dict[str, str] = {}
-    public_flags: dict[str, str] = {}
-    cur_key = None
-    for line in text.splitlines():
-        m = re.match(r"^\s*-?\s*key:\s*(\S+)", line)
-        if m:
-            cur_key = m.group(1)
-            continue
-        m = re.match(r"^\s*value:\s*(.+?)\s*$", line)
-        if m and cur_key:
-            fields[cur_key] = m.group(1).strip("'\"")
-            continue
-        # `public` may precede or follow `value` within the same entry, so the
-        # key stays current until the next `key:` rather than being cleared by
-        # whichever of the two is seen first.
-        m = re.match(r"^\s*public:\s*(\S+)", line)
-        if m and cur_key:
-            public_flags[cur_key] = m.group(1).strip("'\"").lower()
-    return fields, public_flags
 
 
 def infra_profile_has_structured_auth(root: Path) -> tuple[bool, str, dict]:
@@ -215,29 +194,6 @@ def header_marked_public(root: Path) -> tuple[bool, str]:
     return False, "header_user_agent carries no public: flag"
 
 
-def _docstring_nodes(tree: ast.Module) -> set[int]:
-    """id()s of the Constant nodes that are docstrings, not code."""
-    out: set[int] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
-                                 ast.ClassDef)):
-            continue
-        body = getattr(node, "body", None)
-        if (body and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)):
-            out.add(id(body[0].value))
-    return out
-
-
-def _string_literals(tree: ast.Module) -> list[str]:
-    """Every string literal that is real code, docstrings excluded."""
-    skip = _docstring_nodes(tree)
-    return [n.value for n in ast.walk(tree)
-            if isinstance(n, ast.Constant) and isinstance(n.value, str)
-            and id(n) not in skip]
-
-
 def headers_built_from_secrets(root: Path) -> tuple[bool, str]:
     """The transform must assemble dlt's `client["headers"]` from the flat
     `header_*` secrets, not hardcode the User-Agent.
@@ -260,7 +216,7 @@ def headers_built_from_secrets(root: Path) -> tuple[bool, str]:
     from `main.py` is correct, and a main-only scan calls it a closure that
     never reads a header.
     """
-    sources = sorted((root / "transform").glob("*.py")) if (root / "transform").is_dir() else []
+    sources = transform_sources(root)
     if not sources:
         return False, "no transform/*.py sources"
 
@@ -270,7 +226,7 @@ def headers_built_from_secrets(root: Path) -> tuple[bool, str]:
         src = path.read_text(encoding="utf-8", errors="replace")
         text_of.append(src)
         try:
-            literals += _string_literals(ast.parse(src))
+            literals += string_literals(ast.parse(src))
         except SyntaxError as exc:
             return False, f"{path.name} does not parse: {exc}"
 
@@ -365,170 +321,6 @@ def auth_is_dispatched_on_auth_type(transform_src: str) -> tuple[bool, str]:
     return True, ""
 
 
-# Modules whose presence in a transform means the closure is fetching HTTP
-# itself. `urllib.request` and `http.client` are stdlib, the rest are the usual
-# third-party clients; `dlt.sources.helpers.requests` is dlt's OWN requests
-# wrapper, which is still a hand-rolled loop -- dlt-flavored, but not the REST
-# connector, and it lands rows through a plain generator exactly the same way.
-_HTTP_CLIENT_MODULES = (
-    "requests", "httpx", "aiohttp", "urllib3", "httplib2",
-    "urllib.request", "urllib.error", "http.client",
-    # dlt's own requests wrapper -- see above.
-    "dlt.sources.helpers.requests",
-)
-
-
-def _dotted(node: ast.AST) -> str:
-    """`requests.Session` for an Attribute chain, `urlopen` for a bare Name."""
-    parts: list[str] = []
-    while isinstance(node, ast.Attribute):
-        parts.append(node.attr)
-        node = node.value
-    if isinstance(node, ast.Name):
-        parts.append(node.id)
-    else:
-        return ""
-    return ".".join(reversed(parts))
-
-
-def _is_http_module(path: str) -> bool:
-    """True when a resolved dotted path lies inside an HTTP client module."""
-    return any(path == m or path.startswith(f"{m}.") for m in _HTTP_CLIENT_MODULES)
-
-
-def _http_client_calls(tree: ast.Module) -> list[str]:
-    """Hand-rolled HTTP calls in one module, resolved through import aliases.
-
-    AST rather than substring search on purpose: `api-source.md` discusses
-    `requests` and `urllib` in prose, and a closure that quotes that guidance in
-    a docstring or comment must not be failed for describing the thing it
-    correctly avoided.
-
-    Resolution is on the FULL dotted path, not the bound root name. `import
-    urllib` binds the root `urllib`, under which `urllib.request.urlopen` is a
-    network call and `urllib.parse.quote` is string manipulation -- so keying on
-    the root flags a correct closure for quoting a URL path. This repo already
-    refuses to make that trade in the self-check's own transport scan
-    (`reference/self-check.md`: "`urllib` would also catch `urllib.parse`, which
-    is pure string manipulation with no network and is used by shipped example
-    transforms"), and a rule that fires on correct closures gets deleted rather
-    than obeyed. Resolving the whole path keeps `urllib.request` denied and
-    `urllib.parse` free.
-    """
-    aliases: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for a in node.names:
-                # `import urllib.request` binds the root `urllib`, but the alias
-                # maps to the root MODULE so a later `.request.urlopen` resolves
-                # back to the full path. `import x as y` binds y to all of x.
-                if a.asname:
-                    aliases[a.asname] = a.name
-                else:
-                    root = a.name.split(".")[0]
-                    aliases.setdefault(root, root)
-        elif isinstance(node, ast.ImportFrom):
-            mod = node.module or ""
-            for a in node.names:
-                aliases[a.asname or a.name] = f"{mod}.{a.name}" if mod else a.name
-    hits: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = _dotted(node.func)
-        if not name:
-            continue
-        root, _, rest = name.partition(".")
-        if root not in aliases:
-            continue
-        resolved = aliases[root] + (f".{rest}" if rest else "")
-        if _is_http_module(resolved):
-            hits.add(name)
-    return sorted(hits)
-
-
-def _uses_dlt_rest(tree: ast.Module) -> bool:
-    """A `dlt.sources.rest_api` import AND a real call to its entry points."""
-    imported = any(
-        isinstance(n, ast.ImportFrom) and (n.module or "").startswith("dlt.sources.rest_api")
-        for n in ast.walk(tree)
-    )
-    called = any(
-        isinstance(n, ast.Call)
-        and _dotted(n.func).split(".")[-1] in ("rest_api_resources", "rest_api_source")
-        for n in ast.walk(tree)
-    )
-    return imported and called
-
-
-def uses_rest_api_resources(root: Path) -> tuple[bool, str]:
-    """Ingestion goes through dlt's REST connector -- and ONLY through it.
-
-    Two halves, because a closure can fail either independently:
-
-    1. the dlt REST connector is actually used, and
-    2. nothing fetches HTTP beside it.
-
-    The second half is the one that matters in practice. Checking only the
-    first made this fact presence-only: a closure could import
-    `rest_api_resources`, never reach the wire with it, and hand-roll a
-    `requests` loop next to it -- passing a check whose entire purpose is to
-    require the connector architecture. The measured NEX-873 benchmark
-    (`evals/benchmarks/entries/2026-08-11-api-source-custom-client-headers.md`)
-    is what surfaced this: BOTH arms hand-rolled `requests`, and the header
-    gate made hand-rolling *more* attractive, since sending a header is one
-    line there and a config change in dlt.
-
-    Scans every `transform/*.py`, not just `main.py`: with only `main.py`
-    checked, moving the fetch loop into a sibling module defeats the gate
-    without changing the architecture at all.
-
-    No exemption for a connectivity probe, because `api-source.md`'s Self-check
-    section states the rule this enforces: the probe is a standalone script
-    beside the closure, never inside `transform/`. A probe under `transform/`
-    would re-run on every materialization the supervisor performs.
-
-    This does NOT contradict `reference/self-check.md`'s waiver of the transport
-    family for api-source closures. That waiver covers IMPORTS -- dlt's REST
-    source is built on `requests`/`httpx`/`urllib3`, so a reach scan fires on
-    every correct API closure. This gate keys on CALLS the closure's own source
-    makes: a correct dlt closure never calls `requests.get` itself, because dlt
-    does that inside dlt. Imports are waived; hand-written calls are not.
-    """
-    transform_dir = root / "transform"
-    if not transform_dir.is_dir():
-        return False, "no transform/ directory"
-    sources = sorted(transform_dir.glob("*.py"))
-    if not sources:
-        return False, "no transform/*.py sources"
-
-    uses_connector = False
-    hand_rolled: list[str] = []
-    for path in sources:
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-        except SyntaxError as exc:
-            return False, f"{path.name} does not parse: {exc}"
-        uses_connector = uses_connector or _uses_dlt_rest(tree)
-        hand_rolled += [f"{path.name}:{c}" for c in _http_client_calls(tree)]
-
-    if hand_rolled and uses_connector:
-        return False, (
-            f"HYBRID -- imports dlt's REST connector but also fetches HTTP by hand "
-            f"({', '.join(hand_rolled)}). Ingestion must go THROUGH the connector, "
-            f"not beside it; a RESTAPIConfig that exists but does not carry the "
-            f"requests is not the required architecture"
-        )
-    if hand_rolled:
-        return False, (
-            f"ingestion hand-rolls HTTP ({', '.join(hand_rolled)}) instead of "
-            f"dlt's REST connector -- no dlt.sources.rest_api import / "
-            f"rest_api_resources(...) call found"
-        )
-    if not uses_connector:
-        return False, "no dlt.sources.rest_api import / rest_api_resources(...) call found"
-    return True, ""
-
 
 def resolve_result_col(checks_cols: list[str]) -> str | None:
     """The landed scalar status column, whatever spelling the closure produced.
@@ -551,15 +343,6 @@ def resolve_result_col(checks_cols: list[str]) -> str | None:
         if low in ("result", "status") or re.fullmatch(r"result_{1,2}status", low):
             return c
     return None
-
-
-def no_hardcoded_base_url_or_path(transform_src: str) -> tuple[bool, str]:
-    if "127.0.0.1" in transform_src or "localhost" in transform_src:
-        return False, "transform hardcodes the stub host instead of reading secrets['base_url']"
-    if "/v1/checks" in transform_src or "/v1/monitors" in transform_src:
-        return False, ("transform hardcodes an endpoint path instead of reading "
-                       "secrets['endpoint_<model>']")
-    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -690,70 +473,10 @@ def rowcount(db: Path, table: str) -> int:
     return con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
 
 
-ENDPOINT_PREFIX = "endpoint_"
-
-
-def declared_endpoints(root: Path) -> dict[str, str]:
-    """The closure's endpoint map, as {model name: endpoint path}.
-
-    Read from infra-profile.yaml's `endpoint_<model>` attributes. An earlier
-    revision of the api-source skill had the closure write an
-    `api-source-endpoints` companion file instead; that channel is gone, and
-    reading it here would silently pass a closure built to the retired contract.
-
-    The label-prefixed multi-source spelling (`orders_endpoint_checks`) is
-    matched too -- this scenario is single-source, but a checker that only
-    recognized the unlabeled form would report a correct labeled closure as
-    having declared nothing and fall through to the substring heuristic.
-    """
-    fields, _ = profile_attributes(root)
-    mapping: dict[str, str] = {}
-    for key, value in fields.items():
-        # partition() returns an empty tail for a key that does not contain the
-        # prefix at all, so the emptiness check covers both "not an endpoint
-        # attribute" and the degenerate key named exactly `endpoint_`.
-        _, _, model = key.partition(ENDPOINT_PREFIX)
-        if model and value:
-            mapping[model] = value
-    return mapping
-
-
 def declared_models(root: Path) -> dict[str, str]:
     """The endpoint map inverted: {endpoint path: model name}."""
     return {path: model for model, path in declared_endpoints(root).items()}
 
-
-def endpoints_not_public(root: Path) -> list[str]:
-    """Endpoint attribute keys that will NOT survive an export.
-
-    Asserts the POSITIVE. Export redaction is fail-closed: the supervisor keeps
-    an attribute's value only when it carries `public: true` literally
-    (`export.rs` compares against `Some(Bool(true))`), so an attribute with no
-    `public:` line at all is stripped exactly like `public: false`. A scan for
-    an explicit "false" would miss that case -- and the omitted flag is the more
-    likely authoring slip of the two.
-    """
-    fields, public_flags = profile_attributes(root)
-    return sorted(
-        key for key in fields
-        if ENDPOINT_PREFIX in key and public_flags.get(key) != "true"
-    )
-
-
-def endpoint_secrets(root: Path) -> dict[str, str]:
-    """The endpoint attributes as the transform will see them in `secrets`.
-
-    Keyed by the RAW profile key, not by the model name `declared_endpoints`
-    parses out: the label-prefixed multi-source spelling (`orders_endpoint_checks`)
-    reaches the transform under that full key, and rebuilding it as
-    `endpoint_<model>` would hand a correct labeled closure a key it never asked
-    for while withholding the one it did.
-    """
-    fields, _ = profile_attributes(root)
-    return {
-        key: value for key, value in fields.items()
-        if ENDPOINT_PREFIX in key and value
-    }
 
 
 def find_table(tables: list[str], hint: str, other_hint: str | None = None) -> str | None:
@@ -809,28 +532,10 @@ def main() -> int:
     root: Path = args.root
     fixtures: Path = args.fixtures
 
-    # The closure does NOT necessarily land at the workspace root. nxd-run-job-loop
-    # documents `…/nxd-jobs/<workflow>/closure/` (SKILL.md "Author dp-spec.md"),
-    # with the IR beside it — so an agent following the skill correctly writes
-    # transform/main.py several directories down. A checker hardcoding
-    # `<root>/transform/main.py` fails a correct closure and reports it as a
-    # missing one, which is worse than not checking: it is a false accusation
-    # aimed at the agent rather than at the checker.
-    #
-    # Resolve by SEARCH, anchored on the file that defines a closure. Prefer the
-    # workspace root when it is itself a closure (the flat layout other scenarios
-    # use), else take the shallowest match so a nested scratch copy cannot win
-    # over the real one.
-    def _find_closure(base: Path) -> Path:
-        if (base / "transform" / "main.py").is_file():
-            return base
-        found = sorted(
-            (p.parent.parent for p in base.rglob("transform/main.py")),
-            key=lambda p: (len(p.relative_to(base).parts), str(p)),
-        )
-        return found[0] if found else base
-
-    root = _find_closure(root)
+    # The closure does NOT necessarily land at the workspace root — see
+    # find_closure() in api_connector_gate for why this is a search rather than
+    # a fixed path.
+    root = find_closure(root)
 
     # ---- structural: closure exists -------------------------------------
     transform_path = root / "transform" / "main.py"
@@ -895,7 +600,7 @@ def main() -> int:
     ok, detail = uses_rest_api_resources(root)
     check("ingestion:rest-api-resources-used", ok, detail)
 
-    ok, detail = no_hardcoded_base_url_or_path(transform_src)
+    ok, detail = no_hardcoded_url_or_path(root, STUB_HOSTS, STUB_PATHS)
     check("ingestion:no-hardcoded-url-or-path", ok, detail)
 
     # ---- live re-materialization: does it actually work end-to-end? --------

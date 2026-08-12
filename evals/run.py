@@ -228,6 +228,10 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
     "multi-source-labeled-roots": frozenset({"check_labeled_multi_source.py"}),
     "multi-source-labeled-roots-supervisor": frozenset({"check_supervisor_pin.py"}),
+    # Names the banned host/path literals and the exact connector architecture
+    # it grades — staged into the workspace it would turn "build this the
+    # documented way" into "satisfy this file".
+    "worldbank-live": frozenset({"check_worldbank_connector.py"}),
 }
 
 _SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
@@ -1099,7 +1103,13 @@ def deterministic_check_fact(
              "infrastructure_error": f"checker not found: {script}"},
             sort_keys=True,
         )
-    deps = cfg.get("deps") or ["duckdb"]
+    # An OMITTED `deps` takes the duckdb default (most checkers read a landed
+    # DuckDB). An explicitly EMPTY list means none: a static checker that never
+    # opens a database should not pay for the install, and `"deps": []` has to
+    # mean what it says or checks.json is describing a run that isn't happening.
+    deps = cfg.get("deps")
+    if deps is None:
+        deps = ["duckdb"]
     cmd = ["uv", "run", "--no-project"]
     for dep in deps:
         cmd += ["--with", str(dep)]

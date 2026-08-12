@@ -56,6 +56,22 @@ SUITE_WIDE_PREFIXES = (
     ".github/workflows/evals.yml",
 )
 
+# Code a graded run executes that lives OUTSIDE any one scenario directory, and
+# the scenarios whose checkers import it. Without an entry here such a file maps
+# to nothing: it is not a suite-wide prefix, and the scenario-directory rule
+# below never sees it — so tightening a shared gate would select zero scenarios
+# and read as "no eval was affected".
+#
+# Narrower than SUITE_WIDE_PREFIXES on purpose: the blast radius of a shared
+# checker really is its importers, and a full-suite run to cover two scenarios
+# is a cost with no extra signal.
+SHARED_FIXTURE_SCENARIOS = {
+    "evals/tools/api_connector_gate.py": (
+        "authenticated-api-source-build",
+        "worldbank-live",
+    ),
+}
+
 
 def load_scenarios(suite: str) -> tuple[dict[str, list[str]], dict[str, str]]:
     """Return ``({scenario: [skill, ...]}, {scenario: ci_skip_reason})``."""
@@ -121,6 +137,9 @@ def select(
         parts = Path(p).parts
         if len(parts) > 2 and parts[0] == "evals" and parts[2] in scenarios:
             selected.add(parts[2])
+        for importer in SHARED_FIXTURE_SCENARIOS.get(p, ()):
+            if importer in scenarios:
+                selected.add(importer)
 
     # Coverage is measured before ci_skip is applied: a skill covered only by a
     # skipped scenario is genuinely covered by the suite, just not by CI.
