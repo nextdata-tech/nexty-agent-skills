@@ -77,7 +77,33 @@ VALID_TOKEN = "bcn_live_9f3ac2e7d84b41f0a6c5d2e19b7f0033"
 # process boundary, and a checker that infers it from landed rows is inferring —
 # the rows would look identical if the header requirement had quietly stopped
 # being enforced.
+#
+# TWO channels, and the distinction is load-bearing:
+#
+#   set_observations_path()  the RUNNER's channel. `run.py` runs cells in a
+#                            thread pool inside ONE process and loads a fresh
+#                            copy of this module per cell, so a per-module
+#                            attribute is private to its cell. A process-global
+#                            (an env var) is not: two concurrent cells would
+#                            write into one another's logs, and the first to
+#                            finish would unset the variable under the other.
+#   OBSERVATIONS_ENV         the VERIFIER's channel. It is a separate process
+#                            that never starts a server, so it has no module
+#                            instance to be handed — the runner passes the path
+#                            in its environment. Deliberately NOT set in the
+#                            agent's environment: the log records the headers
+#                            the agent's own failing requests carried, and
+#                            reading it back turns "diagnose an unexplained
+#                            403" — the task — into a lookup.
 OBSERVATIONS_ENV = "NXD_STUB_OBSERVATIONS"
+
+_OBSERVATIONS_PATH: Path | None = None
+
+
+def set_observations_path(path: Path | str | None) -> None:
+    """Log every request to `path` — this module instance only."""
+    global _OBSERVATIONS_PATH  # noqa: PLW0603 - per-instance, see above
+    _OBSERVATIONS_PATH = Path(path) if path else None
 
 # The client header Beacon requires of every caller. Non-secret by construction:
 # it is published in BRIEF.md, carries no entropy, and is safe in a traceback.
@@ -108,6 +134,14 @@ def reset_observations() -> None:
 
 
 def _observations_path() -> Path | None:
+    """This instance's log, else the one named in the environment.
+
+    Instance first: in the runner, the env var may belong to a different cell
+    entirely, and writing there would corrupt that cell's evidence rather than
+    merely losing this one's.
+    """
+    if _OBSERVATIONS_PATH is not None:
+        return _OBSERVATIONS_PATH
     raw = os.environ.get(OBSERVATIONS_ENV, "").strip()
     return Path(raw) if raw else None
 

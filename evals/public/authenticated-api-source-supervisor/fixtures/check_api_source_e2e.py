@@ -14,11 +14,14 @@ can still fail once published: an endpoint left in a companion file that the
 snapshot does not carry, a header assembled from a secret the profile never
 declared, a base_url read from an environment the supervisor does not set.
 
-`--mode agent` is the forcing function the agent runs while its own endpoint is
-live. `--mode harness` runs from the pristine scenario copy after the agent
-exits, and is the authority: it re-serves the published snapshot itself, with
-the runner's fixture still bound to the same port, and grades what that serve
-actually does.
+Harness only, and withheld from the agent's workspace. `job-loop`'s verifier
+also ships an `--mode agent` forcing function the agent runs against its own
+live endpoint; this one does not, because it computes the exact per-team counts
+a correct product must reproduce — the answer key to the brief's question 1 —
+and imports runner-side modules the workspace does not have. It runs from the
+pristine scenario copy after the agent exits and re-serves the published
+snapshot itself, with the runner's fixture still bound to the same port, which
+is a stronger claim than a liveness check the agent runs on itself.
 
 Two things make the wire claim decidable rather than inferred:
 
@@ -103,10 +106,11 @@ def checks_per_team(stub) -> dict[str, int]:
     """Checks per owning team, derived from the stub — never hardcoded.
 
     Only monitors that EXIST get a team: the four orphaned check rows
-    (monitor_ids 9101-9104) reference a monitor the directory never had, and
-    the brief deliberately leaves their disposition to the author. So this is
-    the floor a correct closure must reproduce for the teams it can resolve,
-    not a total the closure must match exactly.
+    (monitor_ids 9101-9104) reference a monitor the directory never had, so no
+    correct closure can attribute them to a named team, whatever it decides to
+    do with them. That is what makes these counts EXACT per resolvable team
+    rather than a floor -- the disposition the brief leaves open cannot move
+    them, and a closure whose per-team totals differ has lost or invented rows.
     """
     totals: dict[str, int] = {}
     for row in stub.CHECKS:
@@ -136,7 +140,7 @@ def team_selections(measures: list[str], dimensions: list[str]) -> list[dict[str
     name. It searches the catalog the product actually published for a
     team-shaped dimension and tries each measure against it. A scenario that
     demanded `check_count` by `team` would be grading the agent's vocabulary
-    rather than whether the product answers the brief's question 2.
+    rather than whether the product answers the brief's question 1.
     """
     team_dims = [d for d in dimensions if "team" in d.lower()]
     if not team_dims:
@@ -148,16 +152,40 @@ def team_selections(measures: list[str], dimensions: list[str]) -> list[dict[str
     return [{"measures": [m], "dimensions": [d]} for d in team_dims for m in ordered]
 
 
-def rows_as_totals(result: dict[str, Any]) -> dict[str, float] | None:
-    """A two-column {dimension: measure} answer, or None if it is not that."""
-    if len(result.get("columns", [])) != 2:
+def rows_as_totals(result: dict[str, Any],
+                   selection: dict[str, Any]) -> dict[str, float] | None:
+    """A two-column {dimension: measure} answer, or None if it is not that.
+
+    Columns are resolved BY NAME against the selection, never by position.
+    `check_job_loop.py` states the rule this follows -- "result column order is
+    a catalog implementation detail, not a semantic requirement" -- and a
+    positional read fails a correct product the moment the supervisor emits the
+    measure first: `float()` on a team name raises, every candidate selection is
+    recorded as "not a two-column answer", and the reconciliation fails for a
+    reason that has nothing to do with the closure.
+
+    Falls back to position ONLY when the names do not resolve, so a catalog that
+    labels its columns differently still gets read rather than reported as
+    unusable.
+    """
+    columns = [str(c) for c in result.get("columns", [])]
+    if len(columns) != 2:
         return None
+    dimension = str(selection["dimensions"][0])
+    measure = str(selection["measures"][0])
+    lowered = [c.lower() for c in columns]
+    if dimension.lower() in lowered and measure.lower() in lowered:
+        dim_index = lowered.index(dimension.lower())
+        measure_index = lowered.index(measure.lower())
+    else:
+        dim_index, measure_index = 0, 1
+
     totals: dict[str, float] = {}
     for row in result.get("rows", []):
-        if len(row) != 2 or row[0] is None:
+        if len(row) != 2 or row[dim_index] is None:
             continue
         try:
-            totals[str(row[0])] = float(row[1])
+            totals[str(row[dim_index])] = float(row[measure_index])
         except (TypeError, ValueError):
             return None
     return totals
@@ -271,7 +299,7 @@ def harness_mode(args: argparse.Namespace) -> int:
         if not selections:
             check("query:team-dimension-published", False,
                   f"no team-shaped dimension in {dimensions} — the brief's "
-                  f"question 2 groups check results by owning team, so the "
+                  f"question 1 groups check results by owning team, so the "
                   f"product cannot answer it")
             return report()
         check("query:team-dimension-published", True)
@@ -285,7 +313,7 @@ def harness_mode(args: argparse.Namespace) -> int:
                 except CheckFailure as exc:
                     attempts.append(f"{selection}: {exc}")
                     continue
-                totals = rows_as_totals(result)
+                totals = rows_as_totals(result, selection)
                 if totals is None:
                     attempts.append(f"{selection}: not a two-column answer")
                     continue
@@ -293,7 +321,7 @@ def harness_mode(args: argparse.Namespace) -> int:
                        for team, count in expected.items()):
                     matched = selection
                     break
-                attempts.append(f"{selection}: got {totals}, expected >= {expected}")
+                attempts.append(f"{selection}: got {totals}, expected {expected}")
             check("query:checks-by-team-matches-source", matched is not None,
                   "no governed selection reproduced the fixture's own per-team "
                   f"check counts {expected}; tried: {attempts[:6]}")
@@ -329,7 +357,7 @@ def main() -> int:
     # imports the runner-side gate and the fixture module, neither of which
     # exists in the workspace — and it names the exact per-team counts a
     # correct product must reproduce, which in the agent's hands is the answer
-    # key to the brief's question 2. The harness re-serves independently, which
+    # key to the brief's question 1. The harness re-serves independently, which
     # is a stronger claim than a liveness check the agent runs on itself.
     ap.add_argument("--mode", choices=("harness",), required=True)
     ap.add_argument("--workspace", default=".")

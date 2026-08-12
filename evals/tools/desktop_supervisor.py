@@ -207,8 +207,16 @@ def serve_snapshot(snapshot: Path, workflow: str) -> Served:
             f"serve did not publish within {SERVE_TIMEOUT_S}s: "
             f"stdout={stdout.read()[-500:]} stderr={stderr.read()[-500:]}")
     except BaseException:
+        # Same order the job-loop verifier uses: ask the supervisor to stop
+        # first, so it can release its own state, and only then reap. Skipping
+        # the cooperative stop leaves durable state the next serve trips over,
+        # and leaking the two TemporaryFiles holds fds for the whole run.
+        with contextlib.suppress(CheckFailure, OSError, subprocess.TimeoutExpired):
+            command([supervisor(), "stop", "--data-dir", str(data_dir)], timeout=60)
         if process is not None and process.poll() is None:
             _reap(process)
+        stdout.close()
+        stderr.close()
         holder.cleanup()
         raise
 

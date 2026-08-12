@@ -121,6 +121,84 @@ def test_a_missing_verifier_is_an_infrastructure_error_not_a_pass(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_two_concurrent_cells_keep_separate_logs(tmp_path):
+    """Cells share a process, so the log path cannot be a process global.
+
+    `run.py` runs cells in a ThreadPoolExecutor (default concurrency 4), and the
+    ordinary A/B benchmark run puts two `http_stub_server` contexts in flight at
+    once. With the path in `os.environ`, cell B's assignment redirects cell A's
+    fixture traffic into B's log: A's verifier then fails
+    `wire:observations-recorded` on a perfectly correct closure, and whichever
+    cell exits first unsets the variable under the other.
+    """
+    import urllib.request
+
+    spec = run.scenario_needs_http_stub(SUPERVISOR)
+    ws_a, ws_b = tmp_path / "a", tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+
+    with run.http_stub_server(SUPERVISOR, ws_a, spec, "claude") as (url_a, log_a), \
+            run.http_stub_server(SUPERVISOR, ws_b, spec, "claude") as (url_b, log_b):
+        assert log_a != log_b
+        for url in (url_a, url_a, url_b):
+            request = urllib.request.Request(
+                f"{url}/v1/monitors",
+                headers={"User-Agent": stub.REQUIRED_USER_AGENT,
+                         "Authorization": f"Bearer {stub.VALID_TOKEN}"})
+            urllib.request.urlopen(request, timeout=5).read()
+
+        assert len(stub.logged_observations(log_a)) == 2, (
+            "cell A's traffic did not land in cell A's log"
+        )
+        assert len(stub.logged_observations(log_b)) == 1, (
+            "cell B's log picked up cell A's traffic"
+        )
+
+
+def test_the_agent_environment_never_names_the_log(tmp_path):
+    """The log records the headers the agent's own failed requests carried.
+
+    Handing the agent its path turns "diagnose an unexplained 403" — the task —
+    into `cat "$NXD_STUB_OBSERVATIONS"`. Both backends build the child env from
+    `os.environ`, so the runner must not put it there.
+    """
+    import os
+
+    spec = run.scenario_needs_http_stub(SUPERVISOR)
+    before = os.environ.get(run.STUB_OBSERVATIONS_ENV)
+    with run.http_stub_server(SUPERVISOR, tmp_path, spec, "claude") as (_url, log):
+        assert log is not None
+        assert os.environ.get(run.STUB_OBSERVATIONS_ENV) == before, (
+            "the log path reached the process environment, which both agent "
+            "backends copy into the agent's own"
+        )
+
+
+def test_a_stub_that_cannot_start_leaves_no_log_directory(tmp_path):
+    """The temp dir is created before the server; a failed start must not strand it.
+
+    Counts the delta rather than asserting none exist: an earlier crashed run
+    may have left one behind, and failing this test for that would be blaming
+    the wrong thing.
+    """
+    import tempfile as _tempfile
+
+    def _log_dirs() -> set[Path]:
+        return set(Path(_tempfile.gettempdir()).glob("eval-stub-observations-*"))
+
+    before = _log_dirs()
+    spec = {**run.scenario_needs_http_stub(SUPERVISOR), "start": "no_such_start_fn"}
+    with pytest.raises(AttributeError):
+        with run.http_stub_server(SUPERVISOR, tmp_path, spec, "claude"):
+            pass
+
+    assert not (_log_dirs() - before), (
+        "the log directory survived a failed start; it would then outlive the "
+        "whole run"
+    )
+
+
 def test_stub_logs_observations_for_another_process(tmp_path, monkeypatch):
     """The verifier is a separate process; OBSERVED cannot reach it."""
     import urllib.error
@@ -239,13 +317,42 @@ def test_selection_search_prefers_a_count_measure_and_needs_a_team_dimension():
     assert verifier.team_selections(["check_count"], ["monitor_name"]) == []
 
 
+SELECTION = {"measures": ["check_count"], "dimensions": ["team"]}
+
+
 def test_totals_reader_rejects_a_shape_it_cannot_compare():
     assert verifier.rows_as_totals(
-        {"columns": ["team", "n"], "rows": [["payments", 9]]}) == {"payments": 9.0}
+        {"columns": ["team", "check_count"], "rows": [["payments", 9]]},
+        SELECTION) == {"payments": 9.0}
     assert verifier.rows_as_totals(
-        {"columns": ["team", "n", "extra"], "rows": []}) is None
+        {"columns": ["team", "check_count", "extra"], "rows": []}, SELECTION) is None
     assert verifier.rows_as_totals(
-        {"columns": ["team", "n"], "rows": [["payments", "nine"]]}) is None
+        {"columns": ["team", "check_count"], "rows": [["payments", "nine"]]},
+        SELECTION) is None
+
+
+def test_totals_reader_resolves_columns_by_name_not_position():
+    """Column order is a catalog implementation detail, not a contract.
+
+    A positional read fails a correct product the moment the supervisor emits
+    the measure first — `float("payments")` raises, the selection is recorded as
+    "not a two-column answer", and the reconciliation fails for a reason that
+    has nothing to do with the closure.
+    """
+    assert verifier.rows_as_totals(
+        {"columns": ["check_count", "team"], "rows": [[9, "payments"]]},
+        SELECTION) == {"payments": 9.0}
+    # Case-insensitively, since a catalog may title-case its headers.
+    assert verifier.rows_as_totals(
+        {"columns": ["Check_Count", "Team"], "rows": [[9, "payments"]]},
+        SELECTION) == {"payments": 9.0}
+
+
+def test_totals_reader_falls_back_to_position_when_names_do_not_resolve():
+    """Unrecognized headers should still be read, not reported as unusable."""
+    assert verifier.rows_as_totals(
+        {"columns": ["group", "value"], "rows": [["payments", 9]]},
+        SELECTION) == {"payments": 9.0}
 
 
 def test_verifier_reads_the_log_only_when_the_runner_wired_one(monkeypatch):
@@ -354,8 +461,12 @@ def _install_fake_supervisor(monkeypatch, log: Path, *, requests_on_resume,
         measure = selection["measures"][0]
         if "count" not in measure:
             raise verifier.CheckFailure(f"{measure} is not queryable here")
-        return {"columns": ["team", measure],
-                "rows": [[team, value] for team, value in totals.items()],
+        # MEASURE FIRST on purpose. Column order is a catalog implementation
+        # detail, and a verifier that reads by position fails a correct product
+        # for it — so the fake emits the order that would break a positional
+        # read, and every harness test below inherits that guard.
+        return {"columns": [measure, "team"],
+                "rows": [[value, team] for team, value in totals.items()],
                 "row_count": len(totals), "truncated": False, "error": ""}
 
     monkeypatch.setattr(verifier, "serve_snapshot", _serve)

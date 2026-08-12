@@ -44,7 +44,10 @@ runner could not previously do:
   The log is truncated immediately before the re-serve, so what it holds
   afterwards belongs to the published definition — without that boundary, a
   definition that 403s on every request still passes on the agent's successful
-  traffic from earlier in the run.
+  traffic from earlier in the run. The path reaches the stub on its module
+  instance, never through `os.environ`: cells run in a thread pool inside one
+  process, so a process-global would let two concurrent cells write into one
+  another's logs, and the first to exit would unset it under the other.
 
 The verifier grades: the published-run chronology in the supervisor's own state
 database, a re-serve of the published snapshot from its durable key, the
@@ -96,3 +99,43 @@ header above are each rejected, and the last is rejected by exactly one fact.
 What no test here covers is the supervisor's actual CLI behavior. That contract
 is inherited verbatim from `check_job_loop.py`, which live runs exercise, and it
 is the part a first live run of this cell would be testing.
+
+## Review findings, folded in
+
+Code review of the PR found eight defects, all real and all fixed here. Two are
+worth recording because they would have surfaced as false failures against
+correct closures rather than as crashes:
+
+* **The observation log was a process global.** `run.py` runs cells in a thread
+  pool inside one process, so an ordinary A/B benchmark run (two skill sets, one
+  scenario) had two stub instances sharing one `os.environ` slot. The second
+  cell's assignment redirected the first cell's fixture traffic into the second
+  cell's log, so the first cell's verifier failed `wire:observations-recorded`
+  on a perfectly correct closure — and the first cell to exit unset the variable
+  under the other. The path now reaches the stub on its module instance, which
+  `http_stub_server` loads fresh per cell. The env var remains, for the verifier
+  subprocess only, and is set on that call rather than process-wide: it was
+  previously visible in the agent's own environment, where reading it back would
+  have turned "diagnose an unexplained 403" — the task — into a lookup.
+  `test_two_concurrent_cells_keep_separate_logs` fails against the old channel
+  (cell A's log lands 0 of its 2 requests), verified by reverting.
+* **The query reader assumed `[dimension, measure]` column order.** The
+  verifier this module was factored out of refuses that assumption in as many
+  words — "result column order is a catalog implementation detail, not a
+  semantic requirement". Had the supervisor emitted the measure first,
+  `float()` on a team name would have raised, every candidate selection would
+  have been recorded as "not a two-column answer", and the reconciliation would
+  have failed for a reason unrelated to the closure — on the first live run,
+  which is exactly where this cell has no prior evidence. Columns now resolve by
+  name against the selection, and the fake supervisor in the tests emits the
+  order that would break a positional read, so every harness test inherits the
+  guard.
+
+The rest: the log directory leaked on a failed stub start; `_uses_dlt_rest`
+recognized only the `from`-form import, so `import dlt.sources.rest_api as rest`
+was a false accusation against a correct closure (pre-existing, but the shared
+gate tripled its exposure); `serve_snapshot`'s failure path skipped the
+cooperative `stop` and leaked two file handles; and three message/docstring
+defects, including one that named the wrong brief question in text fed to the
+judge as authoritative, and one whose failure text promised a floor where the
+predicate demanded exact equality.

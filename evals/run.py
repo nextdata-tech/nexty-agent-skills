@@ -296,8 +296,11 @@ class SourceIsolation:
 # to this set below, keyed by scenario) because its payload/auth/pagination
 # logic is the answer key the agent must instead discover by calling the live
 # endpoint — exactly why MCP_SERVER_SIDE_FIXTURES hides catalog.json/semantic.json.
-# Names the env var stub modules read to decide where to append their request
-# log. Mirrors stub_beacon_api.OBSERVATIONS_ENV; the two are pinned together by
+# How the VERIFIER subprocess learns where the stub's request log is. The stub
+# itself is handed the path on its module instance (see http_stub_server) —
+# cells share a process, so an env var cannot address one cell's stub. This is
+# set only on the verifier's own environment, never on the agent's. Mirrors
+# stub_beacon_api.OBSERVATIONS_ENV; the two are pinned together by
 # test_api_source_supervisor_e2e.py so a rename cannot silently disable the log.
 STUB_OBSERVATIONS_ENV = "NXD_STUB_OBSERVATIONS"
 
@@ -1386,23 +1389,39 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     # actually reach this fixture, carrying the required header?". The module's
     # in-memory OBSERVED cannot cross that boundary.
     #
-    # Deliberately outside the workspace. In it, the agent could read back the
-    # exact headers its own failing requests carried, which turns "diagnose an
-    # unexplained 403" — the task — into a lookup.
+    # Deliberately outside the workspace, and handed to the stub through the
+    # module instance loaded just above — never through os.environ. Cells run in
+    # a thread pool inside ONE process (see the ThreadPoolExecutor in main), so a
+    # process-global would let two concurrent cells write into one another's
+    # logs, and the first to exit would unset it under the other. The env var is
+    # for the verifier subprocess only, and is set on that call, not here: in the
+    # agent's environment it would hand back the headers its own failing requests
+    # carried, turning "diagnose an unexplained 403" — the task — into a lookup.
     observations: Path | None = None
     log_holder: tempfile.TemporaryDirectory | None = None
-    previous_log = os.environ.get(STUB_OBSERVATIONS_ENV)
     if spec.get("observations"):
+        if not hasattr(module, "set_observations_path"):
+            raise HttpStubSetupError(
+                f"{module_path.name} declares observations but defines no "
+                f"set_observations_path(); the runner has no other way to reach "
+                f"one stub instance without affecting the others")
         log_holder = tempfile.TemporaryDirectory(prefix="eval-stub-observations-")
-        observations = Path(log_holder.name) / "observations.jsonl"
-        observations.write_text("", encoding="utf-8")
-        # The stub runs IN this process and reads the variable from os.environ,
-        # so this is the only channel that reaches it.
-        os.environ[STUB_OBSERVATIONS_ENV] = str(observations)
 
-    start_fn = getattr(module, str(spec.get("start", "start_server")))
-    stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
-    server, port, thread = start_fn()
+    try:
+        if log_holder is not None:
+            observations = Path(log_holder.name) / "observations.jsonl"
+            observations.write_text("", encoding="utf-8")
+            module.set_observations_path(observations)
+
+        start_fn = getattr(module, str(spec.get("start", "start_server")))
+        stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
+        server, port, thread = start_fn()
+    except BaseException:
+        # Anything from here on leaves no server to stop, but the temp dir is
+        # already on disk. Without this it survives for the life of the process.
+        if log_holder is not None:
+            log_holder.cleanup()
+        raise
     try:
         base_url = f"http://127.0.0.1:{port}"
         endpoint_file = ws / str(spec.get("endpoint_file", "ENDPOINT_URL"))
@@ -1434,13 +1453,14 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
             )
         yield base_url, observations
     finally:
-        stop_fn(server, thread)
-        if log_holder is not None:
-            if previous_log is None:
-                os.environ.pop(STUB_OBSERVATIONS_ENV, None)
-            else:
-                os.environ[STUB_OBSERVATIONS_ENV] = previous_log
-            log_holder.cleanup()
+        # Cleanup runs even if stop_fn raises: a stub that failed to shut down
+        # cleanly must not also strand its log directory for the whole run.
+        try:
+            stop_fn(server, thread)
+        finally:
+            if log_holder is not None:
+                module.set_observations_path(None)
+                log_holder.cleanup()
 
 
 def _write_fake_nxd(bin_dir: Path) -> None:

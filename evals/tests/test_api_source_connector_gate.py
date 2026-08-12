@@ -105,6 +105,26 @@ def test_pure_hand_roll_is_rejected_with_its_own_message(tmp_path: Path):
     assert "urllib.request.urlopen" in detail
 
 
+DOTTED_IMPORT = '''
+import dlt.sources.rest_api as rest
+
+def ingest(duckdb, secrets):
+    config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+    return {r.name: r for r in rest.rest_api_resources(config)}
+'''
+
+
+def test_the_dotted_import_form_is_the_same_architecture(tmp_path: Path):
+    """`import dlt.sources.rest_api as rest` is the connector, spelled sideways.
+
+    Recognizing only the `from`-form failed a correct closure with "no
+    dlt.sources.rest_api import found" — a false accusation, and one the gate
+    can least afford now that three scenarios share it.
+    """
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=DOTTED_IMPORT))
+    assert ok, detail
+
+
 def test_prose_mentioning_requests_still_passes(tmp_path: Path):
     # Substring scanning would fail this closure for describing what it avoided.
     ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=MENTIONS_IN_PROSE))

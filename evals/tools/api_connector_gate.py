@@ -300,9 +300,19 @@ def _http_client_calls(tree: ast.Module) -> list[str]:
 
 
 def _uses_dlt_rest(tree: ast.Module) -> bool:
-    """A `dlt.sources.rest_api` import AND a real call to its entry points."""
+    """A `dlt.sources.rest_api` import AND a real call to its entry points.
+
+    Both import forms count. `import dlt.sources.rest_api as rest` followed by
+    `rest.rest_api_resources(cfg)` is the connector architecture spelled the
+    other way, and recognizing only the `from`-form fails a correct closure
+    with "no dlt.sources.rest_api import found" — a false accusation, and the
+    kind this gate is least able to afford now that three scenarios share it.
+    """
     imported = any(
-        isinstance(n, ast.ImportFrom) and (n.module or "").startswith("dlt.sources.rest_api")
+        (isinstance(n, ast.ImportFrom)
+         and (n.module or "").startswith("dlt.sources.rest_api"))
+        or (isinstance(n, ast.Import)
+            and any(a.name.startswith("dlt.sources.rest_api") for a in n.names))
         for n in ast.walk(tree)
     )
     called = any(
