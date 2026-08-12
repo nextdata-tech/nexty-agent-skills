@@ -68,7 +68,18 @@ SUITE_WIDE_PREFIXES = (
 SHARED_FIXTURE_SCENARIOS = {
     "evals/tools/api_connector_gate.py": (
         "authenticated-api-source-build",
+        "authenticated-api-source-supervisor",
         "worldbank-live",
+    ),
+    "evals/tools/desktop_supervisor.py": (
+        "authenticated-api-source-supervisor",
+    ),
+    # The Beacon stub is the upstream for two scenarios: the build cell reaches
+    # it directly, and the supervisor cell borrows it via `fixtures_from`. A
+    # change to the payload, the auth gate or the User-Agent gate moves both.
+    "evals/public/authenticated-api-source-build/fixtures/stub_beacon_api.py": (
+        "authenticated-api-source-build",
+        "authenticated-api-source-supervisor",
     ),
 }
 

@@ -377,6 +377,73 @@ def uses_rest_api_resources(root: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def headers_built_from_secrets(
+    root: Path, header_value: str
+) -> tuple[bool, str]:
+    """The transform assembles dlt's `client["headers"]` from the flat
+    `header_*` secrets rather than hardcoding the required header.
+
+    Two independent failure modes, distinguished in the detail because the fixes
+    differ: never configuring headers at all (the closure 403s), versus
+    configuring them from a literal (the closure works today and breaks the
+    moment the profile changes, exactly like a hardcoded base_url).
+
+    `header_value` is the value the upstream requires — the caller's, because
+    each scenario's fixture gates on its own. A closure that carries it as a
+    literal has hardcoded it, wherever the profile also happens to declare it.
+
+    This is the fact a supervisor E2E cannot infer from the wire. A closure with
+    the User-Agent frozen into `transform/main.py` sends exactly the right
+    header, so the fixture sees a perfect request and every observation-based
+    check passes — while the closure is one profile change away from 403ing
+    everywhere. Only reading the source can see it, which is why this moved here
+    rather than staying in the one checker that had it.
+
+    The hardcode test reads STRING LITERALS via the AST, docstrings excluded --
+    not the file text. A correct closure that documents why the header exists
+    ("Beacon rejects any client not sending User-Agent: nexty-test-client/1.0")
+    is explaining the requirement, not hardcoding it, and a substring scan
+    reports that comment as the very defect the comment is warning about.
+
+    Scans every `transform/*.py` for the same reason the connector gate does:
+    a closure that factors `_headers_from` into `transform/http.py` and calls it
+    from `main.py` is correct, and a main-only scan calls it a closure that
+    never reads a header.
+    """
+    sources = transform_sources(root)
+    if not sources:
+        return False, "no transform/*.py sources"
+
+    literals: list[str] = []
+    text_of: list[str] = []
+    for path in sources:
+        src = path.read_text(encoding="utf-8", errors="replace")
+        text_of.append(src)
+        try:
+            literals += string_literals(ast.parse(src))
+        except SyntaxError as exc:
+            return False, f"{path.name} does not parse: {exc}"
+
+    if any(header_value in lit for lit in literals):
+        return False, (f"transform hardcodes {header_value!r} instead of reading "
+                       f"it from the flat secrets map (secrets['header_user_agent'])")
+
+    joined = "\n".join(text_of)
+    reads_header_secrets = bool(
+        re.search(r"""startswith\(\s*['"]header_""", joined)
+        or re.search(r"""secrets\s*(?:\.get\s*\(\s*|\[\s*)['"]header_\w+['"]""", joined)
+        or any(lit.startswith("header_") for lit in literals)
+    )
+    if not reads_header_secrets:
+        return False, ("transform never reads a header_* key from secrets — the API "
+                       "requires a header and rejects the request without it")
+    sets_headers = bool(re.search(r"""['"]headers['"]\s*\]?\s*[=:]""", joined))
+    if not sets_headers:
+        return False, ("transform reads header_* secrets but never assigns them to the "
+                       "RESTAPIConfig client's `headers` key")
+    return True, ""
+
+
 def no_hardcoded_url_or_path(
     root: Path, hosts: tuple[str, ...], paths: tuple[str, ...]
 ) -> tuple[bool, str]:

@@ -22,7 +22,6 @@ Run from the closure root with the fixtures directory passed in:
 from __future__ import annotations
 
 import argparse
-import ast
 import importlib.util
 import json
 import os
@@ -47,9 +46,11 @@ from api_connector_gate import (  # noqa: E402
     find_closure,
     no_hardcoded_url_or_path,
     profile_attributes,
-    string_literals,
     transform_sources,
     uses_rest_api_resources,
+)
+from api_connector_gate import (  # noqa: E402
+    headers_built_from_secrets as gate_headers_built_from_secrets,
 )
 
 # The stub's own host and the two endpoint paths the brief names. A closure
@@ -195,60 +196,8 @@ def header_marked_public(root: Path) -> tuple[bool, str]:
 
 
 def headers_built_from_secrets(root: Path) -> tuple[bool, str]:
-    """The transform must assemble dlt's `client["headers"]` from the flat
-    `header_*` secrets, not hardcode the User-Agent.
-
-    Two independent failure modes, distinguished in the detail because the
-    fixes differ: never configuring headers at all (the closure 403s), versus
-    configuring them from a literal (the closure works today and breaks the
-    moment the profile changes, exactly like a hardcoded base_url).
-
-    The hardcode test reads STRING LITERALS via the AST, docstrings excluded --
-    not the file text. A correct closure that documents why the header exists
-    ("Beacon rejects any client not sending User-Agent: nexty-test-client/1.0")
-    is explaining the requirement, not hardcoding it, and a substring scan
-    reports that comment as the very defect the comment is warning about. Same
-    reasoning the connector gate uses, and the same reasoning `self-check.md`
-    gives for reading `spec.py`'s literals via the AST rather than its text.
-
-    Scans every `transform/*.py` for the same reason the connector gate does:
-    a closure that factors `_headers_from` into `transform/http.py` and calls it
-    from `main.py` is correct, and a main-only scan calls it a closure that
-    never reads a header.
-    """
-    sources = transform_sources(root)
-    if not sources:
-        return False, "no transform/*.py sources"
-
-    literals: list[str] = []
-    text_of: list[str] = []
-    for path in sources:
-        src = path.read_text(encoding="utf-8", errors="replace")
-        text_of.append(src)
-        try:
-            literals += string_literals(ast.parse(src))
-        except SyntaxError as exc:
-            return False, f"{path.name} does not parse: {exc}"
-
-    hardcoded = [lit for lit in literals if REQUIRED_USER_AGENT in lit]
-    if hardcoded:
-        return False, (f"transform hardcodes {REQUIRED_USER_AGENT!r} instead of reading "
-                       f"it from the flat secrets map (secrets['header_user_agent'])")
-
-    joined = "\n".join(text_of)
-    reads_header_secrets = bool(
-        re.search(r"""startswith\(\s*['"]header_""", joined)
-        or re.search(r"""secrets\s*(?:\.get\s*\(\s*|\[\s*)['"]header_\w+['"]""", joined)
-        or any(lit.startswith("header_") for lit in literals)
-    )
-    if not reads_header_secrets:
-        return False, ("transform never reads a header_* key from secrets — the API "
-                       "requires a User-Agent and rejects the request without it")
-    sets_headers = bool(re.search(r"""['"]headers['"]\s*\]?\s*[=:]""", joined))
-    if not sets_headers:
-        return False, ("transform reads header_* secrets but never assigns them to the "
-                       "RESTAPIConfig client's `headers` key")
-    return True, ""
+    """This scenario's header value, through the shared implementation."""
+    return gate_headers_built_from_secrets(root, REQUIRED_USER_AGENT)
 
 
 def sensitivity_artifacts_present(root: Path) -> tuple[bool, str]:

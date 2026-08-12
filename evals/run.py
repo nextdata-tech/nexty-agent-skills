@@ -232,6 +232,11 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     # it grades — staged into the workspace it would turn "build this the
     # documented way" into "satisfy this file".
     "worldbank-live": frozenset({"check_worldbank_connector.py"}),
+    # Harness only, unlike job-loop's check_job_loop.py which the agent runs as
+    # a forcing function: this verifier computes the exact per-team check counts
+    # a correct product must reproduce, which is the answer key to the brief's
+    # question 1, and it imports runner-side modules the workspace does not have.
+    "authenticated-api-source-supervisor": frozenset({"check_api_source_e2e.py"}),
 }
 
 _SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
@@ -291,6 +296,11 @@ class SourceIsolation:
 # to this set below, keyed by scenario) because its payload/auth/pagination
 # logic is the answer key the agent must instead discover by calling the live
 # endpoint — exactly why MCP_SERVER_SIDE_FIXTURES hides catalog.json/semantic.json.
+# Names the env var stub modules read to decide where to append their request
+# log. Mirrors stub_beacon_api.OBSERVATIONS_ENV; the two are pinned together by
+# test_api_source_supervisor_e2e.py so a rename cannot silently disable the log.
+STUB_OBSERVATIONS_ENV = "NXD_STUB_OBSERVATIONS"
+
 HTTP_STUB_RUNNER_SIDE_FIXTURES = {
     "http_stub.json",  # runner opt-in marker, parallel to mcp.json/desktop.json
     "stub_beacon_api.py",  # authenticated-api-source-build's stub module/answer key
@@ -977,9 +987,22 @@ def desktop_process_guard(ws: Path, supervisor: Path, env_overrides: dict[str, s
 
 
 def desktop_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: str,
-                        bin_dir: Path, env_overrides: dict[str, str]) -> str:
-    """Run the pristine verifier before the temporary workspace disappears."""
-    checker = scenario_dir / "fixtures" / "check_job_loop.py"
+                        bin_dir: Path, env_overrides: dict[str, str],
+                        verifier: str = "check_job_loop.py") -> str:
+    """Run the pristine verifier before the temporary workspace disappears.
+
+    ``verifier`` comes from ``desktop.json``. It defaults to the job-loop
+    checker every desktop scenario shipped when this was a fixed filename — a
+    scenario verifying a different closure shape (an api-source E2E, say) names
+    its own instead of overloading that one.
+    """
+    checker = scenario_dir / "fixtures" / verifier
+    if not checker.is_file():
+        return "JOB VERIFY (authoritative runner facts): " + json.dumps(
+            {"passed": False,
+             "infrastructure_error": f"desktop verifier not found: {checker}"},
+            sort_keys=True,
+        )
     env = dict(os.environ)
     env.update(env_overrides)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -1332,7 +1355,17 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
     reads it exactly like any other fixture file; the port itself is chosen
     fresh per run via ``socket.bind(("127.0.0.1", 0))`` inside the module.
     """
+    # `fixtures_from` borrows another scenario's stub instead of copying it. Two
+    # scenarios ingesting from the same fixture must serve the SAME payload,
+    # auth and header gate, or the pair stops being comparable — and a copy
+    # drifts silently, which is worse than either scenario having no stub.
+    borrowed = str(spec.get("fixtures_from", "")).strip()
     fixtures_dir = scenario_dir / "fixtures"
+    if borrowed:
+        fixtures_dir = scenario_dir.parent / borrowed / "fixtures"
+        if not fixtures_dir.is_dir():
+            raise HttpStubSetupError(
+                f"http_stub fixtures_from names no such scenario: {borrowed}")
     module_name = str(spec.get("module", "")).removesuffix(".py")
     module_path = fixtures_dir / f"{module_name}.py"
     if not module_path.is_file():
@@ -1347,6 +1380,25 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
         raise HttpStubSetupError(f"could not load http_stub module: {module_path}")
     module = importlib.util.module_from_spec(mod_spec)
     mod_spec.loader.exec_module(module)
+
+    # A file-backed request log, for scenarios whose verifier is a SEPARATE
+    # process and must answer "did the closure the supervisor materialized
+    # actually reach this fixture, carrying the required header?". The module's
+    # in-memory OBSERVED cannot cross that boundary.
+    #
+    # Deliberately outside the workspace. In it, the agent could read back the
+    # exact headers its own failing requests carried, which turns "diagnose an
+    # unexplained 403" — the task — into a lookup.
+    observations: Path | None = None
+    log_holder: tempfile.TemporaryDirectory | None = None
+    previous_log = os.environ.get(STUB_OBSERVATIONS_ENV)
+    if spec.get("observations"):
+        log_holder = tempfile.TemporaryDirectory(prefix="eval-stub-observations-")
+        observations = Path(log_holder.name) / "observations.jsonl"
+        observations.write_text("", encoding="utf-8")
+        # The stub runs IN this process and reads the variable from os.environ,
+        # so this is the only channel that reaches it.
+        os.environ[STUB_OBSERVATIONS_ENV] = str(observations)
 
     start_fn = getattr(module, str(spec.get("start", "start_server")))
     stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
@@ -1380,9 +1432,15 @@ def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_nam
                 "EVAL_CODEX_AGENT_SANDBOX=danger-full-access (what CI uses), or "
                 "with --agent-backend claude."
             )
-        yield base_url
+        yield base_url, observations
     finally:
         stop_fn(server, thread)
+        if log_holder is not None:
+            if previous_log is None:
+                os.environ.pop(STUB_OBSERVATIONS_ENV, None)
+            else:
+                os.environ[STUB_OBSERVATIONS_ENV] = previous_log
+            log_holder.cleanup()
 
 
 def _write_fake_nxd(bin_dir: Path) -> None:
@@ -2363,36 +2421,65 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                     **source_isolation_env,
                     "NXD_JOB_CHECK_TMPDIR": str(ws / ".desktop-check-tmp"),
                 }
+                # A desktop scenario may ALSO need the runner's local REST
+                # fixture: an api-source closure ingests from it, and the
+                # supervisor re-materializes on every serve — including the
+                # verifier's re-serve of the published snapshot. So the stub
+                # must outlive the agent run, on the SAME port. The base_url
+                # the agent pinned into infra-profile.yaml is the port the
+                # runner bound; restart the stub between the two and the
+                # published definition points at a closed socket, which reads
+                # as "the closure is broken" rather than "the fixture moved".
+                stub_ctx: contextlib.AbstractContextManager = (
+                    http_stub_server(scenario_dir, ws, http_stub_spec,
+                                     agent_backend.name)
+                    if http_stub_spec is not None
+                    else contextlib.nullcontext((None, None))
+                )
                 # Keep the workspace until the pristine verifier has re-served
                 # its snapshots. The guard then runs on all outcomes, including
                 # a timed-out Claude process.
-                with desktop_process_guard(
-                    ws, bin_dir / "nxd-desktop-supervisor", env_over
-                ):
-                    # desktop narrows the tool allowlist (no web/docs escape
-                    # hatch). Backends that gate per-tool (Claude) honour it;
-                    # sandbox-based ones (Codex) ignore it, so a desktop run is
-                    # not comparable across providers.
-                    desktop_kwargs = {"allowed_tools": JOB_AGENT_ALLOWED_TOOLS}
-                    # The guard wraps the WHOLE turn loop: run_agent returns
-                    # only once every turn is done, so the cleanup below fires
-                    # once at the end and never sweeps a supervisor out from
-                    # under a turn still to come.
-                    ok, trace, metrics = agent_backend.run_agent(
-                        ws, prompt, agent_model, agent_timeout,
-                        extra_dirs=[], effort=args.agent_effort,
-                        env_overrides=env_over, path_prepend=bin_dir,
-                        skill_pack_dir=plugin_dir, **desktop_kwargs,
-                        **source_audit_kwargs, **turn_kwargs,
-                    )
-                    failure = source_audit_failure(metrics)
-                    if failure is not None:
-                        return failure
-                    if checks.get("desktop_verify"):
-                        facts.append(desktop_harness_fact(
-                            scenario_dir, ws, desktop_python,
-                            str(desktop_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
-                        ))
+                try:
+                    with stub_ctx as (_stub_url, stub_observations), \
+                            desktop_process_guard(
+                                ws, bin_dir / "nxd-desktop-supervisor", env_over):
+                        # desktop narrows the tool allowlist (no web/docs escape
+                        # hatch). Backends that gate per-tool (Claude) honour it;
+                        # sandbox-based ones (Codex) ignore it, so a desktop run is
+                        # not comparable across providers.
+                        desktop_kwargs = {"allowed_tools": JOB_AGENT_ALLOWED_TOOLS}
+                        # The guard wraps the WHOLE turn loop: run_agent returns
+                        # only once every turn is done, so the cleanup below fires
+                        # once at the end and never sweeps a supervisor out from
+                        # under a turn still to come.
+                        ok, trace, metrics = agent_backend.run_agent(
+                            ws, prompt, agent_model, agent_timeout,
+                            extra_dirs=[], effort=args.agent_effort,
+                            env_overrides=env_over, path_prepend=bin_dir,
+                            skill_pack_dir=plugin_dir, **desktop_kwargs,
+                            **source_audit_kwargs, **turn_kwargs,
+                        )
+                        failure = source_audit_failure(metrics)
+                        if failure is not None:
+                            return failure
+                        # Inside the stub context on purpose: the verifier
+                        # re-serves the published definition, which
+                        # re-materializes the transform and therefore re-fetches
+                        # from the fixture.
+                        if checks.get("desktop_verify"):
+                            verify_env = dict(env_over)
+                            if stub_observations is not None:
+                                verify_env[STUB_OBSERVATIONS_ENV] = str(stub_observations)
+                            facts.append(desktop_harness_fact(
+                                scenario_dir, ws, desktop_python,
+                                str(desktop_spec.get("workflow", "invoice-pulse")),
+                                bin_dir, verify_env,
+                                verifier=str(desktop_spec.get(
+                                    "verifier", "check_job_loop.py")),
+                            ))
+                except HttpStubSetupError as exc:
+                    res.error = f"http stub setup failed: {exc}"
+                    return res
             elif http_stub_spec is not None:
                 # A runner-started local REST fixture the agent reaches over a
                 # real socket for the duration of this run — see
