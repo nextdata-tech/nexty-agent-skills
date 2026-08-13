@@ -269,8 +269,16 @@ first three as a discover→select→run protocol, not free-form SQL:
 1. **Discover — `list_models`.** Call `list_models` first to see the available
    semantic models (entities), their grains, and how they join. Never guess
    concept names or grain membership — the listing is the canonical source.
-2. **Select — `describe_model(name)`.** For each model you intend to query,
-   call `describe_model` with its name. The response contains:
+2. **Select — `describe_model(name)` for EVERY model.** Call `describe_model` on
+   **all** models `list_models` returns — not just the ones you already think
+   are relevant. Relevance is decided *from* each `describe_model` response,
+   never before it: the metric and dimension `description`s that determine
+   whether a model answers the question only exist inside `describe_model` —
+   `list_models` surfaces only names, grains, and counts. A model with a
+   misleading name (e.g. a prescriber-sounding name) or an off-sounding grain
+   can still hold the metric the question needs, so skipping it on that
+   pre-read evidence is how a real answer gets missed. Read every model; then
+   pick from the full, read set. The response contains:
    - **metrics** (each with its `compatible_dimensions` list — the dimensions
      that share the model's grain),
    - **dimensions** (with PII classifications),
@@ -327,8 +335,18 @@ first, reading only `describe_model` metadata (`metrics` with
 `compatible_dimensions`, `dimensions` with PII flags, `joins` with
 `reaches_dimensions`) — no extra server surface.
 
-**Intent gate (REQUIRED before `run_semantic_query`).** Run all three:
+**Intent gate (REQUIRED before `run_semantic_query`).** Run all four:
 
+0. **Coverage — no model skipped.** The selection must be built only after
+   **every** model returned by `list_models` has been read via `describe_model`
+   (§6d step 2). Do NOT wave a model off because it looks like a different grain
+   or carries an irrelevant-sounding name — grain and relevance are decided
+   *from* `describe_model`, never before it, so a model skipped on `list_models`-
+   only evidence was never really considered. In particular, "it's a different
+   grain from the one I already picked" is **not** a valid skip: grain was
+   chosen from exactly the information this check exists to complete. If any
+   model is unread, read it now (and revisit the selection if it surfaces a
+   better-fitting metric) before running the critic.
 1. **Critic (catalog-aware).** From the *verbatim* question + selection +
    `describe_model` metadata, return a verdict (`ok` / `ambiguous` / `likely-wrong`)
    and suspect concepts. Check each metric's `description` matches intent (e.g.
