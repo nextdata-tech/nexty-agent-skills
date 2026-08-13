@@ -1,0 +1,63 @@
+{
+  "name": "Publish, resume and query an authenticated REST data product",
+  "skills": [
+    "nxd-generate-data-product",
+    "nxd-run-job-loop"
+  ],
+  "ci_skip": "needs the local desktop supervisor binaries (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON); CI provisions neither. Run locally or via workflow_dispatch",
+  "desktop_verify": true,
+  "checks": [
+    {
+      "id": "payload-inspected-before-authoring",
+      "check": "The trace shows a live fetch of EACH of the two endpoints (/v1/monitors and /v1/checks against ENDPOINT_URL), with the returned payload read, before the first write of models.py or the transform. FAIL if the first closure-file write precedes any fetch of either endpoint in the trace."
+    },
+    {
+      "id": "credential-never-narrated-or-hardcoded",
+      "check": "CRITICAL. The bearer token from BRIEF.md is entered into infra-profile.yaml's api-source service attributes and nowhere else. FAIL if the agent RE-TYPES the token in its own prose/narration, or if it appears as a string literal in spec.py, models.py, transform/main.py, requirements.txt, or any committed source file. Do NOT fail the agent for the token appearing in a tool result that merely echoes BRIEF.md: the prompt instructs the agent to read that file and the fixture puts the token there on purpose. The distinction is authorship — a tool result quoting the fixture is the fixture's content; a sentence the agent wrote containing the token is the agent's. Bearer tokens the supervisor MINTS per serve are a different value and are graded by no-supervisor-bearer-in-narration below."
+    },
+    {
+      "id": "rest-connector-with-configured-header",
+      "check": "CRITICAL. Ingestion goes through dlt's REST connector — rest_api_source / rest_api_resources with a RESTAPIConfig — and the required User-Agent is supplied through the client's headers from a header_user_agent attribute in infra-profile.yaml, not hardcoded in transform/main.py and not by abandoning dlt for a urllib/requests loop. A HYBRID also fails: importing rest_api_resources while a requests/urllib/httpx call fetches the rows beside it is not the required architecture. Enforced by the authoritative JOB VERIFY facts ingestion:rest-api-resources-used, ingestion:no-hardcoded-url-or-path, header:declared-in-profile and header:built-from-secrets; grade FROM THOSE FACTS. The last of those is the one the wire cannot show: a closure with the User-Agent frozen into transform/main.py sends exactly the right header, so every observation-based check passes while the closure is one profile change away from failing everywhere. Do NOT fail the agent for initially misreading the 403 as a credential problem — the fixture's error body is deliberately misleading and diagnosing it is the task; grade the landed closure, not the number of hypotheses tried."
+    },
+    {
+      "id": "connectivity-self-check-run-not-claimed",
+      "check": "Per the api-source skill's self-check section, the closure's connectivity smoke test is actually run against ENDPOINT_URL before serving — credentials are available in-session, so it runs. FAIL if the handoff states the connectivity check could not run for want of credentials, and FAIL if the probe lives under transform/ (it must be a standalone script beside the closure; a probe inside transform/ re-runs on every materialization the supervisor performs)."
+    },
+    {
+      "id": "published-through-the-supervisor",
+      "check": "CRITICAL. The product is served and published through the local desktop supervisor under the beacon-uptime workflow — published=yes, followed by status and describe. Enforced by the authoritative JOB VERIFY fact supervisor:published; grade FROM THAT FACT rather than from the agent's claim of having served it."
+    },
+    {
+      "id": "resumed-from-the-durable-key",
+      "check": "CRITICAL. The product is recovered from its durable key — the closure directory plus the beacon-uptime workflow id — after the original endpoint and bearer are dead, WITHOUT re-authoring the closure or re-running generation. FAIL if the agent recovers by re-generating the closure, or if it claims a re-serve reattaches to a still-running instance rather than rebuilding from the definition. Independently enforced by the JOB VERIFY fact supervisor:resumes-published-definition, which re-serves the published snapshot itself; grade FROM THAT FACT for whether recovery is POSSIBLE, and from the trace for whether the agent did it the prescribed way."
+    },
+    {
+      "id": "published-closure-reaches-the-api",
+      "check": "CRITICAL. The PUBLISHED definition — not the agent's working directory — reaches the upstream API through dlt on re-materialization, carrying both the bearer credential and the required User-Agent. This is the property publication can break on its own: an endpoint left in a companion file the snapshot does not carry, or a header assembled from a secret the profile never declared, ingests correctly under the author's hand and fails once published. Enforced by the authoritative JOB VERIFY facts wire:header-reaches-fixture-on-resume and wire:no-unauthorized-requests, observed on the fixture's own request log during the verifier's re-serve; grade FROM THOSE FACTS."
+    },
+    {
+      "id": "governed-query-answers-question-one",
+      "check": "CRITICAL. The brief's question 1 — check volume by owning team — is answered from a catalog-grounded governed selection against the running endpoint, with the selected measures and dimensions stated, and the answer taken from the returned JSON rather than from raw SQL, a DuckDB file read, or the agent's own arithmetic over the payload. Enforced for CORRECTNESS by the JOB VERIFY facts query:team-dimension-published and query:checks-by-team-matches-source, which reconcile the served answer against the counts the fixture itself serves; grade the MECHANISM from the trace and the NUMBERS from those facts."
+    },
+    {
+      "id": "tri-state-result-preserved",
+      "check": "The check-result field is tri-state (up / down / unknown — an inconclusive probe), never a boolean, as the brief's 'things I already know will bite' states. FAIL if the transform coerces it to a bool, folding 'unknown' into 'down', which corrupts the uptime ratio the brief asks for in question 2."
+    },
+    {
+      "id": "orphaned-checks-visible",
+      "check": "Some check rows reference a monitor_id that does not appear in /v1/monitors — Beacon's own deleted-monitor history, which the brief explicitly calls out. FAIL if a silent inner join drops those rows with no trace of them anywhere in the landed workspace or the stated rulings. Grade DISCLOSURE, not the ruling: dropping them with a recorded reason passes; dropping them silently does not."
+    },
+    {
+      "id": "never-polled-monitor-enumerable",
+      "check": "A monitor with zero check rows must remain enumerable as a monitor with no checks, not simply absent from a check-grouped ranking — the brief's question 3 cannot otherwise be answered for it. FAIL if the closure only lands monitors that appear in the check history."
+    },
+    {
+      "id": "no-supervisor-bearer-in-narration",
+      "check": "The bearer the supervisor mints for each serve is passed per command and never narrated. FAIL if a supervisor bearer value appears in the agent's own prose or in the final answer. This is distinct from the API credential in BRIEF.md: both must stay out of narration, and a run can leak either independently."
+    },
+    {
+      "id": "rebuild-semantics-stated-honestly",
+      "check": "The agent states that on this direct-CLI surface a re-serve REBUILDS from the closure rather than reattaching to a running instance, and that the rebuild re-fetches from the upstream API rather than replaying cached rows. FAIL if the recovery is narrated as a reattach or as a resume of a live process, and FAIL if the agent asserts the rebuild is byte-reproducible — the upstream is live and the brief says the numbers will move."
+    }
+  ]
+}

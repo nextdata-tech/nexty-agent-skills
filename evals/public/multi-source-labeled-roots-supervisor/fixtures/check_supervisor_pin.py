@@ -17,10 +17,15 @@ import hashlib
 import os
 import shutil
 import subprocess
+import sys
 from decimal import Decimal
 from pathlib import Path
 
 import duckdb
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+
+from loop_unroll import unroll_literal_loops  # noqa: E402
 
 
 def fail(message: str) -> None:
@@ -116,6 +121,10 @@ def source_rows(fixtures: Path, label: str) -> list[tuple[str, object]]:
 
 def transform_uses_pinned_roots(path: Path) -> bool:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    # Same reasoning as the public checker: root-ness propagates through
+    # assignments, so a `for` target would be invisible to it. See
+    # evals/tools/loop_unroll.py.
+    tree = unroll_literal_loops(tree)
 
     def is_root_lookup(node: ast.AST) -> bool:
         return (
