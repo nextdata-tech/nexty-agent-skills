@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-13 | nxd-generate-data-product: mapper approval contract rerun | PASS | generate-runnable-dp-from-intent | [`2026-08-13-nxd-generate-data-product-mapper-approval-contract`](entries/2026-08-13-nxd-generate-data-product-mapper-approval-contract.md) |
 | 2026-08-11 | nxd-generate-data-product: labeled csv roots live supervisor boundary | NO_EVAL | — | [`2026-08-11-nxd-generate-data-product-labeled-csv-roots-live-supervisor`](entries/2026-08-11-nxd-generate-data-product-labeled-csv-roots-live-supervisor.md) |
 | 2026-08-11 | nxd-generate-data-product: labeled csv roots final review | PASS | multi-source-labeled-roots | [`2026-08-11-nxd-generate-data-product-labeled-csv-roots-final-review`](entries/2026-08-11-nxd-generate-data-product-labeled-csv-roots-final-review.md) |
 | 2026-08-11 | nxd-generate-data-product: labeled CSV roots carried via companion-files | MIXED | multi-source-labeled-roots | [`2026-08-11-nxd-generate-data-product-labeled-csv-roots-carried-via-comp`](entries/2026-08-11-nxd-generate-data-product-labeled-csv-roots-carried-via-comp.md) |

@@ -102,7 +102,7 @@ Prerequisites:
 - API key visible to MCP child: PASS/FAIL (execution reachability only)
 - spec: PASS/FAIL
 - grant: PASS/FAIL (standalone harness binding only)
-- Desktop supervisor admission: PASS/FAIL/unsupported (only the supervisor may report PASS)
+- Desktop supervisor admission: `unknown` unless the supervisor returned a structured outcome; otherwise `PASS`, `FAIL`, or `unsupported` verbatim (only the supervisor may report `PASS`)
 - generated transform: PASS/FAIL
 
 Execution:

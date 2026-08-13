@@ -21,12 +21,6 @@ grouping, input-adapter shape, and evidence granularity are Layer 2 and are
 deliberately absent here — they live in the landed mapper spec, versioned by
 `mapper_spec_id`.
 
-**Standalone grant boundary.** This Layer-1 contract governs the standalone
-field-mapper harness: `map_inputs` still requires a user-authored `Grant`, and
-`Grant.check` remains the pre-dispatch guard for that harness. It does not mint
-or prove a human authorization for a Desktop supervisor build; that is a
-separate supervisor-owned admission boundary.
-
 ## Contents
 
 - [1. Module layout](#1-module-layout)
@@ -41,6 +35,12 @@ separate supervisor-owned admission boundary.
 - [10. Open questions](#10-open-questions)
 
 ---
+
+**Standalone grant boundary.** This Layer-1 contract governs the standalone
+field-mapper harness: `map_inputs` still requires a user-authored `Grant`, and
+`Grant.check` remains the pre-dispatch guard for that harness. It does not mint
+or prove a human authorization for a Desktop supervisor build; that is a
+separate supervisor-owned admission boundary.
 
 ## 1. Module layout
 
@@ -110,6 +110,7 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | Symbol | Module | Purpose |
 |---|---|---|
 | `map_inputs(inputs, *, spec, grant, run_dir, call, ...) -> MapResult` | `field_mapper` | the N→M primitive |
+| `make_call(*, spec, grant, provider="anthropic", provider_model=None, provider_cwd=None) -> callable` | `field_mapper` | lazy, budgeted provider seam; creates the client only on first dispatch |
 | `MapperInput(input_id, identity, ...)` | `field_mapper` | one source record handed to the mapper |
 | `MapperSpec.load(path)` / `.mapper_spec_id` | `spec` | landed spec → runtime object |
 | `MapperProposal` / `MapperReview` / `MapperEvidence` | `records` | the three record types |
@@ -121,7 +122,8 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | `FieldMapperError` and subclasses | `errors` | so callers can catch by class, not string |
 
 Everything else is private. `transport.Client` is deliberately **not** public —
-Layer 2 must not be able to make an unbudgeted, unledgered call.
+Layer 2 must use `make_call` so provider construction, credential resolution,
+and the per-run budget ledger stay behind the sanctioned seam.
 
 #### The exact call, and the exact construction
 

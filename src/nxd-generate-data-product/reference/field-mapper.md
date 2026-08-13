@@ -285,10 +285,13 @@ silently unbinds every review. Never introspect these signatures to decide how t
 call them: a closure that adapts to whatever is installed converts a loud
 `TypeError` into a silent difference between two runtimes.
 
-`mapper/examples/e2e/` in this skill's repo checkout holds both proofs —
+`mapper/examples/e2e/` in this skill's repo checkout holds historical proofs —
 `run_e2e.py` for the data chain and `transform_main.py` for the platform
-entrypoint. They are not packaged into the installed skill: they need an nxd
-monorepo checkout.
+entrypoint. They are not packaged into the installed skill and their provider
+wiring predates the bounded `make_call` seam; do not copy their private
+`transport.Client` construction into a generated transform. Generated code
+must follow the `make_call` example above. The proofs need an nxd monorepo
+checkout.
 
 ## Spend: the self-check really pays
 

@@ -35,6 +35,17 @@ def test_standalone_harness_still_requires_a_user_authored_grant() -> None:
     assert "`map_inputs` requires a user-authored `Grant`" in field_mapper
 
 
+def test_normative_contract_publishes_the_bounded_call_adapter() -> None:
+    contract = _normalized(MAPPER_CONTRACT)
+
+    assert (
+        '`make_call(*, spec, grant, provider="anthropic", provider_model=None, '
+        'provider_cwd=None) -> callable`'
+    ) in contract
+    assert "provider construction, credential resolution" in contract
+    assert "use `make_call`" in contract
+
+
 def test_desktop_treats_mapper_files_as_scope_proposals_not_authorization() -> None:
     field_mapper = _normalized(FIELD_MAPPER)
 
@@ -51,7 +62,8 @@ def test_preflight_and_phase_g_do_not_claim_desktop_authorization() -> None:
 
     assert "execution reachability only, not Desktop authorization" in preflight
     assert "never proves Desktop authorization, human consent, or credential isolation" in preflight
-    assert "Desktop supervisor admission: PASS/FAIL/unsupported" in preflight
+    assert "Desktop supervisor admission:" in preflight
+    assert "`unknown` unless the supervisor returned a structured outcome" in preflight
     assert "not a protected Desktop human-authorization check" in self_check
     assert "does **not** prove a human authorization" in self_check
 
@@ -88,6 +100,13 @@ def test_client_confirmation_is_the_only_surface_with_exact_subject_reuse_and_fa
         assert diagnostic in field_mapper
     assert "Approval records are session-local" in field_mapper
     assert "do not enforce cumulative call/token/cost budgets across build attempts" in field_mapper
+
+
+def test_mapper_status_defines_a_safe_unknown_admission_default() -> None:
+    preflight = _normalized(PREFLIGHT)
+
+    assert "`unknown` unless the supervisor returned a structured outcome" in preflight
+    assert "otherwise `PASS`, `FAIL`, or `unsupported` verbatim" in preflight
 
 
 def test_generated_mapper_uses_the_budgeted_call_adapter_and_wire_shape() -> None:
