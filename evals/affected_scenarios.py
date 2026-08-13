@@ -74,6 +74,14 @@ SHARED_FIXTURE_SCENARIOS = {
     "evals/tools/desktop_supervisor.py": (
         "authenticated-api-source-supervisor",
     ),
+    # Normalizes literal `for` loops before the labeled-root checkers analyse a
+    # transform. It decides whether a correct closure is READ correctly, so a
+    # change here can flip either scenario's verdict without either scenario
+    # directory being touched.
+    "evals/tools/loop_unroll.py": (
+        "multi-source-labeled-roots",
+        "multi-source-labeled-roots-supervisor",
+    ),
     # The Beacon stub is the upstream for two scenarios: the build cell reaches
     # it directly, and the supervisor cell borrows it via `fixtures_from`. A
     # change to the payload, the auth gate or the User-Agent gate moves both.
