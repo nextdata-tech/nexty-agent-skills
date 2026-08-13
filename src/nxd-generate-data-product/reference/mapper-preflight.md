@@ -31,7 +31,7 @@ one.
 |---|---|---|---|
 | 1 | mapper import available | `python -c "import nxd.experimental.field_mapper"` | the `nxd` package is missing or too old |
 | 2 | anthropic SDK importable | `python -c "import anthropic"` | runtime under-provisioned — `nxd-desktop-setup.sh --force` |
-| 3 | API key present in the child environment | test the variable is set and non-empty — **never print it** | see [field-mapper.md](field-mapper.md) § credentials |
+| 3 | API key present in the child environment | test the variable is set and non-empty — **never print it** | execution reachability only, not Desktop authorization or credential isolation; see [field-mapper.md](field-mapper.md#desktop-supervisor-approval-boundary) |
 | 4 | mapper spec parses | `MapperSpec.load(path)` | malformed spec — fix before anything else |
 | 5 | canonical spec id computed | `python -m nxd.experimental.field_mapper spec-id <spec>` | the id the grant must carry |
 | 6 | grant exists | the grant file is present in `contracts/` | the user must author one; you cannot |
@@ -49,9 +49,12 @@ never by introspecting the installed signature and adapting the generated code
 to match. Adapting turns a loud `TypeError` into a silent behavioural difference
 between two runtimes, which is strictly worse than failing.
 
-Checks 5–8 are consent checks. A failure there is **always** a blocker for the
-user, never something to route around: you cannot author a grant, extend an
-expiry, or rewrite the spec so an existing grant starts binding again.
+Checks 5–8 are the standalone harness's consent checks. A failure there is
+**always** a blocker for the user, never something to route around: you cannot
+author a grant, extend an expiry, or rewrite the spec so an existing grant
+starts binding again. In Desktop they do not admit a build: grant/request files
+remain untrusted scope proposals until the supervisor has obtained protected
+human confirmation.
 
 ## The preflight report
 
@@ -83,7 +86,8 @@ Emit one structured block. Same key order every run, so two runs diff cleanly:
 ```
 
 `api_key_present` is a **boolean**, and `model_called` is always `false` in a
-preflight — if it is ever `true`, this was not a preflight.
+preflight — if it is ever `true`, this was not a preflight. `api_key_present`
+never proves Desktop authorization, human consent, or credential isolation.
 
 ## MAPPER RUN STATUS — the required format
 
@@ -95,9 +99,10 @@ MAPPER RUN STATUS
 
 Prerequisites:
 - SDK: PASS/FAIL
-- API key visible to MCP child: PASS/FAIL
+- API key visible to MCP child: PASS/FAIL (execution reachability only)
 - spec: PASS/FAIL
-- grant: PASS/FAIL
+- grant: PASS/FAIL (standalone harness binding only)
+- Desktop supervisor admission: `unknown` unless the supervisor returned a structured outcome; otherwise `PASS`, `FAIL`, or `unsupported` verbatim (only the supervisor may report `PASS`)
 - generated transform: PASS/FAIL
 
 Execution:
@@ -142,11 +147,12 @@ a later one:
 
 A green consent gate is claim 1. A dispatched build is claim 2. **Neither is a
 successful mapper run**, and describing either as one is the reporting failure
-this file exists to prevent. In the incident, claims 1–3 held and claim 4 never
-happened: the transform started and died constructing its first `MapperInput`.
-The honest report is "failed at s2_transform, model never contacted, nothing
-published" — not "the mapper run failed", which invites the reader to assume
-spend occurred.
+this file exists to prevent. Desktop supervisor admission is a separate,
+earlier boundary: a green Phase G or present API key is never a human
+authorization. In the incident, claims 1–3 held and claim 4 never happened: the
+transform started and died constructing its first `MapperInput`. The honest
+report is "failed at s2_transform, model never contacted, nothing published" —
+not "the mapper run failed", which invites the reader to assume spend occurred.
 
 ## Redaction rules
 
