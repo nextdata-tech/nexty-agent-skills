@@ -702,6 +702,22 @@ def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
     own routes/auth/payload, the runner only supplies the process lifecycle and
     the port handoff, exactly as ``semantic_http_server`` supplies lifecycle for
     the (heavier, license-gated) semantic MCP server.
+
+    Two optional keys, both load-bearing where they appear (implemented in
+    ``http_stub_server``, which carries the full reasoning):
+
+    ``"fixtures_from": "<sibling scenario name>"``
+        Resolve ``module`` from THAT scenario's ``fixtures/`` instead of this
+        one's, so two scenarios ingesting the same fixture share one file
+        rather than a copy that drifts.
+    ``"observations": true``
+        Back the stub with a request log outside the workspace, yielded
+        alongside the base URL and reachable by a separate verifier process.
+        Requires the module to define ``set_observations_path(path | None)``
+        — the runner hands the path to that one module instance rather than
+        through ``os.environ``, because cells share a process and a global
+        would cross-wire concurrent runs. The runner sets the env var for the
+        verifier subprocess only, never for the agent.
     """
     marker = scenario_dir / "fixtures" / "http_stub.json"
     if not marker.exists():

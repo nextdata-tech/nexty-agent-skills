@@ -413,13 +413,14 @@ services:
 
 
 def _workspace(tmp_path: Path, *, published: bool = True,
-               transform: str = CLEAN_TRANSFORM) -> Path:
+               transform: str = CLEAN_TRANSFORM,
+               profile: str | None = None) -> Path:
     import sqlite3
 
     closure = tmp_path / "nxd-jobs" / "beacon" / "closure"
     (closure / "transform").mkdir(parents=True)
     (closure / "transform" / "main.py").write_text(transform, encoding="utf-8")
-    (closure / "infra-profile.yaml").write_text(_profile(), encoding="utf-8")
+    (closure / "infra-profile.yaml").write_text(profile or _profile(), encoding="utf-8")
 
     state = tmp_path / ".desktop" / "state"
     definition = state / "definitions" / "def-1"
@@ -491,14 +492,15 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setenv(stub.OBSERVATIONS_ENV, str(log))
 
     def run_harness(*, requests_on_resume=None, described=CATALOG, totals=...,
-                    published=True, transform=CLEAN_TRANSFORM):
+                    published=True, transform=CLEAN_TRANSFORM, profile=None):
         if totals is ...:
             totals = dict(verifier.checks_per_team(stub))
         if requests_on_resume is None:
             requests_on_resume = [_authorized("/v1/monitors"), _authorized("/v1/checks")]
         _install_fake_supervisor(monkeypatch, log, described=described,
                                  requests_on_resume=requests_on_resume, totals=totals)
-        ws = _workspace(tmp_path, published=published, transform=transform)
+        ws = _workspace(tmp_path, published=published, transform=transform,
+                        profile=profile)
         verifier.FAILURES.clear()
         verifier.PASSES.clear()
         import argparse as _argparse
@@ -597,6 +599,52 @@ def test_a_hardcoded_header_fails_even_when_the_wire_looks_right(harness):
     assert "header:declared-in-profile" in verifier.PASSES
     assert code == 1
     assert failures == ["header:built-from-secrets"], failures
+
+
+def _header_failure_detail() -> str:
+    return next(f for f in verifier.FAILURES if f.startswith("header:declared-in-profile"))
+
+
+def test_a_wrong_header_value_is_diagnosed_as_wrong_not_missing(harness):
+    """The detail must name the value found, not claim the attribute is absent.
+
+    This string is what reaches the JOB VERIFY facts, and `checks.json` tells
+    the judge to grade FROM those facts — so a detail reading "no
+    header_user_agent ... among [... 'header_user_agent' ...]" sends a
+    self-contradicting diagnosis into the transcript and points the reader at
+    the wrong fix.
+    """
+    run_harness, _log = harness
+    wrong = _profile().replace(f"value: {stub.REQUIRED_USER_AGENT}",
+                               "value: nexty-test-client/1.1")
+    assert "nexty-test-client/1.1" in wrong, "profile template drifted"
+    code, failures = run_harness(profile=wrong)
+
+    assert code == 1
+    assert "header:declared-in-profile" in failures
+    detail = _header_failure_detail()
+    assert "nexty-test-client/1.1" in detail, (
+        f"the wrong value itself must appear, or the reader cannot see what to "
+        f"change: {detail}")
+    assert stub.REQUIRED_USER_AGENT in detail, f"the expected value too: {detail}"
+    assert not detail.startswith("header:declared-in-profile: no "), (
+        f"a declared-but-wrong attribute must not be reported as missing: {detail}")
+
+
+def test_a_missing_header_attribute_still_says_missing(harness):
+    """The other half: absence keeps its own wording and lists what was found."""
+    run_harness, _log = harness
+    without = "\n".join(
+        line for line in _profile().splitlines()
+        if "header_user_agent" not in line and stub.REQUIRED_USER_AGENT not in line)
+    code, failures = run_harness(profile=without)
+
+    assert code == 1
+    assert "header:declared-in-profile" in failures
+    detail = _header_failure_detail()
+    assert "no header_user_agent" in detail, detail
+    # The keys actually present are the useful part of an absence report.
+    assert "base_url" in detail, f"the attributes found should be listed: {detail}"
 
 
 # ---------------------------------------------------------------------------

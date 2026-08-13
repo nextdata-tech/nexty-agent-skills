@@ -213,9 +213,20 @@ def harness_mode(args: argparse.Namespace) -> int:
 
     fields, _public_flags = profile_attributes(root)
     header_keys = [k for k in fields if k.lower() == "header_user_agent"]
+    # Two distinct defects, and the detail must say which: a MISSING attribute
+    # and one declared with the wrong value need different fixes. This string
+    # lands in the JOB VERIFY facts the judge grades from, so reporting "no
+    # header_user_agent" while listing it — and printing keys, never the value
+    # that is actually wrong — sends the wrong diagnosis into the transcript.
+    if not header_keys:
+        header_detail = (f"no header_user_agent attribute; found "
+                         f"{sorted(fields)}")
+    else:
+        header_detail = (f"header_user_agent = {fields[header_keys[0]]!r}, "
+                         f"expected {stub.REQUIRED_USER_AGENT!r}")
     check("header:declared-in-profile",
           bool(header_keys) and fields[header_keys[0]] == stub.REQUIRED_USER_AGENT,
-          f"no header_user_agent = {stub.REQUIRED_USER_AGENT!r} among {sorted(fields)}")
+          header_detail)
     # Not redundant with the wire facts below, and the one static fact they
     # cannot replace: a closure with the User-Agent frozen into transform/main.py
     # sends exactly the right header, so the fixture sees a perfect request and

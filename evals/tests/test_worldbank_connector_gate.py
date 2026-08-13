@@ -375,6 +375,41 @@ def test_touching_the_shared_gate_selects_both_scenarios():
     assert "worldbank-live" in result["skipped"]
 
 
+def test_every_evals_tool_is_classified():
+    """The map above is only as good as its completeness, which nothing checked.
+
+    The test above proves the two entries that EXIST work; it cannot notice a
+    third module added with no entry, which lands back in the silent case the
+    map exists to prevent. Requiring every `evals/tools/*.py` to be either
+    mapped to its scenarios or explicitly exempt makes that omission fail here
+    instead of showing up as a green "no eval was affected" on the pull
+    request that breaks a shared gate.
+    """
+    sys.path.insert(0, str(EVALS))
+    affected = _load(EVALS / "affected_scenarios.py", "_affected_scenarios")
+
+    on_disk = {f"evals/tools/{p.name}" for p in (EVALS / "tools").glob("*.py")}
+    classified = set(affected.SHARED_FIXTURE_SCENARIOS) | set(affected.EXEMPT_SHARED_TOOLS)
+    unclassified = on_disk - classified
+    assert not unclassified, (
+        f"{sorted(unclassified)} live in evals/tools/ but are neither mapped in "
+        f"SHARED_FIXTURE_SCENARIOS nor listed in EXEMPT_SHARED_TOOLS. A change "
+        f"to an unmapped shared module selects zero scenarios and reports 'no "
+        f"eval was affected'. Add the importing scenarios, or an exemption "
+        f"stating why it affects none."
+    )
+
+    # An exemption is a judgement about a real file; a stale one silently
+    # excuses nothing while looking like coverage.
+    stale = set(affected.EXEMPT_SHARED_TOOLS) - on_disk
+    assert not stale, f"EXEMPT_SHARED_TOOLS names files that no longer exist: {sorted(stale)}"
+    assert not (set(affected.EXEMPT_SHARED_TOOLS) & set(affected.SHARED_FIXTURE_SCENARIOS)), (
+        "a module cannot be both mapped and exempt"
+    )
+    for path, reason in affected.EXEMPT_SHARED_TOOLS.items():
+        assert reason.strip(), f"{path} is exempt with no stated reason"
+
+
 def test_scenario_declares_the_checker_and_the_judge_defers_to_it():
     checks = json.loads((WORLDBANK / "checks.json").read_text(encoding="utf-8"))
     cfg = checks.get("deterministic_check")

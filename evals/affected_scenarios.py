@@ -83,6 +83,23 @@ SHARED_FIXTURE_SCENARIOS = {
     ),
 }
 
+# Modules under `evals/tools/` that deliberately map to no scenario, with the
+# reason. Nothing above proves this map is COMPLETE — the failure it exists to
+# prevent (a shared file selecting zero scenarios) is silent, so a new module
+# added without an entry reproduces it exactly. `test_every_evals_tool_is_
+# classified` requires every `evals/tools/*.py` to be a key above or a key
+# here, which turns "someone forgot" into a red test and makes each exemption
+# a written judgement rather than an omission.
+EXEMPT_SHARED_TOOLS = {
+    # Harness plumbing, not a checker: no scenario's checker imports it, and
+    # `run.py` — already a suite-wide prefix — is what invokes it. The path
+    # comes from EVAL_CODEX_WRAPPER, so it is not resolved from this repo at
+    # all, and no public scenario currently opts into `agent_source_isolation`.
+    # Give it an entry above if one ever does.
+    "evals/tools/source-isolation-wrapper.py":
+        "invoked by run.py via EVAL_CODEX_WRAPPER; no scenario checker imports it",
+}
+
 
 def load_scenarios(suite: str) -> tuple[dict[str, list[str]], dict[str, str]]:
     """Return ``({scenario: [skill, ...]}, {scenario: ci_skip_reason})``."""
