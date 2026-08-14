@@ -51,9 +51,11 @@ it. Free-form text-to-SQL can't do this because there is no selection to inspect
 
 Step 6f is that validation, run **client-side** before `run_semantic_query`:
 
-0. **Coverage** — every model `list_models` returns has been read via
-   `describe_model`; no model waved off for grain/relevance on `list_models`-
-   only evidence (relevance is decided *from* `describe_model`, never before it).
+0. **Coverage** — every model in the agreed scope has been read via
+   `describe_model` (the full `list_models` set, or the domain subset the user
+   approved when the catalog was too large to read whole); no model waved off
+   for grain/relevance on `list_models`-only evidence (relevance is decided
+   *from* `describe_model`, never before it).
 1. **Critic** — LLM verdict (`ok` / `ambiguous` / `likely-wrong`) over
    `{question, selection, describe_model metadata}`.
 2. **Echo** — deterministic plain-language restatement of the selection from the

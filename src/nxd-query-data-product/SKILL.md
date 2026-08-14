@@ -335,15 +335,19 @@ first, reading only `describe_model` metadata (`metrics` with
 **Intent gate (REQUIRED before `run_semantic_query`).** Run all four:
 
 0. **Coverage — no model skipped.** The selection must be built only after
-   **every** model returned by `list_models` has been read via `describe_model`
-   (§6d step 2). Do NOT wave a model off because it looks like a different grain
-   or carries an irrelevant-sounding name — grain and relevance are decided
-   *from* `describe_model`, never before it, so a model skipped on `list_models`-
-   only evidence was never really considered. In particular, "it's a different
-   grain from the one I already picked" is **not** a valid skip: grain was
-   chosen from exactly the information this check exists to complete. If any
-   model is unread, read it now (and revisit the selection if it surfaces a
-   better-fitting metric) before running the critic.
+   **every** model *in the agreed scope* has been read via `describe_model`
+   (§6d step 2). The agreed scope is the full `list_models` set, or — when the
+   catalog was too large to read whole and the user approved narrowing by domain
+   under §6d step 2 — that approved subset, in which case the echo (step 2)
+   states the narrowing so the user sees what was not read. Within the agreed
+   scope there are no exceptions: do NOT wave a model off because it looks like
+   a different grain or carries an irrelevant-sounding name — grain and
+   relevance are decided *from* `describe_model`, never before it, so a model
+   skipped on `list_models`-only evidence was never really considered. In
+   particular, "it's a different grain from the one I already picked" is **not**
+   a valid skip: grain was chosen from exactly the information this check exists
+   to complete. If any in-scope model is unread, read it now (and revisit the
+   selection if it surfaces a better-fitting metric) before running the critic.
 1. **Critic (catalog-aware).** From the *verbatim* question + selection +
    `describe_model` metadata, return a verdict (`ok` / `ambiguous` / `likely-wrong`)
    and suspect concepts. Check each metric's `description` matches intent (e.g.

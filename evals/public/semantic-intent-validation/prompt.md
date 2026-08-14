@@ -23,40 +23,51 @@ The compiler behind `run_semantic_query` is deterministic and fan-out-safe — s
 SQL; it is answering the **wrong question** with a confident number. The skill's
 job is to validate intent **before** executing.
 
-The analyst submits three questions in turn:
+## What each question is testing (judge-only — not shown to the agent)
 
-> **Q1 (ambiguous):** "How many calls did we make last month?"
->
-> **Q2 (clear):** "What is the total revenue by country?"
->
-> **Q3 (clear, but metric on the decoy):** "How much revenue did partners bring in?"
+Everything below this heading and above `## Task for the agent` is stripped from
+the agent's copy by `agent_task_from_prompt` in `evals/run.py`. It is written for
+the judge. Naming the traps here rather than in the task section is deliberate:
+if the task section told the agent to describe every model, or named
+`partner_sourced_revenue`, the two coverage checks would grade prompt-following
+instead of the skill, and a `no_skills` baseline would pass them.
+
+**Q1 — "How many calls did we make last month?" — expect a clarify, not an
+execution.** The catalog has two call-related metrics (`call_count` = every
+logged call, `sales_calls` = calls that converted) at the same grain, and no
+`month`/date/time dimension on any model, so "last month" has nothing to bind
+to. The right move is to echo what would run and ask the analyst to
+disambiguate — not to guess one metric and execute.
+
+**Q2 — "What is the total revenue by country?" — expect an execution, no
+clarify turn.** One obvious metric (`total_revenue` on `order_event`) and one
+compatible dimension (`country`, reached through `order_event`'s documented join
+to `customer_profile`). Adding a clarify turn here is over-clarifying.
+
+**Q3 — "How much revenue did partners bring in?" — expect an execution, and it
+is the discovery trap.** The only correct metric is `partner_sourced_revenue`,
+and it lives on `partner_directory` — whose `list_models` row exposes nothing but
+a name, a grain ("one row per partner") and a lookup-table-sounding description.
+An agent that decides relevance before reading the model skips it, stops at
+`order_event`, and selects `total_revenue` filtered by `channel = 'partner'`.
+That returns a confident wrong number: `channel` is the order's own sales
+channel, not partner attribution. The two paths are numerically distinguishable
+against the seeded fixtures — the correct path returns 275, the trap returns 150
+— so the transcript shows which one was taken.
 
 ## Task for the agent
 
-Answer each question using the semantic MCP tools, following the skill's Step 6f
-intent gate. For each question: discover the catalog (calling `describe_model` on
-**every** model `list_models` returns — do not skip a model because its name or
-grain sounds irrelevant), build a selection from concept names, run the intent
-gate (coverage + critic + echo + clarify), and only execute `run_semantic_query`
-once intent is confirmed.
+A business analyst asks you three questions, in turn. Answer each one using the
+semantic MCP tools available in your session, following the skill's Step 6f
+intent gate.
 
-Q1 is ambiguous on purpose: the catalog has two call-related metrics
-(`call_count` = every logged call, and `sales_calls` = calls that converted) and
-no `month`/time dimension wired, so "last month" has nothing to bind to. The
-right move is to **echo what you'd run and ask the analyst to disambiguate** —
-not to guess one metric and execute.
+> **Q1:** "How many calls did we make last month?"
+>
+> **Q2:** "What is the total revenue by country?"
+>
+> **Q3:** "How much revenue did partners bring in?"
 
-Q2 is clear: one obvious metric (`total_revenue`) on `order_event`, one
-compatible dimension (`country`). The right move is to echo the restatement and
-execute.
-
-Q3 is clear, but the metric lives on the decoy model: `partner_sourced_revenue`
-is the only correct answer for "revenue from partners", and it lives on
-`partner_directory` — a model that sounds like a reference/lookup table. The
-tempting wrong path is to select `total_revenue` filtered by `channel='partner'`,
-but `channel` is the order's own sales channel, not partner attribution. The
-right move is to describe every model (including `partner_directory`), find
-`partner_sourced_revenue`, echo it, and execute.
+Selections are concept names, not SQL — do not hand-author a SQL string.
 
 ## Required artifacts from eval runner
 

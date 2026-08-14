@@ -41,7 +41,7 @@ metadata — no extra server surface.
 
 | Technique | What it does | How it reads the catalog |
 |---|---|---|
-| **Coverage (no skipping)** | Guards the discover step itself: the selection is only built after **every** model from `list_models` has been read via `describe_model`. A model cannot be waved off for a different grain or an irrelevant-sounding name on `list_models`-only evidence, because relevance is decided *from* `describe_model`, never before it. Grain and relevance are only trustworthy once the full set is read. | Requires `describe_model` on all of `list_models`' models before selection; re-checks the selection if a later-read model surfaces a better-fitting metric. |
+| **Coverage (no skipping)** | Guards the discover step itself: the selection is only built after **every** model in the agreed scope has been read via `describe_model`. A model cannot be waved off for a different grain or an irrelevant-sounding name on `list_models`-only evidence, because relevance is decided *from* `describe_model`, never before it. Grain and relevance are only trustworthy once the full set is read. | Requires `describe_model` on all of `list_models`' models before selection — or, for a catalog too large to read whole, on the domain subset the user approved under §6d step 2, with the echo stating the narrowing. Re-checks the selection if a later-read model surfaces a better-fitting metric. |
 | **Round-trip echo** | Restate the resolved selection in plain language from the catalog descriptions and show it before executing. Catches mis-mapping the user can see. | Pure assembly from each metric's / dimension's `description`. Deterministic — same selection → same echo. |
 | **Catalog-aware critic** | An LLM check: given the question + selection + catalog descriptions, does this selection answer the question? Produces the verdict (`ok` / `ambiguous` / `likely-wrong`) that drives clarify. | Reads metric/dimension `description`s; checks each dimension is in the metric's `compatible_dimensions` or a join's `reaches_dimensions`. |
 | **Clarification on ambiguity** | When the verdict is unclear or a concept doesn't fit, ask the user with the real candidate concepts instead of guessing. Abstain beats a confident wrong answer. | `AskUserQuestion` listing the actual concepts from `list_models` / `describe_model`. |
@@ -52,8 +52,10 @@ Echo is **deterministic** — a pure function of the selection and the catalog
 metadata — so it renders client-side for free. The critic and the clarify decision
 are **non-deterministic / interactive**, so they stay client-side too: keeping them
 out of the compiler preserves the determinism dividend (the `run_semantic_query`
-path stays "same selection → same SQL"). None of the three needs anything beyond
-what `list_models` + `describe_model` already return.
+path stays "same selection → same SQL"). None of these three (echo, critic,
+clarify) needs anything beyond what `list_models` + `describe_model` already
+return — coverage is a precondition on discovery rather than a metadata read, so
+it costs nothing extra either.
 
 ## End-to-end flow (Step 6f)
 
@@ -65,8 +67,8 @@ list_models → describe_model(name)      ← discover catalog: metrics (w/ comp
 build selection {measures, dimensions, filters}   ← concept names only, never SQL
         │
 ┌──────────────── INTENT GATE (client-side) ────────────────┐
-│  0 coverage  every model from list_models read? else read │
-│             + re-check selection before proceeding        │
+│  0 coverage  every model in the agreed scope read? else   │
+│             read it + re-check selection before proceeding│
 │  1 critic   {question, selection, dm} → verdict           │
 │             + compatible_dimensions / reaches_dims        │
 │  2 echo     restate selection in NL (+ PII note)          │

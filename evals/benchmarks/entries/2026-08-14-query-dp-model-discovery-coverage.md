@@ -24,10 +24,25 @@ this is recorded as `NO_EVAL` with the skip itself as the justification.
 ## Evidence
 
 `evals/tests/test_semantic_intent_coverage.py` is the carrying test. It asserts
-the shipped scenario carries the coverage rule and has teeth: `checks.json` names
-the `coverage-all-models-described` check (describe_model on EVERY model), the
-fixture catalog contains a decoy model (`partner_directory`) that owns
-`partner_sourced_revenue` under a misleadingly reference/lookup-sounding name,
-and the prompt no longer teaches the old three-check gate. All three assertions
-fail against the pre-fix skill, which described only a self-selected subset of
-models.
+on two sides.
+
+**Over the shipped skill — verified to fail against the previous
+implementation.** Three assertions read
+`src/nxd-query-data-product/SKILL.md` directly: that §6d step 2 requires
+`describe_model` on EVERY model and forbids deciding relevance first, that §6f's
+gate says "Run all four" and opens with "Coverage — no model skipped" declaring
+a differing grain an invalid skip, and that §6f step 0 scopes coverage to the
+*agreed scope* so it does not contradict the large-catalog narrowing §6d
+permits. Restoring `SKILL.md` from `origin/main` and touching nothing under
+`evals/` turns exactly these three red (verified: 3 failed, 5 passed), so a
+revert of the instruction cannot ship green.
+
+**Over the eval arm — guards the scenario from drifting back.** `checks.json`
+names the `coverage-all-models-described` check, the fixture catalog carries the
+`partner_directory` decoy owning `partner_sourced_revenue` behind a
+lookup-table-sounding name, and — graded through the runner's own
+`agent_task_from_prompt` — the agent-facing task section names neither the
+coverage rule nor the decoy's metric. That last one matters for attribution: the
+task section is handed to the agent verbatim, so restating the graded checks
+there would let a `no_skills` baseline pass them and the arm would measure
+prompt-following instead of the skill.
