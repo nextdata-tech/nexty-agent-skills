@@ -110,7 +110,7 @@ def test_skill_coverage_step_matches_the_large_catalog_carve_out():
     exists to remove.
     """
     text = _skill_text()
-    assert "ask the user to narrow by domain" in text, (
+    assert "name the catalog size and ask the user to narrow by domain" in text, (
         "§6d step 2 must keep the large-catalog narrowing escape hatch"
     )
     gate = _intent_gate_section()
