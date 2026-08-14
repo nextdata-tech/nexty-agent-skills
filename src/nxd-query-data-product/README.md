@@ -61,7 +61,7 @@ Step 6f is that validation, run **client-side** before `run_semantic_query`:
 3. **Clarify** — on an unclear verdict or an unreachable dimension, ask with the
    real candidate concepts instead of guessing.
 
-All three read only what `list_models` + `describe_model` already return — zero
+All four read only what `list_models` + `describe_model` already return — zero
 server change. Echo is deterministic; critic and clarify are non-deterministic /
 interactive, so they stay client-side, which keeps the `run_semantic_query` path
 deterministic (the determinism dividend). Full design:

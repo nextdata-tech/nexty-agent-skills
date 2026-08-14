@@ -67,12 +67,12 @@ build selection {measures, dimensions, filters}   ← concept names only, never 
 ┌──────────────── INTENT GATE (client-side) ────────────────┐
 │  0 coverage  every model from list_models read? else read │
 │             + re-check selection before proceeding        │
-│  1 critic   {question, selection, describe_model} → verdict│
-│             + compatible_dimensions / reaches_dimensions chk│
+│  1 critic   {question, selection, dm} → verdict           │
+│             + compatible_dimensions / reaches_dims        │
 │  2 echo     restate selection in NL (+ PII note)          │
 │  3 clarify  verdict ambiguous/wrong OR dim unreachable    │
 │             → AskUserQuestion; abstain, do not execute    │
-└─────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────┘
         │  critic ok / user confirmed
 run_semantic_query           ← deterministic compile → governed exec → rows + compiled_sql
         │

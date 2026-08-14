@@ -269,16 +269,13 @@ first three as a discover→select→run protocol, not free-form SQL:
 1. **Discover — `list_models`.** Call `list_models` first to see the available
    semantic models (entities), their grains, and how they join. Never guess
    concept names or grain membership — the listing is the canonical source.
-2. **Select — `describe_model(name)` for EVERY model.** Call `describe_model` on
-   **all** models `list_models` returns — not just the ones you already think
-   are relevant. Relevance is decided *from* each `describe_model` response,
-   never before it: the metric and dimension `description`s that determine
-   whether a model answers the question only exist inside `describe_model` —
-   `list_models` surfaces only names, grains, and counts. A model with a
-   misleading name (e.g. a prescriber-sounding name) or an off-sounding grain
-   can still hold the metric the question needs, so skipping it on that
-   pre-read evidence is how a real answer gets missed. Read every model; then
-   pick from the full, read set. The response contains:
+2. **Select — `describe_model(name)` on EVERY model.** Call `describe_model` on
+   all models `list_models` returns; do not decide relevance first. Skipping a
+   model on a misleading name or off-sounding grain is how the metric that
+   answers the question gets missed — relevance is decided *from* each
+   `describe_model` response, never before it. For a large catalog (roughly a
+   dozen or more models), name the catalog size and ask the user to narrow by
+   domain (as Step 2 does) before describing every model. The response contains:
    - **metrics** (each with its `compatible_dimensions` list — the dimensions
      that share the model's grain),
    - **dimensions** (with PII classifications),
