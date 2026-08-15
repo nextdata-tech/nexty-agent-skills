@@ -235,6 +235,8 @@ inputs = [
 call = make_call(
     spec=spec,
     grant=grant,
+    # Optional explicit secret mapping; use None for the environment fallback.
+    secrets=None,
 )
 
 result = map_inputs(
@@ -248,9 +250,14 @@ result = map_inputs(
 
 `make_call` is the only supported provider seam for generated code. It creates
 the provider client and resolves credentials lazily, after `map_inputs` has
-checked the grant. Do not import `anthropic`, use tool-use output, construct a
-private transport client, or return a raw SDK response. The callable returns a
-parsed object with one nested block per target field:
+checked the grant. An explicitly supplied `secrets["anthropic_api_key"]` wins;
+when it is absent, the adapter may use the allowlisted `ANTHROPIC_API_KEY`
+environment fallback. Pass `allow_env=False` when a closure must refuse ambient
+credentials. Missing credentials are a blocking, sanitized
+`CredentialMissingError`; the key never appears in diagnostics or artifacts.
+Do not import `anthropic`, use tool-use output, construct a private transport
+client, or return a raw SDK response. The callable returns a parsed object with
+one nested block per target field:
 
 ```json
 {
@@ -262,6 +269,15 @@ parsed object with one nested block per target field:
   }
 }
 ```
+
+The adapter is synchronous: generated transforms must not return a coroutine or
+an SDK response object. Its callback receives keyword-only `item`, `spec`,
+`wire_schema`, and `violations`; `map_inputs` unwraps the transport result and
+validates the returned mapping. A `SystemicError` (missing credential,
+dependency, grant, model, schema, budget, or cancellation) blocks the run; a
+`CellError` is recorded against the row and handled by the mapper's bounded
+retry/gate policy. Error messages are sanitized and machine outcomes use the
+stable `error_code` values documented in `mapper/CONTRACT.md`.
 
 `target_row_key` is a content-derived hash, not the source row ID. Keep the
 `MapResult` proposals/evidence together and resolve from that bundle; never

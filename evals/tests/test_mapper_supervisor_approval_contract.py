@@ -39,10 +39,13 @@ def test_normative_contract_publishes_the_bounded_call_adapter() -> None:
     contract = _normalized(MAPPER_CONTRACT)
 
     assert (
-        '`make_call(*, spec, grant, provider="anthropic", provider_model=None, '
-        'provider_cwd=None) -> callable`'
+        '`make_call(*, spec, grant, secrets=None, allow_env=True, '
+        'provider="anthropic", provider_model=None, provider_cwd=None) -> callable`'
     ) in contract
     assert "provider construction, credential resolution" in contract
+    assert "allowlisted environment fallback" in contract
+    assert "The adapter is synchronous" in contract or "`make_call` returns a synchronous callable" in contract
+    assert "missing parsed body becomes `error_code = schema_reject`" in contract
     assert "use `make_call`" in contract
 
 
