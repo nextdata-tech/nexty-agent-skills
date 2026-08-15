@@ -228,7 +228,10 @@ def ingest(duckdb: DuckDbOutput) -> None:
         spec=spec,
         grant=grant,
         call=caller,
-        run_dir=str(run_dir / "mapper"),
+        # Keep attempt ledgers below an explicit run-scoped directory. The
+        # mapper refuses a home-directory path that looks like a durable
+        # closure root, because rebuild cleanup cannot safely own it.
+        run_dir=str(run_dir / "run" / "mapper"),
     )
 
     # ---- resolve ---------------------------------------------------------
