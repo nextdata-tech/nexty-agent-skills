@@ -328,12 +328,22 @@ def published_definitions(data_dir: Path, workflow: str) -> list[str]:
     return [str(run["definition_id"]) for run in published_runs(data_dir, workflow)]
 
 
+def definition_path(data_dir: Path, definition_id: str) -> Path:
+    """Resolve a persisted definition id to its content-addressed directory."""
+    root = data_dir / "definitions"
+    if ":" in definition_id:
+        namespace, digest = definition_id.split(":", 1)
+        addressed = root / namespace / digest
+        if addressed.is_dir():
+            return addressed
+    return root / definition_id
+
+
 def definition_hashes(data_dir: Path, definitions: Iterable[str]) -> dict[str, dict[str, str]]:
     """Hash every file in each pinned definition for trace cross-checking."""
-    root = data_dir / "definitions"
     hashes: dict[str, dict[str, str]] = {}
     for definition in definitions:
-        snapshot = root / definition
+        snapshot = definition_path(data_dir, definition)
         if not snapshot.is_dir():
             raise CheckFailure(f"published definition is missing: {snapshot}")
         files = [file for file in sorted(snapshot.rglob("*")) if file.is_file()]
@@ -503,7 +513,7 @@ def qualifying_phase_a_definition(data_dir: Path, workflow: str) -> str | None:
     """
     definitions = published_definitions(data_dir, workflow)
     for definition in definitions[:-1]:
-        served = serve_snapshot(data_dir / "definitions" / definition, "desktop-phase-a-snapshot")
+        served = serve_snapshot(definition_path(data_dir, definition), "desktop-phase-a-snapshot")
         try:
             catalog_json = describe(served.endpoint, served.bearer)
             with tempfile.TemporaryDirectory(prefix="desktop-phase-a-check-") as tmp:
@@ -596,7 +606,7 @@ def harness_mode(args: argparse.Namespace) -> int:
         facts["definition_sha256"] = definition_hashes(data_dir, definitions)
         # Re-serve the LAST immutable snapshot, not the mutable closure or a
         # stale endpoint. This reruns its transform from the pinned CSVs.
-        last = serve_snapshot(data_dir / "definitions" / definitions[-1], "desktop-final-snapshot")
+        last = serve_snapshot(definition_path(data_dir, definitions[-1]), "desktop-final-snapshot")
         try:
             final_catalog = describe(last.endpoint, last.bearer)
             with tempfile.TemporaryDirectory(prefix="desktop-harness-check-") as tmp:

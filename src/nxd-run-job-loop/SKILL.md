@@ -13,7 +13,7 @@ allowed-tools:
 # nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.37.2
+  version: 0.37.3
 ---
 
 # nxd-run-job-loop skill
@@ -291,6 +291,39 @@ Absent a supervisor-reported error body it is yours — heal, record the attempt
 and never claim an "environment issue" you cannot evidence
 ([reference/failure-handling.md](reference/failure-handling.md)).
 
+#### Host-local direct CLI lifecycle
+
+When the confirmed host-local Darwin fallback is in use, `serve` is one
+foreground supervisor process and its successful return metadata is the
+publication receipt. If the shell tool needs the command in the background to
+keep the conversation responsive, capture the task id and the output path the
+tool gives you, then read that task output at bounded intervals. Do not replace
+it with a redirected log plus a shell polling loop: an empty output means only
+that the process has not produced a terminal line yet.
+
+Use this sequence:
+
+1. Start `nxd-desktop-supervisor serve --definition <dir> --workflow <workflow>
+   --data-dir <state>` as the single foreground task. Keep the bearer in the
+   protected environment or bearer file, never in narration.
+2. Read the background task output periodically with a bounded cadence (a few
+   seconds at first, then a longer interval) and a deadline no longer than the
+   configured serve budget. Never use a busy shell loop, `tail -f`, or repeated
+   unbounded `cat` calls to wait for `published=yes`.
+3. Treat `published=yes` plus the returned `run_id`, `artifact_id`, definition,
+   endpoint, and budget as the only publication receipt. Then run `status` and
+   `describe`; do not query before both succeed.
+4. If the deadline expires without a receipt, read the task's final output once
+   more and report that the run did not publish. Do not infer a transform error
+   from an empty redirected log, inspect supervisor SQLite state, or leave a
+   background wait process running. If an MCP session is available, call
+   `inspect_run` once with the failed `run_id`; otherwise preserve the supervisor
+   output and closure for the next diagnosis.
+
+The MCP path remains preferred. This CLI procedure is only the host-local
+equivalent and must preserve the same stop-on-failure and no-fallback rules.
+See [reference/direct-cli-lifecycle.md](reference/direct-cli-lifecycle.md).
+
 ### Step 4a — Render the pinned static artifact
 
 After every successful build or resume, invoke **nxd-render-static-artifact** for the
@@ -497,4 +530,4 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
 
 ## Reference docs (this skill)
 
-Use [dp-spec](reference/dp-spec.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.
+Use [dp-spec](reference/dp-spec.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [direct CLI lifecycle](reference/direct-cli-lifecycle.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.
