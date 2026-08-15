@@ -69,7 +69,7 @@ prefer the reusable local-product path for recurring or multi-question work.
 
 Choose this order before invoking any runtime command:
 
-1. **MCP first.** The `nxd-desktop` server exposes six loop tools —
+1. **MCP first.** Read the server's `tools/list` catalog when the client exposes it; this hand-maintained workflow list is not exhaustive. The current seven loop tools are `mcp__nxd-desktop__check_data_product`,
    `mcp__nxd-desktop__build_data_product`, `mcp__nxd-desktop__resume_data_product`,
    `mcp__nxd-desktop__list_data_products`, `mcp__nxd-desktop__describe_models`,
    `mcp__nxd-desktop__run_semantic_query`, and `mcp__nxd-desktop__inspect_run`
@@ -267,8 +267,8 @@ A green self-check means the closure is structurally sound and the transform ran
 
 ### Step 4 — Build and serve through MCP
 
-When the desktop MCP tools are available, call
-`mcp__nxd-desktop__build_data_product` with the host-visible absolute path of the
+Before build, call `mcp__nxd-desktop__check_data_product` with the same definition and workflow; it is read-only, reports provenance plus structure/runtime/contract/semantic findings, and uses stable finding codes. Treat `skip` as non-pass, stop on `fail`/`skip`, handle warnings, and allow ~330s; on confirmed host-local Darwin use `nxd-desktop-supervisor check --definition <dir> --workflow <workflow> --json` with identical inputs. See [reference/catalog-resources.md](reference/catalog-resources.md).
+Then call `mcp__nxd-desktop__build_data_product` with the host-visible absolute path of the
 `closure/` directory as `definition` and a stable `workflow`; it creates,
 publishes, and serves the product for this MCP session. **If a subagent authored
 the closure (Step 3), verify its returned path resolves on the supervisor's host
@@ -458,7 +458,7 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   the approved plan compiled, ran and published — never that the numbers are
   right, and a ruling behind a number is always stated with the number.
 - **Keep governed analysis on the supervisor path, and MCP is authoritative when
-  connected.** Discover, build, resume, describe and query through the
+  connected.** Discover, check, build, resume, describe and query through the
   `nxd-desktop` tools whenever present. Never answer a governed local-data
   question with SQLite, raw SQL, pandas, or a shell pipeline as fallback, and
   never author raw SQL to bypass the semantic layer — a failed MCP build is a

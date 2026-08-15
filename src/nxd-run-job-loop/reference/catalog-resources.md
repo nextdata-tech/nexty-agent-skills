@@ -16,8 +16,9 @@
 The `nxd-desktop` server exposes two different surfaces, and they answer
 different questions:
 
-- **Tools** (`mcp__nxd-desktop__…`) are *actions*: build, resume, list, inspect,
-  describe, query, export. They take locks, boot runtimes, mint bearers.
+- **Tools** (`mcp__nxd-desktop__…`) are *actions*: check, build, resume, list,
+  inspect, describe, query, export. Most take locks, boot runtimes, or mint
+  bearers; `check_data_product` is the no-lock, no-publish admission check.
 - **Resources** (`nxd://…`) are *read-only documents* projected from the pinned
   artifact bytes of a published release. Reading one takes no lock, boots
   nothing, and cannot disturb a running instance.
