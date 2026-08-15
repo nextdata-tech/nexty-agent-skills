@@ -4,7 +4,7 @@ Two runnable files, proving two different things.
 
 | file | proves |
 |---|---|
-| `run_e2e.py` | the **data chain** — dlt lands rows, the mapper judges them, the gate decides, dlt lands the judgements. Calls `map_inputs` directly. |
+| `run_e2e.py` | the **data chain** — dlt lands rows, the mapper judges them through the public `make_call` adapter, the gate decides, dlt lands the judgements. Calls `map_inputs` directly. |
 | `transform_main.py` | the **platform entrypoint** — the closure is registered with `@data_product.on_transform()` and invoked by nxd's own `data_product.run_transform(...)`. |
 
 ```bash
@@ -118,6 +118,11 @@ site-packages with a `_system_sitepackages.pth` file, so:
 set -a && . ./.env && set +a          # ANTHROPIC_API_KEY
 .venv-live/bin/python examples/e2e/run_e2e.py --live
 ```
+
+The live path uses `nxd.experimental.field_mapper.make_call`, which owns the
+Anthropic SDK construction, allowlisted environment fallback, structured
+response parsing, and budget ledger. The example deliberately does not import
+the SDK or the mapper's private transport modules.
 
 Exit `0` = the chain worked and the landed schema matches the record contract.
 Exit `1` = a landed table is missing contract columns. Exit `2` = the gate
