@@ -58,8 +58,8 @@ sys.path.insert(0, str(PKG_ROOT))
 import dlt  # noqa: E402
 import duckdb  # noqa: E402
 
-from field_mapper import __version__  # noqa: E402
-from field_mapper import (  # noqa: E402
+from nxd.experimental.field_mapper import __version__  # noqa: E402
+from nxd.experimental.field_mapper import (  # noqa: E402
     Grant,
     MapperInput,
     MapperSpec,
@@ -67,13 +67,13 @@ from field_mapper import (  # noqa: E402
     map_inputs,
     resolve,
 )
-from field_mapper.errors import FieldMapperError  # noqa: E402
-from field_mapper.records import (  # noqa: E402
+from nxd.experimental.field_mapper.errors import FieldMapperError  # noqa: E402
+from nxd.experimental.field_mapper.records import (  # noqa: E402
     EVIDENCE_COLUMNS,
     PROPOSAL_COLUMNS,
     reviews_from_csv,
 )
-from field_mapper.schema import ABSENT_SENTINEL, compile_schema  # noqa: E402
+from nxd.experimental.field_mapper.schema import ABSENT_SENTINEL, compile_schema  # noqa: E402
 
 # Imported for the signature check described in the module docstring: if the
 # platform's transform entrypoint moves, this file should fail at import rather
@@ -396,7 +396,7 @@ class _ReplayCaller:
 
 def _live_caller(spec: MapperSpec):
     """Real Anthropic calls through the supported public adapter."""
-    from field_mapper import make_call
+    from nxd.experimental.field_mapper import make_call
 
     # `make_call` owns provider construction, credential resolution, structured
     # response parsing, and the shared budget ledger. The example deliberately
@@ -460,12 +460,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[3/6] mapping ({mode}) ...")
     caller = _live_caller(spec) if args.live else _ReplayCaller()
     try:
+        # The ledger intentionally refuses a closure-root-looking path under
+        # the home directory. Keep the database at `_run`, but put the
+        # attempt ledger under an explicit run-scoped child that the runtime
+        # cleanup rules recognize.
+        mapper_run_dir = run_dir / "run" / "mapper"
         result = map_inputs(
             inputs,
             spec=spec,
             grant=grant,
             call=caller,
-            run_dir=str(run_dir / "mapper"),
+            run_dir=str(mapper_run_dir),
         )
     except FieldMapperError as exc:
         print(f"\n  BLOCKED before landing: [{exc.error_code}] {exc}")

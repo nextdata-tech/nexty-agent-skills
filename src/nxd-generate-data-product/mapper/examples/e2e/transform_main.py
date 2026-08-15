@@ -84,13 +84,13 @@ except ImportError as exc:  # pragma: no cover - environment-dependent
         f"(underlying import error: {exc})"
     ) from exc
 
-from field_mapper import (  # noqa: E402
+from nxd.experimental.field_mapper import (  # noqa: E402
     evaluate_coverage,
     map_inputs,
     resolve,
 )
-from field_mapper.errors import FieldMapperError  # noqa: E402
-from field_mapper.records import reviews_from_csv  # noqa: E402
+from nxd.experimental.field_mapper.errors import FieldMapperError  # noqa: E402
+from nxd.experimental.field_mapper.records import reviews_from_csv  # noqa: E402
 
 # The data-chain pieces are imported from the sibling runner rather than
 # duplicated: two copies of the fixture data and the replay caller would drift,

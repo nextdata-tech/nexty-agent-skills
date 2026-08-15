@@ -127,7 +127,7 @@ def test_generated_mapper_uses_the_budgeted_call_adapter_and_wire_shape() -> Non
 def test_public_e2e_example_does_not_bind_sdk_or_private_transport() -> None:
     source = _read(E2E_RUNNER)
 
-    assert "from field_mapper import make_call" in source
+    assert "from nxd.experimental.field_mapper import make_call" in source
     assert "return make_call(spec=spec, grant=grant, allow_env=True)" in source
     for private_import in (
         "import anthropic",
