@@ -12,7 +12,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Query loop** | `evals/query-loop/run_query_loop.py` | borrows `nxd_eval`'s venv | Multi-turn query refinement against a pharma mesh fixture. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 20 of the 33 public scenarios.**
+installs and covers 20 of the 35 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -110,7 +110,7 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-20 of 34 public scenarios. The remaining 14 declare `ci_skip` in their
+20 of 35 public scenarios. The remaining 15 declare `ci_skip` in their
 `checks.json`. Eleven need a Tier 2 or Tier 3 install; one is gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 
@@ -129,6 +129,7 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
 | `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 | `desktop-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |
+| `terminal-field-mapper-adapter-contract` | per-run `nxd-desktop` stdio MCP server, synthetic mapper-provider injection, and a redacted public JSON-RPC trace sink |
 
 Full detail on scenarios, authoring, the baseline, and CI gating:
 [`evals/README.md`](README.md).

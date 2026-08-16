@@ -1156,6 +1156,12 @@ def deterministic_check_fact(
     for dep in deps:
         cmd += ["--with", str(dep)]
     cmd += ["python", str(script), "--fixtures", str(fixtures), "--root", str(ws)]
+    # A checker may need to prove redaction of a runner-supplied synthetic
+    # secret. Pass VALUES, never credential-key names: `anthropic_api_key` is a
+    # documented configuration key and treating it as a leak rejects valid
+    # closures while missing arbitrary opaque secret values.
+    for marker in cfg.get("redaction_markers", []):
+        cmd += ["--secret-marker", str(marker)]
     if cfg.get("wants_trace"):
         trace_file = Path(tempfile.mkdtemp(prefix="nxd-eval-trace-")) / "trace.txt"
         trace_file.write_text(trace, encoding="utf-8")

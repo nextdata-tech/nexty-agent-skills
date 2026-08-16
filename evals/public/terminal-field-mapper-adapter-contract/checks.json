@@ -1,0 +1,17 @@
+{
+  "name": "Terminal field-mapper provider-adapter contract",
+  "skills": ["nxd-generate-data-product", "nxd-run-job-loop"],
+  "ci_skip": "requires a per-run nxd-desktop stdio MCP server with a synthetic mapper-provider injection and a redacted JSON-RPC trace sink. evals/run.py can provision only the supervisor CLI (fixtures/desktop.json) or the semantic HTTP stub (fixtures/mcp.json); neither exposes the nxd-desktop mapper build tools over stdio nor captures their public MCP trace.",
+  "wants_trace": true,
+  "deterministic_check": {
+    "script": "check_terminal_mapper_adapter.py",
+    "deps": [],
+    "redaction_markers": ["nex884-opaque-synthetic-secret-8f0d"],
+    "wants_trace": true
+  },
+  "checks": [
+    {"id": "public-adapter-only", "check": "The generated mapper transform constructs its callable with public make_call and passes it to map_inputs. It imports no provider SDK, field_mapper.transport, field_mapper.ledger, or undocumented proposal attributes. The deterministic closure scan is authoritative."},
+    {"id": "public-mcp-trace-redacted", "check": "The captured public nxd-desktop MCP trace contains the mapper build path and no credential material. A missing trace is an evaluator infrastructure failure, never an agent PASS."},
+    {"id": "terminal-cleanup-boundary", "check": "The evaluator records setup/provider/agent outcomes separately and cleans per-run state and its server process after success, timeout, or agent termination."}
+  ]
+}
