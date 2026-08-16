@@ -9,22 +9,19 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
-# The plugin validator permits only built-in Claude Code tool names here.
-# nxd-desktop MCP capabilities are selected by their fully qualified names below.
 metadata:
   author: nextdata
-  version: 0.37.2
+  version: 0.37.4
 ---
 
 # nxd-run-job-loop skill
 
 ## Overview
 
-This skill is the analyst-facing entry point for local business-data questions.
-Start from the user's outcome and available data, not internal product language.
-When a durable local product is useful, drive the **local job loop**: a
-natural-language intent plus a local data source become a running, queryable data
-product on a local desktop supervisor — no Kubernetes, no remote warehouse:
+This skill is the analyst-facing entry point for local business-data questions;
+start from the user's outcome and available data, not internal product language.
+When a durable local product is useful, drive the **local job loop**: a natural
+language intent plus a local source become a running, queryable desktop product.
 
 ```
 intent + sources + questions
@@ -36,18 +33,14 @@ intent + sources + questions
    → describe → translate NL → query → present → refine
 ```
 
-This skill is the **orchestrator** and the **entry point for any end-to-end
-"build me a data product from this source" request**. `nxd-generate-data-product`
-constructs the closure once the plan is settled; it is not where a request starts
-— if you are in the generator without having done Steps 1–1b here, come back, do
-them, then invoke it from Step 3. It does not re-teach inference or code
-generation; it invokes the owning skills, then drives the supervisor MCP path —
-routing the user never sees.
+This skill is the **orchestrator** and entry point for end-to-end builds.
+`nxd-generate-data-product` constructs the closure after the plan is settled; if
+you arrive there without Steps 1–1b, come back here first. It invokes the owning
+skills, then drives the supervisor MCP path — routing the user never sees.
 
-> **You own the conversation and sequencing** — loosely, with **one exception**:
-> the policy read-back, discharged by the approved `dp-spec.md` in Step 1b. That
-> gate is enforced here, in agent-turn space, since no runtime seam exists to
-> enforce it later. Keep one data product in flight at a time while iterating.
+> **You own the conversation and sequencing**, except for the policy read-back
+> discharged by the approved `dp-spec.md` in Step 1b. Keep one data product in
+> flight at a time while iterating.
 
 ## Route the request before doing work
 
@@ -69,7 +62,7 @@ prefer the reusable local-product path for recurring or multi-question work.
 
 Choose this order before invoking any runtime command:
 
-1. **MCP first.** The `nxd-desktop` server exposes six loop tools —
+1. **MCP first.** Read the server's `tools/list` catalog when the client exposes it; this hand-maintained workflow list is not exhaustive. The current seven loop tools are `mcp__nxd-desktop__check_data_product`,
    `mcp__nxd-desktop__build_data_product`, `mcp__nxd-desktop__resume_data_product`,
    `mcp__nxd-desktop__list_data_products`, `mcp__nxd-desktop__describe_models`,
    `mcp__nxd-desktop__run_semantic_query`, and `mcp__nxd-desktop__inspect_run`
@@ -267,8 +260,8 @@ A green self-check means the closure is structurally sound and the transform ran
 
 ### Step 4 — Build and serve through MCP
 
-When the desktop MCP tools are available, call
-`mcp__nxd-desktop__build_data_product` with the host-visible absolute path of the
+Before build, call `mcp__nxd-desktop__check_data_product` with the same definition and workflow; it is read-only, reports provenance plus structure/runtime/contract/semantic findings, and uses stable finding codes. Treat `skip` as non-pass, stop on `fail`/`skip`, handle warnings, and allow ~330s; on confirmed host-local Darwin use `nxd-desktop-supervisor check --definition <dir> --workflow <workflow> --json` with identical inputs. See [reference/catalog-resources.md](reference/catalog-resources.md).
+Then call `mcp__nxd-desktop__build_data_product` with the host-visible absolute path of the
 `closure/` directory as `definition` and a stable `workflow`; it creates,
 publishes, and serves the product for this MCP session. **If a subagent authored
 the closure (Step 3), verify its returned path resolves on the supervisor's host
@@ -290,6 +283,14 @@ never executes, so a real code fault arrives wearing an environment's clothes.
 Absent a supervisor-reported error body it is yours — heal, record the attempt,
 and never claim an "environment issue" you cannot evidence
 ([reference/failure-handling.md](reference/failure-handling.md)).
+
+#### Host-local direct CLI lifecycle
+
+The confirmed host-local Darwin fallback is one foreground
+`nxd-desktop-supervisor serve` process. Treat its `published=yes` metadata as
+the only publication receipt, then run `status` and `describe` before querying;
+keep the bearer out of narration. For bounded observation, failure handling,
+and stop-on-failure rules, follow [reference/direct-cli-lifecycle.md](reference/direct-cli-lifecycle.md).
 
 ### Step 4a — Render the pinned static artifact
 
@@ -458,7 +459,7 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   the approved plan compiled, ran and published — never that the numbers are
   right, and a ruling behind a number is always stated with the number.
 - **Keep governed analysis on the supervisor path, and MCP is authoritative when
-  connected.** Discover, build, resume, describe and query through the
+  connected.** Discover, check, build, resume, describe and query through the
   `nxd-desktop` tools whenever present. Never answer a governed local-data
   question with SQLite, raw SQL, pandas, or a shell pipeline as fallback, and
   never author raw SQL to bypass the semantic layer — a failed MCP build is a
@@ -496,5 +497,4 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
 - **Bearer only as a tool parameter** — keep it out of narration, never persist or print it. **Never present a preview or truncated result as verified data**, and never stall silently.
 
 ## Reference docs (this skill)
-
-Use [dp-spec](reference/dp-spec.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.
+Use [dp-spec](reference/dp-spec.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [direct CLI lifecycle](reference/direct-cli-lifecycle.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.
