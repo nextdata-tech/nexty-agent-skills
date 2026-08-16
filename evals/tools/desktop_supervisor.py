@@ -1,12 +1,9 @@
 """Talking to the local desktop supervisor from a runner-side verifier.
 
 The publish → resume → describe → query surface, factored out of what
-`job-loop-serve-query-refine`'s `check_job_loop.py` does inline. That file and
-its `job-loop-export-handoff` twin already carry two near-identical copies of
-this plumbing; this module exists so the third scenario to need it does not
-create a third. Those two predate it and can migrate — deliberately not done
-here, since rewriting two working verifiers is a larger change than the one
-that needed this.
+`job-loop-serve-query-refine`'s `check_job_loop.py` does inline. The shared
+definition resolver also keeps harness-only verifiers aligned with the
+supervisor's content-addressed storage layout.
 
 Nothing here trusts a transcript. Every fact comes from the supervisor's own
 state database or from an authenticated call against an endpoint this module
@@ -119,10 +116,28 @@ def published_runs(data_dir: Path, workflow: str) -> list[dict[str, Any]]:
     return [dict(zip(selected, row)) for row in rows if row[4]]
 
 
+def definition_path(data_dir: Path, definition_id: str) -> Path:
+    """Resolve a persisted definition id to its content-addressed directory."""
+    root = data_dir / "definitions"
+    if ":" in definition_id:
+        namespace, digest = definition_id.split(":", 1)
+        addressed = root / namespace / digest
+        if addressed.is_dir():
+            return addressed
+    return root / definition_id
+
+
 def definition_snapshot(data_dir: Path, definition_id: str) -> Path:
-    snapshot = data_dir / "definitions" / definition_id
+    snapshot = definition_path(data_dir, definition_id)
     if not snapshot.is_dir():
-        raise CheckFailure(f"published definition is missing: {snapshot}")
+        attempted = [snapshot]
+        if ":" in definition_id:
+            namespace, digest = definition_id.split(":", 1)
+            addressed = data_dir / "definitions" / namespace / digest
+            if addressed not in attempted:
+                attempted.insert(0, addressed)
+        tried = "; ".join(str(path) for path in attempted)
+        raise CheckFailure(f"published definition is missing; tried: {tried}")
     if not any(p.is_file() for p in snapshot.rglob("*")):
         raise CheckFailure(f"published definition is empty: {snapshot}")
     return snapshot

@@ -27,6 +27,13 @@ The only successful receipt is the supervisor's publication metadata, including
 query. Keep the bearer in the protected environment or bearer file and pass it
 only to the command that needs it.
 
+The documented host-local `check` invocation intentionally omits `--data-dir`:
+the check uses the supervisor's configured/default data store, like the MCP
+surface, and its input contract here is the definition plus workflow. If a host
+explicitly overrides the supervisor data directory, pass that same directory
+consistently to both `check` and `serve`; never check one store and publish into
+another.
+
 ## Bounded failure handling
 
 Use a bounded observation deadline that matches the configured transform budget.
