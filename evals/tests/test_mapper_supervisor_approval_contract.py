@@ -6,6 +6,7 @@ shipped skill text and makes no network, provider, LLM, or supervisor call.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -129,9 +130,6 @@ def test_public_e2e_example_does_not_bind_sdk_or_private_transport() -> None:
 
     assert "from nxd.experimental.field_mapper import make_call" in source
     assert "return make_call(spec=spec, grant=grant, allow_env=True)" in source
-    for private_import in (
-        "import anthropic",
-        "from field_mapper.transport import",
-        "from field_mapper.ledger import",
-    ):
-        assert private_import not in source
+    assert not re.search(r"^\s*(?:import anthropic\b|from anthropic import)\b", source, re.MULTILINE)
+    for private_module in ("field_mapper.transport", "field_mapper.ledger"):
+        assert private_module not in source

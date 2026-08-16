@@ -134,12 +134,23 @@ implementation. The documented surface was the error, and it is corrected here
 rather than by wrapping the working function — see
 `docs/architecture/field-mapper.md`.
 
+`run_dir` is the mapper's **ephemeral ledger root**, not the closure root and not
+`~`. Derive it as a run-scoped child of the transform directory (for example,
+`Path(run_dir) / "run" / "mapper"`) and pass that child to `map_inputs`. When a
+path under the user's home has no run-directory marker (`runs`, `run`, `tmp`,
+`temp`, `scratch`, or `var`), the current ledger guard raises `ValueError`
+before the first provider dispatch; callers must treat that as a systemic
+refusal. A future stable `error_code` for this path guard must not be inferred
+from the exception text.
+
 ```python
+from pathlib import Path
+
 result = map_inputs(
     inputs,                 # Sequence[MapperInput]
     spec=spec,              # MapperSpec.load(...)
     grant=grant,            # Grant.load(...)
-    run_dir=str(run_dir),   # where the ledger lands
+    run_dir=str(Path(run_dir) / "run" / "mapper"),  # ephemeral ledger root
     call=call,              # the injected model callable
 )
 ```

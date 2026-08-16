@@ -210,6 +210,8 @@ at `MapperInput.__init__() got an unexpected keyword argument 'document_id'`
 before any model was contacted.
 
 ```python
+from pathlib import Path
+
 from nxd.experimental.field_mapper import (
     Grant,
     MapperInput,
@@ -220,6 +222,8 @@ from nxd.experimental.field_mapper import (
 
 spec = MapperSpec.load("contracts/mapper_spec.json")
 grant = Grant.load("contracts/mapper_grant.json")
+
+mapper_run_dir = Path(run_dir) / "run" / "mapper"
 
 inputs = [
     MapperInput(
@@ -243,7 +247,7 @@ result = map_inputs(
     inputs,
     spec=spec,
     grant=grant,
-    run_dir=str(run_dir),
+    run_dir=str(mapper_run_dir),
     call=call,          # the injected model callable
 )
 ```
@@ -301,13 +305,13 @@ silently unbinds every review. Never introspect these signatures to decide how t
 call them: a closure that adapts to whatever is installed converts a loud
 `TypeError` into a silent difference between two runtimes.
 
-`mapper/examples/e2e/` in this skill's repo checkout holds historical proofs —
+`mapper/examples/e2e/` in this skill's repo checkout holds runnable proofs —
 `run_e2e.py` for the data chain and `transform_main.py` for the platform
-entrypoint. They are not packaged into the installed skill and their provider
-wiring predates the bounded `make_call` seam; do not copy their private
-`transport.Client` construction into a generated transform. Generated code
-must follow the `make_call` example above. The proofs need an nxd monorepo
-checkout.
+entrypoint. `run_e2e.py` uses the public `make_call` seam on `--live` and a
+recorded caller on replay; `transform_main.py` exercises the same caller through
+the platform entrypoint. Treat them as reference implementations: do not import
+the provider SDK or private transport modules into a generated transform. The
+proofs need an nxd monorepo checkout.
 
 ## Spend: the self-check really pays
 

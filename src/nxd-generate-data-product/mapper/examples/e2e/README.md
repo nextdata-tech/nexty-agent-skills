@@ -4,7 +4,7 @@ Two runnable files, proving two different things.
 
 | file | proves |
 |---|---|
-| `run_e2e.py` | the **data chain** — dlt lands rows, the mapper judges them through the public `make_call` adapter, the gate decides, dlt lands the judgements. Calls `map_inputs` directly. |
+| `run_e2e.py` | the **data chain** — dlt lands rows, the mapper judges them (through the public `make_call` adapter on `--live`), the gate decides, dlt lands the judgements. Calls `map_inputs` directly. |
 | `transform_main.py` | the **platform entrypoint** — the closure is registered with `@data_product.on_transform()` and invoked by nxd's own `data_product.run_transform(...)`. |
 
 ```bash
