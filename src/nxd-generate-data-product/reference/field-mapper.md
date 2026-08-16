@@ -210,6 +210,8 @@ at `MapperInput.__init__() got an unexpected keyword argument 'document_id'`
 before any model was contacted.
 
 ```python
+from pathlib import Path
+
 from nxd.experimental.field_mapper import (
     Grant,
     MapperInput,
@@ -220,6 +222,8 @@ from nxd.experimental.field_mapper import (
 
 spec = MapperSpec.load("contracts/mapper_spec.json")
 grant = Grant.load("contracts/mapper_grant.json")
+
+mapper_run_dir = Path(run_dir) / "run" / "mapper"
 
 inputs = [
     MapperInput(
@@ -235,22 +239,29 @@ inputs = [
 call = make_call(
     spec=spec,
     grant=grant,
+    # Optional explicit secret mapping; use None for the environment fallback.
+    secrets=None,
 )
 
 result = map_inputs(
     inputs,
     spec=spec,
     grant=grant,
-    run_dir=str(run_dir),
+    run_dir=str(mapper_run_dir),
     call=call,          # the injected model callable
 )
 ```
 
 `make_call` is the only supported provider seam for generated code. It creates
 the provider client and resolves credentials lazily, after `map_inputs` has
-checked the grant. Do not import `anthropic`, use tool-use output, construct a
-private transport client, or return a raw SDK response. The callable returns a
-parsed object with one nested block per target field:
+checked the grant. An explicitly supplied `secrets["anthropic_api_key"]` wins;
+when it is absent, the adapter may use the allowlisted `ANTHROPIC_API_KEY`
+environment fallback. Pass `allow_env=False` when a closure must refuse ambient
+credentials. Missing credentials are a blocking, sanitized
+`CredentialMissingError`; the key never appears in diagnostics or artifacts.
+Do not import `anthropic`, use tool-use output, construct a private transport
+client, or return a raw SDK response. The callable returns a parsed object with
+one nested block per target field:
 
 ```json
 {
@@ -262,6 +273,15 @@ parsed object with one nested block per target field:
   }
 }
 ```
+
+The adapter is synchronous: generated transforms must not return a coroutine or
+an SDK response object. Its callback receives keyword-only `item`, `spec`,
+`wire_schema`, and `violations`; `map_inputs` unwraps the transport result and
+validates the returned mapping. A `SystemicError` (missing credential,
+dependency, grant, model, schema, budget, or cancellation) blocks the run; a
+`CellError` is recorded against the row and handled by the mapper's bounded
+retry/gate policy. Error messages are sanitized and machine outcomes use the
+stable `error_code` values documented in `mapper/CONTRACT.md`.
 
 `target_row_key` is a content-derived hash, not the source row ID. Keep the
 `MapResult` proposals/evidence together and resolve from that bundle; never
@@ -285,13 +305,13 @@ silently unbinds every review. Never introspect these signatures to decide how t
 call them: a closure that adapts to whatever is installed converts a loud
 `TypeError` into a silent difference between two runtimes.
 
-`mapper/examples/e2e/` in this skill's repo checkout holds historical proofs —
+`mapper/examples/e2e/` in this skill's repo checkout holds runnable proofs —
 `run_e2e.py` for the data chain and `transform_main.py` for the platform
-entrypoint. They are not packaged into the installed skill and their provider
-wiring predates the bounded `make_call` seam; do not copy their private
-`transport.Client` construction into a generated transform. Generated code
-must follow the `make_call` example above. The proofs need an nxd monorepo
-checkout.
+entrypoint. `run_e2e.py` uses the public `make_call` seam on `--live` and a
+recorded caller on replay; `transform_main.py` exercises the same caller through
+the platform entrypoint. Treat them as reference implementations: do not import
+the provider SDK or private transport modules into a generated transform. The
+proofs need an nxd monorepo checkout.
 
 ## Spend: the self-check really pays
 

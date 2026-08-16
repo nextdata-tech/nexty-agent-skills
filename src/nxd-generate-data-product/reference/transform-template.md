@@ -44,6 +44,8 @@ def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:
     """Land each promised model into the DuckDB output port."""
     source_root = Path(secrets["csv_source"])
     # Keep ALL dlt state run-local (next to the staging file) — never ~/.dlt.
+    # If this transform also maps fields, pass `run_dir / "run" / "mapper"`
+    # to `map_inputs`; never pass this parent directly as the mapper ledger root.
     run_dir = Path(duckdb.path).parent
     pipelines_dir = run_dir / "dlt-pipelines"
     pipelines_dir.mkdir(parents=True, exist_ok=True)

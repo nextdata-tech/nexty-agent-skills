@@ -84,13 +84,13 @@ except ImportError as exc:  # pragma: no cover - environment-dependent
         f"(underlying import error: {exc})"
     ) from exc
 
-from field_mapper import (  # noqa: E402
+from nxd.experimental.field_mapper import (  # noqa: E402
     evaluate_coverage,
     map_inputs,
     resolve,
 )
-from field_mapper.errors import FieldMapperError  # noqa: E402
-from field_mapper.records import reviews_from_csv  # noqa: E402
+from nxd.experimental.field_mapper.errors import FieldMapperError  # noqa: E402
+from nxd.experimental.field_mapper.records import reviews_from_csv  # noqa: E402
 
 # The data-chain pieces are imported from the sibling runner rather than
 # duplicated: two copies of the fixture data and the replay caller would drift,
@@ -228,7 +228,10 @@ def ingest(duckdb: DuckDbOutput) -> None:
         spec=spec,
         grant=grant,
         call=caller,
-        run_dir=str(run_dir / "mapper"),
+        # Keep attempt ledgers below an explicit run-scoped directory. The
+        # mapper refuses a home-directory path that looks like a durable
+        # closure root, because rebuild cleanup cannot safely own it.
+        run_dir=str(run_dir / "run" / "mapper"),
     )
 
     # ---- resolve ---------------------------------------------------------
