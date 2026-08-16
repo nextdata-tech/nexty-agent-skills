@@ -16,11 +16,10 @@ nxd-desktop-supervisor serve \
   --data-dir <state>
 ```
 
-If the shell tool backgrounds a long-running command, retain the task id and
-the output-file path returned by that tool. Read that output file periodically
-at a bounded cadence. Do not redirect the command to a second log and poll the
-log with a shell loop: the supervisor owns the run lifecycle, and an empty log
-does not distinguish a running process from a failed one.
+If the shell tool backgrounds a long-running command, capture the task id and the output path
+returned by that tool; read that output file at bounded intervals. Do not redirect the command
+to a second log and poll the log with a shell loop: the supervisor owns the run lifecycle, and
+an empty output does not distinguish a running process from a failed one.
 
 The only successful receipt is the supervisor's publication metadata, including
 `published=yes`, `run_id`, `artifact_id`, `definition_id`, and
