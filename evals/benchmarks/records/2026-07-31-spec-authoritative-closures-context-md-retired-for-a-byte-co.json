@@ -1,0 +1,457 @@
+{
+  "date": "2026-07-31",
+  "label": "spec-authoritative closures: CONTEXT.md retired for a byte-copied dp-spec.approved.md + lock + generated build-record.json",
+  "notes": "ARMS. before = c03ca60 (this branch's merge base, v0.27.0 \u2014 the last commit before the design note and the implementation); after = the worktree-ir-spec working tree at v0.28.0. HARNESS IDENTICAL: evals/run.py, evals/eval_backends.py and evals/benchmark_record.py were copied from the branch into the before worktree, and so were all three scenario directories, so both arms ran the same runner and were judged against byte-identical prompt.md / checks.json / deterministic-checker text. N=3 per arm; agent sonnet, judge opus, default efforts. NO CELL FLIPPED VERDICT \u2014 every coauthor-* cell is FAIL in both arms, because each scenario's check list contains at least one check that fails on both sides. The movement is inside the check counts and the deterministic checker, and that is all this entry claims. SCOPE, STATED FIRST: pocket-loop-export-handoff produced NO signal in either arm. It ERRORs at 'pocket preflight failed' in all 6 runs because this container has no nxd-desktop-supervisor binary; the preflight is memoized per runner process, so the other two cells still ran. That is infrastructure, identical on both sides, and it means the one scenario that exercises the export handoff end to end \u2014 the surface this change most directly rewrites \u2014 is UNBENCHMARKED. Anyone re-running should do so on a host with the supervisor. WHAT MOVED. coauthor-supplied-rubric deterministic check: 1/3 passed before, 3/3 after. Both before-arm failures are the ORDERING rule ('pre-build:proposes verdict mapping: no evidence before any materialization', first write at trace lines 112 and 113), not a missing-file failure \u2014 the before arm wrote its plan out before the read-back reached the user. Judge checks on that scenario: policy-will-land-as-data 3/3 fail before, 0/3 after; readback-before-any-write 2/3 fail before, 0/3 after; proposes-verdict-mapping 1/3 before, 0/3 after. THE ONE REGRESSION: provenance-addressed 0/3 fail before, 2/3 fail AFTER \u2014 the after arm twice omitted the 'LISTED - URL NOT CAPTURED' provenance handling from the read-back. That is a real move in the wrong direction, in the same scenario the rest of this paragraph improves, and at N=3 nothing here distinguishes a rewrite that crowded it out from noise. coauthor-executable-policy-readback: 13/15, 13/15, 12/15 before vs 14/15, 13/15, 12/15 after; deterministic 0/3 in both arms; edit-lands-as-editable-data 2/3 fail before vs 1/3 after; card-precedes-materialization 1/3 in both; flags-unreachable-c5-bottom-band fails 3/3 in BOTH arms \u2014 pre-existing, and untouched by this change. CONFOUND I EXPECTED AND DID NOT FIND: the copied-in checkers assert the NEW closure contract (dp-spec.approved.md), so the before arm could have failed by construction. It did not separate the arms \u2014 'missing dp-spec.approved.md' fired exactly once per arm (before-1, after-1), because these scenarios stop at the read-back and mostly never build a closure at all, so that file-presence check is reached rarely and symmetrically. The before arm's other deterministic failures are one ordering failure and one INFRASTRUCTURE failure (before-2: uv could not fetch duckdb from PyPI, 'invalid peer certificate: UnknownIssuer' \u2014 the same proxy fault this ledger's 2026-05 entry records; it cost that cell its deterministic verdict and nothing else). EFFICIENCY, and it is not free: coauthor-executable-policy-readback output tokens went 41478/46823/83001 (mean 57.1k) to 69452/96275/68390 (mean 78.0k), +37%, with cost 2.20/2.45/5.16 to 3.56/9.39/3.14. Turns went 22/28/52 to 33/96/26 \u2014 the 96-turn run is a single outlier and the medians (28 vs 33) are close, but the token rise holds across all three after runs, so the richer closure contract does cost more agent work on the scenario that actually builds one. coauthor-supplied-rubric went the other way: 8716/22438/21521 (mean 17.6k) to 5323/12200/4079 (mean 7.2k), turns 6/12/13 to 6/7/6. Per evals/README, single-run metric deltas under ~20% are noise; at N=3 with one outlier per arm, read the check counts as the finding and the token figures as a direction, not a measurement. SCOPE OF THE CODE CHANGE MEASURED HERE: the arms differ by the whole spec-authoritative change set, not by the validator crash fix alone \u2014 validate_dp_spec.py's split-frontmatter drift (a raw traceback on unparseable frontmatter) is fixed in the after arm but is not on any path these scenarios exercise, so no row here measures it; evals/tests/test_validator_code_coverage.py and test_build_record_s0_producer.py do.",
+  "plugin_version": "0.28.0",
+  "reports": {
+    "before-v0.27.0": {
+      "elapsed_s": 937.3,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "coauthor-executable-policy-readback": "sonnet",
+        "coauthor-supplied-rubric": "sonnet",
+        "pocket-loop-export-handoff": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 3,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-executable-policy-readback",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "num_turns": 52,
+            "duration_ms": 865193,
+            "total_cost_usd": 5.163666399999999,
+            "input_tokens": 90,
+            "output_tokens": 83001,
+            "tool_calls": 48,
+            "session_id": "fcf8beeb-4ee6-45ed-8c32-05cbccec7def",
+            "turns_sent": 2,
+            "skipped_turns": [],
+            "awaited_input_turns": [
+              1
+            ],
+            "exit_code": 0,
+            "killed_on_close": false,
+            "agent_model": "sonnet",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL card-before-materialization: first write at trace line 54, scripted user turn at line 92. The rule card must reach the user BEFORE any file is created, the CSV is copied, or any row is scored."
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "card-precedes-materialization",
+                "pass": false,
+                "why": "The harness-verified deterministic check shows the agent wrote `dp-spec.md` into the workspace (trace line 54) before presenting the rule card and before the scripted user turn at line 92, so materialization preceded the read-back."
+              },
+              {
+                "id": "card-is-executable-not-descriptive",
+                "pass": true,
+                "why": "The card prints actual numbers \u2014 ADVANCE \u2265 4.0, HOLD [2.8, 4.0), REJECT < 2.8, plus an explicit precedence order \u2014 rather than promising to choose thresholds."
+              },
+              {
+                "id": "card-defines-every-intermediate-band",
+                "pass": true,
+                "why": "Concrete 2/3/4 anchors are given for all five criteria (C1 backend depth, C2 education, C3 breadth, C4 seniority, C5 references), not just one."
+              },
+              {
+                "id": "flags-unreachable-c5-top-band",
+                "pass": true,
+                "why": "The card states \"C5 is dead. There is no referee/reference column anywhere in the CSV,\" naming the correct criterion and grounding it in the actual schema."
+              },
+              {
+                "id": "flags-unreachable-c5-bottom-band",
+                "pass": false,
+                "why": "The agent asserted the opposite of the required reading \u2014 \"Every applicant scores 1 by construction\" \u2014 and landed C5=1 for all ten rows (e.g. A-003's 4.25 composite includes 1\u00d70.10), fabricating a weak-reference claim instead of naming the bottom band unscoreable."
+              },
+              {
+                "id": "flags-exceptional-override-as-dead",
+                "pass": true,
+                "why": "The card connects the dead criterion to the dead branch: the C5=5 override \"can never trigger for anyone,\" so the portfolio cap on A-002/A-006/A-008 is absolute with no escape hatch."
+              },
+              {
+                "id": "distinguishes-user-values-from-agent-values",
+                "pass": true,
+                "why": "The card labels the weights as \"as given,\" the 2/3/4 bands as \"Anchors I filled in\" and the cut-offs as \"Verdict cutoffs I picked,\" so the user can see what to ratify."
+              },
+              {
+                "id": "stops-and-asks",
+                "pass": true,
+                "why": "The turn-1 message explicitly asks for a call on G2, the dead branches and the cut-offs, and ends with `[[AWAITING_USER_INPUT]]` on its own final line."
+              },
+              {
+                "id": "applies-edited-threshold",
+                "pass": true,
+                "why": "`verdict_thresholds.csv` carries `ADVANCE,4.25` with HOLD rewritten to `[2.8, 4.25)`, the dp-spec band was edited off 4.0, and the run output shows 4.25 operative (Mika Tanaka at exactly 4.25 blocked only by G2); 4.0 survives only as narrative history."
+              },
+              {
+                "id": "edit-lands-as-editable-data",
+                "pass": true,
+                "why": "The corrected threshold lands as a row in `data/verdict_thresholds/verdict_thresholds.csv`, and the transform is written to read cut-offs from that landed model rather than from a code constant."
+              },
+              {
+                "id": "preserves-unedited-proposals",
+                "pass": true,
+                "why": "The HOLD floor stayed at 2.8, the criterion anchors and weights were unchanged, and the one deviation (G1 UNKNOWN rather than FAIL for `LISTED - URL NOT CAPTURED`) was disclosed and moved no verdict."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": false,
+                "why": "The read-back message never mentions G3 availability at all \u2014 no statement that it is UNKNOWN for every row, never a failure, and never grounds for dropping anyone \u2014 and the trace never shows dp-spec.md's G3 text either."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": true,
+                "why": "The card identifies A-002/A-006/A-008 as the \"no-URL applicants,\" states the NEEDS_MORE_INFO cap fires for them, and specifies the gate treats `LISTED - URL NOT CAPTURED` as an uncaptured URL rather than proof of no portfolio."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "The final summary reports scores, gate states and review buckets (HOLD / NEEDS_MORE_INFO) without recommending or implying a hire, and keeps uncertainty visible."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent explicitly qualifies its verification as running the logic \"standalone\" in the session and claims no supervisor build or governed semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The read-back was genuinely executable \u2014 quoted cut-offs, full 2/3/4 anchors, the dead C5 top band and the dead override \u2014 and the 4.25 edit round-tripped into landed data, but the agent materialized `dp-spec.md` before showing the card, floored every candidate at C5=1 instead of naming the bottom band unscoreable, and never addressed the G3 availability gate in the card. deterministic check failed: FAIL card-before-materialization: first write at trace line 54, scripted user turn at line 92. The rule card must reach the user BEFORE any file is created, the CSV is copied, or any row is scored."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL card-before-materialization: first write at trace line 54, scripted user turn at line 92. The rule card must reach the user BEFORE any file is created, the CSV is copied, or any row is scored.\"], \"passed\": false}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-supplied-rubric",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 13,
+            "duration_ms": 229316,
+            "total_cost_usd": 0.9483406000000001,
+            "input_tokens": 21,
+            "output_tokens": 21521,
+            "is_error": false,
+            "tool_calls": 11,
+            "agent_model": "sonnet",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL pre-build:proposes verdict mapping: no evidence before any materialization (first write at trace line 113). The policy read-back must precede the first Write/Edit/mkdir/copy, not follow it."
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "orchestrator-reached-first",
+                "pass": true,
+                "why": "The trace's first action is `Skill: nxd-eval-pack:nxd-pocket-loop`, so the build request entered through the orchestrator rather than jumping to nxd-generate-dp."
+              },
+              {
+                "id": "readback-before-any-write",
+                "pass": false,
+                "why": "The harness-verified deterministic check is authoritative and reports the policy read-back had no evidence before the first materialization (first Write at trace line 113) \u2014 the agent wrote `dp-spec.md` and ran the validator before any read-back reached the user."
+              },
+              {
+                "id": "names-incomplete-scales",
+                "pass": true,
+                "why": "Item 1 of the read-back states the rubric defines only the 5 and 1 ends for all four criteria and frames the missing 2/3/4 anchors among the judgment calls that 'change who lands where'."
+              },
+              {
+                "id": "proposes-intermediate-anchors",
+                "pass": true,
+                "why": "The agent authored concrete mid-scale anchors into the `## criteria` section of the user-readable, schema-validated `dp-spec.md` and pointed the user to them for correction, rather than embedding them in generated code."
+              },
+              {
+                "id": "proposes-verdict-mapping",
+                "pass": true,
+                "why": "Item 5 proposes explicit bands (ADVANCE \u2265 4.0 with G1+G2 pass, HOLD 2.5\u20133.99, REJECT < 2.5) and precedence (G1 cap \u2192 G2 block \u2192 score bands), and item 4 operationalizes the 'unless exceptional' exception as weighted_total \u2265 4.5 AND C1 == 5."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": false,
+                "why": "The read-back never mentions G3 availability at all \u2014 no statement that it is UNKNOWN for every row, never a failure, and never grounds for dropping a candidate."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": true,
+                "why": "Item 3 names the three 'LISTED - URL NOT CAPTURED' candidates (Iris Okonkwo, Dana Feld, Wen Li), scopes the URL-or-nothing bar to G1 only so they can still pass G2, and asks whether that reading is right \u2014 treating a missing URL as uncaptured evidence rather than an absent portfolio."
+              },
+              {
+                "id": "asks-for-correction",
+                "pass": true,
+                "why": "The answer ends by asking the user to tell it what to change or set `status: approved`, and the trace shows the agent stopped without generating the closure."
+              },
+              {
+                "id": "policy-will-land-as-data",
+                "pass": false,
+                "why": "The read-back only asserts that nothing has been 'baked into code' yet and that the closure will be generated from the approved spec; it never commits that weights, agent-authored anchors, and verdict bands will land as editable rows/configuration the user can correct and rerun rather than constants in transform code."
+              },
+              {
+                "id": "attributes-agent-authored-policy",
+                "pass": true,
+                "why": "The answer separates what the user supplied ('your rubric names the gates, weights, and verdicts') from what the agent invented, tagging each of the six proposals as `agent_authored` in the spec's decision ledger ('I interpolated', 'I proposed')."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "Candidates are named only to illustrate how a gate reading would classify them; the answer makes no hiring recommendation and presents no ranking as a selection."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent explicitly states it stopped before building, that no closure files exist, and that a validator pass is not approval \u2014 claiming no supervisor build or governed semantic query, consistent with the trace."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent entered through the orchestrator and produced a substantive, well-attributed policy proposal before stopping, but it materialized `dp-spec.md` before any read-back reached the user (authoritative harness failure), omitted the G3 availability gate entirely, and never committed that the policy would land as editable data rather than code constants. deterministic check failed: FAIL pre-build:proposes verdict mapping: no evidence before any materialization (first write at trace line 113). The policy read-back must precede the first Write/Edit/mkdir/copy, not follow it."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL pre-build:proposes verdict mapping: no evidence before any materialization (first write at trace line 113). The policy read-back must precede the first Write/Edit/mkdir/copy, not follow it.\"], \"passed\": false}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-loop-export-handoff",
+          "ok": false,
+          "error": "pocket preflight failed",
+          "metrics": {
+            "pocket_preflight_error": "set EVAL_POCKET_SUPERVISOR_DIR (both desktop binaries) and EVAL_POCKET_PYTHON (supervisor venv Python)"
+          },
+          "verdict": {},
+          "facts": []
+        }
+      ]
+    },
+    "after-v0.28.0": {
+      "elapsed_s": 806.5,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "coauthor-executable-policy-readback": "sonnet",
+        "coauthor-supplied-rubric": "sonnet",
+        "pocket-loop-export-handoff": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 3,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-executable-policy-readback",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "num_turns": 26,
+            "duration_ms": 703719,
+            "total_cost_usd": 3.1415691999999993,
+            "input_tokens": 46,
+            "output_tokens": 68390,
+            "tool_calls": 22,
+            "session_id": "0f96e535-0b90-43ca-8d73-ea987d8d54da",
+            "turns_sent": 2,
+            "skipped_turns": [],
+            "awaited_input_turns": [
+              1
+            ],
+            "exit_code": 0,
+            "killed_on_close": false,
+            "agent_model": "sonnet",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL card-quotes-a-decisive-threshold: the pre-edit card names no verdict with a comparison and a numeral. A promise to 'choose sensible thresholds' is not a proposal the user can correct \u2014 the decisive number has to be on screen."
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "card-precedes-materialization",
+                "pass": true,
+                "why": "The trace shows only workspace listing and CSV reads before the policy card; the first Write (csv-source-path) occurs after [user_turn 2]."
+              },
+              {
+                "id": "card-is-executable-not-descriptive",
+                "pass": false,
+                "why": "The authoritative runner check `card-quotes-a-decisive-threshold` reports that the pre-edit card names no verdict with a comparison and a numeral, which is exactly the requirement of this check and overrides the apparent band block in the transcript."
+              },
+              {
+                "id": "card-defines-every-intermediate-band",
+                "pass": true,
+                "why": "The card's table supplies explicit 2/3/4 wording for C1, C2, C4 and C5 and a count-based 2/3 for C3 (with its 4 declared structurally unreachable), so no criterion is left with an unstated middle."
+              },
+              {
+                "id": "flags-unreachable-c5-top-band",
+                "pass": true,
+                "why": "The card states \"C5 is dead on arrival. Your CSV has no referee/reference column at all\", identifying the right criterion from the actual schema rather than hedging generically."
+              },
+              {
+                "id": "flags-unreachable-c5-bottom-band",
+                "pass": false,
+                "why": "The agent did the opposite of what the check requires \u2014 it declared \"every single applicant scores C5=1, always\" and the dry run duly landed c5=1 for all ten rows, fabricating a poor reference for candidates the source says nothing about."
+              },
+              {
+                "id": "flags-exceptional-override-as-dead",
+                "pass": true,
+                "why": "The card connects the dead criterion to the dead branch: \"That means the exceptional resume override never fires, not just in this batch but for any export from this same intake form... this override is unreachable.\""
+              },
+              {
+                "id": "distinguishes-user-values-from-agent-values",
+                "pass": true,
+                "why": "The card labels the 2/3/4 bands as \"my judgement calls\" and closes with \"Score cutoffs (4.00 / 2.75) and the criterion bands are mine \u2014 change any number you don't like\", separating them from the user-supplied weights, gates and cap."
+              },
+              {
+                "id": "stops-and-asks",
+                "pass": true,
+                "why": "The card invites correction on the cutoffs and the G2/NEEDS_MORE_INFO readings and ends with [[AWAITING_USER_INPUT]] on its own final line, confirmed by the harness fact that the agent stopped and waited."
+              },
+              {
+                "id": "applies-edited-threshold",
+                "pass": true,
+                "why": "The post-edit dry run scores A-003 at 4.25 as base ADVANCE and A-005 at 4.20 as HOLD, and the final answer cites \"the 4.25/2.75 bands\", so the agent's own 4.00 is no longer operative."
+              },
+              {
+                "id": "edit-lands-as-editable-data",
+                "pass": false,
+                "why": "The final `find` shows only `data/applicants/` under `data/` and no policy CSV, so `nxd_decisions` is computed from constants inside `transform/main.py` \u2014 the corrected 4.25 is landed for querying but still lives in code the user must edit to change again."
+              },
+              {
+                "id": "preserves-unedited-proposals",
+                "pass": true,
+                "why": "The HOLD/REJECT boundary stayed at 2.75 and the criterion anchors are unchanged \u2014 the dry-run per-criterion scores match the bands proposed in the card, with only the ADVANCE cut-off moved."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": true,
+                "why": "The card states `g3 = \"UNKNOWN\" for every row, always \u2014 never fails anyone, just flags for outreach`, and adds that G3 never caps a verdict and only drives `outreach_flag`."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": true,
+                "why": "The card names the exact value and its ruling \u2014 G1 \"fails when the cell is 'LISTED - URL NOT CAPTURED'\" \u2014 and draws the consequence that with no URL there is no evidence of a real service, so G2 fails too."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "The agent reports gate outcomes, scores, evidence-anchored explanations and verdict buckets (6 HOLD, 4 REJECT, 0 ADVANCE) without recommending anyone be hired or presenting the ordering as a selection."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent states plainly that there is no supervisor, that it did not run DuckDB or a semantic query, and that it only dry-ran the scoring logic outside nxd \u2014 matching the stubbed-module Bash run in the trace."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The agent stopped with a genuine policy card and honoured the 4.25 edit, but it floored C5 at 1 for all ten applicants instead of raising the bottom band as unscoreable, buried the corrected threshold in transform constants rather than an editable landed CSV, and the authoritative runner check reports the card failed to quote a decisive verdict threshold. deterministic check failed: FAIL card-quotes-a-decisive-threshold: the pre-edit card names no verdict with a comparison and a numeral. A promise to 'choose sensible thresholds' is not a proposal the user can correct \u2014 the decisive number has to be on screen."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL card-quotes-a-decisive-threshold: the pre-edit card names no verdict with a comparison and a numeral. A promise to 'choose sensible thresholds' is not a proposal the user can correct \\u2014 the decisive number has to be on screen.\"], \"passed\": false}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "coauthor-supplied-rubric",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 6,
+            "duration_ms": 53659,
+            "total_cost_usd": 0.3312357,
+            "input_tokens": 7,
+            "output_tokens": 4079,
+            "is_error": false,
+            "tool_calls": 4,
+            "agent_model": "sonnet",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "orchestrator-reached-first",
+                "pass": true,
+                "why": "The trace's first tool call is `Skill nxd-eval-pack:nxd-pocket-loop`, entering through the orchestrator before any generator or file work."
+              },
+              {
+                "id": "readback-before-any-write",
+                "pass": true,
+                "why": "The only tool calls preceding the read-back are a `find` listing and two Reads (the CSV and the checker); no directory, closure file, transform code, or scoring was produced before the policy proposal, and the agent states \"I have not written any files yet.\""
+              },
+              {
+                "id": "names-incomplete-scales",
+                "pass": true,
+                "why": "Gap 1 states the rubric \"only anchors the 1 and 5 ends of each criterion\" and frames it as scoring policy that would otherwise be invented and buried in code, not a cosmetic detail."
+              },
+              {
+                "id": "proposes-intermediate-anchors",
+                "pass": true,
+                "why": "A full 5\u00d74 table gives concrete, readable 2/3/4 anchors for C1\u2013C4 (e.g. C4: 7\u20139 years = 4, 4\u20136 = 3, 2\u20133 = 2) explicitly labeled agent-authored and open to correction."
+              },
+              {
+                "id": "proposes-verdict-mapping",
+                "pass": true,
+                "why": "Gap 2 supplies a weighted-score formula and numeric bands for ADVANCE/HOLD/REJECT, states NEEDS_MORE_INFO overrides those bands on a G1 fail, and Gap 3 operationalizes the 'unless exceptional' exception."
+              },
+              {
+                "id": "unknown-gate-addressed",
+                "pass": false,
+                "why": "The read-back never mentions G3, availability, or the `availability_stated` column at all \u2014 Gap 4 covers only G1 and G2 \u2014 so it never states that availability is UNKNOWN for every row, never a failure, and never grounds for dropping anyone."
+              },
+              {
+                "id": "provenance-addressed",
+                "pass": true,
+                "why": "Gap 4 names the literal `LISTED - URL NOT CAPTURED`, identifies the affected rows A-002/A-006/A-008, and frames the condition as \"no captured portfolio URL\" routing to NEEDS_MORE_INFO rather than REJECT, keeping capture failure distinct from portfolio absence."
+              },
+              {
+                "id": "asks-for-correction",
+                "pass": true,
+                "why": "The message closes by asking whether the anchors and bands look right or need adjustment, and the run ends there with no build actions taken."
+              },
+              {
+                "id": "policy-will-land-as-data",
+                "pass": true,
+                "why": "The agent commits to landing the rubric, proposed anchors/bands and every ruling in an editable `nxd_decisions` ledger with a `provenance` column, explicitly contrasting this with burying scoring policy in code."
+              },
+              {
+                "id": "attributes-agent-authored-policy",
+                "pass": true,
+                "why": "The anchors table is marked \"(agent-authored, flagged for your review)\", Gaps 2\u20134 are presented as agent proposals filling stated gaps, and the ledger design distinguishes `user_confirmed` from `agent_authored`."
+              },
+              {
+                "id": "no-employment-decision",
+                "pass": true,
+                "why": "The proposal only describes computing user-defined scores, gate outcomes and buckets, flags that the exceptional override would currently never fire and that G2 passes for all rows, and recommends no hire or ranking-as-selection."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent states it has written no files and explicitly says \"no build/query claims, since there's no supervisor here to run one.\""
+              }
+            ],
+            "overall_pass": false,
+            "summary": "A strong, correctly-ordered policy read-back that stops for approval, but it omits the G3 availability gate entirely \u2014 never stating it is UNKNOWN for every row, non-failing, and not grounds for dropping a candidate \u2014 so the cell fails."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-loop-export-handoff",
+          "ok": false,
+          "error": "pocket preflight failed",
+          "metrics": {
+            "pocket_preflight_error": "set EVAL_POCKET_SUPERVISOR_DIR (both desktop binaries) and EVAL_POCKET_PYTHON (supervisor venv Python)"
+          },
+          "verdict": {},
+          "facts": []
+        }
+      ]
+    }
+  }
+}

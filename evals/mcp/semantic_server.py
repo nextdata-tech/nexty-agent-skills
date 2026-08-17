@@ -113,7 +113,7 @@ def build_server(
 
     stdio mode (http_path=None): the dev/standalone path.
     HTTP mode (http_path set, e.g. "/<dp>/rpcs/<port>/mcp"): the eval path —
-    the nxd-data-product-query skill discovers DP MCP endpoints over HTTP via
+    the nxd-query-data-product skill discovers DP MCP endpoints over HTTP via
     its mcp_gateway.py toolchain, so we serve Streamable-HTTP at the proxy URL
     shape the skill expects.
     """

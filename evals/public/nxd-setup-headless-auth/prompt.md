@@ -9,7 +9,7 @@ before the approval happened and the approval was wasted. The correct recovery
 is a manual OAuth device flow driven with `curl` (device code persisted to a
 file, the server-issued `pkce_verifier` echoed back as `code_verifier`), then
 hand-writing `tokens.json` into the config file's directory and minting a real
-PAT. This scenario regression-tests the `nxd-setup` skill's
+PAT. This scenario regression-tests the `nxd-setup-cli` skill's
 sandboxed/non-persistent-shell branch.
 
 Task for the agent:

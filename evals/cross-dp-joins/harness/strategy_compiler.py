@@ -53,7 +53,7 @@ _REPO_ROOT = _HERE.parents[2]
 _SKILL_SCRIPTS = Path(
     os.environ.get(
         "NXD_QUERY_SKILL_SCRIPTS",
-        str(_REPO_ROOT / "src" / "nxd-data-product-query" / "scripts"),
+        str(_REPO_ROOT / "src" / "nxd-query-data-product" / "scripts"),
     )
 ).resolve()
 _MCP_CALL = _SKILL_SCRIPTS / "mcp_call.py"

@@ -8,7 +8,7 @@ policies with `data-product policies --name`, passes `--env` to
 `deactivate policy` (which rejects it), and claims reactivation restores prior
 configuration from just `--name`. The real reactivation needs the full policy
 configuration, which is committed in `data_product/policies/create.sh`. This
-scenario regression-tests the `nxd-policies` skill's flag surface and its
+scenario regression-tests the `nxd-toggle-policies` skill's flag surface and its
 verify-toggle-verify sequence.
 
 Task for the agent:

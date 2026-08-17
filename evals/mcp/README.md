@@ -44,7 +44,7 @@ masked views.
 
 ## How run.py drives it (production-faithful)
 
-The `nxd-data-product-query` skill discovers DP MCP endpoints exactly as in
+The `nxd-query-data-product` skill discovers DP MCP endpoints exactly as in
 production — `nxd mcp health --format json` → Streamable-HTTP MCP → tool calls.
 So the harness:
 

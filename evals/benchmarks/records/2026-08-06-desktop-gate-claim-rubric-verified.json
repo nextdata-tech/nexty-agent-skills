@@ -1,0 +1,137 @@
+{
+  "id": "2026-08-06-desktop-gate-claim-rubric-verified",
+  "date": "2026-08-06",
+  "label": "docs: retract the desktop 'only durable gate' claim from skill text and judge rubric",
+  "notes": "Verification run for a wording-only change. The retracted 'only durable data-quality gate on desktop' claim survived in the derived-model-asserts check of generate-runnable-dp-from-intent, which a judge reads as the authoritative description of what it grades; the factual clause was replaced and the operative instruction ('never loosen one to make a run pass') kept byte-identical. Single after-arm: no before-arm was run because the agent never reads checks.json and _agent_cache_key deliberately excludes grading fields, so the agent transcript cannot move. The run confirms the baselined non-flaky PASS cell still passes 16/16. Caveat worth reading: derived-model-asserts passed VACUOUSLY here ('No derived models are present'), so this run proves no regression but does not exercise the edited sentence as a grading criterion. derive-models-from-questions is the scenario that forces derived models; its assert checks are worded independently and never carried the retracted claim.",
+  "plugin_version": "0.36.3",
+  "report_tags": {
+    "after-v0.36.2": "after-v0.36.2"
+  },
+  "reports": {
+    "after-v0.36.2": {
+      "elapsed_s": 211.7,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 1158038,
+            "output_tokens": 7288,
+            "reasoning_output_tokens": 939,
+            "cached_input_tokens": 1075712,
+            "tool_calls": 16,
+            "shell_calls": 15,
+            "sandbox_failures": 1,
+            "shell_successes": 11,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The trace shows inferred_model.json and the first five lines of each supplied CSV were read before the authored-file change."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The trace inventory lists all six required source artifacts and confirms deployment-spec.yaml, manifest.yaml, and models.yaml are absent."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "The closure check reports both CSVs preserved byte-for-byte."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "The closure check passes promised-primary-keys and promised-base-primary-key-tuples."
+              },
+              {
+                "id": "derived-model-keys",
+                "pass": true,
+                "why": "The trace identifies only customers and orders as physical base models, so no derived model key requirement applies."
+              },
+              {
+                "id": "derived-through-port",
+                "pass": true,
+                "why": "No derived models are present, and the closure check passes the single dlt-through-port transform contract."
+              },
+              {
+                "id": "derived-rows-flat",
+                "pass": true,
+                "why": "No derived resources are present, and the closure check passes derived-resources-flat."
+              },
+              {
+                "id": "derived-model-asserts",
+                "pass": true,
+                "why": "No derived models are present, so no derived source-versus-output assertion is required."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "The closure check explicitly passes public-semantic-dsl and no-private-semantic-metadata."
+              },
+              {
+                "id": "annotations-carried-through",
+                "pass": true,
+                "why": "The closure check explicitly passes annotations-carried-through for the inferred model."
+              },
+              {
+                "id": "description-reaches-the-agent",
+                "pass": true,
+                "why": "The successful annotations-carried-through structural check supports that role descriptions were placed where the semantic API exposes them."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "The closure check passes desktop-wiring, metric-view-registered, and no-semantic-tools."
+              },
+              {
+                "id": "physical-models-vs-data-dirs",
+                "pass": true,
+                "why": "The closure check passes physical-model-declaration, physical-models-match-data-dirs, and models-promised."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "The closure check passes transform-contract, duckdb-port, loaded model checks, no-child-tables, and transform-complete."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": true,
+                "why": "The trace shows the pinned closure-check command completed successfully and printed ALL CHECKS PASSED."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer explicitly states that no supervisor build or semantic query was run."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All checks pass based on the recorded inspection, generated-closure validation, and appropriately limited final claim."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}

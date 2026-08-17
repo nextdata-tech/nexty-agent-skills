@@ -1,7 +1,7 @@
 {
   "name": "Generate a Semantic-Layer Data Product from a Schema",
   "skills": [
-    "nxd-semantic-data-product"
+    "nxd-build-semantic-data-product"
   ],
   "workspace_files": [
     "models.py",

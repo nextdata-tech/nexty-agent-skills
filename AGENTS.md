@@ -16,8 +16,20 @@ pack-level invariants CI cannot check on its own.
 - `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` — plugin and
   marketplace manifests for the Claude Code distribution path.
 - `evals/skill-sets.yaml` — named skill packs used by the eval harness.
-- `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip.
+- `build-skills.sh` — packages each `src/<skill>` into a Claude Desktop zip and assembles the uploadable whole-pack plugin zip.
 - `.github/workflows/release.yml` — publishes those zips on a `v*` tag.
+- `experiments/<name>/` — self-contained prototypes. **Not part of the shipped
+  pack**: nothing under `src/` imports them, `build-skills.sh` does not package
+  them, and `validate_skills.py` does not scan them, so the versioning and
+  pack-completeness rules below do not apply to changes confined here. Each
+  carries its own docs. An experiment that graduates moves its code under `src/`
+  and its architecture doc to `docs/architecture/`; until then treat
+  `experiments/` as a staging area, never as a dependency. The worked example of
+  a graduation is the field mapper, which graduated twice: out of `experiments/`
+  into the skill, then out of this repo entirely. Its code now ships in the
+  `nxd` package as `nxd.experimental.field_mapper`; what stays here is its
+  normative contract (`src/nxd-generate-data-product/mapper/CONTRACT.md`), its
+  fixtures, and its design record at `docs/architecture/field-mapper.md`.
 
 ## Versioning (single source of truth)
 
@@ -53,7 +65,7 @@ table is a release defect — the pack ships incomplete.
 - `SKILL.md` under 500 lines; detail goes to `reference/`.
 - Reference files over 100 lines start with a `## Contents` section in the first
   20 lines.
-- Each skill zip stays under the **200-entry Claude Desktop cap** (`build-skills.sh`).
+- Each individual skill zip stays under the **200-entry Claude Desktop cap** (`build-skills.sh`).
 
 ## Before opening a PR
 
@@ -62,13 +74,43 @@ python3 scripts/validate_skills.py --root .   # conventions
 ./build-skills.sh                             # packaging + 200-entry cap
 ```
 
+**Evals on a PR are opt-in.** The `evals-pr` job runs only while the PR carries
+the `run-evals` label; without it, no agent run happens and the PR spends no
+model tokens. Add the label to any PR that changes skill behavior — a green
+unlabelled PR means the scenarios never ran, not that they passed. The label can
+be added after the PR is open and will fire a run on its own.
+
+The unconditional gate is at release, not on the PR: tagging `vX.Y.Z` runs every
+runnable public scenario on the tagged commit, and a confirmed regression fails
+the release outright. A green run additionally attaches the `evals.json` asset
+that the nxd monorepo requires before it will merge a submodule bump — so an
+emergency `skip_evals` release still publishes, but cannot reach the monorepo.
+See "What runs in CI vs. what only runs locally" in `evals/README.md`.
+
 When a PR changes a skill's behavior (not pure packaging/typo fixes), benchmark
 it and commit the evidence: run the relevant eval scenario(s) before and after
 (`evals/run.py --report ...`), then record the comparison with
-`evals/benchmark_record.py`, which appends to `evals/benchmarks/ledger.md`.
-The ledger is the repo's before/after history of skill quality and efficiency
-(judge checks, turns, tool calls, tokens) — see "Benchmarking a skill change"
-in `evals/README.md`.
+`evals/benchmark_record.py`. It creates a paired measured entry at
+`evals/benchmarks/entries/<id>.md` and compact report at
+`evals/benchmarks/records/<id>.json`, then deterministically rebuilds
+`evals/benchmarks/README.md`. The historical `evals/benchmarks/ledger.md` and
+all pre-existing `records/*` are frozen evidence; never append to or rewrite
+them. CI runs `benchmark_record.py --check` to validate entry frontmatter and
+index freshness.
+
+**When no scenario can distinguish the change**, hand-author a new entry under
+`evals/benchmarks/entries/` with frontmatter `status: NO_EVAL`,
+`scenarios: []`, and `record: null`. Its Notes must explain why no arm exists,
+and its Evidence must name an existing carrying test file path (prefer tests
+verified to fail against the previous implementation). Run
+`python3 evals/benchmark_record.py --rebuild-index` afterward. Manufacturing a
+scenario to produce a number for such a change makes the evidence less
+trustworthy, not more.
+
+The generated entry index is the current before/after history of skill quality
+and efficiency (judge checks, turns, tool calls, tokens); the legacy ledger is
+an immutable historical record. See "Benchmarking a skill change" in
+`evals/README.md`.
 
 ## Safety
 

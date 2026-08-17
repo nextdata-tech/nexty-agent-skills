@@ -75,8 +75,8 @@ From a clone of this repo, the first-party installer handles every Claude target
 git clone --recurse-submodules https://github.com/nextdata-tech/nexty-agent-skills.git
 cd nexty-agent-skills
 ./scripts/install.sh --code        # Claude Code: copy skills to ~/.claude/skills
-./scripts/install.sh --desktop     # Claude Desktop / Cowork: install + enable (no upload)
-./scripts/install.sh --all         # all targets
+./scripts/install.sh --desktop     # Claude Desktop / Cowork: build one plugin ZIP to upload
+./scripts/install.sh --all         # Code install + one Desktop/Cowork plugin ZIP
 ```
 
 `scripts/install.sh` validates the pack (`scripts/validate_skills.py`), initializes the
@@ -145,7 +145,8 @@ The official Anthropic & Partners directory is separate from the community marke
 ### Installer (`scripts/install.sh`)
 
 The first-party installer is the canonical path. It is pure bash + `python3` (no `npx`,
-no `jq`), validates the pack before installing, and supports a clean uninstall.
+no `jq`), validates the pack before installing, and cleanly removes Claude Code
+installs; Desktop/Cowork uploads must be removed from the Desktop UI.
 
 ```bash
 scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
@@ -156,7 +157,7 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 | Target | What it does |
 |--------|--------------|
 | `--code` | Copies each skill to `~/.claude/skills/<skill>/` (global) or `./.claude/skills/` with `--project`. Full submodule, no size cap. Idempotent (`rsync --delete`). |
-| `--desktop` / `--cowork` | Both are "local-agent-mode". Installs the pack as a local marketplace plugin and enables it — no manual upload. Restart Claude Desktop to load it. `--zip` switches to the build-zip + manual-upload fallback. macOS only. |
+| `--desktop` / `--cowork` | Builds one `nexty-agent-skills-v<version>.zip` containing the complete plugin. Upload that ZIP in Claude Desktop's Plugins UI on macOS or Windows. |
 
 **Scope** (Claude Code only): default global `~/.claude/skills`; `--project` → `./.claude/skills`.
 
@@ -165,29 +166,35 @@ scripts/install.sh [install|uninstall|status|help] [targets] [scope] [options]
 ```bash
 scripts/install.sh --code                       # global Claude Code install (default)
 scripts/install.sh --code --project             # current project only
-scripts/install.sh --code --skills "nxd-setup nxd-data-product-builder"
-scripts/install.sh --desktop                    # install + enable for Desktop/Cowork (then restart)
-scripts/install.sh --desktop --zip              # build zips + manual-upload fallback
+scripts/install.sh --code --skills "nxd-setup-cli nxd-build-data-product"
+scripts/install.sh --code --skills "nxd-run-job-loop nxd-generate-data-product" # generator + its runtime helper skill
+scripts/install.sh --desktop                    # build the one Desktop/Cowork plugin ZIP
+scripts/install.sh --desktop --zip              # same flow; --zip is a compatibility alias
 scripts/install.sh --all                        # every target
 scripts/install.sh status --code                # show what's installed
-scripts/install.sh uninstall --desktop          # remove + disable the Desktop/Cowork plugin
+scripts/install.sh uninstall --desktop          # show where to remove it in Desktop
 scripts/install.sh --code --dry-run             # print actions, change nothing
 ```
 
-Other options: `--no-validate`, `--no-submodule`, `--account-id ID`, `--device-id ID`,
-`-y/--yes`, `--verbose`.
+Other options: `--no-validate`, `--no-submodule`, `-y/--yes`, `--verbose`.
+
+When selecting `nxd-generate-data-product`, include `nxd-run-job-loop`: the generator
+uses its installed validator, lock writer, and build-record helpers at runtime.
 
 #### How the Claude Desktop / Cowork install works
 
-Desktop and Cowork ("local-agent-mode") load plugins from a local marketplace store
-under `~/Library/Application Support/Claude/local-agent-mode-sessions/<accountId>/<deviceId>/`.
-The installer mirrors what the **Browse plugins** UI writes to disk — it materializes a
-marketplace checkout and a plugin cache, then registers the plugin across
-`known_marketplaces.json`, `installed_plugins.json`, and `cowork_settings.json`
-(which carries the `enabledPlugins` flag, so the plugin installs **enabled**, not disabled).
-Every file is backed up before it's edited, and `uninstall --desktop` reverses all of it.
-Restart Claude Desktop after installing for it to pick up the change. macOS only;
-use `--zip` for the manual-upload fallback.
+`scripts/install.sh --desktop` and `--cowork` build the complete plugin at
+`build/nexty-agent-skills-v<version>.zip`. Upload that one file from Claude Desktop's
+Customize → Plugins → Add plugin → Upload plugin, confirm it is enabled, fully quit/reopen Claude Desktop,
+and start a new Cowork task. This is the same plugin layout used by the hosted release
+asset and works on macOS and Windows; the script does not edit Claude's
+`local-agent-mode-sessions` state.
+
+To remove it, use the same Customize → Plugins screen. `uninstall --desktop` prints
+that guidance but cannot remove a UI-managed upload. `status --desktop` and
+`uninstall --desktop` also report recognizable legacy-format app-state evidence
+read-only; they leave Claude-owned registries, caches, and uploaded skill state
+untouched.
 
 ### Manual install
 
@@ -240,37 +247,37 @@ rm -rf .agents .claude/skills skills-lock.json
 
 | Skill | Description |
 |-------|-------------|
-| `nxd-setup` | Install, configure, and authenticate the nxd CLI |
-| `nxd-data-product-builder` | Create, bootstrap, scaffold, refine, and validate a Nextdata OS Python data product — interactive interview or spec-from-document (replaces the former `nexty-bootstrap` wizard) |
-| `nxd-adding-inputs` | Add or repair inputs, input semantic models, transform parameters, and input expectations |
-| `nxd-adding-outputs` | Add or repair output models, output ports, storage mappings, transform output parameters, and output promises |
-| `nxd-adding-expectations-promises` | Add or repair input expectations and output promises |
-| `nxd-adding-policy` | Add contracts and activate computational policies with current CLI syntax |
-| `nxd-complying-with-failing-policy` | Diagnose policy violations and update the data product to comply |
-| `nxd-debugging-data-products` | Diagnose failed data products from describe/logs/init logs/verify output |
-| `nxd-data-product-query` | Query a deployed data product — discovery via the MCP gateway; reads via SQL / file fetch / vector similarity / MCP-RPC (REST only for credential leasing) |
-| `nxd-mesh-analyzer` | Inspect an infra profile's data-bearing services (S3, Snowflake, ADLS, BigQuery, Postgres, Kafka, …) read-only and report candidate data product inputs/outputs grouped by domain |
-| `nxd-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
-| `nxd-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
-| `nxd-eval-harness` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
-| `nxd-generate-dp` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
-| `nxd-pocket-loop` | Drive the local Nexty Pocket loop end to end — infer a semantic model, generate a runnable data product, serve it on the local desktop supervisor, answer natural-language questions against it, and refine wrong answers back into a regenerate |
+| `nxd-setup-cli` | Install, configure, and authenticate the nxd CLI |
+| `nxd-build-data-product` | Create, bootstrap, scaffold, refine, and validate a Nextdata OS Python data product — interactive interview or spec-from-document (replaces the former `nexty-bootstrap` wizard) |
+| `nxd-add-inputs` | Add or repair inputs, input semantic models, transform parameters, and input expectations |
+| `nxd-add-outputs` | Add or repair output models, output ports, storage mappings, transform output parameters, and output promises |
+| `nxd-add-expectations-and-promises` | Add or repair input expectations and output promises |
+| `nxd-add-policies` | Add contracts and activate computational policies with current CLI syntax |
+| `nxd-fix-policy-failures` | Diagnose policy violations and update the data product to comply |
+| `nxd-debug-data-product` | Diagnose failed data products from describe/logs/init logs/verify output |
+| `nxd-query-data-product` | Query a deployed data product — discovery via the MCP gateway; reads via SQL / file fetch / vector similarity / MCP-RPC (REST only for credential leasing) |
+| `nxd-analyze-mesh` | Inspect an infra profile's data-bearing services read-only (S3, Snowflake and ADLS have inspection drivers; others report as unsupported) and report candidate data product inputs/outputs grouped by domain |
+| `nxd-toggle-policies` | List, activate, and deactivate computational policies on a data product via the nxd CLI |
+| `nxd-build-semantic-data-product` | Build a governed text-to-SQL / semantic-layer data product that exposes curated metrics and dimensions over MCP, so an AI agent can answer natural-language questions without writing raw SQL |
+| `nxd-run-evals` | Run the Inspect-based nxd_eval suite to measure how reliably an agent answers questions against your data product or mesh, with deterministic execution-accuracy plus a judge and a Wilson-lower-bound certification gate |
+| `nxd-generate-data-product` | Generate a complete runnable data-product closure for lean-desktop Nextdata OS from a natural-language intent, an inferred semantic model, and a connector config — ready to boot locally and produce a queryable DuckDB result |
+| `nxd-run-job-loop` | Drive the local job loop end to end — infer a semantic model, generate a runnable data product, serve it on the local desktop supervisor, answer natural-language questions against it, and refine wrong answers back into a regenerate |
 | `nxd-review-closure` | Review an authored closure adversarially against the original request — hunt the logical and semantic defects a structural self-check cannot see (an unanswerable question, a capability dismissed rather than researched, an aggregation wrong for its grain, a silently-resolved ruling, an assert that restates its own arithmetic) and return them as claims the builder must adjudicate |
-| `nxd-dp-static-artifact` | Render one published data-product release as a self-contained offline HTML artifact from its verified read-only catalog resources |
+| `nxd-render-static-artifact` | Render one published data-product release as a self-contained offline HTML artifact from its verified read-only catalog resources |
 
 ## Usage
 
 Start Claude Code in any project and invoke a skill:
 
 ```
-/nxd-setup                  # Set up the nxd CLI
-/nxd-data-product-builder   # Build / bootstrap a new data product
-/nxd-adding-inputs          # Add inputs to an existing data product
-/nxd-adding-outputs         # Add output ports and promises
-/nxd-debugging-data-products # Debug a failed deployed data product
-/nxd-data-product-query     # Query output ports from deployed data products
-/nxd-mesh-analyzer          # Discover candidate data products from an infra profile
-/nxd-policies               # List, activate, and deactivate policies
+/nxd-setup-cli           # Set up the nxd CLI
+/nxd-build-data-product  # Build / bootstrap a new data product
+/nxd-add-inputs          # Add inputs to an existing data product
+/nxd-add-outputs         # Add output ports and promises
+/nxd-debug-data-product  # Debug a failed deployed data product
+/nxd-query-data-product  # Query output ports from deployed data products
+/nxd-analyze-mesh        # Discover candidate data products from an infra profile
+/nxd-toggle-policies     # List, activate, and deactivate policies
 ```
 
 Skills also activate automatically — just ask "bootstrap a new data product" and the agent will use the right skill.
@@ -340,8 +347,8 @@ npx skills add ./src -g -a claude-code -s '*' -y
 You should see output similar to:
 
 ```text
-Found 11 skills
-Installed 11 skills
+Found 17 skills
+Installed 17 skills
 ```
 
 The `-g` flag installs the skills globally for your user, so Claude Code can use them from any project directory. The `-a claude-code` flag targets Claude Code only. If you use `--all -g`, the Skills CLI may also try agents that do not support global installs and print unrelated failures such as `PromptScript does not support global skill installation`.
@@ -390,12 +397,12 @@ Use the Nexty skills to build a Nextdata OS Python data product from this requir
 
 ~/src/nexty-agent-skills/example-input/jira-data-product.md
 
-Use nxd-data-product-builder as the main skill. Use supporting workflow skills when needed:
-- nxd-setup
-- nxd-adding-inputs
-- nxd-adding-outputs
-- nxd-adding-expectations-promises
-- nxd-debugging-data-products
+Use nxd-build-data-product as the main skill. Use supporting workflow skills when needed:
+- nxd-setup-cli
+- nxd-add-inputs
+- nxd-add-outputs
+- nxd-add-expectations-and-promises
+- nxd-debug-data-product
 
 Important:
 - Build inside the current directory.
@@ -469,7 +476,7 @@ If `nxd validate` was not run, the README must include the exact blocker and the
 
 Claude Desktop is useful for testing the skill behavior and generating downloadable starter artifacts. It is not the cleanest path for proving a data product was built in a local folder, because Desktop conversations often return files as artifacts/downloads instead of writing into your terminal's current directory.
 
-#### 1. Build the ZIP files
+#### 1. Build the plugin ZIP
 
 ```bash
 cd ~/src/nexty-agent-skills
@@ -478,41 +485,33 @@ python3 scripts/validate_skills.py
 ./build-skills.sh
 ```
 
-This creates one ZIP per skill at the repository root, for example:
+This creates individual skill ZIPs for compatibility and one uploadable whole-pack
+plugin ZIP under `build/`:
 
 ```text
-nxd-data-product-builder.zip
-nxd-setup.zip
-nxd-adding-inputs.zip
-nxd-adding-outputs.zip
-nxd-adding-expectations-promises.zip
-nxd-debugging-data-products.zip
+build/nexty-agent-skills-v<version>.zip
 ```
 
-#### 2. Install the ZIPs in Claude Desktop
+#### 2. Install the plugin ZIP in Claude Desktop
 
-Claude Desktop does not use `npx skills add ./src --all -y` for this flow. Install the generated ZIP files through the Desktop UI.
+Claude Desktop does not use `npx skills add ./src --all -y` for this flow. Upload the
+generated whole-pack plugin ZIP through the Desktop UI.
 
 In Claude Desktop:
 
 1. Open `Customize`.
-2. Open `Skills`.
-3. Click `+`.
-4. Choose `Create skill`.
-5. Choose `Upload a skill`.
-6. Upload each `nxd-*.zip` file you want to test.
-7. Confirm the skills are enabled.
+2. Open `Plugins`.
+3. Choose `Add plugin`.
+4. Choose `Upload plugin`.
+5. Upload `build/nexty-agent-skills-v<version>.zip`.
+6. Confirm the plugin is enabled.
 
-For a full data product build test, install at least:
+The whole-pack ZIP is a plugin archive, not a single skill archive. Do not upload it
+through `Create skill` → `Upload a skill`; that path applies the per-skill 200-entry
+limit. The individual `build/<skill>.zip` artifacts remain available for one-skill
+installs through the Skills UI.
 
-- `nxd-data-product-builder.zip`
-- `nxd-setup.zip`
-- `nxd-adding-inputs.zip`
-- `nxd-adding-outputs.zip`
-- `nxd-adding-expectations-promises.zip`
-- `nxd-debugging-data-products.zip`
-
-If your organization uses Team or Enterprise skill provisioning, an admin can upload the ZIPs once through organization settings instead of every user uploading them individually.
+If your organization uses Team or Enterprise skill provisioning, an admin can upload the plugin ZIP once through organization settings instead of every user uploading it individually.
 
 #### 3. Start a new Claude Desktop chat
 
@@ -527,12 +526,12 @@ Then paste this prompt:
 ```text
 Use the Nexty skills to build a Nextdata OS Python data product from the attached requirement.
 
-Use nxd-data-product-builder as the main skill. Use supporting workflow skills when needed:
-- nxd-setup
-- nxd-adding-inputs
-- nxd-adding-outputs
-- nxd-adding-expectations-promises
-- nxd-debugging-data-products
+Use nxd-build-data-product as the main skill. Use supporting workflow skills when needed:
+- nxd-setup-cli
+- nxd-add-inputs
+- nxd-add-outputs
+- nxd-add-expectations-and-promises
+- nxd-debug-data-product
 
 Important:
 - If you cannot write to a real local filesystem path, say that clearly before generating files.
@@ -643,9 +642,12 @@ eyeballed. The loop for editing an existing skill:
      --report after=/tmp/eval-after.json \
      --notes "<why>"
    ```
-   This appends a before/after entry to `evals/benchmarks/ledger.md` — the repo's
-   history of skill quality and efficiency (judge checks, turns, tool calls,
-   tokens). Commit it in the same PR as the change it measures.
+   This creates a before/after Markdown entry in `evals/benchmarks/entries/`, a
+   matching compact JSON record in `evals/benchmarks/records/`, and rebuilds
+   `evals/benchmarks/README.md` — the current history of skill quality and
+   efficiency (judge checks, turns, tool calls, tokens). Commit all three in the
+   same PR as the change it measures. `evals/benchmarks/ledger.md` and its
+   existing records are frozen legacy history, never append to or rewrite them.
 4. **Bump the version** if behavior changed — plugin version is authoritative and
    kept in lockstep across `.claude-plugin/plugin.json`,
    `.claude-plugin/marketplace.json`, and every `src/*/SKILL.md` `metadata.version`.
@@ -661,16 +663,16 @@ These are enforced by `scripts/validate_skills.py` in CI (`.github/workflows/ci.
 - Skill names: lowercase, hyphens only, 1-64 chars, and the `name:` field **must match the directory name**
 - Descriptions must be specific, stay under 1024 characters, include a clear `Use when ...` trigger clause, and contain **no angle-bracket placeholders** (e.g. `<DP>`)
 - `allowed-tools` must be present and non-empty, listing only known Claude Code tools (`Bash`, `Read`, `Write`, `Edit`, `MultiEdit`, `Glob`, `Grep`, `AskUserQuestion`, `Agent`, `Task`, `TodoWrite`, `WebFetch`, `WebSearch`, `NotebookEdit`)
-- `metadata.version`, if set, must be semver (`X.Y.Z`)
+- `metadata.version` must be semver (`X.Y.Z`) and **equal the `.claude-plugin/plugin.json` version** — skill versions move in lockstep, they are not bumped individually
 - Keep `SKILL.md` under 500 lines for context efficiency
 - Move detailed references to `reference/` (singular only — `references/` is rejected) for progressive disclosure
 - Add a `## Contents` section near the top of reference files longer than 100 lines
-- Each skill zip stays under the 200-entry Claude Desktop cap (enforced via `build-skills.sh` in CI)
-- Run `python3 scripts/validate_skills.py` and `./build-skills.sh` before sharing updated ZIPs
+- Each individual skill zip stays under the 200-entry Claude Desktop cap (enforced via `build-skills.sh` in CI)
+- Run `python3 scripts/validate_skills.py` and `./build-skills.sh` before sharing the plugin ZIP
 
 ### Claude Desktop packaging limits
 
-Claude Desktop rejects skills that violate either of these. Use `./build-skills.sh` to package; it strips noise and reports per-skill file counts.
+Claude Desktop rejects skills that violate either of these. Use `./build-skills.sh` to package; it strips noise, reports per-skill file counts, and assembles the whole-pack plugin ZIP.
 
 - **Max 200 entries per skill zip.** Counts files + directory entries. The build script passes `zip -D` to drop empty dir entries and excludes VCS/caches/lockfiles/OS junk. If a bundled examples repo pushes you over, strip per-DP housekeeping (`README.md`, `.python-version`, `pyproject.toml`, `notebooks/`, `tests/`) before code.
 - **No XML / angle-bracket tags in the SKILL.md `description` field.** Placeholders like `<DP>` or `<table>` in the frontmatter description trip the loader. Use plain wording (`a named DP`, `the table`) instead. Body content is fine; only the YAML frontmatter `description:` is parsed strictly.

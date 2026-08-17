@@ -19,6 +19,9 @@ they ride in Sample metadata, read only by scorers and post-processing.
 from __future__ import annotations
 
 import json
+import socket
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +29,7 @@ from inspect_ai import Epochs, Task
 from inspect_ai.dataset import Sample
 
 from .case import ABSTAIN
+from .dependencies import check_inspect_model_dependency
 from .scorers import scorers_for
 from .solver import mcp_solver
 
@@ -39,6 +43,192 @@ VARIANTS = ("no_skills", "current_pack", "candidate_pack")
 # The public API takes the bare family name plus ``epochs`` as k; we compose the
 # concrete reducer name here so ``epochs_reducer="pass_at"`` stays ergonomic.
 _K_PARAM_REDUCERS = ("pass_at", "at_least")
+
+
+class MCPConnectionError(RuntimeError):
+    """Raised when an HTTP MCP endpoint fails the preflight check."""
+
+
+def _mcp_initialize_body() -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "nxd_eval-preflight", "version": "1"},
+            },
+        }
+    ).encode()
+
+
+def _mcp_error_message(url: str, detail: str) -> str:
+    return (
+        f"MCP endpoint preflight failed for {url}: {detail}. "
+        "Verify the MCP URL is reachable, points at the streamable HTTP MCP path "
+        "(for example /<data-product>/rpcs/<rpc-port>/mcp), and that the auth "
+        "token/header is valid."
+    )
+
+
+def _mcp_http_headers(authorization: str | None = None) -> dict[str, str]:
+    """Headers matching Inspect's ``mcp_server_http(authorization=...)`` path."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if authorization is not None:
+        headers["Authorization"] = f"Bearer {authorization}"
+    return headers
+
+
+def _jsonrpc_payloads(body: bytes, content_type: str) -> list[dict[str, Any]]:
+    text = body.decode("utf-8", errors="replace").strip()
+    if not text:
+        return []
+    payloads: list[dict[str, Any]] = []
+    if "text/event-stream" in content_type:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line.removeprefix("data:").strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                parsed = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                payloads.append(parsed)
+        return payloads
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return [parsed] if isinstance(parsed, dict) else []
+
+
+def _initialize_protocol_version(body: bytes, content_type: str) -> str | None:
+    for payload in _jsonrpc_payloads(body, content_type):
+        result = payload.get("result")
+        if isinstance(result, dict) and isinstance(result.get("protocolVersion"), str):
+            return result["protocolVersion"]
+    return None
+
+
+def _read_initialize_response(resp: Any, content_type: str) -> bytes:
+    if "text/event-stream" not in content_type:
+        return resp.read(65536)
+
+    chunks: list[bytes] = []
+    data_lines = 0
+    total_bytes = 0
+    while total_bytes < 65536 and data_lines < 100:
+        line = resp.readline(65536)
+        if not line:
+            break
+        chunks.append(line)
+        total_bytes += len(line)
+        if not line.strip().startswith(b"data:"):
+            continue
+        data_lines += 1
+        if _initialize_protocol_version(b"".join(chunks), content_type):
+            break
+    return b"".join(chunks)
+
+
+def _close_mcp_session(
+    url: str,
+    *,
+    headers: dict[str, str],
+    session_id: str | None,
+    timeout_s: float,
+) -> None:
+    if not session_id:
+        return
+    close_headers = dict(headers)
+    close_headers["Mcp-Session-Id"] = session_id
+    req = urllib.request.Request(url, method="DELETE", headers=close_headers)
+    try:
+        urllib.request.urlopen(req, timeout=timeout_s).close()
+    except (urllib.error.URLError, OSError, TimeoutError):
+        # The preflight has already learned what it needs. A server that does not
+        # support DELETE should not hide the clearer initialize result.
+        return
+
+
+def preflight_mcp_http_endpoint(
+    url: str,
+    *,
+    authorization: str | None = None,
+    timeout_s: float = 10.0,
+) -> None:
+    """Fail fast with a clear error before Inspect starts a model run.
+
+    ``mcp_server_http`` connects lazily, so bad URLs or tokens otherwise surface
+    deep in an eval loop. The preflight performs a JSON-RPC initialize request,
+    checks for a protocol version in the response, and best-effort closes the
+    session when the server returns a session id.
+    """
+    headers = _mcp_http_headers(authorization)
+
+    req = urllib.request.Request(
+        url,
+        data=_mcp_initialize_body(),
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            if 200 <= status < 300:
+                content_type = resp.headers.get("Content-Type", "")
+                body = _read_initialize_response(resp, content_type)
+                session_id = resp.headers.get("Mcp-Session-Id")
+                if _initialize_protocol_version(body, content_type):
+                    _close_mcp_session(
+                        url,
+                        headers=headers,
+                        session_id=session_id,
+                        timeout_s=timeout_s,
+                    )
+                    return
+                raise MCPConnectionError(
+                    _mcp_error_message(
+                        url,
+                        "malformed MCP initialize response: missing "
+                        "result.protocolVersion",
+                    )
+                )
+            reason = getattr(resp, "reason", "") or "unexpected response"
+            raise MCPConnectionError(
+                _mcp_error_message(url, f"HTTP {status} {reason}".strip())
+            )
+    except urllib.error.HTTPError as exc:
+        reason = exc.reason or "HTTP error"
+        raise MCPConnectionError(
+            _mcp_error_message(url, f"HTTP {exc.code} {reason}".strip())
+        ) from exc
+    except urllib.error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, TimeoutError):
+            detail = f"timed out after {timeout_s:g}s"
+        elif isinstance(reason, ConnectionRefusedError):
+            detail = "connection refused"
+        elif isinstance(reason, socket.gaierror):
+            detail = f"DNS lookup failed ({reason})"
+        else:
+            detail = str(reason) or exc.__class__.__name__
+        raise MCPConnectionError(_mcp_error_message(url, detail)) from exc
+    except TimeoutError as exc:
+        raise MCPConnectionError(
+            _mcp_error_message(url, f"timed out after {timeout_s:g}s")
+        ) from exc
+    except OSError as exc:
+        raise MCPConnectionError(_mcp_error_message(url, str(exc))) from exc
 
 
 def _resolve_reducer(reducer: str, k: int) -> str:
@@ -86,8 +276,18 @@ def _sample_metadata(case: "Case", suite: "Suite") -> dict:
         "judge_checks": list(suite.checks.get(case.expect, []))
         + list(suite.checks.get("judge", [])),
     }
+    # The intended slot selection for slot_match, read off the gold record the
+    # case points at. scorers._gold_selection reads this exact shape back out.
+    if case.gold_id and case.gold_id in suite.gold:
+        rec = suite.gold[case.gold_id]
+        meta["gold_selection"] = {
+            "measures": list(rec.get("measures") or []),
+            "group_by": list(rec.get("group_by") or []),
+            "filters": list(rec.get("filters") or []),
+        }
     # Judge-only context (why / gold_note / raw check text) rides along for the
     # scorer; it is NOT part of the Sample input, so the agent never sees it.
+    # Placed last so a case can still override the derived gold_selection.
     meta.update(case.metadata)
     return meta
 
@@ -109,6 +309,7 @@ def build_task(
     server_factory: "Callable[[], Any] | None" = None,
     agent_prompt: str | None = None,
     agent_model: str | None = None,
+    authorization: str | None = None,
     grader_model: str | None = None,
     epochs: int = 1,
     epochs_reducer: str = "pass_at",
@@ -120,8 +321,9 @@ def build_task(
     ``target`` (an MCP URL), falling back to the suite's own ``server_factory`` /
     ``target``. A suite with none of these is a build error — the agent has
     nothing to drive. ``agent_prompt`` overrides the default agent system prompt.
-    ``grader_model``, when given, wires a ``grader`` model role for the judge
-    scorer. Epochs > 1 attaches an ``Epochs(k, reducer)`` policy.
+    ``authorization`` is forwarded to the HTTP MCP server when a URL transport is
+    used. ``grader_model``, when given, wires a ``grader`` model role for the
+    judge scorer. Epochs > 1 attaches an ``Epochs(k, reducer)`` policy.
     """
     factory = server_factory or suite.server_factory
     mcp_url = target or suite.target
@@ -137,7 +339,11 @@ def build_task(
     # (see solver.py / the README "Transport" note). Build a fresh server per run.
     server = factory() if factory is not None else None
     solver = mcp_solver(
-        mcp_url, server=server, prompt=agent_prompt, model=agent_model
+        mcp_url,
+        server=server,
+        prompt=agent_prompt,
+        model=agent_model,
+        authorization=authorization,
     )
     scorer = scorers_for(suite)
 
@@ -166,6 +372,7 @@ def run_suite(
     server_factory: "Callable[[], Any] | None" = None,
     agent_prompt: str | None = None,
     agent_model: str | None = None,
+    authorization: str | None = None,
     grader_model: str | None = None,
     epochs: int = 1,
     epochs_reducer: str = "pass_at",
@@ -182,12 +389,17 @@ def run_suite(
     The agent's server is chosen by ``server_factory`` (a zero-arg thunk building
     a pre-built stdio MCP server — the teardown-safe default) then ``mcp_url``,
     falling back to the suite's own wiring. ``agent_prompt`` overrides the agent
-    system prompt.
+    system prompt. URL transports are preflighted before Inspect starts the eval
+    so bad paths, auth, and reachability failures raise :class:`MCPConnectionError`
+    with the HTTP status or network failure.
 
-    ``variant`` (``no_skills`` / ``current_pack`` / ``candidate_pack``) selects
-    the agent's skill context and is recorded on the run metadata so the report
-    can pair variants on the same cases. It is validated here so a typo fails
-    loudly instead of silently mislabelling a run.
+    ``variant`` (``no_skills`` / ``current_pack`` / ``candidate_pack``) **labels**
+    the run on its metadata so the report can pair variants on the same cases. It
+    is validated here so a typo fails loudly instead of silently mislabelling a
+    run. It does NOT select the agent's skill context: nothing below installs or
+    removes skills, so the caller must arrange that before calling. Passing two
+    different variants without doing so runs the identical agent twice and makes
+    any resulting lift number meaningless.
     """
     if variant not in VARIANTS:
         raise ValueError(f"variant must be one of {VARIANTS}; got {variant!r}")
@@ -195,12 +407,21 @@ def run_suite(
     # Imported here to keep the authoring/import path free of the eval runtime.
     from inspect_ai import eval as inspect_eval
 
+    check_inspect_model_dependency(agent_model, role="agent_model")
+    check_inspect_model_dependency(grader_model, role="grader_model")
+
+    factory = server_factory or suite.server_factory
+    target = mcp_url or suite.target
+    if factory is None and target:
+        preflight_mcp_http_endpoint(target, authorization=authorization)
+
     task = build_task(
         suite,
         target=mcp_url,
         server_factory=server_factory,
         agent_prompt=agent_prompt,
         agent_model=agent_model,
+        authorization=authorization,
         grader_model=grader_model,
         epochs=epochs,
         epochs_reducer=epochs_reducer,

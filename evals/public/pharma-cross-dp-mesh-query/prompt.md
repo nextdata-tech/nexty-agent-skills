@@ -15,7 +15,7 @@ grain, and **many-per-subject facts** that a naive join would double-count.
 ## Task for the agent
 
 Answer the analyst's questions below **using the governed semantic protocol** of
-the `nxd-data-product-query` skill: discover the mesh via `list_models` /
+the `nxd-query-data-product` skill: discover the mesh via `list_models` /
 `describe_model` (note which member data product each model belongs to and how
 the cross-DP joins connect them), build a concept-name selection, run the intent
 gate, and call `run_semantic_query` (never author raw SQL). For each question,

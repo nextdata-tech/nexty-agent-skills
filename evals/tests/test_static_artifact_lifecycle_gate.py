@@ -1,4 +1,4 @@
-"""Pin the static release artifact contract and Pocket lifecycle ordering."""
+"""Pin the static release artifact contract and desktop lifecycle ordering."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,16 +11,21 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / "src" / "nxd-dp-static-artifact"
-POCKET = ROOT / "src" / "nxd-pocket-loop"
+ARTIFACT = ROOT / "src" / "nxd-render-static-artifact"
+JOB_LOOP = ROOT / "src" / "nxd-run-job-loop"
 SCENARIO = ROOT / "evals" / "public" / "dp-static-artifact-lifecycle"
+
+
+def test_desktop_reference_index_includes_catalog_resources():
+    text = (JOB_LOOP / "SKILL.md").read_text()
+    assert "[catalog resources](reference/catalog-resources.md)" in text
 
 
 def test_renamed_static_skill_is_the_only_shipped_identity():
     assert ARTIFACT.is_dir()
     assert not (ROOT / "src" / ("nxd-" + "artifact")).exists()
     text = (ARTIFACT / "SKILL.md").read_text()
-    assert "name: nxd-dp-static-artifact" in text
+    assert "name: nxd-render-static-artifact" in text
     # Assert the lockstep invariant, not a literal — every release bumps all
     # skills together, so pinning the number here would break on each bump for
     # a reason unrelated to what this test guards.
@@ -80,7 +85,7 @@ def test_static_artifact_allows_the_bridge_only_on_missing_client_capability():
 
     # The lifecycle reference must no longer claim the artifact never calls a
     # tool — that was true only while the bridge did not exist.
-    catalog = (POCKET / "reference" / "catalog-resources.md").read_text()
+    catalog = (JOB_LOOP / "reference" / "catalog-resources.md").read_text()
     assert "It never calls a tool" not in catalog
     assert "read_data_product_resource" in catalog
 
@@ -150,7 +155,7 @@ def test_absence_states_are_distinct_and_never_a_labelled_blank():
     pitfalls = flat("reference/pitfalls.md")
 
     # All three glosses present verbatim, including the empty-string one.
-    for gloss in ("null · the manifest didn’t say", "[] · none declared", '"" · empty'):
+    for gloss in ("null · not declared", "[] · none declared", '"" · empty'):
         assert gloss in skill, gloss
         assert gloss in contract, gloss
 
@@ -173,7 +178,7 @@ def test_absence_states_are_distinct_and_never_a_labelled_blank():
 
 
 
-def test_pocket_renders_before_describe_and_query_and_rerenders_after_rebuild():
+def test_desktop_renders_before_describe_and_query_and_rerenders_after_rebuild():
     """The render step precedes describe/query and survives the 500-line budget.
 
     Assert the requirements, not their phrasing: this file is hand-maintained
@@ -181,14 +186,14 @@ def test_pocket_renders_before_describe_and_query_and_rerenders_after_rebuild():
     sentences here makes an editorial pass look like a regression — the same
     lesson the deterministic gate learned about heading vocabulary.
     """
-    text = (POCKET / "SKILL.md").read_text()
+    text = (JOB_LOOP / "SKILL.md").read_text()
     artifact = text.index("### Step 4a")
     describe = text.index("### Step 5")
     assert artifact < describe
     step_4a = text[artifact:describe]
 
     # The step invokes the artifact skill, before describe/query.
-    assert "nxd-dp-static-artifact" in step_4a
+    assert "nxd-render-static-artifact" in step_4a
     assert re.search(r"before\s+`describe_models`", step_4a)
     # Both transports are named as acceptable sources for the read.
     assert "bridge tools" in step_4a
@@ -236,7 +241,7 @@ def test_offline_fixture_checker_mechanizes_page_contract():
     assert result.returncode == 0, result.stderr + result.stdout
     assert "STATIC ARTIFACT GATE PASSED" in result.stdout
     checks = (SCENARIO / "checks.json").read_text()
-    assert '"nxd-dp-static-artifact"' in checks and '"nxd-pocket-loop"' in checks
+    assert '"nxd-render-static-artifact"' in checks and '"nxd-run-job-loop"' in checks
 
 
 def test_deterministic_checker_stays_runner_side():

@@ -2,7 +2,7 @@
 
 ## Task for the agent
 
-Build a Pocket data product that answers these three questions.
+Build a desktop data product that answers these three questions.
 
 1. How has total GDP moved over time for each income group — high income,
    upper middle, lower middle, low?
@@ -19,7 +19,7 @@ The workspace holds a vendored World Bank snapshot under `data/`:
 Both files are exactly as they came out of the upstream export. Do not edit,
 re-save, or re-shape them.
 
-This is an NXD Pocket data product: local DuckDB through the `duckdb` output
+This is an NXD desktop data product: local DuckDB through the `duckdb` output
 port, loaded with dlt. You have the installed Nexty skills available — consult
 them for the closure contract, the derivation rules, and the assert
 requirements rather than inferring them from other examples on this machine.
@@ -31,6 +31,10 @@ column names.
 Work autonomously. No user is available to confirm a ruling, which does not
 make confirmation optional — consult the skills for what to do with a ruling
 you cannot get confirmed.
+
+Follow the closure contract's boundary: keep stable source and analysis scope
+in the approved plan, and leave generated build outcomes in
+`build-record.json`; do not retrofit runtime facts into the approved plan.
 
 ## Success checks
 

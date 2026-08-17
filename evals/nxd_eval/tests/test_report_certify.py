@@ -496,6 +496,25 @@ def test_certify_fails_when_point_estimate_passes_but_lower_bound_misses(tmp_pat
     assert "lower bound" in res.reason
 
 
+def test_certify_fail_reason_does_not_claim_the_mean_cleared_when_it_did_not(tmp_path):
+    # The other half of FAIL: the point estimate misses the target outright, so
+    # the run fails on the mean and not only on the interval. The reason string
+    # must not assert "the point estimate clears the bar" — that sentence is
+    # true for the sibling case above and false here.
+    #
+    # 255/300 = 0.850 point estimate (< 0.90), Wilson 95% lower bound ~= 0.805,
+    # half-width ~= 0.040 (<= 0.05 -> powered, so a fail rather than a refusal).
+    path = _write(tmp_path, _answer_samples(300, 255))
+    res = certify(path, target=0.90, halfwidth=0.05)
+
+    assert res.p_hat < 0.90, "guard: point estimate must miss the target"
+    assert res.ci_low < 0.90, "guard: lower bound must miss the target"
+    assert res.refused is False, "sample is powered enough — a fail, not a refusal"
+    assert res.passed is False
+    assert "point estimate clears the" not in res.reason
+    assert "below the target" in res.reason
+
+
 def test_certify_refuses_on_insufficient_n(tmp_path):
     # 9/10 pass: p_hat 0.90, but the Wilson half-width on n=10 is ~0.25, far
     # wider than the +/-0.05 margin. The gate cannot bound the pass rate -> it

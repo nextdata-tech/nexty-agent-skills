@@ -1,10 +1,10 @@
 {
   "name": "API To Vector Data Product Build",
   "skills": [
-    "nxd-data-product-builder",
-    "nxd-adding-inputs",
-    "nxd-adding-outputs",
-    "nxd-adding-expectations-promises"
+    "nxd-build-data-product",
+    "nxd-add-inputs",
+    "nxd-add-outputs",
+    "nxd-add-expectations-and-promises"
   ],
   "checks": [
     {

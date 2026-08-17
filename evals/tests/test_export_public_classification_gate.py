@@ -1,6 +1,6 @@
 """The connector-attribute `public:` classification is a security contract.
 
-`nxd-generate-dp` writes each database/API connection field into
+`nxd-generate-data-product` writes each database/API connection field into
 `infra-profile.yaml` with a `public:` flag. Confirmed against the pinned
 supervisor runtime (`ExportParams` / the export path in
 `components/desktop/supervisor/src/mcp_server.rs`): the flag gates **only**
@@ -24,11 +24,11 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GENERATE_DP = REPO_ROOT / "src" / "nxd-generate-dp" / "reference"
+GENERATE_DP = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference"
 DATABASE_SOURCE = GENERATE_DP / "database-source.md"
 API_SOURCE = GENERATE_DP / "api-source.md"
 HANDOFF_EXPORT = (
-    REPO_ROOT / "src" / "nxd-pocket-loop" / "reference" / "handoff-export.md"
+    REPO_ROOT / "src" / "nxd-run-job-loop" / "reference" / "handoff-export.md"
 )
 
 # Credentials/identity that MUST be public: false, per connector.

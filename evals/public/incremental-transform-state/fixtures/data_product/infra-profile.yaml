@@ -11,5 +11,5 @@ spec:
       driver: nxd:local/python/compute:0.1.0
       attributes: []
     - name: csv-source
-      driver: nxd:generic-secrets:1.0.0
+      driver: nxd:local/file/storage:0.1.0
       attributes: []

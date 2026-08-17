@@ -2,7 +2,7 @@
 
 ## Task for the agent
 
-Build a Pocket data product that answers these four questions.
+Build a desktop data product that answers these four questions.
 
 1. What did the curve look like on a given day — the yield at each maturity,
    read from the short end to the long end?
@@ -22,7 +22,7 @@ The workspace holds a vendored US Treasury snapshot under `data/`:
 Every file is exactly as it came out of the upstream export. Do not edit,
 re-save, re-shape, or re-order them.
 
-This is an NXD Pocket data product: local DuckDB through the `duckdb` output
+This is an NXD desktop data product: local DuckDB through the `duckdb` output
 port, loaded with dlt. You have the installed Nexty skills available — consult
 them for the closure contract, the derivation rules, and the assert
 requirements rather than inferring them from other examples on this machine.
@@ -34,6 +34,10 @@ and in the physical layout, not in the column names.
 Work autonomously. No user is available to confirm a ruling, which does not
 make confirmation optional — consult the skills for what to do with a ruling
 you cannot get confirmed.
+
+Follow the closure contract's boundary: keep stable source and measurement
+scope in the approved plan, and leave generated build outcomes in
+`build-record.json`; do not retrofit runtime facts into the approved plan.
 
 ## Success checks
 

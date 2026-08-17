@@ -151,12 +151,20 @@ def certify(
             f"pass: Wilson lower bound {ci.low:.3f} >= target {target:.3f} "
             f"(p_hat={card.p_hat:.3f}, N_eff={card.eff.n_eff:.1f})"
         )
-    else:
+    elif card.p_hat >= target:
+        # The mean clears the bar but the interval does not defend it.
         reason = (
             f"fail: Wilson lower bound {ci.low:.3f} < target {target:.3f} "
             f"even though p_hat={card.p_hat:.3f} — the point estimate clears the "
             f"bar but the sample does not defend it at {round((1 - alpha) * 100)}% "
             f"confidence"
+        )
+    else:
+        # The mean misses the bar outright; the interval never had a chance.
+        reason = (
+            f"fail: Wilson lower bound {ci.low:.3f} < target {target:.3f} "
+            f"— the point estimate p_hat={card.p_hat:.3f} is itself below the "
+            f"target, so the claim fails on the mean, not only on the interval"
         )
     return CertifyResult(
         passed=passed,

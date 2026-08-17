@@ -1,6 +1,6 @@
 # Scenario: Refine an incremental closure past the one-model boundary
 
-The workspace contains a working Pocket data-product closure under
+The workspace contains a working desktop data-product closure under
 `data_product/`, loading an append-only freight export:
 
 - `data/shipments/` — the append-only event export, 240 rows across two parts,
@@ -26,7 +26,7 @@ The author asks for two things in one sitting:
 Work through them in that order, and re-verify the incremental load still
 behaves after the second change.
 
-This is an NXD Pocket data product. You have the installed Nexty skills
+This is an NXD desktop data product. You have the installed Nexty skills
 available; consult them for the platform's incremental-loading contract before
 editing, rather than inferring the mechanism from the closure or from public
 examples elsewhere on this machine. Work autonomously.

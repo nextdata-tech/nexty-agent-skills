@@ -1,0 +1,1210 @@
+"""Phase E — the reach gate — must decide BEFORE the transform executes.
+
+Two things are pinned here, and the first is the one that rots silently.
+
+**Ordering.** Phase B imports ``transform.main`` and calls ``ingest(...)``. A
+reach scan placed anywhere after that reports "denied" once the transform has
+already opened the socket, already called the model, already spent the money —
+and it still prints a red banner, so the failure looks like it worked. The
+ordering is therefore not a stylistic choice about where the block reads best;
+it is the entire mechanism. ``test_phase_e_decides_before_phase_b_imports``
+asserts the byte offsets, so moving the block below ``sys.path.insert`` fails
+here rather than degrading into a post-hoc report nobody notices.
+
+**The rule.** The invariant "the transform never calls a model" was shipped as
+prose on the belief that the desktop venv was closed. It is not: ``requests``,
+``httpx``, ``httpcore`` and ``urllib3`` all arrive transitively via ``dlt`` and
+``mcp``, and ``urllib``/``socket`` are stdlib. These tests run the extracted
+block against synthetic closures so that a rule which stops firing — the usual
+end state of a gate with no test — fails visibly.
+
+The scope boundary is asserted too, in ``test_wrapped_socket_is_invisible`` and
+``test_url_handed_to_a_reader_is_invisible``: those closures PASS, deliberately.
+Pinning what the gate cannot see keeps a later reader from mistaking a green
+Phase E for proof that the transform is offline.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+EVALS_DIR = Path(__file__).resolve().parents[1]
+SELF_CHECK = EVALS_DIR.parent / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
+
+CSV = '_csv = "/infra-profile/desktop-local#/services/csv-source"\n'
+FILE = '_f = "/infra-profile/desktop-local#/services/file-source"\n'
+API = '_api = "/infra-profile/desktop-local#/services/api-source"\n'
+API_LABELLED = '_a = "/infra-profile/desktop-local#/services/api-source-github"\n'
+DB = '_db = "/infra-profile/desktop-local#/services/db-source-orders"\n'
+NO_SOURCE = '_c = "/infra-profile/desktop-local#/services/python-compute"\n'
+
+CLEAN_CSV_TRANSFORM = (
+    "import dlt\n"
+    "from dlt.sources.filesystem import filesystem, read_csv\n"
+    "from nxd import data_product\n"
+    "import os\n"
+    "from pathlib import Path\n"
+)
+
+
+def _script_body() -> str:
+    """The shipped ``self_check.py`` source the agent copies into the closure."""
+    return SELF_CHECK.read_text(encoding="utf-8")
+
+
+def _phase_e_source() -> str:
+    """Phase E's block, from ``eerrors = []`` to the Phase G anchor.
+
+    The end anchor moved from the Phase B banner to ``PHASE-G-BEGIN`` when the
+    consent gate landed between the two: slicing to ``Phase B ---`` would now
+    swallow all of Phase G, whose subprocess calls this file's stub harness
+    cannot satisfy. That Phase G carries an explicit anchor at all is the same
+    lesson — a slice keyed on a content heuristic rots the moment anything is
+    inserted beside it.
+    """
+    body = _script_body()
+    block = body[body.index("eerrors = []"):body.index("=== PHASE-G-BEGIN ===")]
+    return block[:block.rindex("\n#")]
+
+
+def _run_phase_e(
+    tmp_path: Path,
+    spec_src: str,
+    transform_src: str,
+    *,
+    expect_exit: int,
+    verifiers: dict[str, str] | None = None,
+) -> str:
+    """Execute Phase E standalone against a synthetic closure.
+
+    Phase E reads only ``spec_src`` and ``transform_src``, both already in scope
+    at that point in the real script, so the harness supplies them directly
+    rather than materialising a whole closure.
+
+    ``expect_exit`` is mandatory, and that is the point. The banner text and the
+    exit code are independent: printing "PHASE E FAILED" is what a reader sees,
+    but ``sys.exit(1)`` is what actually stops the run before Phase B imports the
+    transform. Asserting only the text would leave the gate green-lighting a
+    denied closure the moment the exit was dropped — the whole mechanism gone,
+    every text assertion still passing.
+    """
+    harness = (
+        "import ast, json, re, sys\n"
+        "from pathlib import Path\n"
+        # Phase E reports through the shared diagnostic surface rather than bare
+        # print/sys.exit. These stubs stand in for the part of the script above
+        # Phase E, and they are deliberately faithful on the two properties this
+        # file asserts: `say` writes to stdout, so the banner text is still
+        # checked, and `finish` really exits, so the ordering guarantee remains a
+        # real process exit rather than a returned value nobody reads.
+        #
+        # Emitted diagnostics are dumped as JSON on the way out so a test can
+        # assert the CODE and not only the prose. The code is what the build
+        # record and its consumers key on; a rule that fires with the wrong code
+        # is as broken as one that does not fire, and prose assertions cannot
+        # tell the difference.
+        "DIAGS = []\n"
+        "def say(*a, **k): print(*a, **k)\n"
+        "def cpath(at): return f'closure:{at}' if at else ''\n"
+        "def diag(stage, code, message, *, path='', evidence=None, fix=None):\n"
+        "    DIAGS.append({'stage': stage, 'code': code, 'path': path})\n"
+        "def close_stage(stage, state, **detail): pass\n"
+        "def _dump(): print('DIAGS_JSON=' + json.dumps(DIAGS))\n"
+        "def finish(code):\n"
+        "    _dump()\n"
+        "    sys.exit(code)\n"
+        f"spec_src = {spec_src!r}\n"
+        f"transform_src = {transform_src!r}\n"
+    ) + _phase_e_source() + "\n_dump()\n"
+    # Verifiers are read off the filesystem relative to cwd, not injected as a
+    # source string: the scan walks `contracts/` with rglob, so the harness must
+    # materialise real files for the walk to find anything.
+    for rel, src in (verifiers or {}).items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(src, encoding="utf-8")
+    script = tmp_path / "_phase_e.py"
+    script.write_text(harness, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(script)], cwd=tmp_path, capture_output=True, text=True
+    )
+    out = proc.stdout + proc.stderr
+    assert "Traceback" not in out, out
+    assert proc.returncode == expect_exit, (
+        f"expected exit {expect_exit}, got {proc.returncode}. A deny must exit 1 "
+        f"(the run stops before Phase B imports the transform); an allow must "
+        f"exit 0.\n{out}"
+    )
+    return out
+
+
+def _findings(out: str) -> list[str]:
+    return [ln.strip()[2:] for ln in out.splitlines() if ln.strip().startswith("- ")]
+
+
+def _diags(out: str) -> list[dict]:
+    """The diagnostics Phase E emitted, decoded from the harness's dump."""
+    line = next(
+        (ln for ln in out.splitlines() if ln.startswith("DIAGS_JSON=")), None
+    )
+    assert line is not None, f"harness emitted no diagnostics dump:\n{out}"
+    import json as _json
+
+    return _json.loads(line[len("DIAGS_JSON="):])
+
+
+def _codes(out: str) -> list[str]:
+    return [d["code"] for d in _diags(out)]
+
+
+def _run_merge_record_harness(
+    tmp_path: Path, record_path: Path, *, fail_replace: bool = False
+) -> tuple[subprocess.CompletedProcess[str], dict]:
+    """Run the shipped reporting/record-merge surface with a real subprocess."""
+    body = _script_body()
+    reporting_surface = body[: body.index(
+        "# ---------------------------------------------------------------- Phase A ---"
+    )]
+    harness = reporting_surface + f"""
+if {fail_replace!r}:
+    def _fail_replace(self, target):
+        raise OSError("simulated replace failure")
+    Path.replace = _fail_replace
+close_stage("s1_structure", "passed")
+close_stage("s2_transform", "passed")
+close_stage("s3_closure", "passed")
+finish(0)
+"""
+    script = tmp_path / "_merge_record.py"
+    script.write_text(harness, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(script), "--json", "--record", str(record_path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert "Traceback" not in proc.stdout + proc.stderr
+    report = json.loads(proc.stdout)
+    return proc, report
+
+
+def test_merge_record_failures_reach_json_verdict(tmp_path):
+    """Record read/write failures are observable and preserve prior bytes."""
+    record_dir = tmp_path / "record-dir"
+    record_dir.mkdir()
+    proc, report = _run_merge_record_harness(tmp_path, record_dir)
+    assert proc.returncode != 0
+    assert report["ok"] is False
+    assert any(
+        d["code"] == "closure.build_record_merge_failed"
+        for d in report["diagnostics"]
+    )
+    assert "could not be read" in proc.stderr
+
+    record_path = tmp_path / "build-record.json"
+    original = b'{"marker": "keep", "stages": {}}\n'
+    record_path.write_bytes(original)
+    proc, report = _run_merge_record_harness(
+        tmp_path, record_path, fail_replace=True
+    )
+    assert proc.returncode != 0
+    assert report["ok"] is False
+    assert any(
+        d["code"] == "closure.build_record_merge_failed"
+        for d in report["diagnostics"]
+    )
+    assert record_path.read_bytes() == original
+    assert not record_path.with_name(record_path.name + ".tmp").exists()
+    assert "could not be written" in proc.stderr
+
+
+# --------------------------------------------------------------- ordering ---
+
+def test_phase_e_decides_before_phase_b_imports():
+    """The gate's exit must precede the import it is gating.
+
+    This is the trap the whole phase exists to avoid: a scan left in Phase D's
+    position runs after ``from transform.main import ...`` and after
+    ``ingest(...)``, so the model call has already happened when the check says
+    no. Asserted on offsets in the shipped script, not on prose about it.
+    """
+    body = _script_body()
+    gate_exit = body.index("PHASE E FAILED")
+    phase_b = body.index("Phase B ---")
+    # rindex for the Phase B call sites: Phase E's own comment quotes
+    # `sys.path.insert(0, ".")` when it explains why it sits above them, and a
+    # first-match index would compare the gate against its own prose.
+    path_insert = body.rindex('sys.path.insert(0, ".")')
+    transform_import = body.rindex("from transform.main import")
+    ingest_call = body.rindex("ingest(duckdb=out")
+
+    assert gate_exit < phase_b, "Phase E must be declared above the Phase B banner"
+    assert gate_exit < path_insert, "Phase E must exit before sys.path is primed"
+    assert gate_exit < transform_import, (
+        "Phase E must decide BEFORE transform.main is imported — after it, the "
+        "module body has already run"
+    )
+    assert gate_exit < ingest_call, (
+        "Phase E must decide BEFORE ingest() runs — after it, 'denied' is a "
+        "report about money already spent"
+    )
+
+
+def test_phase_e_exit_precedes_the_transform_import_structurally():
+    """The exit CALL itself — not just the banner — comes before the import.
+
+    ``test_phase_e_decides_before_phase_b_imports`` anchors on the "PHASE E
+    FAILED" string, which is the message, not the mechanism. A block that printed
+    the banner and fell through would satisfy it while gating nothing. This one
+    locates the exit call inside Phase E's own failure branch and requires it
+    above the import it exists to prevent.
+
+    The call is ``finish(1)``, not ``sys.exit(1)``: every exit in the script now
+    routes through ``finish`` so the diagnostic report and the build record are
+    written on the way out. That indirection is exactly why this test also
+    asserts ``finish`` terminates — a ``finish`` that returned would turn every
+    gate in the script into a printed opinion, and this test would still pass on
+    the call site alone.
+    """
+    body = _script_body()
+    gate_branch = body.index("if eerrors:")
+    gate_exit = body.index("finish(1)", gate_branch)
+    transform_import = body.rindex("from transform.main import")
+
+    assert gate_exit < transform_import, (
+        "Phase E's finish(1) must appear before `from transform.main import` — "
+        "without the exit, a denied closure prints a red banner and then runs "
+        "the transform anyway"
+    )
+
+    # `finish` is the only thing standing between the banner and the import, so
+    # its terminating behaviour is part of THIS gate's contract, not an unrelated
+    # helper's business.
+    finish_def = body.index("def finish(exit_code):")
+    finish_end = body.index("\n# ---", finish_def)
+    assert "sys.exit(exit_code)" in body[finish_def:finish_end], (
+        "finish() must terminate. If it ever returns, Phase E's finish(1) stops "
+        "gating anything and the transform is imported regardless."
+    )
+
+
+def test_phase_a_still_runs_first():
+    """Phase E reads spec.py's service refs; Phase A is what validates them."""
+    body = _script_body()
+    assert body.index("phase A ok") < body.index("eerrors = []")
+
+
+# ------------------------------------------------------- model-provider SDK ---
+
+def test_model_sdk_import_fails_on_csv_closure(tmp_path):
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import anthropic\n", expect_exit=1)
+    assert "PHASE E FAILED" in out
+    assert "model-provider SDK" in out
+    assert "never calls a model" in out
+
+
+def test_model_sdk_submodule_import_fails_once(tmp_path):
+    """``from openai import OpenAI`` is one violation, not two.
+
+    The AST yields both ``openai`` and ``openai.OpenAI``; reporting each would
+    make a single bad import read as a pattern.
+    """
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + "from openai import OpenAI\n", expect_exit=1)
+    assert "PHASE E FAILED" in out
+    assert len(_findings(out)) == 1, _findings(out)
+    assert "'openai'" in out
+
+
+def test_dotted_model_root_is_matched(tmp_path):
+    """``google.generativeai`` is denied; bare ``google`` is not the root."""
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import google.generativeai as genai\n", expect_exit=1
+    )
+    assert "PHASE E FAILED" in out
+    assert "google.generativeai" in out
+
+
+def test_from_google_import_genai_is_matched(tmp_path):
+    """``from google import genai`` is the current Google SDK spelling.
+
+    It arrives as module="google", names=["genai"] — and NEITHER part is a denied
+    root on its own, because denying bare ``google`` would take out
+    ``google.cloud.storage`` and every other unrelated Google package. The gate
+    catches it only because the ImportFrom expansion emits the joined
+    ``google.genai``. A reader who "simplifies" that expansion away reopens the
+    hole silently, so it is pinned here.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM + "from google import genai\n", expect_exit=1
+    )
+    assert "PHASE E FAILED" in out
+    assert "google.genai" in out
+
+
+def test_bare_google_package_is_not_collateral(tmp_path):
+    """The other half of the same rule: ``google`` itself is not denied."""
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM + "from google.cloud import storage\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+def test_every_listed_model_root_is_denied(tmp_path):
+    """Each root in MODEL_ROOTS actually fires.
+
+    A deny list is only as good as its entries, and an entry that never matches
+    any real import spelling is decoration. Each case here is the spelling an
+    author would actually write.
+    """
+    for imp, shown in (
+        ("import litellm\n", "litellm"),
+        ("from litellm import completion\n", "litellm"),
+        ("import groq\n", "groq"),
+        ("from groq import Groq\n", "groq"),
+        ("import together\n", "together"),
+        ("import replicate\n", "replicate"),
+        ("from huggingface_hub import InferenceClient\n", "huggingface_hub"),
+        ("import vertexai\n", "vertexai"),
+        ("from vertexai.generative_models import GenerativeModel\n", "vertexai"),
+        ("from langchain_anthropic import ChatAnthropic\n", "langchain_anthropic"),
+        ("from langchain_openai import ChatOpenAI\n", "langchain_openai"),
+        ("from llama_index.core import VectorStoreIndex\n", "llama_index"),
+        ("from anthropic_bedrock import AnthropicBedrock\n", "anthropic_bedrock"),
+        ("import mistralai\n", "mistralai"),
+        ("import ollama\n", "ollama"),
+        ("import cohere\n", "cohere"),
+    ):
+        out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + imp, expect_exit=1)
+        assert "model-provider SDK" in out, imp
+        assert shown in out, imp
+
+
+def test_model_sdk_denied_even_when_no_connector_parses(tmp_path):
+    """The SDK denial is waived by nothing — not even an unreadable spec.py.
+
+    The transport check degrades to a warning when the declaration cannot be
+    read (see ``test_unparseable_spec_warns_and_does_not_deny_transport``). The
+    inference denial must NOT degrade with it: no state of spec.py licenses
+    calling a model from a transform.
+    """
+    out = _run_phase_e(
+        tmp_path, "def broken(:\n", CLEAN_CSV_TRANSFORM + "import anthropic\n",
+        expect_exit=1,
+    )
+    assert "model-provider SDK" in out
+
+
+def test_model_sdk_is_not_waived_by_a_declared_api_source(tmp_path):
+    """The connector exception covers transport, never inference.
+
+    An api-source closure legitimately opens sockets. It still may not call a
+    model — declaring a connector is not a licence to infer inside the transform.
+    """
+    out = _run_phase_e(
+        tmp_path, API,
+        "from dlt.sources.rest_api import rest_api_source\nimport anthropic\n", expect_exit=1
+    )
+    assert "PHASE E FAILED" in out
+    assert "model-provider SDK" in out
+
+
+# ------------------------------------------------------------ import reach ---
+
+def test_raw_transport_fails_on_csv_closure(tmp_path):
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import requests\n", expect_exit=1)
+    assert "PHASE E FAILED" in out
+    assert "raw network transport" in out
+
+
+def test_stdlib_transport_roots_are_denied(tmp_path):
+    """urllib.request, socket and http.client are the stdlib escape hatches."""
+    for imp, root in (
+        ("import urllib.request\n", "urllib.request"),
+        ("import socket\n", "socket"),
+        ("from http.client import HTTPSConnection\n", "http.client"),
+        ("import urllib3\n", "urllib3"),
+    ):
+        out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + imp, expect_exit=1)
+        assert "PHASE E FAILED" in out, imp
+        assert root in out, imp
+
+
+def test_transport_layers_beneath_the_obvious_spellings_are_denied(tmp_path):
+    """The roots a dlt-shaped closure reaches without naming httpx or requests.
+
+    A first version of this list stopped ``import requests`` and ``import httpx``
+    — the spellings someone writes when they are NOT thinking about the gate —
+    while permitting every layer underneath them. That version was a check on
+    naivety rather than on reach.
+
+    ``dlt.sources.helpers.requests`` is the sharp one, and it is asserted here
+    rather than argued about: it is dlt's own re-export of the same object, it
+    has ``.post``, and it is the spelling dlt's documentation teaches. Denying
+    ``requests`` while permitting the library's documented alias for it is not a
+    smaller gate, it is a gate with a hole shaped exactly like the connector
+    library this pack tells authors to use.
+    """
+    for imp, root in (
+        ("import httpcore\n", "httpcore"),
+        ("import h11\n", "h11"),
+        ("import anyio\n", "anyio"),
+        ("import asyncio\n", "asyncio"),
+        ("from dlt.sources.helpers import requests as dreq\n",
+         "dlt.sources.helpers.requests"),
+        ("from dlt.sources.helpers.rest_client import RESTClient\n",
+         "dlt.sources.helpers.rest_client"),
+    ):
+        out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + imp, expect_exit=1)
+        assert "PHASE E FAILED" in out, imp
+        assert root in out, imp
+        assert _codes(out) == ["reach.undeclared_transport"], imp
+
+
+def test_the_deeper_transport_roots_are_still_waived_by_a_declared_source(tmp_path):
+    """Widening the list must not cost the waiver.
+
+    The whole reason the transport family is waivable is that a legitimate
+    api-source closure reaches the network by design. If widening the list broke
+    that, the gate would start failing correct closures — and a rule that blocks
+    correct work gets deleted rather than obeyed, which is a worse outcome than
+    the hole it closed.
+    """
+    for imp in (
+        "import httpcore\n",
+        "from dlt.sources.helpers import requests as dreq\n",
+        "from dlt.sources.helpers.rest_client import RESTClient\n",
+    ):
+        out = _run_phase_e(tmp_path, API, CLEAN_CSV_TRANSFORM + imp, expect_exit=0)
+        assert "phase E ok" in out, imp
+
+
+def test_transport_is_waived_for_a_declared_api_source(tmp_path):
+    """dlt's REST source IS httpx and requests.
+
+    A gate that fires on every correct api-source closure gets deleted rather
+    than obeyed, so the waiver is load-bearing, not a loophole.
+    """
+    out = _run_phase_e(
+        tmp_path, API,
+        "import dlt\n"
+        "from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig\n"
+        "import requests\nimport httpx\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+    assert "PHASE E FAILED" not in out
+
+
+def test_transport_is_waived_for_a_declared_db_source(tmp_path):
+    out = _run_phase_e(
+        tmp_path, DB,
+        "import dlt\nfrom dlt.sources.sql_database import sql_database\nimport socket\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+def test_labelled_multi_source_service_still_declares_its_type(tmp_path):
+    """``api-source-github`` is an api-source (reference/multi-source.md)."""
+    out = _run_phase_e(
+        tmp_path, API_LABELLED,
+        "from dlt.sources.rest_api import rest_api_source\nimport httpx\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+def test_transport_with_no_source_declared_fails(tmp_path):
+    out = _run_phase_e(tmp_path, NO_SOURCE, CLEAN_CSV_TRANSFORM + "import requests\n", expect_exit=1)
+    assert "PHASE E FAILED" in out
+    assert "no connector service" in out
+
+
+# ------------------------------------------- reading the declaration itself ---
+# The waiver is the permissive branch of this gate, so how `declared_sources` is
+# built is a security question, not a parsing detail. These pin the reader.
+
+def test_a_commented_out_service_ref_grants_no_waiver(tmp_path):
+    """A comment must not declare a connector.
+
+    The original reader was ``re.findall`` over spec.py's SOURCE TEXT, so a
+    spec.py whose only occurrence of api-source was inside a ``#`` comment
+    declared api-source — and collected the transport waiver from a line Python
+    never evaluates. Anyone able to type a comment could turn the gate off.
+    Reading ``ast.Constant`` nodes is what closes it.
+
+    The commented ref sits alongside a REAL csv-source declaration, because that
+    is the shape that must deny: a closure whose readable declaration says "no
+    network" and whose comment says otherwise. (A spec.py with ONLY the comment
+    declares nothing readable at all and takes the warn path instead — see
+    ``test_spec_with_no_service_reference_at_all_warns``. Both are correct; the
+    distinction is between "declared non-network" and "unreadable".)
+    """
+    spec = (
+        '_csv = "/infra-profile/desktop-local#/services/csv-source"\n'
+        "# I could have used "
+        '"/infra-profile/desktop-local#/services/api-source" here\n'
+    )
+    out = _run_phase_e(tmp_path, spec, CLEAN_CSV_TRANSFORM + "import requests\n",
+                       expect_exit=1)
+    assert "PHASE E FAILED" in out
+    assert "raw network transport" in out
+    # The comment must not reach the DECLARED SET the message reports. Asserted
+    # on the rendered list rather than on the substring: the remediation text
+    # legitimately says "declare an api-source", so a bare `not in out` would
+    # fail on the fix advice instead of on the defect.
+    assert "declares ['csv-source']" in out
+
+
+def test_a_docstring_mentioning_a_service_grants_no_waiver(tmp_path):
+    """A module docstring IS an ast.Constant — but not a service reference.
+
+    The match is anchored on the whole string value, so prose that merely
+    contains the path does not declare it. Without the anchor, moving from regex
+    to AST would have swapped one text-shaped hole for another.
+    """
+    spec = (
+        '"""This closure reads CSVs. It does not use '
+        '/infra-profile/desktop-local#/services/api-source."""\n'
+        '_csv = "/infra-profile/desktop-local#/services/csv-source"\n'
+    )
+    out = _run_phase_e(tmp_path, spec, CLEAN_CSV_TRANSFORM + "import requests\n",
+                       expect_exit=1)
+    assert "raw network transport" in out
+
+
+def test_single_quoted_service_ref_is_read(tmp_path):
+    """Quote style is not a declaration. The old regex only matched double."""
+    spec = "_api = '/infra-profile/desktop-local#/services/api-source'\n"
+    out = _run_phase_e(tmp_path, spec, CLEAN_CSV_TRANSFORM + "import httpx\n",
+                       expect_exit=0)
+    assert "phase E ok" in out
+    assert "api-source" in out
+
+
+def test_absolute_https_service_ref_is_read(tmp_path):
+    """The platform accepts the absolute form too; so must this reader."""
+    spec = ('_api = "https://nxd.example.com/infra-profile/desktop-local'
+            '#/services/api-source"\n')
+    out = _run_phase_e(tmp_path, spec, CLEAN_CSV_TRANSFORM + "import httpx\n",
+                       expect_exit=0)
+    assert "phase E ok" in out
+    assert "api-source" in out
+
+
+def test_absolute_https_csv_source_still_denies_transport(tmp_path):
+    """The absolute form is read for DENIAL too, not only for the waiver.
+
+    Reading a new spelling only where it grants permission would be worse than
+    not reading it at all.
+    """
+    spec = ('_csv = "https://nxd.example.com/infra-profile/desktop-local'
+            '#/services/csv-source"\n')
+    out = _run_phase_e(tmp_path, spec, CLEAN_CSV_TRANSFORM + "import requests\n",
+                       expect_exit=1)
+    assert "raw network transport" in out
+    assert "csv-source" in out
+
+
+def test_unparseable_spec_warns_and_does_not_deny_transport(tmp_path):
+    """No readable declaration is "unknown", not "declared nothing".
+
+    Treating an unreadable spec.py as a closure that declared no connector denies
+    every transport on the strength of a parse failure — a verdict this gate has
+    not earned, and one whose message ("spec.py declares no connector service")
+    would send the author looking for a declaration that is right there. Phase A
+    owns the syntax error; here it is a warning.
+    """
+    out = _run_phase_e(tmp_path, "def broken(:\n",
+                       CLEAN_CSV_TRANSFORM + "import requests\n", expect_exit=0)
+    assert "warning:" in out
+    assert "connector type is unknown" in out
+    assert "PHASE E FAILED" not in out
+
+
+def test_spec_with_no_service_reference_at_all_warns(tmp_path):
+    """Parses fine, declares nothing readable — same "unknown", same warning."""
+    out = _run_phase_e(tmp_path, "X = 1\n",
+                       CLEAN_CSV_TRANSFORM + "import requests\n", expect_exit=0)
+    assert "warning:" in out
+    assert "phase E ok" in out
+
+
+# --------------------------------------------------------- connector shape ---
+
+def test_rest_api_import_on_csv_closure_is_a_shape_mismatch(tmp_path):
+    """The closure reads from a source its own spec.py does not name."""
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM
+        + "from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig\n", expect_exit=1
+    )
+    assert "PHASE E FAILED" in out
+    assert "a REST API source" in out
+    assert "does not name" in out
+
+
+def test_sql_database_import_on_csv_closure_is_a_shape_mismatch(tmp_path):
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM + "from dlt.sources.sql_database import sql_database\n", expect_exit=1
+    )
+    assert "PHASE E FAILED" in out
+    assert "a database source" in out
+
+
+def test_multi_source_closure_declaring_both_passes(tmp_path):
+    """Declaring csv-source AND api-source licenses both shapes."""
+    out = _run_phase_e(
+        tmp_path, CSV + API,
+        "from dlt.sources.rest_api import rest_api_source\n"
+        "from dlt.sources.filesystem import filesystem\n"
+        "import requests\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+# ------------------------------------------------------ no false positives ---
+
+def test_clean_csv_closure_passes(tmp_path):
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0)
+    assert "phase E ok" in out
+    assert "PHASE E FAILED" not in out
+
+
+def test_clean_file_source_closure_passes(tmp_path):
+    out = _run_phase_e(tmp_path, FILE, CLEAN_CSV_TRANSFORM, expect_exit=0)
+    assert "phase E ok" in out
+
+
+def test_mcp_is_never_flagged(tmp_path):
+    """``mcp`` ships in the fixed desktop venv and is not a denied root.
+
+    Flagging it would fail closures that do nothing wrong, which is how a gate
+    earns a blanket waiver from the next author.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import mcp\nfrom mcp.server import Server\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+def test_prefix_collisions_are_not_collateral(tmp_path):
+    """Denied roots match on dot boundaries.
+
+    ``socketserver`` is not ``socket`` and ``requests_oauthlib`` is not
+    ``requests``; a substring match would fail both.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM + "import socketserver\nimport requests_oauthlib\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+def test_relative_import_does_not_crash(tmp_path):
+    """``from . import helpers`` has module=None/level=1 — must not blow up."""
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + "from . import helpers\n", expect_exit=0)
+    assert "phase E ok" in out
+
+
+def test_no_environ_credential_check(tmp_path):
+    """A closure reading os.environ is NOT a Phase E finding, by decision.
+
+    The real credential channel is the ``.secrets([...])`` binding the platform
+    resolves, so an environ scan watches a door nobody uses — and widening it to
+    ``secrets[...]`` subscripts false-positives on every legitimate REST closure.
+    Pinned so a later author does not "complete" the gate by adding it back.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM + "TOKEN = os.environ['SOME_TOKEN']\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+# ----------------------------------------------------- the scope boundary ---
+# These closures PASS, and that is the finding. Each is a real way to reach the
+# network that no import-level check can see. They are pinned as passing so the
+# limit stays documented in executable form: a green Phase E is not proof the
+# transform is offline.
+
+def test_wrapped_socket_is_invisible(tmp_path):
+    """Semantic detection is an explicit non-goal.
+
+    A helper that opens a socket behind a local name defeats a name check. Phase
+    E does not follow imports and does not reason about what a function does.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM + "from .net_helper import fetch\n", expect_exit=0
+    )
+    assert "phase E ok" in out, (
+        "if this now fails, Phase E grew semantic detection — update the "
+        "'What Phase E cannot see' section rather than just this assertion"
+    )
+
+
+def test_url_handed_to_a_reader_is_invisible(tmp_path):
+    """pandas.read_json(url) and DuckDB httpfs are out of scope and unfixable here."""
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM
+        + "import pandas as pd\n"
+        + "df = pd.read_json('https://example.invalid/data.json')\n"
+        + "con.execute(\"INSTALL httpfs; SELECT * FROM 'https://example.invalid/x.csv'\")\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+def test_dynamic_import_is_invisible(tmp_path):
+    """importlib builds the name at runtime; there is no ast.Import node."""
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM + "import importlib\nm = importlib.import_module('requests')\n", expect_exit=0
+    )
+    assert "phase E ok" in out
+
+
+def test_a_forged_declaration_passes(tmp_path):
+    """The connector type is agent-authored, so the shape check is self-consistency.
+
+    Declaring ``api-source`` in spec.py waives the transport family whether or
+    not the closure really has one. Phase E catches the closure that DRIFTED, not
+    the one that lied — the same generation pass writes both files and nothing
+    independent stamps either.
+    """
+    out = _run_phase_e(tmp_path, API, CLEAN_CSV_TRANSFORM + "import httpx\n", expect_exit=0)
+    assert "phase E ok" in out
+
+
+# ------------------------------------------------------ diagnostic codes ---
+# The prose above is for the human reading the scrollback. The CODE is what the
+# build record carries and what any consumer keys on, and the two are
+# independent: a rule can fire with the right message and the wrong code, and
+# every text assertion in this file would still pass. These pin the code.
+
+
+def test_model_sdk_import_emits_its_code(tmp_path):
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import anthropic\n", expect_exit=1
+    )
+    assert _codes(out) == ["reach.model_sdk_import"]
+
+
+def test_undeclared_transport_emits_its_code(tmp_path):
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import requests\n", expect_exit=1
+    )
+    assert _codes(out) == ["reach.undeclared_transport"]
+
+
+def test_shape_mismatch_emits_its_code(tmp_path):
+    out = _run_phase_e(
+        tmp_path, CSV,
+        CLEAN_CSV_TRANSFORM + "from dlt.sources.rest_api import rest_api_source\n",
+        expect_exit=1,
+    )
+    assert _codes(out) == ["reach.connector_shape_mismatch"]
+
+
+def test_unreadable_declaration_warns_with_its_code(tmp_path):
+    """A warning, and the run still passes — the gate did not earn a denial."""
+    out = _run_phase_e(
+        tmp_path, "x = 1\n", CLEAN_CSV_TRANSFORM, expect_exit=0
+    )
+    assert _codes(out) == ["reach.connector_undeclared"]
+    assert "phase E ok" in out
+
+
+def test_every_reach_finding_lands_on_s1_structure(tmp_path):
+    """Phase E must file under the stage it runs in, not Phase B's.
+
+    ``s1_structure`` is offline and precedes the transform import. Filing a reach
+    finding under ``s2_transform`` would say the transform ran — which is the one
+    thing this gate exists to prevent.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import anthropic\n", expect_exit=1
+    )
+    assert {d["stage"] for d in _diags(out)} == {"s1_structure"}
+
+
+def test_reach_codes_are_registered_in_the_shared_vocabulary():
+    """Every code Phase E emits must exist in the shared registry.
+
+    ``test_self_check_diagnostic_vocab.py`` enforces this across the whole
+    script by walking its string constants. Asserted again here, narrowly, so
+    that deleting a ``reach.*`` code from the registry names THIS gate in the
+    failure rather than a generic vocabulary drift.
+    """
+    import sys as _sys
+
+    skill_scripts = EVALS_DIR.parent / "src" / "nxd-run-job-loop" / "scripts"
+    if str(skill_scripts) not in _sys.path:
+        _sys.path.insert(0, str(skill_scripts))
+    import dp_diagnostics as dpd
+
+    emitted = {
+        "reach.model_sdk_import",
+        "reach.undeclared_transport",
+        "reach.connector_shape_mismatch",
+        "reach.connector_undeclared",
+    }
+    missing = emitted - set(dpd.CODES)
+    assert not missing, f"Phase E emits unregistered codes: {sorted(missing)}"
+
+    for code in emitted:
+        assert dpd.CODES[code]["stage"] == "s1_structure", code
+        # Every reach finding is fixed by editing the closure. None is a question
+        # for the user and none is environmental — an `owner` drift here would
+        # silently reroute the finding away from the agent that can fix it.
+        assert dpd.CODES[code]["owner"] == "agent", code
+
+
+def test_phase_e_codes_are_registered_in_the_scripts_own_table():
+    """Every ``reach.*`` code Phase E emits must be in self_check.py's ``CODES``.
+
+    This is a SECOND registry. ``dp_diagnostics.CODES`` (asserted above) is the
+    shared one; the script carries its own inlined copy, and ``diag()`` opens
+    with the unguarded ``sev, owner = CODES[code]``. A code missing from the
+    inlined table raises ``KeyError`` the first time the phase reports — so a
+    denied closure crashes with a traceback instead of exiting through
+    ``finish(1)``, and under the ``--json --record`` invocation SKILL.md
+    commands it emits no report and merges nothing into the build record. The
+    gate would block only by accident, on exactly the runs it exists for.
+
+    The whole-file harness above cannot catch this: it stubs ``diag``, and the
+    stub does not consult ``CODES``.
+    """
+    body = _script_body()
+    registered = set()
+    for sev, owner, block in re.findall(
+        r'_codes\(\s*"(\w+)",\s*"(\w+)",(.*?)\)\n', body, re.S
+    ):
+        registered |= set(re.findall(r'"([a-z_]+\.[a-z_]+)"', block))
+
+    emitted = set(
+        re.findall(r'(?:diag\(\s*"[^"]+",\s*|eerr\(\s*)"(reach\.[a-z_]+)"', body)
+    )
+    assert emitted, "found no reach.* emission sites — did Phase E move?"
+
+    missing = emitted - registered
+    assert not missing, (
+        f"Phase E emits {sorted(missing)}, which self_check.py's own CODES table "
+        f"does not register. diag() would raise KeyError and kill the run."
+    )
+
+
+def test_phase_e_failure_reports_through_the_real_diagnostic_surface(tmp_path):
+    """Drive a denied closure through the REAL ``diag``/``finish``, not stubs.
+
+    Every other test here runs Phase E under a harness that substitutes the
+    reporting functions. That keeps them fast and hermetic, and it is also how a
+    ``KeyError`` in the real ``diag()`` survived 45 passing tests: the failure
+    path was never executed against the code that actually ships.
+
+    So this one splices Phase E onto the script's REAL preamble — the actual
+    ``CODES`` table, the actual ``diag``, ``close_stage`` and ``finish`` — and
+    drives a denied closure through it. Only the two source strings Phase E
+    reads are injected; nothing about the reporting path is stubbed.
+
+    Building a whole closure instead would drag in every file Phase A demands
+    (``models.py``, ``data/``, a parseable spec) and would fail in Phase A long
+    before reaching the seam under test.
+    """
+    body = _script_body()
+    # Everything up to the Phase A banner: imports, the CODES table, redact,
+    # say, cpath, diag, close_stage, finish. Splicing further would drag in
+    # Phase A's own file reads, which fail on a closure that has no models.py
+    # and would stop the run before it reached the seam under test.
+    reporting_surface = body[: body.index("# ------------------------------"
+                                          "---------------------------------- "
+                                          "Phase A ---")]
+    harness = (
+        reporting_surface
+        + f"spec_src = {CSV!r}\n"
+        + f"transform_src = {CLEAN_CSV_TRANSFORM + 'import anthropic' + chr(10)!r}\n"
+        + _phase_e_source()
+    )
+    script = tmp_path / "_phase_e_real.py"
+    script.write_text(harness, encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, str(script), "--json"],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+    out = proc.stdout + proc.stderr
+    assert "Traceback" not in out, f"the reporting surface itself crashed:\n{out}"
+    assert "KeyError" not in out, f"a reach.* code is unregistered:\n{out}"
+    assert proc.returncode == 1, f"a denied closure must exit 1, got {proc.returncode}:\n{out}"
+    assert "reach.model_sdk_import" in out, (
+        f"the denial must be reported by CODE, not prose alone:\n{out}"
+    )
+
+
+# ------------------------------------------------------ contract verifiers ---
+# Executable custom contracts made `contracts/**/*.py` a SECOND class of Python
+# the local desktop runtime runs. A verifier that imports a model SDK and calls it is
+# the identical risk Phase E denies in the transform, and before these tests it
+# passed the whole self-check green: Phase C reads those files for escape
+# references, AST shape, inertness and secret literals, but never their imports.
+
+CLEAN_VERIFIER = (
+    "import duckdb\n"
+    "import csv\n"
+    "def verify(con):\n"
+    "    return con.execute('select 1').fetchone()[0] == 1\n"
+)
+
+
+def test_verifier_importing_a_model_sdk_is_denied(tmp_path):
+    """The demonstrated hole: a verifier calling a model, whole run green."""
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=1,
+        verifiers={"contracts/row_count.py":
+                   "import anthropic\n"
+                   "def verify(con):\n"
+                   "    return anthropic.Anthropic().messages.create()\n"},
+    )
+    assert _codes(out) == ["reach.model_sdk_import"]
+    assert "contracts/row_count.py" in out, (
+        f"the finding must name the verifier, not the transform:\n{out}"
+    )
+
+
+def test_verifier_model_sdk_denial_is_not_waived_by_a_declared_api_source(tmp_path):
+    """Unconditional. `network_declared` waives transport, never a model SDK."""
+    out = _run_phase_e(
+        tmp_path, API, CLEAN_CSV_TRANSFORM, expect_exit=1,
+        verifiers={"contracts/expectations/freshness.py": "import openai\n"},
+    )
+    assert _codes(out) == ["reach.model_sdk_import"]
+    assert "contracts/expectations/freshness.py" in out, out
+
+
+def test_clean_verifier_passes(tmp_path):
+    """The other direction: a duckdb/csv verifier must not trip the gate."""
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0,
+        verifiers={"contracts/row_count.py": CLEAN_VERIFIER,
+                   "contracts/promises/__init__.py": "",
+                   "contracts/promises/uniqueness.py": CLEAN_VERIFIER},
+    )
+    assert "phase E ok" in out
+
+
+def test_verifier_transport_import_is_a_recorded_gap(tmp_path):
+    """Verifiers are NOT scanned for transport, and that is a decided gap.
+
+    The transform's `network_declared` waiver is derived from spec.py's connector
+    declaration — a statement about how the TRANSFORM gets its data. Handing it
+    to a post-transform verifier would grant reach the declaration never claimed,
+    so the transport family is left out of the verifier scan entirely rather than
+    inherited. Pinned so that closing it later is a deliberate edit with a test
+    change attached, not a silent one.
+    """
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0,
+        verifiers={"contracts/row_count.py": "import httpx\n"},
+    )
+    assert "phase E ok" in out
+
+
+def test_a_closure_with_no_contracts_directory_still_passes(tmp_path):
+    """rglob over a missing `contracts/` must not raise — most closures have none."""
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0)
+    assert "phase E ok" in out
+
+
+def test_an_unparseable_verifier_is_skipped_not_crashed(tmp_path):
+    """A syntax error under contracts/ is Phase C's finding, not this gate's."""
+    out = _run_phase_e(
+        tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0,
+        verifiers={"contracts/broken.py": "def verify(con:\n"},
+    )
+    assert "phase E ok" in out
+
+
+def test_a_non_utf8_verifier_is_skipped_not_crashed(tmp_path):
+    """The same for a verifier this gate cannot DECODE, not just cannot parse.
+
+    ``UnicodeDecodeError`` subclasses ``ValueError``, not ``OSError``, so a
+    verifier that is valid Python under a non-UTF-8 coding declaration escaped
+    the handler above and took the whole self-check with it: a bare traceback,
+    no ``reach.*`` code, no ``close_stage``, no record merge — the one failure
+    mode the rest of this script is written to avoid.
+
+    Written as bytes directly rather than through the ``verifiers`` dict,
+    because that dict writes text and cannot express the defect.
+    """
+    (tmp_path / "contracts" / "promises").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "contracts" / "promises" / "legacy.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\nTHRESHOLD = '\xe9'\n"
+    )
+    out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM, expect_exit=0)
+    assert "Traceback" not in out, out
+    assert "phase E ok" in out
+
+
+def test_every_read_under_contracts_survives_a_non_utf8_file():
+    """Phase E is not the only place the script decodes a file under contracts/.
+
+    Guarding only Phase E moved the traceback a few hundred lines down and left
+    the observable behaviour identical: the same latin-1 verifier cleared the
+    reach gate and then killed the C9 escaping-reference scan, which rglobs
+    ``contracts/*`` and ``contracts/*/*`` and read them unguarded. Phase C's
+    verifier read had the same hole — and Phase E's handler comment defers an
+    undecodable verifier to "Phase C's finding to report", which Phase C could
+    not do while dying on the same read.
+
+    Asserted statically over the shipped source rather than by running the
+    script: reaching C9 needs a complete valid closure (models.py, spec.py,
+    transform/, data/), so a runtime test would spend a large fixture to cover
+    one guard — and a fixture that fails an earlier phase exits before C9 and
+    passes vacuously, which is exactly how the first version of this test
+    reported green against a script that still crashed.
+    """
+    body = _script_body()
+
+    # The opening read of models.py/spec.py/transform/main.py is the fourth site
+    # of the same class, and it is asserted first because it is the one a reader
+    # is most likely to assume is safe. An earlier version of this comment
+    # claimed a bare read_text() there "fails the closure loudly and correctly";
+    # it does not. `except OSError` misses UnicodeDecodeError, so a latin-1
+    # models.py exited 1 with a bare traceback — "found something", by that
+    # block's own definition, when nothing had been read. Exit 2 is the code it
+    # reserves for "could not read".
+    opening = body[body.index('models_src = Path("models.py")'):]
+    opening = opening[:opening.index("finish(2)") + 20]
+    assert "except (OSError, UnicodeDecodeError) as exc:" in opening, (
+        "the opening closure read catches OSError only — a non-UTF-8 models.py "
+        "escapes as a traceback and exits 1, the code this block reserves for "
+        "'found something', rather than 2 for 'could not read'"
+    )
+    # Catching the error is half of it. An earlier revision of this test
+    # asserted the handler and not the codec, and the fix that followed caught
+    # UnicodeDecodeError while still reading under the LOCALE encoding — so the
+    # guard printed "must be UTF-8" about a decode it had not performed in
+    # UTF-8. On a cp1252 host that message is simply false; under an ASCII
+    # locale it fires on a file that is already UTF-8.
+    for name in ("models.py", "spec.py", "transform/main.py"):
+        m = re.search(rf'Path\("{re.escape(name)}"\)\.read_text\((.*?)\)', opening)
+        assert m is not None, f"the opening read of {name} moved"
+        assert 'encoding="utf-8"' in m.group(1), (
+            f"{name} is read under the locale codec while the handler below "
+            f"tells the author it must be UTF-8"
+        )
+
+    # The landed CSVs, which are the reads most likely to meet a non-UTF-8 byte
+    # in practice: a latin-1 verifier is a rare hand-written artifact, but a CSV
+    # exported from Excel as cp1252 is routine. csv.DictReader over one raises
+    # UnicodeDecodeError, and with no top-level handler in this script that is
+    # the same bare traceback — no code, no close_stage, no record merge.
+    # errors="replace" rather than skipping: an undecodable CSV is still a CSV
+    # whose rows are graded, and skipping it would make it the one place a
+    # mismatch hides. Unlike C9 — where the search is a fixed `../*.md` pattern
+    # a replacement char cannot match — a replacement char here CAN sit inside a
+    # graded value, so the trade is deliberate: a mangled cell reports as a
+    # vocabulary mismatch, which is a finding, where a skip reports nothing.
+    csv_opens = re.findall(r"\.open\(newline=\"\"(.*?)\)", body)
+    assert csv_opens, "the landed-CSV reads moved"
+    for args in csv_opens:
+        assert "errors=" in args, (
+            "a landed CSV is read with no error policy — a cp1252 export kills "
+            "the script with a bare traceback partway through grading"
+        )
+        # Both halves, because checking only the error policy is the mistake
+        # this file already documents at Phase C: errors="replace" with no
+        # encoding= still decodes under the host locale, so the same cp1252
+        # export mangles graded cells on one machine and not another, and
+        # presents as a vocabulary mismatch that is not really there.
+        assert 'encoding="utf-8"' in args, (
+            "a landed CSV declares an error policy but no codec — it decodes "
+            "under the host locale, so grading depends on the machine"
+        )
+
+    # EXHAUSTIVE, and that is the point. This defect was closed at one site,
+    # then three, then four, then seven — each round patching the sites the last
+    # review had named while the next unpinned read sat waiting. A per-site
+    # assertion can only catch sites someone already thought of. The invariant
+    # is that NO text-file read or write in this script depends on the locale
+    # codec, so it is asserted as one.
+    # Matches every read/open/write_text call and requires each text-mode call
+    # to name a codec rather than matching one spelling of "unpinned". A regex
+    # keyed on empty parens
+    # `read_text()` misses the three ways this defect actually came back:
+    # `read_text(errors="replace")` (a policy but no codec — the exact Phase C
+    # half-fix documented above), a bare `open(p)` with no `newline=""` for the
+    # csv check to key on, and a call split across lines.
+    calls = re.findall(
+        r"(?:\.read_text|\.write_text|\.open|(?<![\w.])open)\(([^()]*(?:\([^()]*\)[^()]*)*)\)",
+        body, re.S,
+    )
+    assert calls, "no file I/O calls found — did the script move?"
+    # The argument regex handles one level of nested parens, so a call like
+    # `open(os.path.join(str(a), b))` is not matched AT ALL — it contributes
+    # nothing to `calls`, never reaches the codec check, and passes silently.
+    # That is this file's own never-fires shape one level up: the sweep would
+    # only catch call SPELLINGS someone thought of. Counting the call sites
+    # independently makes an unparseable argument list fail the test instead of
+    # disappearing from it.
+    sites = re.findall(r"(?:\.read_text|\.write_text|\.open|(?<![\w.])open)\(", body)
+    assert len(calls) == len(sites), (
+        f"{len(sites) - len(calls)} file I/O call(s) have an argument list "
+        f"this scan cannot parse, so they were never checked for a codec"
+    )
+    binary_mode = re.compile(
+        r"(?:,\s*|mode\s*=\s*)[\"'][rwxa+]*b[rwxa+]*[\"']"
+    )
+    # Binary handles do not decode text and therefore must not name a text codec.
+    unpinned = [c.strip() for c in calls
+                if "encoding=" not in c and not binary_mode.search(c)]
+    assert not unpinned, (
+        "these file I/O calls depend on the host's locale codec rather than "
+        "the file:\n  "
+        + "\n  ".join(unpinned)
+    )
+
+    # The remaining assertions are scoped to contracts/ ON PURPOSE: those are
+    # the reads Phase E's deferral depends on. This test is not a whole-file
+    # sweep, and saying so keeps a later reader from trusting a coverage claim
+    # this file does not make.
+    c9 = body[body.index('rglob("contracts/*")'):]
+    c9_read = re.search(r"ESCAPE\.findall\(p\.read_text\((.*?)\)\)", c9)
+    assert c9_read is not None, "C9's escaping-reference read moved"
+    assert "errors=" in c9_read.group(1), (
+        "the C9 escaping-reference scan reads contracts/ files with no error "
+        "policy — a non-UTF-8 verifier kills the script there with a bare "
+        "traceback, after Phase E has already cleared it"
+    )
+
+    # Anchored to Phase C's own region, like the C9 check above. A file-wide
+    # substring search is satisfied by any handler anywhere in ~2000 lines: move
+    # the guard off this read, spell one the same way elsewhere, and the test
+    # still reports green while the deferral it protects is broken again. That
+    # is the same never-fires shape this file exists to document.
+    pc = body[body.index('cerr("closure.contract_verifier_missing"'):]
+    pc = pc[:pc.index("closure.contract_verifier_malformed") + 400]
+    assert "except (OSError, UnicodeDecodeError) as exc:" in pc, (
+        "Phase C's verifier read is unguarded — Phase E defers an undecodable "
+        "verifier to Phase C, so Phase C must survive to report it"
+    )
+    assert "cannot be read as UTF-8 text" in pc, (
+        "Phase C's verifier diagnostic still describes every read failure as "
+        "a decode failure, including OSError cases"
+    )
+    pc_read = re.search(r"vsrc = vp\.read_text\((.*?)\)", pc)
+    assert pc_read is not None, "Phase C's verifier read moved"
+    assert 'encoding="utf-8"' in pc_read.group(1), (
+        "Phase C reads the verifier under the LOCALE codec while its diagnostic "
+        "claims UTF-8 — on a cp1252 host it silently accepts bytes Phase E "
+        "rejected, and under an ASCII locale it fails a valid UTF-8 file"
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import pytest
+
+    raise SystemExit(pytest.main([__file__, "-q"]))

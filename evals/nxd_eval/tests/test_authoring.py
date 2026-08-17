@@ -10,7 +10,11 @@ scorer slot list, the solver, and the model-role wiring — plus the two loaders
 from __future__ import annotations
 
 import json
+import socket
+import threading
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 
 import pytest
 from inspect_ai._util.registry import registry_info
@@ -20,13 +24,18 @@ from nxd_eval import checks
 from nxd_eval import gold
 from nxd_eval import load_checks_json
 from nxd_eval import load_suite
+from nxd_eval.dependencies import DependencyCheckError
+from nxd_eval.dependencies import check_inspect_model_dependency
 from nxd_eval.scorers import ABSTAIN_INFEASIBLE
 from nxd_eval.scorers import DETERMINISTIC_EX
 from nxd_eval.scorers import JUDGE
 from nxd_eval.scorers import SLOT_MATCH
+from nxd_eval.task import MCPConnectionError
 from nxd_eval.solver import mcp_solver
 from nxd_eval.task import build_task
 from nxd_eval.task import case_to_sample
+from nxd_eval.task import preflight_mcp_http_endpoint
+from nxd_eval.task import run_suite
 
 
 def _scorer_names(task) -> set[str]:
@@ -58,6 +67,70 @@ def _demo_suite() -> Suite:
         gold=gold({"g_a": gold.rows("g_a", [{"subject_count": 4}])}),
         checks=checks(answer=["one number, equals 4"]),
     )
+
+
+def _free_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+class _StatusHandler(BaseHTTPRequestHandler):
+    status = 200
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"protocolVersion": "2024-11-05", "capabilities": {}},
+        }
+    ).encode()
+    content_type = "application/json"
+    seen_headers = None
+    delete_count = 0
+
+    def do_POST(self):  # noqa: N802 - stdlib callback name
+        type(self).seen_headers = dict(self.headers)
+        self.send_response(self.status)
+        self.send_header("Content-Type", self.content_type)
+        self.send_header("Mcp-Session-Id", "test-session")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def do_DELETE(self):  # noqa: N802 - stdlib callback name
+        type(self).delete_count += 1
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+        return
+
+
+@pytest.fixture
+def http_status_server():
+    servers = []
+
+    def _start(status: int, **attrs) -> tuple[str, type[_StatusHandler]]:
+        handler = type(
+            f"Status{status}Handler",
+            (_StatusHandler,),
+            {"status": status, **attrs},
+        )
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        servers.append((server, thread))
+        port = server.server_address[1]
+        return f"http://127.0.0.1:{port}/dp/rpcs/mcp-api/mcp", handler
+
+    yield _start
+
+    for server, thread in servers:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 # --------------------------------------------------------------------------- #
@@ -215,6 +288,141 @@ def test_mcp_solver_requires_url_or_server():
 def test_mcp_solver_prompt_override():
     # A custom prompt is accepted (mesh scenarios pass their own analyst prompt).
     assert mcp_solver(MCP_URL, prompt="custom analyst prompt") is not None
+
+
+def test_mcp_preflight_accepts_reachable_endpoint(http_status_server):
+    url, handler = http_status_server(200)
+
+    preflight_mcp_http_endpoint(url, timeout_s=1)
+
+    assert handler.delete_count == 1
+
+
+def test_mcp_preflight_sends_same_bearer_auth_as_inspect(http_status_server):
+    url, handler = http_status_server(200)
+
+    preflight_mcp_http_endpoint(url, authorization="raw-token", timeout_s=1)
+
+    assert handler.seen_headers["Authorization"] == "Bearer raw-token"
+
+
+def test_mcp_preflight_allows_sse_keepalives_before_initialize(http_status_server):
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"protocolVersion": "2024-11-05", "capabilities": {}},
+        }
+    )
+    body = ("\n".join([": ping"] * 120) + f"\nevent: message\ndata: {payload}\n\n").encode()
+    url, _handler = http_status_server(
+        200,
+        body=body,
+        content_type="text/event-stream",
+    )
+
+    preflight_mcp_http_endpoint(url, timeout_s=1)
+
+
+def test_mcp_preflight_rejects_malformed_200_response(http_status_server):
+    url, _handler = http_status_server(200, body=b"{}")
+
+    with pytest.raises(MCPConnectionError, match="malformed MCP initialize response"):
+        preflight_mcp_http_endpoint(url, timeout_s=1)
+
+
+@pytest.mark.parametrize(
+    ("status", "needle"),
+    [(401, "HTTP 401"), (404, "HTTP 404"), (500, "HTTP 500")],
+)
+def test_mcp_preflight_reports_clear_http_status(http_status_server, status, needle):
+    with pytest.raises(MCPConnectionError, match=needle) as excinfo:
+        url, _handler = http_status_server(status)
+        preflight_mcp_http_endpoint(url, timeout_s=1)
+
+    message = str(excinfo.value)
+    assert "MCP endpoint preflight failed" in message
+    assert "/dp/rpcs/mcp-api/mcp" in message
+    assert "auth token/header" in message
+
+
+def test_mcp_preflight_reports_clear_connection_failure():
+    url = f"http://127.0.0.1:{_free_port()}/dp/rpcs/mcp-api/mcp"
+
+    with pytest.raises(MCPConnectionError, match="connection refused") as excinfo:
+        preflight_mcp_http_endpoint(url, timeout_s=1)
+
+    assert "MCP endpoint preflight failed" in str(excinfo.value)
+
+
+def test_run_suite_preflights_http_mcp_before_eval(http_status_server, tmp_path):
+    suite = Suite(
+        name="s",
+        cases=[Case(id="a", question="q", expect="clarify")],
+    )
+
+    with pytest.raises(MCPConnectionError, match="HTTP 404"):
+        url, _handler = http_status_server(404)
+        run_suite(
+            suite,
+            mcp_url=url,
+            agent_model="mockllm/model",
+            log_dir=tmp_path,
+        )
+
+
+def test_inspect_model_dependency_check_reports_missing_extra(monkeypatch):
+    monkeypatch.setattr(
+        "nxd_eval.dependencies._find_spec",
+        lambda _module: None,
+    )
+
+    with pytest.raises(DependencyCheckError) as excinfo:
+        check_inspect_model_dependency("openai/gpt-4o", role="agent_model")
+
+    message = str(excinfo.value)
+    assert "agent_model 'openai/gpt-4o'" in message
+    assert "'openai'" in message
+    assert "--extra openai" in message
+
+
+def test_inspect_model_dependency_check_ignores_unknown_or_mock_providers(monkeypatch):
+    calls = []
+
+    def _fake_find_spec(module):
+        calls.append(module)
+        return None
+
+    monkeypatch.setattr(
+        "nxd_eval.dependencies._find_spec",
+        _fake_find_spec,
+    )
+
+    check_inspect_model_dependency("mockllm/model", role="agent_model")
+    check_inspect_model_dependency("custom-provider/model", role="agent_model")
+    check_inspect_model_dependency(None, role="agent_model")
+
+    assert calls == []
+
+
+def test_run_suite_checks_model_backend_before_mcp(http_status_server, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "nxd_eval.dependencies._find_spec",
+        lambda _module: None,
+    )
+    suite = Suite(
+        name="s",
+        cases=[Case(id="a", question="q", expect="clarify")],
+    )
+
+    with pytest.raises(DependencyCheckError, match="--extra openai"):
+        url, _handler = http_status_server(404)
+        run_suite(
+            suite,
+            mcp_url=url,
+            agent_model="openai/gpt-4o",
+            log_dir=tmp_path,
+        )
 
 
 def test_build_task_accepts_server_factory_without_url():

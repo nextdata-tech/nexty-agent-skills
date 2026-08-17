@@ -25,6 +25,8 @@ jobs:
 
       # build-skills.sh only prints an "OVER CAP" status column; it does not
       # exit non-zero. Capture its output and fail if any skill is over cap.
+      # Also assert that the whole-pack artifact is a real plugin ZIP rather
+      # than a ZIP containing the individual skill ZIPs.
       - name: Build skill zips and enforce the 200-entry cap
         run: |
           set -euo pipefail
@@ -34,6 +36,19 @@ jobs:
             echo "::error::one or more skills exceed the 200-entry Claude Desktop cap"
             exit 1
           fi
+          version="$(python3 -c 'import json;print(json.load(open(".claude-plugin/plugin.json"))["version"])')"
+          pack="build/nexty-agent-skills-v${version}.zip"
+          test -f "$pack"
+          unzip -p "$pack" .claude-plugin/plugin.json | python3 -c '
+          import json, sys
+          plugin = json.load(sys.stdin)
+          assert "skills" not in plugin
+          assert "skills/" in "".join(__import__("subprocess").check_output(["unzip", "-Z1", sys.argv[1]], text=True))
+          ' "$pack"
+          if unzip -Z1 "$pack" | grep -q '\.zip$'; then
+            echo "::error::whole-pack plugin ZIP must not contain nested ZIPs"
+            exit 1
+          fi
 
       - uses: astral-sh/setup-uv@v5
 
@@ -41,4 +56,19 @@ jobs:
       # agent/judge backends and run the runner-side checkers directly, so a
       # deterministic gate cannot silently regress to judge-only grading.
       - name: Harness unit tests
-        run: uv run --no-project --with pytest --with duckdb python -m pytest evals/tests -q
+        run: uv run --no-project --with pytest --with duckdb --with pyyaml python -m pytest evals/tests -q
+
+      # nxd_eval's own unit tests (stats/scoring/transcript/task-wiring). The
+      # `dev` group pins pytest with no provider SDK required, so this installs
+      # and runs with no model credentials — see evals/nxd_eval/pyproject.toml.
+      - name: nxd_eval unit tests
+        working-directory: evals/nxd_eval
+        run: uv run pytest -q
+
+      # Benchmark evidence is source-controlled like the skills: validate the
+      # stdlib recorder directly and fail if an entry or generated index drifts.
+      - name: Benchmark evidence index
+        run: |
+          set -euo pipefail
+          python3 -m unittest evals.tests.test_benchmark_record
+          python3 evals/benchmark_record.py --check

@@ -1,6 +1,6 @@
 """Offloading generation to a subagent must be TAUGHT with its safety boundaries.
 
-The pocket loop's heaviest context cost is source profiling + code generation
+The job loop's heaviest context cost is source profiling + code generation
 (Steps 2-3). Moving that into an isolated subagent keeps it out of the main
 conversation — but only safely if the skill text pins four properties that a
 naive "just fan out generation" would violate:
@@ -26,10 +26,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src"
 
-POCKET_LOOP = SRC / "nxd-pocket-loop"
-SKILL = POCKET_LOOP / "SKILL.md"
-SCHEDULING = POCKET_LOOP / "reference" / "scheduling.md"
-GENERATE_DP = SRC / "nxd-generate-dp" / "SKILL.md"
+JOB_LOOP = SRC / "nxd-run-job-loop"
+SKILL = JOB_LOOP / "SKILL.md"
+SCHEDULING = JOB_LOOP / "reference" / "scheduling.md"
+GENERATE_DP = SRC / "nxd-generate-data-product" / "SKILL.md"
+ADVERSARIAL_REVIEW = SRC / "nxd-generate-data-product" / "reference" / "adversarial-review.md"
+POLICY_GATE = SRC / "nxd-generate-data-product" / "reference" / "policy-gate.md"
+BUILD_RECORD = JOB_LOOP / "reference" / "build-record.md"
 
 
 def _strip_markdown(text: str) -> str:
@@ -126,7 +129,7 @@ def test_generate_dp_teaches_subagent_gate_contract():
     text = _strip_markdown(raw)
     # The generator, when run as a subagent, never opens a user turn and bounces.
     assert "invoked as a generation subagent" in text, (
-        "nxd-generate-dp must address the generation-subagent invocation"
+        "nxd-generate-data-product must address the generation-subagent invocation"
     )
     assert "you never open one" in text or "never open a user turn" in text or (
         "user turn is the orchestrator" in text
@@ -137,6 +140,28 @@ def test_generate_dp_teaches_subagent_gate_contract():
     assert "not a rubber stamp" in text, (
         "the gate must not be a rubber stamp when pre-approved — re-run the self-check"
     )
+
+
+def test_generate_dp_direct_invocation_returns_to_job_loop():
+    generator = GENERATE_DP.read_text()
+    generator_direct = generator[
+        generator.index("**Invoked directly**"):generator.index("**Invoked as a generation subagent**")
+    ]
+    policy = POLICY_GATE.read_text()
+    policy_direct = policy[policy.index("## Invoked directly"):policy.index("## Invoked as a generation subagent")]
+    for direct in (generator_direct, policy_direct):
+        text = _strip_markdown(direct)
+        assert "return to" in text and "nxd-run-job-loop" in text
+        assert "immediately" in text
+        assert "do not run" in text and "read-back" in text
+        assert "run the read-back here" not in text
+
+
+def test_generate_dp_declares_job_loop_dependency_for_selective_install():
+    text = _strip_markdown(GENERATE_DP.read_text())
+    assert "selective-install dependency" in text
+    assert "selective install must include both skills" in text
+    assert "nxd-run-job-loop" in text
 
 
 # --- Meaning-pinning tests: a reworded-but-broken doc must FAIL these. ---
@@ -187,17 +212,30 @@ def test_credential_slots_are_key_names_only():
     # the subagent away from scheduling.md).
     gen = _strip_markdown(GENERATE_DP.read_text())
     assert "hold no credential" in gen and "placeholder" in gen, (
-        "nxd-generate-dp's subagent block must restate the placeholder credential rule inline"
+        "nxd-generate-data-product's subagent block must restate the placeholder credential rule inline"
     )
+
+
+# §9 frozen verify-before-build closure file list. Line wrapping may differ, so
+# compare whitespace-collapsed; wording may not differ at all.
+VERIFY_LIST = (
+    "`spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, "
+    "`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, "
+    "`build-record.json`, `README.md`, the connector companion artifact — and, "
+    "for a credentialed source, `SENSITIVE` and `.gitignore`"
+)
 
 
 def test_verify_list_enumerates_the_required_files():
     # H2/finding-5: the host-side verify must name the files, and MUST include
-    # infra-profile.yaml (the file credential injection writes into).
-    text = SCHEDULING.read_text()
-    for fname in ("spec.py", "models.py", "infra-profile.yaml",
-                  "transform/main.py", "requirements.txt", "CONTEXT.md"):
-        assert fname in text, f"the verify-before-build list must name `{fname}`"
+    # infra-profile.yaml (the file credential injection writes into) and the
+    # three generated record files that replaced the retired prose doc.
+    collapsed = re.sub(r"\s+", " ", SCHEDULING.read_text())
+    assert re.sub(r"\s+", " ", VERIFY_LIST) in collapsed, (
+        "scheduling.md must carry the frozen verify-before-build closure file "
+        "list verbatim — an agent that verifies a different set ships a closure "
+        "missing a file the other skill files name"
+    )
 
 
 def test_skill_offloads_two_subagents_not_one_unit():
@@ -208,3 +246,59 @@ def test_skill_offloads_two_subagents_not_one_unit():
         "profile subagent" in collapsed and "generate subagent" in collapsed
         and "never one combined unit" in collapsed
     ), "SKILL.md must offload Steps 2-3 as two subagents split at the seam, not one unit"
+
+
+def test_file_profile_dispatch_is_builtin_read_only_and_non_mutating():
+    # The Desktop experiment proved that explicit skill prose can dispatch a
+    # built-in agent. Keep file profiling on that narrow surface rather than
+    # smuggling a custom plugin agent or a writer into the source-profile step.
+    text = _strip_markdown(SCHEDULING.read_text())
+    collapsed = re.sub(r"\s+", " ", text)
+    assert "built-in read-only" in text
+    assert "file source (csv/json/jsonl/parquet)" in text
+    assert "source path" in text and "inference instructions" in text
+    assert "writes no closure" in collapsed and "does not transform the source" in collapsed
+    assert "asks the user nothing" in text
+
+
+def test_multi_question_dispatch_never_transfers_runtime_credentials():
+    text = _strip_markdown(SCHEDULING.read_text())
+    collapsed = re.sub(r"\s+", " ", text)
+    # A child may query only through governed MCP tools that it already has; a
+    # lead must not proxy the endpoint/bearer through prompt or result text.
+    assert "describemodels" in text and "runsemanticquery" in text
+    assert "available directly to that child" in collapsed
+    assert "do not pass an endpoint or bearer" in text
+    assert "main thread runs the governed queries sequentially" in collapsed
+    assert "never falls back to raw sql, pandas, or shell aggregation" in collapsed
+
+
+def test_adversarial_review_is_builtin_claims_only_dispatch():
+    skill = _strip_markdown(GENERATE_DP.read_text())
+    reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
+    # Step 6b is the entry contract; the reference supplies the full handoff.
+    assert "explicitly dispatch one built-in read-only reviewer" in skill
+    assert "never a custom/plugin agent definition" in skill
+    assert "closure path and verbatim request" in skill
+    assert "return claims only" in skill
+    assert all(word in skill for word in ("never edits", "builds", "serves", "transforms", "talks to the user"))
+    assert "one built-in read-only subagent" in reference
+    assert "the closure path" in reference and "original request, verbatim" in reference
+    assert "return claims only" in reference
+    assert all(word in reference for word in ("never edits", "builds", "serves", "runs the transform", "user conversation"))
+
+
+def test_adversarial_deadline_records_partial_claims_without_a_finding_cap():
+    reference = _strip_markdown(ADVERSARIAL_REVIEW.read_text())
+    record = _strip_markdown(BUILD_RECORD.read_text())
+    collapsed = re.sub(r"\s+", " ", reference)
+    assert "120000 ms elapsed-time deadline" in reference
+    assert "status: timedout" in reference and "budgetms: 120000" in reference
+    assert "every partial claim received by then" in collapsed
+    assert "no finding-count cap" in collapsed
+    assert "client cannot cancel or collect" in collapsed and "stop the workflow as needsuser" in collapsed
+    # `skipped` was never a legal review round status. Non-eligibility is no
+    # dispatch, while a dispatched entry is complete/timed_out/needs_user.
+    assert "skipped is not a review status" in collapsed
+    assert "complete, timedout, or needsuser" in record
+    assert "never skipped" in record

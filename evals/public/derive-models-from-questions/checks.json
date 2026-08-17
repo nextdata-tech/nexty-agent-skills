@@ -1,7 +1,7 @@
 {
   "name": "Derive the models the questions actually need",
   "skills": [
-    "nxd-generate-dp"
+    "nxd-generate-data-product"
   ],
   "deterministic_check": {
     "script": "check_derived_closure.py",
@@ -64,7 +64,7 @@
     },
     {
       "id": "decisions-recorded",
-      "check": "Unconfirmed rulings are recorded as rows in the closure's landed `nxd_decisions` model (columns decision_id, status, ruling, applies_to, detail), not in a prose file — the skill explicitly forbids a DECISIONS.md. The merchant-to-category mapping is a classification over observed values, so it is landed and carries status=proposed. Currency is recorded either as proposed rates (if the closure chose to convert) or as status=blocked naming the absent rates and the questions limited until they arrive (if it declined). Either is acceptable; leaving the choice unrecorded is not. A closure with no rulings at all correctly emits no ledger."
+      "check": "Unconfirmed rulings are recorded as rows in the closure's landed `nxd_decisions` model (columns decision_id, status, provenance, ruling, applies_to, detail), not in a prose file — the skill explicitly forbids a DECISIONS.md. Every row carries BOTH a status (confirmed/proposed/blocked) and a provenance (user_confirmed/agent_authored/source_derived/deferred): they are orthogonal axes, so a ledger carrying only status fails — it cannot distinguish a value the user supplied from one the agent invented. The merchant-to-category mapping is a classification over observed values, so it is landed with status=proposed and provenance=agent_authored. Currency is recorded either as proposed rates (if the closure chose to convert) or as status=blocked with provenance=deferred, naming the absent rates and the questions limited until they arrive (if it declined). Either is acceptable; leaving the choice unrecorded is not. A closure with no rulings at all correctly emits no ledger."
     },
     {
       "id": "no-client-side-arithmetic",
@@ -76,7 +76,7 @@
     },
     {
       "id": "decisions-ledger-legible",
-      "check": "If an nxd_decisions model is promised, its own columns are legible in the catalog: the model declares a .description(...) and status / ruling / applies_to / detail each carry a description= stating what the column holds (status naming the confirmed/proposed/blocked vocabulary). A ledger whose columns are unexplained in describe_models cannot be used to discover which numbers rest on unconfirmed rulings."
+      "check": "If an nxd_decisions model is promised, its own columns are legible in the catalog: the model declares a .description(...) and status / provenance / ruling / applies_to / detail each carry a description= stating what the column holds (status naming the confirmed/proposed/blocked vocabulary, provenance naming the user_confirmed/agent_authored/source_derived/deferred vocabulary and that it is orthogonal to status). A ledger whose columns are unexplained in describe_models cannot be used to discover which numbers rest on unconfirmed rulings, or which rest on values the agent authored rather than the user."
     },
     {
       "id": "every-field-annotated",

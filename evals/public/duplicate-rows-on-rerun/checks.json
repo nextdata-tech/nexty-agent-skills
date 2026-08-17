@@ -1,8 +1,8 @@
 {
   "name": "Duplicate Rows on Every Re-run",
   "skills": [
-    "nxd-debugging-data-products",
-    "nxd-adding-outputs"
+    "nxd-debug-data-product",
+    "nxd-add-outputs"
   ],
   "checks": [
     {

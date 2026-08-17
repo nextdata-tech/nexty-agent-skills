@@ -15,7 +15,7 @@ tool-call checks even when the underlying skill is correct.
 
 Keep these here (local, un-shipped) and run them manually against a live mesh.
 Currently parked for this reason — both are **consumer** scenarios for the
-**nxd-data-product-query** skill (its §6d "Semantic-layer MCP ports"), exercising
+**nxd-query-data-product** skill (its §6d "Semantic-layer MCP ports"), exercising
 how an agent queries a deployed semantic DP, NOT how the producer skill builds one:
 
 - `semantic-query-nl-to-answer` — needs the three semantic MCP tools live.
@@ -23,6 +23,6 @@ how an agent queries a deployed semantic DP, NOT how the producer skill builds o
   the mixed-grain `CompileError` the scenario grades.
 
 The producer **build** scenario `generate-semantic-layer-dp-from-schema` stays
-public under the **nxd-semantic-data-product** skill: it is pure authoring (the
+public under the **nxd-build-semantic-data-product** skill: it is pure authoring (the
 agent writes the registry + wiring), graded by reading the produced files, and
 passes headlessly (9/9).

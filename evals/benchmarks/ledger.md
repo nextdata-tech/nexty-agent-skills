@@ -453,3 +453,911 @@ entries above.
   with the driver-side fallback that makes the mistake silent in
   `driver_impls/drivers/nxd-snowflake/src/storage/mod.rs` (absent `schema` falls
   back to the data-product name rather than erroring).
+
+## 2026-07-29 — v0.25.4 — nxd-generate-dp: per-criterion score explainability and absence semantics
+
+**Change:** reference-doc rules for `nxd-generate-dp`. `derived-models.md` gains the
+explanation-row contract (a scored row carries per-criterion rows saying WHY it scored
+what it did) and a precedence section for the case where a supplied rubric's bottom
+band is the absence case — the band that decides whether "no evidence" scores the
+minimum or is held out of the score entirely. `llm-judgments.md` picks up the matching
+vocabulary so the two documents describe one model rather than two.
+
+The explanation row's authored-by column is named `evidence_kind` (`fact` /
+`inference`), deliberately NOT `provenance`: `nxd_decisions.provenance` (v0.25.5)
+classifies who authored a RULING, while this classifies what a per-criterion
+explanation is standing on. Two different questions; giving them one name would make
+the ledger unreadable at the exact point a reviewer needs to tell them apart.
+
+**No before/after run table — no scenario observes these rules.** Nothing in
+`evals/public/` asserts on explanation rows, `evidence_kind`, or bottom-band absence
+precedence; a grep across every `checks.json` and every deterministic checker returns
+nothing. The harness therefore cannot distinguish a run that follows the new
+precedence from one that does not — the failure these rules prevent is a scored
+absence silently reading as a genuine low score, which no current check inspects.
+Reporting a table from scenarios blind to the change would be noise presented as
+signal. Same posture as the v0.25.3 and v0.22.0 entries above.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py` passes; version surfaces agree at 0.25.4 across
+  `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+- `./build-skills.sh` packages every skill `ok`; `nxd-generate-dp` is 18 entries and
+  `nxd-data-product-builder` 159, both under the 200-entry cap.
+- Both touched reference files added their new sections to the existing `## Contents`
+  list, so progressive disclosure still resolves them.
+- `src/nxd-generate-dp/SKILL.md` is at exactly 500 lines, the cap, after restoring the
+  Step 6b dispatch that a rebase had dropped.
+- The three asserts the rules require are separately falsifiable: coverage is read off
+  the score sheet rather than off the explanation rows (so a missing explanation
+  cannot hide as a missing score), the scored-absence pair, and a substring anchor
+  that survives whitespace and case differences.
+
+**Follow-up worth doing:** these rules are unmeasurable only because no scenario
+exercises them. A scenario asserting on explanation rows and bottom-band precedence
+would convert every future change here from evidence-prose into a real table.
+
+## 2026-07-29 — v0.26.0 — nxd-generate-dp: ruling provenance classes in `nxd_decisions`
+
+**Change:** `nxd_decisions` gains a mandatory `provenance` column alongside `status`.
+Settled-or-not and authored-by are separate axes: a ruling the agent invented to fill
+a gap and a ruling the user supplied can both be `confirmed`, and only `provenance`
+tells the reader which one they are ratifying. Phase D fails a closure whose ledger
+lacks the column or carries an out-of-vocabulary value, and four new deterministic
+checks land in `check_coauthored_closure.py`.
+
+**No before/after run table — the change is not measurable on a shared denominator.**
+The four new checks (`provenance-column-present`, `provenance-vocabulary-valid`,
+`agent-authored-ruling-classified`, `user-supplied-ruling-classified`) did not exist
+before this PR, so a "before" run cannot be scored against them: every prior closure
+fails a column that was not required of it. Scoring the after-run against the larger
+check set and calling the difference an improvement would measure the denominator
+change, not the skill. Same posture as the 2026-07-23 Phase D entry, which recorded
+the same situation rather than inventing a comparison.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py` passes; version surfaces agree at 0.26.0 across
+  `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+- `./build-skills.sh` packages every skill `ok`; `nxd-data-product-builder` is 159
+  entries, under the 200-entry cap.
+- Phase D gate tests: 26 passed across `test_policy_boundary_phase_d.py` and
+  `test_deterministic_check.py`, including the pair that pins the two axes as
+  independently checked — `test_status_and_provenance_are_checked_independently`
+  and `test_missing_provenance_still_reports_bad_status`. Without that pair a
+  nested check would report only the first failing axis and leave half the ledger
+  ungraded.
+- Vocabulary is closed and case-sensitive: `Confirmed` / `User_Confirmed` are
+  rejected, and a short row or empty cell is caught as `''` rather than passing.
+- Known inherited limit, not introduced here: a header-only CSV with zero data rows
+  skips both column checks. The gate is row-driven, so an empty ledger is not a
+  failure on either axis.
+
+## 2026-07-29 — v0.26.1 — semantic roles + the `Agg.EXPRESSION` boundary (#130)
+
+**Change:** two things, both doc-only but both behavior-bearing. (1) A new
+**Semantic roles** section in `nxd-data-product-builder`'s
+`semantic_model_spec.md` — the role table (`primary_key` / `dimension` / `join`),
+the three accepted `.schema()` field shapes, and the rule that agent-visible
+descriptions belong on `dimension(description=…)` / `metric(description=…)`, not
+on `field(description=…)`. (2) `Agg.EXPRESSION` promoted from "never use it" to a
+documented member with an explicit boundary, which required reconciling four
+files that disagreed about it.
+
+The pack previously contradicted itself in three places once EXPRESSION was
+documented, all fixed here: `nxd-generate-dp/reference/nxd-spec-api.md` wrongly
+documented `expressions=` on `data_product_output().model(...)`;
+`nxd-semantic-data-product/reference/registry-authoring.md` asserted a closed
+six-member vocabulary as an API fact; and that skill's
+`compiler-and-routing.md` Snowflake table had no EXPRESSION row. The
+`median` prohibition is retained and strengthened — `Agg.EXPRESSION` is
+explicitly ruled out as a smuggling route for it.
+
+**No before/after run table — not measurable by the current harness.** No eval
+scenario authors an `Agg.EXPRESSION` metric or asserts on description placement,
+so the harness cannot distinguish the corrected guidance from the old text. The
+failures these edits prevent land at author time (an expression map silently
+dropped, so the metric compiles and then emits wrong SQL) or at agent-read time
+(two loaded skills giving opposite rulings) — neither is observable offline.
+Same posture as the v0.25.3 / v0.22.0 / v0.21.0 entries above.
+
+**Evidence instead of a table:**
+- `scripts/validate_skills.py --root .` passes; version surfaces agree at
+  0.26.1 across `plugin.json`, `marketplace.json` and all 17 `SKILL.md`.
+- `./build-skills.sh` packages all 17 skills `ok`; largest is
+  `nxd-mesh-analyzer` at 32 entries, far under the 200-entry cap.
+- Signatures verified against upstream `nxd` source, not inferred:
+  - `Agg.EXPRESSION` is a real member —
+    `components/nxd_py/data_product/nxd/experimental/semantic/registry.py:22-31`,
+    mirrored in Rust at `components/shared/semantic_registry/src/types.rs:43-58`.
+  - `expressions=` persists **only** on the port model
+    (`nxd/spec/_spec.py:3166-3173`); `data_product_output().model(...)`
+    validates and discards it (`_spec.py:4661-4667`), pinned upstream by
+    `test_output_models.py:96`
+    (`test_output_model_expressions_are_not_written_to_top_level_metadata`).
+    This is why the old `nxd-spec-api.md` guidance would have silently no-opped.
+  - Expression SQL resolution and the EXPRESSION dialect row —
+    `nxd/experimental/semantic/dialect.py:144-173` (an attached expression wins
+    for any `Agg`; bare `Agg.EXPRESSION` emits `column` as raw SQL). Build-time
+    guard at `registry.py:1067-1078`.
+  - Description routing — `dimension(description=…)` lands in the role blob and
+    is what `describe_model` surfaces (`registry.py:334-344`,
+    `_manifest_compile.py:440`); `field(description=…)` lands on
+    `AttributeSpec._description` (`nxd/spec/_semantic.py:314-357`) and never
+    reaches the querying agent.
+  - `SamplingMethod` members are PascalCase on the `nxd.spec` surface
+    (`nxd/core/yaml_schemas.pyi:1553-1556`), correcting the one table row that
+    said `RANDOM`. A second SCREAMING_CASE enum of the same name exists at
+    `nxd/core/_bindings.pyi:780-783` but is not what `nxd.spec` re-exports.
+- Phase A gate: `Agg.EXPRESSION` parses as a known member but `walk_roles`
+  emits a targeted `bad()` naming the derivation-plan boundary, so the gate now
+  AGREES with the prose in `nxd-spec-api.md`, `derivation-plan.md` and
+  `nxd-generate-dp/SKILL.md` instead of silently passing the construct they
+  forbid. This also removes a gate/grader split: the vendored grader
+  `evals/public/generate-semantic-layer-from-live-source-and-questions/fixtures/check_semantic_model.py:46`
+  keeps `AGGS` at the six lowercase names and fails an `expression` metric at
+  its `role-grammar` check, so a closure reaching for it would previously have
+  passed its own self-check and then failed the eval.
+  Verified on a two-closure fixture: an `Agg.EXPRESSION` metric yields
+  `models.py:order_metrics.net_revenue: Agg.EXPRESSION is outside this
+  generation path ...`, while the same closure using `Agg.SUM` produces no
+  `Agg` diagnostic. `scripts/self_check.py` and the fenced mirror in
+  `reference/self-check.md` were diffed programmatically and are byte-identical.
+- Builder port surface corrected: `data_product_spec.md:357` documented the
+  port method as `.model(model)` with no `expressions`, which is what made the
+  new example look like a `TypeError`. The real signature is
+  `.model(model, is_public=True, expressions=None)` (`_spec.py:3166-3173`).
+  The worked example now also puts `.promise()` at port level, per
+  `troubleshooting.md:102` (output-level promises are silently ineffective),
+  while keeping a model registered at output level as validation requires.
+
+## 2026-07-30 — nxd-generate-dp: transform_state is the only route; watermark fallback deleted (plugin v0.26.2)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.26.0 | current_pack | incremental-multi-model | PASS | 15/15 | 32 | 29 | 56499 | 3.84 | claude-opus-4-8 |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 22 | 20 | 8059 | 0.69 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 13 | 11 | 4364 | 0.50 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | FAIL | 5/16 | 17 | 15 | 7501 | 0.49 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 13 | 11 | 3810 | 0.38 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | FAIL | 5/16 | 23 | 21 | 9320 | 0.64 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 10 | 9 | 3868 | 0.38 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 25 | 23 | 8272 | 0.75 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | FAIL | 15/16 | 16 | 14 | 5934 | 0.58 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 14 | 12 | 5337 | 0.54 | sonnet |
+| before-v0.26.0 | current_pack | incremental-transform-state | PASS | 16/16 | 14 | 12 | 4708 | 0.52 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | PASS | 16/16 | 12 | 10 | 4177 | 0.46 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | FAIL | 5/16 | 41 | 39 | 13672 | 1.29 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | PASS | 16/16 | 17 | 15 | 6940 | 0.58 | sonnet |
+| after-v0.26.2 | current_pack | incremental-multi-model | FAIL | 14/15 | 33 | 30 | 21198 | 1.86 | claude-opus-4-8 |
+| after-v0.26.2 | current_pack | incremental-transform-state | FAIL | 14/16 | 15 | 13 | 5144 | 0.59 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | PASS | 16/16 | 13 | 11 | 4867 | 0.51 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | FAIL | 15/16 | 15 | 13 | 6030 | 0.58 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | PASS | 16/16 | 15 | 13 | 4812 | 0.59 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | FAIL | 6/16 | 23 | 21 | 8245 | 0.62 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | PASS | 16/16 | 12 | 10 | 4762 | 0.49 | sonnet |
+| after-v0.26.2 | current_pack | incremental-transform-state | FAIL | 5/16 | 22 | 20 | 8270 | 0.85 | sonnet |
+
+Notes: Before arm is origin/main at 81848fc (v0.26.0), which is NOT this PR's merge base -- the branch was later rebased onto 39b0216 (v0.26.1). That delta is 41 files, not the four an earlier version of this note listed. Skill-side it is semantic-layer / Agg.EXPRESSION material (nxd-generate-dp/SKILL.md, derivation-plan.md, nxd-spec-api.md, self-check.md, plus semantic_model_spec.md, compiler-and-routing.md and registry-authoring.md inside current_pack) with no bearing on incrementality. It ALSO changes the harness -- evals/run.py, evals/eval_backends.py, scripts/self_check.py (15 files, +3484 lines under evals/ and scripts/) -- so the arms were not run by identical harness code, which the earlier 'the arms remain comparable' sentence obscured. Most of that is gated on scripted turns (empty for both incremental scenarios), but one change is not: _tool_input_json() now hoists `command` to the front before the 600-char truncation that renders every trace the judge reads. It is unlikely to explain the after-only readback failures, since Edit inputs carry no `command` key and render byte-identically across arms while the cited rationales are all about Edit content -- but it is transcript-visible, it is exactly the machinery this note blames for those failures, and it is disclosed here rather than left to be discovered. 
+
+TWO EARLIER VERSIONS OF THIS ENTRY WERE WRONG AND ARE RETRACTED HERE. (1) The first baselined against fb0d472 -- this branch's own gated-fallback commit, not main -- and reported incremental-multi-model as FAIL 13/15 to PASS 15/15; against real main that scenario was ALREADY PASS 15/15, so the deletion never improved it. (2) The second reported the head arm's deciding cell as 2/4 after merging two report files without recounting; the correct figure at the time was 3/5. NOTE both that 3/5 and the 'after-deletion' arm it described belong to SUPERSEDED versions of this record (ledger commits 2afb9df and 659d5d2) -- neither appears in the record linked below, whose arms are before-v0.26.0 and after-v0.26.2 only. Cite those commits, not this record, to check the retracted figures. Both errors overstated a regression. 
+
+incremental-transform-state is bimodal on consults-the-skill-pack: runs that open the pack score 14-16/16, the rest 5-8/16 (they conclude from public docs that transform_state is k8s-only). THE CELL IS DEFINED BY THAT CHECK PASSING, NOT BY THE SCORE BAND -- keying on the check reproduces the cell sizes exactly (8 before, 7 after, 2 in the probe), and only that cell measures the doc. At N=8 before / N=7 after in that cell: before 7/8 at 16/16 (16 x7, 15 x1), after 5/7 (16 x5, 15, 14). That is a ONE-SAMPLE difference and NOT distinguishable at this N -- and note the baseline is NOT immaculate: its own 15/16 run disproves the earlier 'perfect 4/4' framing that made the gap look real. 
+
+Residual failures, counted INSIDE the consulting cell (the only cell this paragraph claims measures the doc): readback-avoids-module-shadowing-and-first-run-io 0 before / 2 after; first-run-empty-bag-takes-history 0 before / 1 after. Pooled over all 10 runs per arm the latter reads 2 before / 4 after, but 2 of 2 and 3 of 4 of those are the 5-6/16 non-consulting runs, which fail ~11 checks each because they never opened the pack -- so the pooled figure is non-consulting noise and an earlier version of this note reported it as a doubling in a check that did NOT regress in the measuring cell. readback is the only check that moved there. 
+
+CONFOUND PROBE (the review's suggested experiment, run 2026-07-30): a third arm at the TRUE merge base 39b0216 with the CURRENT checks.json copied in -- removing both the wrong-baseline and pre-rewrite-rubric confounds -- put 2 of 6 runs in the consulting cell (16, 15) and readback failed 1 of those 2. So readback CAN fail on a pre-change tree once judged under current rubric text, where the 81848fc baseline showed 0 of 8. That materially weakens the 0-before/2-after reading as evidence of a real effect and supports the confound explanation. It does NOT settle it: N=2 in the cell is far too thin to estimate a rate, and this arm cannot separate the baseline-commit confound from the rubric one since it removes both at once. Anyone re-testing should target N>=8 IN THE CELL (expect to run ~24 samples given the bimodality) at 39b0216 with current rubric. The probe's 6 runs are committed at records/2026-07-30-confound-probe-mergebase-39b0216-current-rubric.json, so this arm is checkable rather than asserted. 
+
+An earlier version of this note claimed BOTH appear in the baseline and inferred 'a property of the scenario's judgeability, not of this change' -- that is RETRACTED: it holds for first-run-empty-bag-takes-history, which does fail in the baseline, but readback-avoids-module-shadowing-and-first-run-io fails ZERO times before and twice after, so the generalisation was wrong and it pointed in this change's favour. Only 2 of the failing instances are genuinely missing-evidence judgements (readback on the 6th incremental-transform-state run of the after arm, 'the Edit's new content is never shown'; empty-bag on the 4th, 'truncated before the function body' -- numbered over that scenario's runs only, NOT over the table rows, which interleave one incremental-multi-model row); the rest are the judge recording that no state read-back appeared at all, and one readback instance explicitly notes the aliasing WAS visible. So 'all about Edit content' was too broad. Narration volume does not separate passing from failing runs either, so the mechanism is unexplained -- but for the readback check the after-only distribution is NOT evidence against a real effect, and nothing here rules one out. 
+
+preserves-transform-contract, the one check that genuinely regressed on the deletion arm (failed both 14/16 runs there -- see ledger commit 659d5d2 for that arm's rows), fails 1 of 10 before and 0 of 10 after here, i.e. the keep-both rewording holds. incremental-multi-model: PASS 15/15 on main, PASS 15/15 after the deletion, 14/15 on the head commit failing only closure-still-builds. An earlier version of this note called that failure 'environmental' and said it was 'not asserted as a doc regression' -- BOTH are RETRACTED. The committed rationale is a closure-design failure, not infrastructure: the agent demoted the non-append-safe lane aggregate to a consume-time semantic_view, left PHYSICAL_MODELS/DERIVED_MODELS unchanged so no summary table is landed or row-count-verified, and added an expedited_flag column to the now append-only shipments table with no backfill for already-landed rows. That is precisely what closure-still-builds exists to catch (this ledger reserves 'environmental' for infrastructure faults -- see the 2026-05 entry's UnknownIssuer proxy failure). A doc-side cause was live: at the time of this arm the gate neither sanctioned nor forbade escaping it by demoting an aggregate to a query-time view, and at N=1 the run cannot decide whether that silence caused the failure. The SAME commit that records this retraction (9f64227) closes that gap -- incremental-transforms.md now forbids the demotion route explicitly -- so the doc being merged is no longer silent on it. ARM VINTAGE, stated because it bounds every claim above: the after-v0.26.2 arm was run at 850e4e0, and EVERY commit on this branch after 850e4e0 that touches src/ or evals/public/ is unbenchmarked -- the exact number grows with every review round, so this note deliberately does not state one -- compute it with `git log --oneline 850e4e0..HEAD -- src/ evals/public/`. Earlier versions said three, then eighteen, then twenty; each went stale the round after it was written, which is the point. Everything those commits changed is unbenchmarked, including three rule changes rather than clarifications: the gate-escape prohibition (9f64227), the one-pipeline-object rule (32fdf36), and the first-run bullet's move from 'avoid flat access on a path that can execute on run one' to 'wrong at every model count and on every run' (c394af1). They are doc rules added in response to failures THIS arm recorded, which is the intended direction, but no run covers the tree being merged. 
+
+The agent column is now sourced per run from metrics.agent_model (benchmark_record.py previously read the report-level field and mislabelled these rows sonnet). incremental-multi-model ran on claude-opus-4-8 in every arm: run.py's effective_agent_model() returns the pinned POCKET_AGENT_MODEL for any pocket-path scenario on the Claude backend, and incremental-multi-model has fixtures/pocket.json, so it cannot have run on anything else. (Do NOT verify this from the after arm's scenario_agent_models -- that field carries only the incremental-transform-state entry, because each arm's top-level metadata came from ONE of the merged report files.) Same cause, one more caveat: every arm-level field (elapsed_s, agent_model) describes only the first merged file, NOT the concatenated results -- the after arm reads elapsed_s 110.2 against 11 results. The per-run rows are intact and reconcile against the table, so no figure here is affected, but recomputing from arm-level metadata would mislead. 
+
+ROUND-TRIP PROVENANCE (moved here out of the shipped doc, which should not carry cross-repo source paths): the kernel claim is pinned by transform_state_round_trips_across_two_builds_of_one_workflow in the nxd repo's components/desktop/supervisor/tests/acceptance.rs -- run 1 commits a counter, run 2 asserts prior_bag == {run_counter: 1}. Verified live on 2026-07-30: run1 prior_bag {} counter 1, run2 prior_bag {run_counter: 1} counter 2. The case is Python-gated, so it runs locally rather than in CI. 
+
+RUBRIC DRIFT, disclosed in full: three checks in incremental-transform-state/checks.json were reworded across this branch -- state-bag-addressed-via-for-model, verification-can-detect-a-missing-write, readback-avoids-module-shadowing-and-first-run-io -- plus uses-transform-state-kwarg, so the before arm ran against pre-rewrite text for all four. TWO of the four pass conditions tightened, not one: uses-transform-state-kwarg and verification-can-detect-a-missing-write both gained the SELECT max(<cursor>) read-back as a banned alternative. A FIFTH rewording is in a DIFFERENT file this paragraph previously omitted -- incremental-multi-model/checks.json's own uses-transform-state-kwarg, tightened the same way in 6bdb3b0 so the sibling scenario stops grading the rule more loosely. No previously-passing solution changes verdict, since no run in either arm reconstructed its cursor that way, and none of the four checks ever REQUIRED the banned shape. But the arms were not judged against byte-identical check text, and one condition is narrower on the after side.
+
+Record: [`records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json`](records/2026-07-30-nxd-generate-dp-transform-state-is-the-only-route-watermark-.json)
+
+## 2026-07-31 — nxd-generate-dp: round-two Pocket CSV runtime contract fixes (plugin v0.27.0)
+
+**SUPERSEDED — measures the PRE-REBASE implementation.** This work was rebased onto the spec-authoritative architecture (#139) and substantially reworked: the contract inventory moved from `CONTEXT.md` into `## expectations` / `## promises` sections of the dp-spec IR, the Phase C gate was rewritten against registered `closure.*` codes, and the infra-profile gate that this PR's review flagged as hard-failing every non-CSV profile was re-scoped. The numbers below were real when taken; they no longer describe the shipped code. Preserved as history — see the 2026-08-02 entry for the rebased branch, which explains why the protected scenario could not be re-run.
+
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline-main-current-rubric | current_pack | api-to-vector-data-product-build | PASS | 6/6 | — | 38 | 31098 | — | gpt-5.6-terra |
+| baseline-main-current-rubric | current_pack | generate-runnable-dp-from-intent | FAIL | 7/16 | — | 15 | 9757 | — | gpt-5.6-terra |
+| baseline-main-current-rubric | current_pack | policy-compliance-failure | PASS | 5/5 | — | 13 | 6020 | — | gpt-5.6-terra |
+| head-initial | current_pack | api-to-vector-data-product-build | FAIL | 4/6 | — | 20 | 18935 | — | gpt-5.6-terra |
+| head-initial | current_pack | generate-runnable-dp-from-intent | FAIL | 15/16 | — | 22 | 10549 | — | gpt-5.6-terra |
+| head-initial | current_pack | pocket-custom-contracts | FAIL | 4/5 | — | 18 | 11161 | — | gpt-5.6-terra |
+| head-initial | current_pack | policy-compliance-failure | PASS | 5/5 | — | 14 | 5620 | — | gpt-5.6-terra |
+| head-path-fixed | current_pack | generate-runnable-dp-from-intent | PASS | 16/16 | — | 18 | 10227 | — | gpt-5.6-terra |
+| head-path-fixed | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 16 | 14823 | — | gpt-5.6-terra |
+| head-api-rerun | current_pack | api-to-vector-data-product-build | ERROR | — | — | — | — | — | gpt-5.6-terra |
+
+Notes: Current-rubric baseline versus round-two review fixes. **The `pocket-custom-contracts` rows are retracted and superseded by the source-isolated 2026-08-02 entry below** because these runs did not prove answer-source isolation; do not cite their Pocket verdicts or efficiency metrics. Non-Pocket rows retain their original status. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.
+
+Record: [`records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json`](records/2026-07-31-nxd-generate-dp-round-two-pocket-csv-runtime-contract-fixes.json)
+
+## 2026-07-31 — spec-authoritative closures: CONTEXT.md retired for a byte-copied dp-spec.approved.md + lock + generated build-record.json (plugin v0.28.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.27.0 | current_pack | coauthor-executable-policy-readback | FAIL | 13/15 | 22 | 18 | 41478 | 2.20 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 8716 | 0.43 | sonnet |
+| before-v0.27.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| before-v0.27.0 | current_pack | coauthor-executable-policy-readback | FAIL | 13/15 | 28 | 24 | 46823 | 2.45 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 9/12 | 12 | 10 | 22438 | 0.93 | sonnet |
+| before-v0.27.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| before-v0.27.0 | current_pack | coauthor-executable-policy-readback | FAIL | 12/15 | 52 | 48 | 83001 | 5.16 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 9/12 | 13 | 11 | 21521 | 0.95 | sonnet |
+| before-v0.27.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| after-v0.28.0 | current_pack | coauthor-executable-policy-readback | FAIL | 14/15 | 33 | 29 | 69452 | 3.56 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 5323 | 0.36 | sonnet |
+| after-v0.28.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| after-v0.28.0 | current_pack | coauthor-executable-policy-readback | FAIL | 13/15 | 96 | 92 | 96275 | 9.39 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 12200 | 0.60 | sonnet |
+| after-v0.28.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+| after-v0.28.0 | current_pack | coauthor-executable-policy-readback | FAIL | 12/15 | 26 | 22 | 68390 | 3.14 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 4079 | 0.33 | sonnet |
+| after-v0.28.0 | current_pack | pocket-loop-export-handoff | ERROR | — | — | — | — | — | sonnet |
+
+Notes: ARMS. before = c03ca60 (this branch's merge base, v0.27.0 — the last commit before the design note and the implementation); after = the worktree-ir-spec working tree at v0.28.0. HARNESS IDENTICAL: evals/run.py, evals/eval_backends.py and evals/benchmark_record.py were copied from the branch into the before worktree, and so were all three scenario directories, so both arms ran the same runner and were judged against byte-identical prompt.md / checks.json / deterministic-checker text. N=3 per arm; agent sonnet, judge opus, default efforts. NO CELL FLIPPED VERDICT — every coauthor-* cell is FAIL in both arms, because each scenario's check list contains at least one check that fails on both sides. The movement is inside the check counts and the deterministic checker, and that is all this entry claims. SCOPE, STATED FIRST: pocket-loop-export-handoff produced NO signal in either arm. It ERRORs at 'pocket preflight failed' in all 6 runs because this container has no nxd-desktop-supervisor binary; the preflight is memoized per runner process, so the other two cells still ran. That is infrastructure, identical on both sides, and it means the one scenario that exercises the export handoff end to end — the surface this change most directly rewrites — is UNBENCHMARKED. Anyone re-running should do so on a host with the supervisor. WHAT MOVED. coauthor-supplied-rubric deterministic check: 1/3 passed before, 3/3 after. Both before-arm failures are the ORDERING rule ('pre-build:proposes verdict mapping: no evidence before any materialization', first write at trace lines 112 and 113), not a missing-file failure — the before arm wrote its plan out before the read-back reached the user. Judge checks on that scenario: policy-will-land-as-data 3/3 fail before, 0/3 after; readback-before-any-write 2/3 fail before, 0/3 after; proposes-verdict-mapping 1/3 before, 0/3 after. THE ONE REGRESSION: provenance-addressed 0/3 fail before, 2/3 fail AFTER — the after arm twice omitted the 'LISTED - URL NOT CAPTURED' provenance handling from the read-back. That is a real move in the wrong direction, in the same scenario the rest of this paragraph improves, and at N=3 nothing here distinguishes a rewrite that crowded it out from noise. coauthor-executable-policy-readback: 13/15, 13/15, 12/15 before vs 14/15, 13/15, 12/15 after; deterministic 0/3 in both arms; edit-lands-as-editable-data 2/3 fail before vs 1/3 after; card-precedes-materialization 1/3 in both; flags-unreachable-c5-bottom-band fails 3/3 in BOTH arms — pre-existing, and untouched by this change. CONFOUND I EXPECTED AND DID NOT FIND: the copied-in checkers assert the NEW closure contract (dp-spec.approved.md), so the before arm could have failed by construction. It did not separate the arms — 'missing dp-spec.approved.md' fired exactly once per arm (before-1, after-1), because these scenarios stop at the read-back and mostly never build a closure at all, so that file-presence check is reached rarely and symmetrically. The before arm's other deterministic failures are one ordering failure and one INFRASTRUCTURE failure (before-2: uv could not fetch duckdb from PyPI, 'invalid peer certificate: UnknownIssuer' — the same proxy fault this ledger's 2026-05 entry records; it cost that cell its deterministic verdict and nothing else). EFFICIENCY, and it is not free: coauthor-executable-policy-readback output tokens went 41478/46823/83001 (mean 57.1k) to 69452/96275/68390 (mean 78.0k), +37%, with cost 2.20/2.45/5.16 to 3.56/9.39/3.14. Turns went 22/28/52 to 33/96/26 — the 96-turn run is a single outlier and the medians (28 vs 33) are close, but the token rise holds across all three after runs, so the richer closure contract does cost more agent work on the scenario that actually builds one. coauthor-supplied-rubric went the other way: 8716/22438/21521 (mean 17.6k) to 5323/12200/4079 (mean 7.2k), turns 6/12/13 to 6/7/6. Per evals/README, single-run metric deltas under ~20% are noise; at N=3 with one outlier per arm, read the check counts as the finding and the token figures as a direction, not a measurement. SCOPE OF THE CODE CHANGE MEASURED HERE: the arms differ by the whole spec-authoritative change set, not by the validator crash fix alone — validate_dp_spec.py's split-frontmatter drift (a raw traceback on unparseable frontmatter) is fixed in the after arm but is not on any path these scenarios exercise, so no row here measures it; evals/tests/test_validator_code_coverage.py and test_build_record_s0_producer.py do.
+
+Record: [`records/2026-07-31-spec-authoritative-closures-context-md-retired-for-a-byte-co.json`](records/2026-07-31-spec-authoritative-closures-context-md-retired-for-a-byte-co.json)
+
+## 2026-08-01 — nxd-pocket-loop / nxd-generate-dp: explicit built-in Desktop subagent dispatch (plugin v0.29.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| desktop-synthetic-probe | disposable synthetic skill | desktop-subagent-probe:run-probe | OBSERVED | 1/1 | — | — | — | — | Claude Desktop built-in Explore |
+
+Notes: Observational evidence, not a `run.py` before/after benchmark. A disposable synthetic skill containing explicit built-in-subagent dispatch prose — and **no** custom/plugin agent definition — was invoked in Claude Desktop. Desktop visibly dispatched one built-in Explore subagent and returned the requested synthetic JSON. This establishes one instruction-following dispatch path only. It makes **no** correctness, latency, token, cost, review-quality, cancellation, deadline-persistence, or multi-question governed-query availability conclusion; the shipped source-contract tests cover the intended boundaries, and a full production closure Desktop E2E remains required.
+
+Record: [`records/2026-08-01-explicit-built-in-desktop-subagent-dispatch.json`](records/2026-08-01-explicit-built-in-desktop-subagent-dispatch.json)
+
+## 2026-07-31 — pocket-loop: non-capture sentinel routed to gate unknown (N=10/arm re-test of the reported provenance regression) (plugin v0.28.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 7/12 | 13 | 11 | 19346 | 0.93 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 11 | 9 | 15555 | 0.81 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 6991 | 0.40 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 10961 | 0.47 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 6965 | 0.40 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 5152 | 0.37 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 15 | 13 | 15844 | 0.90 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 11 | 9 | 27055 | 1.06 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 6830 | 0.40 | sonnet |
+| before-v0.27.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9105 | 0.44 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 7237 | 0.40 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9871 | 0.45 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 9234 | 0.50 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 8 | 6 | 8393 | 0.55 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 10 | 8 | 18628 | 0.90 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 9/12 | 9 | 7 | 8342 | 0.61 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 8619 | 0.43 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9897 | 0.46 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 13 | 11 | 15501 | 0.83 | sonnet |
+| after-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 8153 | 0.43 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 6208 | 0.39 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 5917 | 0.38 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 9543 | 0.44 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 7229 | 0.42 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 6615 | 0.41 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 10/12 | 10 | 8 | 17139 | 0.85 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | PASS | 12/12 | 6 | 4 | 8973 | 0.44 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 7 | 5 | 9109 | 0.47 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 7258 | 0.40 | sonnet |
+| fixed-v0.28.0 | current_pack | coauthor-supplied-rubric | FAIL | 11/12 | 6 | 4 | 9003 | 0.43 | sonnet |
+
+Notes: PURPOSE: settle the provenance-addressed regression the 2026-07-31 N=3 entry flagged as the top open item, then measure a fix. THREE ARMS, N=10 EACH, same scenario coauthor-supplied-rubric, agent sonnet / judge opus, identical harness: run.py, eval_backends.py, benchmark_record.py, skill-sets.yaml and the whole coauthor-supplied-rubric directory were copied from this branch into a detached c03ca60 worktree, verified byte-identical with diff -r, so the arms differ only in src/ skills. before-v0.27.0 = c03ca60. after-v0.28.0 = this branch before today's edit. fixed-v0.28.0 = after + the sentinel guidance. HEADLINE, AND IT IS NEGATIVE: THE REPORTED REGRESSION WAS AN ARTIFACT OF N=3. provenance-addressed fails 3/10 in the before arm, not the 0/3 the prior entry recorded; its true rate was always about a third and the original three samples happened to draw three passes. before 3/10 vs after 5/10 gives Fisher exact p=0.65 — no regression is demonstrable, and the prior entry's own caveat that N=3 could not separate signal from noise was correct. THE FIX AND WHAT IT IS WORTH: the failures are one repeated semantic error, not a formatting miss — the agent collapses evidence-not-captured into evidence-absent, routing the literal string LISTED - URL NOT CAPTURED to a hard G1 FAIL instead of UNKNOWN, and in one run chaining it to REJECT, overriding the user's own stated NEEDS_MORE_INFO cap. The scenario prompt states that cap explicitly, so those runs contradict a user instruction. Guidance was added in two places (reference/dp-spec.md gates section, SKILL.md Step 1b) telling the agent that a present non-empty sentinel encoding non-capture is an unknown, not a failing value. after 5/10 vs fixed 3/10, p=0.65: DIRECTIONALLY BETTER, NOT DEMONSTRATED. At an interim N=9 the fixed arm read 2/9 and looked stronger; the tenth run moved it to 3/10, which is exactly the instability this entry exists to warn about. Do not cite this fix as proven. WHY IT SHIPS ANYWAY: the validator already rejects unknown: FAIL via spec.gate.unknown_is_fail, so a spec cannot declare the wrong rule — but it cannot tell that LISTED - URL NOT CAPTURED means uncaptured, so a spec that misclassifies a sentinel validates clean and is still wrong. The gap is real and mechanically uncatchable whatever the eval says; the measurement only fails to prove the prose closes it. WHAT ELSE MOVED, unprompted by the fix: unknown-gate-addressed fails 4/10 before and 0/10 after — a genuine v0.28.0 improvement the N=3 entry missed entirely. Overall PASS count 2/10 before, 2/10 after, 4/10 fixed. Efficiency on this scenario went the right way: mean output tokens 12380 before, 10388 after, 8699 fixed; mean turns 8.6 / 7.8 / 6.5. STILL FAILING AND NOT ADDRESSED HERE: readback-before-any-write 4/10 before, 4/10 after, 2/10 fixed — a gate-ordering rule, invisible at N=3 (0/3), and its own investigation. SCOPE: this entry measures one scenario. pocket-loop-export-handoff remains UNBENCHMARKED — it still ERRORs at pocket preflight with no nxd-desktop-supervisor in this container, and stages s4-s8 remain unexecuted against a real supervisor.
+
+Record: [`records/2026-07-31-pocket-loop-non-capture-sentinel-routed-to-gate-unknown-n-10.json`](records/2026-07-31-pocket-loop-non-capture-sentinel-routed-to-gate-unknown-n-10.json)
+
+## 2026-08-02 — closure-contract eval retargets: runtime observations in build records (rubric alignment, plugin v0.29.0)
+
+**No before/after run table — rubric drift, not a measured skill change.**
+`worldbank-live`'s `context-discloses-as-of-fetch` now distinguishes stable
+live-source scope from fetch-specific runtime evidence:
+`dp-spec.approved.md` must say that the data is a live-source snapshot and that
+rebuilds can revise it, while the observed upstream `lastupdated` must appear
+in `build-record.json` under `evidence.source_state`. This prevents a timestamp
+from one fetch being frozen into the approved plan. The same CONTEXT.md
+retirement retargets `treasury-yield-curve`'s closure file-set check and the
+three `country-income-trajectory` disclosure checks
+(`year-subset-selection-disclosed`, `aggregate-exclusion-ruling-landed`, and
+`current-classification-scope-disclosed`) to the approved-spec / generated-
+record closure contract. Those vendored-source checks have no runtime
+`lastupdated` observation: their source or analysis scope remains plan content,
+while generated build outcomes remain in `build-record.json`. These changes
+narrow or relocate accepted closure shapes, so historical and future runs are
+not judged by byte-identical rubric text.
+
+No live evaluation was run. `worldbank-live`, `treasury-yield-curve`, and
+`country-income-trajectory` are `ci_skip` because they require a live desktop
+supervisor; World Bank additionally needs outbound access to
+`api.worldbank.org`. This environment has neither `EVAL_POCKET_SUPERVISOR_DIR`
+nor `EVAL_POCKET_PYTHON`, and `nxd-desktop-supervisor` is absent. The static
+regression test pins the prompt/checker boundary only. It establishes no
+PASS/FAIL, quality, latency, token, cost, or runtime-connector claim.
+
+## 2026-08-02 — pocket custom contracts rebased onto the spec-authoritative IR (plugin v0.30.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 7/12 | — | 34 | 19426 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 2/12 | — | 7 | 3509 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | coauthor-supplied-rubric | FAIL | 5/12 | — | 17 | 16093 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 2/12 | — | 20 | 15766 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 4/12 | — | 27 | 28095 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | coauthor-supplied-rubric | FAIL | 5/12 | — | 34 | 3496 | — | gpt-5.6-luna |
+
+Notes: **No difference is demonstrable, and no Pocket-contract claim is made here.** Scenario `coauthor-supplied-rubric`, N=3 per arm, agent AND judge on the codex backend, same harness and rubric in both arms. Arms differ only in `src/`: the before arm is a clean worktree at origin/main (446369f), the after arm is this branch. `build_agent_prompt` was verified to emit a BYTE-IDENTICAL prompt across the two arms for a non-isolated scenario, so the source-isolation harness this branch also carries does not confound the comparison.
+
+Judge checks: before 7/2/5 (mean 4.7/12), after 2/4/5 (mean 3.7/12). Two-sided exact permutation test on the difference of means: **p=0.80**. Every per-check difference is a single run out of three and none flips consistently, so the apparent 1-check drop is noise at this N, not a regression. The deterministic check is **1/3 in BOTH arms**, failing identically (`pre-build:names the incomplete scale: no evidence before any materialization`). Output tokens 13.0k vs 15.8k mean, which at this N and this variance (3.5k-28.1k within a single arm) says nothing.
+
+**What this run does NOT cover.** `pocket-custom-contracts` — the scenario that exercises the contract work this PR is about — is not measured here. **It has since been run: see the source-isolated entry below, which is the authoritative evidence for this change.** At the time of this run it failed closed without an operator-supplied default-deny wrapper, capability ID, 64-hex profile fingerprint and five protected roots. It errors with `source-isolation infrastructure invalid: missing source-isolation capability ID` rather than degrading to an unisolated run, which is the harness behaving correctly. The three v0.27.0 entries above measured the PRE-REBASE implementation of this work — a different Phase C gate, a CONTEXT.md-based inventory, and no dp-spec IR sections. **Do not read them as evidence for this branch.** The contract behaviour here is covered by 37 checker tests and a 460-test suite, not by an eval arm.
+
+Record: [`records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json`](records/2026-08-02-pocket-custom-contracts-rebased-onto-the-spec-authoritative-.json)
+
+## 2026-08-02 — executable Pocket custom contracts, source-isolated (pocket-custom-contracts) (plugin v0.30.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 17 | 13693 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 1 | 1102 | — | gpt-5.6-luna |
+| before-v0.29.0 | current_pack | pocket-custom-contracts | FAIL | 0/5 | — | 14 | 8956 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 26 | 12830 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 24 | 13254 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | PASS | 5/5 | — | 22 | 11490 | — | gpt-5.6-luna |
+| after-v0.30.0 | current_pack | pocket-custom-contracts | FAIL | 4/5 | — | 15 | 8031 | — | gpt-5.6-luna |
+
+Notes: **The scenario this PR exists for now runs, and it separates cleanly.** `pocket-custom-contracts`, source-isolated, agent AND judge on the codex backend (gpt-5.6-luna). Before arm = this branch's harness and scenario with `src/` at origin/main (446369f); after arm = this branch. main does not carry this scenario at all — it ships with this PR — so the before arm necessarily supplies the scenario and varies only the skills, which is the same framing the retracted v0.27.0 isolated entry used.
+
+Judge checks: before **0/5, 0/5, 0/5**; after **5/5, 5/5, 5/5, 4/5** (mean 4.75/5). The deterministic checker goes **0/3 to 4/4**. Fisher exact, two-sided, on both any-check-passed and the deterministic checker: **p=0.029**. Every one of the five checks improves; none regresses.
+
+The before-arm failures are exactly what this change adds, not incidental noise — `FAIL infra-profile.yaml lacks the desktop-local DuckDB, compute, and csv-source services; FAIL custom description missing; FAIL custom verifier must u[se ...]`. Without the skill guidance the agent does not produce wired executable contracts at all.
+
+**Isolation evidence.** All 7 default-deny probes reported `blocked` on every run, wrapper path and sha256 identical across arms, raw-stream audit `clean` on all reported runs. Enforcement is macOS `sandbox-exec`, so the denial is kernel-level rather than advisory. The probe requires the kernel's denial signature rather than a mere non-zero exit — a malformed Seatbelt policy fails WITHOUT enforcing, and reading that as "blocked" would attest isolation that never applied; it reports `sandbox-error` instead. These runs were re-verified 7/7 under that stricter check.
+
+**One after-run was DISCARDED and is not in the table.** Its audit returned `access_observed` for five markers. The isolation held — all 7 probes still blocked — but a `root` marker's needle IS the protected path, and a *denied* access still prints that path (`ls: /path: Operation not permitted`), so an attempt that the sandbox correctly refused is indistinguishable from one that succeeded. The harness fails the run rather than guess, which is the right call; it was replaced rather than reinterpreted. After-arm n=4, not 5, because two runs collided on one report filename — the surviving file is one of them, not a merge.
+
+Efficiency is not compared: the before arm never produces a working closure, so its token and tool counts measure failing early, not doing the work more cheaply.
+
+Record: [`records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json`](records/2026-08-02-executable-pocket-custom-contracts-source-isolated-pocket-cu.json)
+
+## 2026-08-02 — validate_dp_spec: duplicate-contract diagnostics field-addressed (plugin v0.30.1)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+Notes: **No eval arm, deliberately, and no behaviour claim is made from one.**
+This entry exists because `src/nxd-pocket-loop/scripts/validate_dp_spec.py` is
+shipped skill code and its OUTPUT changed — `spec.contract.duplicate_name` moves
+from `path: spec:expectations` to `spec:<section>[<name>].name`, its message no
+longer names a section the document may not contain, and a same-section
+collision emits one finding per distinct rendered path. The finding COUNT also
+moves, in the other direction from what a de-dup implies: the base emitted one
+diagnostic for all duplicate names combined (`found: [a, b]`), so two distinct
+duplicated names now produce two findings rather than one, and a cross-section
+collision two rather than one. A pocket-loop
+agent reads those fields, so the change is not invisible even though no closure
+it generates changes.
+
+It is not benchmarkable: no public scenario authors a spec with a duplicate
+contract name, so every arm would be byte-identical and the comparison would
+measure nothing. Manufacturing a scenario to produce a number for a diagnostic
+bugfix would make the ledger less honest, not more. The evidence is four unit
+tests in `evals/tests/test_validator_code_coverage.py` and
+`test_pocket_custom_contract_checker.py`, each **verified to fail against the
+previous implementation** rather than assumed to — including the secret-regex
+parity test, which parses `SECRET_LITERAL` out of `scripts/self_check.py` and
+compares compiled patterns, so the eval checker and Phase C cannot drift again.
+
+Recorded per AGENTS.md's "changes a skill's behavior" rule, read strictly. The
+v0.30.0 entry above makes the same argument for the contract work itself —
+coverage resting on the test suite rather than on an eval arm — and this is the
+narrower case of it.
+
+## 2026-08-03 — nxd-generate-dp: reach gate (Phase E) + connector-scoped secrets key (plugin v0.31.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| before-v0.30.1 | no_skills | authenticated-api-source-build | FAIL | 13/15 | 52 | 51 | 52888 | 3.74 | sonnet |
+| before-v0.30.1 | current_pack | authenticated-api-source-build | PASS | 15/15 | 89 | 86 | 75074 | 6.17 | sonnet |
+| before-v0.30.1 | no_review_control | authenticated-api-source-build | FAIL | 7/15 | 86 | 83 | 45579 | 4.69 | sonnet |
+| before-v0.30.1 | candidate_pack | authenticated-api-source-build | FAIL | 13/15 | 95 | 93 | 71571 | 7.86 | sonnet |
+| after-v0.31.0 | no_skills | authenticated-api-source-build | FAIL | 14/15 | 5 | 115 | 2580 | 6.64 | sonnet |
+| after-v0.31.0 | current_pack | authenticated-api-source-build | FAIL | 14/15 | 96 | 104 | 74654 | 7.72 | sonnet |
+| after-v0.31.0 | no_review_control | authenticated-api-source-build | FAIL | 14/15 | 81 | 79 | 63561 | 6.72 | sonnet |
+| after-v0.31.0 | candidate_pack | authenticated-api-source-build | PASS | 15/15 | 79 | 76 | 56522 | 5.22 | sonnet |
+
+Notes: **These arms do not support a quality claim, and none is made.** The
+deltas are single-run agent variance, not signal: `current_pack` goes 15/15 →
+14/15 (DOWN on the change) while `candidate_pack` goes 13/15 → 15/15 (up), and
+`no_review_control`'s 7/15 before-arm is one run that built a working
+rest_api_resources closure and landed it under `$HOME` instead of the graded
+workspace, so `closure:transform-exists` failed on the graded path. Each arm is n=1 and the arms fail on different
+checks in each run. Read the table as "no measured regression", not as evidence
+the change helps.
+
+**The after/`no_skills` efficiency columns are broken telemetry — do not read
+them.** 5 turns against 115 tool calls, and 2,580 output tokens in 34.7s, are
+mutually impossible; the capture failed, not the run. Scanning the column shows
+that arm going 52,888 → 2,580 tokens and 52 → 5 turns, a phantom 95% efficiency
+win that did not happen. Its 14/15 check score is real; its turn, tool-call and
+token figures are not.
+
+The specific bug the change fixes did NOT fire in either run: `KeyError:
+'csv_source'` appears in neither report. It fired in an earlier run of this
+scenario, which is how it was found — Step 5 of `nxd-generate-dp/SKILL.md` told
+every closure the connector config arrives in `secrets["csv_source"]` regardless
+of the connector it declares, so an api-source closure following the main body
+raised at transform time, after the credential had already been resolved.
+`reference/api-source.md` taught the right key all along; the SKILL body
+contradicted it, and the body is read first. With n=1 per arm and an agent free
+to consult either surface, no arm isolates it.
+
+The before arm runs THIS branch's scenario and harness with main's `src/`
+swapped in. A literal before/after is unavailable: `authenticated-api-source-build`
+does not exist on main — this PR adds it.
+
+**The swap covered `src/` only, and that is a disclosed confound.** The
+repo-root `scripts/self_check.py` stayed at branch state, so the before arm
+carried this PR's Phase E. The before `candidate_pack` transcript shows the
+agent finding that file, copying it into its closure and running it — printing
+`phase E ok`. A "before" arm therefore executed the after-state script. The bias
+runs toward the after state and so shrinks any delta rather than inflating one,
+which is why this is recorded rather than rerun; but "the skill pack is the only
+variable" would be false and is not claimed.
+
+**Phase E has no arm here.** Every closure in this scenario passes the gate, so
+nothing in this table speaks to it either way. Its evidence is
+`evals/tests/test_reach_gate_phase_e.py` (53 tests, each verified to fail
+against the pre-change script) and a live run in which the deny path exits 1
+carrying `reach.model_sdk_import` rather than a traceback — not this benchmark.
+
+**`candidate_pack` is "shipped pack plus skills under evaluation."** Its 15/15
+is a pack-composition difference and is not attributable to this change.
+
+**Runs of this scenario before 2026-08-03 are not a progression.** Most of that
+history measured defects in the scenario's own deterministic checker rather than
+agent behaviour: a column whitelist accepting `result_status` while dlt emits
+`result__status` (its `__` path separator); a `find_table` resolving by first
+substring match, so the closure's derived `check_monitor_resolution` was read as
+its `monitors` table; and a child-table guard reading a sibling derived model
+`checks_enriched` as evidence the nested payload was never flattened. Those are
+recorded in the PR description as harness faults and should not be read as skill
+signal.
+
+## 2026-08-03 — v0.32.0 — pack-wide: skill names standardized to imperative action phrases (NEX-830)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+**No before/after run table — this change has no behavioural arm, by construction.**
+Fifteen skill directories were renamed and every reference to them rewritten; not one
+word of skill *instruction* changed. The eval harness selects skills by path from
+`skill-sets.yaml`, and both arms would load the same seventeen skills carrying byte-identical
+bodies. A table here would compare a pack against itself and report the difference as
+scenario noise.
+
+The renames (`nxd-` + imperative verb + spelled-out object):
+
+| old | new |
+|---|---|
+| `nxd-adding-inputs` | `nxd-add-inputs` |
+| `nxd-adding-outputs` | `nxd-add-outputs` |
+| `nxd-adding-policy` | `nxd-add-policies` |
+| `nxd-adding-expectations-promises` | `nxd-add-expectations-and-promises` |
+| `nxd-complying-with-failing-policy` | `nxd-fix-policy-failures` |
+| `nxd-data-product-builder` | `nxd-build-data-product` |
+| `nxd-data-product-query` | `nxd-query-data-product` |
+| `nxd-debugging-data-products` | `nxd-debug-data-product` |
+| `nxd-eval-harness` | `nxd-run-evals` |
+| `nxd-generate-dp` | `nxd-generate-data-product` |
+| `nxd-mesh-analyzer` | `nxd-analyze-mesh` |
+| `nxd-policies` | `nxd-toggle-policies` |
+| `nxd-semantic-data-product` | `nxd-build-semantic-data-product` |
+| `nxd-setup` | `nxd-setup-cli` |
+| `nxd-dp-static-artifact` | `nxd-render-static-artifact` |
+
+`nxd-review-closure` already conformed. `nxd-pocket-loop` is deliberately untouched: it
+carries a product codename whose removal is a separate change, and folding it in here would
+mix a naming convention with a product decision.
+
+**The claim that needs evidence is not "the skills got better" but "nothing dangles."**
+A skill `name` is a storage key: it is the directory name, the frontmatter `name`, the token
+other skills dispatch on in prose, and the value eval configs select by. A rename that misses
+any one surface produces a skill that silently never loads. The evidence is therefore
+completeness, and it is mechanical:
+
+- `scripts/validate_skills.py` passes. Every `name:` equals its directory name — the check
+  that would fail first if a frontmatter edit had been missed.
+- `./build-skills.sh` packages all 17 `ok`, each under the 200-entry cap.
+- Version surfaces agree at 0.32.0 across `plugin.json`, `marketplace.json` and all 17
+  `SKILL.md`. Minor, not patch: renaming storage keys breaks trigger-matching for anyone on
+  an installed 0.31.0 pack.
+- `current_pack` in `skill-sets.yaml` lists all 17 directories, and every `skills[]` entry
+  across `evals/public/*/checks.json` resolves to a real directory — 0 dangling.
+- `python3 -m pytest evals/tests` — 540 passed. This is the load-bearing check for the one
+  failure mode a text substitution cannot cover: a skill name assembled at runtime rather
+  than written literally, which no grep would have found.
+- A grep for surviving old names outside `evals/benchmarks/` returns nothing.
+
+**Two substitution hazards were live and are recorded because they were nearly missed.**
+`nxd-setup` is a proper prefix of the eval scenario `nxd-setup-headless-auth`, and
+`nxd-policies` of the new `nxd-add-policies`; an unbounded replace would have rewritten the
+scenario id to `nxd-setup-cli-headless-auth` and corrupted a frozen record. The rewrite
+matched on a trailing name-character boundary and applied longest-name-first. Both are
+verified after the fact: the scenario id survives intact in `evals/README.md` and
+`benchmark_record.py`, and no `nxd-setup-cli-headless` string exists anywhere.
+
+**`nxd-policies` → `nxd-toggle-policies`, not `nxd-manage-policies`.** Pluralizing
+`nxd-adding-policy` to `nxd-add-policies` put the two names one weak verb apart, and these
+are exactly the pair a router must separate: one authors and activates a policy contract on
+a data product, the other drives the CLI's list/activate/deactivate. `toggle` names the
+second concretely enough that the description is not doing the disambiguation alone.
+
+**Two descriptions had to be shortened to stay under the 1024-char cap** — the longer names
+pushed `nxd-generate-data-product` to 1027 and `nxd-pocket-loop` to 1037. Both were trimmed
+by removing a repeated skill reference and a restatement, not by dropping trigger keywords;
+they now sit at 980 and 1014. Worth noting for whoever edits next: `nxd-query-data-product`
+is at 1022 of 1024, so any name appearing in it is effectively frozen.
+
+**`evals/benchmarks/ledger.md` and `records/` were excluded from the rewrite on purpose.**
+They record runs that happened against skills named `nxd-generate-dp` and `nxd-setup`.
+Rewriting them would assert those runs occurred under names that did not exist at the time,
+which costs more than the inconsistency is worth — the ledger's value is that its figures and
+labels mean what they say. Old names below this entry are correct history, not stale text.
+The follow-up `nxd-pocket-loop` change should hold the same line.
+
+**What this entry cannot tell you.** Skill *descriptions* drive model routing, and two were
+edited here. The trims were conservative, but no scenario in `evals/public/` isolates routing
+well enough to prove the edited descriptions still win their skill the same dispatches — the
+v0.16.0 entry above measured routing at n=4/n=5 and called it directional at best. If a
+routing regression is going to hide anywhere in this PR, it is in those two descriptions and
+not in the renames.
+
+## 2026-08-03 — auth dispatch on an unauthenticated API; non-UTF-8 verifier (plugin v0.32.1)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+Notes: **No eval arm, deliberately.** Both defects need an input no public
+scenario produces, and manufacturing one to yield a number would put a figure in
+this ledger that measures the fixture rather than the change.
+
+The first is shipped guidance, not code. `reference/api-source.md` contradicted
+itself: the canonical transform template ends the auth dispatch with `elif
+auth_type is not None:`, while a prose section fifty lines below instructed
+authors to end it with a bare `else: raise` and supplied a snippet to paste.
+`auth_type` is documented as present only when the API requires authentication,
+and the template reads it with `.get("auth_type")`, so an unauthenticated
+api-source closure has `auth_type is None` — which the `elif` lets through and a
+bare `else` turns into a transform-time raise naming a profile attribute that is
+legitimately absent. **An arm that reaches this case does exist**, and the
+earlier claim here that none did was wrong: `worldbank-live` is an api-source
+scenario whose own checks state the API "needs no authentication … carries
+`base_url` and no `auth_type`", so a closure written from the old bare-`else`
+guidance would have raised at transform time and failed its downstream checks.
+It cannot produce a number, because it is `ci_skip` — it needs a live desktop
+supervisor and outbound network to `api.worldbank.org`, which CI does not
+provision. `authenticated-api-source-build`, the api-source scenario that does
+run, authenticates and so never reaches the None case. The three dispatch
+surfaces now agree, and the deterministic check
+`secret:auth-dispatched-on-auth-type` was confirmed by execution to still pass a
+closure written from the corrected guidance and still fail one with the terminal
+branch removed.
+
+The second is shipped script behaviour, at **every** read site in the script — sixteen, not one.
+Phase E's contract-verifier scan caught `(OSError, SyntaxError)`, but
+`UnicodeDecodeError` subclasses `ValueError`, so a verifier that is valid Python
+under a non-UTF-8 coding declaration escaped the handler and killed the
+self-check with a bare traceback — no `reach.*` code, no `close_stage`, no record
+merge, which is the one failure mode the rest of the script is written to avoid.
+Guarding only Phase E moved the traceback rather than removing it: the C9
+escaping-reference scan rglobs `contracts/*` and read them unguarded, and Phase
+C's verifier read had the same hole — while Phase E's handler defers an
+undecodable verifier to "Phase C's finding to report", which Phase C could not do
+while dying on the same read. The fourth is the opening read of
+`models.py`/`spec.py`/`transform/main.py`, whose `except OSError` missed the same
+subclass: a latin-1 `models.py` exited **1** with a bare traceback — "found
+something", by that block's own definition — instead of the **2** it reserves for
+"could not read". The last three are the landed CSVs, and they are the reads
+most likely to meet a non-UTF-8 byte in practice: a latin-1 verifier is a rare
+hand-written artifact, but a CSV exported from Excel as cp1252 is routine, and
+`csv.DictReader` over one raised the same bare traceback partway through grading.
+Every read in the script now names its codec explicitly — the fix was reached
+site-by-site over four rounds, each closing the reads the last review had named
+while the next one waited, so the final pass swept the file rather than patching
+it and the test asserts the absence of ANY locale-codec read rather than a list
+of remembered sites: Phase C's guard initially left its read on the LOCALE codec while its
+own diagnostic asserted UTF-8, which breaks the deferral in both directions — a
+cp1252 host decodes bytes Phase E rejected and reports nothing, and an ASCII
+locale fails a valid UTF-8 file over an em dash in a comment. No scenario ships a
+latin-1 verifier.
+
+Evidence is two tests in `evals/tests/test_reach_gate_phase_e.py`, both
+**verified to fail against the previous implementation** rather than assumed to.
+`test_a_non_utf8_verifier_is_skipped_not_crashed` scopes its green to the Phase E
+SLICE — `_run_phase_e` runs an extracted harness, not `self_check.py`, and that
+distinction is precisely what hid the two remaining crashes, so it is stated here
+rather than left for a reader to infer. `test_every_read_under_contracts_survives_a_non_utf8_file`
+covers the other two sites statically over the shipped source: reaching C9 needs
+a complete valid closure, and a fixture that fails an earlier phase exits before
+C9 and passes vacuously — which the first version of that test did. The Phase E
+fixture is written as bytes because the existing `verifiers` harness writes text
+and cannot express the defect.
+
+Both findings came from review of the merged #141, not from a run.
+
+
+## 2026-08-03 — v0.33.0 — pack-wide: "pocket" codename removed; NEX-830 review follow-ups
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+**No before/after run table.** Same posture as the v0.32.0 entry above, and for the same
+reason: this is a rename plus review fixes, and no scenario distinguishes a pack from
+itself. Two of the five sections below are behavioural — §4 and §5, both harness breaks the
+sweep caused — and each is called out with the tests carrying its evidence rather than a
+manufactured arm. §2 records an accepted break rather than a fix.
+
+### 1. The `nxd-pocket-loop` rename and codename removal
+
+`nxd-pocket-loop` → **`nxd-run-job-loop`**, completing NEX-830, plus removal of the "Pocket"
+product codename from every shipped surface. Prose "Pocket" (the local runtime) became "the
+local desktop runtime" / "desktop"; `POCKET_HELPER_DIR` → `JOB_HELPER_DIR`;
+`…/nxd-pocket/<workflow>/` → `…/nxd-jobs/<workflow>/`. Scenario directories
+`pocket-loop-*` → `job-loop-*` and `pocket-custom-contracts` → `desktop-custom-contracts`;
+`examples/pocket-demo` → `examples/job-loop-demo`; `docs/architecture/nexty-pocket.md` →
+`nexty-desktop.md`. Also renamed: the `JOB VERIFY` runner-fact protocol string (emitter and
+both parsers, same file), and the `EVAL_DESKTOP_SUPERVISOR_DIR` / `EVAL_DESKTOP_PYTHON` /
+`NXD_JOB_CHECK_TMPDIR` environment variables.
+
+**Two path contracts were checked against the supervisor source before touching them**, in
+`projects/nxd`, because a skill that names a directory the supervisor does not create fails
+silently:
+
+- `…/nxd-pocket/<workflow>/` — the supervisor takes `workflow_id` as an opaque string and
+  receives the closure path as a caller argument; it never constructs this layout. **Owned
+  by this repo, safe to rename.**
+- `.pocket/state/` — appears nowhere in supervisor source, whose documented invocation is
+  `nxd-desktop-supervisor --data-dir ~/.nxd/data`. The literal in `SKILL.md` was a stale
+  doc string. It now refers to the supervisor's `--data-dir` generically rather than naming
+  a path that may be wrong. Note that a frozen 2026-07-17 record does contain
+  `"state_dirs": [".pocket/state"]`, so the literal was accurate for that run's
+  configuration — which is exactly why the doc should not hardcode it.
+
+`POCKET_HELPER_DIR` was verified absent from supervisor source before renaming: it is this
+repo's own handoff variable, not a cross-process contract.
+
+### 2. Customer extension paths — break accepted, no compatibility shim
+
+The 0.32.0 rename broke `~/.nxd/skills/<skill-name>/` and `./.nxd/skills/<skill-name>/` for
+`nxd-analyze-mesh` and `nxd-build-data-product`, and the `…/nxd-jobs/` rename in §1 does the
+same to workflow directories holding a hand-edited `dp-spec.md`. These are **customer-owned
+paths outside the pack** — `nxd-analyze-mesh/SKILL.md` states they exist "so they survive
+skill updates" — so no in-repo rewriting reaches them, and the failure is silent: discovery
+falls through to the working-tree glob or the "no profile found" branch and asks for a path
+the user already supplied.
+
+An earlier revision of this branch added legacy-path fallbacks to all three sites. **They
+were removed on the product owner's call: the pack has no installed base to be compatible
+with.** Pre-1.0, with the desktop path young, there is no user carrying a
+`~/.nxd/skills/nxd-mesh-analyzer/` directory forward, so the fallbacks were prose describing
+a migration nobody needs — paid for out of a 500-line `SKILL.md` budget, and load-bearing
+only if the premise were wrong.
+
+Recording it here because the premise, not the code, is what a future reader needs to
+re-check. If the pack ever ships to an installed base and is renamed again, this break is
+the thing to handle deliberately rather than rediscover: the reviewer on #147 rated it high
+severity precisely because nothing surfaces it at runtime.
+
+### 3. Scratch identifiers renamed, correcting a v0.32.0 ledger claim
+
+The v0.32.0 entry asserted "a grep for surviving old names outside `evals/benchmarks/`
+returns nothing." That was **false** — eight occurrences remained in venv and scratch-dir
+names (`.nxd-mesh-analyzer-venv`, `$HOME/.nxd-data-product-query-scripts`, and siblings).
+Each was self-consistent, so nothing broke, but the claim was wrong and the entry's whole
+argument is completeness. They are renamed here, which makes the original claim true rather
+than narrowing it. The prior entry stands as written; this is the correction of record.
+
+### 4. `scripts/self_check.py` regenerated from its fence (behavioural)
+
+`test_self_check_sync.py` asserts the shipped script matches the `# self_check.py` fence in
+`nxd-generate-data-product/reference/self-check.md` byte for byte — the fence is what the
+agent actually runs at session time. The codename sweep hit the two copies unevenly and the
+test failed. The script was regenerated from the fence, which is the authoritative side.
+**This is the change most worth a reviewer's attention**: it is the one place where a purely
+textual rename altered a file the agent executes, and it was caught by a test rather than by
+inspection.
+
+### 5. Two silent harness breaks the sweep caused, caught in review
+
+Both were the same failure shape as §4 and neither raised anything:
+
+- **`fixtures/pocket.json` was never renamed.** The sweep rewrote the marker *string*
+  in `run.py` to `desktop.json`, but a filename on disk has no text to rewrite, so all
+  six scenarios kept shipping `pocket.json`. `scenario_needs_desktop()` returned `None`
+  everywhere: no supervisor provisioned, `extra_dirs` wrongly regaining `EXAMPLES_DIR`,
+  the transcript cache key no longer varying with the supervisor build, and the
+  Claude-model pin for desktop cells silently off. The scenarios are `ci_skip`'d, so
+  the next local desktop run would have graded cells that never had a supervisor.
+- **`EVAL_JOB_PYTHON` vs `EVAL_DESKTOP_PYTHON`.** Substitution order: the broad
+  `POCKET_`→`JOB_` pass ran before the targeted `EVAL_POCKET_PYTHON`→`EVAL_DESKTOP_PYTHON`
+  one, so `run.py` read a name no doc mentions while every doc and the
+  `treasury-yield-curve` checker used the other. Settled on `EVAL_DESKTOP_PYTHON`, which
+  matches its sibling `EVAL_DESKTOP_SUPERVISOR_DIR`.
+
+`class desktopServe` (lowercased by the same blanket substitution) is now `DesktopServe`.
+
+**Two of those three fixes were claimed here before they existed, and the second review
+caught it.** The `EVAL_DESKTOP_PYTHON` rename and the `DesktopServe` capitalization were
+edited, then silently reverted by a `git checkout evals/run.py` used to undo a deliberate
+test mutation during negative-control verification — the file carried both the mutation and
+two real uncommitted fixes, and the restore took all three. Only the six `git mv`'d fixture
+files survived into the commit. So an earlier revision of this entry asserted a completed
+fix for the exact break it was documenting, in the entry whose §3 exists to correct an
+identical false completeness claim in v0.32.0.
+
+Recorded rather than quietly amended, because it is the same failure §3 describes and the
+second one in three entries: **a ledger claim is only worth what re-verifying it after the
+commit costs.** Both fixes are now in the tree and pinned by tests below.
+
+### 6. Third-review cleanups: a prefix that names nothing, and a diagnostic string
+
+`desktop-loop` appeared in eight docs and comments naming a scenario prefix that does not
+exist — the scenarios are `job-loop-*`. Harmless to the runner, which never reads those
+strings, but it points a reader following `GETTING-STARTED.md` at a tier that cannot be
+selected. Corrected to `job-loop`.
+
+Sentence-initial lowercase `desktop` in four agent-facing and user-facing titles (scenario
+`prompt.md` headings, the demo RUNBOOK) — the prose form of the `desktopServe` defect §5
+records, which the new class-name test cannot reach.
+
+**Two of those title fixes broke tests, which is the useful part.** `Desktop custom verifier
+must be synchronous` and `Desktop source-aligned inputs currently require` are *diagnostic
+strings* asserted verbatim by `test_desktop_custom_contract_checker.py` and emitted from
+four places: `self-check.md`'s fence, the `scripts/self_check.py` regenerated from it, and
+the scenario's own `check_custom_contracts.py`. Capitalizing the fence alone desynced them.
+All four now agree. Unlike every other item in §5 and §6, this contract *did* have a test,
+and it failed immediately — the contrast with the filename and env-var contracts, which had
+none and stayed broken across review rounds, is the entry's whole argument in miniature.
+
+### 7. A fourth-review sweep of `incremental-transform-state`, and an invented CLI verb
+
+The earlier rounds did not reach this scenario, which is **not** `ci_skip`'d — its
+judge-visible strings are graded on every PR run, so `desktop/desktop` (a degenerate phrase
+from collapsing `desktop/Pocket`) and lowercase `desktop` in the scenario name and two
+checks were more than cosmetic. Rewritten to `the desktop runtime` / `the local DuckDB
+storage driver`. Two `build_data.py` docstrings reading `desktop Loop CSV fixture` became
+`job-loop CSV fixture`.
+
+**The interesting one is `fixtures/nxd-run-history.txt`.** The sweep turned a simulated CLI
+transcript reading `$ nxd pocket runs storefront-events` into `$ nxd desktop runs …` — and
+checking the supervisor repo shows **neither is real**: no `nxd <x> runs` subcommand exists,
+and `runs` is a SQLite table in `state.rs`, not a CLI verb. So the original fixture already
+showed an invented command, and the rename swapped one fiction for another while making it
+look freshly authored.
+
+Replaced with a caption — `# Run history for workflow "…" (supervisor run records)` — that
+describes the data without claiming an invocation. No checker parses that line; `prompt.md`
+introduces the file as "the row counts from the two runs so far," which the caption matches.
+
+This is §1's discipline failing on a surface §1 did not enumerate. That section verified the
+two *path* contracts against supervisor source before renaming them; a command name in a
+fixture is the same kind of external contract and got no such check. Fictional example
+commands in fixtures are worth an audit of their own — this PR only fixes the one it touched.
+
+### 8. The two-prefix rule, stated rather than churned
+
+The sweep landed `JOB_` on `run.py`'s module constants and `desktop` on everything they
+touch, which reads as an unfinished rename — sharpest at `NXD_JOB_CHECK_TMPDIR` pointing
+at `.desktop-check-tmp`. There *is* a rule, it was just never written down: **`JOB_` names
+the loop** (the scenario shape this harness drives, matching `nxd-run-job-loop` and the
+`job-loop-*` scenarios), **`desktop` names the runtime being driven** (the supervisor, its
+binaries, env vars and opt-in marker — none of which this repo owns). Under it that tmpdir
+line is correct: the loop's checker writes into the runtime's scratch dir.
+
+Stated as a comment at the constants rather than renaming them. Renaming would churn
+surfaces that are already merged and reviewed to buy symmetry, and the prefixes are
+load-bearing in opposite directions — `EVAL_DESKTOP_*` is an operator-facing contract §5
+settled deliberately, while `JOB_*` names this repo's own shape. Neither new test covers
+prefix choice, and neither should: the failure it guards against is a *reader* mis-inferring
+the pattern, which a comment fixes and an assertion cannot.
+
+Also in this round: sentence-initial lowercase `desktop` in eight `run.py` strings that
+reach benchmark reports and the judge (two beyond those reported), and `Nexty desktop` —
+a proper-noun frame with a common noun inside it, left over from `Nexty Pocket`. The frame
+is dropped rather than capitalized, matching how the rest of the sweep says "the local
+desktop path" and how the supervisor repo itself writes "NXD desktop".
+
+One test docstring was corrected rather than its code: `_names_read_by_runner()` claimed to
+return names `run.py` "passes to os.environ" when it regexes the whole file. The superset is
+deliberate and safe — over-requiring documentation costs a stale line, under-requiring costs
+a silent misconfiguration — but the docstring hid that a concatenated name is invisible to
+it, which is exactly what the next person needs to know.
+
+**The lesson is mechanical, not incidental.** A rename sweep is text-substitution over
+file *contents*; every contract whose other half is a *filename*, a directory name, an
+environment variable read by a human following setup docs, or a path on a user's disk is
+invisible to it. That is the same class as §2's customer extension paths — four instances
+in one PR — and the reason the new tests assert pairings rather than spellings.
+
+`evals/tests/test_runner_opt_in_markers_resolve.py` (9 tests) pins opt-in markers from
+both sides: every shipped marker file resolves, every marker withheld from the agent has
+a resolver, and no scenario shipping runtime-only fixtures resolves nothing. Each was
+verified to fail against the broken state — the code-side rename and a partial data-side
+rename produce different failures, which is the point: a partial rename leaves the suite
+resolving the runtime while one scenario silently grades without it.
+
+`evals/tests/test_env_var_names_match_docs.py` (4 tests) closes the half that stayed
+broken, which the marker tests did not cover: every `EVAL_*` name `run.py` reads must
+appear in the eval docs, the desktop pair must agree across runner, READMEs, `ci_skip`
+messages, checker and architecture doc, and no `class` in `run.py` may start lowercase.
+All four were verified to fail against the state this PR actually shipped — that is, they
+would have caught the omission the reviewer found rather than restating it.
+
+**Evidence:**
+- `scripts/validate_skills.py` passes; every `name:` equals its directory name.
+- `./build-skills.sh` packages all 17 `ok`, each under the 200-entry cap.
+- `python3 -m pytest evals/tests` — **555 passed** (rebased onto v0.32.1, plus the 9 marker
+  tests and 4 env-var/naming tests).
+- Zero occurrences of "pocket" in any shipped surface — `src/`, `scripts/`, `docs/`,
+  `examples/`, `README.md`, the manifests and `evals/run.py`. Two remain **by design**,
+  both outside those surfaces: `test_runner_opt_in_markers_resolve.py` and
+  `test_env_var_names_match_docs.py` name the old spellings in their docstrings in order
+  to forbid them, and the latter asserts on the stale string directly. Stating the bound
+  rather than "zero occurrences" because the unqualified version was false when written —
+  the third time in this entry's lineage that a completeness claim outran its check (§3,
+  §5, here).
+- Version surfaces agree at 0.33.0 across `plugin.json`, `marketplace.json` and all 17
+  `SKILL.md`. Minor again: `nxd-pocket-loop` was a storage key, and `JOB_HELPER_DIR` /
+  `…/nxd-jobs/` change a handoff variable and an on-disk layout.
+
+**What this entry cannot tell you.** The §2 break is accepted on a premise this ledger
+cannot verify — that no installed base exists. Nothing in the repo proves that either way;
+it is a product fact, and the entry records whose call it was rather than pretending to
+evidence. If the premise holds, the renames are clean. If it does not, the symptom is a user
+whose infra profile or `dp-spec.md` stops being found after upgrade, with no error to point
+at the cause.
+
+## 2026-08-03 — self-check verifier I/O diagnostics and locale-independent reads/writes (plugin v0.33.0)
+
+| run | skill-set | scenario | verdict | checks | turns | tool_calls | out_tokens | cost_usd | agent |
+|---|---|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — | — | — |
+
+Notes: **No eval arm, deliberately.** No public scenario creates an unreadable
+or non-UTF-8 contract verifier, changes the host locale codec, or observes the
+diagnostic text for a failed `build-record.json` write. Manufacturing a scenario
+to produce a number would measure a fixture rather than this narrow self-check
+behavior. Evidence is `evals/tests/test_reach_gate_phase_e.py` (the generic
+read/write codec sweep, the Phase C diagnostic assertion, the
+`merge_record` write-failure guard, atomic replacement, its JSON diagnostic
+signal, and propagation into the JSON verdict/process exit code) plus
+`evals/tests/test_self_check_sync.py` (the shipped script and reference fence
+remain byte-identical). `test_merge_record_failures_reach_json_verdict` drives
+the shipped reporting/merge surface in a subprocess and checks both read and
+write failures: the diagnostic reaches JSON, the verdict and exit code fail,
+the previous record bytes survive a failed replacement, and no temporary file
+remains. The review-driven assertions were verified to fail against the
+pre-PR implementation at `0e93e3e`: the generic sweep finds its unpinned
+`merge_record` `write_text`, the Phase C assertion finds the decode-only
+diagnostic, and the behavioral merge test finds no diagnostic or failed
+verdict. The final write path preserves the previous record on failure rather
+than admitting a partial write, and a merge failure cannot leave the JSON
+report or process exit green.
+The writer intentionally matches `dp_diagnostics.py` with
+`ensure_ascii=False`, so records remain readable UTF-8 and the explicit codec
+pin is load-bearing; all in-repo record readers already pin UTF-8.
+`python3 scripts/validate_skills.py --root .` and the targeted tests are the
+executable gates for this change.

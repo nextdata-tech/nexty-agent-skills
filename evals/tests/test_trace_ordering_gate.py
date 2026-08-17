@@ -42,21 +42,25 @@ def _load_run_module():
 
 # The shape actually observed: technical questions, defaults chosen by the
 # agent, then straight into scaffolding. No policy read-back anywhere.
+# The tool lines use the `[tool_use:<Name>] {json}` form the backends really
+# emit. An earlier `[tool] Write(...)` spelling matched nothing a run produces —
+# it passed only because the checker's markers were wrong in the same way, so
+# two defects cancelled out and this gate was never actually exercised.
 BUILD_FIRST = """\
 [assistant] Got the data — 10 candidates. Before I build, three decisions shape
 the whole thing: deterministic transform vs manual, repo browsing, extra output.
-[tool] Read(/tmp/src/applicants.csv)
+[tool_use:Read] {"file_path": "/tmp/src/applicants.csv"}
 [assistant] Going with the recommended defaults for the other two.
-[tool] Skill(nxd-generate-dp)
+[tool_use:Skill] {"name": "nxd-generate-data-product"}
 [assistant] Templates in hand. Let me set up the closure directory, copy the
 source CSV in, and capture how dlt normalizes the headers.
-[tool] Bash(mkdir -p ws/data/applicants)
-[tool] Write(ws/models.py)
+[tool_use:Bash] {"command": "mkdir -p ws/data/applicants", "description": "scaffold"}
+[tool_use:Write] {"file_path": "ws/models.py", "content": "..."}
 """
 
 # The same run done right: read the source, then propose, then wait.
 READBACK_FIRST = """\
-[tool] Read(/tmp/src/applicants.csv)
+[tool_use:Read] {"file_path": "/tmp/src/applicants.csv"}
 [assistant] Before I create anything, here is the policy I propose to encode.
 Your rubric defines only the 5 and the 1 on all four criteria — 2, 3 and 4 are
 undefined, and they drive most of the sub-scores. Proposed anchors: C4 4 = 7-9
@@ -113,9 +117,11 @@ def test_read_only_inspection_is_not_a_write(tmp_path):
     The read-back has to describe that data, so it cannot come first.
     """
     trace = (
-        "[tool] Read(/tmp/src/applicants.csv)\n"
-        "[tool] Bash(head -3 /tmp/src/applicants.csv)\n"
-        "[tool] Bash(wc -l /tmp/src/applicants.csv)\n"
+        '[tool_use:Read] {"file_path": "/tmp/src/applicants.csv"}\n'
+        '[tool_use:Bash] {"command": "head -3 /tmp/src/applicants.csv",'
+        ' "description": "peek at the header"}\n'
+        '[tool_use:Bash] {"command": "wc -l /tmp/src/applicants.csv",'
+        ' "description": "count the rows"}\n'
     ) + READBACK_FIRST
     proc = _run_checker(tmp_path, trace)
     assert proc.returncode == 0, proc.stdout
@@ -126,25 +132,25 @@ def test_routing_check_fails_when_generator_is_reached_first(tmp_path):
     """Skill SELECTION is graded, not just what happens inside a skill.
 
     The observed failure was a routing decision: both skills attached, only
-    nxd-generate-dp loaded, because "I want a data product" matched the
+    nxd-generate-data-product loaded, because "I want a data product" matched the
     generator's trigger. That choice happens before any skill body runs, so no
     rule inside a skill can compensate for it.
     """
     trace = (
-        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-generate-dp", '
+        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-generate-data-product", '
         '"args": "Build a local desktop data product that screens..."}\n'
-        "[tool_result] Launching skill: nxd-eval-pack:nxd-generate-dp\n"
+        "[tool_result] Launching skill: nxd-eval-pack:nxd-generate-data-product\n"
     )
     proc = _run_checker(tmp_path, trace)
     assert proc.returncode != 0, proc.stdout
     assert "FAIL routing:orchestrator-first" in proc.stdout
-    assert "nxd-generate-dp" in proc.stdout
+    assert "nxd-generate-data-product" in proc.stdout
 
 
 def test_routing_check_passes_when_orchestrator_is_reached_first(tmp_path):
     trace = (
-        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-pocket-loop"}\n'
-        "[tool_result] Launching skill: nxd-eval-pack:nxd-pocket-loop\n"
+        '[tool_use:Skill] {"skill": "nxd-eval-pack:nxd-run-job-loop"}\n'
+        "[tool_result] Launching skill: nxd-eval-pack:nxd-run-job-loop\n"
     ) + READBACK_FIRST
     proc = _run_checker(tmp_path, trace)
     assert proc.returncode == 0, proc.stdout

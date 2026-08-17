@@ -1,7 +1,7 @@
 {
   "name": "Toggle a Policy Off and Back On via the Public CLI (stale-flag trap)",
   "skills": [
-    "nxd-policies"
+    "nxd-toggle-policies"
   ],
   "workspace_files": [
     "policy-toggle-runbook.md",

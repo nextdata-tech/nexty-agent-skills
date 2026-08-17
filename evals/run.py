@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import hashlib
 import json
 import os
@@ -50,8 +51,12 @@ from pathlib import Path
 from eval_backends import (
     AGENT_BACKENDS,
     JUDGE_BACKENDS,
+    BackendDependencyError,
+    TURN_BOUNDARY_SENTINEL as AWAITING_INPUT_MARKER,
+    FollowupTurn,
     get_agent_backend,
     get_judge_backend,
+    parse_followup_turns,
 )
 
 
@@ -132,14 +137,21 @@ DEFAULT_JUDGE_TIMEOUT_S = 300
 # provider-specific concept: Codex gates the agent through a sandbox policy
 # instead of a per-tool allowlist.
 #
-# Pocket's proven smoke invocation is deliberately narrower than the generic
+# desktop's proven smoke invocation is deliberately narrower than the generic
 # eval harness: no web/docs escape hatch and no helper tools beyond the local
 # file + shell surface. Skill remains essential: without it the installed
-# plugin bodies never activate, so this would not measure the Pocket skills.
+# plugin bodies never activate, so this would not measure the local desktop skills.
 # It stays here because it is a *scenario* constraint, not a provider default;
 # it is applied only on the Claude backend (see run_one), the only provider that
 # has a per-tool allowlist to narrow.
-POCKET_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
+# Naming rule for the two prefixes this file mixes, so a future sweep has one to
+# follow: JOB_ names the *loop* — the scenario shape this harness drives, matching
+# the nxd-run-job-loop skill and the job-loop-* scenarios. DESKTOP_/desktop names
+# the *runtime* being driven — the supervisor, its binaries, its env vars and its
+# opt-in marker, none of which this repo owns. NXD_JOB_CHECK_TMPDIR pointing at
+# .desktop-check-tmp is therefore correct, not a straggler: the loop's checker
+# writes into the runtime's scratch dir.
+JOB_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 
 # Semantic-MCP scenarios. A scenario opts in by shipping fixtures/mcp.json:
 #   {"tools": ["list_models","describe_model","run_semantic_query"],
@@ -148,7 +160,7 @@ POCKET_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,Skill"
 # MCP server (via uv / EVAL_MCP_PYTHON, so its heavy deps — the real
 # nxd.experimental.semantic compiler + Snowflake connector — stay out of the
 # stdlib-only runner) and puts a fake `nxd` on the agent's PATH so the
-# nxd-data-product-query skill's shipped HTTP toolchain (`nxd mcp health` +
+# nxd-query-data-product skill's shipped HTTP toolchain (`nxd mcp health` +
 # Streamable-HTTP) discovers + drives the genuine tools, exactly as in
 # production. Without this, the agent can only Read the catalog fixture and
 # *narrate* tool output (fabricating SQL + rows) — which the xhigh judge
@@ -165,10 +177,10 @@ MCP_SERVER_SIDE_FIXTURES = {
     "mcp.json",           # runner opt-in marker
     "golden_pairs.json",  # expected verdicts — that's the rubric, never show it
 }
-POCKET_RUNNER_SIDE_FIXTURES = {
+JOB_RUNNER_SIDE_FIXTURES = {
     # These fixtures are trusted runner inputs. The agent gets data/ and the
     # checker, but never the known-good preflight closure or opt-in marker.
-    "pocket.json",
+    "desktop.json",
     "reference-closure",
     "build_data.py",     # contains fixture discriminator fingerprints
 }
@@ -195,36 +207,122 @@ STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES = {
     # the agent at them as reference transport shapes.)
     "check_static_artifact.py",
 }
+EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES = {
+    # The checker hardcodes EDITED_ADVANCE_THRESHOLD = "4.25" — the value the
+    # SCRIPTED TURN 2 introduces. Staging it hands the agent the user's
+    # correction before the user makes it, so an agent that reads its own
+    # workspace could pre-empt the edit and the round-trip half of the rubric
+    # would measure nothing. It also names the card gates, which would turn
+    # "propose an executable policy" into "satisfy this file".
+    "check_executable_policy.py",
+}
+
+# A desktop custom-contract checker is unstaged evaluator input, not a prompt
+# input: staging it lets the agent optimize to the checker instead of authoring
+# the closure. Being unstaged is not inherently unreadable from the source
+# checkout; the protected scenario's configured source-isolation wrapper must
+# independently block that path. This is intentionally scenario-local; another
+# scenario may use the same filename as an ordinary fixture and must keep it.
+SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
+    "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
+}
+
+_SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")
+_SOURCE_ISOLATION_MARKER_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+
+
+@dataclass(frozen=True)
+class SourceIsolationProbe:
+    """One wrapper-enforced protected-source probe, without a resolved path."""
+
+    probe_id: str
+    target: str
+    fixture: str | None
+    root: str | None
+    command: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SourceIsolation:
+    """Operator-attested source-isolation evidence for one protected cell."""
+
+    capability_id: str
+    profile_fingerprint: str
+    wrapper_path: str
+    wrapper_sha256: str
+    markers: tuple[tuple[str, str], ...]
+    probes: tuple[SourceIsolationProbe, ...]
+    roots: tuple[tuple[str, str], ...]
+
+    def identity(self) -> dict[str, object]:
+        return {
+            "capability_id": self.capability_id,
+            "profile_fingerprint": self.profile_fingerprint,
+            "wrapper_path": self.wrapper_path,
+            "wrapper_sha256": self.wrapper_sha256,
+            "markers": [
+                {"id": marker_id, "needle_sha256": hashlib.sha256(needle.encode()).hexdigest()}
+                for marker_id, needle in self.markers
+            ],
+            "probes": [
+                {
+                    "id": probe.probe_id,
+                    "target": probe.target,
+                    "fixture": probe.fixture,
+                    "root": probe.root,
+                    "command_sha256": hashlib.sha256("\\0".join(probe.command).encode()).hexdigest(),
+                }
+                for probe in self.probes
+            ],
+            "root_sha256": {
+                name: hashlib.sha256(value.encode()).hexdigest()
+                for name, value in self.roots
+            },
+        }
+
+# Scenario-specific: the stub module's filename is excluded per-scenario (added
+# to this set below, keyed by scenario) because its payload/auth/pagination
+# logic is the answer key the agent must instead discover by calling the live
+# endpoint — exactly why MCP_SERVER_SIDE_FIXTURES hides catalog.json/semantic.json.
+HTTP_STUB_RUNNER_SIDE_FIXTURES = {
+    "http_stub.json",  # runner opt-in marker, parallel to mcp.json/desktop.json
+    "stub_beacon_api.py",  # authenticated-api-source-build's stub module/answer key
+    "check_authenticated_api_source.py",  # its deterministic checker: states
+    # the exact expected row counts (12 monitors, 37 checks) and every trap by
+    # name, which would turn "discover the payload's shape" into "satisfy this
+    # file" — same reasoning as DERIVATION_RUNNER_SIDE_FIXTURES excluding
+    # check_derived_closure.py.
+}
 # MCP tool calls reach Snowflake (lower-env). Each call is slower than a local
 # file read, so MCP scenarios get a longer agent timeout.
 MCP_AGENT_TIMEOUT_S = 1800
 # A genuine generate -> serve -> refine run starts a local kernel twice and is
 # intentionally much slower than mocked eval cells.
-POCKET_AGENT_TIMEOUT_S = 2400
+JOB_AGENT_TIMEOUT_S = 2400
 # The verified local smoke used Opus 4.8.  Keep this scenario pinned to that
 # model rather than silently inheriting the benchmark-wide Sonnet default.
-POCKET_AGENT_MODEL = "claude-opus-4-8"
+JOB_AGENT_MODEL = "claude-opus-4-8"
 
 
-def effective_agent_model(is_pocket: bool, backend_name: str, default_model: str) -> str:
+def effective_agent_model(is_desktop: bool, backend_name: str, default_model: str) -> str:
     """Resolve the model a scenario actually runs on.
 
-    Pocket is pinned to a verified Claude model, but that id is meaningless to
+    desktop is pinned to a verified Claude model, but that id is meaningless to
     any other provider, so the pin applies only on the Claude backend. The
     dispatch path and the report must agree on this or a report attributes a
-    Codex pocket run to a Claude model and poisons the benchmark ledger.
+    Codex desktop run to a Claude model and poisons benchmark evidence.
     """
-    if is_pocket and backend_name == "claude":
-        return POCKET_AGENT_MODEL
+    if is_desktop and backend_name == "claude":
+        return JOB_AGENT_MODEL
     return default_model
 # The verifier may legitimately re-serve the final snapshot plus several
 # earlier published snapshots.  Give that work most of the agent budget, then
 # report a timeout as runner infrastructure rather than an agent failure.
-POCKET_HARNESS_TIMEOUT_S = 1800
-_POCKET_PREFLIGHT_LOCK = threading.Lock()
-_POCKET_PREFLIGHT_DONE = False
-_POCKET_PREFLIGHT_ERROR: str | None = None
-_POCKET_PREFLIGHT_ENDPOINT: str | None = None
+JOB_HARNESS_TIMEOUT_S = 1800
+_JOB_PREFLIGHT_LOCK = threading.Lock()
+_JOB_PREFLIGHT_DONE = False
+_JOB_PREFLIGHT_ERROR: str | None = None
+_JOB_PREFLIGHT_ENDPOINT: str | None = None
 
 # Public platform docs base. The docs site is a docsify SPA: the human viewer
 # lives at https://docs.demo.nextopia.dev/#/<path>, but the *fetchable* markdown
@@ -241,7 +339,7 @@ DEFAULT_DOCS_BASE = "https://docs.demo.nextopia.dev/"
 # read-only via --add-dir — it is the public GitHub examples a user starts from.
 EXAMPLES_DIR = (
     REPO_ROOT
-    / "src" / "nxd-data-product-builder" / "reference" / "nextdata-public-examples"
+    / "src" / "nxd-build-data-product" / "reference" / "nextdata-public-examples"
 )
 
 
@@ -332,6 +430,14 @@ def discover_scenarios(suite: str) -> list[Path]:
     return sorted(p.parent for p in base.glob("*/prompt.md"))
 
 
+def _copy_skill_tree(src: Path, dst: Path) -> None:
+    """Stage skill content without carrying repository/submodule metadata."""
+    # A submodule's `.git` is often a *file* pointing at the shared checkout's
+    # object store, rather than a directory.  Ignore by basename recursively so
+    # neither shape reaches the plugin nor Codex's workspace-visible skill copy.
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".git"))
+
+
 def build_workspace(
     tmp: Path,
     skill_set: SkillSet,
@@ -371,7 +477,7 @@ def build_workspace(
             src = REPO_ROOT / rel
             if not src.is_dir():
                 raise FileNotFoundError(f"skill path missing: {rel}")
-            shutil.copytree(src, skills_dst / src.name)
+            _copy_skill_tree(src, skills_dst / src.name)
         manifest = {
             "name": "nxd-eval-pack",
             "version": "0.0.1",
@@ -386,10 +492,13 @@ def build_workspace(
             ws_skills.mkdir(parents=True, exist_ok=True)
             for rel in skill_set.skills:
                 src = REPO_ROOT / rel
-                shutil.copytree(src, ws_skills / src.name)
+                _copy_skill_tree(src, ws_skills / src.name)
 
     fixtures = scenario_dir / "fixtures"
     if fixtures.is_dir():
+        scenario_exclusions = SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS.get(
+            scenario_dir.name, frozenset()
+        )
         for item in fixtures.iterdir():
             # Server-side MCP inputs must NOT land in the agent's workspace. The
             # catalog is the data the agent is supposed to obtain by CALLING the
@@ -401,10 +510,16 @@ def build_workspace(
             # Never copy generated bytecode or hidden runner detritus.  In
             # particular, a sibling __pycache__/build_data.pyc would reveal
             # runner-only discriminator assertions to the agent.
+            # Scenario-local exclusions are merely unstaged. They do not make
+            # a source checkout unreadable; protected cells prove that with
+            # their separately configured source-isolation wrapper.
             if (item.name.startswith(".") or item.name == "__pycache__"
-                    or item.name in MCP_SERVER_SIDE_FIXTURES | POCKET_RUNNER_SIDE_FIXTURES
+                    or item.name in MCP_SERVER_SIDE_FIXTURES | JOB_RUNNER_SIDE_FIXTURES
                     | STATIC_ARTIFACT_RUNNER_SIDE_FIXTURES
-                    | DERIVATION_RUNNER_SIDE_FIXTURES):
+                    | DERIVATION_RUNNER_SIDE_FIXTURES
+                    | EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES
+                    | HTTP_STUB_RUNNER_SIDE_FIXTURES
+                    or item.name in scenario_exclusions):
                 continue
             dst = ws / item.name
             if item.is_dir():
@@ -470,6 +585,7 @@ def build_agent_prompt(
     docs_base: str,
     has_examples: bool,
     skills_in_workspace: bool = False,
+    source_isolation: bool = False,
 ) -> str:
     """Prepend the shared context every skill-set gets (docs + examples).
 
@@ -478,21 +594,37 @@ def build_agent_prompt(
     this adds a line telling the agent to read them, so the skill guidance is
     available as context. Providers that activate skills natively (Claude) leave
     this False — the skills load through the Skill tool, not by file-reading."""
-    lines = [
-        "You are working on a Nextdata OS (nxd) data-product task.",
-        "",
-        "Available context (the same for every run):",
-        f"- Public platform docs: fetch markdown pages (WebFetch, or curl if "
-        f"WebFetch is unavailable) at "
-        f"{docs_base}<path>.md (e.g. {docs_base}dp_development/debugging.md). "
-        f"Start from the index {docs_base}_sidebar.md to find the right page. "
-        "Use the .md URLs directly — the docs viewer's #/ links are not fetchable.",
-        "- Your workspace contains the files for this task. Inspect them first: "
-        "any `nxd-*.txt` files are pre-captured output of nxd CLI commands that "
-        "were already run for you (read them — do not try to run `nxd`, it is not "
-        "installed), and any `data_product/` directory is the product source.",
-    ]
-    if has_examples:
+    if source_isolation:
+        lines = [
+            "You are working on a Nextdata OS (nxd) data-product task.",
+            "",
+            "Available context (protected evaluation):",
+            "- Every permitted task input and example is already materialized as "
+            "ordinary files inside your workspace. Inspect those workspace files first.",
+            "- You may use system and desktop executables available on PATH when the "
+            "task requires them.",
+            "- Do not discover, list, read, or execute task inputs, examples, repo "
+            "source, histories, or rubrics outside the workspace. Do not use git, "
+            "submodules, or another checkout to find them.",
+        ]
+    else:
+        # Keep this branch byte-for-byte stable for ordinary scenarios: their
+        # public-docs and mounted-examples contract remains unchanged.
+        lines = [
+            "You are working on a Nextdata OS (nxd) data-product task.",
+            "",
+            "Available context (the same for every run):",
+            f"- Public platform docs: fetch markdown pages (WebFetch, or curl if "
+            f"WebFetch is unavailable) at "
+            f"{docs_base}<path>.md (e.g. {docs_base}dp_development/debugging.md). "
+            f"Start from the index {docs_base}_sidebar.md to find the right page. "
+            "Use the .md URLs directly — the docs viewer's #/ links are not fetchable.",
+            "- Your workspace contains the files for this task. Inspect them first: "
+            "any `nxd-*.txt` files are pre-captured output of nxd CLI commands that "
+            "were already run for you (read them — do not try to run `nxd`, it is not "
+            "installed), and any `data_product/` directory is the product source.",
+        ]
+    if has_examples and not source_isolation:
         lines.append(
             "- A read-only copy of the public example data products is mounted "
             "alongside your workspace (a `nextdata-public-examples` directory with "
@@ -526,36 +658,57 @@ def scenario_needs_mcp(scenario_dir: Path) -> dict | None:
     return json.loads(marker.read_text(encoding="utf-8"))
 
 
-def scenario_needs_pocket(scenario_dir: Path) -> dict | None:
-    """Return the Pocket runtime marker when a scenario opts into the local
+def scenario_needs_desktop(scenario_dir: Path) -> dict | None:
+    """Return the local desktop runtime marker when a scenario opts into the local
     desktop supervisor. Kept parallel to MCP opt-in so ordinary cells never
     inherit a host binary, Python venv, or persistent-process cleanup."""
-    marker = scenario_dir / "fixtures" / "pocket.json"
+    marker = scenario_dir / "fixtures" / "desktop.json"
     if not marker.exists():
         return None
     return json.loads(marker.read_text(encoding="utf-8"))
 
 
-def _pocket_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str], str]:
+def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
+    """Return the HTTP-stub marker when a scenario opts into a runner-started
+    local REST fixture. Kept parallel to the MCP/desktop opt-ins for the same
+    reason: ordinary cells must not inherit a background process, and only a
+    scenario that names ``fixtures/http_stub.json`` gets one.
+
+    Marker shape: ``{"module": "<py filename under fixtures/>",
+    "start": "<callable name>", "stop": "<callable name>",
+    "endpoint_file": "<workspace-relative path the base URL is written to>"}``.
+    ``start`` must return ``(server, port, thread)``; ``stop`` takes those same
+    three (minus port). This is intentionally generic — the module supplies its
+    own routes/auth/payload, the runner only supplies the process lifecycle and
+    the port handoff, exactly as ``semantic_http_server`` supplies lifecycle for
+    the (heavier, license-gated) semantic MCP server.
+    """
+    marker = scenario_dir / "fixtures" / "http_stub.json"
+    if not marker.exists():
+        return None
+    return json.loads(marker.read_text(encoding="utf-8"))
+
+
+def _desktop_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str], str]:
     """Return a narrow command directory and the matched Python interpreter."""
-    supervisor_dir = Path(os.environ.get("EVAL_POCKET_SUPERVISOR_DIR", "")).expanduser()
-    python = os.environ.get("EVAL_POCKET_PYTHON", "").strip()
+    supervisor_dir = Path(os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", "")).expanduser()
+    python = os.environ.get("EVAL_DESKTOP_PYTHON", "").strip()
     if not supervisor_dir.is_dir() or not python:
         raise RuntimeError(
-            "set EVAL_POCKET_SUPERVISOR_DIR (both desktop binaries) and "
-            "EVAL_POCKET_PYTHON (supervisor venv Python)"
+            "set EVAL_DESKTOP_SUPERVISOR_DIR (both desktop binaries) and "
+            "EVAL_DESKTOP_PYTHON (supervisor venv Python)"
         )
     binaries = ("nxd-desktop-supervisor", "nxd-desktop-kernel-host")
     missing = [name for name in binaries if not (supervisor_dir / name).is_file()]
     if missing or not Path(python).is_file():
         raise RuntimeError(
-            f"Pocket runtime missing binaries={missing} or Python={python!r}"
+            f"desktop runtime missing binaries={missing} or Python={python!r}"
         )
     # The supervisor finds its kernel-host sibling from its *real* executable
     # path, so tiny exec wrappers preserve that contract while exposing only the
-    # two intended Pocket commands to the evaluated agent.  Do not symlink: the
+    # two intended desktop commands to the evaluated agent.  Do not symlink: the
     # detached implementation historically re-execed through current_exe().
-    bin_dir = tmp / "pocket-bin"
+    bin_dir = tmp / "desktop-bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     for name in binaries:
         target = supervisor_dir / name
@@ -570,7 +723,7 @@ def _pocket_runtime(scenario_dir: Path, tmp: Path) -> tuple[Path, dict[str, str]
     return bin_dir, {"NXD_DESKTOP_PYTHON": python}, python
 
 
-def _pocket_kv(output: str) -> dict[str, str]:
+def _desktop_kv(output: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in output.splitlines():
         if "=" in line:
@@ -580,7 +733,7 @@ def _pocket_kv(output: str) -> dict[str, str]:
 
 
 @dataclass
-class PocketServe:
+class DesktopServe:
     """Foreground supervisor process plus its startup transcript files."""
 
     process: subprocess.Popen
@@ -590,9 +743,9 @@ class PocketServe:
     bearer: str
 
 
-def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
+def _desktop_start_serve(supervisor: Path, definition: Path, workflow: str,
                         data_dir: Path, env: dict[str, str],
-                        timeout_s: int = 300) -> PocketServe:
+                        timeout_s: int = 300) -> DesktopServe:
     """Start documented foreground ``serve`` and wait for real publication.
 
     ``create --detach`` can report ``published=yes`` while its child has already
@@ -600,7 +753,7 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
     the same foreground command agents are asked to use, with a direct Popen
     handle held until ``stop`` reaps it.
     """
-    bearer = f"eval-pocket-{secrets.token_urlsafe(24)}"
+    bearer = f"eval-desktop-{secrets.token_urlsafe(24)}"
     child_env = dict(env)
     child_env["NXD_DESKTOP_BEARER"] = bearer
     stdout = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
@@ -614,9 +767,9 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
     while time.time() < deadline:
         stdout.seek(0)
         output = stdout.read()
-        values = _pocket_kv(output)
+        values = _desktop_kv(output)
         if values.get("published") == "yes":
-            return PocketServe(proc, stdout, stderr, values, bearer)
+            return DesktopServe(proc, stdout, stderr, values, bearer)
         if proc.poll() is not None:
             stderr.seek(0)
             detail = stderr.read()
@@ -624,7 +777,7 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
             stderr.close()
             raise RuntimeError(f"foreground serve exited before publication: {detail[-1200:]}")
         time.sleep(0.1)
-    _sweep_pocket_pid(proc.pid)
+    _sweep_desktop_pid(proc.pid)
     stdout.seek(0)
     stderr.seek(0)
     detail = f"stdout={stdout.read()[-600:]} stderr={stderr.read()[-600:]}"
@@ -633,9 +786,9 @@ def _pocket_start_serve(supervisor: Path, definition: Path, workflow: str,
     raise RuntimeError(f"foreground serve did not publish within {timeout_s}s: {detail}")
 
 
-def _pocket_stop_serve(supervisor: Path, data_dir: Path, served: PocketServe,
+def _desktop_stop_serve(supervisor: Path, data_dir: Path, served: DesktopServe,
                        env: dict[str, str]) -> None:
-    """Stop a foreground Pocket serve and close runner-owned log handles."""
+    """Stop a foreground desktop serve and close runner-owned log handles."""
     recorded_pids: list[int] = []
     for name in ("semantic.pid", "supervisor.pid"):
         with contextlib.suppress(OSError, ValueError):
@@ -647,9 +800,9 @@ def _pocket_stop_serve(supervisor: Path, data_dir: Path, served: PocketServe,
     # foreground server's shutdown, the direct supervisor sweep below cannot
     # reach that child, so explicitly reap both pid-file identities as well.
     for pid in recorded_pids:
-        _sweep_pocket_pid(pid)
+        _sweep_desktop_pid(pid)
     if served.process.poll() is None:
-        _sweep_pocket_pid(served.process.pid)
+        _sweep_desktop_pid(served.process.pid)
     with contextlib.suppress(subprocess.TimeoutExpired):
         served.process.wait(timeout=10)
     served.stdout.close()
@@ -658,7 +811,7 @@ def _pocket_stop_serve(supervisor: Path, data_dir: Path, served: PocketServe,
 
 def _sweep_stale_preflights(supervisor: Path, env: dict[str, str]) -> None:
     """Recover a preflight abandoned by SIGKILL or an interrupted runner."""
-    for root in Path(tempfile.gettempdir()).glob("eval-pocket-preflight-*"):
+    for root in Path(tempfile.gettempdir()).glob("eval-desktop-preflight-*"):
         owner = root / ".owner-pid"
         try:
             if owner.exists() and _pid_alive(int(owner.read_text(encoding="utf-8").strip())):
@@ -672,38 +825,38 @@ def _sweep_stale_preflights(supervisor: Path, env: dict[str, str]) -> None:
                                capture_output=True, text=True, timeout=60, env=env)
             for name in ("semantic.pid", "supervisor.pid"):
                 with contextlib.suppress(OSError, ValueError):
-                    _sweep_pocket_pid(int((data_dir / name).read_text(encoding="utf-8").strip()))
+                    _sweep_desktop_pid(int((data_dir / name).read_text(encoding="utf-8").strip()))
         shutil.rmtree(root, ignore_errors=True)
 
 
-def pocket_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str, str]) -> str | None:
+def desktop_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str, str]) -> str | None:
     """Serve/describe/query/stop the committed closure once per runner.
 
     A broken local build is infrastructure failure, not evidence an agent could
     not use the skills. The memoized result is shared across parallel cells.
     """
-    global _POCKET_PREFLIGHT_DONE, _POCKET_PREFLIGHT_ERROR, _POCKET_PREFLIGHT_ENDPOINT
-    with _POCKET_PREFLIGHT_LOCK:
-        if _POCKET_PREFLIGHT_DONE:
-            return _POCKET_PREFLIGHT_ERROR
-        _POCKET_PREFLIGHT_DONE = True
+    global _JOB_PREFLIGHT_DONE, _JOB_PREFLIGHT_ERROR, _JOB_PREFLIGHT_ENDPOINT
+    with _JOB_PREFLIGHT_LOCK:
+        if _JOB_PREFLIGHT_DONE:
+            return _JOB_PREFLIGHT_ERROR
+        _JOB_PREFLIGHT_DONE = True
         reference = scenario_dir / "fixtures" / "reference-closure"
         supervisor = bin_dir / "nxd-desktop-supervisor"
         if not reference.is_dir():
-            _POCKET_PREFLIGHT_ERROR = "reference closure is missing"
-            return _POCKET_PREFLIGHT_ERROR
+            _JOB_PREFLIGHT_ERROR = "reference closure is missing"
+            return _JOB_PREFLIGHT_ERROR
         env = dict(os.environ)
         env.update(env_overrides)
         env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
         _sweep_stale_preflights(supervisor, env)
-        tmp = Path(tempfile.mkdtemp(prefix="eval-pocket-preflight-"))
+        tmp = Path(tempfile.mkdtemp(prefix="eval-desktop-preflight-"))
         (tmp / ".owner-pid").write_text(str(os.getpid()), encoding="utf-8")
         data_dir = tmp / "state"
-        served: PocketServe | None = None
+        served: DesktopServe | None = None
         try:
             try:
-                served = _pocket_start_serve(
-                    supervisor, reference, "pocket-preflight", data_dir, env
+                served = _desktop_start_serve(
+                    supervisor, reference, "desktop-preflight", data_dir, env
                 )
                 endpoint = served.values.get("semantic_endpoint", "")
                 if not endpoint:
@@ -747,20 +900,20 @@ def pocket_preflight(scenario_dir: Path, bin_dir: Path, env_overrides: dict[str,
                 answer = json.loads(probe.stdout)
                 if answer.get("error") != "" or not answer.get("rows"):
                     raise RuntimeError(f"query response invalid: {probe.stdout[-800:]}")
-                _POCKET_PREFLIGHT_ENDPOINT = endpoint
-                print(f"Pocket preflight OK: semantic_endpoint={endpoint}",
+                _JOB_PREFLIGHT_ENDPOINT = endpoint
+                print(f"Desktop preflight OK: semantic_endpoint={endpoint}",
                       file=sys.stderr, flush=True)
             except (OSError, subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError) as exc:
-                _POCKET_PREFLIGHT_ERROR = str(exc)
+                _JOB_PREFLIGHT_ERROR = str(exc)
         finally:
             if served is not None:
-                _pocket_stop_serve(supervisor, data_dir, served, env)
+                _desktop_stop_serve(supervisor, data_dir, served, env)
             else:
                 with contextlib.suppress(OSError, subprocess.TimeoutExpired):
                     subprocess.run([str(supervisor), "stop", "--data-dir", str(data_dir)],
                                    capture_output=True, text=True, timeout=60, env=env)
             shutil.rmtree(tmp, ignore_errors=True)
-        return _POCKET_PREFLIGHT_ERROR
+        return _JOB_PREFLIGHT_ERROR
 
 
 def _pid_alive(pid: int) -> bool:
@@ -771,7 +924,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _sweep_pocket_pid(pid: int) -> None:
+def _sweep_desktop_pid(pid: int) -> None:
     """Last-resort process-group cleanup for a supervisor whose stop failed."""
     if pid <= 0 or not _pid_alive(pid):
         return
@@ -794,8 +947,8 @@ def _sweep_pocket_pid(pid: int) -> None:
 
 
 @contextlib.contextmanager
-def pocket_process_guard(ws: Path, supervisor: Path, env_overrides: dict[str, str]):
-    """Always stop persistent supervisors created by a Pocket agent cell."""
+def desktop_process_guard(ws: Path, supervisor: Path, env_overrides: dict[str, str]):
+    """Always stop persistent supervisors created by a desktop agent cell."""
     try:
         yield
     finally:
@@ -811,34 +964,34 @@ def pocket_process_guard(ws: Path, supervisor: Path, env_overrides: dict[str, st
             for name in ("semantic.pid", "supervisor.pid"):
                 pid_file = data_dir / name
                 try:
-                    _sweep_pocket_pid(int(pid_file.read_text(encoding="utf-8").strip()))
+                    _sweep_desktop_pid(int(pid_file.read_text(encoding="utf-8").strip()))
                 except (OSError, ValueError):
                     pass
 
 
-def pocket_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: str,
+def desktop_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: str,
                         bin_dir: Path, env_overrides: dict[str, str]) -> str:
     """Run the pristine verifier before the temporary workspace disappears."""
-    checker = scenario_dir / "fixtures" / "check_pocket_loop.py"
+    checker = scenario_dir / "fixtures" / "check_job_loop.py"
     env = dict(os.environ)
     env.update(env_overrides)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    # Snapshot re-serves must be visible to pocket_process_guard even if this
+    # Snapshot re-serves must be visible to desktop_process_guard even if this
     # verifier times out after its child supervisor was spawned.
-    checker_tmp = ws / ".pocket-check-tmp"
+    checker_tmp = ws / ".desktop-check-tmp"
     checker_tmp.mkdir(parents=True, exist_ok=True)
-    env["NXD_POCKET_CHECK_TMPDIR"] = str(checker_tmp)
+    env["NXD_JOB_CHECK_TMPDIR"] = str(checker_tmp)
     try:
         proc = subprocess.run(
             [python, str(checker), "--mode", "harness", "--workspace", str(ws),
              "--workflow", workflow],
-            capture_output=True, text=True, timeout=POCKET_HARNESS_TIMEOUT_S, env=env,
+            capture_output=True, text=True, timeout=JOB_HARNESS_TIMEOUT_S, env=env,
         )
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         if not lines:
             facts = {
                 "passed": False,
-                "infrastructure_error": "pocket harness verifier emitted no facts",
+                "infrastructure_error": "desktop harness verifier emitted no facts",
             }
         else:
             facts = json.loads(lines[-1])
@@ -847,24 +1000,24 @@ def pocket_harness_fact(scenario_dir: Path, ws: Path, python: str, workflow: str
         facts = {
             "passed": False,
             "infrastructure_error": (
-                f"pocket harness verifier timed out after {POCKET_HARNESS_TIMEOUT_S}s: {exc}"
+                f"desktop harness verifier timed out after {JOB_HARNESS_TIMEOUT_S}s: {exc}"
             ),
         }
     except (OSError, json.JSONDecodeError) as exc:
         facts = {
             "passed": False,
-            "infrastructure_error": f"pocket harness verifier failed: {exc}",
+            "infrastructure_error": f"desktop harness verifier failed: {exc}",
         }
-    return "POCKET VERIFY (authoritative runner facts): " + json.dumps(facts, sort_keys=True)
+    return "JOB VERIFY (authoritative runner facts): " + json.dumps(facts, sort_keys=True)
 
 
-def pocket_facts_passed(facts: list[str]) -> bool:
-    """Return whether an authoritative Pocket verifier fact explicitly passed.
+def desktop_facts_passed(facts: list[str]) -> bool:
+    """Return whether an authoritative desktop verifier fact explicitly passed.
 
-    A Pocket cell is fail-closed: missing, malformed, timed-out, or negative
+    A desktop cell is fail-closed: missing, malformed, timed-out, or negative
     verifier output must not be rescued by a lenient LLM judge.
     """
-    prefix = "POCKET VERIFY (authoritative runner facts): "
+    prefix = "JOB VERIFY (authoritative runner facts): "
     for fact in facts:
         if fact.startswith(prefix):
             try:
@@ -874,15 +1027,15 @@ def pocket_facts_passed(facts: list[str]) -> bool:
     return False
 
 
-def pocket_facts_infrastructure_error(facts: list[str]) -> str | None:
+def desktop_facts_infrastructure_error(facts: list[str]) -> str | None:
     """Return a verifier infrastructure failure, if one was recorded."""
-    prefix = "POCKET VERIFY (authoritative runner facts): "
+    prefix = "JOB VERIFY (authoritative runner facts): "
     for fact in facts:
         if fact.startswith(prefix):
             try:
                 error = json.loads(fact[len(prefix):]).get("infrastructure_error")
             except json.JSONDecodeError:
-                return "pocket verifier facts were malformed"
+                return "desktop verifier facts were malformed"
             return str(error) if error else None
     return None
 
@@ -1066,7 +1219,7 @@ def semantic_http_server(scenario_dir: Path, mcp_spec: dict):
     """Start the semantic DP as a Streamable-HTTP MCP server for the duration of
     a scenario, and yield the (endpoint_url, env_overrides) the agent needs.
 
-    This mirrors production: the nxd-data-product-query skill discovers DP MCP
+    This mirrors production: the nxd-query-data-product skill discovers DP MCP
     endpoints by shelling out to ``nxd mcp health`` and then opens an HTTP MCP
     session. We start the real server, then point a fake ``nxd`` (on the agent's
     PATH) at it via EVAL_MCP_ENDPOINT — so the skill's shipped toolchain drives
@@ -1144,6 +1297,81 @@ def _wait_for_http(endpoint: str, proc: subprocess.Popen, timeout_s: int) -> Non
     raise TimeoutError(f"MCP server did not come up within {timeout_s}s at {endpoint}")
 
 
+class HttpStubSetupError(RuntimeError):
+    """A fault in bringing the stub up — not a fault in the agent run.
+
+    The two must stay distinguishable: `run_agent` executes INSIDE the stub's
+    `with` block, so a bare `except RuntimeError` there records a skill or
+    backend failure as "http stub setup failed" and points the operator at the
+    fixture instead of the thing that broke.
+    """
+
+
+@contextlib.contextmanager
+def http_stub_server(scenario_dir: Path, ws: Path, spec: dict, agent_backend_name: str = ""):
+    """Start a scenario-supplied in-process HTTP stub for the run's duration.
+
+    Runs the fixture module's own ``start``/``stop`` callables IN this process
+    (unlike ``semantic_http_server``, which shells to a separate interpreter for
+    a heavy licensed dependency) — the stub is stdlib-only `http.server`, so no
+    subprocess or extra interpreter is needed. Writes the base URL to
+    ``spec["endpoint_file"]`` inside the workspace before yielding, so the agent
+    reads it exactly like any other fixture file; the port itself is chosen
+    fresh per run via ``socket.bind(("127.0.0.1", 0))`` inside the module.
+    """
+    fixtures_dir = scenario_dir / "fixtures"
+    module_name = str(spec.get("module", "")).removesuffix(".py")
+    module_path = fixtures_dir / f"{module_name}.py"
+    if not module_path.is_file():
+        raise HttpStubSetupError(f"http_stub module not found: {module_path}")
+
+    import importlib.util
+
+    mod_spec = importlib.util.spec_from_file_location(
+        f"_eval_http_stub_{module_name}", module_path
+    )
+    if mod_spec is None or mod_spec.loader is None:
+        raise HttpStubSetupError(f"could not load http_stub module: {module_path}")
+    module = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(module)
+
+    start_fn = getattr(module, str(spec.get("start", "start_server")))
+    stop_fn = getattr(module, str(spec.get("stop", "stop_server")))
+    server, port, thread = start_fn()
+    try:
+        base_url = f"http://127.0.0.1:{port}"
+        endpoint_file = ws / str(spec.get("endpoint_file", "ENDPOINT_URL"))
+        endpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        endpoint_file.write_text(base_url + "\n", encoding="utf-8")
+
+        # The stub is useless unless the AGENT can reach it, and the agent's
+        # sandbox is not this process's. Codex's default `workspace-write`
+        # implements isolation with a network namespace, so the agent's curl gets
+        # `Failed to connect to 127.0.0.1` while this process talks to the same
+        # port happily — verified, not theorised.
+        #
+        # Left unchecked, that produces the worst possible outcome: the run
+        # completes, every data-dependent check fails for want of data, and the
+        # report reads as a skill regression. The scenario is unrunnable under
+        # that sandbox, so say so here rather than grading a run that never had
+        # a source. CI already exports EVAL_CODEX_AGENT_SANDBOX=danger-full-access
+        # (`.github/workflows/evals.yml`); a local run needs the same.
+        if agent_backend_name == "codex" and os.environ.get(
+                "EVAL_CODEX_AGENT_SANDBOX", "").strip() in ("", "workspace-write"):
+            raise HttpStubSetupError(
+                f"scenario needs a runner-started HTTP stub at {base_url}, but the "
+                "codex agent sandbox is 'workspace-write', which blocks loopback "
+                "network from the agent's shell. The agent would see connection "
+                "refused and every data-dependent check would fail as though the "
+                "skills regressed. Re-run with "
+                "EVAL_CODEX_AGENT_SANDBOX=danger-full-access (what CI uses), or "
+                "with --agent-backend claude."
+            )
+        yield base_url
+    finally:
+        stop_fn(server, thread)
+
+
 def _write_fake_nxd(bin_dir: Path) -> None:
     """Write a `nxd` shim onto a dir that gets prepended to the agent's PATH.
 
@@ -1170,12 +1398,88 @@ JUDGE_SYSTEM = (
 )
 
 
+def build_scripted_turns_block(checks: dict, metrics: dict | None = None) -> str:
+    """Describe the scripted user turns to the judge, or "" for single-turn.
+
+    Without this the judge reads a transcript in which the agent suddenly
+    adopts a correction it was handed, cannot attribute it to the user, and may
+    credit the agent for the user's idea. The turns are quoted verbatim, and the
+    turns that did NOT fire are named so their checks are not graded against a
+    conversation that never happened.
+    """
+    turns = checks.get("turns") or []
+    if not turns:
+        return ""
+    skipped = set((metrics or {}).get("skipped_turns") or [])
+    # Turns default to `when: "always"`, so a turn arriving proves nothing about
+    # whether the agent stopped for it. `awaited_input_turns` records which turns
+    # ENDED with the boundary sentinel, which is the only signal separating "the
+    # user answered a question the agent asked" from "the harness talked over an
+    # agent that had already barrelled on". Without it in the prompt the judge
+    # reads an unconditional delivery as evidence of a checkpoint that may never
+    # have happened — and a scenario grading "did it stop and ask" would pass
+    # while measuring nothing.
+    awaited = set((metrics or {}).get("awaited_input_turns") or [])
+    lines = [
+        "\n--- SCRIPTED USER TURNS (supplied by the HARNESS, not authored by "
+        "the agent — the agent's first message answers the task above; these "
+        "arrived afterwards as the user speaking) ---"
+    ]
+    for i, turn in enumerate(turns):
+        index = i + 2  # turn 1 is the scenario prompt
+        status = " [NOT SENT]" if index in skipped else ""
+        lines.append(f'  [user_turn {index}]{status} {turn.get("text", "")}')
+    # Report the stop/no-stop verdict for the turn each scripted message
+    # FOLLOWED, since that is the turn whose ending is under grading.
+    for i, _turn in enumerate(turns):
+        index = i + 2
+        if index in skipped:
+            continue
+        # Walk back to the last turn that actually RAN. Indices are positional,
+        # so they do not renumber around a skip — `index - 1` can name a turn
+        # that was never sent, and the fact would then be stated about a turn
+        # with no ending to grade.
+        preceding = index - 1
+        while preceding in skipped:
+            preceding -= 1
+        if preceding in awaited:
+            lines.append(
+                f"  HARNESS FACT: before [user_turn {index}], the agent ended "
+                f"turn {preceding} with the {AWAITING_INPUT_MARKER} marker — it "
+                f"stopped and waited for the user."
+            )
+        else:
+            lines.append(
+                f"  HARNESS FACT: the agent did NOT end turn {preceding} with "
+                f"the {AWAITING_INPUT_MARKER} marker. [user_turn {index}] was "
+                f"delivered unconditionally by the harness, NOT because the "
+                f"agent asked for input. Any check about the agent stopping, "
+                f"pausing, or waiting for approval at that point MUST be failed "
+                f"— the conversation continuing is the harness's doing, not "
+                f"evidence the agent yielded."
+            )
+    if skipped:
+        lines.append(
+            "  A turn marked [NOT SENT] never reached the agent, because the "
+            "agent did not signal it was waiting for input. Any check tagged "
+            "with that turn number MUST be failed with the reason \"turn not "
+            "sent\" — do not grade it against this transcript, and do not "
+            "credit the agent for behaviour the turn would have prompted."
+        )
+    return "\n".join(lines) + "\n"
+
+
 def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
-                       final_answer: str, facts: list[str] | None = None) -> str:
+                       final_answer: str, facts: list[str] | None = None,
+                       metrics: dict | None = None) -> str:
     prompt_md = (scenario_dir / "prompt.md").read_text(encoding="utf-8")
     check_lines = "\n".join(
-        f'  {i + 1}. [id={c["id"]}] {c["check"]}' for i, c in enumerate(checks["checks"])
+        f'  {i + 1}. [id={c["id"]}]'
+        + (f' (about user_turn {c["turn"]})' if c.get("turn") else "")
+        + f' {c["check"]}'
+        for i, c in enumerate(checks["checks"])
     )
+    scripted_turns = build_scripted_turns_block(checks, metrics)
     # Opt-in mechanical facts the harness computed itself (not the agent's word)
     # — e.g. re-hashing the reproduced models.py to tie it to the reported
     # digest. Only present when the scenario declares it in checks.json.
@@ -1194,7 +1498,7 @@ def build_judge_prompt(scenario_dir: Path, checks: dict, trace: str,
 
 --- SCENARIO DEFINITION (for your context only) ---
 {prompt_md}
-
+{scripted_turns}
 --- SUCCESS CHECKS (grade each one) ---
 {check_lines}
 
@@ -1220,13 +1524,13 @@ source matches the reported digest (use it, not the agent's self-report, for
 that), but it does NOT establish that the digest came from a passing acceptance
 run — grade that provenance from the trace.
 
-For Pocket scenarios, direct writes to the agent-owned supervisor state under
-`.pocket/state/` (`state.sqlite*` or `definitions/**`) outside an
+For desktop scenarios, direct writes to the agent-owned supervisor state under
+`.desktop/state/` (`state.sqlite*` or `definitions/**`) outside an
 `nxd-desktop-supervisor` command are an automatic FAIL for the
 supervisor-state-integrity check and therefore for the whole cell. The
-runner-owned `.pocket-check-tmp/` is explicitly excluded from this rule because
+runner-owned `.desktop-check-tmp/` is explicitly excluded from this rule because
 it holds verifier snapshot re-serves. In particular, do not excuse SQLite
-inserts, copied/edited pinned snapshots, or shell redirection in `.pocket/state`
+inserts, copied/edited pinned snapshots, or shell redirection in `.desktop/state`
 merely because the final re-served output is plausible. Use the harness-provided
 published-run timestamps and definition SHA-256s to cross-check the trace
 chronology.
@@ -1238,11 +1542,15 @@ Respond with ONE JSON object and nothing else, in this exact shape:
 
 def run_judge(judge_backend, scenario_dir: Path, checks: dict, trace: str,
               final_answer: str, model: str, timeout_s: int,
-              effort: str = "", facts: list[str] | None = None) -> dict:
+              effort: str = "", facts: list[str] | None = None,
+              metrics: dict | None = None) -> dict:
     """Grade one transcript. Builds the provider-independent judge prompt (which
-    folds in the harness-verified ``facts``), then delegates the actual model
-    call to the selected judge backend."""
-    prompt = build_judge_prompt(scenario_dir, checks, trace, final_answer, facts)
+    folds in the harness-verified ``facts`` and, for multi-turn scenarios, the
+    scripted user turns), then delegates the actual model call to the selected
+    judge backend."""
+    prompt = build_judge_prompt(
+        scenario_dir, checks, trace, final_answer, facts, metrics
+    )
     return judge_backend.run_judge(prompt, JUDGE_SYSTEM, model, timeout_s, effort)
 
 
@@ -1407,7 +1715,7 @@ WORKSPACE_FILE_BUDGET = 60_000
 # Directories the harness stages into the workspace as INPUT. Their contents are
 # never the agent's output, so quoting them as such would misattribute authorship
 # to the agent and burn the budget the agent's real files need.
-_STAGED_INPUT_DIRS = frozenset({".skills", ".claude", "fixtures", ".pocket"})
+_STAGED_INPUT_DIRS = frozenset({".skills", ".claude", "fixtures", ".desktop"})
 
 
 def workspace_files_fact(ws: Path, cfg: list | None) -> str | None:
@@ -1518,19 +1826,29 @@ def _fixtures_fingerprint(scenario_dir: Path) -> str:
 
 
 def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
-                     backend: str, model: str, effort: str) -> str:
-    """Cache key for an agent run. Independent of the judge / checks.json, so
-    iterating on grading reuses the expensive agent transcript. Includes the
-    agent backend so switching provider (claude ↔ codex) never reuses the other
-    provider's transcript."""
+                     backend: str, model: str, effort: str,
+                     followup_turns: list[FollowupTurn] | None = None,
+                     source_isolation_identity: dict[str, object] | None = None) -> str:
+    """Cache key for an agent run. Independent of the judge and of checks.json's
+    GRADING fields, so iterating on the rubric reuses the expensive agent
+    transcript. Includes the agent backend so switching provider (claude ↔
+    codex) never reuses the other provider's transcript.
+
+    Scripted follow-up turns are hashed in even though they live in checks.json:
+    they are not grading, they are agent INPUT that shapes the transcript.
+    ``_fixtures_fingerprint`` covers only ``fixtures/``, so without this an
+    edited turn script would silently replay a transcript recorded against the
+    old wording. A scenario with no turns contributes NOTHING to the hash, so
+    every single-turn key predates this change unchanged and no existing cached
+    transcript is discarded by multi-turn support merely existing."""
     h = hashlib.sha256()
-    pocket_runtime_key = ""
-    if scenario_needs_pocket(scenario_dir) is not None:
-        pocket_runtime_key = "|".join((
-            os.environ.get("EVAL_POCKET_SUPERVISOR_DIR", ""),
-            os.environ.get("EVAL_POCKET_PYTHON", ""),
+    desktop_runtime_key = ""
+    if scenario_needs_desktop(scenario_dir) is not None:
+        desktop_runtime_key = "|".join((
+            os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", ""),
+            os.environ.get("EVAL_DESKTOP_PYTHON", ""),
         ))
-    for part in (
+    parts = [
         skill_set.name,
         ",".join(sorted(skill_set.skills)),
         scenario_dir.name,
@@ -1539,11 +1857,257 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
         model,
         effort,
         _fixtures_fingerprint(scenario_dir),
-        pocket_runtime_key,
-    ):
+        desktop_runtime_key,
+    ]
+    # APPENDED ONLY when the scenario actually scripts turns. A single-turn
+    # scenario must contribute no field at all — even an empty string still
+    # feeds its \x00 delimiter into the digest and would invalidate every
+    # cached transcript in the repo.
+    if followup_turns:
+        parts.append(json.dumps(
+            [dataclasses.asdict(t) for t in followup_turns], sort_keys=True
+        ))
+    if source_isolation_identity is not None:
+        parts.append(json.dumps(source_isolation_identity, sort_keys=True))
+    for part in parts:
         h.update(part.encode())
         h.update(b"\x00")
     return h.hexdigest()
+
+
+def _source_isolation_value(args, attr: str, env: str) -> str:
+    value = getattr(args, attr, None)
+    return str(value if value not in (None, "") else os.environ.get(env, "")).strip()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_isolation_roots(args) -> tuple[dict[str, str] | None, str | None]:
+    """Resolve operator-local root aliases without writing their paths to reports."""
+    roots: dict[str, str] = {}
+    raw_env = os.environ.get("EVAL_SOURCE_ISOLATION_ROOTS", "").strip()
+    if raw_env:
+        try:
+            parsed = json.loads(raw_env)
+        except json.JSONDecodeError:
+            return None, "EVAL_SOURCE_ISOLATION_ROOTS must be a JSON object"
+        if (not isinstance(parsed, dict)
+                or not all(isinstance(k, str) and isinstance(v, str) and v for k, v in parsed.items())):
+            return None, "EVAL_SOURCE_ISOLATION_ROOTS must map symbolic names to non-empty strings"
+        roots.update(parsed)
+    for raw in getattr(args, "source_isolation_roots", None) or []:
+        if not isinstance(raw, str) or "=" not in raw:
+            return None, "--source-isolation-root must be NAME=PATH"
+        name, value = raw.split("=", 1)
+        if not name or not value:
+            return None, "--source-isolation-root must be NAME=PATH"
+        roots[name] = value
+    canonical: dict[str, str] = {}
+    for name, value in roots.items():
+        path = Path(value)
+        if not path.is_absolute():
+            return None, f"source-isolation root {name!r} must be absolute"
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            return None, f"source-isolation root {name!r} does not exist"
+        # Require the exact canonical spelling. A symlink (including one in an
+        # ancestor) lets the raw-stream marker and wrapper probe describe the
+        # same protected root differently.
+        if path != resolved:
+            return None, f"source-isolation root {name!r} must not traverse a symlink"
+        if not resolved.is_file() and not resolved.is_dir():
+            return None, f"source-isolation root {name!r} must be a file or directory"
+        canonical[name] = str(resolved)
+    return canonical, None
+
+
+def _resolve_source_isolation(
+    checks: dict, args, backend_name: str, scenario_dir: Path
+) -> tuple[SourceIsolation | None, str | None]:
+    """Validate protected-scenario config and its explicit operator attestation.
+
+    The attestation says an operator selected an isolation profile; it is not
+    treated as proof. The wrapper probe and raw-stream audit are independent
+    evidence and run before an agent transcript can be judged or cached.
+    """
+    raw = checks.get("agent_source_isolation")
+    if not raw:
+        return None, None
+    if not isinstance(raw, dict):
+        return None, "agent_source_isolation must be an object"
+    if backend_name != "codex":
+        return None, "agent-source isolation requires the configured codex wrapper backend"
+    declared_capability = raw.get("capability_id")
+    if not isinstance(declared_capability, str) or not declared_capability.strip():
+        return None, "agent_source_isolation requires an explicit capability_id"
+    capability_id = _source_isolation_value(
+        args, "source_isolation_capability_id", "EVAL_SOURCE_ISOLATION_CAPABILITY_ID"
+    )
+    if not capability_id:
+        return None, "missing source-isolation capability ID"
+    if capability_id != declared_capability:
+        return None, "source-isolation capability ID does not match the scenario requirement"
+    profile_fingerprint = _source_isolation_value(
+        args, "source_isolation_profile_fingerprint", "EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT"
+    )
+    if not _SOURCE_ISOLATION_FINGERPRINT.fullmatch(profile_fingerprint):
+        return None, "source-isolation profile fingerprint must be exactly 64 hexadecimal characters"
+    wrapper_value = _source_isolation_value(args, "codex_wrapper", "EVAL_CODEX_WRAPPER")
+    if not wrapper_value:
+        return None, "missing configured codex wrapper"
+    wrapper_candidate = Path(wrapper_value).expanduser()
+    wrapper = wrapper_candidate if wrapper_candidate.is_absolute() or "/" in wrapper_value else shutil.which(wrapper_value)
+    if not wrapper:
+        return None, "configured codex wrapper could not be resolved"
+    wrapper_path = Path(wrapper).resolve()
+    if not wrapper_path.is_file() or not os.access(wrapper_path, os.X_OK):
+        return None, "configured codex wrapper is not an executable file"
+    roots, roots_error = _source_isolation_roots(args)
+    if roots_error:
+        return None, roots_error
+    markers_raw = raw.get("raw_stream_markers")
+    if not isinstance(markers_raw, list) or not markers_raw:
+        return None, "agent_source_isolation requires non-empty raw_stream_markers"
+    markers: list[tuple[str, str]] = []
+    for marker in markers_raw:
+        if not isinstance(marker, dict):
+            return None, "source-isolation marker must be an object"
+        marker_id = marker.get("id")
+        if not isinstance(marker_id, str) or not _SOURCE_ISOLATION_MARKER_ID.fullmatch(marker_id):
+            return None, "source-isolation markers need normalized IDs"
+        fields = [key for key in ("needle", "target", "root") if key in marker]
+        if len(fields) != 1:
+            return None, "source-isolation markers need exactly one needle, target, or root"
+        if "needle" in marker:
+            needle = marker["needle"]
+            if not isinstance(needle, str) or not needle:
+                return None, "source-isolation marker needles must be non-empty strings"
+        elif marker.get("target") == "scenario_checks":
+            # The declaration stays machine-independent, but the audit matches
+            # the actual runner-side checks path rather than any generated
+            # workspace file coincidentally named checks.json.
+            needle = str(scenario_dir / "checks.json")
+        elif "root" in marker and isinstance(marker["root"], str) and marker["root"] in roots:
+            needle = roots[marker["root"]]
+        else:
+            return None, "source-isolation marker target/root is not configured"
+        markers.append((marker_id, needle))
+    probes_raw = raw.get("probes")
+    if not isinstance(probes_raw, list) or not probes_raw:
+        return None, "agent_source_isolation requires non-empty structured probes"
+    probes: list[SourceIsolationProbe] = []
+    probe_ids: set[str] = set()
+    for probe in probes_raw:
+        if not isinstance(probe, dict):
+            return None, "source-isolation probe must be an object"
+        probe_id, target = probe.get("id"), probe.get("target")
+        command = probe.get("command")
+        if (not isinstance(probe_id, str) or not _SOURCE_ISOLATION_MARKER_ID.fullmatch(probe_id)
+                or probe_id in probe_ids or not isinstance(target, str)
+                or not isinstance(command, list) or not command
+                or not all(isinstance(part, str) and part for part in command)):
+            return None, "source-isolation probes need unique normalized IDs, targets, and commands"
+        fixture = probe.get("fixture")
+        root = probe.get("root")
+        if target == "withheld_fixture":
+            fixture_path = Path(fixture) if isinstance(fixture, str) else None
+            if (fixture_path is None or not fixture or fixture_path.is_absolute()
+                    or ".." in fixture_path.parts):
+                return None, "withheld-fixture probes need a relative fixture path"
+        elif target == "scenario_checks":
+            if fixture is not None or root is not None:
+                return None, "scenario-checks probes cannot declare fixture/root"
+        elif target == "operator_root":
+            if not isinstance(root, str) or root not in roots or fixture is not None:
+                return None, "operator-root probes need a configured symbolic root"
+        else:
+            return None, "source-isolation probe has an unknown target"
+        if "{target}" not in command:
+            return None, "source-isolation probe command must contain {target}"
+        probe_ids.add(probe_id)
+        probes.append(SourceIsolationProbe(probe_id, target, fixture, root, tuple(command)))
+    return SourceIsolation(
+        capability_id=capability_id,
+        profile_fingerprint=profile_fingerprint.lower(),
+        wrapper_path=str(wrapper_path),
+        wrapper_sha256=_sha256_file(wrapper_path),
+        markers=tuple(markers),
+        probes=tuple(probes),
+        roots=tuple(sorted(roots.items())),
+    ), None
+
+
+def _source_isolation_probes(isolation: SourceIsolation, scenario_dir: Path) -> tuple[list[dict[str, str]], str | None]:
+    """Ask the wrapper to prove every symbolic protected source is blocked.
+
+    The wrapper contract is deliberately small: ``--eval-source-isolation-probe
+    -- <command...>`` must emit one JSON object with ``passed: true`` and
+    ``status: "blocked"``. No probe target or raw wrapper output enters report
+    metrics; only normalized probe IDs and statuses do.
+    """
+    roots = dict(isolation.roots)
+    env = dict(os.environ)
+    env.update({
+        "EVAL_SOURCE_ISOLATION_CAPABILITY_ID": isolation.capability_id,
+        "EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT": isolation.profile_fingerprint,
+        # The resolved map, so a root supplied via --source-isolation-root is
+        # the same set the wrapper denies. Probing a root the sandbox does not
+        # know about would report "blocked" for the wrong reason.
+        "EVAL_SOURCE_ISOLATION_ROOTS": json.dumps(roots),
+    })
+    evidence: list[dict[str, str]] = []
+    for probe in isolation.probes:
+        if probe.target == "withheld_fixture":
+            target = scenario_dir / "fixtures" / str(probe.fixture)
+            if not target.is_file():
+                return evidence, f"source-isolation probe {probe.probe_id} fixture is missing"
+        elif probe.target == "scenario_checks":
+            target = scenario_dir / "checks.json"
+        else:
+            target = Path(roots[str(probe.root)])
+        command = tuple(str(target) if part == "{target}" else part for part in probe.command)
+        try:
+            proc = subprocess.run(
+                [isolation.wrapper_path, "--eval-source-isolation-probe", "--", *command],
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            evidence.append({"id": probe.probe_id, "status": "failed"})
+            return evidence, f"source-isolation probe {probe.probe_id} failed to start"
+        try:
+            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            evidence.append({"id": probe.probe_id, "status": "failed"})
+            return evidence, f"source-isolation probe {probe.probe_id} returned no structured result"
+        if proc.returncode != 0 or not isinstance(payload, dict) or payload.get("passed") is not True or payload.get("status") != "blocked":
+            evidence.append({"id": probe.probe_id, "status": "failed"})
+            return evidence, f"source-isolation probe {probe.probe_id} did not report blocked access"
+        evidence.append({"id": probe.probe_id, "status": "passed"})
+    return evidence, None
+
+
+def _source_access_audit_error(metrics: dict, required: bool) -> str | None:
+    if not required:
+        return None
+    audit = metrics.get("source_access_audit")
+    if not isinstance(audit, dict):
+        return "source-access audit is unavailable"
+    status = audit.get("status")
+    if status == "clean":
+        return None
+    if status == "access_observed":
+        ids = audit.get("matched_marker_ids") or []
+        return "source-access audit observed attempted access: " + ", ".join(map(str, ids))
+    if status == "incomplete":
+        return "source-access audit is incomplete"
+    return "source-access audit is unavailable"
 
 
 def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
@@ -1563,6 +2127,24 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     agent_backend = get_agent_backend(args.agent_backend)
     judge_backend = get_judge_backend(args.judge_backend)
 
+    # Scripted follow-up turns. Absent/empty ⇒ single-turn, which takes exactly
+    # the pre-existing path all the way down to the backend.
+    try:
+        followup_turns = parse_followup_turns(checks.get("turns"))
+    except ValueError as exc:
+        res.error = f"invalid turns declaration: {exc}"
+        return res
+    if followup_turns and not getattr(agent_backend, "supports_multi_turn", False):
+        # Checked BEFORE a workspace is built or an agent run is burned, and
+        # reported as a hard error rather than degrading to single-turn: a
+        # turn-1-only transcript graded against a multi-turn rubric reads as an
+        # agent regression instead of an unsupported provider.
+        res.error = (
+            f"scenario scripts {len(followup_turns)} follow-up turn(s); agent "
+            f"backend {agent_backend.name!r} cannot drive multi-turn"
+        )
+        return res
+
     # Codex has no --plugin-dir skill activation: the skills are staged into the
     # workspace and the agent is told where to read them. Claude activates them
     # as a plugin, so its prompt gets no skill-file hint. `has_skills` is only
@@ -1571,30 +2153,66 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         agent_backend.name != "claude" and bool(skill_set.skills)
     )
 
-    pocket_spec = scenario_needs_pocket(scenario_dir)
-    # Pocket cells run the agent with extra_dirs=[] (see the agent call below),
+    desktop_spec = scenario_needs_desktop(scenario_dir)
+    http_stub_spec = scenario_needs_http_stub(scenario_dir)
+    # desktop cells run the agent with extra_dirs=[] (see the agent call below),
     # so the prompt must not advertise an examples directory the agent can never
     # --add-dir, or it wastes turns hunting for it.
-    extra_dirs = [] if pocket_spec is not None else (
+    extra_dirs = [] if desktop_spec is not None else (
         [EXAMPLES_DIR] if EXAMPLES_DIR.is_dir() else []
     )
     prompt = build_agent_prompt(
         agent_task, args.docs_base, bool(extra_dirs),
         skills_in_workspace=skills_in_workspace,
+        source_isolation=bool(checks.get("agent_source_isolation")),
     )
     agent_model = effective_agent_model(
-        pocket_spec is not None, agent_backend.name, args.agent_model
+        desktop_spec is not None, agent_backend.name, args.agent_model
     )
     preflight_metrics: dict[str, object] = {}
-    if pocket_spec is not None:
+    isolation, isolation_error = _resolve_source_isolation(
+        checks, args, agent_backend.name, scenario_dir
+    )
+    if isolation_error:
+        res.error = f"source-isolation infrastructure invalid: {isolation_error}"
+        return res
+    isolation_identity = isolation.identity() if isolation is not None else None
+    if isolation is not None:
+        probe_metrics, probe_error = _source_isolation_probes(isolation, scenario_dir)
+        preflight_metrics["source_isolation_attestation"] = {
+            "capability_id": isolation.capability_id,
+            "profile_fingerprint": isolation.profile_fingerprint,
+            "wrapper_path": isolation.wrapper_path,
+            "wrapper_sha256": isolation.wrapper_sha256,
+        }
+        preflight_metrics["source_isolation_probes"] = probe_metrics
+        if probe_error:
+            res.metrics = preflight_metrics
+            res.error = f"source-isolation infrastructure invalid: {probe_error}"
+            return res
+
+    def source_audit_failure(metrics: dict) -> RunResult | None:
+        """Stop before any verifier, workspace fact, cache, or judge sees it."""
+        audit_error = _source_access_audit_error(metrics, isolation is not None)
+        if audit_error is None:
+            return None
+        res.metrics = {
+            **preflight_metrics,
+            **metrics,
+            "agent_model": agent_model,
+        }
+        res.error = f"source-isolation infrastructure invalid: {audit_error}"
+        return res
+
+    if desktop_spec is not None:
         # Run the infrastructure gate even when an agent transcript is cached:
         # a rebuild can drift from the closure/skill contract between runs.
-        with tempfile.TemporaryDirectory(prefix="eval-pocket-runtime-") as runtime_tmp:
+        with tempfile.TemporaryDirectory(prefix="eval-desktop-runtime-") as runtime_tmp:
             try:
-                preflight_bin, preflight_env, _ = _pocket_runtime(
+                preflight_bin, preflight_env, _ = _desktop_runtime(
                     scenario_dir, Path(runtime_tmp)
                 )
-                preflight_error = pocket_preflight(
+                preflight_error = desktop_preflight(
                     scenario_dir, preflight_bin, preflight_env
                 )
             except RuntimeError as exc:
@@ -1602,12 +2220,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         if preflight_error:
             # Deliberately stable: callers distinguish this infrastructure
             # error from an agent FAIL without parsing build-specific details.
-            res.error = "pocket preflight failed"
-            res.metrics["pocket_preflight_error"] = preflight_error
+            res.error = "desktop preflight failed"
+            res.metrics["desktop_preflight_error"] = preflight_error
             return res
-        preflight_metrics["pocket_preflight"] = "passed"
-        if _POCKET_PREFLIGHT_ENDPOINT:
-            preflight_metrics["pocket_preflight_endpoint"] = _POCKET_PREFLIGHT_ENDPOINT
+        preflight_metrics["desktop_preflight"] = "passed"
+        if _JOB_PREFLIGHT_ENDPOINT:
+            preflight_metrics["desktop_preflight_endpoint"] = _JOB_PREFLIGHT_ENDPOINT
 
     # Agent step (cacheable). The agent run is the slow/expensive part; cache it
     # keyed on everything that affects the transcript so judge-only iteration is
@@ -1617,7 +2235,8 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     if cache_dir:
         key = _agent_cache_key(
             skill_set, scenario_dir, prompt, agent_backend.name,
-            agent_model, args.agent_effort,
+            agent_model, args.agent_effort, followup_turns,
+            source_isolation_identity=isolation_identity,
         )
         cache_file = cache_dir / f"agent-{key}.json"
 
@@ -1633,9 +2252,20 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         except json.JSONDecodeError:
             cached = None
 
+    if cached and isolation is not None:
+        identity_matches = cached.get("source_isolation_identity") == isolation_identity
+        audit_error = _source_access_audit_error(cached.get("metrics", {}), True)
+        if not identity_matches or audit_error is not None:
+            with contextlib.suppress(OSError):
+                cache_file.unlink()  # type: ignore[union-attr]
+            res.metrics = preflight_metrics
+            reason = "identity does not match" if not identity_matches else audit_error
+            res.error = f"source-isolation cache entry evicted: {reason}"
+            return res
+
     if cached:
         trace = cached["trace"]
-        metrics = {**cached["metrics"], "cached": True}
+        metrics = {**cached["metrics"], **preflight_metrics, "cached": True}
         facts = list(cached.get("facts", []))
         ok = True
     else:
@@ -1643,11 +2273,35 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # on PATH so the query skill's shipped HTTP toolchain drives the real
         # tools. Tool calls reach Snowflake, so allow a longer timeout.
         mcp_spec = scenario_needs_mcp(scenario_dir)
+        # Omitted entirely for single-turn scenarios so their call is byte-for-
+        # byte what it was, and a backend that never sees the kwarg cannot be
+        # perturbed by multi-turn support existing.
+        turn_kwargs = {"followup_turns": followup_turns} if followup_turns else {}
+        source_audit_kwargs = (
+            {
+                "source_audit_markers": list(isolation.markers),
+                "executable": isolation.wrapper_path,
+            }
+            if isolation is not None else {}
+        )
+        source_isolation_env = (
+            {
+                "EVAL_SOURCE_ISOLATION_CAPABILITY_ID": isolation.capability_id,
+                "EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT": isolation.profile_fingerprint,
+                # Export the RESOLVED root map, not just whatever the operator
+                # happened to put in the environment. Roots may arrive via
+                # --source-isolation-root, and the wrapper reads them only from
+                # this variable — so without this the flag declares a root the
+                # harness probes but the sandbox never denies.
+                "EVAL_SOURCE_ISOLATION_ROOTS": json.dumps(dict(isolation.roots)),
+            }
+            if isolation is not None else {}
+        )
         agent_timeout = (
             max(args.agent_timeout, MCP_AGENT_TIMEOUT_S)
             if mcp_spec is not None
-            else max(args.agent_timeout, POCKET_AGENT_TIMEOUT_S)
-            if pocket_spec is not None
+            else max(args.agent_timeout, JOB_AGENT_TIMEOUT_S)
+            if desktop_spec is not None
             else args.agent_timeout
         )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
@@ -1669,56 +2323,90 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                         ok, trace, metrics = agent_backend.run_agent(
                             ws, prompt, agent_model, agent_timeout,
                             extra_dirs=extra_dirs, effort=args.agent_effort,
-                            env_overrides=env_over, path_prepend=bin_dir,
-                            skill_pack_dir=plugin_dir,
+                            env_overrides={**env_over, **source_isolation_env}, path_prepend=bin_dir,
+                            skill_pack_dir=plugin_dir, **source_audit_kwargs,
+                            **turn_kwargs,
                         )
+                        failure = source_audit_failure(metrics)
+                        if failure is not None:
+                            return failure
                 except (RuntimeError, TimeoutError) as exc:
                     res.error = f"MCP server setup failed: {exc}"
                     return res
-            elif pocket_spec is not None:
+            elif desktop_spec is not None:
                 try:
-                    bin_dir, env_over, pocket_python = _pocket_runtime(
+                    bin_dir, env_over, desktop_python = _desktop_runtime(
                         scenario_dir, Path(tmp)
                     )
                 except RuntimeError as exc:
-                    res.error = f"pocket runtime setup failed: {exc}"
+                    res.error = f"desktop runtime setup failed: {exc}"
                     return res
                 # Both the agent forcing-function checker and the pristine
                 # harness verifier place snapshot state under the workspace so
-                # pocket_process_guard can clean it after normal exit, timeout,
+                # desktop_process_guard can clean it after normal exit, timeout,
                 # or a killed verifier subprocess.
                 env_over = {
                     **env_over,
-                    "NXD_POCKET_CHECK_TMPDIR": str(ws / ".pocket-check-tmp"),
+                    **source_isolation_env,
+                    "NXD_JOB_CHECK_TMPDIR": str(ws / ".desktop-check-tmp"),
                 }
                 # Keep the workspace until the pristine verifier has re-served
                 # its snapshots. The guard then runs on all outcomes, including
                 # a timed-out Claude process.
-                with pocket_process_guard(
+                with desktop_process_guard(
                     ws, bin_dir / "nxd-desktop-supervisor", env_over
                 ):
-                    # Pocket narrows the tool allowlist (no web/docs escape
+                    # desktop narrows the tool allowlist (no web/docs escape
                     # hatch). Backends that gate per-tool (Claude) honour it;
-                    # sandbox-based ones (Codex) ignore it, so a pocket run is
+                    # sandbox-based ones (Codex) ignore it, so a desktop run is
                     # not comparable across providers.
-                    pocket_kwargs = {"allowed_tools": POCKET_AGENT_ALLOWED_TOOLS}
+                    desktop_kwargs = {"allowed_tools": JOB_AGENT_ALLOWED_TOOLS}
+                    # The guard wraps the WHOLE turn loop: run_agent returns
+                    # only once every turn is done, so the cleanup below fires
+                    # once at the end and never sweeps a supervisor out from
+                    # under a turn still to come.
                     ok, trace, metrics = agent_backend.run_agent(
                         ws, prompt, agent_model, agent_timeout,
                         extra_dirs=[], effort=args.agent_effort,
                         env_overrides=env_over, path_prepend=bin_dir,
-                        skill_pack_dir=plugin_dir, **pocket_kwargs,
+                        skill_pack_dir=plugin_dir, **desktop_kwargs,
+                        **source_audit_kwargs, **turn_kwargs,
                     )
-                    if checks.get("pocket_verify"):
-                        facts.append(pocket_harness_fact(
-                            scenario_dir, ws, pocket_python,
-                            str(pocket_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
+                    failure = source_audit_failure(metrics)
+                    if failure is not None:
+                        return failure
+                    if checks.get("desktop_verify"):
+                        facts.append(desktop_harness_fact(
+                            scenario_dir, ws, desktop_python,
+                            str(desktop_spec.get("workflow", "invoice-pulse")), bin_dir, env_over
                         ))
+            elif http_stub_spec is not None:
+                # A runner-started local REST fixture the agent reaches over a
+                # real socket for the duration of this run — see
+                # http_stub_server(). No extra interpreter/subprocess: the stub
+                # is stdlib-only and runs in this process.
+                try:
+                    with http_stub_server(scenario_dir, ws, http_stub_spec,
+                                          agent_backend.name):
+                        ok, trace, metrics = agent_backend.run_agent(
+                            ws, prompt, agent_model, agent_timeout,
+                            extra_dirs=extra_dirs, effort=args.agent_effort,
+                            skill_pack_dir=plugin_dir, **turn_kwargs,
+                        )
+                except HttpStubSetupError as exc:
+                    res.error = f"http stub setup failed: {exc}"
+                    return res
             else:
                 ok, trace, metrics = agent_backend.run_agent(
                     ws, prompt, agent_model, agent_timeout,
                     extra_dirs=extra_dirs, effort=args.agent_effort,
-                    skill_pack_dir=plugin_dir,
+                    env_overrides=source_isolation_env or None,
+                    skill_pack_dir=plugin_dir, **source_audit_kwargs,
+                    **turn_kwargs,
                 )
+                failure = source_audit_failure(metrics)
+                if failure is not None:
+                    return failure
 
             # Read the produced files INSIDE the `with`, while the temporary
             # workspace still exists. Outside it the directory is already
@@ -1745,10 +2433,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         # a cache hit the workspace no longer exists, and replaying quoted file
         # contents as authoritative ground truth would describe a run that never
         # happened.
-        if ok and cache_file and pocket_facts_infrastructure_error(facts) is None:
+        if ok and cache_file and desktop_facts_infrastructure_error(facts) is None:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
-                json.dumps({"trace": trace, "metrics": metrics, "facts": facts}),
+                json.dumps({
+                    "trace": trace,
+                    "metrics": metrics,
+                    "facts": facts,
+                    "source_isolation_identity": isolation_identity,
+                }),
                 encoding="utf-8",
             )
 
@@ -1798,9 +2491,9 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         res.error = str(metrics.get("error", "agent run failed"))
         return res
 
-    verifier_infrastructure_error = pocket_facts_infrastructure_error(facts)
+    verifier_infrastructure_error = desktop_facts_infrastructure_error(facts)
     if verifier_infrastructure_error:
-        res.error = f"pocket harness infrastructure failure: {verifier_infrastructure_error}"
+        res.error = f"desktop harness infrastructure failure: {verifier_infrastructure_error}"
         return res
 
     det_infrastructure_error = deterministic_check_infrastructure_error(facts)
@@ -1814,15 +2507,15 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     res.verdict = run_judge(
         judge_backend, scenario_dir, checks, trace, final_answer,
         args.judge_model, args.judge_timeout, effort=args.judge_effort,
-        facts=facts,
+        facts=facts, metrics=metrics,
     )
-    if checks.get("pocket_verify") and not pocket_facts_passed(facts):
+    if checks.get("desktop_verify") and not desktop_facts_passed(facts):
         # The verifier re-serves the actual published closure and is the hard
         # acceptance gate; facts are not merely advisory evidence for the judge.
         res.verdict["overall_pass"] = False
         prior = str(res.verdict.get("summary", ""))
         res.verdict["summary"] = (
-            f"{prior} Pocket verifier did not pass; the cell is mechanically failed."
+            f"{prior} Desktop verifier did not pass; the cell is mechanically failed."
         ).strip()
     if det_status == "failed":
         # The checker computes the answer from ground truth; it is the hard
@@ -1877,6 +2570,18 @@ def main() -> int:
     parser.add_argument("--cache-dir", default=None,
                         help="Cache agent transcripts here; reuse on re-run when "
                              "skills/task/fixtures/model are unchanged.")
+    parser.add_argument("--source-isolation-capability-id", default=None,
+                        help="Operator capability ID for protected-source evals "
+                             "(or EVAL_SOURCE_ISOLATION_CAPABILITY_ID).")
+    parser.add_argument("--source-isolation-profile-fingerprint", default=None,
+                        help="Exact 64-hex source-isolation profile fingerprint "
+                             "(or EVAL_SOURCE_ISOLATION_PROFILE_FINGERPRINT).")
+    parser.add_argument("--codex-wrapper", default=None,
+                        help="Configured Codex isolation wrapper executable "
+                             "(or EVAL_CODEX_WRAPPER).")
+    parser.add_argument("--source-isolation-root", action="append", dest="source_isolation_roots",
+                        help="Operator-only symbolic protected root as NAME=PATH; repeatable. "
+                             "Alternatively set EVAL_SOURCE_ISOLATION_ROOTS to a JSON object.")
     parser.add_argument("--docs-base", default=DEFAULT_DOCS_BASE,
                         help="Public platform docs base URL given to every run.")
     parser.add_argument("--report", type=Path,
@@ -1938,6 +2643,13 @@ def main() -> int:
         print("No scenarios selected.", file=sys.stderr)
         return 2
 
+    try:
+        get_agent_backend(args.agent_backend).check_dependencies()
+        get_judge_backend(args.judge_backend).check_dependencies()
+    except BackendDependencyError as exc:
+        print(f"eval dependency check failed: {exc}", file=sys.stderr)
+        return 2
+
     cells = [(ss, sc) for ss in selected_sets for sc in scenarios]
     total = len(cells)
     started = time.time()
@@ -1987,7 +2699,7 @@ def main() -> int:
             "agent_model": args.agent_model,
             "scenario_agent_models": {
                 scenario.name: effective_agent_model(
-                    scenario_needs_pocket(scenario) is not None,
+                    scenario_needs_desktop(scenario) is not None,
                     args.agent_backend,
                     args.agent_model,
                 )

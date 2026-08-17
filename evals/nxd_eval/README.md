@@ -309,4 +309,4 @@ model-dependent (the grader is itself an LLM). So:
 
 - The public API (`Suite`, `Case`, `checks`, `gold`, `run_suite`, `certify`) — §E.
 - The statistics contract (`stats.py`) and its unit tests — §F.
-- The `nxd-eval-harness` skill directory + the 3 lockstep pack edits — §G.
+- The `nxd-run-evals` skill directory + the 3 lockstep pack edits — §G.

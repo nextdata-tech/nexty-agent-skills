@@ -1,0 +1,729 @@
+{
+  "date": "2026-07-31",
+  "label": "nxd-generate-dp: round-two Pocket CSV runtime contract fixes",
+  "notes": "Current-rubric baseline versus round-two review fixes. The pocket-custom-contracts cells are RETRACTED and superseded by the 2026-07-31 source-isolated Pocket record because these runs did not prove answer-source isolation; their Pocket verdicts and efficiency metrics must not be cited. Non-Pocket cells retain their original status. The initial head arm resolved uv through an unconfigured asdf shim for generate-runnable and Pocket; PATH-fixed reruns passed 16/16 and 5/5. API initial was 4/6 from an agent-authored port-name error; its repeat hit the harness 1200s agent timeout before evidence or judging completed, so no API pass is claimed.",
+  "plugin_version": "0.27.0",
+  "reports": {
+    "baseline-main-current-rubric": {
+      "elapsed_s": 723.7,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-terra",
+      "scenario_agent_models": {
+        "api-to-vector-data-product-build": "gpt-5.6-terra",
+        "generate-runnable-dp-from-intent": "gpt-5.6-terra",
+        "policy-compliance-failure": "gpt-5.6-terra"
+      },
+      "judge_model": "gpt-5.6-sol",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "concurrency": 3,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "api-to-vector-data-product-build",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 4299516,
+            "output_tokens": 31098,
+            "reasoning_output_tokens": 10497,
+            "cached_input_tokens": 4128512,
+            "tool_calls": 38,
+            "shell_calls": 29,
+            "sandbox_failures": 0,
+            "shell_successes": 26,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "no-secrets-in-source",
+                "pass": true,
+                "why": "The trace shows the transform retrieving a bearer token dynamically from the API runtime context, and the final literal-secret scan passed."
+              },
+              {
+                "id": "service-names-from-brief",
+                "pass": true,
+                "why": "The displayed spec wires the input as `issue-tracker-api` and the output service as `pgvector-search-store`, matching the brief verbatim."
+              },
+              {
+                "id": "transform-signature-matches-ports",
+                "pass": true,
+                "why": "The NXD package-loader successfully built the spec, providing concrete validation of the transform-to-port wiring."
+              },
+              {
+                "id": "promise-expectation-placement",
+                "pass": true,
+                "why": "The displayed spec places `issue-id-required` through `.expectation(...)` directly on the source-aligned input, with no evidence of a misplaced output promise."
+              },
+              {
+                "id": "no-schema-on-vector-output",
+                "pass": true,
+                "why": "The trace explicitly records pgvector-without-output-schema as a pinned requirement, while the displayed spec attaches the model only to the input and reports a successful spec build."
+              },
+              {
+                "id": "failed-validate-debugged",
+                "pass": true,
+                "why": "No `nxd validate` failure occurred because the CLI was unavailable, and both the handover and final answer honestly state that validation was not run while reporting the substitute checks."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All six checks pass based on the displayed spec, runtime credential handling, successful local validation, and explicit handover status."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 1503510,
+            "output_tokens": 9757,
+            "reasoning_output_tokens": 3351,
+            "cached_input_tokens": 1418496,
+            "tool_calls": 15,
+            "shell_calls": 13,
+            "sandbox_failures": 0,
+            "shell_successes": 11,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The trace shows a successful command reading inferred_model.json and the first three lines, including headers, of every supplied CSV before file authoring."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": false,
+                "why": "The inventory documents the six requested files, but the transcript never establishes that csv-source-path contains exactly the relative path data."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "The recorded file changes exclude the CSV files, and the final answer explicitly states that the supplied CSVs were unchanged."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": false,
+                "why": "The transcript reports validating customer_id and order_id, but never shows that models.py actually declares them with primary_key()."
+              },
+              {
+                "id": "derived-model-keys",
+                "pass": true,
+                "why": "The trace identifies only the two CSV-backed base models and no derived models, so this requirement is vacuously satisfied."
+              },
+              {
+                "id": "derived-through-port",
+                "pass": true,
+                "why": "No derived models are reported, so there are no derived rows requiring dlt resource routing."
+              },
+              {
+                "id": "derived-rows-flat",
+                "pass": true,
+                "why": "No derived models or derived resources are reported, making this constraint inapplicable."
+              },
+              {
+                "id": "derived-model-asserts",
+                "pass": true,
+                "why": "No derived models are reported, so no source-versus-derived assertion is required."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": false,
+                "why": "Although the agent stated an intention to use the public DSL, the transcript does not show the resulting models.py content or prove the absence of private imports and metadata writes."
+              },
+              {
+                "id": "annotations-carried-through",
+                "pass": false,
+                "why": "The transcript does not show that every inferred model, dimension, and metric description was carried into models.py."
+              },
+              {
+                "id": "description-reaches-the-agent",
+                "pass": false,
+                "why": "Reading guidance about builder placement does not prove that the authored descriptions are inside dimension(...) and metric(...)."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": false,
+                "why": "The transcript does not show the spec.py contents needed to verify all promises, view registrations, the duckdb port, and absence of semantic_tools()."
+              },
+              {
+                "id": "physical-models-vs-data-dirs",
+                "pass": false,
+                "why": "The trace identifies two CSV-backed physical models but does not show PHYSICAL_MODELS, promise coverage, or model_tables construction from that constant."
+              },
+              {
+                "id": "transform-contract",
+                "pass": false,
+                "why": "The transcript never exposes transform/main.py sufficiently to verify secrets-only sourcing, typed DuckDbOutput use, run-local dlt state, replace writes, read-back assertions, and completion-marker ordering."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": false,
+                "why": "The required command failed while fetching dependencies and never produced ALL CHECKS PASSED."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer accurately reports that validation was incomplete and makes no claim that a supervisor build or governed semantic query ran."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The run honestly created a plausible closure and preserved the inputs, but the acceptance check failed and the transcript lacks evidence for most required authored-file contracts."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "policy-compliance-failure",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 693276,
+            "output_tokens": 6020,
+            "reasoning_output_tokens": 2363,
+            "cached_input_tokens": 634112,
+            "tool_calls": 13,
+            "shell_calls": 12,
+            "sandbox_failures": 0,
+            "shell_successes": 9,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "identifies-policy-type-first",
+                "pass": true,
+                "why": "Before editing, the trace shows the agent reading the describe output that names require-output-quality as DataQualityCompliance in the nextdata namespace, then diagnosing the missing output promise."
+              },
+              {
+                "id": "distinguishes-input-expectation-from-output-promise",
+                "pass": true,
+                "why": "The agent explicitly notes that the input already uses Soda and identifies the required fix as an output-side, port-level quality promise rather than another input expectation or schema-model promise."
+              },
+              {
+                "id": "adds-output-quality-promise-not-disable",
+                "pass": true,
+                "why": "The trace shows a Soda quality promise added to the Snowflake storage port with a corresponding ORDERS_CURATED contract file, without disabling or weakening the policy."
+              },
+              {
+                "id": "uses-current-activate-policy-flags",
+                "pass": true,
+                "why": "The agent inspected the current activate-policy help and correctly concluded reactivation was unnecessary, so it gave no invented or obsolete activation flags."
+              },
+              {
+                "id": "gives-exact-verify-commands",
+                "pass": true,
+                "why": "The final answer provides concrete launch, logs, describe, and policy-list commands for customer-orders-curated in the demo environment, including the required describe rerun."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All checks pass: the agent diagnosed the policy before editing, added the correct output-quality contract without weakening enforcement, and supplied concrete verification commands."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "head-initial": {
+      "elapsed_s": 658.1,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-terra",
+      "scenario_agent_models": {
+        "api-to-vector-data-product-build": "gpt-5.6-terra",
+        "generate-runnable-dp-from-intent": "gpt-5.6-terra",
+        "pocket-custom-contracts": "gpt-5.6-terra",
+        "policy-compliance-failure": "gpt-5.6-terra"
+      },
+      "judge_model": "gpt-5.6-sol",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "concurrency": 4,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "api-to-vector-data-product-build",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 2703768,
+            "output_tokens": 18935,
+            "reasoning_output_tokens": 5738,
+            "cached_input_tokens": 2590464,
+            "tool_calls": 20,
+            "shell_calls": 13,
+            "sandbox_failures": 0,
+            "shell_successes": 11,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "no-secrets-in-source",
+                "pass": true,
+                "why": "The shown transform reads the bearer token from `issue_tracker_api.token`, and no credential literal appears in the displayed generated code."
+              },
+              {
+                "id": "service-names-from-brief",
+                "pass": false,
+                "why": "The trace confirms `issue-tracker-api` but does not show `pgvector-search-store` wired as the output service, while the visible output port is named `pgvector-search`."
+              },
+              {
+                "id": "transform-signature-matches-ports",
+                "pass": false,
+                "why": "Neither the complete transform declaration nor the complete spec transform wiring is shown, so matching names cannot be verified from the transcript."
+              },
+              {
+                "id": "promise-expectation-placement",
+                "pass": true,
+                "why": "The visible spec attaches the custom `issue_ids_present` expectation to the input, and no misplaced output promise is shown."
+              },
+              {
+                "id": "no-schema-on-vector-output",
+                "pass": true,
+                "why": "The visible spec and final answer explicitly state that no model or schema was attached to the vector output port."
+              },
+              {
+                "id": "failed-validate-debugged",
+                "pass": true,
+                "why": "No failed `nxd validate` run occurred, and the handover honestly reports that `nxd validate` was not run while documenting the known DSL conflict."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The run demonstrates correct secret handling, contract placement, schema-less vector output, and honest validation reporting, but does not establish the required output service wiring or transform-signature alignment."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 2247216,
+            "output_tokens": 10549,
+            "reasoning_output_tokens": 3175,
+            "cached_input_tokens": 2147584,
+            "tool_calls": 22,
+            "shell_calls": 21,
+            "sandbox_failures": 0,
+            "shell_successes": 14,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The trace shows commands reading inferred_model.json and the first four lines, including headers, of every supplied CSV before file creation."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The checker reported PASS for required Python-only files, forbidden source YAML absence, and relative csv-source-path."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "The checker verified both CSV digests, and the final digest check matched the supplied fixture hashes."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "The trace validated non-null unique first-column keys for both exports, and the checker passed promised primary-key checks."
+              },
+              {
+                "id": "derived-model-keys",
+                "pass": true,
+                "why": "No derived models were declared, so this requirement is not applicable."
+              },
+              {
+                "id": "derived-through-port",
+                "pass": true,
+                "why": "No derived models or derived rows existed, so this requirement is vacuously satisfied."
+              },
+              {
+                "id": "derived-rows-flat",
+                "pass": true,
+                "why": "No derived resources existed, and the checker also reported PASS for derived-resources-flat."
+              },
+              {
+                "id": "derived-model-asserts",
+                "pass": true,
+                "why": "No derived models were present, so no derived relationship assertions were required."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "The checker reported PASS for public semantic DSL use, inferred semantic roles, and absence of private semantic metadata."
+              },
+              {
+                "id": "annotations-carried-through",
+                "pass": true,
+                "why": "The checker explicitly reported PASS for annotations-carried-through."
+              },
+              {
+                "id": "description-reaches-the-agent",
+                "pass": true,
+                "why": "The checker passed annotations-carried-through and inferred-semantic-roles, supporting that role descriptions were placed where describe_model can expose them."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "The checker passed model promises, metric-view registration, desktop wiring, duckdb port use, and absence of semantic_tools."
+              },
+              {
+                "id": "physical-models-vs-data-dirs",
+                "pass": true,
+                "why": "The checker passed physical-model declaration, directory matching, model promises, and transform loading for customers and orders only."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "The checker reported PASS for transform-contract, direct-DDL prohibition, out-of-port-write prohibition, physical table loads, no child tables, and transform completion."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": false,
+                "why": "The exact required pinned uv command never completed successfully; only a fallback run with pandas 3.0.5 printed ALL CHECKS PASSED."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The agent accurately distinguished the fallback transform check from the blocked pinned run and did not claim a supervisor build or semantic query."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "All authored-closure checks are supported, but the scenario fails because the required pinned uv acceptance command did not complete with ALL CHECKS PASSED."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 1926099,
+            "output_tokens": 11161,
+            "reasoning_output_tokens": 3580,
+            "cached_input_tokens": 1817600,
+            "tool_calls": 18,
+            "shell_calls": 16,
+            "sandbox_failures": 0,
+            "shell_successes": 12,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "No version is set for command uv\nConsider adding one of the following versions in your config file at <operator-worktree>/.tool-versions\nuv 0.9.18\nuv 0.7.12"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": true,
+                "why": "CONTEXT.md separately inventories both user-stated guarantees and explicitly distinguishes them from inferred model constraints."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": true,
+                "why": "spec.py declares a source-aligned CSV input using the local csv-source, relative model_paths, and the named accepted-currency verifier script."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": true,
+                "why": "spec.py retains the ordinary orders schema promise and adds the distinct named order-total-reconciles custom promise to the DuckDB output."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": true,
+                "why": "Each custom contract owns one safe relative script containing exactly one on_verify registration and the exact data_product.verify() main guard, with no decorative scripts or secrets shown."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": false,
+                "why": "The authoritative deterministic runner result reports passed=false with exit code 126 due to an unset uv version, despite the agent's earlier ALL CHECKS PASSED claim."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The generated contract structure satisfies the content requirements, but the authoritative deterministic check did not pass. deterministic check failed: No version is set for command uv\nConsider adding one of the following versions in your config file at <operator-worktree>/.tool-versions\nuv 0.9.18\nuv 0.7.12"
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- data_product/CONTEXT.md (2599 bytes) ---\n# Pocket custom contracts\n\n## Purpose\n\nDesktop Pocket closure for the supplied `orders.csv`. It lands one unchanged\n`orders` row per supplied input line into the local DuckDB output.\n\n## Source and re-run\n\n- Source artifact: `data/orders/orders.csv`, a byte-for-byte copy of the\n  supplied `orders.csv`.\n- `csv-source-path` is the contained relative export root `data`.\n- The transform reads the CSV source through the `csv-source` secret and\n  replaces the local DuckDB `orders` table on each run.\n\n## Model\n\n- `orders` grain: one supplied order line, identified by source field\n  `line_id`.\n- The supplied `models.py` is retained without inferred accepted-value or\n  reconciliation rules. Its type, key, and field declarations remain ordinary\n  model checks.\n\n## Explicit custom-contract inventory\n\n| Name | Wording and authority | Phase and model | Executable rule and diagnostic |\n| --- | --- | --- | --- |\n| `accepted-currency` | User-stated: every input currency is EUR or USD. | Input expectation, `orders`, before transform. | Reads only `LocalFileInput.path_for(\"orders\")`; fails with up to 20 row numbers and observed currencies outside `{EUR, USD}`. |\n| `order-total-reconciles` | User-stated: after transform, each order total reconciles to its output line totals. | Output promise, `orders`, after DuckDB write. | Reads the context-resolved DuckDB table; fails when an `order_id` has inconsistent `order_total` values or its `SUM(line_total)` differs, returning up to 20 observed totals. |\n\nBoth contracts are `user_stated` guarantees, not inferred schema rules. No\ntolerance, time basis, or population rule is missing from the supplied wording:\nthe reconciliation applies to every output `order_id` exactly.\n\n## Validation boundary\n\nThe offline structural harness can validate closure wiring and verifier shape.\nIt cannot execute Desktop contract phases or prove the runtime produced data;\na successful structural check is not evidence that either verifier ran.\n\n## Adversarial review\n\nThe closure was reviewed against the original request before final structural\nvalidation. No evidence-backed semantic findings were raised: the two\nuser-stated guarantees are distinct executable checks in the required phases,\nand the output verifier independently reads DuckDB output rather than repeating\ntransform arithmetic.\n\n## Reopen\n\nBuild this directory with the Desktop supervisor using a stable workflow id.\nAfter a successful build, use the returned endpoint and bearer to describe the\n`orders` model and run semantic queries. The bearer is session-only and is not\nstored in this closure.\n\n--- data_product/infra-profile.yaml (363 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- data_product/spec.py (1736 bytes) ---\n\"\"\"Desktop Pocket closure for the supplied orders export.\"\"\"\n\nfrom nxd.spec import (\n    custom,\n    data_product,\n    data_product_output,\n    script,\n    simple_sensor,\n    source_aligned_input,\n    storage,\n)\n\nfrom models import orders\n\n_csv = \"/infra-profile/desktop-local#/services/csv-source\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\nspec = (\n    data_product(\n        name=\"pocket-custom-contracts\",\n        domain=\"desktop.local\",\n        version=\"0.0.1\",\n        infra_profile=\"desktop-local\",\n    )\n    .input(\n        \"orders-source\",\n        source_aligned_input()\n        .source(_csv)\n        .config({\"model_paths\": {\"orders\": \"orders/orders.csv\"}})\n        .expectation(orders)\n        .expectation(\n            custom(\"accepted-currency\")\n            .description(\"User-stated: every input currency is EUR or USD.\")\n            .model(orders)\n            .verify(\n                script(\"contracts/expectations/accepted-currency.py\").compute(_compute)\n            )\n        ),\n    )\n    .transform(\n        script(\"transform/main.py\")\n        .compute(_compute)\n        .secrets([_csv])\n        .when(simple_sensor(startup=False, when=\"any\"))\n    )\n    .output(\n        data_product_output()\n        .promise(orders)\n        .promise(\n            custom(\"order-total-reconciles\")\n            .description(\n                \"User-stated: after transform, each order total reconciles to its output line totals.\"\n            )\n            .model(orders)\n            .verify(\n                script(\"contracts/promises/order-total-reconciles.py\").compute(_compute)\n            )\n        )\n        .port(\"duckdb\", storage(_duckdb))\n    )\n)\n\n--- data_product/contracts/expectations/accepted-currency.py (1187 bytes) ---\n\"\"\"Verify the user-stated input currency guarantee.\"\"\"\n\nimport csv\n\nfrom nxd import data_product\nfrom nxd.core.context import LocalFileInput, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(orders_source: LocalFileInput) -> VerifyResult:\n    \"\"\"Reject input rows whose currency is outside the stated accepted set.\"\"\"\n    violations = []\n    with open(orders_source.path_for(\"orders\"), newline=\"\") as handle:\n        for row_number, row in enumerate(csv.DictReader(handle), start=2):\n            if row[\"currency\"] not in {\"EUR\", \"USD\"}:\n                violations.append(\n                    {\"row\": row_number, \"currency\": row[\"currency\"]}\n                )\n    if violations:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\n                \"contract\": \"accepted-currency\",\n                \"model\": \"orders\",\n                \"expected_currencies\": [\"EUR\", \"USD\"],\n                \"violations\": violations[:20],\n            },\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"checked\": True},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n\n--- data_product/contracts/promises/order-total-reconciles.py (1660 bytes) ---\n\"\"\"Verify the user-stated output reconciliation guarantee.\"\"\"\n\nimport duckdb\n\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(duckdb_output: DuckDbOutput) -> VerifyResult:\n    \"\"\"Reject output orders with inconsistent totals or line-total sums.\"\"\"\n    table = duckdb_output.full_table_name(\"orders\")\n    with duckdb.connect(duckdb_output.path, read_only=True) as connection:\n        mismatches = connection.execute(\n            f\"\"\"\n            SELECT\n                order_id,\n                MIN(order_total) AS observed_order_total,\n                SUM(line_total) AS observed_line_total_sum\n            FROM {table}\n            GROUP BY order_id\n            HAVING COUNT(DISTINCT order_total) != 1\n                OR MIN(order_total) != SUM(line_total)\n            LIMIT 20\n            \"\"\"\n        ).fetchall()\n    if mismatches:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\n                \"contract\": \"order-total-reconciles\",\n                \"model\": \"orders\",\n                \"mismatches\": [\n                    {\n                        \"order_id\": order_id,\n                        \"order_total\": str(order_total),\n                        \"line_total_sum\": str(line_total_sum),\n                    }\n                    for order_id, order_total, line_total_sum in mismatches\n                ],\n            },\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"order-total-reconciles\", \"model\": \"orders\", \"checked\": True},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"detail\": \"No version is set for command uv\\nConsider adding one of the following versions in your config file at <operator-worktree>/.tool-versions\\nuv 0.9.18\\nuv 0.7.12\", \"exit_code\": 126, \"failures\": [], \"passed\": false}"
+          ]
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "policy-compliance-failure",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 696922,
+            "output_tokens": 5620,
+            "reasoning_output_tokens": 2352,
+            "cached_input_tokens": 641792,
+            "tool_calls": 14,
+            "shell_calls": 13,
+            "sandbox_failures": 0,
+            "shell_successes": 11,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "identifies-policy-type-first",
+                "pass": true,
+                "why": "Before the file edit, the trace shows the agent read nxd-describe.txt identifying require-output-quality as nextdata DataQualityCompliance and then explicitly diagnosed it as an output-side policy."
+              },
+              {
+                "id": "distinguishes-input-expectation-from-output-promise",
+                "pass": true,
+                "why": "The agent clearly distinguished the existing Soda input expectation from the missing output quality promise and placed quality(soda, ...) on the Snowflake storage port."
+              },
+              {
+                "id": "adds-output-quality-promise-not-disable",
+                "pass": true,
+                "why": "The change adds storage(...).promise(quality(soda, \"contracts/orders_output_soda_checks.yml\")) plus the Soda contract while retaining the schema promise and leaving the STOP policy enabled."
+              },
+              {
+                "id": "uses-current-activate-policy-flags",
+                "pass": true,
+                "why": "The agent inspected the captured activate-policy help and supplied no reactivation command or invented activation flags because the existing policy parameters required no change."
+              },
+              {
+                "id": "gives-exact-verify-commands",
+                "pass": true,
+                "why": "The final answer gives concrete validate, launch, logs, describe, and policy-list commands, including the required customer-orders-curated data-product name and demo environment."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All checks pass: the agent diagnosed the exact policy before editing, added the correct output-side Soda promise and contract without weakening policy enforcement, and supplied concrete verification commands."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "head-path-fixed": {
+      "elapsed_s": 616.6,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-terra",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "gpt-5.6-terra",
+        "pocket-custom-contracts": "gpt-5.6-terra"
+      },
+      "judge_model": "gpt-5.6-sol",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "concurrency": 2,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 3700102,
+            "output_tokens": 10227,
+            "reasoning_output_tokens": 2630,
+            "cached_input_tokens": 3580160,
+            "tool_calls": 18,
+            "shell_calls": 17,
+            "sandbox_failures": 0,
+            "shell_successes": 14,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The trace shows a command reading inferred_model.json and the first lines, including headers, of every supplied CSV before the file-authoring event."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The authored-file event and final inventory show all six required source files, while the checker reports PASS for python-only-files and no-source-yaml."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "The acceptance run reports PASS for the pinned SHA-256 preservation checks for both supplied CSV files."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "The trace validates unique non-empty source keys and the checker reports PASS for promised-primary-keys and promised-base-primary-key-tuples."
+              },
+              {
+                "id": "derived-model-keys",
+                "pass": true,
+                "why": "The trace explicitly identifies no derived physical models, so this requirement is vacuously satisfied."
+              },
+              {
+                "id": "derived-through-port",
+                "pass": true,
+                "why": "There are no derived models requiring resources, and the checker confirms the physical transform contract and absence of direct DuckDB DDL or out-of-port writes."
+              },
+              {
+                "id": "derived-rows-flat",
+                "pass": true,
+                "why": "There are no derived resources, and the checker nevertheless reports PASS for derived-resources-flat and no-child-tables."
+              },
+              {
+                "id": "derived-model-asserts",
+                "pass": true,
+                "why": "No derived models were authored, so no derived-model relationship assertion was required."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "The checker reports PASS for public-semantic-dsl, no-private-semantic-metadata, inferred-semantic-roles, and metric-view-registered."
+              },
+              {
+                "id": "annotations-carried-through",
+                "pass": true,
+                "why": "The checker reports PASS for annotations-carried-through against the supplied inferred model."
+              },
+              {
+                "id": "description-reaches-the-agent",
+                "pass": true,
+                "why": "The checker\u2019s PASS for annotations-carried-through and inferred-semantic-roles establishes that required role descriptions were placed through the semantic role builders."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "The checker reports PASS for models-promised, metric-view-registered, desktop-wiring, no-semantic-tools, and duckdb-port."
+              },
+              {
+                "id": "physical-models-vs-data-dirs",
+                "pass": true,
+                "why": "The checker reports PASS for physical-model-declaration and physical-models-match-data-dirs, and the trace identifies customers and orders as the only physical models."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "The executed checker reports PASS for transform-contract, loaded customers and orders, no child tables, no direct DDL, no out-of-port write, and transform-complete."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": true,
+                "why": "The trace shows the specified pinned-dependency checker command executing successfully and printing ALL CHECKS PASSED."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer explicitly says that no supervisor build or live semantic query was run."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All sixteen checks pass based on the recorded input inspection, authored closure inventory, and successful shipped acceptance run."
+          },
+          "facts": []
+        },
+        {
+          "skill_set": "current_pack",
+          "scenario": "pocket-custom-contracts",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 4780837,
+            "output_tokens": 14823,
+            "reasoning_output_tokens": 5913,
+            "cached_input_tokens": 4651776,
+            "tool_calls": 16,
+            "shell_calls": 14,
+            "sandbox_failures": 0,
+            "shell_successes": 12,
+            "sandbox_blocked": false,
+            "agent_model": "gpt-5.6-terra",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "contract-inventory",
+                "pass": true,
+                "why": "CONTEXT.md explicitly records both guarantees as user-stated executable contracts and separately states that no field semantics or acceptance rules were inferred."
+              },
+              {
+                "id": "csv-input-expectation",
+                "pass": true,
+                "why": "The named accepted-currency expectation is attached to the orders-source source-aligned input using the local-file csv-source, relative orders/orders.csv model path, and its own verifier script."
+              },
+              {
+                "id": "duckdb-output-promise",
+                "pass": true,
+                "why": "The DuckDB output retains the ordinary .promise(orders) schema promise and adds the distinct named order-total-reconciles custom promise."
+              },
+              {
+                "id": "verifier-script-shape",
+                "pass": true,
+                "why": "Each custom contract owns one unique safe relative Python path whose file has exactly one on_verify registration and the exact __main__ data_product.verify() guard, with no extra contract scripts or secrets shown."
+              },
+              {
+                "id": "deterministic-check",
+                "pass": true,
+                "why": "The authoritative deterministic checker completed with exit code 0 and reported ALL CHECKS PASSED."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All five Pocket custom-contract checks pass based on the authoritative workspace contents and deterministic checker result."
+          },
+          "facts": [
+            "WORKSPACE FILES (read by the harness from the agent's workspace after the run \u2014 this is the agent's actual output, authoritative over anything the transcript does or does not show; grade content checks about these files from here, NOT from whether the agent echoed them):\n--- data_product/CONTEXT.md (2501 bytes) ---\n# CONTEXT \u2014 pocket-custom-contracts\n\nWorkflow id: `pocket-custom-contracts`\nClosure path: `/private/var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-pocket-custom-contracts-mv6qayu3/workspace/data_product`\n\n## Intent\n\nThis desktop Pocket data product loads the supplied order lines unchanged and\nenforces two user-stated guarantees: input currency is limited to EUR or USD,\nand each transformed order's reported total equals the sum of its output line\ntotals.\n\n## Population & sample-selection rule\n\n- Source population: every row in the supplied `orders.csv`.\n- Sample rule: none. The connector export is a byte-for-byte copy of the\n  supplied CSV, so no source row is selected out.\n\n## Inferred fields & determinism caveats\n\n- No field semantics or acceptance rules were inferred. `models.py` is the\n  supplied model, and both executable contracts are explicit user guarantees.\n- The transform is source-aligned and deterministic: it loads the CSV through\n  the DuckDB output port with replace disposition.\n\n## Required-capture fields (downstream depends on these)\n\n- `currency`: required by the `accepted-currency` input expectation. Missing\n  values fail because they are outside the accepted set. Missing for source\n  rows: none observed in the supplied CSV.\n- `order_id`, `order_total`, and `line_total`: required by the\n  `order-total-reconciles` output promise. Null values fail the promise.\n  Missing for source rows: none observed in the supplied CSV.\n\n## Executable custom contracts\n\n- `accepted-currency` \u2014 input expectation on `orders-source`; authority:\n  explicit user guarantee. It reads only the declared `orders` model path and\n  fails any currency other than `EUR` or `USD`.\n- `order-total-reconciles` \u2014 output promise on the DuckDB `orders` table;\n  authority: explicit user guarantee. It fails null reconciliation fields,\n  inconsistent per-order totals, and any order whose line-total sum differs\n  from its reported order total.\n\n## Reopen\n\nResume first with `list_data_products`, then\n`resume_data_product(workflow=\"pocket-custom-contracts\")`. If the published\nartifact is unavailable, rebuild with `build_data_product` using the closure\npath above and the same workflow id. After either route, use `describe_models`\nbefore querying.\n\n## Known blockers\n\n- No desktop supervisor or `nxd` CLI is connected in this workspace. Structural\n  checks can validate parseability and wiring, but cannot execute either custom\n  contract phase or publish a Pocket release.\n\n--- data_product/infra-profile.yaml (363 bytes) ---\napiVersion: infra.nextdata.com/v1\nkind: Profile\nmetadata:\n  name: desktop-local\nspec:\n  services:\n    - name: duckdb\n      driver: nxd:local/duckdb/storage:0.1.0\n      attributes: []\n    - name: python-compute\n      driver: nxd:local/python/compute:0.1.0\n      attributes: []\n    - name: csv-source\n      driver: nxd:local/file/storage:0.1.0\n      attributes: []\n\n--- data_product/spec.py (1780 bytes) ---\n\"\"\"Desktop Pocket data product for executable order-quality guarantees.\"\"\"\n\nfrom nxd.spec import (\n    custom,\n    data_product,\n    data_product_output,\n    script,\n    simple_sensor,\n    source_aligned_input,\n    storage,\n)\n\nfrom models import orders\n\n_csv = \"/infra-profile/desktop-local#/services/csv-source\"\n_compute = \"/infra-profile/desktop-local#/services/python-compute\"\n_duckdb = \"/infra-profile/desktop-local#/services/duckdb\"\n\n_output = (\n    data_product_output()\n    .promise(orders)\n    .promise(\n        custom(\"order-total-reconciles\")\n        .description(\n            \"User-stated: each transformed order total reconciles to its output line totals.\"\n        )\n        .model(orders)\n        .verify(\n            script(\"contracts/promises/order-total-reconciles.py\").compute(_compute)\n        )\n    )\n    .port(\"duckdb\", storage(_duckdb))\n)\n\nspec = (\n    data_product(\n        name=\"pocket-custom-contracts\",\n        description=\"Orders with executable input currency and output reconciliation guarantees.\",\n        domain=\"desktop.local\",\n        version=\"0.0.1\",\n        infra_profile=\"desktop-local\",\n    )\n    .transform(\n        script(\"transform/main.py\")\n        .compute(_compute)\n        .secrets([_csv])\n        .when(simple_sensor(startup=False, when=\"any\"))\n    )\n    .input(\n        \"orders-source\",\n        source_aligned_input()\n        .source(_csv)\n        .config({\"model_paths\": {\"orders\": \"orders/orders.csv\"}})\n        .expectation(\n            custom(\"accepted-currency\")\n            .description(\"User-stated: every input currency is EUR or USD.\")\n            .model(orders)\n            .verify(\n                script(\"contracts/expectations/accepted-currency.py\").compute(_compute)\n            )\n        ),\n    )\n    .output(_output)\n)\n\n--- data_product/contracts/expectations/accepted-currency.py (1168 bytes) ---\n\"\"\"Executable input expectation for the user-stated accepted currencies.\"\"\"\n\nimport csv\n\nfrom nxd import data_product\nfrom nxd.core.context import LocalFileInput, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(orders_source: LocalFileInput) -> VerifyResult:\n    \"\"\"Reject source rows whose currency is outside the stated accepted set.\"\"\"\n    violations = []\n    with open(orders_source.path_for(\"orders\"), newline=\"\") as handle:\n        for row_number, row in enumerate(csv.DictReader(handle), start=2):\n            if row[\"currency\"] not in {\"EUR\", \"USD\"}:\n                violations.append({\"row\": row_number, \"currency\": row[\"currency\"]})\n    if violations:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\n                \"contract\": \"accepted-currency\",\n                \"model\": \"orders\",\n                \"violation_count\": len(violations),\n                \"violations\": violations[:20],\n            },\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"accepted-currency\", \"model\": \"orders\", \"checked\": True},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n\n--- data_product/contracts/promises/order-total-reconciles.py (1943 bytes) ---\n\"\"\"Executable output promise for the user-stated order-total reconciliation.\"\"\"\n\nimport duckdb\n\nfrom nxd import data_product\nfrom nxd.core.context import DuckDbOutput, VerifyResult, VerifyResultEnum\n\n\n@data_product.on_verify()\ndef verify(duckdb_output: DuckDbOutput) -> VerifyResult:\n    \"\"\"Reject incomplete, inconsistent, or unreconciled transformed orders.\"\"\"\n    table = duckdb_output.full_table_name(\"orders\")\n    with duckdb.connect(duckdb_output.path, read_only=True) as connection:\n        mismatches = connection.execute(\n            f\"\"\"\n            WITH null_values AS (\n                SELECT order_id\n                FROM {table}\n                WHERE order_id IS NULL\n                   OR order_total IS NULL\n                   OR line_total IS NULL\n                GROUP BY order_id\n            ),\n            inconsistent_totals AS (\n                SELECT order_id\n                FROM {table}\n                GROUP BY order_id\n                HAVING COUNT(DISTINCT order_total) != 1\n                   OR MIN(order_total) != SUM(line_total)\n            ),\n            mismatched_orders AS (\n                SELECT order_id FROM null_values\n                UNION\n                SELECT order_id FROM inconsistent_totals\n            )\n            SELECT order_id, COUNT(*) OVER () AS mismatch_count\n            FROM mismatched_orders\n            LIMIT 20\n            \"\"\"\n        ).fetchall()\n    if mismatches:\n        return VerifyResult(\n            VerifyResultEnum.FAILED,\n            {\n                \"contract\": \"order-total-reconciles\",\n                \"model\": \"orders\",\n                \"mismatch_count\": mismatches[0][1],\n                \"sample_order_ids\": [row[0] for row in mismatches],\n            },\n        )\n    return VerifyResult(\n        VerifyResultEnum.PASS,\n        {\"contract\": \"order-total-reconciles\", \"model\": \"orders\", \"checked\": True},\n    )\n\n\nif __name__ == \"__main__\":\n    data_product.verify()\n",
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    },
+    "head-api-rerun": {
+      "elapsed_s": 1200.3,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-terra",
+      "scenario_agent_models": {
+        "api-to-vector-data-product-build": "gpt-5.6-terra"
+      },
+      "judge_model": "gpt-5.6-sol",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "api-to-vector-data-product-build",
+          "ok": false,
+          "error": "agent timed out after 1200s",
+          "metrics": {
+            "error": "agent timed out after 1200s",
+            "agent_model": "gpt-5.6-terra"
+          },
+          "verdict": {},
+          "facts": []
+        }
+      ]
+    }
+  }
+}
