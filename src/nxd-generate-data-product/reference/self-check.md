@@ -66,7 +66,9 @@ those two phases rather than an accident of how they were added.
   with a resolvable key spends real money there, so a consent verdict delivered
   afterwards would describe consent already spent. **What it cannot see is in
   "What Phase G cannot see"** — a green Phase G is not proof that no unconsented
-  mapping happened.
+  mapping happened. This is a static artifact-binding check, not a protected
+  Desktop human-authorization check: the current supervisor must independently
+  admit the mapper build before it can create a run.
 - **Phase B — dry-run of the transform** against a scratch DuckDB: the
   supervisor's execution minus the kernel.
 - **Phase C — closure-record gate** (Step 6a). A closure can be structurally
@@ -334,7 +336,9 @@ name as `grant.vendored_harness`, described below.
 `nxd.experimental.field_mapper` is deliberately **not** in Phase E's
 `MODEL_ROOTS`: it would fail every legitimate mapper closure, and the two gates
 answer different questions. Green Phase G means a binding consent artifact
-exists. Specifically not:
+exists. In a Desktop supervisor flow it does **not** prove a human
+authorization: the static grant/request files are untrusted scope proposals,
+and only protected supervisor confirmation can admit a run. Specifically not:
 
 - **The hash is computed by the harness, not by this gate.** Phase G
   subprocesses `python -m nxd.experimental.field_mapper spec-id` rather than

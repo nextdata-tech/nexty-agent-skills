@@ -1,5 +1,11 @@
 # The desktop-local infra profile
 
+## Contents
+
+- The profile shape (this section)
+- What the supervisor does with `attributes`
+- `csv-source-path`
+
 Step 5 of nxd-generate-data-product. The desktop closure ships its own infra profile
 declaring the three local services `spec.py` references. Emit it **verbatim in
 this shape** — the driver ids and service names are fixed and only rarely does
@@ -41,6 +47,49 @@ populate `attributes` with the real credential — see
 [`database-source.md`](database-source.md) and [`api-source.md`](api-source.md).
 For 2+ instances of one type, emit one service per instance, per
 [`multi-source.md`](multi-source.md).
+
+## What the supervisor does with `attributes`
+
+**`attributes` is live input, not documentation.** For every service the
+transform names in `.secrets([...])`, the supervisor reads that service's
+`attributes` and delivers them to `ingest(...)` as its `secrets` argument. This
+is the whole delivery mechanism for a credential: nothing else in the closure
+carries one, and nothing else needs to.
+
+Four properties follow from how it delivers them, and each one has bitten a
+closure that assumed otherwise:
+
+- **It is ONE flat map.** Every declared service's attributes are merged
+  together and keyed by the raw attribute `key`; the service name is discarded
+  and never appears. A `db-source` attribute `host` arrives as
+  `secrets["host"]` — there is no `secrets["db-source"]` or `secrets["db_source"]`
+  level to index first, and reading one raises `KeyError` at transform time,
+  after the credential has already been resolved.
+- **Only declared services contribute.** A populated `attributes` list on a
+  service absent from `.secrets([...])` delivers nothing. The profile declares
+  what exists; `spec.py` decides what the transform receives.
+- **`attributes: []` contributes no attribute *keys*** — but the service is not
+  therefore absent from the map. `csv-source` and `file-source` receive their
+  export root as a single key contributed by their own driver, so an ordinary
+  CSV closure still reads `secrets["csv_source"]` (see `csv-source-path` below,
+  and `transform-template.md`). Their companion path file exists for an
+  unrelated reason: the path must be authored **relative** so the supervisor can
+  resolve it inside the pinned snapshot.
+- A labeled multi-source CSV closure is the transform-only exception. Its
+  `csv-source-<label>` services do not contribute `csv_source_<label>` keys;
+  each labeled root is resolved from its relative path file below
+  `NXD_TRANSFORM_ROOT` and is carried by its root-level `companion-files`
+  declaration. Keep the ordinary single-source rule above for the unlabeled
+  `csv-source` service.
+- **`public:` does not gate the transform.** It controls `export_data_product`
+  redaction only; the transform reads every attribute regardless of the flag.
+  Marking a credential `public: true` does not hide it from anything — it
+  exposes it to an export.
+
+Because the map is flat, two services declaring the same `key` collide, one wins
+on merge order, and the loser vanishes with no error. Prefix the attribute keys
+per instance — [`multi-source.md`](multi-source.md) has the rule and the worked
+example.
 
 **On the `csv-source` driver id.** Emit `nxd:local/file/storage:0.1.0`, which is
 what the desktop runtime expects for a local-file service. The self-check

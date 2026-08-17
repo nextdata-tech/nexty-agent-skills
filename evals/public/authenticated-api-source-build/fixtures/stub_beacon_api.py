@@ -14,6 +14,19 @@ a REAL header rather than a hardcoded/omitted one: replaying the closure's
 request with the token stripped must fail, and with the token intact must
 succeed.
 
+Client header: every request must ALSO carry ``User-Agent:
+nexty-test-client/1.0`` (``REQUIRED_USER_AGENT``). A request without it gets
+**403** and a non-secret error body — *before* the token is looked at, so a
+correctly-credentialed client still fails. This reproduces NEX-873: dlt sends
+``User-Agent: dlt/1.28.2`` by default, and an upstream that filters unknown
+clients rejects it while the same credentials succeed under curl. The gate is
+what makes the header requirement decidable rather than advisory — a closure
+that omits ``client.headers`` cannot land a single row, and one that abandons
+dlt for a hand-rolled ``urllib`` loop fails ``ingestion:rest-api-resources-used``
+instead. ``OBSERVED`` records what actually arrived on the wire so the checker
+can assert the configured header reached the request rather than inferring it
+from the source.
+
 Endpoints:
 
   GET /v1/monitors?page=&per_page=   -- monitor directory (12 monitors total)
@@ -48,11 +61,115 @@ payload gotchas:
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 VALID_TOKEN = "bcn_live_9f3ac2e7d84b41f0a6c5d2e19b7f0033"
+
+# When set, every observation is ALSO appended here as one JSON line. OBSERVED
+# lives in whichever process imported this module, and the supervisor E2E's
+# verifier is a separate process: it re-serves the published definition and then
+# has to answer "did the closure the supervisor materialized reach this fixture,
+# carrying the required header?". In-memory state cannot answer that across a
+# process boundary, and a checker that infers it from landed rows is inferring —
+# the rows would look identical if the header requirement had quietly stopped
+# being enforced.
+#
+# TWO channels, and the distinction is load-bearing:
+#
+#   set_observations_path()  the RUNNER's channel. `run.py` runs cells in a
+#                            thread pool inside ONE process and loads a fresh
+#                            copy of this module per cell, so a per-module
+#                            attribute is private to its cell. A process-global
+#                            (an env var) is not: two concurrent cells would
+#                            write into one another's logs, and the first to
+#                            finish would unset the variable under the other.
+#   OBSERVATIONS_ENV         the VERIFIER's channel. It is a separate process
+#                            that never starts a server, so it has no module
+#                            instance to be handed — the runner passes the path
+#                            in its environment. Deliberately NOT set in the
+#                            agent's environment: the log records the headers
+#                            the agent's own failing requests carried, and
+#                            reading it back turns "diagnose an unexplained
+#                            403" — the task — into a lookup.
+OBSERVATIONS_ENV = "NXD_STUB_OBSERVATIONS"
+
+_OBSERVATIONS_PATH: Path | None = None
+
+
+def set_observations_path(path: Path | str | None) -> None:
+    """Log every request to `path` — this module instance only."""
+    global _OBSERVATIONS_PATH  # noqa: PLW0603 - per-instance, see above
+    _OBSERVATIONS_PATH = Path(path) if path else None
+
+# The client header Beacon requires of every caller. Non-secret by construction:
+# it is published in BRIEF.md, carries no entropy, and is safe in a traceback.
+REQUIRED_USER_AGENT = "nexty-test-client/1.0"
+
+# Every inbound request, in arrival order: (path, user_agent, authorized).
+# Appended under _OBSERVED_LOCK because ThreadingHTTPServer serves each request
+# on its own thread. Read it via `observations()`, never directly.
+OBSERVED: list[tuple[str, str, bool]] = []
+_OBSERVED_LOCK = threading.Lock()
+
+
+def observations() -> list[tuple[str, str, bool]]:
+    """A snapshot copy of OBSERVED — safe to iterate while the server runs."""
+    with _OBSERVED_LOCK:
+        return list(OBSERVED)
+
+
+def reset_observations() -> None:
+    with _OBSERVED_LOCK:
+        OBSERVED.clear()
+    path = _observations_path()
+    if path is not None:
+        # Truncate rather than unlink: the verifier may already hold the path,
+        # and a caller resetting before a re-serve wants an empty log, not a
+        # missing one it cannot distinguish from "the stub never started".
+        path.write_text("", encoding="utf-8")
+
+
+def _observations_path() -> Path | None:
+    """This instance's log, else the one named in the environment.
+
+    Instance first: in the runner, the env var may belong to a different cell
+    entirely, and writing there would corrupt that cell's evidence rather than
+    merely losing this one's.
+    """
+    if _OBSERVATIONS_PATH is not None:
+        return _OBSERVATIONS_PATH
+    raw = os.environ.get(OBSERVATIONS_ENV, "").strip()
+    return Path(raw) if raw else None
+
+
+def _record(path_and_query: str, user_agent: str, authorized: bool) -> None:
+    with _OBSERVED_LOCK:
+        OBSERVED.append((path_and_query, user_agent, authorized))
+    log = _observations_path()
+    if log is None:
+        return
+    line = json.dumps({"path": path_and_query, "user_agent": user_agent,
+                       "authorized": authorized})
+    # Append under the same lock the in-memory list uses: ThreadingHTTPServer
+    # serves each request on its own thread, and two interleaved writes would
+    # produce a line the verifier cannot parse.
+    with _OBSERVED_LOCK, log.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
+def logged_observations(path: Path) -> list[dict]:
+    """Read a file-backed observation log written by another process."""
+    if not path.is_file():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            out.append(json.loads(line))
+    return out
 
 TEAMS = {
     1001: "payments",
@@ -140,13 +257,26 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args) -> None:  # silence default stderr logging
         return
 
-    def _unauthorized(self) -> None:
-        body = json.dumps({"error": "unauthorized", "detail": "missing or invalid bearer token"}).encode()
-        self.send_response(401)
+    def _json_error(self, code: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _unauthorized(self) -> None:
+        self._json_error(401, {"error": "unauthorized",
+                               "detail": "missing or invalid bearer token"})
+
+    def _forbidden(self) -> None:
+        # Deliberately says "client is not permitted" rather than naming the
+        # header: a real filtering upstream does not explain itself, and an
+        # error body that reads as a permissions problem is exactly what sends
+        # an author after the credential instead of the User-Agent. The body
+        # carries no secret, so it is safe in a traceback.
+        self._json_error(403, {"error": "forbidden",
+                               "detail": "client is not permitted to access this API"})
 
     def _paginate(self, items: list[dict], qs: dict) -> dict:
         page = int(qs.get("page", ["1"])[0])
@@ -164,8 +294,18 @@ class _Handler(BaseHTTPRequestHandler):
         }
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib method name
+        user_agent = self.headers.get("User-Agent", "")
         auth = self.headers.get("Authorization", "")
-        if auth != f"Bearer {VALID_TOKEN}":
+        authorized = auth == f"Bearer {VALID_TOKEN}"
+        _record(self.path, user_agent, authorized)
+        # The header gate runs BEFORE the credential check, so a correctly
+        # authenticated client is still refused. That ordering is the point:
+        # it is what makes the 403 unattributable to the token and forces the
+        # author to compare headers rather than re-check the credential.
+        if user_agent != REQUIRED_USER_AGENT:
+            self._forbidden()
+            return
+        if not authorized:
             self._unauthorized()
             return
         parsed = urlparse(self.path)

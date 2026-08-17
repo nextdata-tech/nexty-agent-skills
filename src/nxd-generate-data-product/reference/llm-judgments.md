@@ -256,7 +256,9 @@ This recipe lands the **judgement model** only. Land the `scoring_rubric` and
 
 The judgement model is a **base reference model**, landed exactly like
 `merchant_categories` or `nxd_decisions` — authored as data, flowing through the
-same dlt reader loop with no special casing:
+same dlt reader loop with no special casing (on a file connector; an
+`api-source` / `db-source` closure has no such loop and needs its own
+`@dlt.resource` — see step 3 below):
 
 1. Write judgement rows to `data/<name>/batch-00N.csv` (one file per batch).
 2. Declare the model in `models.py` with a metric view beside it so the rows are
@@ -404,6 +406,11 @@ candidate_judgments_metrics = semantic_view(
    `spec.py`, add the model to `BASE_MODELS` in the transform. It is a base model
    like any other — a composite `primary_key()` across the four key columns, and
    the naming invariant applies unchanged.
+
+   On an `api-source` or `db-source` closure, `BASE_MODELS` alone does not land
+   it: those connectors have no `data/` reader loop, so the rows need their own
+   `@dlt.resource` appended to the same `readers` list. Same carve-out and same
+   reasoning as `derivation-plan.md` § "Landing it" step 3.
 
 ## What the transform does with it (deferred)
 

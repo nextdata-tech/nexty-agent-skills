@@ -1,0 +1,263 @@
+{
+  "id": "2026-08-13-nxd-generate-data-product-mapper-approval-contract",
+  "date": "2026-08-13",
+  "label": "nxd-generate-data-product: mapper approval contract rerun",
+  "notes": "Reran the runnable data-product generation scenario locally with the Codex agent/judge backend because the Claude CLI was not authenticated. Both arms used identical runner/model settings and passed all 16 checks. The live Desktop mapper-admission path is not exercised by this public scenario; its separate deterministic supervisor/skills contract tests passed 744 tests after the review fixes.",
+  "plugin_version": "0.37.1",
+  "report_tags": {
+    "before-origin-main": "before-origin-main",
+    "after-mapper-approval": "after-mapper-approval"
+  },
+  "reports": {
+    "before-origin-main": {
+      "elapsed_s": 221.0,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "high",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 1122107,
+            "output_tokens": 7117,
+            "reasoning_output_tokens": 1055,
+            "cached_input_tokens": 1049600,
+            "tool_calls": 13,
+            "shell_calls": 12,
+            "sandbox_failures": 0,
+            "shell_successes": 10,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "Before authoring, the trace runs commands to print inferred_model.json and the first four lines of every supplied CSV."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The final inventory and the passing python-only-files/no-source-yaml checks show exactly the requested authored closure without generated YAML sources."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "The acceptance output explicitly passes csv-preserved for both customers and orders."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "The checker passes both promised-primary-keys and promised-base-primary-key-tuples."
+              },
+              {
+                "id": "derived-model-keys",
+                "pass": true,
+                "why": "The reported closure has only customers and orders as physical base models, so no derived-model key requirement applies."
+              },
+              {
+                "id": "derived-through-port",
+                "pass": true,
+                "why": "No derived models are reported or loaded, making this derived-row delivery requirement vacuously satisfied."
+              },
+              {
+                "id": "derived-rows-flat",
+                "pass": true,
+                "why": "No derived models are reported, and the checker also passes derived-resources-flat."
+              },
+              {
+                "id": "derived-model-asserts",
+                "pass": true,
+                "why": "No derived model is present in the reported physical-model mapping, so no derived-model assertion is required."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "The acceptance output passes public-semantic-dsl and no-private-semantic-metadata."
+              },
+              {
+                "id": "annotations-carried-through",
+                "pass": true,
+                "why": "The acceptance output explicitly passes annotations-carried-through."
+              },
+              {
+                "id": "description-reaches-the-agent",
+                "pass": true,
+                "why": "The passing annotations-carried-through check is accompanied by checker logic that rejects descriptions placed only on field or metric_field wrappers."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "The checker passes desktop-wiring, models-promised, metric-view-registered, no-semantic-tools, and duckdb-port."
+              },
+              {
+                "id": "physical-models-vs-data-dirs",
+                "pass": true,
+                "why": "The acceptance output passes physical-models-match-data-dirs and physical-model-declaration, while loading only customers and orders."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "The checker passes transform-contract, no-direct-duckdb-ddl, no-out-of-port-write, and transform-complete."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": true,
+                "why": "The trace shows the pinned check command completing with exit code 0 and printing ALL CHECKS PASSED."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer explicitly states that no supervisor build or semantic query was claimed or run."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All checks pass based on the trace, final inventory, and successful shipped acceptance output."
+          },
+          "facts": []
+        }
+      ]
+    },
+    "after-mapper-approval": {
+      "elapsed_s": 247.3,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "generate-runnable-dp-from-intent": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "high",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "generate-runnable-dp-from-intent",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 1508142,
+            "output_tokens": 7926,
+            "reasoning_output_tokens": 899,
+            "cached_input_tokens": 1425408,
+            "tool_calls": 19,
+            "shell_calls": 18,
+            "sandbox_failures": 0,
+            "shell_successes": 15,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "read-inputs",
+                "pass": true,
+                "why": "The trace shows the agent reading inferred_model.json and printing the CSV headers/data before authoring files."
+              },
+              {
+                "id": "python-only-closure",
+                "pass": true,
+                "why": "The trace inventories all six required authored files, and the checker reports both python-only-files and no-source-yaml passing."
+              },
+              {
+                "id": "source-data-preserved",
+                "pass": true,
+                "why": "The final verifier output explicitly passes byte-preservation checks for both customers and orders CSVs."
+              },
+              {
+                "id": "base-primary-keys",
+                "pass": true,
+                "why": "The verifier passes promised-primary-keys and promised-base-primary-key-tuples for the two physical models."
+              },
+              {
+                "id": "derived-model-keys",
+                "pass": true,
+                "why": "No derived models are reported in the produced mapping or verifier output, so this requirement is vacuously satisfied."
+              },
+              {
+                "id": "derived-through-port",
+                "pass": true,
+                "why": "No derived models are present, so there are no derived rows requiring through-port landing."
+              },
+              {
+                "id": "derived-rows-flat",
+                "pass": true,
+                "why": "No derived models are present, and the verifier also reports derived-resources-flat passing."
+              },
+              {
+                "id": "derived-model-asserts",
+                "pass": true,
+                "why": "No derived models are present, so no derived-model relationship assertions are required."
+              },
+              {
+                "id": "public-semantic-dsl",
+                "pass": true,
+                "why": "The verifier reports both public-semantic-dsl and no-private-semantic-metadata passing."
+              },
+              {
+                "id": "annotations-carried-through",
+                "pass": true,
+                "why": "The verifier explicitly reports annotations-carried-through passing."
+              },
+              {
+                "id": "description-reaches-the-agent",
+                "pass": true,
+                "why": "The semantic-role and annotation checks passed, including the checker logic described in the trace for rejecting wrapper-level descriptions."
+              },
+              {
+                "id": "desktop-wiring",
+                "pass": true,
+                "why": "The verifier passes desktop-wiring, no-semantic-tools, and duckdb-port."
+              },
+              {
+                "id": "physical-models-vs-data-dirs",
+                "pass": true,
+                "why": "The verifier passes physical-model-declaration, physical-models-match-data-dirs, and models-promised."
+              },
+              {
+                "id": "transform-contract",
+                "pass": true,
+                "why": "The verifier passes transform-contract, no-direct-duckdb-ddl, no-out-of-port-write, loaded tables, no-child-tables, and transform-complete."
+              },
+              {
+                "id": "acceptance-check",
+                "pass": true,
+                "why": "The trace shows the shipped checker being run successfully and ending with ALL CHECKS PASSED."
+              },
+              {
+                "id": "honest-result",
+                "pass": true,
+                "why": "The final answer expressly states that no supervisor build or semantic query was claimed."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All checks pass based on the recorded inspection, authored-file verification, and successful final closure check."
+          },
+          "facts": []
+        }
+      ]
+    }
+  }
+}

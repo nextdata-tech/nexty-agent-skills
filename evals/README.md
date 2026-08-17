@@ -35,18 +35,18 @@ There are three ways the suite runs, and only one of them is unconditional:
 | | PR with the `run-evals` label | Release (`v*` tag) | Manual (`workflow_dispatch`) | Local only |
 |---|---|---|---|---|
 | **Harness** | scenario suite (`run.py`) | scenario suite (`run.py`) | scenario suite + `nxd_eval` smoke | query loop, cross-dp-joins, full `nxd_eval` |
-| **Scenarios** | only those covering changed skills, minus 12 `ci_skip` | every runnable scenario (19 of 31; the 12 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
+| **Scenarios** | only those covering changed skills, minus 14 `ci_skip` | every runnable scenario (20 of 34; the 14 `ci_skip` are excluded) | any, incl. `ci_skip` | any |
 | **Skill set** | `current_pack` | `current_pack` | any | any |
 | **Backend** | `codex` both sides | `codex` both sides | any | any |
-| **Gate** | fails on regression vs. the 10 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
+| **Gate** | fails on regression vs. the 12 baselined cells | same, plus any cell that produced no verdict fails the release | reports drift, never fails | — |
 
 One caveat that applies to both gating columns: `evals/baselines/public.json` records
-10 cells, of which 5 are `PASS`. Two cells are marked `flaky`
-(`false-pass-validation`, which is one of those five, and `nxd-setup-headless-auth`
+12 cells, of which 7 are `PASS`. Two cells are marked `flaky`
+(`false-pass-validation`, which is one of those seven, and `nxd-setup-headless-auth`
 on the `FAIL` side); a flaky cell never gates in either direction, so it can neither
 regress nor be recorded as an improvement. Gating is on regression from a baselined,
 non-flaky `PASS` (see below), so unbaselined cells run and are reported but cannot
-fail anything — the effective gating surface is 4 cells, not the whole suite.
+fail anything — the effective gating surface is 6 cells, not the whole suite.
 Widening it means recording more cells in the baseline, not changing the workflows.
 
 **Pull requests are opt-in.** Add the `run-evals` label to a PR and the affected
@@ -107,7 +107,7 @@ one is responsible when a change ships unmeasured:
   scenarios whose `checks.json` names a changed skill (computed by
   `affected_scenarios.py`). Harness changes — `run.py`, `eval_backends.py`,
   `skill-sets.yaml`, the workflow — select every scenario.
-- **The 12 `ci_skip` scenarios never run automatically**, so the skills they
+- **The 14 `ci_skip` scenarios never run automatically**, so the skills they
   cover are unguarded. `nxd-query-data-product` is covered *only* by skipped
   scenarios and `nxd-analyze-mesh` has no scenario at all — for those two, a
   green eval check means "nothing ran", not "nothing regressed". Run them
@@ -208,11 +208,12 @@ Two properties worth knowing:
   says nothing about the agent, so it is reported separately and never recorded
   in the ledger as an agent failure.
 
-Only 7 of 31 public scenarios use this today
+Only 10 of 34 public scenarios use this today
 (`authenticated-api-source-build`, `coauthor-executable-policy-readback`,
 `coauthor-supplied-rubric`, `derive-models-from-questions`,
 `dp-static-artifact-lifecycle`, `desktop-custom-contracts`,
-`treasury-yield-curve`). It is the strongest signal available — prefer it
+`multi-source-labeled-roots`, `multi-source-labeled-roots-supervisor`,
+`treasury-yield-curve`, `worldbank-live`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)
@@ -553,13 +554,15 @@ the workflow) select every scenario, since they can alter any cell's outcome.
 
 A scenario that cannot run unattended sets `ci_skip` to a reason string and is
 never selected automatically. Run those locally or via `workflow_dispatch`.
-Twelve scenarios are currently skipped:
+Fourteen scenarios are currently skipped:
 
 | Scenario | Why |
 |---|---|
 | `job-loop-serve-query-refine` | needs a live desktop supervisor (`EVAL_DESKTOP_SUPERVISOR_DIR`) |
 | `job-loop-export-handoff` | needs a live desktop supervisor (`EVAL_DESKTOP_SUPERVISOR_DIR`) |
 | `treasury-yield-curve` | same |
+| `multi-source-labeled-roots-supervisor` | needs a compatible live desktop supervisor (`EVAL_DESKTOP_SUPERVISOR_DIR`) |
+| `authenticated-api-source-supervisor` | same, and the runner keeps its HTTP fixture bound across the verifier's re-serve |
 | `country-income-trajectory` | same |
 | `incremental-multi-model` | same |
 | `worldbank-live` | same, plus outbound network to `api.worldbank.org` |
@@ -795,7 +798,7 @@ the diff since the previous tag can span the whole pack — and this is the one 
 whose result is published as the version's evidence, so it should not be scoped
 by a heuristic.
 
-"Runnable" excludes the 12 `ci_skip` scenarios. It has to: `run.py` does not read
+"Runnable" excludes the 14 `ci_skip` scenarios. It has to: `run.py` does not read
 `ci_skip` (only `affected_scenarios.py` does), so a bare `--suite public` would
 run the scenarios that need a live desktop supervisor or a semantic MCP server,
 they would all ERROR, and since none of them are in the baseline

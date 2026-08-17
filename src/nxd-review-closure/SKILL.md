@@ -7,7 +7,7 @@ allowed-tools:
   - Grep
 metadata:
   author: nextdata
-  version: 0.36.5
+  version: 0.37.4
 ---
 
 # Review a generated closure — adversarially
@@ -26,7 +26,7 @@ this review.
 1. **The closure** — a directory containing
    `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
    `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
-   `build-record.json`, `README.md`, the connector companion artifact — and,
+   `build-record.json`, `README.md`, the connector companion artifact where the type has one — and,
    for a credentialed source, `SENSITIVE` and `.gitignore`
    — plus `data/` where the connector is file-based.
 2. **The original request** — the questions the user asked and any procedure

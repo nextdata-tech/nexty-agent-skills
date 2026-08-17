@@ -5,6 +5,10 @@
     "nxd-build-semantic-data-product"
   ],
   "ci_skip": "needs a live desktop supervisor plus outbound network to api.worldbank.org; CI provisions neither. Run locally or via workflow_dispatch",
+  "deterministic_check": {
+    "script": "check_worldbank_connector.py",
+    "deps": []
+  },
   "checks": [
     {
       "id": "payload-inspected-before-authoring",
@@ -12,7 +16,7 @@
     },
     {
       "id": "rest-connector-not-hand-rolled",
-      "check": "Ingestion goes through dlt's REST connector \u2014 rest_api_source / rest_api_resources with a RESTAPIConfig, per the api-source reference \u2014 with an api-source service in infra-profile.yaml and an api-source-endpoints companion file. FAIL if the transform hand-rolls fetching with requests/urllib in a loop and feeds rows to dlt as a plain generator, and FAIL if base_url or either endpoint path is a literal in transform/main.py rather than read from secrets[\"api_source\"] and the companion file."
+      "check": "CRITICAL. Ingestion goes through dlt's REST connector \u2014 rest_api_source / rest_api_resources with a RESTAPIConfig, per the api-source reference \u2014 with an api-source service in infra-profile.yaml carrying one endpoint_<model> attribute per model (public: true) and NO api-source-endpoints companion file. FAIL if the transform hand-rolls fetching with requests/urllib in a loop and feeds rows to dlt as a plain generator, and FAIL if base_url or either endpoint path is a literal in transform/main.py rather than read from the flat secrets map (secrets[\"base_url\"] and secrets[\"endpoint_<model>\"], the attribute keys themselves -- NOT secrets[\"api_source\"]). A HYBRID also fails: importing rest_api_resources while a requests/urllib/httpx call fetches the rows beside it is not the required architecture, and neither is dlt's own dlt.sources.helpers.requests wrapper driven by a hand-written loop. This covers every transform/*.py, not only main.py. Enforced by the authoritative DETERMINISTIC CHECK facts ingestion:rest-api-resources-used, ingestion:no-hardcoded-url-or-path, ingestion:flat-secrets-read, closure:endpoints-in-profile, closure:endpoints-public and closure:no-endpoints-companion; grade FROM THOSE FACTS rather than from whether the agent echoed the transform."
     },
     {
       "id": "data-selector-present",

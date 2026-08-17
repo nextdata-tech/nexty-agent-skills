@@ -1,0 +1,56 @@
+{
+  "name": "Generate a multi-source labeled CSV closure",
+  "skills": ["nxd-generate-data-product"],
+  "workspace_files": [
+    "companion-files",
+    "README.md",
+    "spec.py",
+    "models.py",
+    "infra-profile.yaml",
+    "transform/main.py",
+    "csv-source-*-path",
+    "data-*/*/*.csv"
+  ],
+  "deterministic_check": {
+    "script": "check_labeled_multi_source.py",
+    "deps": []
+  },
+  "checks": [
+    {
+      "id": "reads-all-source-shapes",
+      "check": "The trace shows the agent reading BRIEF.md, inferred_model.json, and each of source-orders, source-users, and source-archive before authoring the closure."
+    },
+    {
+      "id": "labeled-csv-wiring",
+      "check": "The closure has distinct labeled CSV connector services and relative csv-source-orders-path and csv-source-users-path files; the transform consumes those path files rather than expecting per-label secrets or binding either source through the single unlabeled source path."
+    },
+    {
+      "id": "nonempty-roots-carried",
+      "check": "data-orders/orders/*.csv and data-users/users/*.csv are present byte-for-byte, and the root-level companion-files manifest declares data-orders and data-users as directory roots for the structural pin model."
+    },
+    {
+      "id": "empty-root-omitted",
+      "check": "The zero-row archive source is deliberately omitted from the runtime closure: data-archive is not declared in companion-files and is not treated as a promised input that the transform must open."
+    },
+    {
+      "id": "manifest-refusals",
+      "check": "The effective companion manifest is UTF-8, relative, sorted, unique, and contains only one line per non-empty root; it does not declare data/, transform/, contracts/, a child file, an overlapping path, or a symlink."
+    },
+    {
+      "id": "pinned-runtime-resolution",
+      "check": "transform/main.py resolves data-orders and data-users below NXD_TRANSFORM_ROOT (or an equivalent pinned execution-root contract), never an absolute authoring path and never by writing/updating companion-files during transform execution."
+    },
+    {
+      "id": "runtime-capability-documentation",
+      "check": "README.md states that this closure requires a desktop supervisor with directory-companion support."
+    },
+    {
+      "id": "python-only-desktop-closure",
+      "check": "The final closure uses spec.py/models.py/infra-profile.yaml/transform/main.py/requirements.txt and the public desktop dlt-through-port shape, without hand-written deployment-spec.yaml, manifest.yaml, or models.yaml."
+    },
+    {
+      "id": "deterministic-check",
+      "check": "The withheld runner-side structural checker reports ALL CHECKS PASSED; the evaluator must not claim that a live supervisor was invoked."
+    }
+  ]
+}

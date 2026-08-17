@@ -56,6 +56,58 @@ SUITE_WIDE_PREFIXES = (
     ".github/workflows/evals.yml",
 )
 
+# Code a graded run executes that lives OUTSIDE any one scenario directory, and
+# the scenarios whose checkers import it. Without an entry here such a file maps
+# to nothing: it is not a suite-wide prefix, and the scenario-directory rule
+# below never sees it — so tightening a shared gate would select zero scenarios
+# and read as "no eval was affected".
+#
+# Narrower than SUITE_WIDE_PREFIXES on purpose: the blast radius of a shared
+# checker really is its importers, and a full-suite run to cover two scenarios
+# is a cost with no extra signal.
+SHARED_FIXTURE_SCENARIOS = {
+    "evals/tools/api_connector_gate.py": (
+        "authenticated-api-source-build",
+        "authenticated-api-source-supervisor",
+        "worldbank-live",
+    ),
+    "evals/tools/desktop_supervisor.py": (
+        "authenticated-api-source-supervisor",
+    ),
+    # Normalizes literal `for` loops before the labeled-root checkers analyse a
+    # transform. It decides whether a correct closure is READ correctly, so a
+    # change here can flip either scenario's verdict without either scenario
+    # directory being touched.
+    "evals/tools/loop_unroll.py": (
+        "multi-source-labeled-roots",
+        "multi-source-labeled-roots-supervisor",
+    ),
+    # The Beacon stub is the upstream for two scenarios: the build cell reaches
+    # it directly, and the supervisor cell borrows it via `fixtures_from`. A
+    # change to the payload, the auth gate or the User-Agent gate moves both.
+    "evals/public/authenticated-api-source-build/fixtures/stub_beacon_api.py": (
+        "authenticated-api-source-build",
+        "authenticated-api-source-supervisor",
+    ),
+}
+
+# Modules under `evals/tools/` that deliberately map to no scenario, with the
+# reason. Nothing above proves this map is COMPLETE — the failure it exists to
+# prevent (a shared file selecting zero scenarios) is silent, so a new module
+# added without an entry reproduces it exactly. `test_every_evals_tool_is_
+# classified` requires every `evals/tools/*.py` to be a key above or a key
+# here, which turns "someone forgot" into a red test and makes each exemption
+# a written judgement rather than an omission.
+EXEMPT_SHARED_TOOLS = {
+    # Harness plumbing, not a checker: no scenario's checker imports it, and
+    # `run.py` — already a suite-wide prefix — is what invokes it. The path
+    # comes from EVAL_CODEX_WRAPPER, so it is not resolved from this repo at
+    # all, and no public scenario currently opts into `agent_source_isolation`.
+    # Give it an entry above if one ever does.
+    "evals/tools/source-isolation-wrapper.py":
+        "invoked by run.py via EVAL_CODEX_WRAPPER; no scenario checker imports it",
+}
+
 
 def load_scenarios(suite: str) -> tuple[dict[str, list[str]], dict[str, str]]:
     """Return ``({scenario: [skill, ...]}, {scenario: ci_skip_reason})``."""
@@ -121,6 +173,9 @@ def select(
         parts = Path(p).parts
         if len(parts) > 2 and parts[0] == "evals" and parts[2] in scenarios:
             selected.add(parts[2])
+        for importer in SHARED_FIXTURE_SCENARIOS.get(p, ()):
+            if importer in scenarios:
+                selected.add(importer)
 
     # Coverage is measured before ci_skip is applied: a skill covered only by a
     # skipped scenario is genuinely covered by the suite, just not by CI.

@@ -1,5 +1,5 @@
 # self_check.py
-import ast, hashlib, json, re, sys, tempfile, time, traceback, types
+import ast, hashlib, json, os, re, stat, sys, tempfile, time, traceback, types
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1604,6 +1604,11 @@ else:
 if _real_path:
     nxd.__path__ = list(_real_path)
 sys.modules.update({"nxd": nxd, "nxd.core": core, "nxd.core.context": ctx})
+# A labeled multi-source closure carries its transform-only exports in
+# data-<label>/ roots rather than the ordinary data/ root. The supervisor names
+# the immutable snapshot explicitly, so the dry run must do the same instead
+# of relying on the current working directory.
+os.environ["NXD_TRANSFORM_ROOT"] = str(Path.cwd().resolve())
 try:
     from transform.main import BASE_MODELS, PHYSICAL_MODELS, ingest  # noqa: E402
 except Exception as exc:
@@ -1612,13 +1617,141 @@ except Exception as exc:
          "transform/main.py", tb=traceback.format_exc())
     fail_b()
 
-DIRS = [d.name for d in sorted(Path("data").iterdir()) if d.is_dir()]
-# Only BASE models are backed by data/. Derived models are landed by the
-# transform and appear in PHYSICAL_MODELS with no directory of their own.
+def _real_directory(path: Path) -> bool:
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except OSError:
+        return False
+
+
+def _real_regular_file(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except OSError:
+        return False
+
+
+source_roots = []
+if Path("data").exists() or Path("data").is_symlink():
+    source_roots.append(Path("data"))
+source_roots.extend(sorted(
+    path for path in Path(".").glob("data-*")
+    if _real_directory(path) or path.is_symlink()
+))
+
+# A labeled root is a transform-only source export. Keep each root's
+# ownership intact: flattening all child names into one set can make two labels
+# appear valid when they actually claim the same model, or let a symlink/empty
+# root reach the transform dry-run. The supervisor applies the same refusal
+# rules when it copies a declared companion tree.
+labeled_roots = [
+    root for root in source_roots
+    if root.name.startswith("data-") and root.name != "data-"
+]
+root_models: dict[Path, set[str]] = {}
+model_owners: dict[str, Path] = {}
+for source_root in source_roots:
+    if not _real_directory(source_root):
+        berr("closure.csv_root_invalid",
+             f"source export root must be a real directory, not a symlink: "
+             f"{source_root}", str(source_root))
+        continue
+    try:
+        children = list(source_root.iterdir())
+    except OSError as exc:
+        berr("closure.csv_root_invalid",
+             f"cannot inspect source export root {source_root}: {exc}",
+             str(source_root))
+        continue
+    model_dirs = set()
+    for child in children:
+        if child.is_symlink():
+            berr("closure.csv_root_invalid",
+                 f"source export contains a symlink: {child}", str(child))
+            continue
+        if not _real_directory(child):
+            continue
+        model_dirs.add(child.name)
+        prior = model_owners.setdefault(child.name, source_root)
+        if prior != source_root:
+            berr("closure.csv_root_invalid",
+                 f"model directory {child.name!r} is claimed by both "
+                 f"{prior} and {source_root}", str(child))
+    root_models[source_root] = model_dirs
+
+for source_root in labeled_roots:
+    label = source_root.name.removeprefix("data-")
+    if not root_models.get(source_root):
+        berr("closure.csv_root_invalid",
+             f"labeled export root {source_root} is empty or has no model "
+             "directory; omit it instead of declaring it", str(source_root))
+    for member in source_root.rglob("*"):
+        if member.is_symlink():
+            berr("closure.csv_root_invalid",
+                 f"labeled export tree contains a symlink: {member}",
+                 str(member))
+    path_file = Path(f"csv-source-{label}-path")
+    if not _real_regular_file(path_file):
+        berr("closure.csv_root_invalid",
+             f"labeled export root {source_root} requires a regular "
+             f"{path_file} companion file", str(path_file))
+        continue
+    try:
+        relative_path = path_file.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError) as exc:
+        berr("closure.csv_root_invalid",
+             f"cannot read {path_file}: {exc}", str(path_file))
+        continue
+    candidate = Path(relative_path)
+    if relative_path != source_root.name or candidate.is_absolute() \
+            or ".." in candidate.parts:
+        berr("closure.csv_root_invalid",
+             f"{path_file} must name its relative labeled root "
+             f"{source_root.name!r}, got {relative_path!r}", str(path_file))
+
+if labeled_roots:
+    manifest = Path("companion-files")
+    if not _real_regular_file(manifest):
+        berr("closure.csv_root_invalid",
+             "labeled export roots require a regular root-level "
+             "companion-files manifest", "companion-files")
+    else:
+        try:
+            declared = [
+                line.strip() for line in manifest.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+        except (OSError, UnicodeError) as exc:
+            declared = []
+            berr("closure.csv_root_invalid",
+                 f"cannot read companion-files: {exc}", "companion-files")
+        expected = sorted(root.name for root in labeled_roots)
+        if declared != expected or declared != sorted(set(declared)):
+            berr("closure.csv_root_invalid",
+                 f"companion-files must declare each non-empty labeled root "
+                 f"once, got {declared!r}, expected {expected!r}",
+                 "companion-files")
+        for entry in declared:
+            declared_root = Path(entry)
+            if (declared_root.is_absolute() or ".." in declared_root.parts
+                    or not _real_directory(declared_root)):
+                berr("closure.csv_root_invalid",
+                     f"companion-files entry is not a real relative directory: "
+                     f"{entry!r}", "companion-files")
+            if declared_root.is_symlink():
+                berr("closure.csv_root_invalid",
+                     f"companion-files entry is a symlink: {entry!r}",
+                     "companion-files")
+
+DIRS = sorted({model for models in root_models.values() for model in models})
+# BASE models are backed by the ordinary data/ root or by labeled data-<label>/
+# roots. Derived models are landed by the transform and appear in
+# PHYSICAL_MODELS with no source directory of their own.
 if set(BASE_MODELS) != set(DIRS):
     berr("runtime.base_models_mismatch",
-         f"base models must match data/: BASE_MODELS {sorted(set(BASE_MODELS))} "
-         f"!= data/ directories {sorted(set(DIRS))}", "transform/main.py",
+         f"base models must match source export directories: "
+         f"BASE_MODELS {sorted(set(BASE_MODELS))} != "
+         f"{sorted(set(DIRS))}", "transform/main.py",
          {"expected": sorted(set(DIRS)), "actual": sorted(set(BASE_MODELS))})
 if not set(BASE_MODELS) <= set(PHYSICAL_MODELS):
     berr("runtime.base_models_mismatch",
@@ -1633,7 +1766,11 @@ run = Path(tempfile.mkdtemp())
 out = DuckDbOutput(path=str(run / "data.duckdb"), schema="main",
                    model_tables={m: m for m in PHYSICAL_MODELS})
 try:
-    ingest(duckdb=out, secrets={"csv_source": str(Path("data").resolve())})
+    dry_run_secrets = (
+        {"csv_source": str(Path("data").resolve())}
+        if Path("data").is_dir() else {}
+    )
+    ingest(duckdb=out, secrets=dry_run_secrets)
 except AssertionError as exc:
     # A fired assert is the transform's OWN invariant rejecting the data it
     # produced. That is the check working, not the check being wrong.

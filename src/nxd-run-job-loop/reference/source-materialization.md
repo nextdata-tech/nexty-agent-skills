@@ -48,15 +48,23 @@ row with a different field count, or an unparseable value.
 
 ## Database connection
 
-Record host/port/database/schema, the table(s)/view(s) the user explicitly
-named, and the live credentials supplied now. Treat access as **read-only** and
-never invent a table name.
+Record host/port/database/schema and the table(s)/view(s) the user explicitly
+named — plus the credential **slot names** the connection needs (`user`,
+`password`), not their values. Treat access as **read-only** and never invent a
+table name.
 
 ## REST API
 
 Record the base URL, auth scheme, the endpoint(s)/resource(s) in scope, a sample
-response shape if available, any known pagination, and the live token/key if
-auth is required. Treat access as **read-only** and never fabricate an endpoint.
+response shape if available, and any known pagination. When auth is required,
+record the credential **slot names** for that scheme — per
+`nxd-generate-data-product`'s `reference/api-source.md`, e.g. `auth_token` for
+`bearer`, or `auth_username` + `auth_password` for `http_basic` — not their
+values. Treat access as **read-only** and never fabricate an endpoint.
+
+For both kinds: you gather the *shape* of the credential here. The value itself
+reaches the closure by one of the routes in **Where credentials land**, and
+asking the user to type it into chat is the last of them.
 
 ## Where credentials land
 
@@ -66,6 +74,43 @@ A database or API credential lands in exactly one place: the generated
 return. Per-type shape is in `nxd-generate-data-product`'s `reference/database-source.md`
 and `reference/api-source.md`; labeled instances in its
 `reference/multi-source.md`.
+
+**How the value gets there, in order of preference.** A pasted credential is in
+conversation history for good, and history is the one surface `SENSITIVE`,
+`.gitignore` and `chmod 0600` cannot reach — the same reasoning that keeps a
+credential out of a subagent's prompt (`reference/scheduling.md`) applies to the
+main thread, which is also a transcript. So prefer a route where you never see
+the value:
+
+1. **The user writes it.** Generate the closure with a placeholder in each slot,
+   then name the slots and the `infra-profile.yaml` path and ask the user to fill
+   them in directly. That file is already `0600`, gitignored and marked
+   `SENSITIVE` — it is the surface designed to hold the value. Wait for their
+   confirmation, then run the connectivity check. This is the human-boundary form
+   of the subagent's placeholder + `credential_slots` hand-back.
+2. **An environment variable already visible to your own tooling.** This route is
+   narrower than it sounds. A variable the user exports in their interactive
+   shell *after* the session starts is not visible to your tool calls, which run
+   in a separate process: reading it raises `KeyError`, or yields an empty string
+   you would then write into the profile as though it were the credential. It
+   works only when the variable is already in the environment your tools inherit
+   — set in the user's shell profile, or exported before the session began.
+   Given that, substitute it when writing the profile by reading `os.environ`
+   **inside** the script — never as a shell-expanded `$TOKEN` on a command line,
+   which lands the value in the transcript exactly as a paste would. Have that
+   script fail loudly on a missing or empty key rather than write a profile with
+   a hollow credential in it, and when the variable turns out not to be visible,
+   fall back to route 1 rather than asking the user to re-export and retry.
+   `generic-secrets` stores a literal string and does not interpolate, so the
+   substitution happens at write time, not at run time.
+3. **Pasted into chat — last resort.** If the user supplies it this way anyway,
+   do not echo it back, and say plainly that it now lives in conversation history
+   where no closure guard reaches it, so the credential should be rotated after
+   the build.
+
+Never invite route 3 when route 1 is available: "paste your token" and "fill in
+`auth_token` in `infra-profile.yaml`" cost the user the same keystrokes and
+differ only in where the secret comes to rest.
 
 ## Host path handoff
 

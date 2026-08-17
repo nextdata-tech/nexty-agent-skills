@@ -3,9 +3,11 @@
 ## Contents
 
 - The label rule
+- Colliding keys: prefix in the attribute keys
 - Naming table
 - Worked example: two database sources
 - Applying the pattern to file / API / CSV sources
+- Labeled CSV export roots and `companion-files`
 - What does NOT change
 
 Every connector type documented elsewhere in this pack (`csv-source` inline
@@ -23,13 +25,86 @@ CSV single-source path in particular is regression-tested by literal string
 assertions, so never label a source that is the only instance of its type.
 
 **Once a type has two or more instances**, each instance gets an
-author-chosen **source label**: short, lowercase, hyphen-separated (e.g.
-`orders`, `users`, `crm`), unique among instances of *that* type. Reusing a
-label across different types is harmless (`db-source-orders` and
-`api-source-orders` don't collide as service names) but avoid it for
-clarity. **desktop source-aligned inputs are the exception:** this is a
-transform-service naming rule for labeled CSVs, not permission to bind
-`.input(...).source(_csv_<label>)`; those inputs use the one unlabeled `_csv`.
+author-chosen **source label**: short, lowercase, hyphen-separated and
+carrying **no underscore** (e.g. `orders`, `users`, `crm`, `orders-eu`),
+unique across **every labeled instance in the closure — not merely within its
+own type**. Both halves of that rule are driven by the `generic-secrets`
+connectors — `db-source` and `api-source` — because those are the instances the
+transform separates by `<label>_` key prefix over a single flat `secrets` map
+spanning every service.
+
+- **No underscore in a label** is what keeps `<label>_` unambiguous. Because
+  labels use hyphens, `orders_` cannot match an `orders-eu_*` key and the two
+  instances partition cleanly. Sneak an underscore in and that stops holding:
+  `orders` alongside `orders_eu` is illegal, because `orders_` then matches
+  every `orders_eu_*` key and silently folds the two together.
+- **Unique across types, not per type**, because the prefix is the label
+  alone — the type is not part of it. `db-source-orders` and
+  `api-source-orders` both prefix their keys `orders_`, so one recovery loop
+  drags both services' fields into a single instance's dict, and any attribute
+  the two happen to share (`region`, `user`, `token`) collides outright in the
+  merge. Distinct *service* names do not rescue this: the service name is
+  discarded before the transform sees anything (see Colliding keys below).
+
+**Labeled `csv-source` instances separate by a different mechanism** in the
+transform-only multi-source case: each labeled path file names a relative root
+below the pinned execution root, so the transform does not expect a per-label
+`secrets[...]` entry. The single unlabeled `csv-source` case still receives its
+ordinary driver-supplied `csv_source` key. Do not infer a
+`csv_source_<label>` secret from a labeled service name; the labeled roots are
+carried by their path files and root-level `companion-files` declarations.
+
+**desktop source-aligned inputs are a separate channel:** this is a
+transform-service naming rule for labeled CSVs, not permission to bind a
+labeled root through `.input(...).source(_csv_<label>)`. The labeled roots do
+not create spec-level inputs; an unrelated ordinary CSV input, when present,
+uses the one unlabeled `_csv`.
+
+## Colliding keys: prefix in the attribute keys
+
+**`secrets` is one flat map, so any two services that declare the same attribute
+`key` collide.** The supervisor merges every service named in `.secrets([...])`
+into a single dict keyed by the raw attribute `key` — there is no per-service
+level to separate them. For a `generic-secrets` service (`db-source`,
+`api-source`) those keys are exactly the `attributes` you wrote, and the service
+name does not appear among them. (A `csv-source` / `file-source` does not carry
+`attributes`; its key — `csv_source`, `file_source` — is contributed by its own
+driver and is unaffected by this section.) Two
+`db-source-<label>` services that both declare `host` resolve to one
+`secrets["host"]`, and which one wins is the merge order, not your intent.
+
+**This fails silently.** The losing value is not reported, not logged, and not
+visible to the transform — there is no key to compare against, because the
+duplicate simply never existed in the merged map. A closure that reads the
+survivor connects to the wrong database and ingests real rows from it. Renaming
+the *services* does not help: the service name is discarded before the transform
+sees anything.
+
+**Check for it while writing the profile.** List the attribute keys of every
+service named in `.secrets([...])`, and treat any key appearing twice as a
+collision. It is an authoring-time check because it is not a runtime one.
+
+**Fix it by prefixing the attribute `key` in the profile**, since the key is the
+only thing that survives the merge:
+
+- **Two or more `generic-secrets` instances of the same type** (`db-source`,
+  `api-source`) — prefix *every* key of each instance with its label:
+  `orders_host`, `orders_password`, `users_host`, `users_base_url`. Uniform
+  prefixing keeps the transform's recovery loop regular
+  (`k.startswith(f"{label}_")`, as in the worked example below) and survives
+  someone later adding a field to one instance. Labeled `file-source` instances
+  retain their driver-supplied `file_source_<label>` keys. Labeled
+  transform-only `csv-source` instances are different: their roots are read
+  from the relative path files and pinned `data-<label>/` trees described
+  below, not from per-label `secrets[...]` keys.
+- **Mixed types that happen to share a key** — a `db-source` and an `api-source`
+  that both carry `region`, `user`, or a `token`. The canonical field sets do not
+  overlap, so this arises from fields *you* add. Prefix at least the colliding
+  keys; prefixing that whole instance is simpler to keep right than a
+  per-key exception list.
+
+The service name still carries the label — it names the instance in the profile
+and in `.secrets([...])` — but only the attribute keys reach the transform.
 
 ## Naming table
 
@@ -41,14 +116,14 @@ must be mirrored here.
 
 | Case | Service | `secrets[...]` key | Companion artifact | `spec.py` var |
 |---|---|---|---|---|
-| One database (unchanged) | `db-source` | `db_source` | `db-source-tables` | `_db` |
-| 2+ databases, labeled | `db-source-<label>` | `db_source_<label>` | `db-source-<label>-tables` | `_db_<label>` |
+| One database (unchanged) | `db-source` | the field keys — `host`, `port`, … | `db-source-tables` | `_db` |
+| 2+ databases, labeled | `db-source-<label>` | `<label>_<field>` — `orders_host`, … | `db-source-<label>-tables` | `_db_<label>` |
 | One file source (unchanged) | `file-source` | `file_source` | `file-source-path` | `_file` |
 | 2+ file sources, labeled | `file-source-<label>` | `file_source_<label>` | `file-source-<label>-path` | `_file_<label>` |
-| One API (unchanged) | `api-source` | `api_source` | `api-source-endpoints` | `_api` |
-| 2+ APIs, labeled | `api-source-<label>` | `api_source_<label>` | `api-source-<label>-endpoints` | `_api_<label>` |
+| One API (unchanged) | `api-source` | the attribute keys — `base_url`, `endpoint_<model>`, … | none | `_api` |
+| 2+ APIs, labeled | `api-source-<label>` | `<label>_<attr>` — `orders_base_url`, `orders_endpoint_<model>`, … | none | `_api_<label>` |
 | One CSV (unchanged) | `csv-source` | `csv_source` | `csv-source-path` | `_csv` |
-| 2+ CSVs, labeled, transform-only | `csv-source-<label>` | `csv_source_<label>` | `csv-source-<label>-path` | `_csv_<label>` |
+| 2+ CSVs, labeled, transform-only | `csv-source-<label>` | none — pinned root from `csv-source-<label>-path` | `csv-source-<label>-path` + `data-<label>/` | `_csv_<label>` |
 
 For CSV instances the driver is `nxd:local/file/storage:0.1.0`; only the
 service name changes. **Runtime boundary:** labeled CSV services may appear in
@@ -61,9 +136,10 @@ types retain their documented drivers.
 `csv-source-<label>` / `file-source-<label>` (nothing secret to carry — see
 `reference/file-source.md`); for `db-source-<label>` / `api-source-<label>`,
 one flat `{"key": <property>, "value": <live value>, "public": <bool>}`
-attribute per connection field — the label lives on the *service* name
-(`db-source-orders`), not on the attribute keys, which stay the plain
-property names (`host`, `port`, ...) within each labeled service — see
+attribute per connection field, **each key prefixed with the label**
+(`orders_host`, `orders_port`, ...). The service name carries the label too,
+but it is discarded before the transform sees anything, so the key is what
+separates the instances — see Colliding keys above, and see
 `reference/database-source.md` / `reference/api-source.md` for the exact
 per-property list and the `public:` value per property (secrets `false`,
 non-secret topology `true`).
@@ -88,31 +164,34 @@ spec:
       attributes: []
     - name: db-source-orders
       driver: nxd:generic-secrets:1.0.0
+      # Every key carries the `orders_` label prefix. Unprefixed, these six
+      # would collide with db-source-users below in the flat merge and one
+      # instance would silently win.
       attributes:
-        - key: host
+        - key: orders_host
           value: <live host>
           public: true
-        - key: port
+        - key: orders_port
           value: <live port>
           public: true
-        - key: database
+        - key: orders_database
           value: <live database>
           public: true
-        - key: schema
+        - key: orders_schema
           value: <live schema>
           public: true
-        - key: user
+        - key: orders_user
           value: <live user>
           public: false
-        - key: password
+        - key: orders_password
           value: <the live password the user supplied>
           public: false
     - name: db-source-users
       driver: nxd:generic-secrets:1.0.0
-      # Same six attributes as db-source-orders above (host/port/database/
-      # schema `public: true`, user/password `public: false`) — its own values,
-      # not shared with db-source-orders. See reference/database-source.md
-      # for the canonical per-field list.
+      # Same six attributes, prefixed `users_` instead (users_host, users_port,
+      # users_database, users_schema `public: true`; users_user, users_password
+      # `public: false`) — its own values, not shared with db-source-orders.
+      # See reference/database-source.md for the canonical per-field list.
       attributes: [...]
 ```
 
@@ -145,11 +224,18 @@ owns):
 
 ```python
 readers = []
-for label, secrets_key, tables_file in (
-    ("orders", "db_source_orders", "db-source-orders-tables"),
-    ("users", "db_source_users", "db-source-users-tables"),
+for label, tables_file in (
+    ("orders", "db-source-orders-tables"),
+    ("users", "db-source-users-tables"),
 ):
-    db_secrets = secrets[secrets_key]
+    # `secrets` is ONE flat map across every service, so each instance's fields
+    # are recovered by their `<label>_` prefix — there is no per-service level.
+    # This is only a partition because labels carry no underscore and are unique
+    # closure-wide (see the label rule): an `orders_eu` label would make
+    # `orders_` match every `orders_eu_*` key, and an `api-source-orders` reusing
+    # the `orders` label would fold its fields into this dict too.
+    db_secrets = {k[len(label) + 1:]: v for k, v in secrets.items()
+                  if k.startswith(f"{label}_")}
     connection_string = _build_connection_string(db_secrets)
     table_map = _load_source_tables(tables_file)
     source = sql_database(credentials=connection_string,
@@ -168,20 +254,67 @@ it.
 
 ## Applying the pattern to file / API / CSV sources
 
-Same shape: swap `db-source-<label>`/`db_source_<label>`/`sql_database` for
+Same shape: swap `db-source-<label>`/`<label>_<field>`/`sql_database` for
 `file-source-<label>`/`file_source_<label>`/the `dlt.sources.filesystem`
-reader, `api-source-<label>`/`api_source_<label>`/`rest_api_resources`, or
-`csv-source-<label>`/`csv_source_<label>`/`read_csv` **inside the transform**.
-Labeled CSV roots (`data-<label>/<model>/*.csv`) are transform-only; they do
-not create a labeled desktop source-aligned input. Multiple source-aligned
-inputs instead share `_csv` and `csv-source-path`.
+reader, `api-source-<label>`/`<label>_<attr>`/`rest_api_resources`, or
+`csv-source-<label>`/its relative path file and pinned `data-<label>/` root /
+`read_csv` **inside the transform**. Labeled CSV roots do not arrive as
+per-label `secrets[...]` keys. Labeled CSV roots
+(`data-<label>/<model>/*.csv`) are transform-only and do not create
+spec-level inputs. If the same closure also has an ordinary single-source CSV
+input, that separate input uses `_csv` and `csv-source-path`.
+
+## Labeled CSV export roots and `companion-files`
+
+The labeled CSV roots are runtime data, not optional authoring directories. After
+materializing the exports and before calling the supervisor, write a UTF-8
+`companion-files` manifest at the closure root. It must contain one sorted line
+per **non-empty** labeled root, using the directory path without a trailing
+slash, for example:
+
+```text
+data-orders
+data-users
+```
+
+Generation time is the only safe point to write this manifest: pin copies the
+declared tree before the transform starts, so a transform cannot repair a
+missing declaration after pin. For each label, first materialize
+`data-<label>/<model>/*.csv`, then inspect the finished tree. If the label's
+models produced no rows, omit the label entirely: do not create its
+`data-<label>` root, `csv-source-<label>-path` file, connector service/spec
+binding, or manifest line. Declare a root only when it contains regular export
+files that carry rows.
+
+Emit only the root line. Do not also list `data-orders/orders.csv` or any other
+descendant: overlapping declarations are refused by the supervisor. These
+generated roots are safe declaration paths because they are siblings of the
+supervisor-owned `data/`, `transform/`, and `contracts/` trees; never declare
+those trees or anything beneath them. Before writing the manifest, fail closed
+if a root or any member below it is a symlink (do not dereference it), a special
+file, or a filename that is not valid UTF-8 and NFC-normalized. Use relative
+path segments only. A root with no eligible files is omitted rather than
+represented by a placeholder.
+
+The transform reads each `csv-source-<label>-path` file from the pinned
+execution root and resolves its relative value against `NXD_TRANSFORM_ROOT`
+(which yields a path such as `data-orders`); it must never use the mutable
+authoring checkout's absolute path. `NXD_TRANSFORM_ROOT` is mandatory: read it
+with `os.environ["NXD_TRANSFORM_ROOT"]` (or an equivalent fail-closed lookup),
+never with `os.environ.get(..., ".")`, `Path.cwd()`, or another fallback that
+can make an unpinned checkout appear valid. This closure requires a desktop
+supervisor with directory-companion support; never silently fall back to an
+undeclared root.
 
 ## What does NOT change
 
 - The physical-model naming invariant (`models.py` == `.promise` ==
   `PHYSICAL_MODELS` == `main.<name>`) — every model still belongs to exactly
-  one source instance, it just resolves through that instance's labeled
-  companion file instead of an unlabeled one.
+  one source instance. For labeled CSVs, that instance resolves through its
+  labeled path file and pinned root; other connector types retain their own
+  documented reader/configuration channels. In particular, labeled APIs use
+  label-prefixed `endpoint_<model>` profile attributes and have no endpoint
+  companion file.
 - The `duckdb` output port name, `write_disposition="replace"`, and
   `.transform-complete` touch.
 - The single-instance default names for any type that only has one source —

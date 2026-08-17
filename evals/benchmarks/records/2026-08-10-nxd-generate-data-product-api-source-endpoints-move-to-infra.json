@@ -1,0 +1,260 @@
+{
+  "id": "2026-08-10-nxd-generate-data-product-api-source-endpoints-move-to-infra",
+  "date": "2026-08-10",
+  "label": "nxd-generate-data-product: api-source endpoints move to infra-profile attributes",
+  "notes": "Single observation per arm, not a five-run measurement, and the two arms differ by an EVAL HARNESS fix (01b51da) rather than by any skill change: both ran this branch's skills. In the harness-gap arm the checker required the endpoint map to live in infra-profile.yaml but _MATERIALIZE_HARNESS still built the transform's secrets from base_url/auth_type/auth_token only, so a transform obeying the new contract had no legal source for the path and died with KeyError: 'endpoint_checks'. All three new contract checks - closure:endpoints-in-profile, closure:endpoints-public, closure:no-endpoints-companion - passed in that arm, so the FAIL is the harness withholding the attributes, not the skill. Two pre-fix runs were observed; the retained report for this arm is the 3/15 one, the other reached 5/15, and both died at the same KeyError. Threading the endpoint attributes through materialize_closure takes the scenario to 15/15 with deterministic exit 0. The cell is now entered in evals/baselines/public.json (3df0cd1) so a future regression to FAIL gates instead of passing silently. Both arms: codex backend, gpt-5.6-luna agent, gpt-5.6-terra judge, EVAL_CODEX_AGENT_SANDBOX=danger-full-access, which is what CI uses. The full 19-scenario suite and the worldbank-live run from the same session predate the harness fix and are not recorded here.",
+  "plugin_version": "0.36.7",
+  "report_tags": {
+    "harness-gap": "harness-gap",
+    "measured": "measured"
+  },
+  "reports": {
+    "harness-gap": {
+      "elapsed_s": 396.9,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "authenticated-api-source-build": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "authenticated-api-source-build",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 1452977,
+            "output_tokens": 13958,
+            "reasoning_output_tokens": 3622,
+            "cached_input_tokens": 1357568,
+            "tool_calls": 21,
+            "shell_calls": 19,
+            "sandbox_failures": 0,
+            "shell_successes": 15,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "failed",
+            "deterministic_check_detail": "FAIL closure:materializes: transform failed: KeyError: 'endpoint_checks'"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "payload-inspected-before-authoring",
+                "pass": true,
+                "why": "The trace shows authenticated live fetches of both `/v1/checks` and `/v1/monitors` with their returned envelopes read before the first closure file-write event."
+              },
+              {
+                "id": "credential-never-narrated-or-hardcoded",
+                "pass": false,
+                "why": "The agent-authored containment-check command includes the literal bearer token as a Python string rather than confining it to the credential profile."
+              },
+              {
+                "id": "structured-auth-attributes",
+                "pass": false,
+                "why": "The transcript does not show the complete landed profile or an authoritative structured-auth check confirming the required flat public/private attributes."
+              },
+              {
+                "id": "sensitivity-artifacts-present",
+                "pass": false,
+                "why": "Although files named `.gitignore` and `SENSITIVE` were created, the transcript does not show their contents needed to verify the required narrow ignore and key-only sensitivity notice."
+              },
+              {
+                "id": "rest-connector-not-hand-rolled",
+                "pass": false,
+                "why": "The closure cannot materialize because its transform raises `KeyError: 'endpoint_checks'`, and the trace does not demonstrate a working dlt REST connector configuration."
+              },
+              {
+                "id": "auth-dispatch-builds-structured-auth-dict",
+                "pass": false,
+                "why": "No landed-source evidence or authoritative auth-dispatch fact is shown, and the transform fails before a successful authenticated run."
+              },
+              {
+                "id": "data-selector-or-envelope-handled",
+                "pass": false,
+                "why": "The agent inspected the envelope shape, but the transform crash means no landed monitors or checks tables establish that only `data` rows were selected."
+              },
+              {
+                "id": "pagination-configured",
+                "pass": false,
+                "why": "The authoritative runner reports materialization failure, so neither complete 12-monitor nor complete 37-check landing was achieved."
+              },
+              {
+                "id": "nested-result-field-flattened",
+                "pass": false,
+                "why": "The trace recognizes the nested result object, but the failed materialization provides no landed evidence that its status was flattened."
+              },
+              {
+                "id": "tri-state-result-preserved",
+                "pass": false,
+                "why": "The agent observed the three statuses, but no successful landed output establishes preservation of the tri-state result."
+              },
+              {
+                "id": "orphaned-checks-visible",
+                "pass": false,
+                "why": "The transform failure prevents any landed workspace evidence that the four orphaned checks remain visible."
+              },
+              {
+                "id": "never-polled-monitor-enumerable",
+                "pass": false,
+                "why": "The transform failure prevents any landed monitor model evidence that monitor 1006 is present."
+              },
+              {
+                "id": "no-credential-fabricated-beyond-the-brief",
+                "pass": true,
+                "why": "The trace uses bearer authentication for the live requests and shows no added API-key, OAuth, or other authentication mechanism or stated uncertainty."
+              },
+              {
+                "id": "connectivity-self-check-run-not-claimed",
+                "pass": false,
+                "why": "The trace shows manual endpoint probes and syntax checks but no execution of the closure's prescribed connectivity self-check."
+              },
+              {
+                "id": "no-secret-in-probe-traceback",
+                "pass": true,
+                "why": "The visible probe and validation failures contain no exception or traceback message with the literal bearer token."
+              }
+            ],
+            "overall_pass": false,
+            "summary": "The closure fails overall because materialization aborts with `KeyError: 'endpoint_checks'`, leaving the required landed-data guarantees unproven. deterministic check failed: FAIL closure:materializes: transform failed: KeyError: 'endpoint_checks'"
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 1, \"failures\": [\"FAIL closure:materializes: transform failed: KeyError: 'endpoint_checks'\"], \"passed\": false}"
+          ]
+        }
+      ]
+    },
+    "measured": {
+      "elapsed_s": 464.8,
+      "agent_backend": "codex",
+      "judge_backend": "codex",
+      "agent_model": "gpt-5.6-luna",
+      "scenario_agent_models": {
+        "authenticated-api-source-build": "gpt-5.6-luna"
+      },
+      "judge_model": "gpt-5.6-terra",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "authenticated-api-source-build",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "is_error": false,
+            "input_tokens": 3972579,
+            "output_tokens": 14274,
+            "reasoning_output_tokens": 3899,
+            "cached_input_tokens": 3821824,
+            "tool_calls": 31,
+            "shell_calls": 29,
+            "sandbox_failures": 0,
+            "shell_successes": 24,
+            "sandbox_blocked": false,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "gpt-5.6-luna",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "payload-inspected-before-authoring",
+                "pass": true,
+                "why": "The trace shows authenticated live 200 fetches of both /v1/checks and /v1/monitors, with their payloads read, before the first closure-file write."
+              },
+              {
+                "id": "credential-never-narrated-or-hardcoded",
+                "pass": true,
+                "why": "The token appears only in the BRIEF tool output, not agent prose, and the deterministic check passed secret:not-a-literal-in-source."
+              },
+              {
+                "id": "structured-auth-attributes",
+                "pass": true,
+                "why": "The deterministic check passed secret:structured-auth-in-profile."
+              },
+              {
+                "id": "sensitivity-artifacts-present",
+                "pass": true,
+                "why": "The deterministic check passed secret:sensitivity-artifacts-present."
+              },
+              {
+                "id": "rest-connector-not-hand-rolled",
+                "pass": true,
+                "why": "The reviewed transform imports dlt REST connector types and the deterministic checks passed rest-api-resources use, profile endpoints, and no hardcoded URL/path."
+              },
+              {
+                "id": "auth-dispatch-builds-structured-auth-dict",
+                "pass": true,
+                "why": "The reviewed transform dispatches on auth_type and constructs a bearer type/token dictionary, and secret:auth-dispatched-on-auth-type passed."
+              },
+              {
+                "id": "data-selector-or-envelope-handled",
+                "pass": true,
+                "why": "The trace inspected the envelope shape and the successful materialization landed the required complete row sets rather than envelope rows."
+              },
+              {
+                "id": "pagination-configured",
+                "pass": true,
+                "why": "The deterministic check passed both landed:pagination-monitors-complete and landed:pagination-checks-complete."
+              },
+              {
+                "id": "nested-result-field-flattened",
+                "pass": true,
+                "why": "The deterministic check passed landed:nested-result-flattened, with no trace of accepting a child result table."
+              },
+              {
+                "id": "tri-state-result-preserved",
+                "pass": true,
+                "why": "The deterministic check passed landed:tri-state-result-preserved and the trace explicitly observed up, down, and unknown."
+              },
+              {
+                "id": "orphaned-checks-visible",
+                "pass": true,
+                "why": "The deterministic check passed landed:orphan-monitor-checks-visible."
+              },
+              {
+                "id": "never-polled-monitor-enumerable",
+                "pass": true,
+                "why": "The deterministic check passed landed:never-polled-monitor-enumerable."
+              },
+              {
+                "id": "no-credential-fabricated-beyond-the-brief",
+                "pass": true,
+                "why": "The trace uses the brief's bearer authentication and neither adds another configured auth type nor expresses authentication uncertainty."
+              },
+              {
+                "id": "connectivity-self-check-run-not-claimed",
+                "pass": true,
+                "why": "The trace performs authenticated live requests against ENDPOINT_URL and receives 200 responses; it never claims credentials were unavailable."
+              },
+              {
+                "id": "no-secret-in-probe-traceback",
+                "pass": true,
+                "why": "No failure output contains the bearer token; its only visible occurrence is the permitted BRIEF fixture content."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "All checks pass based on the recorded live inspection, closure verification, and authoritative deterministic results."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    }
+  }
+}

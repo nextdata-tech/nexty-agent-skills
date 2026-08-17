@@ -9,6 +9,7 @@ the exception, and it is gated by consent rather than trusted.
 - [When to use it (and when not to)](#when-to-use-it-and-when-not-to)
 - [Importing it in a closure](#importing-it-in-a-closure)
 - [Authoring the spec and the grant](#authoring-the-spec-and-the-grant)
+- [Desktop supervisor approval boundary](#desktop-supervisor-approval-boundary)
 - [Evidence modes — what each one proves](#evidence-modes--what-each-one-proves)
 - [Reviews: `data/mapper_reviews/`](#reviews-datamapper_reviews)
 - [Two dlt runs, in this order](#two-dlt-runs-in-this-order)
@@ -30,10 +31,12 @@ self-check.
 
 ## Before you build: run the preflight
 
-A mapper build has two prerequisites that fail *outside* your generated code —
-the `anthropic` SDK and an API key visible to the MCP child process — and
-several that fail inside it before any model is contacted. All of them are
-checkable offline in under a second.
+A mapper build has two execution prerequisites that fail *outside* your
+generated code — the `anthropic` SDK and an API key visible to the MCP child
+process — and several that fail inside it before any model is contacted. Key
+visibility is only a reachability observation: it is not a Desktop approval or
+a credential-isolation guarantee. All prerequisites are checkable offline in
+under a second.
 
 **Run the preflight in [mapper-preflight.md](mapper-preflight.md) before every
 mapper build**, and report its `MAPPER RUN STATUS` block before and after the
@@ -97,6 +100,63 @@ Thresholds have **no defaults**: `max_degrade_share`, `max_error_rate` and
 `max_unverified_share` must be declared, and a wrong default would be worse than
 an absent one. `max_absent_share` is genuinely optional.
 
+## Desktop supervisor approval boundary
+
+The grant above remains the **standalone field-mapper harness** contract:
+`map_inputs` requires a user-authored `Grant`, and a matching `Grant.check` is
+required before the harness dispatches a model call. It is not, by itself, a
+Desktop supervisor authorization.
+
+In a Desktop build, `contracts/mapper_grant.json`, a mapper request file, and
+their fields are **untrusted scope proposals**. The supervisor derives the
+actual mapper subject from the definition and is the only component that
+can turn that subject into an approval. An agent must not author `approved`,
+`granted_by`, receipt, signature, or approval-id claims in an attempt to make a
+proposal authoritative; those claims are rejected rather than treated as user
+consent. A green Phase G proves only that the static harness grant check found a
+binding artifact. It is not proof of human authorization in Desktop.
+
+Desktop mapper builds require an MCP session using protocol `2025-06-18` or
+newer whose client advertises form elicitation. The supervisor sends a protected
+client-mediated confirmation before it creates a writer, state database, run,
+or provider client. The client renders the derived subject — workflow, subject
+and mapper-spec hashes, plus the proposed provider, model, purpose, input and
+document/PII categories, recurrence, and call/token/cost/expiry limits — rather
+than an agent-supplied approval assertion. The typed response contains only
+`authorize_this_exact_subject`; the supervisor accepts it only through the
+client's explicit elicitation action. The user approves once in that client
+interaction; there is no OS dialog or secondary approval surface.
+
+An accepted form admits that exact subject for the current supervisor session.
+An unchanged retry reuses that session approval without another interaction; a
+changed spec or proposed scope gets a new subject and must be confirmed again.
+The supervisor re-derives the subject after elicitation, so a definition changed
+while it was open fails with `mapper_subject_changed` rather than running under
+the earlier confirmation.
+
+**Every non-accept outcome fails closed.** Client Decline, client Cancel,
+elicitation timeout, malformed response, parse/transport failure, and a client
+on an older protocol or without form elicitation return
+`kind: mapper_approval_required` with `run_admitted: false`. Their
+`confirmation` values are `declined`, `cancelled`, `timed_out`, `failed`, and
+`unsupported` as applicable. `unsupported` is terminal for that client: update
+the client rather than trying another approval mechanism. For example:
+
+```json
+{
+  "kind": "mapper_approval_required",
+  "confirmation": "cancelled",
+  "run_admitted": false,
+  "credential_isolation": "not_enforced"
+}
+```
+
+Do not retry by adding approval fields or treat an API key in the child
+environment as a workaround. `credential_isolation: not_enforced` means the
+current diagnostic makes no claim that provider egress is brokered or contained.
+Approval records are session-local: they do not persist receipts or expiry and
+do not enforce cumulative call/token/cost budgets across build attempts.
+
 ## Evidence modes — what each one proves
 
 | Mode / path | Evidence kind | What it actually proves |
@@ -150,7 +210,20 @@ at `MapperInput.__init__() got an unexpected keyword argument 'document_id'`
 before any model was contacted.
 
 ```python
-from nxd.experimental.field_mapper import Grant, MapperInput, MapperSpec, map_inputs
+from pathlib import Path
+
+from nxd.experimental.field_mapper import (
+    Grant,
+    MapperInput,
+    MapperSpec,
+    make_call,
+    map_inputs,
+)
+
+spec = MapperSpec.load("contracts/mapper_spec.json")
+grant = Grant.load("contracts/mapper_grant.json")
+
+mapper_run_dir = Path(run_dir) / "run" / "mapper"
 
 inputs = [
     MapperInput(
@@ -163,14 +236,56 @@ inputs = [
     for document_id, text in rows
 ]
 
+call = make_call(
+    spec=spec,
+    grant=grant,
+    # Optional explicit secret mapping; use None for the environment fallback.
+    secrets=None,
+)
+
 result = map_inputs(
     inputs,
-    spec=MapperSpec.load("contracts/mapper_spec.json"),
-    grant=Grant.load("contracts/mapper_grant.json"),
-    run_dir=str(run_dir),
+    spec=spec,
+    grant=grant,
+    run_dir=str(mapper_run_dir),
     call=call,          # the injected model callable
 )
 ```
+
+`make_call` is the only supported provider seam for generated code. It creates
+the provider client and resolves credentials lazily, after `map_inputs` has
+checked the grant. An explicitly supplied `secrets["anthropic_api_key"]` wins;
+when it is absent, the adapter may use the allowlisted `ANTHROPIC_API_KEY`
+environment fallback. Pass `allow_env=False` when a closure must refuse ambient
+credentials. Missing credentials are a blocking, sanitized
+`CredentialMissingError`; the key never appears in diagnostics or artifacts.
+Do not import `anthropic`, use tool-use output, construct a private transport
+client, or return a raw SDK response. The callable returns a parsed object with
+one nested block per target field:
+
+```json
+{
+  "category": {
+    "value": "Software & Cloud",
+    "evidence": [
+      {"quote": "verbatim source span", "source_field_name": "description"}
+    ]
+  }
+}
+```
+
+The adapter is synchronous: generated transforms must not return a coroutine or
+an SDK response object. Its callback receives keyword-only `item`, `spec`,
+`wire_schema`, and `violations`; `map_inputs` unwraps the transport result and
+validates the returned mapping. A `SystemicError` (missing credential,
+dependency, grant, model, schema, budget, or cancellation) blocks the run; a
+`CellError` is recorded against the row and handled by the mapper's bounded
+retry/gate policy. Error messages are sanitized and machine outcomes use the
+stable `error_code` values documented in `mapper/CONTRACT.md`.
+
+`target_row_key` is a content-derived hash, not the source row ID. Keep the
+`MapResult` proposals/evidence together and resolve from that bundle; never
+reconstruct a join from a model response's guessed row key.
 
 **`MapperInput` takes no arbitrary keyword per source column.** There is no
 `MapperInput(document_id=...)`, and there is no `deps` argument to `map_inputs` —
@@ -190,10 +305,13 @@ silently unbinds every review. Never introspect these signatures to decide how t
 call them: a closure that adapts to whatever is installed converts a loud
 `TypeError` into a silent difference between two runtimes.
 
-`mapper/examples/e2e/` in this skill's repo checkout holds both proofs —
+`mapper/examples/e2e/` in this skill's repo checkout holds runnable proofs —
 `run_e2e.py` for the data chain and `transform_main.py` for the platform
-entrypoint. They are not packaged into the installed skill: they need an nxd
-monorepo checkout.
+entrypoint. `run_e2e.py` uses the public `make_call` seam on `--live` and a
+recorded caller on replay; `transform_main.py` exercises the same caller through
+the platform entrypoint. Treat them as reference implementations: do not import
+the provider SDK or private transport modules into a generated transform. The
+proofs need an nxd monorepo checkout.
 
 ## Spend: the self-check really pays
 

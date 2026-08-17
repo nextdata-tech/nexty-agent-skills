@@ -3,6 +3,7 @@
 ## Contents
 
 - [Resources vs. tools](#resources-vs-tools)
+- [Preflight before build](#preflight-before-build)
 - [The five resources](#the-five-resources)
 - [Addressing: only the current release is readable](#addressing-only-the-current-release-is-readable)
 - [What each document carries](#what-each-document-carries)
@@ -16,8 +17,9 @@
 The `nxd-desktop` server exposes two different surfaces, and they answer
 different questions:
 
-- **Tools** (`mcp__nxd-desktop__…`) are *actions*: build, resume, list, inspect,
-  describe, query, export. They take locks, boot runtimes, mint bearers.
+- **Tools** (`mcp__nxd-desktop__…`) are *actions*: check, build, resume, list,
+  inspect, describe, query, export. Most take locks, boot runtimes, or mint
+  bearers; `check_data_product` is the no-lock, no-publish admission check.
 - **Resources** (`nxd://…`) are *read-only documents* projected from the pinned
   artifact bytes of a published release. Reading one takes no lock, boots
   nothing, and cannot disturb a running instance.
@@ -25,6 +27,39 @@ different questions:
 Reach for a resource when you want to know **what a published product
 declares** — its identity, its model registry, its output ports. Reach for a
 tool when you want to *do* something or when you need live runtime state.
+
+## Preflight before build
+
+Before building an authored or edited closure, call
+`mcp__nxd-desktop__check_data_product` with the same `definition` and
+`workflow` that you will give to `build_data_product`. The host-local equivalent
+is `nxd-desktop-supervisor check --definition <dir> --workflow <workflow> --json`.
+This is a read-only admission check: it publishes nothing, opens no run, and
+takes no supervisor ownership lock.
+
+The result reports:
+
+- `outcome`: the overall `pass`, `warn`, `fail`, or `skip` verdict;
+- `provenance`: the content-addressed `definition_id`, interpreter and package
+  versions, and payload digests for the snapshot that was actually checked;
+- four separately rolled-up stages: `structure` (parse, compile, seal),
+  `runtime` (Python imports), `contract` (declared verifiers), and `semantic`
+  (registry and publish readiness).
+
+Every finding has a stable `code`, `status`, bounded `detail`, and, when a
+single remedy is known, a `remedy`. Key the next action on `code`, never on
+the prose in `detail`; the taxonomy is the contract. `fail` blocks the build.
+`skip` is also non-pass because that check examined nothing; it outranks
+`warn` in the roll-up. A `warn` is an examined, non-fatal condition that the
+caller must handle before proceeding. A structural failure reports downstream
+stages as `*/not_reached` because their snapshot does not exist.
+
+The check uses the same interpreter and dependency view as the build. Its
+sequential interpreter, compile, and Python-stage limits can total about 330
+seconds, so size the client deadline accordingly. Because the definition ID is
+content-addressed, compare it with the ID reported by the subsequent build;
+editing the authoring files between the two calls means the build is not the
+closure that was checked.
 
 `describe_models` remains the right call when you are about to build a query —
 it is the query-facing view, and it requires a live `endpoint` and bearer

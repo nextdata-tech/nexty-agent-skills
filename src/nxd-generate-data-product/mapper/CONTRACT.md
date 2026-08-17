@@ -36,6 +36,12 @@ deliberately absent here — they live in the landed mapper spec, versioned by
 
 ---
 
+**Standalone grant boundary.** This Layer-1 contract governs the standalone
+field-mapper harness: `map_inputs` still requires a user-authored `Grant`, and
+`Grant.check` remains the pre-dispatch guard for that harness. It does not mint
+or prove a human authorization for a Desktop supervisor build; that is a
+separate supervisor-owned admission boundary.
+
 ## 1. Module layout
 
 Imported as `nxd.experimental.field_mapper`, from the installed `nxd` package.
@@ -104,6 +110,7 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | Symbol | Module | Purpose |
 |---|---|---|
 | `map_inputs(inputs, *, spec, grant, run_dir, call, ...) -> MapResult` | `field_mapper` | the N→M primitive |
+| `make_call(*, spec, grant, secrets=None, allow_env=True, provider="anthropic", provider_model=None, provider_cwd=None) -> callable` | `field_mapper` | lazy, budgeted provider seam; explicit secret first, then allowlisted environment fallback; creates the client only on first dispatch |
 | `MapperInput(input_id, identity, ...)` | `field_mapper` | one source record handed to the mapper |
 | `MapperSpec.load(path)` / `.mapper_spec_id` | `spec` | landed spec → runtime object |
 | `MapperProposal` / `MapperReview` / `MapperEvidence` | `records` | the three record types |
@@ -115,7 +122,8 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | `FieldMapperError` and subclasses | `errors` | so callers can catch by class, not string |
 
 Everything else is private. `transport.Client` is deliberately **not** public —
-Layer 2 must not be able to make an unbudgeted, unledgered call.
+Layer 2 must use `make_call` so provider construction, credential resolution,
+and the per-run budget ledger stay behind the sanctioned seam.
 
 #### The exact call, and the exact construction
 
@@ -126,12 +134,23 @@ implementation. The documented surface was the error, and it is corrected here
 rather than by wrapping the working function — see
 `docs/architecture/field-mapper.md`.
 
+`run_dir` is the mapper's **ephemeral ledger root**, not the closure root and not
+`~`. Derive it as a run-scoped child of the transform directory (for example,
+`Path(run_dir) / "run" / "mapper"`) and pass that child to `map_inputs`. When a
+path under the user's home has no run-directory marker (`runs`, `run`, `tmp`,
+`temp`, `scratch`, or `var`), the current ledger guard raises `ValueError`
+before the first provider dispatch; callers must treat that as a systemic
+refusal. A future stable `error_code` for this path guard must not be inferred
+from the exception text.
+
 ```python
+from pathlib import Path
+
 result = map_inputs(
     inputs,                 # Sequence[MapperInput]
     spec=spec,              # MapperSpec.load(...)
     grant=grant,            # Grant.load(...)
-    run_dir=str(run_dir),   # where the ledger lands
+    run_dir=str(Path(run_dir) / "run" / "mapper"),  # ephemeral ledger root
     call=call,              # the injected model callable
 )
 ```
@@ -165,6 +184,27 @@ immediate `TypeError` into a silent behavioural difference between two runtimes.
 **in one in-memory bundle** (design §7). There is no API that returns proposals
 without their evidence, because that API is how the orphan-evidence bug gets
 written.
+
+### Provider adapter contract
+
+`make_call` returns a synchronous callable. Generated code must not return a
+coroutine, import a provider SDK, construct `transport.Client`, or pass through
+an SDK response object. The callable receives these keyword-only arguments:
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `item` | `MapperInput` | one source record and its landed text |
+| `spec` | `MapperSpec` | the runtime-bound mapper spec |
+| `wire_schema` | mapping | compiled structured-output schema |
+| `violations` | sequence | bounded validation feedback for a correction turn |
+
+It returns a parsed mapping shaped like the compiled wire schema. `map_inputs`
+unwraps a transport `CallResult` when present and validates that mapping; a
+missing parsed body becomes `error_code = schema_reject`, never
+`evidence_absent`. `SystemicError` subclasses block the run, while `CellError`
+subclasses are recorded for the row and handled by the mapper's bounded retry
+and coverage gate. Error details are sanitized; stable machine codes, not
+provider payloads or credentials, are persisted.
 
 ---
 
@@ -586,8 +626,11 @@ gate. The `claude-haiku-4-5` E2E run in `examples/e2e/` exercises it.
   rejected by design review independently. Do not add them back "for
   determinism" — they never guaranteed it.
 - No `budget_tokens`. Depth is `output_config.effort`, declared by the spec.
-- The API key reaches the transform via `.secrets([...])` in `spec.py`. It is
-  read once into the client and **never** written to the ledger, a record, a log
+- The API key may reach the transform via `.secrets([...])` in `spec.py`, with
+  the allowlisted `ANTHROPIC_API_KEY` environment variable as fallback for a
+  CLI or explicitly configured local run. An explicit secret wins. Pass
+  `allow_env=False` when ambient credentials must be refused. The key is read
+  once into the client and **never** written to the ledger, a record, a log
   line, an error message, or a `repr`.
 
 **Constraints the harness must own, because the API cannot express them:**

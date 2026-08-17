@@ -5,7 +5,9 @@
 - Scope
 - The `RESTAPIConfig` / `rest_api_resources` shape
 - Credential handling — read this before shipping
+- Custom request headers
 - Naming
+- Why the endpoints live in the profile
 - `transform/main.py` diff from the CSV template
 - `requirements.txt`
 - `spec.py` / `infra-profile.yaml` diffs
@@ -13,8 +15,10 @@
 
 This is a sibling of the proven CSV connector documented inline in
 `SKILL.md` — same closure shape (`duckdb` port, `PHYSICAL_MODELS`,
-read-back assert, `.transform-complete`), no `data/` directory, no local
-file export.
+read-back assert, `.transform-complete`), no `data/` export, no local
+file export. "No `data/`" is about the *connector*: this type brings no
+export of its own. A closure may still carry `data/` for landed reference
+data it authored — see § "Landed reference data in an API closure".
 
 ## Scope
 
@@ -32,6 +36,7 @@ config: RESTAPIConfig = {
     "client": {
         "base_url": <base_url>,
         "auth": <bearer | http_basic | api_key | oauth2_client_credentials>,
+        "headers": {...},  # non-secret request headers — see Custom request headers
         # paginator: omit and let dlt auto-detect unless the user specifies one
     },
     "resources": [
@@ -83,10 +88,23 @@ config is a non-secret path; for a REST API it necessarily includes a real
 credential (bearer token, API key, or OAuth client secret). That value is
 delivered by writing it into the `api-source` service's `attributes` in
 `infra-profile.yaml` — the desktop supervisor's `generic-secrets` driver
-reads it from there and exposes it to the transform as `secrets["api_source"]`.
+reads it from there and merges it into the transform's `secrets` dict.
+**`secrets` is FLAT.** The supervisor merges every service named in
+`.secrets([...])` into one map. For a `generic-secrets` service the keys are
+exactly the `attributes` you wrote — the service name is not among them — so an `api-source` attribute `base_url` arrives as
+`secrets["base_url"]`, never `secrets["api_source"]["base_url"]`. A nested read
+raises `KeyError: 'api_source'` at transform time, after the credential has
+already been resolved.
 
-- The companion file `api-source-endpoints` holds **only non-secret
-  topology** — one line per model, `<model>=<endpoint path>`.
+- **When this closure names more than one service in `.secrets([...])`, check
+  for key collisions before writing the profile.** The merge is flat, so a key
+  declared by two services resolves to one value and the loser vanishes with no
+  error — prefix the attribute `key` (`orders_base_url`) to separate them. Full
+  rule: `reference/multi-source.md`.
+- **Endpoint paths are attributes too, one per model**: `endpoint_<model>`,
+  marked `public: true`. They are non-secret topology and belong beside
+  `base_url` in the same service — **not** in a companion file. See "Why the
+  endpoints live in the profile" below.
 - The `api-source` service's `attributes` list carries the live payload as
   **one entry per property**, each shaped `{"key": <property>, "value":
   <live value>, "public": <bool>}` — never one attribute holding a nested
@@ -108,19 +126,27 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   | `oauth2_client_credentials` | `auth_client_id`, `auth_client_secret`, `auth_token_url` |
 
   Omitting `auth_type` (and its fields) entirely means
-  `secrets["api_source"]` has no `"auth_type"` key, not an empty one. See
+  `secrets` has no `"auth_type"` key, not an empty one. See
   the worked example below and the `auth_type` dispatch in the transform
   diff, which assembles these flat fields into the structured dict dlt
   expects.
+- **Non-secret request headers use the `header_` prefix** — one attribute per
+  header, `header_<name>` with `-` written as `_` (`header_user_agent` →
+  `User-Agent`), `public: true`. This is the *only* supported way to add a
+  required client header; see **Custom request headers** below for why the
+  prefix exists and how the transform reassembles it. A **secret-valued**
+  header (an API key sent as `X-API-Key`) does NOT go here — it belongs to
+  `auth_type: api_key`, which already sends a header and keeps the value
+  `public: false`.
 - **`value` is always a plain string** on the transform side — dlt/Python
   types (ints, bools) are not preserved; cast in the transform if needed.
 - **Mark each attribute by sensitivity.** The `public:` flag controls **only**
   `export_data_product` redaction — the transform reads every attribute via
-  `secrets["api_source"]` regardless. Secrets and identity —
+  `secrets` regardless. Secrets and identity —
   `auth_token`, `auth_username`, `auth_password`, `auth_api_key`,
   `auth_client_id`, `auth_client_secret` — are `public: false` (redacted
   fail-closed on export). Non-secret topology/config — `base_url`, `auth_type`,
-  `auth_key_name`, `auth_key_location`, `region` — is `public: true` so it
+  `auth_key_name`, `auth_key_location`, `region`, and every `header_*` — is `public: true` so it
   survives an export and the recipient only refills the credentials. **Never
   mark a credential `public: true`.** If the user explicitly designates an
   attribute's sensitivity, honor their choice over this default.
@@ -150,20 +176,130 @@ reads it from there and exposes it to the transform as `secrets["api_source"]`.
   `yaml_schemas::infra_profile::KeyValuePairWithPublic` type and
   `SecretsHandler` construction — not inferred from a single example.
 
+## Custom request headers
+
+Some APIs reject a request that carries valid credentials, because of a header
+that has nothing to do with authentication. The common case is `User-Agent`:
+**dlt sends `User-Agent: dlt/1.28.2` by default**, and an upstream that
+filters unrecognized clients answers `403 Forbidden` — with an error body about
+permissions, not about the header. The same credentials succeed under `curl`,
+which sends `curl/x.y.z`. That contrast reads as "Python traffic is blocked" or
+"the token is wrong", and the tempting fix — abandon dlt, hand-roll `urllib`
+with a browser-ish `User-Agent` — throws away the connector for a one-line
+config change and fails the acceptance check. **Diagnose a 403 by comparing the
+headers the two clients send before touching the credential.**
+
+`RESTAPIConfig`'s `client` accepts a `headers` mapping (verified by
+introspection against the pinned `dlt==1.28.2`: `ClientConfig.headers` is typed
+`Optional[Dict[str, str]]`). It composes with `auth` rather than replacing it —
+the `Authorization` header the `auth` dispatch builds is still sent on every
+request — and a per-resource `endpoint.headers` **merges with** these rather
+than replacing them, so a resource adding its own header keeps the client's.
+
+### The `header_` prefix
+
+`secrets` is one flat string→string map, so a header mapping cannot be stored
+as a nested object under one attribute. Encode each header as its own flat
+attribute instead:
+
+| Header | Attribute key | `public:` |
+|---|---|---|
+| `User-Agent` | `header_user_agent` | `true` |
+| `Accept` | `header_accept` | `true` |
+| `X-Trace-Id` | `header_x_trace_id` | `true` |
+
+Lowercase the header name and write `-` as `_`. The transform reverses it by
+title-casing each `_`-separated part and rejoining with `-`, so
+`header_x_trace_id` → `X-Trace-Id`. Reconstruction can differ from the upstream
+docs' capitalization (`header_x_api_key` → `X-Api-Key`); that is fine, because
+HTTP header field names are case-insensitive per RFC 7230 §3.2. Do not try to
+preserve exact casing by inventing a second attribute to hold it.
+
+**`header_` is for non-secret values only.** Every `header_*` attribute is
+`public: true` and therefore survives `export_data_product` verbatim. A
+credential sent as a header belongs to `auth_type: api_key`
+(`auth_api_key` + `auth_key_name`, `public: false`), which puts the same header
+on the wire with the value redacted on export. Putting a token in
+`header_authorization` marks a live credential exportable and is the one
+mistake this convention must not invite.
+
+### Transform assembly
+
+```python
+def _headers_from(secrets: dict) -> dict:
+    """Flat `header_<name>` secrets -> the dict dlt's client.headers wants.
+
+    `header_user_agent` -> `User-Agent`. Header names are case-insensitive
+    (RFC 7230 §3.2), so title-casing each part is safe.
+    """
+    headers = {}
+    for key, value in secrets.items():
+        if not key.startswith("header_") or value in (None, ""):
+            continue
+        name = "-".join(part.title() for part in key[len("header_"):].split("_"))
+        headers[name] = str(value)
+    return headers
+```
+
+Then, in the `client_config` build (after the `auth_type` dispatch, so a
+malformed profile fails on the credential first):
+
+```python
+headers = _headers_from(secrets)
+if headers:
+    client_config["headers"] = headers
+```
+
+Assign it **only when non-empty** — `"headers": {}` is accepted but says the
+closure configures headers when it does not, and an empty dict reads in review
+as "the author checked and there are none" rather than "no `header_*` attribute
+was written". Build it from `secrets` like everything else: a `User-Agent`
+hard-coded in `transform/main.py` is the same defect as a hard-coded base URL,
+and it is not fixed by the value being non-secret — the profile is where a
+deployment-varying value belongs.
+
 ## Naming
 
 - Infra-profile service: `api-source`, driver `nxd:generic-secrets:1.0.0`.
-- Transform secrets key: `secrets["api_source"]` — a dict with `base_url`
-  (always present) and, only when the API requires authentication,
-  `auth_type` plus that type's own fields (see Credential handling).
-- Companion file: `api-source-endpoints` — one line per model,
-  `<model>=<endpoint path>` (non-secret topology only).
+- Transform secrets keys: the attribute keys themselves, flat on `secrets` —
+  `secrets["base_url"]` (always present); only when the API requires
+  authentication, `secrets["auth_type"]` plus that type's own fields (see
+  Credential handling); and only when the API requires a non-secret header,
+  one `secrets["header_<name>"]` per header (see Custom request headers).
+  There is no `secrets["api_source"]` level.
+- Endpoint paths: `secrets["endpoint_<model>"]`, one attribute per API-backed
+  model (non-secret topology, `public: true`). **No companion file.**
 
 These names are for exactly **one** API source. When this closure needs two
 or more APIs (or mixes an API with another connector type), label each
 instance instead — see `reference/multi-source.md` for the full
-`api-source-<label>` / `api_source_<label>` / `api-source-<label>-endpoints`
-pattern.
+`api-source-<label>` / label-prefixed attribute keys (`orders_base_url`,
+`orders_endpoint_<model>`) pattern.
+
+## Why the endpoints live in the profile
+
+An earlier revision of this reference had the author write an
+`api-source-endpoints` file beside the transform, one `<model>=<endpoint path>`
+line each. Do not do that, and do not reintroduce it under another name.
+
+The endpoint map is **configuration**, and this closure already has exactly one
+configuration channel: the `api-source` service's `attributes`, which the
+supervisor merges flat into `secrets`. `base_url` travels that way already, and
+an endpoint path is the same kind of value — non-secret topology the recipient
+of an export needs to see and may need to change. Splitting it into a sidecar
+file bought nothing and cost two things: the file had to survive closure
+materialization to be readable at transform time (it did not, for a while), and
+an export had to decide separately whether it should travel.
+
+On the platform (k8s) path the model→source-object binding lives in the
+manifest — `target-tables` / `target-files` — or in a source-aligned input's
+`.config(attributes={...})` bag. **Neither is available here.** The desktop
+runtime ships exactly one input storage driver, `nxd:local/file/storage:0.1.0`,
+which reads CSVs out of the pinned definition's `data/` directory; there is no
+local driver that can back a source-aligned input pointed at a REST API, and an
+api-source closure declares no input at all — the transform reaches the API
+itself through dlt. That leaves the profile attributes, which is where a flat,
+string-valued, per-model key belongs on this runtime.
 
 ## `transform/main.py` diff from the CSV template
 
@@ -174,32 +310,49 @@ template. Only the ingestion body changes:
 ```python
 from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig
 
-api_secrets = secrets["api_source"]  # dict: base_url (always), auth_type (+its fields) if needed
-endpoint_map = _load_api_source_endpoints()  # parses the api-source-endpoints companion file
+# `secrets` is the FLAT merge of every service in `.secrets([...])` — read the
+# attribute keys directly. There is no per-service level to index first.
+#
+# The API-backed models are exactly the ones the profile gives an endpoint for.
+#
+# Not PHYSICAL_MODELS and not BASE_MODELS. A derived model (Step 3a) is computed
+# in Python and has no endpoint. But neither is every BASE_MODEL fetched: landed
+# reference data — `nxd_decisions`, agent judgement rulings, anything from
+# `derivation-plan.md` / `llm-judgments.md` — is a base model too, and reaches
+# the port as its own `@dlt.resource` rather than over HTTP. Iterating either
+# tuple asks the API for a model it does not serve, or demands an
+# `endpoint_<model>` attribute for a path that does not exist.
+#
+# A model that SHOULD be fetched but whose attribute you forgot drops out here
+# rather than raising. That is caught: the mandatory read-back assert at the end
+# of the transform compares what landed against PHYSICAL_MODELS and names the
+# missing table. Do not delete that assert — here it is the only thing standing
+# between a typo'd attribute key and a silently empty model.
+API_MODELS = tuple(model for model in BASE_MODELS if f"endpoint_{model}" in secrets)
 
-client_config = {"base_url": api_secrets["base_url"]}
-auth_type = api_secrets.get("auth_type")
+client_config = {"base_url": secrets["base_url"]}
+auth_type = secrets.get("auth_type")
 if auth_type == "bearer":
-    client_config["auth"] = {"type": "bearer", "token": api_secrets["auth_token"]}
+    client_config["auth"] = {"type": "bearer", "token": secrets["auth_token"]}
 elif auth_type == "http_basic":
     client_config["auth"] = {
         "type": "http_basic",
-        "username": api_secrets["auth_username"],
-        "password": api_secrets["auth_password"],
+        "username": secrets["auth_username"],
+        "password": secrets["auth_password"],
     }
 elif auth_type == "api_key":
     client_config["auth"] = {
         "type": "api_key",
-        "name": api_secrets["auth_key_name"],
-        "api_key": api_secrets["auth_api_key"],
-        "location": api_secrets.get("auth_key_location", "header"),
+        "name": secrets["auth_key_name"],
+        "api_key": secrets["auth_api_key"],
+        "location": secrets.get("auth_key_location", "header"),
     }
 elif auth_type == "oauth2_client_credentials":
     client_config["auth"] = {
         "type": "oauth2_client_credentials",
-        "access_token_url": api_secrets["auth_token_url"],
-        "client_id": api_secrets["auth_client_id"],
-        "client_secret": api_secrets["auth_client_secret"],
+        "access_token_url": secrets["auth_token_url"],
+        "client_id": secrets["auth_client_id"],
+        "client_secret": secrets["auth_client_secret"],
     }
 elif auth_type is not None:
     # Do NOT drop this branch, and do not collapse the dispatch to whichever
@@ -208,15 +361,22 @@ elif auth_type is not None:
     # instead of sending a wrong-scheme request and reading the 401 as a
     # credential problem.
     raise ValueError(
-        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"unsupported auth_type {auth_type!r} in secrets — "
         f"add a branch above, or fix the infra-profile attribute"
     )
+
+# Non-secret request headers, rebuilt from the flat `header_*` attributes.
+# See "Custom request headers" — this is what keeps a `User-Agent`-gated API on
+# the dlt path instead of a hand-rolled urllib loop.
+headers = _headers_from(secrets)
+if headers:
+    client_config["headers"] = headers
 
 config: RESTAPIConfig = {
     "client": client_config,
     "resources": [
-        {"name": model, "endpoint": {"path": endpoint_map[model]}}
-        for model in PHYSICAL_MODELS
+        {"name": model, "endpoint": {"path": secrets[f"endpoint_{model}"]}}
+        for model in API_MODELS
     ],
 }
 # rest_api_resources returns a LIST of DltResource, not a DltSource. Verified
@@ -231,19 +391,102 @@ config: RESTAPIConfig = {
 # `rest_api_source` DOES return a DltSource whose `.resources` mapping is real.
 # Pick one and stay with it; the two names differ by one word and not by shape.
 resources = {r.name: r for r in rest_api_resources(config)}
+# API_MODELS again, matching the resource list above. Everything else promised —
+# derived models (Step 3a) and landed reference data — reaches the same
+# `pipeline.run` as `@dlt.resource` generators appended to this same list. They
+# are landed in the one run, just not fetched over HTTP.
 readers = []
-for model in PHYSICAL_MODELS:
+for model in API_MODELS:
     table_name = duckdb.model_tables[model]
     readers.append(resources[model].with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
 ```
 
-Build the `RESTAPIConfig` from `secrets["api_source"]` at runtime — never
+### Landed reference data in an API closure
+
+`derivation-plan.md` and `llm-judgments.md` tell you to write
+`data/<name>/<name>.csv`, add the model to `BASE_MODELS`, and let it flow
+through the reader loop with "no special casing anywhere". **Step 1 still
+applies; the reader-loop half does not.** The loop above iterates `API_MODELS`,
+so a reference model added to `BASE_MODELS` and nothing else is neither fetched
+nor read, and drops out silently until the read-back assert reports a table that
+never landed.
+
+**Still write the CSV, at `data/<name>/<name>.csv`.** "No `data/` directory"
+above means this connector brings no *export* — it does not mean the closure may
+not carry one. The supervisor materializes `transform/` and `data/` into the
+pinned snapshot for every closure, by path and not by connector type, so a
+`data/` tree an api closure authors itself travels with it. Do **not** inline
+the rows as a literal in the transform instead: `SKILL.md`'s "Reference data is
+landed, never hardcoded" invariant forbids exactly that, and it does not relax
+by connector.
+
+The rows reach the port differently, **and so do their types** — see the cast
+rule below; this is not a pure change of route. Read the CSV yourself with
+stdlib `csv` and yield them as your own resource, appended to the same `readers`
+list before the one `pipeline.run(...)` — the form is in `derived-models.md`
+§ "The resource template":
+
+```python
+import csv, os
+from pathlib import Path
+
+# Anchor on the execution root, not the working directory. The local Python
+# compute driver exports NXD_TRANSFORM_ROOT on every desktop transform run,
+# unconditionally, set to the materialized closure root; it also chdir's there,
+# so a relative open happens to work — but the working directory is an
+# implementation detail of how the child is spawned, and the env var is the
+# stated contract. Never an authoring-checkout absolute path: it escapes the
+# pinned snapshot and fails.
+#
+# Desktop only. The k8s compute driver does not export it, which is fine here —
+# this skill emits desktop closures — but do not carry this line into a k8s
+# data product.
+root = Path(os.environ["NXD_TRANSFORM_ROOT"])
+
+# Read it yourself with stdlib csv: dlt's filesystem reader streams straight to
+# the destination and cannot hand rows back to Python (same rule as Step 3a).
+# sorted() because glob order is filesystem-dependent.
+decision_rows: list[dict[str, str]] = []
+for path in sorted((root / "data" / "nxd_decisions").glob("*.csv")):
+    with path.open(newline="", encoding="utf-8") as handle:
+        decision_rows.extend(csv.DictReader(handle))
+
+@dlt.resource(name=duckdb.model_tables["nxd_decisions"])
+def nxd_decisions_resource() -> Iterator[dict[str, Any]]:
+    yield from decision_rows          # flat scalar dicts only
+
+readers.append(nxd_decisions_resource())
+```
+
+`secrets["csv_source"]` is **not** available here — that key is supplied by the
+`csv-source` service, which an api-source closure does not name in
+`.secrets([...])`. `NXD_TRANSFORM_ROOT` is the anchor that does not depend on a
+connector service being present.
+
+**Cast the measures — this read does not type them for you.** A file
+connector's `read_csv()` infers column types; `csv.DictReader` yields strings
+for every column, so a reference model landed this way reaches DuckDB as
+VARCHAR throughout. That is invisible for an all-`string()` model like
+`nxd_decisions`, and wrong the moment the model promises a number — the
+`fx_rates(currency, month, rate)` case `derivation-plan.md` routes down this
+same path, or a judgement model whose `score` is `field(number(), ...)` under an
+`Agg.AVG`. `derived-models.md` § "Reading the sources yourself" is the rule:
+convert measures, not identifiers; `Decimal` for money, cast to `float` only in
+the final dict.
+
+It is still a base model everywhere else — promised in `spec.py`, declared in
+`models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. What changes is how
+the rows reach the port, because on this connector there is no reader loop to
+carry them — and, because you are now reading the file yourself, their types.
+
+Build the `RESTAPIConfig` from `secrets` at runtime — never
 hard-code a base URL or credential in the transform source. The `auth_type`
 dispatch assembles dlt's structured `auth` dict from the flat secret
 fields, the same way `_build_connection_string` in `database-source.md`
-assembles a connection string from flat `db_source` fields — never pass a
-flat secret value straight through as `auth`.
+assembles a connection string from the flat `host` / `port` / `user` /
+`password` entries in `secrets` — never pass a flat secret value straight
+through as `auth`.
 
 **Keep the dispatch, and end it with an explicit `elif auth_type is not None:
 raise`.** Writing only
@@ -260,14 +503,14 @@ branch that reads it must fail loudly on a value it does not handle:
 ```python
 elif auth_type is not None:
     raise ValueError(
-        f"unsupported auth_type {auth_type!r} in secrets['api_source'] — "
+        f"unsupported auth_type {auth_type!r} in secrets — "
         f"add a branch above, or fix the infra-profile attribute"
     )
 ```
 
 **`auth_type is None` is the one value that must NOT raise.** It means the
 profile configures no authentication, which is why the template reads the field
-with `api_secrets.get("auth_type")` and why `secrets["api_source"]` carries
+with `secrets.get("auth_type")` and why `secrets` carries
 `auth_type` *only when the API requires authentication* (see the attributes list
 above). A bare `else: raise` fails every unauthenticated api-source closure at
 transform time, with a message pointing the author at a profile attribute that is
@@ -278,10 +521,12 @@ different shape: it raises on exactly the case the `elif` exists to let through.
 An `auth_type` the transform does not handle is a closure that cannot
 authenticate. Discovering that as a raise at transform time beats discovering it
 as an HTTP 401 whose body is someone else's error page.
-`_load_api_source_endpoints` is **not** a dlt or stdlib function — the author
-must write it, parsing the `api-source-endpoints` companion file's
-`<model>=<endpoint path>` lines into a dict. A transform that calls it
-without defining it raises `NameError` at runtime.
+**Never open a file to find an endpoint path.** Every value the ingestion body
+needs — base URL, auth fields, endpoint paths — arrives in `secrets`. A helper
+that reads a sidecar file beside the transform (`_load_api_source_endpoints` and
+friends) is not a dlt or stdlib function, has to be hand-written, and is
+reaching for a channel this closure does not use; § "Why the endpoints live in
+the profile" above has the reasoning.
 
 ## `requirements.txt`
 
@@ -308,7 +553,19 @@ add it explicitly rather than assuming it's already covered.
         - key: base_url
           value: https://aidevboard.com/api/v1
           public: true
+        - key: endpoint_checks
+          value: /v1/checks
+          public: true
+        - key: endpoint_monitors
+          value: /v1/monitors
+          public: true
   ```
+
+  One `endpoint_<model>` per API-backed model, `<model>` byte-identical to the
+  name in `PHYSICAL_MODELS` (the naming invariant reaches this attribute key,
+  not a companion file). Always `public: true` — an endpoint path is topology,
+  and redacting it would hand the recipient of an export a closure they cannot
+  run without asking what the paths were.
 
   When the API needs authentication, add `auth_type` plus that type's own
   flat fields alongside `base_url` — never nest a whole credential under
@@ -322,6 +579,12 @@ add it explicitly rather than assuming it's already covered.
         - key: base_url
           value: https://aidevboard.com/api/v1
           public: true
+        - key: endpoint_checks
+          value: /v1/checks
+          public: true
+        - key: endpoint_monitors
+          value: /v1/monitors
+          public: true
         - key: auth_type
           value: bearer
           public: true
@@ -330,16 +593,27 @@ add it explicitly rather than assuming it's already covered.
           public: false
   ```
 
+  When the API also requires a non-secret header, add one `header_*` attribute
+  per header alongside these (`public: true` — see **Custom request headers**):
+
+  ```yaml
+        - key: header_user_agent
+          value: acme-analytics/1.0
+          public: true
+  ```
+
   For the other three types, add that type's fields from the table in
   Credential handling instead of `auth_token` (e.g. `auth_username` +
   `auth_password` for `http_basic`) — one attribute per field, each marked
   `public:` per the sensitivity classification (secrets `false`, non-secret
   config like `auth_key_name`/`auth_key_location` `true`).
 
-  **No `data/` directory, no path file** — `api-source-endpoints` is the
-  only companion artifact, and it stays non-secret topology only. For 2+ API
-  sources, add one labeled service per instance instead (`api-source-<label>`
-  / `secrets["api_source_<label>"]`) — see `reference/multi-source.md`.
+  **No `data/` directory, no path file, no companion artifact of any kind** —
+  an api-source closure ships none. Everything the transform needs is an
+  attribute on this service. For 2+ API sources, add one labeled service per
+  instance instead (`api-source-<label>` / label-prefixed attribute keys such
+  as `secrets["orders_base_url"]` and `secrets["orders_endpoint_<model>"]`) —
+  see `reference/multi-source.md`.
 
 ## Self-check (connectivity smoke test)
 
@@ -352,25 +626,68 @@ in-session, report the connectivity self-check as **not run** — do not
 claim it passed. Structural checks (naming invariant, no
 `.semantic_tools()`, import correctness) still run regardless.
 
+**The probe is a standalone script beside the closure — never inside
+`transform/`.** It runs once, at authoring time, from the author's shell. A
+probe living in `transform/main.py` (or any `transform/*.py`) instead runs on
+every materialization the supervisor performs, doubling the request count
+against an upstream you were careful to rate-limit, and it puts an HTTP client
+on the ingestion path where the only thing that should reach the wire is the
+dlt connector. Keep `transform/` free of `requests` / `urllib.request` /
+`httpx` entirely: if something under `transform/` is fetching, that is
+ingestion by hand, whatever it is named. (`urllib.parse` is fine — it is string
+manipulation and touches no socket.)
+
 **Never let a probe's traceback reach the transcript unredacted.** This is a
 sharper risk than the database case: `requests` puts the full URL in
 `HTTPError`/`ConnectionError` messages, so an API keyed by query string
 (`?api_key=…`) or basic auth leaks the live credential into chat the moment a
 probe fails — and chat is the one place the user cannot remediate. Redact by
-substituting the known secret values, never by pattern-matching:
+substituting every value that is not known-public topology, never by
+pattern-matching:
 
 ```python
+# The same exemption list as database-source.md's _redact — one pattern, two
+# call sites. It matters here too: `secrets` is the whole flat map, so a closure
+# naming both an api-source and a db-source hands this probe the db's host, port
+# and schema as well.
+_PUBLIC_SUFFIXES = ("host", "port", "database", "schema",
+                    "base_url", "auth_type", "region")
+# `header_*` is deliberately NOT exempt. Those values are non-secret by
+# convention, but the exemption list is what stands between a mis-filed
+# credential and the transcript — and `header_authorization` holding a token is
+# exactly the mis-filing the convention warns about. A redacted User-Agent in an
+# error message costs nothing; the reverse mistake cannot be taken back.
+#
+# Endpoint keys are `endpoint_<model>` (or `<label>_endpoint_<model>`), so the
+# suffix rule below cannot reach them — the model name is the tail, and it is
+# author-chosen and therefore unbounded. Match the segment instead. Leaving them
+# out is not fail-safe here, it is just unhelpful: `.replace()` would rewrite the
+# path out of the middle of the failing URL, so a 404 on the wrong endpoint —
+# the single most likely thing to go wrong at this step — would print as
+# `https://api.example.com<redacted>` and name neither the endpoint nor the model.
+_PUBLIC_SEGMENTS = ("endpoint_",)
+
 def _redact(exc: BaseException, secrets: dict) -> str:
     text = str(exc)
-    for value in secrets.values():            # every live value, keys vary per API
-        if value:
-            text = text.replace(str(value), "<redacted>")
+    # Redact by DEFAULT and exempt public topology, rather than listing secret
+    # names: the credential key varies per API (`api_key`, `token`, `bearer`,
+    # whatever this one calls it), so any fixed list misses the one that matters.
+    # Exempting base_url is what keeps the failing URL readable while the
+    # credential inside its query string still goes.
+    for key, value in secrets.items():
+        if not value:
+            continue
+        if any(key == p or key.endswith(f"_{p}") for p in _PUBLIC_SUFFIXES):
+            continue
+        if any(seg in key for seg in _PUBLIC_SEGMENTS):
+            continue
+        text = text.replace(str(value), "<redacted>")
     return text
 
 try:
     ...  # the bounded GET
 except Exception as exc:
-    raise SystemExit(f"connectivity check failed: {_redact(exc, api_secrets)}") from None
+    raise SystemExit(f"connectivity check failed: {_redact(exc, secrets)}") from None
 ```
 
 `from None` is mandatory: without it Python chains the original exception as
