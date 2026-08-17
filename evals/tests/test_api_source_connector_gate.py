@@ -105,6 +105,26 @@ def test_pure_hand_roll_is_rejected_with_its_own_message(tmp_path: Path):
     assert "urllib.request.urlopen" in detail
 
 
+DOTTED_IMPORT = '''
+import dlt.sources.rest_api as rest
+
+def ingest(duckdb, secrets):
+    config = {"client": {"base_url": secrets["base_url"]}, "resources": []}
+    return {r.name: r for r in rest.rest_api_resources(config)}
+'''
+
+
+def test_the_dotted_import_form_is_the_same_architecture(tmp_path: Path):
+    """`import dlt.sources.rest_api as rest` is the connector, spelled sideways.
+
+    Recognizing only the `from`-form failed a correct closure with "no
+    dlt.sources.rest_api import found" — a false accusation, and one the gate
+    can least afford now that three scenarios share it.
+    """
+    ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=DOTTED_IMPORT))
+    assert ok, detail
+
+
 def test_prose_mentioning_requests_still_passes(tmp_path: Path):
     # Substring scanning would fail this closure for describing what it avoided.
     ok, detail = checker.uses_rest_api_resources(_closure(tmp_path, main=MENTIONS_IN_PROSE))
@@ -287,3 +307,55 @@ def ingest(duckdb, secrets):
     ok, detail = checker.headers_built_from_secrets(_closure(tmp_path, main=src))
     assert not ok
     assert "never reads a header_*" in detail
+
+
+# ---------------------------------------------------------------------------
+# ingestion:no-hardcoded-url-or-path — the same two properties again
+# ---------------------------------------------------------------------------
+
+
+def test_documenting_the_endpoints_is_not_hardcoding_them(tmp_path: Path):
+    """This check reads AST literals now, not the raw file text.
+
+    A closure that names /v1/monitors in a docstring while reading the path
+    from `secrets["endpoint_monitors"]` is describing its topology, and the
+    text form reported that description as the defect it describes avoiding —
+    the same false accusation `headers_built_from_secrets` was fixed for.
+    """
+    src = '''
+from dlt.sources.rest_api import rest_api_resources
+
+def ingest(duckdb, secrets):
+    """Ingest /v1/monitors and /v1/checks from the Beacon API at 127.0.0.1.
+
+    Both paths come from secrets; neither is written here.
+    """
+    # secrets["endpoint_monitors"] is /v1/monitors on localhost in the fixture.
+    resources = [{"name": "monitors",
+                  "endpoint": {"path": secrets["endpoint_monitors"]}}]
+    return rest_api_resources(
+        {"client": {"base_url": secrets["base_url"]}, "resources": resources})
+'''
+    ok, detail = checker.no_hardcoded_url_or_path(
+        _closure(tmp_path, main=src), checker.STUB_HOSTS, checker.STUB_PATHS)
+    assert ok, f"a docstring is documentation, not configuration: {detail}"
+
+
+def test_a_frozen_endpoint_in_a_sibling_module_is_caught(tmp_path: Path):
+    """main.py-only scanning is defeated by moving the literal one file over."""
+    main = '''
+from dlt.sources.rest_api import rest_api_resources
+from .endpoints import RESOURCES
+
+def ingest(duckdb, secrets):
+    return rest_api_resources(
+        {"client": {"base_url": secrets["base_url"]}, "resources": RESOURCES})
+'''
+    endpoints = '''
+RESOURCES = [{"name": "monitors", "endpoint": {"path": "/v1/monitors"}}]
+'''
+    ok, detail = checker.no_hardcoded_url_or_path(
+        _closure(tmp_path, main=main, endpoints=endpoints),
+        checker.STUB_HOSTS, checker.STUB_PATHS)
+    assert not ok
+    assert "/v1/monitors" in detail

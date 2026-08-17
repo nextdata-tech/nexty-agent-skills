@@ -1,0 +1,6 @@
+{
+  "requires": "nxd-desktop-supervisor",
+  "workflow": "beacon-uptime",
+  "verifier": "check_api_source_e2e.py",
+  "description": "Run this scenario against the pinned local desktop supervisor runtime; the runner also keeps the Beacon HTTP fixture bound for the whole cell, including the verifier's re-serve."
+}

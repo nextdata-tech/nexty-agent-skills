@@ -6,6 +6,7 @@ shipped skill text and makes no network, provider, LLM, or supervisor call.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -14,6 +15,7 @@ MAPPER_CONTRACT = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "
 FIELD_MAPPER = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "field-mapper.md"
 PREFLIGHT = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "mapper-preflight.md"
 SELF_CHECK = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
+E2E_RUNNER = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "examples" / "e2e" / "run_e2e.py"
 
 
 def _read(path: Path) -> str:
@@ -39,10 +41,13 @@ def test_normative_contract_publishes_the_bounded_call_adapter() -> None:
     contract = _normalized(MAPPER_CONTRACT)
 
     assert (
-        '`make_call(*, spec, grant, provider="anthropic", provider_model=None, '
-        'provider_cwd=None) -> callable`'
+        '`make_call(*, spec, grant, secrets=None, allow_env=True, '
+        'provider="anthropic", provider_model=None, provider_cwd=None) -> callable`'
     ) in contract
     assert "provider construction, credential resolution" in contract
+    assert "allowlisted environment fallback" in contract
+    assert "The adapter is synchronous" in contract or "`make_call` returns a synchronous callable" in contract
+    assert "missing parsed body becomes `error_code = schema_reject`" in contract
     assert "use `make_call`" in contract
 
 
@@ -118,3 +123,13 @@ def test_generated_mapper_uses_the_budgeted_call_adapter_and_wire_shape() -> Non
     assert '"category": {' in field_mapper
     assert '"evidence"' in field_mapper
     assert "content-derived hash" in field_mapper
+
+
+def test_public_e2e_example_does_not_bind_sdk_or_private_transport() -> None:
+    source = _read(E2E_RUNNER)
+
+    assert "from nxd.experimental.field_mapper import make_call" in source
+    assert "return make_call(spec=spec, grant=grant, allow_env=True)" in source
+    assert not re.search(r"^\s*(?:import anthropic\b|from anthropic import)\b", source, re.MULTILINE)
+    for private_module in ("field_mapper.transport", "field_mapper.ledger"):
+        assert private_module not in source

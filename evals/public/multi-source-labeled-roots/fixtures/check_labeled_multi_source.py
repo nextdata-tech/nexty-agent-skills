@@ -12,9 +12,14 @@ import argparse
 import ast
 import hashlib
 import shutil
+import sys
 import tempfile
 import unicodedata
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+
+from loop_unroll import unroll_literal_loops  # noqa: E402
 
 
 def fail(message: str) -> None:
@@ -260,6 +265,12 @@ def main() -> None:
         tree = ast.parse(transform, filename=str(root / "transform/main.py"))
     except SyntaxError as exc:
         fail(f"transform-python-syntax: {exc}")
+
+    # Name propagation below follows assignments; a root bound by a `for` target
+    # would drop out of it and fail a correct closure for looping over its two
+    # labeled roots instead of spelling each one out. Normalizing the loop away
+    # keeps that reasoning in one place -- see evals/tools/loop_unroll.py.
+    tree = unroll_literal_loops(tree)
 
     string_constants = {
         node.value for node in ast.walk(tree)

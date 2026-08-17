@@ -302,6 +302,17 @@ def published_definitions(data_dir: Path, workflow: str) -> list[str]:
     return definitions
 
 
+def definition_path(data_dir: Path, definition_id: str) -> Path:
+    """Resolve a persisted definition id to its content-addressed directory."""
+    root = data_dir / "definitions"
+    if ":" in definition_id:
+        namespace, digest = definition_id.split(":", 1)
+        addressed = root / namespace / digest
+        if addressed.is_dir():
+            return addressed
+    return root / definition_id
+
+
 @dataclass
 class SnapshotServe:
     holder: tempfile.TemporaryDirectory[str]
@@ -592,7 +603,7 @@ def harness_mode(args: argparse.Namespace) -> int:
 
         # 1. Re-serve the agent's last immutable snapshot and re-answer from
         #    pristine truth — proves the served product is correct.
-        last = serve_definition(data_dir / "definitions" / definitions[-1], "desktop-final-snapshot")
+        last = serve_definition(definition_path(data_dir, definitions[-1]), "desktop-final-snapshot")
         try:
             final_catalog = describe(last.endpoint, last.bearer)
             with tempfile.TemporaryDirectory(prefix="desktop-harness-check-") as tmp:

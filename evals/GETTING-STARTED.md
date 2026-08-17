@@ -110,7 +110,7 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-20 of 33 public scenarios. The remaining 13 declare `ci_skip` in their
+20 of 34 public scenarios. The remaining 14 declare `ci_skip` in their
 `checks.json`. Eleven need a Tier 2 or Tier 3 install; one is gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 

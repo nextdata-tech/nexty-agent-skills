@@ -1,0 +1,7 @@
+{
+  "module": "stub_beacon_api",
+  "fixtures_from": "authenticated-api-source-build",
+  "endpoint_file": "ENDPOINT_URL",
+  "observations": true,
+  "description": "Borrow the build scenario's Beacon stub rather than copying it: the two scenarios must serve the same payload, auth and User-Agent gate or they stop being comparable. `observations` turns on the file-backed request log the harness verifier reads to prove the PUBLISHED closure reached this fixture."
+}

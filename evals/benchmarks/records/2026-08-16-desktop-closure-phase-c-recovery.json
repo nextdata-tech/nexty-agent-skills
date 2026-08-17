@@ -1,0 +1,98 @@
+{
+  "id": "2026-08-16-desktop-closure-phase-c-recovery",
+  "date": "2026-08-16",
+  "label": "nxd-run-job-loop: desktop closure preflight and phase-c recovery",
+  "notes": "Fresh local Claude-driven desktop eval with the paired NXD supervisor passed all 8 checks: full build, governed queries, staged average refinement, forcing-function cleanup, independent pristine-snapshot verification, and honest Phase-C recovery from the durable closure plus workflow id. The prior NO_EVAL entry reflected the earlier incomplete run; this measured run closes that evidence gap.",
+  "plugin_version": "0.37.3",
+  "report_tags": {
+    "nex879-phase-c-report-2.json": ""
+  },
+  "reports": {
+    "nex879-phase-c-report-2.json": {
+      "elapsed_s": 998.1,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "job-loop-serve-query-refine": "claude-opus-4-8"
+      },
+      "judge_model": "opus",
+      "agent_effort": "medium",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "candidate_pack",
+          "scenario": "job-loop-serve-query-refine",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "desktop_preflight": "passed",
+            "desktop_preflight_endpoint": "http://127.0.0.1:65382/mcp/",
+            "num_turns": 70,
+            "duration_ms": 895135,
+            "total_cost_usd": 6.592844500000002,
+            "input_tokens": 124,
+            "output_tokens": 61066,
+            "is_error": false,
+            "tool_calls": 67,
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "agent_model": "claude-opus-4-8"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "phase-a-loop",
+                "pass": true,
+                "why": "The trace shows CSV inspection (`cat data/*.csv`) and a dlt/DuckDB type probe, skill-driven semantic modeling, authoring of spec.py/models.py/infra-profile.yaml/transform/main.py/requirements.txt plus the data export, a `check` pass, a serve emitting `published=yes` with an endpoint, then `status` (current_artifact/pointer) and `describe` before any phase-A query."
+              },
+              {
+                "id": "catalog-grounded-governed-queries",
+                "pass": true,
+                "why": "Every answer comes from `nxd-desktop-supervisor query` with `--selection` JSON naming catalog measures/dimensions surfaced by the preceding `describe` (total_invoiced_amount, overdue_invoice_count, average_invoice_value, segment, product_category, customer_name), with the stated selection preceding each query and no answer derived from hand-written SQL or CSV arithmetic."
+              },
+              {
+                "id": "phase-a-answers",
+                "pass": true,
+                "why": "Harness facts mark spain_q2_total, q2_amount_by_segment, overdue_by_category and top_customers_by_amount all CORRECT, and the traced selections retain billing_country=Spain plus both half-open date bounds, group by the customer-sourced `segment`, sum the is_overdue boolean, and return three rows via desc order_by + limit 3."
+              },
+              {
+                "id": "staged-refine",
+                "pass": true,
+                "why": "Phase A shipped only sum and overdue-count metrics (no average), and after the staged request the agent regenerated, re-served the same `invoice-pulse` workflow, refreshed status/describe (showing the added average_invoice_value alongside the preserved sum) and answered Q5; harness facts confirm phase_a_definition_id 1ba12f… is UNANSWERABLE for the average while runs_published=4 all Published."
+              },
+              {
+                "id": "supervisor-state-integrity",
+                "pass": true,
+                "why": "The only touches to `.desktop/state` outside supervisor commands are read-only SQLite SELECT/PRAGMA queries — no inserts, no copied or edited pinned snapshots, and logs/selection files were written to `.desktop/` siblings — and the harness's four published runs (1ba12f → cd5f2b → 7992f0 → 7992f0) match the traced publication chronology exactly."
+              },
+              {
+                "id": "independent-published-snapshot",
+                "pass": true,
+                "why": "The authoritative facts report harness_exit_code 0, passed=true, all five questions CORRECT from the re-served final published snapshot, with source_csvs_pristine=true and check_script_pristine=true."
+              },
+              {
+                "id": "forcing-function-and-cleanup",
+                "pass": true,
+                "why": "The trace shows `check_job_loop.py --mode agent` ending in `ALL CHECKS PASSED (7/7)`, followed by `nxd-desktop-supervisor stop` reporting stopped and the semantic child confirmed DEAD; harness facts record agent_left_endpoint_running=false."
+              },
+              {
+                "id": "phase-c-recover-from-durable-key",
+                "pass": true,
+                "why": "After the endpoint/bearer were dead, the agent re-served the same closure directory under the same `invoice-pulse` workflow with no new inference, generation, or closure authoring — producing the identical definition hash 7992f0… (harness run 4) — then re-described and re-answered Q5 (Enterprise 240 / Mid-Market 170 / SMB 140), and narrated the re-serve explicitly as a rebuild from the closure rather than a reattach."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent completed the full build→serve→query→refine→recover loop with catalog-grounded queries, a genuinely gap-bearing phase-A snapshot, a passing forcing-function check, clean shutdown, and an honest closure-based Phase-C recovery, with no supervisor-state tampering."
+          },
+          "facts": [
+            "JOB VERIFY (authoritative runner facts): {\"agent_left_endpoint_running\": false, \"check_script_pristine\": true, \"definition_sha256\": {\"sha256-v1:1ba12fb2ef0facf300dd8a5fb5d046bbed9e91ae0a76e6538920477b98df7474\": {\"csv-source-path\": \"6667b2d1aab6a00caa5aee5af8ad9f1465e567abf1c209d15727d57b3e8f6e5f\", \"data/customers/customers.csv\": \"e1101311817604d8a1976f8f7b8dbd998fa7ab4b85b816d6ecc4a5b0afc9439e\", \"data/orders/orders.csv\": \"909a0793552e6d75092122e46d3cba56168acb28c94ca0f7e70e17a241db4b89\", \"definition.json\": \"5fbc120570f2af2772b2b6e8dbb4bcb9a5be17c3013b0278dad3439d75efabdb\", \"deployment-spec.yaml\": \"bcafa0da3a485321ba8ea356c00ee7b232b60b4d388a1d46e3bc026984e98f4d\", \"infra-profile.yaml\": \"a0bf952723bc5822e1a7771ec4047b9c1a856f449904a7a3816d85ded7c12e2c\", \"manifest.yaml\": \"d694394d637d5fe4fe9da79e6cfc173ef96de8473b29bddef44ac6ff2dbd0281\", \"models.yaml\": \"4bca1b9b01415d7f63e7c1b590f88fc3aaba21e3c32df144a2a3401ec25b40aa\", \"transform/main.py\": \"a39020760f3f0dccaf37af61227f83cf7b2432a6f2dc57c29da3a83838e6fa4e\"}, \"sha256-v1:7992f0b0aed03d5bb0d9f436317f755bd5491ee6962d1de7723b4f9351595f6c\": {\"csv-source-path\": \"6667b2d1aab6a00caa5aee5af8ad9f1465e567abf1c209d15727d57b3e8f6e5f\", \"data/customers/customers.csv\": \"e1101311817604d8a1976f8f7b8dbd998fa7ab4b85b816d6ecc4a5b0afc9439e\", \"data/orders/orders.csv\": \"909a0793552e6d75092122e46d3cba56168acb28c94ca0f7e70e17a241db4b89\", \"definition.json\": \"006c5427e09add93f4809b4f48a794d1af6fb7c52d737c673bf7fc091fb13d0c\", \"deployment-spec.yaml\": \"bcafa0da3a485321ba8ea356c00ee7b232b60b4d388a1d46e3bc026984e98f4d\", \"infra-profile.yaml\": \"a0bf952723bc5822e1a7771ec4047b9c1a856f449904a7a3816d85ded7c12e2c\", \"manifest.yaml\": \"d91927bb2f57930b93193a566aaaa298d0efca091561d8352796ba3b6d416ff3\", \"models.yaml\": \"bb374e6f6a39d34a6de675dfc2ed30d043bc7e658a5da96f923b43ecb4f96f3d\", \"transform/main.py\": \"c3a5515b573662b7e5917260370b0e10ce78c095c6d3969f87be86c6318f7bf2\"}, \"sha256-v1:cd5f2baf9a6ef1aaaceca3958466b5fd6ad5582b8dcd1b42da7bf1f48cd64bd7\": {\"csv-source-path\": \"6667b2d1aab6a00caa5aee5af8ad9f1465e567abf1c209d15727d57b3e8f6e5f\", \"data/customers/customers.csv\": \"e1101311817604d8a1976f8f7b8dbd998fa7ab4b85b816d6ecc4a5b0afc9439e\", \"data/orders/orders.csv\": \"909a0793552e6d75092122e46d3cba56168acb28c94ca0f7e70e17a241db4b89\", \"definition.json\": \"ddbb01872c09a93be86ffa057ea97fb57fa783bd1a5928353d2543bac9796f65\", \"deployment-spec.yaml\": \"bcafa0da3a485321ba8ea356c00ee7b232b60b4d388a1d46e3bc026984e98f4d\", \"infra-profile.yaml\": \"a0bf952723bc5822e1a7771ec4047b9c1a856f449904a7a3816d85ded7c12e2c\", \"manifest.yaml\": \"d694394d637d5fe4fe9da79e6cfc173ef96de8473b29bddef44ac6ff2dbd0281\", \"models.yaml\": \"5ef5fcf69c7e6c84aa9cce74b94547ddb614a26e1625fc75b336001f5ceb6f4f\", \"transform/main.py\": \"a39020760f3f0dccaf37af61227f83cf7b2432a6f2dc57c29da3a83838e6fa4e\"}}, \"harness_exit_code\": 0, \"passed\": true, \"phase_a_definition_id\": \"sha256-v1:1ba12fb2ef0facf300dd8a5fb5d046bbed9e91ae0a76e6538920477b98df7474\", \"phase_a_snapshot_refine_unanswerable\": true, \"published_runs\": [{\"artifact_id\": \"artifact-f9a1774c-e015-4b3e-b8d7-39010e0f4c8f\", \"definition_id\": \"sha256-v1:1ba12fb2ef0facf300dd8a5fb5d046bbed9e91ae0a76e6538920477b98df7474\", \"rowid\": 1, \"run_id\": \"run-1e4b8925-8f7b-4fc5-af1a-e05004692224\", \"status\": \"Published\", \"workflow_id\": \"invoice-pulse\"}, {\"artifact_id\": \"artifact-3506cfea-e4ba-4dfd-870e-2d3a385334cf\", \"definition_id\": \"sha256-v1:cd5f2baf9a6ef1aaaceca3958466b5fd6ad5582b8dcd1b42da7bf1f48cd64bd7\", \"rowid\": 2, \"run_id\": \"run-0860eb79-10fa-4e60-9b4b-bf4a596bb91a\", \"status\": \"Published\", \"workflow_id\": \"invoice-pulse\"}, {\"artifact_id\": \"artifact-72db5e7a-74f9-4300-a290-725dc8e4f1b1\", \"definition_id\": \"sha256-v1:7992f0b0aed03d5bb0d9f436317f755bd5491ee6962d1de7723b4f9351595f6c\", \"rowid\": 3, \"run_id\": \"run-d47451b7-56f9-4765-aff1-125e4bfdf091\", \"status\": \"Published\", \"workflow_id\": \"invoice-pulse\"}, {\"artifact_id\": \"artifact-527a16c6-8d64-4d73-8451-c436da9c582c\", \"definition_id\": \"sha256-v1:7992f0b0aed03d5bb0d9f436317f755bd5491ee6962d1de7723b4f9351595f6c\", \"rowid\": 4, \"run_id\": \"run-0cc0945d-5147-4217-af33-a57d031a0522\", \"status\": \"Published\", \"workflow_id\": \"invoice-pulse\"}], \"questions\": {\"average_by_segment_q2\": \"CORRECT\", \"overdue_by_category\": \"CORRECT\", \"q2_amount_by_segment\": \"CORRECT\", \"spain_q2_total\": \"CORRECT\", \"top_customers_by_amount\": \"CORRECT\"}, \"runs_published\": 4, \"source_csvs_pristine\": true, \"state_dirs\": [\".desktop/state\"]}"
+          ]
+        }
+      ]
+    }
+  }
+}
