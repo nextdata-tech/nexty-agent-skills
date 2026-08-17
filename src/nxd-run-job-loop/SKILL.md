@@ -328,9 +328,7 @@ natural-language translation is yours to do. For each question:
    **broader** one (a **per-question constraint** → express it here)? When
    ambiguous, ask; with no user, materialize. Never re-aggregate agent-side, and
    never silently drop the constraint.
-4. **Run the governed query.** Call `mcp__nxd-desktop__run_semantic_query` with
-   the endpoint/token plus the selected measures/dimensions — don't bypass it
-   with raw SQL or a local aggregation.
+4. **Run the governed query.** Call `mcp__nxd-desktop__run_semantic_query` with the endpoint/token plus the selected measures/dimensions — don't bypass it with raw SQL or a local aggregation. For ranked questions, pass endpoint-native `order_by: [{"name": "<selected measure or dimension>", "dir": "desc"}]` and integer `limit`; never sort or truncate rows agent-side.
 5. **Quantify the review bucket before presenting a classified total.** If the
    selection's model carries a classification dimension with a review bucket
    (`needs_review`, `unmapped`, `other`), a single headline number hides how much

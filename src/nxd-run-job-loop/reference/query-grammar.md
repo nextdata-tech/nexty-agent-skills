@@ -21,6 +21,23 @@
 
 Filter **values are strings on the wire**, whatever the column's physical type.
 
+For a ranked question, make the endpoint do the ordering and limiting in the
+same governed query. The order term uses `name` (a selected measure or
+dimension) and `dir` (`asc` or `desc`):
+
+```json
+{
+  "measures": ["revenue"],
+  "dimensions": ["customer_name"],
+  "order_by": [{"name": "revenue", "dir": "desc"}],
+  "limit": 3
+}
+```
+
+Do not fetch the unrestricted grouped result and sort or truncate it in the
+agent. That loses the endpoint's ordering/limit contract and can turn a
+bounded top-N question into an incomplete or misleading answer.
+
 ## What it does not accept
 
 `IN` / `NOT IN` · `BETWEEN` · `IS NULL` / `IS NOT NULL` · `NOT LIKE` · `HAVING`
