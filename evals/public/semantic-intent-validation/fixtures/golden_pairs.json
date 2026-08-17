@@ -31,6 +31,7 @@
     },
     "expected_agent_behavior": {
       "runs_intent_gate": true,
+      "describes_all_models": true,
       "echo_contains": ["total_revenue", "country", "sum", "order amount"],
       "clarifies": false,
       "calls_run_semantic_query": true
@@ -40,7 +41,36 @@
       "group_by_columns": ["COUNTRY"],
       "aggregate_exprs": ["SUM(TRY_CAST(CAST(AMOUNT_USD AS VARCHAR) AS DOUBLE)) AS total_revenue"],
       "compile_path": "view",
-      "comment": "Clear question: one obvious metric + one compatible dimension. No clarify turn should be added."
+      "comment": "Clear question: one obvious metric + one compatible dimension on order_event. No clarify turn should be added. country is reachable via order_event's join to customer_profile."
+    }
+  },
+  {
+    "nl": "How much revenue did partners bring in?",
+    "expect": "execute",
+    "selection": {
+      "measures": ["partner_sourced_revenue"],
+      "dimensions": [],
+      "filters": []
+    },
+    "expected_agent_behavior": {
+      "runs_intent_gate": true,
+      "describes_all_models": true,
+      "echo_contains": ["partner_sourced_revenue", "partner_directory", "attributed to a sourcing partner"],
+      "clarifies": false,
+      "calls_run_semantic_query": true
+    },
+    "tempting_wrong_selection": {
+      "measures": ["total_revenue"],
+      "dimensions": [],
+      "filters": [{"dimension": "channel", "op": "=", "value": "partner"}],
+      "why_wrong": "channel is the order's own sales channel (web, retail, partner), not partner attribution. Filtering total_revenue by channel='partner' measures orders placed via the partner channel, not revenue sourced through partners. Only reading partner_directory reveals partner_sourced_revenue."
+    },
+    "expected_sql_shape": {
+      "aggregated": true,
+      "group_by_columns": [],
+      "aggregate_exprs": ["SUM(TRY_CAST(CAST(AMOUNT_USD AS VARCHAR) AS DOUBLE)) AS partner_sourced_revenue"],
+      "compile_path": "view",
+      "comment": "Clear question, but the metric lives on partner_directory — a model that sounds like a reference/lookup table. The agent must describe EVERY model to find partner_sourced_revenue."
     }
   }
 ]
