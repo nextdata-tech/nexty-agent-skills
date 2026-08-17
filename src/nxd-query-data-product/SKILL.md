@@ -274,8 +274,11 @@ first three as a discover→select→run protocol, not free-form SQL:
    model on a misleading name or off-sounding grain is how the metric that
    answers the question gets missed — relevance is decided *from* each
    `describe_model` response, never before it. For a large catalog (roughly a
-   dozen or more models), name the catalog size and ask the user to narrow by
-   domain (as Step 2 does) before describing every model. The response contains:
+   dozen or more models): if a user is reachable (interactive session), name the
+   catalog size and ask them to narrow by domain before describing every model;
+   if no user is reachable (non-interactive session, scripted caller, eval
+   harness), proceed over the full set and state the catalog size in the echo so
+   the caller sees what was read. The response contains:
    - **metrics** (each with its `compatible_dimensions` list — the dimensions
      that share the model's grain),
    - **dimensions** (with PII classifications),
@@ -336,10 +339,12 @@ first, reading only `describe_model` metadata (`metrics` with
 
 0. **Coverage — no model skipped.** The selection must be built only after
    **every** model *in the agreed scope* has been read via `describe_model`
-   (§6d step 2). The agreed scope is the full `list_models` set, or — when the
-   catalog was too large to read whole and the user approved narrowing by domain
-   under §6d step 2 — that approved subset, in which case the echo (step 2)
-   states the narrowing so the user sees what was not read. Within the agreed
+   (§6d step 2). The agreed scope is: the full `list_models` set; or — when the
+   catalog is large and a user is reachable — the domain subset the user approved
+   under §6d step 2, with the echo stating the narrowing so the user sees what
+   was not read; or — when the catalog is large and no user is reachable
+   (non-interactive session, scripted caller) — the full set read without asking,
+   with the echo stating the catalog size. Within the agreed
    scope there are no exceptions: do NOT wave a model off because it looks like
    a different grain or carries an irrelevant-sounding name — grain and
    relevance are decided *from* `describe_model`, never before it, so a model

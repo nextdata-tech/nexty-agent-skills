@@ -103,21 +103,35 @@ def test_skill_intent_gate_opens_with_a_coverage_step():
 
 
 def test_skill_coverage_step_matches_the_large_catalog_carve_out():
-    """§6d may narrow a large catalog; §6f step 0 must honour the same scope.
+    """§6d must handle large catalogs for both interactive and non-interactive sessions.
 
-    Without this, an agent that correctly narrows by domain under §6d step 2
-    fails §6f step 0 as written — the runtime-judgment failure mode the gate
-    exists to remove.
+    The cross-DP path uses the mesh-merged registry, which routinely exceeds the
+    large-catalog threshold. Non-interactive callers (eval harness claude -p,
+    scheduled runs, scripted callers) have no user to answer a narrowing question.
+    Both §6d step 2 and §6f step 0 must cover both cases, or an agent in a
+    non-interactive cross-DP session has to either block on an unanswerable
+    AskUserQuestion or violate a REQUIRED gate.
     """
     text = _skill_text()
-    assert "name the catalog size and ask the user to narrow by domain" in text, (
-        "§6d step 2 must keep the large-catalog narrowing escape hatch"
+    # Interactive path: the narrowing ask is still available.
+    assert "if a user is reachable" in text, (
+        "§6d step 2 must keep the large-catalog interactive-narrowing path"
+    )
+    # Non-interactive fallback: proceed over the full set, state size in echo.
+    assert "no user is reachable" in text, (
+        "§6d step 2 must add a non-interactive fallback (proceed over the full "
+        "set, state catalog size in the echo) — without it, a non-interactive "
+        "session against a large cross-DP mesh blocks on an unanswerable "
+        "AskUserQuestion or violates the REQUIRED gate"
     )
     gate = _intent_gate_section()
     assert "agreed scope" in gate, (
-        "§6f step 0 must scope coverage to the agreed scope (full list_models "
-        "set, or the user-approved domain subset from §6d step 2), or it "
-        "contradicts the narrowing §6d permits"
+        "§6f step 0 must scope coverage to the agreed scope, or it contradicts "
+        "the narrowing §6d permits"
+    )
+    assert "no user is reachable" in gate, (
+        "§6f step 0 must carry the non-interactive fallback alongside §6d step 2 "
+        "so the gate and the discovery rule stay consistent"
     )
 
 
