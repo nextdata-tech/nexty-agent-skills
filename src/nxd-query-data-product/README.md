@@ -51,6 +51,13 @@ it. Free-form text-to-SQL can't do this because there is no selection to inspect
 
 Step 6f is that validation, run **client-side** before `run_semantic_query`:
 
+0. **Coverage** — every model in the agreed scope has been read via
+   `describe_model` (the full `list_models` set; or, for a large catalog in an
+   interactive session, the user-approved domain subset; or, for a large catalog
+   in a non-interactive session, the full set read without asking, with the echo
+   stating the catalog size); no model waved off for grain/relevance on
+   `list_models`-only evidence (relevance is decided *from* `describe_model`,
+   never before it).
 1. **Critic** — LLM verdict (`ok` / `ambiguous` / `likely-wrong`) over
    `{question, selection, describe_model metadata}`.
 2. **Echo** — deterministic plain-language restatement of the selection from the
@@ -58,7 +65,7 @@ Step 6f is that validation, run **client-side** before `run_semantic_query`:
 3. **Clarify** — on an unclear verdict or an unreachable dimension, ask with the
    real candidate concepts instead of guessing.
 
-All three read only what `list_models` + `describe_model` already return — zero
+All four read only what `list_models` + `describe_model` already return — zero
 server change. Echo is deterministic; critic and clarify are non-deterministic /
 interactive, so they stay client-side, which keeps the `run_semantic_query` path
 deterministic (the determinism dividend). Full design:
