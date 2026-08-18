@@ -111,8 +111,9 @@ you were trying to re-measure.
 ### What runs without any further setup
 
 20 of 35 public scenarios. The remaining 15 declare `ci_skip` in their
-`checks.json`. Eleven need a Tier 2 or Tier 3 install; one is gated on the agent
-backend; and one requires an operator-provided source-isolation wrapper:
+`checks.json`. Twelve need a Tier 2 or Tier 3 install; one is gated on the agent
+backend; one requires an operator-provided source-isolation wrapper; and one
+requires the future runner-owned Desktop stdio MCP capability:
 
 | Scenario | Needs |
 |---|---|

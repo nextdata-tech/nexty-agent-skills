@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+from collections.abc import Iterator
 import json
 import sys
 from dataclasses import replace
@@ -31,12 +32,21 @@ CONTRACT = REPO_ROOT / "src/nxd-generate-data-product/mapper/CONTRACT.md"
 E2E_RUNNER = REPO_ROOT / "src/nxd-generate-data-product/mapper/examples/e2e/run_e2e.py"
 TERMINAL_SCENARIO = REPO_ROOT / "evals/public/terminal-field-mapper-adapter-contract"
 SAMPLE = "samples/01-row-scores"
-SYNTHETIC_SECRET = "nex884-synthetic-secret-never-persist"
+SYNTHETIC_SECRET = "nex884-opaque-synthetic-secret-8f0d"
 ARBITRARY_SECRET = "opaque-credential-value-7f8b92"
 
 
+def _load_checker(name: str = "nex884_terminal_checker") -> Any:
+    checker_path = TERMINAL_SCENARIO / "fixtures/check_terminal_mapper_adapter.py"
+    spec = importlib.util.spec_from_file_location(name, checker_path)
+    checker = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(checker)
+    return checker
+
+
 @pytest.fixture(scope="module")
-def _import_canonical_harness() -> None:
+def _import_canonical_harness() -> Iterator[None]:
     """Import exactly the nxd checkout selected by ``NXD_REPO``.
 
     ``harness_path`` is intentionally exclusive when NXD_REPO is set.  Adding
@@ -291,42 +301,55 @@ def test_generated_closure_uses_only_the_public_adapter_surface() -> None:
     assert "proposal.__dict__" not in source
 
 
-def test_generated_closure_negative_fixtures_are_classified_without_secret_echo() -> None:
-    """Static closure checks cover paths that must never dispatch a provider.
-
-    An absent adapter, direct SDK binding, private transport binding, and a raw
-    SDK message are all generation defects.  The terminal evaluator classifies
-    them locally rather than attempting a provider call just to learn that the
-    transform is unsafe.
-    """
+def test_generated_closure_negative_fixtures_use_the_shipped_checker() -> None:
+    """Static closure defects are classified by the public checker itself."""
+    checker = _load_checker("nex884_negative_checker")
     fixtures = {
-        "absent-adapter": ("def transform():\n    return {}\n", "mapper_adapter_missing"),
-        "direct-sdk": ("import anthropic\n", "mapper_provider_sdk_forbidden"),
-        "aliased-sdk": ("import anthropic as provider\n", "mapper_provider_sdk_forbidden"),
+        "absent-adapter": (
+            "def transform():\n    return {}\n",
+            {"public make_call call missing", "map_inputs call missing"},
+        ),
+        "direct-sdk": (
+            "import anthropic\n",
+            {"provider SDK import", "public make_call call missing", "map_inputs call missing"},
+        ),
+        "aliased-sdk": (
+            "import anthropic as provider\n",
+            {"provider SDK import", "public make_call call missing", "map_inputs call missing"},
+        ),
         "private-transport": (
-            "from nxd.experimental.field_mapper.transport import Client\n", "mapper_private_api_forbidden"
+            "from nxd.experimental.field_mapper.transport import Client\n",
+            {"private mapper import", "public make_call call missing", "map_inputs call missing"},
         ),
         "aliased-private-transport": (
             "from nxd.experimental.field_mapper import transport as mapper_transport\n",
-            "mapper_private_api_forbidden",
+            {"private mapper import", "public make_call call missing", "map_inputs call missing"},
         ),
         "raw-message": (
             "from anthropic.types import Message\n\ndef adapter(**kwargs):\n    return Message\n",
-            "mapper_raw_provider_response",
+            {"provider SDK import", "raw provider response return", "public make_call call missing", "map_inputs call missing"},
         ),
     }
     for _name, (source, expected) in fixtures.items():
-        assert _closure_adapter_status(source) == expected
-        assert SYNTHETIC_SECRET not in _closure_adapter_status(source)
+        assert set(checker.findings(source)) == expected
+        assert SYNTHETIC_SECRET not in "\n".join(checker.findings(source))
+
+    aliased_public = (
+        "import nxd.experimental.field_mapper as fm\n"
+        "def run():\n"
+        "    call = fm.make_call(spec=spec, grant=grant, allow_env=False)\n"
+        "    return fm.map_inputs(inputs, spec=spec, grant=grant, call=call)\n"
+    )
+    assert checker.findings(aliased_public) == []
 
 
 def test_contract_names_callback_shape_and_sanitized_boundaries() -> None:
     contract = " ".join(CONTRACT.read_text(encoding="utf-8").split())
     for required in ("`item`", "`spec`", "`wire_schema`", "`violations`"):
         assert required in contract
-    assert "return a coroutine, import a provider SDK, construct `transport.Client`" in contract
-    assert "pass through an SDK response object" in contract
-    assert "stable machine codes, not provider payloads or credentials" in contract
+    for required in ("coroutine", "provider SDK", "transport.Client", "SDK response object",
+                     "stable machine codes", "credentials"):
+        assert required in contract
 
 
 def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists(tmp_path: Path) -> None:
@@ -340,14 +363,11 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists(tmp_p
     checks = json.loads((TERMINAL_SCENARIO / "checks.json").read_text(encoding="utf-8"))
     assert checks["wants_trace"] is True
     assert checks["deterministic_check"]["wants_trace"] is True
+    assert checks["deterministic_check"]["trace_source"] == "runner_mcp"
     assert "per-run nxd-desktop stdio MCP server" in checks["ci_skip"]
     assert "JSON-RPC trace sink" in checks["ci_skip"]
 
-    checker_path = TERMINAL_SCENARIO / "fixtures/check_terminal_mapper_adapter.py"
-    spec = importlib.util.spec_from_file_location("nex884_terminal_checker", checker_path)
-    checker = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(checker)
+    checker = _load_checker()
 
     good = (
         "from nxd.experimental.field_mapper import make_call, map_inputs\n"
@@ -362,20 +382,21 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists(tmp_p
     )
     assert "raw provider response return" in checker.findings("def f():\n    return response\n")
 
-    trace = tmp_path / "trace.txt"
-    trace.write_text("nxd-desktop build_data_product\n", encoding="utf-8")
-    assert "nxd-desktop" in trace.read_text(encoding="utf-8")
+    assert checker.trace_errors("nxd-desktop build_data_product\n") == [
+        "trace is not runner-authored JSON-RPC"
+    ]
+    good_trace = json.dumps({
+        "source": "runner", "protocol": "mcp", "direction": "request",
+        "method": "tools/call", "tool": "build_data_product",
+    }) + "\n"
+    assert checker.trace_errors(good_trace) == []
 
 
 def test_terminal_checker_redacts_secret_bearing_trace_and_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A checker failure must name the class, never replay its secret input."""
-    checker_path = TERMINAL_SCENARIO / "fixtures/check_terminal_mapper_adapter.py"
-    spec = importlib.util.spec_from_file_location("nex884_redaction_checker", checker_path)
-    checker = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(checker)
+    checker = _load_checker("nex884_redaction_checker")
 
     main = tmp_path / "transform/main.py"
     main.parent.mkdir()
@@ -389,12 +410,21 @@ def test_terminal_checker_redacts_secret_bearing_trace_and_artifact(
     )
     (tmp_path / "run").mkdir()
     (tmp_path / "run/ledger.json").write_text(ARBITRARY_SECRET, encoding="utf-8")
-    trace = tmp_path / "trace.txt"
-    trace.write_text(f"nxd-desktop build_data_product {ARBITRARY_SECRET}\n", encoding="utf-8")
+    trace = tmp_path.parent / f"{tmp_path.name}-trace.jsonl"
+    trace.write_text(
+        json.dumps({
+            "source": "runner", "protocol": "mcp", "direction": "request",
+            "method": "tools/call", "tool": "build_data_product",
+            "detail": ARBITRARY_SECRET,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    marker_file = tmp_path.parent / f"{tmp_path.name}-markers.txt"
+    marker_file.write_text(ARBITRARY_SECRET + "\n", encoding="utf-8")
     monkeypatch.setattr(
         sys, "argv", ["checker", "--fixtures", str(TERMINAL_SCENARIO / "fixtures"),
                         "--root", str(tmp_path), "--trace", str(trace),
-                        "--secret-marker", ARBITRARY_SECRET],
+                        "--secret-marker-file", str(marker_file)],
     )
 
     assert checker.main() == 1
@@ -404,45 +434,16 @@ def test_terminal_checker_redacts_secret_bearing_trace_and_artifact(
     assert ARBITRARY_SECRET not in output
     assert "anthropic_api_key" not in output
 
+    monkeypatch.setattr(
+        sys, "argv", ["checker", "--fixtures", str(TERMINAL_SCENARIO / "fixtures"),
+                        "--root", str(tmp_path), "--trace", str(trace)],
+    )
+    assert checker.main() == 1
+    assert "redaction markers are required" in capsys.readouterr().out
+
 
 def _assert_secret_absent(root: Path) -> None:
     """Fail if a test artifact/ledger contains our synthetic credential."""
     for path in root.rglob("*"):
         if path.is_file():
             assert SYNTHETIC_SECRET not in path.read_text(encoding="utf-8", errors="ignore"), path
-
-
-def _closure_adapter_status(source: str) -> str:
-    """Return a stable, non-sensitive pre-dispatch closure diagnostic.
-
-    This is deliberately narrow: it detects the documented unsafe spellings,
-    rather than claiming to prove that arbitrary Python cannot reach a model.
-    Runtime provider failures are covered by the synthetic ``map_inputs``
-    cases above and retain their mapper-owned machine codes.
-    """
-    tree = ast.parse(source)
-    imported: set[str] = set()
-    calls_make_call = False
-    returns_raw_message = False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imported.add(node.module or "")
-            imported.update(f"{node.module}.{alias.name}" for alias in node.names if node.module)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "make_call":
-            calls_make_call = True
-        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name) and node.value.id in {"Message", "message"}:
-            returns_raw_message = True
-
-    if any(name == "anthropic" or name.startswith("anthropic.") for name in imported):
-        return "mapper_raw_provider_response" if returns_raw_message else "mapper_provider_sdk_forbidden"
-    if any(
-        "nxd.experimental.field_mapper.transport" in name
-        or "nxd.experimental.field_mapper.ledger" in name
-        for name in imported
-    ):
-        return "mapper_private_api_forbidden"
-    if not calls_make_call:
-        return "mapper_adapter_missing"
-    return "ok"

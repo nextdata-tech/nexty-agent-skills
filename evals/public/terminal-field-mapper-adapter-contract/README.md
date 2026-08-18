@@ -1,8 +1,10 @@
 # Terminal mapper-adapter evaluator — required runner capability
 
 This scenario is registered with the normal terminal evaluator (`evals/run.py`)
-so it receives the agent transcript and its deterministic checker receives that
-trace. It intentionally does not claim to be runnable today.
+with an explicit `runner_mcp` trace source. The deterministic checker must
+receive runner-authored JSONL MCP events, never the agent transcript; the
+current generic runner fails closed until the stdio capability exists. It
+intentionally does not claim to be runnable today.
 
 The present runner has two adjacent but insufficient paths:
 
@@ -19,7 +21,8 @@ To enable this scenario, add a runner capability that, for each cell:
 2. injects the recorded mapper provider and one synthetic secret without adding
    either to the agent workspace or environment;
 3. exposes the public MCP tools to the terminal agent and records redacted
-   JSON-RPC request/response events; and
+   JSONL events with `source: runner`, `protocol: mcp`, method, and tool fields;
+   the synthetic secret is supplied through a runner-owned private file; and
 4. classifies setup, provider, and agent timeout/termination independently,
    then stops the process group and removes all run, trace, and credential
    state in every exit path.
@@ -28,3 +31,8 @@ Until that capability exists, `ci_skip` is deliberate and explicit. The
 non-skipped unit tests in `evals/tests/test_terminal_field_mapper_adapter_contract.py`
 continue to exercise the public adapter with synthetic local fixtures against a
 canonical NXD checkout; they are not offered as a substitute for this MCP E2E.
+
+The checker deliberately rejects plain transcript text as a trace. This keeps
+an agent from satisfying the MCP requirement by printing tool names, and makes
+the missing runner capability an infrastructure failure rather than a false
+agent pass.

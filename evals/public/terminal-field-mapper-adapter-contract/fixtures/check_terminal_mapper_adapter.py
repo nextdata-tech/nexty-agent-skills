@@ -4,27 +4,64 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 from pathlib import Path
+
+
+PUBLIC_MAPPER_MODULE = "nxd.experimental.field_mapper"
+
+
+def _attribute_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _attribute_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return None
+
 
 def findings(source: str) -> list[str]:
     tree = ast.parse(source)
     imported: set[str] = set()
+    module_aliases: set[str] = set()
     adapter_names: set[str] = set()
+    map_names: set[str] = set()
     map_calls: list[ast.Call] = []
+    make_call_calls: list[ast.Call] = []
     raw_return = False
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
+            for alias in node.names:
+                imported.add(alias.name)
+                if alias.name == PUBLIC_MAPPER_MODULE:
+                    module_aliases.add(alias.asname or alias.name)
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             imported.add(module)
             imported.update(f"{module}.{alias.name}" for alias in node.names if module)
-            if module == "nxd.experimental.field_mapper":
-                adapter_names.update(alias.asname or alias.name for alias in node.names if alias.name == "make_call")
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "map_inputs":
-            map_calls.append(node)
-        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name) and node.value.id.lower() in {"message", "response"}:
-            raw_return = True
+            if module == PUBLIC_MAPPER_MODULE:
+                for alias in node.names:
+                    local = alias.asname or alias.name
+                    if alias.name == "make_call":
+                        adapter_names.add(local)
+                    elif alias.name == "map_inputs":
+                        map_names.add(local)
+        elif isinstance(node, ast.Call):
+            dotted = _attribute_name(node.func)
+            if (
+                isinstance(node.func, ast.Name) and node.func.id in map_names
+            ) or dotted in {f"{alias}.map_inputs" for alias in module_aliases}:
+                map_calls.append(node)
+            if (
+                isinstance(node.func, ast.Name) and node.func.id in adapter_names
+            ) or dotted in {f"{alias}.make_call" for alias in module_aliases}:
+                make_call_calls.append(node)
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name):
+            raw_return = node.value.id.lower() in {
+                "message", "response", "resp", "raw_response", "sdk_response"
+            }
+
     errors: list[str] = []
     if any(name == "anthropic" or name.startswith("anthropic.") for name in imported):
         errors.append("provider SDK import")
@@ -32,11 +69,11 @@ def findings(source: str) -> list[str]:
         errors.append("private mapper import")
     if raw_return:
         errors.append("raw provider response return")
-    if not adapter_names:
-        errors.append("public make_call import missing")
+    if not make_call_calls:
+        errors.append("public make_call call missing")
     if not map_calls:
         errors.append("map_inputs call missing")
-    elif not any(any(k.arg == "call" for k in call.keywords) for call in map_calls):
+    elif not any(any(keyword.arg == "call" for keyword in call.keywords) for call in map_calls):
         errors.append("map_inputs must receive call=")
     return errors
 
@@ -44,7 +81,7 @@ def findings(source: str) -> list[str]:
 def artifact_contains_secret(root: Path, markers: tuple[str, ...]) -> bool:
     """Scan landed text artifacts without echoing the matching content."""
     for path in root.rglob("*"):
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="ignore").lower()
         if any(marker.lower() in text for marker in markers):
@@ -52,32 +89,67 @@ def artifact_contains_secret(root: Path, markers: tuple[str, ...]) -> bool:
     return False
 
 
+def trace_errors(trace_text: str) -> list[str]:
+    """Require runner-authored JSON-RPC events, never agent prose."""
+    events: list[dict[str, object]] = []
+    for line in trace_text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return ["trace is not runner-authored JSON-RPC"]
+        if not isinstance(event, dict) or event.get("source") != "runner" or event.get("protocol") != "mcp":
+            return ["trace is not runner-authored JSON-RPC"]
+        events.append(event)
+    if not events:
+        return ["missing runner-authored MCP trace event"]
+    if not any(event.get("method") == "tools/call" for event in events):
+        return ["trace has no nxd-desktop MCP tool call"]
+    if not any(
+        event.get("method") == "tools/call"
+        and event.get("tool") in {"build_data_product", "inspect_run"}
+        for event in events
+    ):
+        return ["trace has no mapper build/inspection event"]
+    return []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fixtures", required=True)
     ap.add_argument("--root", required=True)
     ap.add_argument("--trace", required=True)
-    ap.add_argument("--secret-marker", action="append", default=[])
+    ap.add_argument("--secret-marker-file")
     args = ap.parse_args()
-    root, trace = Path(args.root), Path(args.trace)
-    source_path = root / "transform" / "main.py"
+    root, trace, fixtures = Path(args.root), Path(args.trace), Path(args.fixtures)
     errors: list[str] = []
+    if not fixtures.is_dir():
+        errors.append("fixtures directory missing")
+    source_path = root / "transform" / "main.py"
     if not source_path.is_file():
         errors.append("missing transform/main.py")
     else:
         errors.extend(findings(source_path.read_text(encoding="utf-8")))
-    markers = tuple(str(marker) for marker in args.secret_marker if marker)
-    if artifact_contains_secret(root, markers):
+
+    markers: tuple[str, ...] = ()
+    if args.secret_marker_file:
+        marker_path = Path(args.secret_marker_file)
+        try:
+            markers = tuple(line for line in marker_path.read_text(encoding="utf-8").splitlines() if line)
+        except OSError:
+            errors.append("secret marker file unreadable")
+    if not markers:
+        errors.append("redaction markers are required")
+    elif artifact_contains_secret(root, markers):
         errors.append("credential material appears in artifact")
+
     if not trace.is_file():
         errors.append("missing public MCP trace")
     else:
         trace_text = trace.read_text(encoding="utf-8", errors="ignore")
-        if "nxd-desktop" not in trace_text:
-            errors.append("trace has no nxd-desktop MCP event")
-        if not ("build_data_product" in trace_text or "inspect_run" in trace_text):
-            errors.append("trace has no mapper build/inspection event")
-        if any(marker.lower() in trace_text.lower() for marker in markers):
+        errors.extend(trace_errors(trace_text))
+        if markers and any(marker.lower() in trace_text.lower() for marker in markers):
             errors.append("credential material appears in trace")
     if errors:
         for error in errors:

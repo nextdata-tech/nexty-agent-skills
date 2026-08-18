@@ -1121,6 +1121,23 @@ DETERMINISTIC_CHECK_PREFIX = "DETERMINISTIC CHECK (authoritative runner facts): 
 DETERMINISTIC_CHECK_FAILED = "deterministic check failed"
 
 
+def _private_text_file(
+    directory_prefix: str, filename: str, text: str
+) -> tuple[tempfile.TemporaryDirectory, Path]:
+    """Create a runner-owned 0600 text file and its private temp directory."""
+    holder = tempfile.TemporaryDirectory(prefix=directory_prefix)
+    path = Path(holder.name) / filename
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except BaseException:
+        os.close(fd)
+        holder.cleanup()
+        raise
+    return holder, path
+
+
 def deterministic_check_fact(
     scenario_dir: Path, ws: Path, cfg: dict, trace: str = ""
 ) -> str:
@@ -1145,6 +1162,15 @@ def deterministic_check_fact(
              "infrastructure_error": f"checker not found: {script}"},
             sort_keys=True,
         )
+    # ``trace`` is the agent transcript in the generic runner. A future
+    # Desktop stdio harness may provide a runner-authored JSON-RPC trace, but
+    # silently substituting the transcript would let an agent spoof MCP use by
+    # printing tool names. Fail closed until that source is wired explicitly.
+    if cfg.get("trace_source") == "runner_mcp":
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False, "infrastructure_error": "runner-authored MCP trace source is unavailable"},
+            sort_keys=True,
+        )
     # An OMITTED `deps` takes the duckdb default (most checkers read a landed
     # DuckDB). An explicitly EMPTY list means none: a static checker that never
     # opens a database should not pay for the install, and `"deps": []` has to
@@ -1156,33 +1182,49 @@ def deterministic_check_fact(
     for dep in deps:
         cmd += ["--with", str(dep)]
     cmd += ["python", str(script), "--fixtures", str(fixtures), "--root", str(ws)]
-    # A checker may need to prove redaction of a runner-supplied synthetic
-    # secret. Pass VALUES, never credential-key names: `anthropic_api_key` is a
-    # documented configuration key and treating it as a leak rejects valid
-    # closures while missing arbitrary opaque secret values.
-    for marker in cfg.get("redaction_markers", []):
-        cmd += ["--secret-marker", str(marker)]
-    if cfg.get("wants_trace"):
-        trace_file = Path(tempfile.mkdtemp(prefix="nxd-eval-trace-")) / "trace.txt"
-        trace_file.write_text(trace, encoding="utf-8")
-        cmd += ["--trace", str(trace_file)]
+    private_files: list[tempfile.TemporaryDirectory] = []
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=DETERMINISTIC_CHECK_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
-            {"passed": False,
-             "infrastructure_error": (
-                 f"checker timed out after {DETERMINISTIC_CHECK_TIMEOUT_S}s: {exc}")},
-            sort_keys=True,
-        )
+        # A checker may need to prove redaction of a runner-supplied synthetic
+        # secret. Pass it through a runner-owned 0600 file, never argv: argv is
+        # visible to other processes and may be echoed into CI diagnostics.
+        markers = [str(marker) for marker in cfg.get("redaction_markers", []) if str(marker)]
+        if markers:
+            marker_holder, marker_file = _private_text_file(
+                "nxd-eval-markers-", "markers.txt", "\n".join(markers) + "\n"
+            )
+            private_files.append(marker_holder)
+            cmd += ["--secret-marker-file", str(marker_file)]
+        if cfg.get("wants_trace"):
+            trace_holder, trace_file = _private_text_file(
+                "nxd-eval-trace-", "trace.txt", trace
+            )
+            private_files.append(trace_holder)
+            cmd += ["--trace", str(trace_file)]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=DETERMINISTIC_CHECK_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+                {"passed": False,
+                 "infrastructure_error": (
+                     f"checker timed out after {DETERMINISTIC_CHECK_TIMEOUT_S}s: {exc}")},
+                sort_keys=True,
+            )
+        except OSError as exc:
+            return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+                {"passed": False, "infrastructure_error": f"checker failed to start: {exc}"},
+                sort_keys=True,
+            )
     except OSError as exc:
         return DETERMINISTIC_CHECK_PREFIX + json.dumps(
-            {"passed": False, "infrastructure_error": f"checker failed to start: {exc}"},
+            {"passed": False, "infrastructure_error": f"checker inputs failed to start: {exc}"},
             sort_keys=True,
         )
+    finally:
+        for holder in private_files:
+            holder.cleanup()
     stdout = proc.stdout
     # Fail closed on the exit code, and require the checker's own success
     # sentinel: a checker that dies mid-report can exit 0 without having run

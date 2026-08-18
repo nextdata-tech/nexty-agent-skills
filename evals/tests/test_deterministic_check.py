@@ -14,6 +14,7 @@ import csv
 import importlib.util
 import json
 import shutil
+import stat
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -426,3 +427,49 @@ def test_answer_key_stays_out_of_the_agent_workspace():
     """The checker and its truth file must remain runner-side."""
     assert "truth.json" in run.DERIVATION_RUNNER_SIDE_FIXTURES
     assert "check_derived_closure.py" in run.DERIVATION_RUNNER_SIDE_FIXTURES
+
+
+def test_redaction_markers_use_a_private_file_and_are_cleaned_up(tmp_path, monkeypatch):
+    captured = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "ALL CHECKS PASSED\n"
+        stderr = ""
+
+    def fake_run(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        marker_path = Path(cmd[cmd.index("--secret-marker-file") + 1])
+        captured["marker_path"] = marker_path
+        assert marker_path.read_text(encoding="utf-8") == "opaque-synthetic-secret\n"
+        assert stat.S_IMODE(marker_path.stat().st_mode) == 0o600
+        assert "--secret-marker" not in cmd
+        return Completed()
+
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+    facts = [
+        run.deterministic_check_fact(
+            SCENARIO,
+            tmp_path,
+            {"script": "check_derived_closure.py", "deps": [],
+             "redaction_markers": ["opaque-synthetic-secret"]},
+        )
+    ]
+
+    assert run.deterministic_check_passed(facts) is True
+    assert not captured["marker_path"].exists()
+
+
+def test_runner_authored_trace_source_fails_closed_until_stdio_harness_exists(tmp_path):
+    facts = [
+        run.deterministic_check_fact(
+            SCENARIO, tmp_path,
+            {"script": "check_derived_closure.py", "trace_source": "runner_mcp"},
+            trace="nxd-desktop build_data_product",
+        )
+    ]
+
+    assert run.deterministic_check_passed(facts) is False
+    assert run.deterministic_check_infrastructure_error(facts) == (
+        "runner-authored MCP trace source is unavailable"
+    )
