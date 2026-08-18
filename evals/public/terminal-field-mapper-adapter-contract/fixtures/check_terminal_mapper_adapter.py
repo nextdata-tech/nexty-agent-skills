@@ -13,19 +13,20 @@ PUBLIC_MAPPER_MODULE = "nxd.experimental.field_mapper"
 DOCUMENTED_PROPOSAL_ATTRIBUTES = frozenset({
     "target_row_key",
     "field",
+    "typed",
     "value_status",
-    "error_code",
-    "value_string",
-    "value_int",
-    "value_float",
-    "value_bool",
-    "value_date",
-    "value_datetime",
-    "value_json",
+    "mapper_spec_id",
+    "input_snapshot_id",
+    "execution_id",
+    "observation_id",
+    "emission_ordinal",
     "evidence",
-    "evidence_statuses",
+    "error_code",
+    "error_detail",
+    "attempt_count",
+    "attempt_id",
+    "needs_review",
 })
-
 
 def _attribute_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
@@ -53,8 +54,9 @@ def findings(source: str) -> list[str]:
                 imported.add(alias.name)
                 if alias.name == PUBLIC_MAPPER_MODULE:
                     module_aliases.add(alias.asname or alias.name)
-                elif alias.name == "nxd.experimental":
-                    module_aliases.add(f"{alias.asname or alias.name}.field_mapper")
+                elif alias.name in {"nxd", "nxd.experimental"}:
+                    suffix = ".experimental.field_mapper" if alias.name == "nxd" else ".field_mapper"
+                    module_aliases.add(f"{alias.asname or alias.name}{suffix}")
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             imported.add(module)
@@ -107,6 +109,9 @@ def findings(source: str) -> list[str]:
             target = _attribute_name(node.value)
             if target and target.split(".", 1)[0] == "proposal" and node.attr not in DOCUMENTED_PROPOSAL_ATTRIBUTES:
                 proposal_attribute_access = True
+            if target and any(target == alias or target.startswith(f"{alias}.") for alias in module_aliases):
+                if node.attr in {"transport", "ledger"}:
+                    imported.add(f"field_mapper.{node.attr}")
         elif isinstance(node, ast.Return):
             value = node.value
             if isinstance(value, ast.Name):

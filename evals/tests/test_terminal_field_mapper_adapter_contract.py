@@ -361,6 +361,8 @@ def test_generated_closure_negative_fixtures_use_the_shipped_checker() -> None:
 
 def test_contract_names_callback_shape_and_sanitized_boundaries() -> None:
     contract = " ".join(CONTRACT.read_text(encoding="utf-8").split())
+    checker = _load_checker("nex884_contract_checker")
+    assert all(name in contract for name in checker.DOCUMENTED_PROPOSAL_ATTRIBUTES)
     for required in ("`item`", "`spec`", "`wire_schema`", "`violations`"):
         assert required in contract
     for required in ("coroutine", "provider SDK", "transport.Client", "SDK response object",
@@ -423,6 +425,12 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     )
     assert "private mapper import" in checker.findings(
         'importlib.import_module("nxd.experimental.field_mapper.transport")\n'
+    )
+    assert "private mapper import" in checker.findings(
+        "import nxd.experimental.field_mapper as fm\nfm.transport.Client()\n"
+    )
+    assert "private mapper import" in checker.findings(
+        "import nxd\nnxd.experimental.field_mapper.ledger.append(1)\n"
     )
 
     assert checker.trace_errors("nxd-desktop build_data_product\n") == [
