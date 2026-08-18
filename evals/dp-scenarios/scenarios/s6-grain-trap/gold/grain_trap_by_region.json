@@ -1,0 +1,18 @@
+[
+  {
+    "region": "east",
+    "regional_revenue": 1602.82
+  },
+  {
+    "region": "north",
+    "regional_revenue": 1751.14
+  },
+  {
+    "region": "south",
+    "regional_revenue": 1402.98
+  },
+  {
+    "region": "west",
+    "regional_revenue": 2503.4
+  }
+]

@@ -1,0 +1,56 @@
+version: 1
+scenario_id: S6
+opening_message: Which regions are actually bringing in the money?
+turns:
+  - Which regions are actually bringing in the money?
+  - Please continue with the agreed definitions.
+  - Please continue with the build.
+  - Please continue with the checks.
+  - Please continue with the result.
+  - Please continue with the reconciliation.
+  - Please continue with the final check.
+source_answers:
+  source: Use the approved order source for the answer.
+  data: The source contains orders and their related line items.
+  record: Count each active order once, even when it has several related items.
+  status: Exclude orders marked deleted; unmatched child rows do not create orders.
+  region: Report one exact-cent revenue value for each region.
+decision_answers:
+  region_scope:
+    terms: [regions, included]
+    answer: Include north, south, east, and west.
+  order_definition:
+    terms: [order, count]
+    answer: The order is the unit that contributes its amount once.
+status_answers:
+  status: The regional revenue result is ready for reconciliation.
+opening_forbidden_terms:
+  - source
+  - driver
+  - mechanism
+  - data
+  - dataset
+  - table
+  - join
+  - order
+  - orders
+  - line item
+  - line items
+  - average
+  - sum
+  - aggregate
+  - aggregation
+  - revenue
+  - total
+  - per
+  - each
+  - group
+  - count
+  - grain
+  - parent
+  - child
+  - fan-out
+  - row
+  - record
+open_decision_markers: ["[DECISION NEEDED]"]
+obstacle_terms: []

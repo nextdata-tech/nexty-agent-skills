@@ -1,0 +1,47 @@
+{
+  "active_order_count": 18,
+  "control_total": 7260.34,
+  "dataset": "grain_trap",
+  "filters": {
+    "line_items": "exact inner join on order_id; orphan keys excluded",
+    "orders": "status <> 'deleted'"
+  },
+  "regions": [
+    {
+      "active_order_count": 4,
+      "correct_typical_order_value": 400.71,
+      "joined_line_item_count": 9,
+      "naive_fanout_order_value": 450.83,
+      "naive_fanout_revenue": 4057.48,
+      "region": "east",
+      "regional_revenue": 1602.82
+    },
+    {
+      "active_order_count": 5,
+      "correct_typical_order_value": 350.23,
+      "joined_line_item_count": 15,
+      "naive_fanout_order_value": 416.92,
+      "naive_fanout_revenue": 6253.8,
+      "region": "north",
+      "regional_revenue": 1751.14
+    },
+    {
+      "active_order_count": 4,
+      "correct_typical_order_value": 350.75,
+      "joined_line_item_count": 10,
+      "naive_fanout_order_value": 400.68,
+      "naive_fanout_revenue": 4006.81,
+      "region": "south",
+      "regional_revenue": 1402.98
+    },
+    {
+      "active_order_count": 5,
+      "correct_typical_order_value": 500.68,
+      "joined_line_item_count": 14,
+      "naive_fanout_order_value": 557.87,
+      "naive_fanout_revenue": 7810.14,
+      "region": "west",
+      "regional_revenue": 2503.4
+    }
+  ]
+}
