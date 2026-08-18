@@ -388,6 +388,31 @@ def test_header_behaviors_fanout_and_errors_over_http(tmp_path: Path) -> None:
     run(check())
 
 
+def test_literal_route_outranks_parameterized_route() -> None:
+    config = load_config(
+        {
+            "routes": [
+                {
+                    "path": "/resources/{resource_id}",
+                    "method": "GET",
+                    "response": {"json": [{"matched": "parameterized"}]},
+                },
+                {
+                    "path": "/resources/special",
+                    "method": "GET",
+                    "response": {"json": {"matched": "literal"}},
+                },
+            ]
+        }
+    )
+    server = MockRestServer(config)
+
+    assert server._routes[0].path == "/resources/special"
+    match = server._find_route("GET", "/resources/special")
+    assert match is not None
+    assert match[0].path == "/resources/special"
+
+
 def test_count_auth_rate_latency_and_explicit_state_switch(tmp_path: Path) -> None:
     async def check() -> None:
         server = await server_from_yaml(tmp_path)

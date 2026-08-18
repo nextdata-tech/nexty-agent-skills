@@ -232,6 +232,12 @@ class Scenario:
 
         return self.gold
 
+    @property
+    def has_scoreable_answer_gold(self) -> bool:
+        """Whether this scenario declares the answer artifact needed by G6."""
+
+        return "answer" in self.gold
+
     def generate_fixture(self, out_dir: str | Path) -> GenerationResult:
         """Generate the pinned source and gold fixture for one run."""
 
@@ -297,7 +303,16 @@ class Scenario:
 
         from .grading import control_total_oracle
 
-        return control_total_oracle(answer, self.raw_gold("control_total"))
+        observed = answer
+        if isinstance(answer, Sequence) and not isinstance(answer, (str, bytes, bytearray)):
+            values = [
+                row.get("regional_revenue")
+                for row in answer
+                if isinstance(row, Mapping)
+            ]
+            if values and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+                observed = {"control_total": round(sum(float(value) for value in values), 2)}
+        return control_total_oracle(observed, self.raw_gold("control_total"))
 
     def score_query(
         self,
@@ -376,13 +391,19 @@ class Scenario:
             )
         else:
             result = {"status": "not-examined", "passed": False, "findings": ["unknown_follow_up_kind"]}
-        if query_rows is not None:
+        if query_rows is not None and self.has_scoreable_answer_gold:
             assessment = self.score_query(
                 query_rows,
                 fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
             )
             result["query_verdict"] = assessment.verdict
             result["query_gate_passed"] = assessment.gold_gate.passed
+            if "control_total" in self.gold:
+                control = self.reconcile_control_total(query_rows)
+                result["control_total_verdict"] = control.outcome
+                if not control.passed:
+                    result.setdefault("findings", [])
+                    result["findings"] = [*result["findings"], *control.codes]
         return result
 
     def follow_up_gate(
@@ -603,10 +624,11 @@ class Scenario:
         if observed_required != declared_required:
             findings.append("requiredness_artifact_mismatch")
 
-        count_source = "row_count_oracle"
+        count_source = "not-examined"
         actual_counts: dict[str, int] | None = None
         malformed_resources: set[str] = set()
         if row_count_oracle is not _MISSING:
+            count_source = "row_count_oracle"
             actual_counts = _row_count_mapping(row_count_oracle)
             if actual_counts is None:
                 return {
@@ -619,6 +641,8 @@ class Scenario:
             actual_counts = _manifest_row_counts(manifest)
             if actual_counts is None:
                 count_source = "closure_data"
+            else:
+                count_source = "fixture_manifest"
         elif isinstance(closure_target, Mapping):
             # Preserve the direct mapping API as an explicit oracle input.
             actual_counts = _row_count_mapping(closure_target)
@@ -825,8 +849,8 @@ def _parse_repeatability(value: object) -> RepeatabilitySpec:
     rule = _string(certification["rule"], "repeatability.certification.rule")
     lower = certification.get("lower_bound")
     confidence = certification.get("confidence")
-    if tier is RepeatabilityTier.DETERMINISTIC and rule != "wilson_lower_bound":
-        raise ScenarioError("deterministic scenarios require Wilson certification")
+    if tier is RepeatabilityTier.DETERMINISTIC and rule not in {"wilson_lower_bound", "observed_epochs"}:
+        raise ScenarioError("deterministic scenarios require Wilson or observed_epochs certification")
     if tier is RepeatabilityTier.DEMONSTRATED_ONCE and rule != "demonstrated_once":
         raise ScenarioError("demonstrated-once scenarios require demonstrated_once certification")
     if rule == "wilson_lower_bound":
@@ -842,6 +866,11 @@ def _parse_repeatability(value: object) -> RepeatabilitySpec:
             raise ScenarioError(
                 "deterministic certification requires lower_bound 0.90 and confidence 0.95"
             )
+    elif rule == "observed_epochs":
+        if lower is not None or confidence is not None:
+            raise ScenarioError("deterministic certification requires lower_bound 0.90 and confidence 0.95 or null")
+        lower_value = None
+        confidence_value = None
     elif rule == "demonstrated_once":
         if lower is not None or confidence is not None:
             raise ScenarioError("demonstrated-once certification cannot declare Wilson bounds")

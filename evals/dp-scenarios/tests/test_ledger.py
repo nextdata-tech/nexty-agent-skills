@@ -145,6 +145,48 @@ def test_tampering_a_prior_row_is_rejected_before_append_and_bytes_survive(tmp_p
     assert path.read_bytes() == b"".join(lines)
 
 
+def test_deleting_the_row_zero_chain_anchor_is_tampering(tmp_path: Path) -> None:
+    path = tmp_path / "missing-row-zero-anchor.jsonl"
+    with LedgerStore.open(path, make_manifest()) as store:
+        store.append(make_row())
+
+    lines = path.read_bytes().splitlines(keepends=True)
+    manifest = json.loads(lines[0])
+    del manifest["chain_anchor"]
+    lines[0] = (json.dumps(manifest, separators=(",", ":")) + "\n").encode()
+    path.write_bytes(b"".join(lines))
+
+    with pytest.raises(LedgerTamperError, match=r"line 1: missing chain anchor"):
+        read_ledger(path)
+
+
+def test_row_zero_chain_anchor_covers_manifest_edits(tmp_path: Path) -> None:
+    path = tmp_path / "changed-row-zero.jsonl"
+    with LedgerStore.open(path, make_manifest()) as store:
+        store.append(make_row())
+
+    lines = path.read_bytes().splitlines(keepends=True)
+    manifest = json.loads(lines[0])
+    manifest["manifest"]["scenario_id"] = "S7"
+    # Keep the old anchor and sidecar: only the manifest bytes are changed.
+    lines[0] = (json.dumps(manifest, separators=(",", ":")) + "\n").encode()
+    path.write_bytes(b"".join(lines))
+
+    with pytest.raises(LedgerTamperError, match=r"line 1: chain anchor mismatch"):
+        read_ledger(path)
+
+
+def test_a_line_without_a_trailing_newline_is_tampering(tmp_path: Path) -> None:
+    path = tmp_path / "missing-newline.jsonl"
+    with LedgerStore.open(path, make_manifest()) as store:
+        store.append(make_row())
+
+    path.write_bytes(path.read_bytes().removesuffix(b"\n"))
+
+    with pytest.raises(LedgerTamperError, match=r"line 2: line has no newline"):
+        read_ledger(path)
+
+
 def test_read_requires_the_terminal_anchor_sidecar(tmp_path: Path) -> None:
     path = tmp_path / "missing-anchor.jsonl"
     with LedgerStore.open(path, make_manifest()) as store:

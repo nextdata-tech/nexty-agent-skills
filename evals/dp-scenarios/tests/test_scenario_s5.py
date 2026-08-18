@@ -134,7 +134,7 @@ def test_generated_fixture_manifest_is_the_named_oracle_fallback(tmp_path: Path)
     result = SCENARIO.follow_up_check(closure, generated.out_dir)
 
     assert result["passed"]
-    assert result["count_source"] == "row_count_oracle"
+    assert result["count_source"] == "fixture_manifest"
 
 
 def test_requiredness_is_read_from_the_named_agent_document(tmp_path: Path) -> None:

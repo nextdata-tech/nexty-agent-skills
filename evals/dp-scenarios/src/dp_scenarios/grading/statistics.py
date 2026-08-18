@@ -188,19 +188,34 @@ def repeatability_plan(tier: RepeatabilityTier | str) -> int:
     return {RepeatabilityTier.DETERMINISTIC: 5, RepeatabilityTier.MOCK_SOURCE: 3, RepeatabilityTier.DEMONSTRATED_ONCE: 1}[tier_value]
 
 
-def repeatability_certificate(runs: Sequence[object], tier: RepeatabilityTier | str) -> RepeatabilityReport:
+def repeatability_certificate(runs: Sequence[object], tier: RepeatabilityTier | str | object) -> RepeatabilityReport:
     """Certify only the scenario-declared repeatability protocol."""
 
-    tier_value = RepeatabilityTier(tier)
-    required = repeatability_plan(tier_value)
+    declared = tier if not isinstance(tier, (RepeatabilityTier, str)) else None
+    tier_value = RepeatabilityTier(getattr(declared, "tier", tier))
+    required = int(getattr(declared, "epochs", repeatability_plan(tier_value)))
+    certification_rule = str(getattr(declared, "certification_rule", "wilson_lower_bound"))
+    certification_gates = tuple(getattr(declared, "gates", ("G5", "G6")))
+    lower_bound = getattr(declared, "lower_bound", 0.90)
+    confidence = getattr(declared, "confidence", 0.95)
     if tier_value is RepeatabilityTier.DEMONSTRATED_ONCE:
         last = runs[-1] if runs else None
-        result = DemonstratedOnce(gates={gate: _gate_passed(last, gate) for gate in ("G5", "G6")} if last is not None else {})
+        result = DemonstratedOnce(gates={gate: _gate_passed(last, gate) for gate in certification_gates} if last is not None else {})
         return RepeatabilityReport(tier_value, required, len(runs), False, demonstrated_once=result)
-    report = gate_pass_rates(runs)
-    g5 = report.rates.get("G5")
-    g6 = report.rates.get("G6")
-    certified = len(runs) == required and g5 is not None and g6 is not None and g5.lower_bound >= 0.90 and g6.lower_bound >= 0.90
+    alpha = 1 - float(confidence) if confidence is not None else 0.05
+    report = gate_pass_rates(runs, alpha=alpha)
+    if certification_rule == "observed_epochs":
+        certified = len(runs) == required and all(
+            _gate_observation(run, gate) == (True, True)
+            for run in runs
+            for gate in certification_gates
+        )
+    else:
+        certified = len(runs) == required and all(
+            (rate := report.rates.get(gate)) is not None
+            and rate.lower_bound >= float(lower_bound)
+            for gate in certification_gates
+        )
     return RepeatabilityReport(tier_value, required, len(runs), certified, rates=report)
 
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from typing import Mapping
+from types import SimpleNamespace
 
 import pytest
 import dp_scenarios.runner.tier as tier_module
@@ -159,12 +160,32 @@ def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecordin
             "per_model_row_counts": row_counts,
             "lifecycle_state": "published",
         }
+        supervisor_rows = [
+            {
+                "turn": 7,
+                "phase": 5,
+                "action_kind": "supervisor_fact",
+                "fact_key": fact_key,
+                "evidence_ref": f"supervisor#{fact_key}",
+                "qualification": "strong",
+            }
+            for fact_key in ("run_id", "artifact_id", "publish_sequence", "lifecycle_state")
+        ] + [
+            {
+                "turn": 7,
+                "phase": 5,
+                "action_kind": "supervisor_fact",
+                "fact_key": f"per_model_row_counts.{model}",
+                "evidence_ref": f"supervisor#row_counts.{model}",
+                "qualification": "strong",
+            }
+            for model in sorted(row_counts)
+        ]
         artifacts = {
             "spec.json": {"metrics": {"regional_revenue": "supported"}},
             "capability.json": {"metrics": {"regional_revenue": "supported"}},
             "spec-diff.json": {"turn": 3, "metrics": {"regional_revenue": 3}},
             "query-results.json": {"rows": list(scenario.load_gold("answer", generated.out_dir).rows)},
-            "supervisor-records.json": supervisor,
             "ledger-extra.json": {
                 "rows": [
                     {
@@ -185,7 +206,7 @@ def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecordin
                         "evidence_ref": "artifact#adversarial-review",
                         "qualification": "not-claimed",
                     },
-                ]
+                ] + supervisor_rows
             },
             "closure/semantic.json": {
                 "semantic": {
@@ -208,7 +229,7 @@ def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecordin
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
-        recordings.append(recording_for(scenario, responses))
+        recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
     return scenario, recordings
 
 
@@ -262,9 +283,10 @@ def test_live_canary_data_dir_is_temporary_and_outside_the_package(tmp_path: Pat
 
     monkeypatch.setattr(tier_module, "run_preflight", fake_preflight)
     monkeypatch.setattr(tier_module, "run_build", fake_build)
-    monkeypatch.setattr(tier_module, "aggregate_verdict", lambda report, claims, *, probe_id: Verdict("clean", (), ()))
+    monkeypatch.setattr(tier_module, "extract_claims", lambda *args, **kwargs: SimpleNamespace(drift=(), advisories=()))
+    monkeypatch.setattr(tier_module, "aggregate_verdict", lambda report, claims, **kwargs: Verdict("clean", (), ()))
 
-    result = run_drift_canary(canary_root)
+    result = run_drift_canary(canary_root, skills_root=canary_root)
 
     assert result.verdict.outcome == "clean"
     assert len(captured) == 2
@@ -311,7 +333,32 @@ def test_completed_build_run_lints_clean_with_available_supervisor_facts(monkeyp
         "per_model_row_counts": {"model-a": "42"},
         "lifecycle_state": "served",
     }
-    recording = replace(recording_for(scenario, responses_for(scenario)), supervisor_facts=facts)
+    recording = recording_for(scenario, responses_for(scenario))
+    turns = list(recording.turns)
+    fact_rows = [
+        {
+            "turn": 7,
+            "phase": 5,
+            "action_kind": "supervisor_fact",
+            "fact_key": fact_key,
+            "evidence_ref": f"supervisor#{fact_key}",
+            "qualification": "strong",
+        }
+        for fact_key in ("run_id", "artifact_id", "publish_sequence", "lifecycle_state")
+    ] + [
+        {
+            "turn": 7,
+            "phase": 5,
+            "action_kind": "supervisor_fact",
+            "fact_key": f"per_model_row_counts.{model}",
+            "evidence_ref": f"supervisor#row_counts.{model}",
+            "qualification": "strong",
+        }
+        for model in sorted(facts["per_model_row_counts"])
+    ]
+    extra = TouchedFile("ledger-extra.json", json.dumps({"rows": fact_rows}).encode())
+    turns[-1] = replace(turns[-1], result=replace(turns[-1].result, files_touched=(extra,)))
+    recording = replace(recording, turns=tuple(turns), supervisor_facts=facts)
     reports = []
     original_gate_honesty = tier_module.gate_honesty
 
@@ -450,7 +497,8 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
     ).run()
     live_run = live.scenario_runs[0]
 
-    assert live_run.score.gates["G2"].examined
+    assert not live_run.score.gates["G2"].examined
+    assert not live_run.score.gates["G2"].required
     assert live_run.replay_recording.turns[0].result.files_touched[0].path == "spec.json"
 
     replay = TierRunner(
@@ -460,10 +508,10 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
         replay_recordings={scenario.id: live_run.replay_recording},
         environment_root=tmp_path,
     ).run()
-    assert replay.scenario_runs[0].score.gates["G2"].examined
+    assert not replay.scenario_runs[0].score.gates["G2"].examined
 
 
-def test_real_grain_trap_populated_replay_has_all_seven_gates_passed(tmp_path: Path) -> None:
+def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Path) -> None:
     scenario, recordings = populated_s6_recordings(tmp_path)
 
     result = TierRunner(
@@ -480,13 +528,14 @@ def test_real_grain_trap_populated_replay_has_all_seven_gates_passed(tmp_path: P
             and record.get("scenario_id") == run.manifest.scenario_id
             for record in records[1:]
         )
-        assert run.score.total == 100
+        assert run.score.total == 75
         assert run.route_fidelity_status == "not-applicable"
         assert run.score.hard_gate_flags["route_fidelity"] is None
     assert result.verdict == "clean"
     assert len(result.scenario_runs) == 5
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
-    assert all(all(gate.passed for gate in run.score.gates.values()) for run in result.scenario_runs)
+    assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "G2") for run in result.scenario_runs)
+    assert all(not run.score.gates["G2"].examined and not run.score.gates["G2"].required for run in result.scenario_runs)
 
 
 def test_invalid_epoch_is_excluded_from_repeatability_rates() -> None:

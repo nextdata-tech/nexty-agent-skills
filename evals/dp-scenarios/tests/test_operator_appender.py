@@ -118,6 +118,59 @@ def test_supervisor_fact_cannot_be_written_without_reader() -> None:
         )
 
 
+def test_non_fact_supervisor_claim_requires_reader_provenance() -> None:
+    with pytest.raises(AppenderError, match="record reader"):
+        row_payload(turn(action_kind="build", phase=5, claim={"run_id": "run-1"}))
+
+
+def test_supervisor_fact_requires_a_fact_key_even_with_reader() -> None:
+    rows: list[object] = []
+
+    with pytest.raises(AppenderError, match="explicit fact_key"):
+        append_turn_row(
+            rows,  # type: ignore[arg-type]
+            turn(action_kind="supervisor_fact"),
+            supervisor_reader=StaticSupervisorRecordReader(facts()),
+        )
+
+
+def test_unknown_action_kind_is_rejected_by_the_appender() -> None:
+    with pytest.raises(AppenderError, match="unknown ledger action kind"):
+        row_payload(turn(action_kind="not-a-real-action"))
+
+
+def test_reader_returning_the_wrong_type_is_rejected() -> None:
+    class WrongReader:
+        def read_facts(self) -> object:
+            return {"run_id": "run-1"}
+
+    with pytest.raises(AppenderError, match="no SupervisorFacts"):
+        append_turn_row(
+            [],  # type: ignore[arg-type]
+            turn(action_kind="supervisor_fact", fact_key="run_id"),
+            supervisor_reader=WrongReader(),  # type: ignore[arg-type]
+        )
+
+
+def test_empty_per_model_row_counts_are_rejected_by_fact_appender() -> None:
+    malformed = object.__new__(SupervisorFacts)
+    object.__setattr__(malformed, "run_id", "run-1")
+    object.__setattr__(malformed, "artifact_id", "artifact-1")
+    object.__setattr__(malformed, "publish_sequence", "7")
+    object.__setattr__(malformed, "per_model_row_counts", {})
+    object.__setattr__(malformed, "lifecycle_state", "served")
+
+    with pytest.raises(AppenderError, match="no per-model row counts"):
+        append_supervisor_facts(
+            [],  # type: ignore[arg-type]
+            StaticSupervisorRecordReader(malformed),  # type: ignore[arg-type]
+            run_id="run-1",
+            scenario_id="scenario-1",
+            turn=6,
+            phase=5,
+        )
+
+
 def test_agent_authored_supervisor_count_is_rejected_even_with_reader() -> None:
     rows: list[object] = []
     reader = StaticSupervisorRecordReader(facts())

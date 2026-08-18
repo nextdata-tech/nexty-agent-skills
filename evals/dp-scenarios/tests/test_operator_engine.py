@@ -148,6 +148,18 @@ def test_sentinel_scan_is_exact_bytes_and_case_sensitive() -> None:
     assert exact.gradeable
 
 
+def test_sentinel_scan_covers_transcript_delta() -> None:
+    script = make_script(turns=("Improve weekly visibility.",), sentinel=b"SECRET")
+
+    result = OperatorEngine(
+        script,
+        InMemoryTransport([TurnResult(agent_message="safe", transcript_delta="contains SECRET")]),
+    ).run()
+
+    assert result.terminal_state is TerminalState.SENTINEL_TRIP
+    assert "sentinel_trip" in result.failure_modes
+
+
 def test_sentinel_trip_aborts_before_later_script_turns() -> None:
     script = make_script(turns=("Improve weekly visibility.", "Please continue."), sentinel=b"SECRET")
     transport = InMemoryTransport(
@@ -565,6 +577,16 @@ def test_phase_mapping_controls_rows_and_action_kinds() -> None:
     }
 
 
+def test_empty_script_turn_text_is_rejected() -> None:
+    with pytest.raises(ValueError, match="ScriptTurn.text must be a non-empty string"):
+        make_script(turns=("",), phase_by_turn={1: 1})
+
+
+def test_script_turn_one_must_be_the_answer_sheet_opening() -> None:
+    with pytest.raises(ValueError, match="turn one must be the answer-sheet opening"):
+        make_script(turns=("A different opening.",), phase_by_turn={1: 1})
+
+
 def test_operator_script_hash_changes_for_each_script_material() -> None:
     script = make_script(turns=("Improve weekly visibility.", "Please continue."))
     persona_mapping = script.persona.to_mapping()
@@ -598,6 +620,9 @@ def test_operator_script_hash_changes_for_each_script_material() -> None:
     assert operator_script_hash(replace(script, events=EventSchedule((event,)))) != operator_script_hash(script)
     assert operator_script_hash(replace(script, turn_budget=24)) != operator_script_hash(script)
     assert operator_script_hash(replace(script, phase_by_turn={1: 2, 2: 1})) != operator_script_hash(script)
+    assert operator_script_hash(replace(script, sentinel=b"secret-a")) != operator_script_hash(
+        replace(script, sentinel=b"secret-b")
+    )
 
 
 def test_partial_phase_map_is_rejected_instead_of_using_an_identity_default() -> None:

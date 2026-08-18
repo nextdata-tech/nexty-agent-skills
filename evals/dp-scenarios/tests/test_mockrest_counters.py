@@ -14,6 +14,7 @@ import pytest
 
 from dp_scenarios.mockrest.config import load_config
 from dp_scenarios.mockrest import cli
+from dp_scenarios.mockrest.counters import RequestCounters, caller_identity
 from dp_scenarios.mockrest.server import MockRestServer, wait_until_ready
 
 
@@ -156,6 +157,19 @@ def test_counters_are_thread_safe_for_direct_recording() -> None:
         assert sorted(sequences) == list(range(1, 16_001))
     finally:
         sys.setswitchinterval(previous_interval)
+
+
+def test_caller_identity_ignores_whitespace_and_matches_header_names_case_insensitively() -> None:
+    assert caller_identity({"X-Caller-Id": "   \t"}) is None
+    assert caller_identity({"x-cAlLeR-iD": "worker-a"}) == "worker-a"
+
+
+def test_counters_record_rejects_empty_route_and_method() -> None:
+    counters = RequestCounters()
+    with pytest.raises(ValueError, match="route and method are required"):
+        counters.record("", "GET")
+    with pytest.raises(ValueError, match="route and method are required"):
+        counters.record("/route", "")
 
 
 def test_cli_readiness_record_exposes_supplied_control_secret(

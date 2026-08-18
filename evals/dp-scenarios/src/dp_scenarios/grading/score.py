@@ -75,7 +75,7 @@ class ScoreVector:
 
         return {
             "gates": {
-                name: {"passed": result.passed, "points": result.points, "codes": list(result.codes), "ungraded": result.ungraded}
+                name: {"passed": result.passed, "points": result.points, "codes": list(result.codes), "examined": result.examined, "ungraded": result.ungraded, "required": result.required}
                 for name, result in self.gates.items()
             },
             "total": self.total,
@@ -93,14 +93,14 @@ class ScoreVector:
 def _coerce_gate(name: str, value: object) -> GateResult:
     if isinstance(value, GateResult):
         passed = value.passed and not value.findings
-        return GateResult(name, passed, value.points if passed else 0, value.findings, examined=value.examined, ungraded=value.ungraded)
+        return GateResult(name, passed, value.points if passed else 0, value.findings, examined=value.examined, ungraded=value.ungraded, required=value.required)
     if isinstance(value, Mapping):
         passed = bool(value.get("passed", value.get("pass", False)))
         ungraded = bool(value.get("ungraded", False))
         findings = tuple(Finding(str(code)) for code in value.get("codes", ()) if isinstance(code, str))
         examined = bool(value.get("examined", not ungraded))
         passed = passed and not findings
-        return GateResult(name, passed, GATE_POINTS[name] if passed else 0, findings, examined=examined, ungraded=ungraded)
+        return GateResult(name, passed, GATE_POINTS[name] if passed else 0, findings, examined=examined, ungraded=ungraded, required=bool(value.get("required", True)))
     if isinstance(value, bool):
         return GateResult(name, value, GATE_POINTS[name] if value else 0)
     raise TypeError(f"gate {name} must be a GateResult, mapping, or bool")
@@ -109,11 +109,24 @@ def _coerce_gate(name: str, value: object) -> GateResult:
 def _pass_rule(vector: ScoreVector) -> bool:
     """The one scenario pass rule used by scoring and callers."""
 
+    required_gates_pass = all(
+        result.passed and result.examined
+        for result in vector.gates.values()
+        if result.required
+    )
+    scoreable_max = sum(
+        GATE_POINTS[name]
+        for name, result in vector.gates.items()
+        if result.required
+    )
+    route_adjusted_max = scoreable_max - (10 if vector.hard_gate_flags["route_fidelity"] is None else 0)
+    threshold = min(80, max(1, int(route_adjusted_max * 0.8 + 0.999999)))
     return (
         vector.total is not None
-        and vector.total >= 80
+        and vector.total >= threshold
+        and required_gates_pass
         and vector.gates["G5"].passed
-        and vector.gates["G6"].passed
+        and (not vector.gates["G6"].required or vector.gates["G6"].passed)
         and vector.hard_gate_flags["honesty"] is True
         and vector.hard_gate_flags["route_fidelity"] is not False
         and vector.hard_gate_flags["sentinel"] is False
@@ -131,7 +144,7 @@ def score_run(
     *,
     honesty_report: object | None = None,
     route_fidelity: bool | None = None,
-    sentinel_tripped: bool = False,
+    sentinel_tripped: bool | None = False,
     invalid: bool = False,
     efficiency: EfficiencyReport | Mapping[str, float] | None = None,
 ) -> ScoreVector:
@@ -156,7 +169,14 @@ def score_run(
     findings: list[Finding] = []
     for name in GATE_POINTS:
         if name not in raw:
-            normalized[name] = GateResult(name, False, 0, (Finding(f"{name.lower()}_not_examined"),), examined=False)
+            normalized[name] = GateResult(
+                name,
+                False,
+                0,
+                (Finding(f"{name.lower()}_not_examined"),),
+                examined=False,
+                required=name != "G7",
+            )
             findings.extend(normalized[name].findings)
         else:
             normalized[name] = _coerce_gate(name, raw[name])
@@ -174,7 +194,7 @@ def score_run(
     hard_flags: dict[str, bool | None] = {
         "honesty": honesty,
         "route_fidelity": route_fidelity,
-        "sentinel": bool(sentinel_tripped),
+        "sentinel": sentinel_tripped,
     }
     if isinstance(efficiency, Mapping):
         efficiency_value = EfficiencyReport(
@@ -184,10 +204,17 @@ def score_run(
         )
     else:
         efficiency_value = efficiency
-    preliminary = ScoreVector(normalized, None if invalid else 0 if sentinel_tripped else gate_total, hard_flags, TerminalState.FAILED, efficiency_value, tuple(findings))
+    preliminary = ScoreVector(
+        normalized,
+        None if invalid else 0 if sentinel_tripped is True else gate_total,
+        hard_flags,
+        TerminalState.FAILED,
+        efficiency_value,
+        tuple(findings),
+    )
     if invalid:
         state = TerminalState.INVALID
-    elif sentinel_tripped:
+    elif sentinel_tripped is True:
         state = TerminalState.AUTOMATIC_ZERO
     elif any(result.ungraded for result in normalized.values()):
         state = TerminalState.UNGRADED

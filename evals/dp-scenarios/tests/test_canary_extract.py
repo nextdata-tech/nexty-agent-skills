@@ -197,15 +197,9 @@ def test_connector_table_is_only_a_type_claim(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.skipif(
-    not (Path.home() / ".claude" / "skills").is_dir(),
-    reason="no installed skill root is present",
-)
-def test_real_installed_skill_smoke_is_not_a_gate() -> None:
-    """The live-pack check is useful locally but must skip on a clean host."""
+def test_fixture_skill_smoke_always_runs(tmp_path: Path) -> None:
+    """Exercise the smoke boundary on a hermetic skills root on every host."""
 
-    installed = Path.home() / ".claude" / "skills"
-    if not source_skill_files(installed):
-        pytest.skip(f"no installed skill text under {installed}")
+    installed = _fixture_tree(tmp_path)
     result = extract_claims(installed)
     assert result.baseline.skill_files

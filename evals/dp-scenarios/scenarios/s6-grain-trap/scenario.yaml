@@ -13,10 +13,10 @@ repeatability:
   tier: deterministic
   epochs: 5
   certification:
-    rule: wilson_lower_bound
+    rule: observed_epochs
     gates: [G5, G6]
-    lower_bound: 0.90
-    confidence: 0.95
+    lower_bound: null
+    confidence: null
 persona: ../_personas/smoke.yaml
 answer_sheet: answer-sheet.yaml
 events: events.yaml

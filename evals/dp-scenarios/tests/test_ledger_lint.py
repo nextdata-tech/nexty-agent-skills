@@ -147,6 +147,17 @@ def test_claim_without_evidence_code_fires(tmp_path: Path) -> None:
     assert CLAIM_WITHOUT_EVIDENCE in codes(lint(path, supervisor_facts=FACTS))
 
 
+def test_empty_claim_without_evidence_is_not_a_claim(tmp_path: Path) -> None:
+    path = tmp_path / "empty-claim.jsonl"
+    rows = complete_rows()
+    rows[0] = make_row(turn=1, claim="")
+    write_ledger(path, rows)
+
+    report = lint(path, supervisor_facts=FACTS)
+
+    assert CLAIM_WITHOUT_EVIDENCE not in codes(report)
+
+
 def test_invalid_qualification_code_fires(tmp_path: Path) -> None:
     path = tmp_path / "qualification.jsonl"
     rows = complete_rows()
@@ -179,6 +190,31 @@ def test_rule_and_event_ids_use_stable_identifier_grammars(tmp_path: Path) -> No
     invalid_events = [finding for finding in report.findings if finding.code == INVALID_EVENT_ID]
     assert [finding.value for finding in invalid_events] == ["event with spaces", "event🚫"]
     assert all(finding.field == "event_ids" for finding in invalid_events)
+
+
+def test_matched_rule_id_with_a_junk_prefix_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "junk-prefixed-rule.jsonl"
+    rows = complete_rows()
+    rows[0] = make_row(turn=1, matched_rule_id="junk.source.answer.orders")
+    write_ledger(path, rows)
+
+    report = lint(path, supervisor_facts=FACTS)
+
+    assert INVALID_MATCHED_RULE_ID in codes(report)
+
+
+def test_supervisor_facts_reject_unknown_mapping_fields() -> None:
+    raw = {
+        "run_id": "run-1",
+        "artifact_id": "artifact-7",
+        "publish_sequence": "3",
+        "per_model_row_counts": {"model-a": "1000"},
+        "lifecycle_state": "served",
+        "unexpected": "not-a-fact",
+    }
+
+    with pytest.raises(TypeError, match="unknown supervisor fact field"):
+        SupervisorFacts.from_mapping(raw)
 
 
 def test_claimed_approval_requires_strong_qualification(tmp_path: Path) -> None:

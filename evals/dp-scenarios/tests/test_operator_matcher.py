@@ -41,6 +41,25 @@ def test_no_leading_fallback_does_not_confirm_named_obstacle() -> None:
     assert result.obstacle_question
 
 
+def test_obstacle_guard_applies_only_to_questions() -> None:
+    bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet())  # type: ignore[arg-type]
+
+    result = bank.classify("The source proxy is ready.")
+
+    assert result.category is Category.SOURCE_QUESTION
+    assert result.rule_id == "source.question"
+    assert not result.obstacle_question
+
+
+def test_byte_reply_material_is_checked_for_obstacle_terms() -> None:
+    with pytest.raises(MatcherError, match="obstacle"):
+        MatcherBank(
+            load_persona(ROOT / "scenarios/_personas/smoke.yaml"),
+            sheet(),
+            extra_material=(b"reply contains PROXY",),
+        )  # type: ignore[arg-type]
+
+
 def test_empty_outgoing_message_is_rejected() -> None:
     bank = MatcherBank(load_persona(ROOT / "scenarios/_personas/smoke.yaml"), sheet())  # type: ignore[arg-type]
 

@@ -9,6 +9,7 @@ and validates its status vocabulary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,26 @@ from typing import Any, Mapping, Sequence
 ALLOWED_STATUSES = frozenset({"pass", "warn", "fail", "skip"})
 SUPERVISOR_ENV = "NXD_DESKTOP_SUPERVISOR"
 PYTHON_ENV = "NXD_DESKTOP_PYTHON"
+SESSION_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "COLORTERM",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "NO_COLOR",
+        "PATH",
+        "PYTHONIOENCODING",
+        "PYTHONUNBUFFERED",
+        "SHELL",
+        "TERM",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "USER",
+        "VIRTUAL_ENV",
+    }
+)
 
 
 class ProbeError(RuntimeError):
@@ -42,6 +63,7 @@ class ProbeResult:
     report: dict[str, Any]
     stdout: str
     stderr: str
+    supervisor_digest: str | None = None
 
     @property
     def outcome(self) -> str:
@@ -50,6 +72,7 @@ class ProbeResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "supervisor": self.supervisor,
+            "supervisor_digest": self.supervisor_digest,
             "closure": self.closure,
             "command": list(self.command),
             "returncode": self.returncode,
@@ -69,10 +92,12 @@ class BuildResult:
     stdout: str
     stderr: str
     diagnostic: dict[str, Any] | None = None
+    supervisor_digest: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "supervisor": self.supervisor,
+            "supervisor_digest": self.supervisor_digest,
             "closure": self.closure,
             "command": list(self.command),
             "returncode": self.returncode,
@@ -130,7 +155,9 @@ def resolve_supervisor(explicit: Path | str | None = None) -> Path:
 
 
 def _run(command: Sequence[str], *, closure: Path) -> subprocess.CompletedProcess[str]:
-    environment = os.environ.copy()
+    environment = {
+        key: value for key, value in os.environ.items() if key in SESSION_ENVIRONMENT_ALLOWLIST
+    }
     if not environment.get(PYTHON_ENV):
         provisioned_python = Path.home() / ".nxd" / "desktop-venv" / "bin" / "python"
         if provisioned_python.is_file() and os.access(provisioned_python, os.X_OK):
@@ -168,6 +195,12 @@ def _parse_json(stdout: str, *, closure: Path) -> dict[str, Any]:
         f"supervisor check for closure {closure} did not emit a machine-readable JSON report; "
         f"stdout={stdout[-1000:]!r}"
     )
+
+
+def _supervisor_digest(path: Path) -> str:
+    """Hash the resolved executable so reports identify what actually ran."""
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _validate_report_shape(report: Mapping[str, Any], *, closure: Path) -> None:
@@ -232,6 +265,7 @@ def run_preflight(
         report=report,
         stdout=completed.stdout,
         stderr=completed.stderr,
+        supervisor_digest=_supervisor_digest(supervisor_path),
     )
 
 
@@ -275,6 +309,7 @@ def run_build(
         stdout=completed.stdout,
         stderr=completed.stderr,
         diagnostic=diagnostic,
+        supervisor_digest=_supervisor_digest(supervisor_path),
     )
 
 

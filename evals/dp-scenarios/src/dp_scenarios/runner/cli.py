@@ -15,7 +15,7 @@ import shlex
 from typing import Any, Mapping, Sequence
 
 from dp_scenarios.canary import load_claims
-from dp_scenarios.canary.verdict import Verdict, VerdictIssue
+from dp_scenarios.canary.verdict import Verdict
 from dp_scenarios.scenario import load_scenarios
 
 from .environment import PinnedVersions
@@ -27,6 +27,8 @@ from .tier import CanaryResult, RunBudgets, TierError, TierRunner, run_drift_can
 def _canary_from_mapping(
     value: Mapping[str, object],
     *,
+    canary_dir: Path,
+    skills_root: Path,
     expected_claims_hash: str,
 ) -> CanaryResult:
     claims_hash = value.get("claims_hash")
@@ -34,35 +36,19 @@ def _canary_from_mapping(
         raise TierError("replayed canary must carry a non-empty claims_hash")
     if claims_hash != expected_claims_hash:
         raise TierError("replayed canary claims_hash does not match the loaded claims file")
-    raw = value.get("verdict", value)
-    if not isinstance(raw, Mapping):
-        raise TierError("replayed canary has no verdict object")
-    issues: list[VerdictIssue] = []
-    for item in raw.get("issues", ()):
-        if not isinstance(item, Mapping):
-            raise TierError("replayed canary issue is not an object")
-        issues.append(
-            VerdictIssue(
-                kind=str(item.get("kind", "blocked")),
-                message=str(item.get("message", "")),
-                claim_id=item.get("claim_id") if isinstance(item.get("claim_id"), str) else None,
-                code=item.get("code") if isinstance(item.get("code"), str) else None,
-                skill_file=item.get("skill_file") if isinstance(item.get("skill_file"), str) else None,
-                line=item.get("line") if isinstance(item.get("line"), int) else None,
-            )
-        )
-    verdict = Verdict(
-        outcome=str(raw.get("outcome", "blocked")),
-        issues=tuple(issues),
-        observed_codes=tuple(str(code) for code in raw.get("observed_codes", ()) if isinstance(code, str)),
-        advisories=(),
-    )
-    return CanaryResult(
-        verdict,
-        claims_hash,
-        value.get("probe") if isinstance(value.get("probe"), Mapping) else None,
-        value.get("build") if isinstance(value.get("build"), Mapping) else None,
-        float(value.get("wall_clock_seconds", 0.0)),
+    probe = value.get("probe")
+    if not isinstance(probe, Mapping) or not isinstance(probe.get("report"), Mapping):
+        raise TierError("replayed canary requires a probe object containing a report")
+    build = value.get("build")
+    if not isinstance(build, Mapping) and build is not None:
+        raise TierError("replayed canary build must be an object")
+    if isinstance(build, Mapping) and "returncode" not in build:
+        raise TierError("replayed canary build has no mandatory returncode")
+    return run_drift_canary(
+        canary_dir,
+        skills_root=skills_root,
+        probe=probe,
+        build=build,
     )
 
 
@@ -120,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("replay", "live"), default="replay")
     parser.add_argument("--scenario-root", type=Path, required=True)
     parser.add_argument("--canary-dir", type=Path, required=True)
+    parser.add_argument("--skills-root", type=Path, required=True)
     parser.add_argument("--canary-replay", type=Path)
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--session-command", help="JSONL headless session command for live mode")
@@ -154,10 +141,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_claims_hash = load_claims(args.canary_dir / "claims.json").baseline.approves_claims_hash
         canary = _canary_from_mapping(
             _read_json(args.canary_replay),
+            canary_dir=args.canary_dir,
+            skills_root=args.skills_root,
             expected_claims_hash=expected_claims_hash,
         )
     else:
-        canary = lambda: run_drift_canary(args.canary_dir, supervisor=args.supervisor)
+        canary = lambda: run_drift_canary(
+            args.canary_dir,
+            skills_root=args.skills_root,
+            supervisor=args.supervisor,
+        )
 
     replays: dict[str, ReplayRecording] = {}
     session_factory = None

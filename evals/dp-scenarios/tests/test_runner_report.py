@@ -11,7 +11,7 @@ from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.verdict import Verdict
 from dp_scenarios.operator import OperatorEngine
 from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
-from dp_scenarios.runner import CanaryResult, PinnedVersions, RecordingSession, ReplayRecording, TierRunner
+from dp_scenarios.runner import CanaryResult, PinnedVersions, RecordingSession, ReplayRecording, TierError, TierRunner
 from dp_scenarios.runner.report import human_summary, machine_report, write_report
 from dp_scenarios.runner.cli import _canary_from_mapping
 
@@ -79,9 +79,17 @@ def test_replayed_canary_hash_is_bound_to_the_loaded_claims_file() -> None:
     expected = load_claims(claims_path).baseline.approves_claims_hash
     document = {"verdict": {"outcome": "clean"}, "claims_hash": expected}
 
-    assert _canary_from_mapping(document, expected_claims_hash=expected).claims_hash == expected
+    with pytest.raises(TierError, match="requires a probe"):
+        _canary_from_mapping(
+            document,
+            canary_dir=claims_path.parent,
+            skills_root=claims_path.parent,
+            expected_claims_hash=expected,
+        )
     with pytest.raises(Exception, match="claims_hash"):
         _canary_from_mapping(
             {"verdict": {"outcome": "clean"}, "claims_hash": "arbitrary"},
+            canary_dir=claims_path.parent,
+            skills_root=claims_path.parent,
             expected_claims_hash=expected,
         )

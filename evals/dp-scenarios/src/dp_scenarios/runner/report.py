@@ -22,11 +22,39 @@ class ReportError(ValueError):
 def machine_report(result: TierResult) -> dict[str, object]:
     """Return the stable JSON-ready tier document."""
 
-    document = result.as_dict()
+    document = _stable_document(result.as_dict())
     document["report_format_version"] = 1
-    document["total_wall_clock_seconds"] = result.wall_clock_seconds
     document["efficiency_is_reported_only"] = True
     return document
+
+
+_NON_REPRODUCIBLE_KEYS = frozenset(
+    {
+        "wall_clock",
+        "wall_clock_seconds",
+        "total_wall_clock_seconds",
+        "observed_wall_clock_seconds",
+        "ledger_path",
+        "fixture_dir",
+        "supervisor",
+        "closure",
+        "command",
+    }
+)
+
+
+def _stable_document(value: object) -> object:
+    """Remove disposable paths and timing deltas from the machine surface."""
+
+    if isinstance(value, dict):
+        return {
+            key: _stable_document(item)
+            for key, item in value.items()
+            if key not in _NON_REPRODUCIBLE_KEYS
+        }
+    if isinstance(value, list):
+        return [_stable_document(item) for item in value]
+    return value
 
 
 def _gate_text(run: ScenarioRun) -> str:

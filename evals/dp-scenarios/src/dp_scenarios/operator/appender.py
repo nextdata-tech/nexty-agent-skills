@@ -98,6 +98,7 @@ _NON_FACT_CLAIM_KEYS = frozenset(
         "counter_snapshots",
         "event_outcomes",
         "open_decision_marker",
+        "outcome",
         "session_gap_seconds",
     }
 )
@@ -138,6 +139,8 @@ def _validate_non_fact_claim(value: object) -> None:
         raise AppenderError("approval_without_artifact must be a boolean")
     if "approval_out_of_phase" in value and not isinstance(value["approval_out_of_phase"], bool):
         raise AppenderError("approval_out_of_phase must be a boolean")
+    if "outcome" in value and not isinstance(value["outcome"], str):
+        raise AppenderError("outcome must be a string")
     if "event_outcomes" in value:
         outcomes = value["event_outcomes"]
         if not isinstance(outcomes, (list, tuple)) or any(not isinstance(item, str) for item in outcomes):

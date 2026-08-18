@@ -19,7 +19,8 @@ import threading
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from dp_scenarios.ledger import LedgerStore, Manifest, fixture_dir_hash
+from dp_scenarios.canary.probe import SESSION_ENVIRONMENT_ALLOWLIST
+from dp_scenarios.ledger import LedgerStore, Manifest
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios.scenario import Scenario
 
@@ -28,26 +29,7 @@ class EnvironmentError(RuntimeError):
     """Raised when a trial cannot be prepared with a comparable identity."""
 
 
-_SESSION_ENVIRONMENT_ALLOWLIST = frozenset(
-    {
-        "COLORTERM",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "NO_COLOR",
-        "PATH",
-        "PYTHONIOENCODING",
-        "PYTHONUNBUFFERED",
-        "SHELL",
-        "TERM",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "TZ",
-        "USER",
-        "VIRTUAL_ENV",
-    }
-)
+_SESSION_ENVIRONMENT_ALLOWLIST = SESSION_ENVIRONMENT_ALLOWLIST
 
 
 def _required_text(value: object, field_name: str) -> str:
@@ -258,7 +240,7 @@ class RunEnvironment:
             skill_pack_version=self.pins.skill_pack_version,
             supervisor_version=self.pins.supervisor_version,
             nxd_data_product_wheel_version=self.pins.runtime_wheel_version,
-            fixture_dir_hash=fixture_dir_hash(generation.out_dir),
+            fixture_dir_hash=str(generation.manifest.get("fixture_hash", "")),
             mock_api_version=self.pins.mock_api_version,
             operator_script_hash=self.scenario.script_hash,
             turn_budget=self.scenario.turn_budget,

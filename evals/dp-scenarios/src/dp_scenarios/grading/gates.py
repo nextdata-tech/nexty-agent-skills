@@ -38,6 +38,7 @@ class GateResult:
     findings: tuple[Finding, ...] = ()
     examined: bool = True
     ungraded: bool = False
+    required: bool = True
 
     @property
     def codes(self) -> tuple[str, ...]:
@@ -68,13 +69,21 @@ def _rows(value: object) -> list[Mapping[str, object]]:
             candidate = candidate.get("rows", ())
         if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
             return [row for row in candidate if isinstance(row, Mapping)]
-        return [value]
+        return [value] if value else []
     if isinstance(value, Iterable):
         return [row for row in value if isinstance(row, Mapping)]
     raise TypeError("ledger artifact must be a path, mapping, or row sequence")
 
 
-def _result(gate: str, passed: bool, findings: Iterable[Finding] = (), *, examined: bool = True, ungraded: bool = False) -> GateResult:
+def _result(
+    gate: str,
+    passed: bool,
+    findings: Iterable[Finding] = (),
+    *,
+    examined: bool = True,
+    ungraded: bool = False,
+    required: bool = True,
+) -> GateResult:
     finding_tuple = tuple(findings)
     return GateResult(
         gate=gate,
@@ -83,6 +92,7 @@ def _result(gate: str, passed: bool, findings: Iterable[Finding] = (), *, examin
         findings=finding_tuple,
         examined=examined,
         ungraded=ungraded,
+        required=required,
     )
 
 
@@ -90,8 +100,29 @@ def gate_intake(ledger: object) -> GateResult:
     """G1: require approval strictly before the first code-generation row."""
 
     rows = _rows(ledger)
+    if not rows:
+        return _result(
+            "G1",
+            False,
+            [Finding("g1_ledger_not_examined", "ledger contains no rows")],
+            examined=False,
+        )
     approvals = [row["turn"] for row in rows if row.get("action_kind") == "spec_approved" and isinstance(row.get("turn"), int)]
     codegen = [row["turn"] for row in rows if row.get("action_kind") == "codegen" and isinstance(row.get("turn"), int)]
+    if isinstance(ledger, Mapping):
+        observations = ledger.get("observations")
+        if isinstance(observations, Mapping):
+            turns = observations.get("turns")
+            if isinstance(turns, Sequence) and not isinstance(turns, (str, bytes, bytearray)):
+                for turn in turns:
+                    if not isinstance(turn, Mapping) or not isinstance(turn.get("turn"), int):
+                        continue
+                    files = turn.get("files_touched")
+                    calls = turn.get("tool_calls")
+                    if (isinstance(files, Sequence) and not isinstance(files, (str, bytes, bytearray)) and files) or (
+                        isinstance(calls, Sequence) and not isinstance(calls, (str, bytes, bytearray)) and calls
+                    ):
+                        codegen.append(turn["turn"])
     findings: list[Finding] = []
     for row in rows:
         action_kind = row.get("action_kind")
@@ -140,7 +171,7 @@ def _capability_labels(capability: object) -> Mapping[str, str]:
     return value if isinstance(value, Mapping) else {}
 
 
-def gate_capability(spec: object, capability: object) -> GateResult:
+def gate_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
     """G2: compare every spec metric with the fixture capability label."""
 
     expected = _metric_labels(spec)
@@ -150,7 +181,25 @@ def gate_capability(spec: object, capability: object) -> GateResult:
         actual = observed.get(name)
         if actual != label:
             findings.append(Finding("g2_capability_label_mismatch", f"capability classification differs for {name}", {"metric": name, "spec": label, "capability": actual}))
-    return _result("G2", not findings and bool(expected), findings or ([Finding("g2_metrics_not_examined", "spec contains no metric labels")] if not expected else []), examined=bool(expected))
+    if not expected:
+        return GateResult(
+            "G2",
+            False,
+            0,
+            (Finding("g2_metrics_not_examined", "spec contains no metric labels"),),
+            examined=False,
+            required=required,
+        )
+    if capability is None:
+        return GateResult(
+            "G2",
+            False,
+            0,
+            (Finding("g2_capability_not_examined", "no harness-owned capability snapshot is available"),),
+            examined=False,
+            required=required,
+        )
+    return _result("G2", not findings, findings, examined=True)
 
 
 def _diff_metrics(spec_diff: object) -> tuple[dict[str, int | None], int | None]:
@@ -309,6 +358,13 @@ def gate_construction(ledger: object) -> GateResult:
     """
 
     rows = _rows(ledger)
+    if not rows:
+        return _result(
+            "G4",
+            False,
+            [Finding("g4_ledger_not_examined", "ledger contains no rows")],
+            examined=False,
+        )
     observed: dict[str, object] = {}
     for row in rows:
         kind = row.get("action_kind")
@@ -435,15 +491,15 @@ def gate_follow_up(check: object) -> GateResult:
     """
 
     if check is None:
-        return _result("G7", False, [Finding("g7_check_not_examined", "scenario supplied no planted check")], examined=False)
+        return _result("G7", False, [Finding("g7_check_not_examined", "scenario supplied no planted check")], examined=False, required=False)
     value = check() if callable(check) else check
     if isinstance(value, GateResult):
         passed = value.passed and not value.findings
-        return GateResult("G7", passed, GATE_POINTS["G7"] if passed else 0, value.findings, value.examined, value.ungraded)
+        return GateResult("G7", passed, GATE_POINTS["G7"] if passed else 0, value.findings, value.examined, value.ungraded, value.required)
     if isinstance(value, Mapping):
         status = value.get("status")
         if status == "not-examined":
-            return _result("G7", False, [Finding("g7_check_not_examined", "planted check did not fire")], examined=False)
+            return _result("G7", False, [Finding("g7_check_not_examined", "planted check did not fire")], examined=False, required=False)
         if status == "ungraded":
             return _result("G7", False, [Finding("g7_check_ungraded", "planted check fired without a measurable result")], examined=False, ungraded=True)
         passed = bool(value.get("passed", value.get("pass", False)))

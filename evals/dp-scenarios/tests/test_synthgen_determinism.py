@@ -8,17 +8,22 @@ from datetime import datetime
 from decimal import Decimal
 import json
 from pathlib import Path
+import random
 import shutil
 import subprocess
 
+import pytest
 import yaml
 
 from dp_scenarios.synthgen.generator import (
     _NondeterminismVisitor,
+    _aggregate_fixture_hash,
+    _hash_emitted_files,
     find_nondeterministic_sources,
     generate_dataset,
 )
-from dp_scenarios.synthgen.datasets import BASE_INSTANT
+from dp_scenarios.synthgen import generator as generator_module
+from dp_scenarios.synthgen.datasets import BASE_INSTANT, build_tables
 
 
 PACKAGE_DIR = Path(__file__).parents[1] / "src" / "dp_scenarios" / "synthgen"
@@ -220,3 +225,40 @@ def test_pii_markers_change_with_seed(tmp_path: Path) -> None:
     generate_dataset("zero_row_optional", 29, first)
     generate_dataset("zero_row_optional", 30, second)
     assert _manifest(first)["pii_markers"] != _manifest(second)["pii_markers"]
+
+
+def test_boolean_seed_is_rejected_at_each_generation_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(TypeError, match="seed must be an integer"):
+        build_tables("zero_row_optional", True, random.Random(True))
+
+    fixed_tables = build_tables("zero_row_optional", 4, random.Random(4))
+    monkeypatch.setattr(
+        generator_module,
+        "build_tables",
+        lambda name, seed, rng: fixed_tables,
+    )
+    with pytest.raises(TypeError, match="seed must be an integer"):
+        generate_dataset("zero_row_optional", True, tmp_path / "boolean-seed")
+
+
+def test_file_hash_iteration_and_aggregation_are_order_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dp_scenarios.synthgen.generator as generator
+
+    output = tmp_path / "fixture"
+    generate_dataset("zero_row_optional", 4, output)
+    original_owned_files = generator._owned_files
+    monkeypatch.setattr(
+        generator,
+        "_owned_files",
+        lambda out_dir: list(reversed(original_owned_files(out_dir))),
+    )
+
+    file_hashes = _hash_emitted_files(output)
+    assert list(file_hashes) == sorted(file_hashes)
+
+    shuffled_hashes = dict(reversed(list(file_hashes.items())))
+    assert _aggregate_fixture_hash(shuffled_hashes) == _aggregate_fixture_hash(file_hashes)
