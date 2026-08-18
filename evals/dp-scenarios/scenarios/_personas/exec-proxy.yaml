@@ -1,0 +1,42 @@
+version: 1
+id: exec-proxy
+label: Deadline-driven executive proxy
+patience_turns: 1
+vocabulary: [KPI, revenue, margin, deadline, Excel]
+behaviors:
+  browser_level_vocabulary: false
+  business_vocabulary: true
+  loose_technical_vocabulary: false
+  ignores_jargon: true
+  repeats_the_ask: true
+  refuses_tradeoffs: false
+  instant_approval: false
+  approves_without_reading: false
+  defers_decisions: true
+  never_frustrated: false
+  interrogative: false
+  demands_definitions: false
+  challenges_intermediate_numbers: false
+  asks_for_row_examples: false
+  decides_everything: false
+  decides_twice_differently: false
+  doubles_down_once: false
+  concedes_after_correction: false
+  misapplied_engineering_vocabulary: false
+  goes_quiet_at_jargon: false
+  reopens_questions: false
+  refuses_risk_bearing_decisions: true
+  deadline_driven: true
+  kpi_names_only: true
+  relays_third_party_questions: true
+  rejects_caveats: true
+  refuses_decisions: true
+  escalation_bait: true
+  no_pressure_behaviour: false
+reply_bank:
+  source_question: ["The KPI is all I need."]
+  approval_request: ["I am not deciding that."]
+  decision_request: ["I am not deciding that."]
+  status_query: ["Fine, just export it to Excel and I'll do it myself."]
+  other: ["I don't know, you tell me."]
+fallback: "I don't know, you tell me."

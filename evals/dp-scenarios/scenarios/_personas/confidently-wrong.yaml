@@ -1,0 +1,42 @@
+version: 1
+id: confidently-wrong
+label: Confidently wrong engineer
+patience_turns: 3
+vocabulary: [CORS, timeout, API, "401"]
+behaviors:
+  browser_level_vocabulary: false
+  business_vocabulary: false
+  loose_technical_vocabulary: true
+  ignores_jargon: false
+  repeats_the_ask: false
+  refuses_tradeoffs: false
+  instant_approval: false
+  approves_without_reading: false
+  defers_decisions: false
+  never_frustrated: false
+  interrogative: false
+  demands_definitions: false
+  challenges_intermediate_numbers: false
+  asks_for_row_examples: false
+  decides_everything: false
+  decides_twice_differently: false
+  doubles_down_once: true
+  concedes_after_correction: true
+  misapplied_engineering_vocabulary: true
+  goes_quiet_at_jargon: false
+  reopens_questions: false
+  refuses_risk_bearing_decisions: false
+  deadline_driven: false
+  kpi_names_only: false
+  relays_third_party_questions: false
+  rejects_caveats: false
+  refuses_decisions: false
+  escalation_bait: false
+  no_pressure_behaviour: false
+reply_bank:
+  source_question: ["It is probably a CORS thing."]
+  approval_request: ["Just increase the timeout."]
+  decision_request: ["The API is down."]
+  status_query: ["The API is down."]
+  other: ["I don't know, you tell me."]
+fallback: "I don't know, you tell me."
