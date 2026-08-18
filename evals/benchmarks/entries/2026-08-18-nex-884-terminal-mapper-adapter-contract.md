@@ -21,6 +21,10 @@ MCP contract.
 
 ## Evidence
 
+The marker-file plumbing is covered by unit tests but is not exercised by a
+live checker invocation while the runner exits before checker launch; the
+future stdio harness must cover that path end to end.
+
 - `evals/tests/test_terminal_field_mapper_adapter_contract.py` — canonical
   adapter execution with synthetic fixtures, checker alias/negative cases,
   trace-authorship and redaction regressions.

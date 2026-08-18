@@ -1168,7 +1168,13 @@ def deterministic_check_fact(
     # Desktop stdio harness may provide a runner-authored JSON-RPC trace, but
     # silently substituting the transcript would let an agent spoof MCP use by
     # printing tool names. Fail closed until that source is wired explicitly.
-    if cfg.get("trace_source") == "runner_mcp":
+    trace_source = cfg.get("trace_source")
+    if trace_source not in (None, "transcript", "runner_mcp"):
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False, "infrastructure_error": f"unknown trace source: {trace_source!r}"},
+            sort_keys=True,
+        )
+    if trace_source == "runner_mcp":
         return DETERMINISTIC_CHECK_PREFIX + json.dumps(
             {"passed": False, "infrastructure_error": "runner-authored MCP trace source is unavailable"},
             sort_keys=True,
@@ -1227,7 +1233,7 @@ def deterministic_check_fact(
             )
     except OSError as exc:
         return DETERMINISTIC_CHECK_PREFIX + json.dumps(
-            {"passed": False, "infrastructure_error": f"checker inputs failed to start: {exc}"},
+            {"passed": False, "infrastructure_error": f"checker input staging failed: {exc}"},
             sort_keys=True,
         )
     finally:

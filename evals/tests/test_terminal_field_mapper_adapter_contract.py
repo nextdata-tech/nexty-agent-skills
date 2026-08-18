@@ -40,8 +40,8 @@ ARBITRARY_SECRET = "opaque-credential-value-7f8b92"
 def _load_checker(name: str = "nex884_terminal_checker") -> Any:
     checker_path = TERMINAL_SCENARIO / "fixtures/check_terminal_mapper_adapter.py"
     spec = importlib.util.spec_from_file_location(name, checker_path)
+    assert spec is not None and spec.loader is not None
     checker = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(checker)
     return checker
 
@@ -279,6 +279,8 @@ def test_approved_environment_fallback_is_explicit_and_missing_credentials_are_s
 
 def test_generated_closure_uses_only_the_public_adapter_surface() -> None:
     """The shipped example is a generated-closure oracle, not a runtime import."""
+    if not E2E_RUNNER.is_file():
+        pytest.skip("mapper examples submodule not initialized")
     source = E2E_RUNNER.read_text(encoding="utf-8")
     tree = ast.parse(source)
     imports = {
@@ -396,6 +398,9 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
         "from nxd.experimental.field_mapper import transport as hidden\n"
     )
     assert "raw provider response return" in checker.findings("def f():\n    return response\n")
+    assert "provider SDK import" in checker.findings("import importlib\nimportlib.import_module(name)\n")
+    assert "provider SDK import" in checker.findings("__import__(name)\n")
+    assert "raw provider response return" in checker.findings("def f():\n    return self.response\n")
 
     assert checker.trace_errors("nxd-desktop build_data_product\n") == [
         "trace is not runner-authored JSON-RPC"
