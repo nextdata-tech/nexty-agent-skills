@@ -401,9 +401,19 @@ def run_stdio_proxy(spec_path: Path) -> int:
         def terminate_child(signum: int, _frame: Any) -> None:
             # The proxy and server intentionally have separate sessions. The
             # proxy owns the server group and forwards shutdown before exiting.
+            # Reap the child before leaving the handler: otherwise the child
+            # can remain as a zombie long enough for cleanup tests (and a
+            # runner-side liveness probe) to mistake it for a live process.
             if child.poll() is None:
                 with contextlib.suppress(OSError):
                     os.killpg(child_pid, signum)
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(OSError):
+                        os.killpg(child_pid, signal.SIGKILL)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        child.wait(timeout=5)
             raise SystemExit(128 + signum)
 
         signal.signal(signal.SIGTERM, terminate_child)
