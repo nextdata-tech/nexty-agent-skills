@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -46,6 +47,8 @@ _ASSIGN_SECRET = re.compile(
     r"pg\w*password)\s*(?:[:=]|\bis\b)\s*)[^\s,;]+"
 )
 PROXY_MODULE = Path(__file__).resolve()
+PROXY_CHILD_TERM_GRACE_S = 2.0
+PROXY_CHILD_KILL_REAP_GRACE_S = 0.5
 _TRACE_LOCK = threading.Lock()
 
 
@@ -398,22 +401,48 @@ def run_stdio_proxy(spec_path: Path) -> int:
         )
         child_pid = child.pid
 
+        shutting_down = False
+
+        def reap_child(timeout_s: float) -> bool:
+            """Reap the direct child without taking Popen's wait lock."""
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                try:
+                    waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
+                except ChildProcessError:
+                    if child.returncode is None:
+                        child.returncode = -signal.SIGTERM
+                    return True
+                except OSError:
+                    return False
+                if waited_pid == child_pid:
+                    child.returncode = os.waitstatus_to_exitcode(status)
+                    return True
+                # This loop runs only during signal shutdown; keep the grace
+                # short and avoid Popen.wait(), whose Python lock may be held
+                # by the interrupted main thread.
+                time.sleep(0.01)
+            return False
+
         def terminate_child(signum: int, _frame: Any) -> None:
+            nonlocal shutting_down
+            if shutting_down:
+                return
+            shutting_down = True
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
             # The proxy and server intentionally have separate sessions. The
             # proxy owns the server group and forwards shutdown before exiting.
-            # Reap the child before leaving the handler: otherwise the child
-            # can remain as a zombie long enough for cleanup tests (and a
-            # runner-side liveness probe) to mistake it for a live process.
             if child.poll() is None:
                 with contextlib.suppress(OSError):
                     os.killpg(child_pid, signum)
-                try:
-                    child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
+                if not reap_child(PROXY_CHILD_TERM_GRACE_S):
                     with contextlib.suppress(OSError):
                         os.killpg(child_pid, signal.SIGKILL)
-                    with contextlib.suppress(subprocess.TimeoutExpired):
-                        child.wait(timeout=5)
+                    if not reap_child(PROXY_CHILD_KILL_REAP_GRACE_S):
+                        # The proxy must still exit if the OS refuses a final
+                        # wait; the process group has already received SIGKILL.
+                        child.returncode = -signal.SIGKILL
             raise SystemExit(128 + signum)
 
         signal.signal(signal.SIGTERM, terminate_child)
