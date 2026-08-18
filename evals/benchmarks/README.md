@@ -7,8 +7,8 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
-| 2026-08-18 | evals: isolated Desktop stdio MCP substrate | NO_EVAL | — | [`2026-08-18-desktop-stdio-substrate`](entries/2026-08-18-desktop-stdio-substrate.md) |
 | 2026-08-18 | NEX-884: terminal field-mapper adapter contract scenario | NO_EVAL | — | [`2026-08-18-nex-884-terminal-mapper-adapter-contract`](entries/2026-08-18-nex-884-terminal-mapper-adapter-contract.md) |
+| 2026-08-18 | evals: isolated Desktop stdio MCP substrate | NO_EVAL | — | [`2026-08-18-desktop-stdio-substrate`](entries/2026-08-18-desktop-stdio-substrate.md) |
 | 2026-08-16 | nxd-run-job-loop: desktop closure preflight and phase-c recovery | PASS | job-loop-serve-query-refine | [`2026-08-16-desktop-closure-phase-c-recovery`](entries/2026-08-16-desktop-closure-phase-c-recovery.md) |
 | 2026-08-15 | NEX-877: public field-mapper provider adapter contract | NO_EVAL | — | [`2026-08-15-nex-877-provider-adapter-contract`](entries/2026-08-15-nex-877-provider-adapter-contract.md) |
 | 2026-08-14 | nxd-query-data-product: describe-every-model discovery + coverage gate (§6d/§6f) | NO_EVAL | — | [`2026-08-14-query-dp-model-discovery-coverage`](entries/2026-08-14-query-dp-model-discovery-coverage.md) |
