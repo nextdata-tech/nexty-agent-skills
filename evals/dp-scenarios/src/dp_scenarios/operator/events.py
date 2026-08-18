@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -144,7 +144,10 @@ class EventCard:
     gap_seconds: int = 0
     fresh_session: bool = False
     replace_message: bool = False
-    metadata: Mapping[str, object] = MappingProxyType({})
+    # default_factory, not a bare MappingProxyType: Python 3.12 accepts a
+    # mappingproxy as an immutable dataclass default but 3.11 rejects it, and
+    # this package supports 3.11.
+    metadata: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     plant: bool = False
 
     @property
