@@ -226,6 +226,9 @@ EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES = {
 # scenario may use the same filename as an ordinary fixture and must keep it.
 SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
+    # The terminal mapper checker is withheld from the agent; it is runner-side
+    # oracle material and is passed directly to the deterministic subprocess.
+    "terminal-field-mapper-adapter-contract": frozenset({"check_terminal_mapper_adapter.py"}),
     "multi-source-labeled-roots": frozenset({"check_labeled_multi_source.py"}),
     "multi-source-labeled-roots-supervisor": frozenset({"check_supervisor_pin.py"}),
     # Names the banned host/path literals and the exact connector architecture

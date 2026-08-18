@@ -30,6 +30,7 @@ def findings(source: str) -> list[str]:
     map_calls: list[ast.Call] = []
     make_call_calls: list[ast.Call] = []
     raw_return = False
+    proposal_attribute_access = False
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -56,7 +57,7 @@ def findings(source: str) -> list[str]:
                         module_aliases.add(alias.asname or alias.name)
         elif isinstance(node, ast.Call):
             dotted = _attribute_name(node.func)
-            if dotted == "importlib.import_module":
+            if dotted in {"importlib.import_module", "import_module"}:
                 if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
                     imported.add("<dynamic import>")
                 elif node.args[0].value == "anthropic" or node.args[0].value.startswith("anthropic."):
@@ -66,6 +67,10 @@ def findings(source: str) -> list[str]:
                     imported.add("<dynamic import>")
                 elif node.args[0].value == "anthropic" or node.args[0].value.startswith("anthropic."):
                     imported.add(node.args[0].value)
+            if dotted == "getattr" and node.args:
+                target = _attribute_name(node.args[0])
+                if target and target.split(".", 1)[0] == "proposal":
+                    proposal_attribute_access = True
             if dotted == "getattr" and len(node.args) > 1:
                 attribute = node.args[1]
                 if isinstance(attribute, ast.Constant) and attribute.value in {"transport", "ledger"}:
@@ -80,6 +85,10 @@ def findings(source: str) -> list[str]:
                 isinstance(node.func, ast.Name) and node.func.id in adapter_names
             ) or dotted in {f"{alias}.make_call" for alias in module_aliases}:
                 make_call_calls.append(node)
+        elif isinstance(node, ast.Attribute):
+            target = _attribute_name(node.value)
+            if target and target.split(".", 1)[0] == "proposal":
+                proposal_attribute_access = True
         elif isinstance(node, ast.Return):
             value = node.value
             if isinstance(value, ast.Name):
@@ -94,8 +103,15 @@ def findings(source: str) -> list[str]:
     errors: list[str] = []
     if any(name == "anthropic" or name.startswith("anthropic.") or name == "<dynamic import>" for name in imported):
         errors.append("provider SDK import")
-    if any("field_mapper.transport" in name or "field_mapper.ledger" in name for name in imported):
+    if any(
+        "field_mapper.transport" in name
+        or "field_mapper.ledger" in name
+        or "field_mapper.<dynamic private access>" in name
+        for name in imported
+    ):
         errors.append("private mapper import")
+    if proposal_attribute_access:
+        errors.append("undocumented proposal attribute")
     if raw_return:
         errors.append("raw provider response return")
     if not make_call_calls:

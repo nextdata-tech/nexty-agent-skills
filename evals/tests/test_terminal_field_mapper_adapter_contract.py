@@ -34,7 +34,6 @@ TERMINAL_SCENARIO = REPO_ROOT / "evals/public/terminal-field-mapper-adapter-cont
 SAMPLE = "samples/01-row-scores"
 SCENARIO_CHECKS = json.loads((TERMINAL_SCENARIO / "checks.json").read_text(encoding="utf-8"))
 SYNTHETIC_SECRET = SCENARIO_CHECKS["deterministic_check"]["redaction_markers"][0]
-ARBITRARY_SECRET = "opaque-credential-value-7f8b92"
 
 
 def _load_checker(name: str = "nex884_terminal_checker") -> Any:
@@ -383,6 +382,9 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     assert checks["deterministic_check"]["trace_source"] == "runner_mcp"
     assert "per-run nxd-desktop stdio MCP server" in checks["ci_skip"]
     assert "JSON-RPC trace sink" in checks["ci_skip"]
+    assert '"terminal-field-mapper-adapter-contract": frozenset' in (
+        REPO_ROOT / "evals/run.py"
+    ).read_text(encoding="utf-8")
 
     checker = _load_checker()
 
@@ -401,6 +403,15 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     assert "provider SDK import" in checker.findings("import importlib\nimportlib.import_module(name)\n")
     assert "provider SDK import" in checker.findings("__import__(name)\n")
     assert "raw provider response return" in checker.findings("def f():\n    return self.response\n")
+    assert "undocumented proposal attribute" in checker.findings(
+        "def f():\n    return proposal.value\n"
+    )
+    assert "undocumented proposal attribute" in checker.findings(
+        "def f():\n    return getattr(proposal, name)\n"
+    )
+    assert "private mapper import" in checker.findings(
+        "import nxd.experimental.field_mapper as fm\ngetattr(fm, name)\n"
+    )
 
     assert checker.trace_errors("nxd-desktop build_data_product\n") == [
         "trace is not runner-authored JSON-RPC"
@@ -429,18 +440,19 @@ def test_terminal_checker_redacts_secret_bearing_trace_and_artifact(
         encoding="utf-8",
     )
     (tmp_path / "run").mkdir()
-    (tmp_path / "run/ledger.json").write_text(ARBITRARY_SECRET, encoding="utf-8")
+    mixed_case_secret = "Opaque-Secret-7F8b92"
+    (tmp_path / "run/ledger.json").write_text(mixed_case_secret, encoding="utf-8")
     trace = tmp_path.parent / f"{tmp_path.name}-trace.jsonl"
     trace.write_text(
         json.dumps({
             "source": "runner", "protocol": "mcp", "direction": "request",
             "method": "tools/call", "tool": "build_data_product",
-            "detail": ARBITRARY_SECRET,
+            "detail": mixed_case_secret,
         }) + "\n",
         encoding="utf-8",
     )
     marker_file = tmp_path.parent / f"{tmp_path.name}-markers.txt"
-    marker_file.write_text(ARBITRARY_SECRET + "\n", encoding="utf-8")
+    marker_file.write_text(mixed_case_secret + "\n", encoding="utf-8")
     monkeypatch.setattr(
         sys, "argv", ["checker", "--fixtures", str(TERMINAL_SCENARIO / "fixtures"),
                         "--root", str(tmp_path), "--trace", str(trace),
@@ -451,7 +463,7 @@ def test_terminal_checker_redacts_secret_bearing_trace_and_artifact(
     output = capsys.readouterr().out
     assert "credential material appears in artifact" in output
     assert "credential material appears in trace" in output
-    assert ARBITRARY_SECRET not in output
+    assert mixed_case_secret not in output
     assert "anthropic_api_key" not in output
 
     monkeypatch.setattr(
