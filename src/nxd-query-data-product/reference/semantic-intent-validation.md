@@ -33,13 +33,15 @@ The intent gate (Step 6f) validates that upper layer **client-side**, using only
 what the three semantic tools (`list_models`, `describe_model`,
 `run_semantic_query`) already return.
 
-## The three techniques
+## The four techniques
 
-The gate runs three checks against the selection before executing. All read only
-`describe_model` metadata — no extra server surface.
+The gate runs four checks against the selection before executing. The first is a
+completeness precondition on *discovery*, the rest read only `describe_model`
+metadata — no extra server surface.
 
 | Technique | What it does | How it reads the catalog |
 |---|---|---|
+| **Coverage (no skipping)** | Guards the discover step itself: the selection is only built after **every** model in the agreed scope has been read via `describe_model`. A model cannot be waved off for a different grain or an irrelevant-sounding name on `list_models`-only evidence, because relevance is decided *from* `describe_model`, never before it. Grain and relevance are only trustworthy once the full set is read. | The agreed scope is the full `list_models` set; or — for a large catalog in an interactive session — the user-approved domain subset from §6d step 2, with the echo stating the narrowing; or — for a large catalog in a non-interactive session — the full set read without asking, with the echo stating the catalog size. Re-checks the selection if a later-read model surfaces a better-fitting metric. |
 | **Round-trip echo** | Restate the resolved selection in plain language from the catalog descriptions and show it before executing. Catches mis-mapping the user can see. | Pure assembly from each metric's / dimension's `description`. Deterministic — same selection → same echo. |
 | **Catalog-aware critic** | An LLM check: given the question + selection + catalog descriptions, does this selection answer the question? Produces the verdict (`ok` / `ambiguous` / `likely-wrong`) that drives clarify. | Reads metric/dimension `description`s; checks each dimension is in the metric's `compatible_dimensions` or a join's `reaches_dimensions`. |
 | **Clarification on ambiguity** | When the verdict is unclear or a concept doesn't fit, ask the user with the real candidate concepts instead of guessing. Abstain beats a confident wrong answer. | `AskUserQuestion` listing the actual concepts from `list_models` / `describe_model`. |
@@ -50,23 +52,29 @@ Echo is **deterministic** — a pure function of the selection and the catalog
 metadata — so it renders client-side for free. The critic and the clarify decision
 are **non-deterministic / interactive**, so they stay client-side too: keeping them
 out of the compiler preserves the determinism dividend (the `run_semantic_query`
-path stays "same selection → same SQL"). None of the three needs anything beyond
-what `list_models` + `describe_model` already return.
+path stays "same selection → same SQL"). None of these three (echo, critic,
+clarify) needs anything beyond what `list_models` + `describe_model` already
+return — coverage is a precondition on discovery rather than a metadata read, so
+it costs nothing extra either.
 
 ## End-to-end flow (Step 6f)
 
 ```
 list_models → describe_model(name)      ← discover catalog: metrics (w/ compatible_dimensions),
         │                                   dimensions (w/ pii), joins (w/ reaches_dimensions)
+        │   describe EVERY model list_models returns — relevance is decided from
+        │   describe_model, never before it (a skipped model can hold the real metric)
 build selection {measures, dimensions, filters}   ← concept names only, never SQL
         │
 ┌──────────────── INTENT GATE (client-side) ────────────────┐
-│  critic   {question, selection, describe_model} → verdict   │
-│           + compatible_dimensions / reaches_dimensions chk  │
-│  echo     restate selection in NL (+ PII note)              │
-│  clarify  verdict ambiguous/wrong OR dim unreachable        │
-│           → AskUserQuestion; abstain, do not execute        │
-└─────────────────────────────────────────────────────────────┘
+│  0 coverage  every model in the agreed scope read? else   │
+│             read it + re-check selection before proceeding│
+│  1 critic   {question, selection, dm} → verdict           │
+│             + compatible_dimensions / reaches_dims        │
+│  2 echo     restate selection in NL (+ PII note)          │
+│  3 clarify  verdict ambiguous/wrong OR dim unreachable    │
+│             → AskUserQuestion; abstain, do not execute    │
+└───────────────────────────────────────────────────────────┘
         │  critic ok / user confirmed
 run_semantic_query           ← deterministic compile → governed exec → rows + compiled_sql
         │

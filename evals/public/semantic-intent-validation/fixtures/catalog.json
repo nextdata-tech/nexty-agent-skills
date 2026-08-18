@@ -3,15 +3,16 @@
   "list_models": [
     {"name": "order_event", "grain": "one row per order", "description": "Placed orders, one row per order."},
     {"name": "rep_activity", "grain": "one row per logged activity", "description": "Sales-rep activity log, one row per logged activity."},
-    {"name": "customer_profile", "grain": "one row per customer", "description": "Customer master, one row per customer."}
+    {"name": "customer_profile", "grain": "one row per customer", "description": "Customer master, one row per customer."},
+    {"name": "partner_directory", "grain": "one row per partner", "description": "Partner directory — registered partners, one row per partner record."}
   ],
   "describe_model": {
     "order_event": {
       "name": "order_event",
       "grain": "one row per order",
       "metrics": [
-        {"name": "total_revenue", "aggregation": "SUM", "description": "Sum of order amount in USD (AMOUNT_USD) across orders.", "compatible_dimensions": ["channel", "country", "segment"]},
-        {"name": "order_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct count of orders (ORDER_ID).", "compatible_dimensions": ["channel", "country", "segment"]}
+        {"name": "order_count", "aggregation": "COUNT_DISTINCT", "description": "Distinct count of orders (ORDER_ID).", "compatible_dimensions": ["channel", "country", "segment"]},
+        {"name": "total_revenue", "aggregation": "SUM", "description": "Sum of order amount in USD (AMOUNT_USD) across orders.", "compatible_dimensions": ["channel", "country", "segment"]}
       ],
       "dimensions": [
         {"name": "channel", "type": "string", "pii": false, "description": "Sales channel the order came through (web, retail, partner)."}
@@ -41,11 +42,23 @@
         {"name": "segment", "type": "string", "pii": false, "description": "Customer segment (enterprise, mid-market, smb)."}
       ],
       "joins": []
+    },
+    "partner_directory": {
+      "name": "partner_directory",
+      "grain": "one row per partner",
+      "metrics": [
+        {"name": "partner_sourced_revenue", "aggregation": "SUM", "description": "Revenue from orders attributed to a sourcing partner, in USD.", "compatible_dimensions": ["partner_name"]}
+      ],
+      "dimensions": [
+        {"name": "partner_name", "type": "string", "pii": false, "description": "Name of the sourcing partner."}
+      ],
+      "joins": []
     }
   },
   "notes": [
     "There is NO month / date / time dimension on any model. 'last month' cannot bind to anything in this catalog.",
     "call_count and sales_calls both live on rep_activity at the same grain — distinguished only by their descriptions (all logged calls vs converted calls).",
-    "country and segment live on customer_profile and reach order_event via a documented many_to_one join (reaches_dimensions). rep_activity has NO join to customer_profile, so a call metric CANNOT be sliced by country/channel — it is neither in compatible_dimensions nor in any reaches_dimensions."
+    "country and segment live on customer_profile and reach order_event via a documented many_to_one join (reaches_dimensions). rep_activity has NO join to customer_profile, so a call metric CANNOT be sliced by country/channel — it is neither in compatible_dimensions nor in any reaches_dimensions.",
+    "partner_sourced_revenue lives ONLY on partner_directory (sounds like a reference/lookup table, not a metrics model). Q3 'how much revenue did partners bring in?' needs this metric — an agent that skips partner_directory would pick total_revenue filtered by channel='partner' (wrong: channel is the order's sales channel, not partner attribution) and return a confident wrong number."
   ]
 }

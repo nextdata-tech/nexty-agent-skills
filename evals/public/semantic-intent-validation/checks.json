@@ -10,6 +10,10 @@
       "check": "For each question the agent calls list_models and describe_model to learn the catalog before any run_semantic_query call. It does not guess concept names."
     },
     {
+      "id": "coverage-all-models-described",
+      "check": "Before building any selection the agent calls describe_model on EVERY model list_models returned (order_event, rep_activity, customer_profile, partner_directory). Skipping one is a failure even if the final answer happens to be right, and 'different grain' or 'irrelevant-sounding name' is not a valid reason to skip."
+    },
+    {
       "id": "echo-produced",
       "check": "For each question the agent restates the resolved selection in plain language using the metric/dimension meanings from describe_model (not just the bare names) before executing — e.g. distinguishing \"count of every logged call\" (call_count) from \"count of converted calls\" (sales_calls)."
     },
@@ -24,6 +28,10 @@
     {
       "id": "q2-executes-no-overclarify",
       "check": "On Q2 (\"What is the total revenue by country?\") the agent selects measures=[\"total_revenue\"], dimensions=[\"country\"] (country reaches order_event via its join's reaches_dimensions), runs run_semantic_query, and answers from the rows. It does NOT add a needless clarify turn for an unambiguous question."
+    },
+    {
+      "id": "q3-uses-partner-sourced-revenue",
+      "check": "On Q3 (\"How much revenue did partners bring in?\") the agent selects partner_sourced_revenue from partner_directory. Selecting total_revenue with a channel='partner' filter is a failure — channel is the order's own sales channel, not partner attribution."
     },
     {
       "id": "no-raw-sql-authored",

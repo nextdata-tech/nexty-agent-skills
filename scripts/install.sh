@@ -98,11 +98,16 @@ parse_args() {
   fi
   dbg "assume-yes=$ASSUME_YES"
 
-  local -A seen=()
+  # Order-preserving dedupe. Uses a delimited string rather than an
+  # associative array: `local -A` is bash 4+, and macOS ships bash 3.2.
+  local seen=""
   local -a unique=()
   if [[ -n "${TARGETS[0]+set}" ]]; then
     for target in "${TARGETS[@]}"; do
-      [[ -n "${seen[$target]:-}" ]] || { unique+=("$target"); seen[$target]=1; }
+      case "$seen" in
+        *"|$target|"*) ;;
+        *) unique+=("$target"); seen="$seen|$target|" ;;
+      esac
     done
   fi
   if [[ -n "${unique[0]+set}" ]]; then

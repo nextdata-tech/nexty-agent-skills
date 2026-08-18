@@ -58,8 +58,8 @@ sys.path.insert(0, str(PKG_ROOT))
 import dlt  # noqa: E402
 import duckdb  # noqa: E402
 
-from field_mapper import __version__  # noqa: E402
-from field_mapper import (  # noqa: E402
+from nxd.experimental.field_mapper import __version__  # noqa: E402
+from nxd.experimental.field_mapper import (  # noqa: E402
     Grant,
     MapperInput,
     MapperSpec,
@@ -67,20 +67,13 @@ from field_mapper import (  # noqa: E402
     map_inputs,
     resolve,
 )
-from field_mapper.errors import FieldMapperError  # noqa: E402
-from field_mapper.records import (  # noqa: E402
+from nxd.experimental.field_mapper.errors import FieldMapperError  # noqa: E402
+from nxd.experimental.field_mapper.records import (  # noqa: E402
     EVIDENCE_COLUMNS,
     PROPOSAL_COLUMNS,
     reviews_from_csv,
 )
-from field_mapper.ledger import hash_text  # noqa: E402
-from field_mapper.schema import ABSENT_SENTINEL, compile_schema  # noqa: E402
-from field_mapper.transport import (  # noqa: E402
-    AttemptOutcome,
-    BudgetLedger,
-    CallResult,
-    RunBudget,
-)
+from nxd.experimental.field_mapper.schema import ABSENT_SENTINEL, compile_schema  # noqa: E402
 
 # Imported for the signature check described in the module docstring: if the
 # platform's transform entrypoint moves, this file should fail at import rather
@@ -395,68 +388,22 @@ class _ReplayCaller:
             }
             for name in ("invoice_ref", "total_usd", "payment_terms_days")
         }
-        # The REAL CallResult, not a lookalike. The first draft used a stub
-        # dataclass with a plausible-looking field set and omitted `outcome`,
-        # so every attempt read as a non-success and the harness's own
-        # consistency assert caught it. Constructing the real type means the
-        # replay path cannot drift from what transport actually returns.
-        return CallResult(
-            outcome=AttemptOutcome.SUCCESS,
-            parsed=parsed,
-            response_hash=hash_text(json.dumps(parsed, sort_keys=True)),
-            model_snapshot="replay",
-            stop_reason="end_turn",
-            input_tokens=0,
-            output_tokens=0,
-            latency_seconds=0.0,
-            attempt_index=0,
-            provider="replay",
-            provider_notes=("replayed from a fixed answer table, no API call",),
-        )
+        # The callback contract accepts the parsed mapping directly. Keeping
+        # replay on this public shape means the example does not reach into the
+        # private transport result types just to model a recorded response.
+        return parsed
 
 
 def _live_caller(spec: MapperSpec):
-    """Real Anthropic calls, using the same closure the CLI uses."""
-    from field_mapper.mapper import system_prompt_for
-    from field_mapper.transport import Client, TransportConfig, resolve_api_key
+    """Real Anthropic calls through the supported public adapter."""
+    from nxd.experimental.field_mapper import make_call
 
-    # The grant declares max_calls / max_tokens / max_usd, but `Grant.check()`
-    # does NOT enforce them — it checks consent, not spend. A BudgetLedger is
-    # what actually stops the run, and without one those ceilings are
-    # decoration. This file is meant to be copied into a real transform, so an
-    # unbounded live path here would ship as an unbounded live path there.
+    # `make_call` owns provider construction, credential resolution, structured
+    # response parsing, and the shared budget ledger. The example deliberately
+    # does not import the provider SDK or the private transport client: this is
+    # the same public seam a generated transform is expected to use.
     grant = _build_grant(spec)
-    budget = RunBudget(
-        max_calls=grant.max_calls,
-        max_input_tokens=grant.max_tokens,
-        max_output_tokens=grant.max_tokens,
-        max_usd=grant.max_usd,
-        max_wall_seconds=600,
-    )
-    client = Client(
-        api_key=resolve_api_key({}),
-        config=TransportConfig.from_spec(spec),
-        # `model` so actuals reconcile at this model's rate: it governs the
-        # max_usd STOP, not just a printed figure.
-        budget_ledger=BudgetLedger(budget=budget, model=spec.model),
-    )
-
-    def call(*, item, spec, wire_schema, violations=()):  # noqa: ANN001
-        instruction = spec.instruction
-        if violations:
-            instruction += "\n\nYour previous answer had these problems:\n" + "\n".join(
-                f"- {v}" for v in violations
-            )
-        return client.call(
-            system_prompt=system_prompt_for(item),
-            instruction=instruction,
-            wire_schema=wire_schema,
-            text_inputs=[item.landed_text] if item.landed_text else [],
-            media_inputs=item.media,
-            input_hash=item.input_id,
-        )
-
-    return call
+    return make_call(spec=spec, grant=grant, allow_env=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -513,12 +460,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[3/6] mapping ({mode}) ...")
     caller = _live_caller(spec) if args.live else _ReplayCaller()
     try:
+        # The ledger intentionally refuses a closure-root-looking path under
+        # the home directory. Keep the database at `_run`, but put the
+        # attempt ledger under an explicit run-scoped child that the runtime
+        # cleanup rules recognize.
+        mapper_run_dir = run_dir / "run" / "mapper"
         result = map_inputs(
             inputs,
             spec=spec,
             grant=grant,
             call=caller,
-            run_dir=str(run_dir / "mapper"),
+            run_dir=str(mapper_run_dir),
         )
     except FieldMapperError as exc:
         print(f"\n  BLOCKED before landing: [{exc.error_code}] {exc}")

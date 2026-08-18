@@ -41,12 +41,18 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Protocol
+
+try:
+    from desktop_stdio import DesktopStdioError, DesktopStdioSession, redact_text
+except ImportError:  # pragma: no cover - package-style imports in downstream runners
+    from .desktop_stdio import DesktopStdioError, DesktopStdioSession, redact_text
 
 
 # Cap each tool-result block fed to the judge so a huge file read doesn't blow
@@ -438,6 +444,26 @@ def _extract_json(text: str) -> dict | None:
 # (mocked) shell, and fetch the public platform docs. `Skill` MUST be here or
 # installed skills never activate.
 CLAUDE_AGENT_ALLOWED_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,TodoWrite,WebFetch,Skill"
+DESKTOP_MCP_TOOL_PREFIX = "mcp__nxd-desktop__"
+
+
+def isolated_mcp_allowed_tools(
+    allowed_tools: str | None = None,
+    *,
+    server_name: str = "nxd-desktop",
+) -> str:
+    """Return the caller's tools plus only the named private MCP server.
+
+    The strict config prevents inherited MCP servers; this allowlist prevents
+    an agent from reaching an unrelated configured MCP namespace even if a
+    scenario broadens its normal shell/file tools.
+    """
+    source = allowed_tools or CLAUDE_AGENT_ALLOWED_TOOLS
+    values = [item.strip() for item in source.split(",") if item.strip()]
+    prefix = f"mcp__{server_name}__"
+    values = [item for item in values if not item.startswith("mcp__")]
+    values.append(prefix + "*")
+    return ",".join(dict.fromkeys(values))
 
 
 class ClaudeBackend:
@@ -465,6 +491,8 @@ class ClaudeBackend:
         effort: str,
         skill_pack_dir: Path | None,
         allowed_tools: str | None,
+        mcp_config: Path | None = None,
+        strict_mcp_config: bool = False,
     ) -> list[str]:
         """Flags shared by the single-turn and multi-turn invocations.
 
@@ -484,6 +512,12 @@ class ClaudeBackend:
             "--allowedTools", allowed_tools or CLAUDE_AGENT_ALLOWED_TOOLS,
             "--add-dir", str(ws),
         ]
+        if mcp_config is not None:
+            cmd += ["--mcp-config", str(mcp_config)]
+            if strict_mcp_config:
+                cmd += ["--strict-mcp-config"]
+        elif strict_mcp_config:
+            raise ValueError("strict_mcp_config requires mcp_config")
         # Load the skill-set as a plugin so its skills actually activate
         # (invokable as nxd-eval-pack:<skill>). Copying into .claude/skills/
         # does NOT register them. no_skills baseline passes skill_pack_dir=None
@@ -523,7 +557,26 @@ class ClaudeBackend:
         followup_turns: list[FollowupTurn] | None = None,
         source_audit_markers: list[tuple[str, str]] | None = None,
         executable: str | None = None,
+        mcp_config: Path | None = None,
+        strict_mcp_config: bool = False,
+        stdio_session: DesktopStdioSession | None = None,
     ) -> tuple[bool, str, dict]:
+        if stdio_session is not None:
+            try:
+                stdio_session.ensure_started()
+            except DesktopStdioError as exc:
+                return False, "", {
+                    "error": redact_text(str(exc)),
+                    **stdio_session.result_metrics(),
+                }
+            mcp_config = stdio_session.config_path
+            strict_mcp_config = True
+            allowed_tools = isolated_mcp_allowed_tools(
+                allowed_tools,
+                server_name=stdio_session.server_name,
+            )
+        elif strict_mcp_config:
+            raise ValueError("strict_mcp_config requires mcp_config")
         # Multi-turn takes a separate, persistent-process implementation. The
         # single-turn path below is left byte-for-byte as it was so a scenario
         # that scripts no turns cannot regress from multi-turn work.
@@ -535,12 +588,28 @@ class ClaudeBackend:
                 skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
                 followup_turns=followup_turns,
                 source_audit_markers=source_audit_markers,
+                mcp_config=mcp_config,
+                strict_mcp_config=strict_mcp_config,
+                stdio_session=stdio_session,
+            )
+        if mcp_config is not None:
+            return self._run_agent_stdio(
+                ws, prompt, model, timeout_s,
+                executable=executable or self.executable,
+                extra_dirs=extra_dirs, effort=effort,
+                env_overrides=env_overrides, path_prepend=path_prepend,
+                skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
+                mcp_config=mcp_config,
+                strict_mcp_config=strict_mcp_config,
+                stdio_session=stdio_session,
+                source_audit_markers=source_audit_markers,
             )
         cmd = [
             executable or self.executable, "-p", strip_argv_control_chars(prompt),
         ] + self._agent_command(
             ws, model, extra_dirs=extra_dirs, effort=effort,
             skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
+            mcp_config=mcp_config, strict_mcp_config=strict_mcp_config,
         )
 
         env = self._agent_env(env_overrides, path_prepend)
@@ -574,6 +643,139 @@ class ClaudeBackend:
         metrics["source_access_audit"] = audit
         return not metrics.get("is_error", False), trace, metrics
 
+    def _run_agent_stdio(
+        self,
+        ws: Path,
+        prompt: str,
+        model: str,
+        timeout_s: int,
+        *,
+        executable: str,
+        extra_dirs: list[Path] | None,
+        effort: str,
+        env_overrides: dict | None,
+        path_prepend: Path | None,
+        skill_pack_dir: Path | None,
+        allowed_tools: str | None,
+        mcp_config: Path,
+        strict_mcp_config: bool,
+        stdio_session: DesktopStdioSession | None,
+        source_audit_markers: list[tuple[str, str]] | None,
+    ) -> tuple[bool, str, dict]:
+        """Run one Claude turn with a runner-owned strict MCP config.
+
+        This path intentionally uses Popen rather than subprocess.run so a
+        timeout can terminate the whole process group (Claude plus its MCP
+        proxy/server descendants). The legacy single-turn path remains
+        unchanged when no MCP config is supplied.
+        """
+        if not mcp_config.is_file():
+            error = f"MCP config does not exist: {mcp_config}"
+            if stdio_session is not None:
+                stdio_session.record_agent(status="setup_failed", error=error)
+                return False, "", {
+                    "error": error,
+                    **stdio_session.result_metrics(),
+                }
+            return False, "", {"error": error}
+        cmd = [
+            executable,
+            "-p",
+            strip_argv_control_chars(prompt),
+        ] + self._agent_command(
+            ws,
+            model,
+            extra_dirs=extra_dirs,
+            effort=effort,
+            skill_pack_dir=skill_pack_dir,
+            allowed_tools=allowed_tools,
+            mcp_config=mcp_config,
+            strict_mcp_config=strict_mcp_config,
+        )
+        env = self._agent_env(env_overrides, path_prepend)
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=ws,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                start_new_session=True,
+            )
+            if stdio_session is not None:
+                stdio_session.attach_process(proc)
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                if stdio_session is not None:
+                    stdio_session.record_agent(
+                        status="timeout",
+                        error=f"agent timed out after {timeout_s}s",
+                    )
+                DesktopStdioSession._kill_process(proc)
+                partial = timeout_stdout(exc)
+                result = {
+                    "error": f"agent timed out after {timeout_s}s",
+                    "source_access_audit": source_access_audit(
+                        partial, source_audit_markers, incomplete=True
+                    ),
+                }
+                if stdio_session is not None:
+                    result.update(stdio_session.result_metrics())
+                return False, "", result
+        except OSError as exc:
+            error = f"could not start claude: {redact_text(str(exc))}"
+            if stdio_session is not None:
+                stdio_session.record_agent(status="failed", error=error)
+                return False, "", {
+                    "error": error,
+                    **stdio_session.result_metrics(),
+                }
+            return False, "", {"error": error}
+        finally:
+            if stdio_session is not None:
+                # The process is already reaped on normal and timeout paths;
+                # cleanup remains idempotent for the caller's context manager.
+                stdio_session._attached = [
+                    item for item in stdio_session._attached if item.poll() is None
+                ]
+
+        if proc.returncode != 0:
+            detail = stderr.strip() or stdout.strip() or "(no output)"
+            error = f"claude exited {proc.returncode}: {redact_text(detail[-2000:])}"
+            if stdio_session is not None:
+                stdio_session.record_agent(status="failed", error=error)
+            result = {
+                "error": error,
+                "source_access_audit": source_access_audit(
+                    stdout, source_audit_markers
+                ),
+            }
+            if stdio_session is not None:
+                result.update(stdio_session.result_metrics())
+            return False, "", result
+        audit = source_access_audit(stdout, source_audit_markers)
+        trace, metrics = self._trace_from_stream(stdout)
+        if not trace and not metrics.get("final_answer"):
+            error = f"empty stream output: {redact_text(stdout[-2000:])}"
+            if stdio_session is not None:
+                stdio_session.record_agent(status="failed", error=error)
+            result = {"error": error, "source_access_audit": audit}
+            if stdio_session is not None:
+                result.update(stdio_session.result_metrics())
+            return False, "", result
+        if stdio_session is not None:
+            stdio_session.record_agent(
+                status="passed" if not metrics.get("is_error", False) else "failed",
+                error="Claude returned an error result"
+                if metrics.get("is_error", False)
+                else None,
+            )
+            metrics.update(stdio_session.result_metrics())
+        metrics["source_access_audit"] = audit
+        return not metrics.get("is_error", False), trace, metrics
+
     # -- agent (multi-turn) ---------------------------------------------------
     def _run_agent_multi_turn(
         self,
@@ -590,6 +792,9 @@ class ClaudeBackend:
         allowed_tools: str | None,
         followup_turns: list[FollowupTurn],
         source_audit_markers: list[tuple[str, str]] | None,
+        mcp_config: Path | None,
+        strict_mcp_config: bool,
+        stdio_session: DesktopStdioSession | None,
     ) -> tuple[bool, str, dict]:
         """Drive one conversation over a single long-lived CLI process.
 
@@ -614,6 +819,7 @@ class ClaudeBackend:
         ] + self._agent_command(
             ws, model, extra_dirs=extra_dirs, effort=effort,
             skill_pack_dir=skill_pack_dir, allowed_tools=allowed_tools,
+            mcp_config=mcp_config, strict_mcp_config=strict_mcp_config,
         )
         env = self._agent_env(env_overrides, path_prepend)
 
@@ -623,9 +829,19 @@ class ClaudeBackend:
                 cmd, cwd=ws, env=env, text=True, bufsize=1,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
+            if stdio_session is not None:
+                stdio_session.attach_process(proc)
         except OSError as exc:
-            return False, "", {"error": f"could not start claude: {exc}"}
+            error = f"could not start claude: {redact_text(str(exc))}"
+            if stdio_session is not None:
+                stdio_session.record_agent(status="failed", error=error)
+                return False, "", {
+                    "error": error,
+                    **stdio_session.result_metrics(),
+                }
+            return False, "", {"error": error}
 
         stdout_q: queue.Queue[str | None] = queue.Queue()
         stderr_chunks: list[str] = []
@@ -684,6 +900,8 @@ class ClaudeBackend:
             # in its `finally`; a CLI still alive at that moment can re-write one
             # after the sweep ran and leak a supervisor for the rest of the run.
             with contextlib.suppress(OSError, ValueError):
+                os.killpg(proc.pid, signal.SIGTERM)
+            with contextlib.suppress(OSError, ValueError):
                 proc.kill()
             # TimeoutExpired subclasses SubprocessError, NOT OSError, so it
             # would escape a suppress(OSError) and crash the whole eval run
@@ -709,6 +927,9 @@ class ClaudeBackend:
             if partial:
                 meta["partial_trace"] = partial[-PARTIAL_TRACE_CHARS:]
                 meta["partial_segments"] = len(segments)
+            if stdio_session is not None:
+                stdio_session.record_agent(status="failed", error=error)
+                meta.update(stdio_session.result_metrics())
             return False, "", meta
 
         segments: list[tuple[str, dict]] = []
@@ -849,14 +1070,21 @@ class ClaudeBackend:
                 "".join(raw_stdout_chunks), source_audit_markers
             ),
         })
+        if stdio_session is not None:
+            stdio_session.record_agent(
+                status="passed" if not metrics.get("is_error", False) else "failed",
+                error="Claude returned an error result"
+                if metrics.get("is_error", False)
+                else None,
+            )
+            metrics.update(stdio_session.result_metrics())
         if not trace and not metrics.get("final_answer"):
             detail = _failure_detail()
-            return False, "", {
-                "error": f"empty stream output (exit {returncode}): {detail[-2000:]}",
-                "source_access_audit": source_access_audit(
-                    "".join(raw_stdout_chunks), source_audit_markers
-                ),
-            }
+            metrics["error"] = (
+                f"empty stream output (exit {returncode}): "
+                f"{redact_text(detail[-2000:])}"
+            )
+            return False, "", metrics
         # A nonzero exit fails the run exactly as it does on the single-turn
         # path. A CLI that emits its result events and then dies with a fatal
         # error would otherwise be graded ok on a transcript it disowned.
@@ -866,7 +1094,7 @@ class ClaudeBackend:
                 "did not exit after its input was closed"
                 if killed_on_close else f"exited {returncode}"
             )
-            metrics["error"] = f"claude {reason}: {detail[-2000:]}"
+            metrics["error"] = f"claude {reason}: {redact_text(detail[-2000:])}"
             return False, trace, metrics
         return not metrics.get("is_error", False), trace, metrics
 

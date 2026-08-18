@@ -6,9 +6,23 @@
 -- Designed so the graded questions have a real, checkable answer:
 --   Q2 "total revenue by country"  -> total_revenue (SUM AMOUNT_USD) by country
 --      via order_event -> customer_profile join. US = 300, UK = 150.
+--   Q3 "revenue from partners"     -> partner_sourced_revenue (SUM AMOUNT_USD)
+--      lives ONLY on partner_directory (sounds like a reference/lookup table).
+--      Wrong path: total_revenue filtered by channel='partner' — channel is the
+--      order's sales channel, not partner attribution.
 --   PII: rep_name is masked for the governed analyst principal.
 --   The two confusable call metrics (call_count vs sales_calls) differ in the
 --   rows so picking the wrong one would give a different number (4 vs 2).
+
+DROP TABLE IF EXISTS partner_directory;
+CREATE TABLE partner_directory (
+  PARTNER_ID   NUMBER,
+  PARTNER_NAME TEXT,
+  AMOUNT_USD   NUMBER
+);
+INSERT INTO partner_directory (PARTNER_ID, PARTNER_NAME, AMOUNT_USD) VALUES
+  (9001, 'Acme Corp', 200),
+  (9002, 'Beta Ltd',   75);
 
 DROP TABLE IF EXISTS order_event;
 CREATE TABLE order_event (
