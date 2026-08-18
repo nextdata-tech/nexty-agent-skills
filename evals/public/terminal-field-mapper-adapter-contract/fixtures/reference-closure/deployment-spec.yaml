@@ -1,0 +1,28 @@
+environment: desktop
+infraProfile: in-memory
+services:
+  - driver: nxd:local/duckdb/storage:0.1.0
+    environment: desktop
+    infraService: output
+    name: output
+  - driver: nxd:generic-secrets:1.0.0
+    environment: desktop
+    infraService: csv-source
+    name: csv-source
+domain: desktop.local
+inputs: {}
+name: terminal mapper adapter contract
+executor:
+  driver: nxd:local/python/compute:0.1.0
+  secrets:
+    - csv-source
+output:
+  ports:
+    output:
+      service: output
+      config:
+        model_tables:
+          orders: orders
+        path: __NXD_STAGING_DATA__
+        schema: main
+version: 0.0.1

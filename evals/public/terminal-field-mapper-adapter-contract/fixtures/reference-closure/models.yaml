@@ -1,0 +1,13 @@
+api-version: data-product.nextdata.com/v1
+models:
+  - name: orders
+    description: Synthetic order documents for the mapper adapter contract.
+    attributes:
+      order_id:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"primary_key"}'
+      product_category:
+        data-type: string
+        metadata:
+          __nxd_semantic__: '{"kind":"dimension","name":"product_category","description":"Synthetic product category."}'

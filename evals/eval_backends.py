@@ -58,6 +58,11 @@ except ImportError:  # pragma: no cover - package-style imports in downstream ru
 # Cap each tool-result block fed to the judge so a huge file read doesn't blow
 # up the judge prompt; the head is enough to see what the agent inspected.
 TOOL_RESULT_HEAD_CHARS = 1500
+_CREDENTIAL_ENV_KEY = re.compile(
+    r"(?i)(?:anthropic|openai|claude|api|access|secret|bearer|token|password|private).*"
+    r"(?:key|token|secret|credential|password)|(?:key|token|secret|credential|password).*"
+    r"(?:anthropic|openai|claude|api|access|secret|bearer|private)"
+)
 
 
 def source_access_audit(
@@ -532,13 +537,20 @@ class ClaudeBackend:
 
     @staticmethod
     def _agent_env(
-        env_overrides: dict | None, path_prepend: Path | None
+        env_overrides: dict | None,
+        path_prepend: Path | None,
+        *,
+        credential_isolation: bool = False,
     ) -> dict[str, str]:
         env = dict(os.environ)
         if env_overrides:
             env.update(env_overrides)
         if path_prepend is not None:
             env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
+        if credential_isolation:
+            for key in tuple(env):
+                if _CREDENTIAL_ENV_KEY.search(key):
+                    env.pop(key, None)
         return env
 
     def run_agent(
@@ -692,7 +704,11 @@ class ClaudeBackend:
             mcp_config=mcp_config,
             strict_mcp_config=strict_mcp_config,
         )
-        env = self._agent_env(env_overrides, path_prepend)
+        env = self._agent_env(
+            env_overrides,
+            path_prepend,
+            credential_isolation=stdio_session is not None,
+        )
         try:
             proc = subprocess.Popen(
                 cmd,

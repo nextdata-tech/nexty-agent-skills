@@ -475,7 +475,7 @@ def test_non_list_redaction_markers_fail_closed(tmp_path):
     )
 
 
-def test_runner_authored_trace_source_fails_closed_until_stdio_harness_exists(tmp_path):
+def test_runner_authored_trace_source_requires_nonempty_stdio_trace(tmp_path):
     facts = [
         run.deterministic_check_fact(
             SCENARIO, tmp_path,
@@ -484,9 +484,22 @@ def test_runner_authored_trace_source_fails_closed_until_stdio_harness_exists(tm
         )
     ]
 
-    assert run.deterministic_check_passed(facts) is False
-    assert run.deterministic_check_infrastructure_error(facts) == (
+    # A real runner trace is accepted as an input to the checker. The checker
+    # may still fail on this empty fixture workspace; that is an agent/fixture
+    # result, not the former missing-harness infrastructure error.
+    assert run.deterministic_check_infrastructure_error(facts) != (
         "runner-authored MCP trace source is unavailable"
+    )
+
+    empty = [
+        run.deterministic_check_fact(
+            SCENARIO, tmp_path,
+            {"script": "check_derived_closure.py", "trace_source": "runner_mcp"},
+            trace="",
+        )
+    ]
+    assert run.deterministic_check_infrastructure_error(empty) == (
+        "runner-authored MCP trace is empty"
     )
 
 

@@ -4,7 +4,6 @@
     "nxd-generate-data-product",
     "nxd-run-job-loop"
   ],
-  "ci_skip": "requires a per-run nxd-desktop stdio MCP server with a synthetic mapper-provider injection and a redacted JSON-RPC trace sink. evals/run.py can provision only the supervisor CLI (fixtures/desktop.json) or the semantic HTTP stub (fixtures/mcp.json); neither exposes the nxd-desktop mapper build tools over stdio nor captures their public MCP trace.",
   "wants_trace": true,
   "deterministic_check": {
     "script": "check_terminal_mapper_adapter.py",

@@ -379,8 +379,19 @@ def run_stdio_proxy(spec_path: Path) -> int:
         command = [str(x) for x in spec["command"]]
         trace_path = Path(spec["trace_path"])
         result_path = Path(spec["result_path"])
-        env = dict(os.environ)
+        # Do not inherit the runner's or user's credential-bearing environment
+        # into the supervisor child. The private spec is the only supported
+        # injection point; keep only process plumbing needed to locate the
+        # binary and write its isolated state.
+        env = {
+            key: os.environ[key]
+            for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
+            if os.environ.get(key)
+        }
         env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
+        for key in tuple(env):
+            if _SECRET_KEY.search(key):
+                env.pop(key, None)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return 2
     child: subprocess.Popen[bytes] | None = None

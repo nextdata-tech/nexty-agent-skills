@@ -140,6 +140,64 @@ def test_proxy_forwards_and_redacts_json_rpc_trace(tmp_path):
         session.cleanup()
 
 
+def test_proxy_server_environment_is_allowlisted_and_secret_keys_removed(tmp_path):
+    child = _script(
+        tmp_path / "env-server.py",
+        "import json, os, sys\n"
+        "print(json.dumps({'env': dict(os.environ)}), flush=True)\n"
+        "for _line in sys.stdin: pass\n",
+    )
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        root=tmp_path / "session",
+        server_env={
+            "NXD_DESKTOP_PYTHON": "/tmp/eval-python",
+            "EVAL_MARKER": "allowed",
+            "ANTHROPIC_API_KEY": "must-not-pass",
+        },
+    ).start()
+    old = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = "runner-secret"
+    proxy = subprocess.Popen(
+        [sys.executable, str(ds.PROXY_MODULE), "--proxy", "--spec", str(session.root / "server-spec.json")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert proxy.stdout is not None
+        child_env = json.loads(proxy.stdout.readline())["env"]
+        assert child_env["NXD_DESKTOP_PYTHON"] == "/tmp/eval-python"
+        assert child_env["EVAL_MARKER"] == "allowed"
+        assert "ANTHROPIC_API_KEY" not in child_env
+        if proxy.stdin is not None:
+            proxy.stdin.close()
+        proxy.wait(timeout=10)
+    finally:
+        if old is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = old
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
+def test_claude_stdio_agent_environment_drops_provider_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "runner-secret")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
+    env = eb.ClaudeBackend._agent_env(
+        {"NXD_SYNTHETIC_EVALUATION_PROFILE": "/tmp/profile.json"},
+        None,
+        credential_isolation=True,
+    )
+    assert env["NXD_SYNTHETIC_EVALUATION_PROFILE"] == "/tmp/profile.json"
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
 def test_claude_backend_passes_private_mcp_flags_and_isolated_tools(tmp_path):
     args_file = tmp_path / "args.json"
     claude = _script(tmp_path / "claude", FAKE_CLAUDE)

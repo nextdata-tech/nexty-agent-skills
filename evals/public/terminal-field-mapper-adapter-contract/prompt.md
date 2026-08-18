@@ -1,8 +1,11 @@
 # Terminal field-mapper adapter contract
 
-Create a local NXD mapper transform using the documented public provider seam.
+Use the starter closure already present in the workspace as a local NXD mapper transform.
 The evaluator supplies a synthetic provider and a per-run `nxd-desktop` MCP
-server; do not use network access or a real credential.
+server; do not use network access or a real credential. Do not rename or remove
+the starter contract files; inspect the transform and use the connected MCP tools
+to build it under workflow `terminal-mapper-adapter`, then report the sanitized
+result.
 
 The transform must construct `make_call(...)` with an explicit credential
 policy, pass its result to `map_inputs(...)`, and preserve the callback shape
