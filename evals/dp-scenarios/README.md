@@ -44,7 +44,6 @@ and closure validators define that artifact contract; this harness records only
 the scripted scenario phases and the artifacts available to its smoke gates.
 Mapper approval is a separate supervisor admission boundary and is not reproduced
 by the T0 operator.
-
 ## Layout
 
 | Path | Contents |
@@ -68,7 +67,6 @@ There is deliberately no fallback to a globally installed pack. A global install
 drifts from the build an agent actually runs, so a default pointing at one would
 measure text no runtime ever saw and report drift the agent could never hit —
 while hiding drift in the pack that matters.
-
 ## Fixture hygiene
 
 Large or hostile fixtures are **generated at harness start** from the seeded
