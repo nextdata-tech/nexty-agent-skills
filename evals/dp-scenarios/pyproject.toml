@@ -7,6 +7,7 @@ dependencies = [
     "nxd-eval",              # EX scorer, Wilson/McNemar statistics, report emitters
     "pyyaml>=6.0",           # scenario / route-table / persona definitions
     "duckdb>=1.0",           # gold-row-set reconciliation against landed data
+    "aiohttp>=3.9",          # the mock HTTP source server and its client-side tests
 ]
 
 [project.optional-dependencies]

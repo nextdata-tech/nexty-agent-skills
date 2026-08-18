@@ -31,6 +31,9 @@ on:
     paths:
       - 'src/**'
       - 'evals/**'
+      # A separate uv project with its own always-on gate in ci.yml. run.py
+      # never imports it, so it cannot move a public-suite verdict.
+      - '!evals/dp-scenarios/**'
       - '.github/workflows/evals.yml'
       # Files under evals/ that cannot change a verdict. Excluding them keeps a
       # docs edit or a baseline re-record from spending a full agent run to

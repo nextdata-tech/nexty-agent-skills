@@ -73,7 +73,8 @@ jobs:
       # flake, which is why it belongs in the always-on job rather than in the
       # opt-in evals workflow.
       - name: dp-scenarios harness tests
-        run: uv run --project evals/dp-scenarios --with pytest pytest evals/dp-scenarios/tests -q
+        working-directory: evals/dp-scenarios
+        run: uv run --locked pytest -q
 
       # Benchmark evidence is source-controlled like the skills: validate the
       # stdlib recorder directly and fail if an entry or generated index drifts.

@@ -5,3 +5,4 @@
 *.csv -filter -diff -merge text
 *.json -filter -diff -merge text
 *.yaml -filter -diff -merge text
+*.jsonl -filter -diff -merge text

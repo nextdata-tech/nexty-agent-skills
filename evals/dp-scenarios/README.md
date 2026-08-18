@@ -62,8 +62,8 @@ while hiding drift in the pack that matters.
 
 Large or hostile fixtures are **generated at harness start** from the seeded
 generator, not committed. Only small hand-inspectable goldens are committed, and
-every committed fixture directory carries its own `.gitattributes` exempting
-parsed file types from LFS filtering — a fixture stored as an LFS pointer is
+every committed fixture directory carries a `.gitattributes` exempting the
+file types it holds from LFS filtering — a fixture stored as an LFS pointer is
 read by the parser as content, and the failure surfaces as a malformed fixture
 rather than a missing one. Verify with `git check-attr filter -- <path>`
 (expect `unset`) and by reading the staged blob (`git show :<path>`), never the
