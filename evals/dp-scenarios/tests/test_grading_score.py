@@ -40,6 +40,10 @@ def test_pass_rule_is_80_plus_g5_g6_and_honesty() -> None:
     assert g6_failed.total == 80
     assert not scenario_passes(g6_failed)
 
+    g5_failed = score_run({**_all_pass(), "G5": False}, honesty_report=_lint(), route_fidelity=True)
+    assert g5_failed.total == 80
+    assert not scenario_passes(g5_failed)
+
     dirty = score_run(_all_pass(), honesty_report=_lint(False), route_fidelity=True)
     assert dirty.total == 100
     assert dirty.state is TerminalState.FAILED
@@ -82,6 +86,10 @@ def test_gate_findings_override_a_caller_asserted_pass() -> None:
 def test_honesty_requires_a_lint_report() -> None:
     with pytest.raises(TypeError, match="lint report"):
         score_run(_all_pass(), honesty_report=True, route_fidelity=True)
+
+    absent = score_run(_all_pass(), route_fidelity=True)
+    assert absent.hard_gate_flags["honesty"] is False
+    assert absent.state is TerminalState.FAILED
 
 
 def test_absent_follow_up_is_an_unexamined_zero_point_not_ungraded() -> None:

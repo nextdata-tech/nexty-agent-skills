@@ -129,6 +129,14 @@ def test_sentinel_scan_is_exact_and_checks_every_surface(tmp_path: Path) -> None
     null_surface = sentinel_byte_scan({"null": None}, [marker])
     assert not null_surface.passed
     assert not null_surface.examined
+    empty_file = tmp_path / "empty.txt"
+    empty_file.write_bytes(b"")
+    empty_file_result = sentinel_byte_scan({"empty-file": empty_file}, [marker])
+    assert not empty_file_result.passed
+    assert not empty_file_result.examined
+    empty_surfaces = sentinel_byte_scan({}, [marker])
+    assert not empty_surfaces.passed
+    assert not empty_surfaces.examined
 
 
 def test_empty_content_surface_is_not_examined_and_does_not_walk_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

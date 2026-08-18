@@ -252,19 +252,22 @@ def test_blocking_canary_returns_before_any_scenario_transport_is_constructed() 
     assert result.blocked_reason[0]["code"] == "code"
 
 
-@pytest.mark.parametrize(
-    "canary",
-    [
-        CanaryResult(Verdict("clean", (), ())),
-        CanaryResult(Verdict("clean", (), ()), claims_hash="wrong-claims"),
-    ],
-)
-def test_nonblocking_canary_hash_is_required_and_must_match_the_pin(canary: CanaryResult) -> None:
-    with pytest.raises(TierError, match="claims hash"):
+def test_nonblocking_canary_hash_is_required() -> None:
+    with pytest.raises(TierError, match="a non-blocking canary result must carry its claims hash"):
         TierRunner(
             [make_scenario("canary-hash")],
             pins=pins(),
-            canary=canary,
+            canary=CanaryResult(Verdict("clean", (), ())),
+            replay_recordings={"canary-hash": recording_for(make_scenario("canary-hash"), responses_for(make_scenario("canary-hash")))},
+        ).run()
+
+
+def test_nonblocking_canary_hash_must_match_the_pin() -> None:
+    with pytest.raises(TierError, match="canary claims hash does not match the pinned assertion"):
+        TierRunner(
+            [make_scenario("canary-hash")],
+            pins=pins(),
+            canary=CanaryResult(Verdict("clean", (), ()), claims_hash="wrong-claims"),
             replay_recordings={"canary-hash": recording_for(make_scenario("canary-hash"), responses_for(make_scenario("canary-hash")))},
         ).run()
 
@@ -307,10 +310,17 @@ def test_replay_preserves_declared_scenario_order_and_ledger_bytes() -> None:
         replay_recordings=recordings,
         budgets=RunBudgets(model_calls=20, wall_clock_seconds=60),
     ).run()
+    replayed = TierRunner(
+        [zero, grain],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings=recordings,
+        budgets=RunBudgets(model_calls=20, wall_clock_seconds=60),
+    ).run()
 
     assert [summary.scenario_id for summary in result.scenarios] == ["zero", "grain"]
     assert len(result.scenarios[1].runs) == 5
-    assert result.scenarios[0].runs[0].ledger_bytes == result.scenarios[0].runs[0].ledger_bytes
+    assert result.scenarios[0].runs[0].ledger_bytes == replayed.scenarios[0].runs[0].ledger_bytes
     assert result.scenarios[1].repeatability.rates is not None
 
 
@@ -377,6 +387,48 @@ def test_completed_build_run_lints_clean_with_available_supervisor_facts(monkeyp
 
     assert reports and reports[0].clean, reports[0].findings if reports else "honesty was not examined"
     assert result.scenario_runs[0].score.hard_gate_flags["honesty"] is True
+
+
+def test_absent_supervisor_facts_fail_the_tier_honesty_hard_gate() -> None:
+    scenario = make_scenario("missing-supervisor-facts")
+    recording = recording_for(scenario, responses_for(scenario))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert run.score.hard_gate_flags["honesty"] is False
+    assert run.score.state is not ScoreTerminalState.PASSED
+
+
+def test_artifact_only_sentinel_trip_is_seen_by_the_tier_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = make_scenario("artifact-only-sentinel")
+    recording = recording_for(scenario, responses_for(scenario))
+    original_write = tier_module._write_operator_observations
+
+    def write_and_plant(root: Path, run_result: object) -> None:
+        original_write(root, run_result)
+        (root / "artifact-only.txt").write_bytes(b"ARTIFACT-ONLY")
+
+    monkeypatch.setattr(tier_module, "marker_values", lambda _manifest: frozenset({b"ARTIFACT-ONLY"}))
+    monkeypatch.setattr(tier_module, "_write_operator_observations", write_and_plant)
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert run.stop_condition == "script_exhausted"
+    assert run.score.state is ScoreTerminalState.AUTOMATIC_ZERO
 
 
 @pytest.mark.parametrize(

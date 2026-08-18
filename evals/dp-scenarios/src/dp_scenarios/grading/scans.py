@@ -4,6 +4,10 @@ The scan invariant is fail-closed examination: every scan reports a stable code
 and an empty sentinel set raises because examining no markers is not a clean
 scan.  Source scans inspect mechanism, not whether a shortcut happened to
 produce the expected answer.
+
+Only the sentinel scan is wired into the tier runner.  The other four scans
+remain public scenario APIs; exercising them directly does not imply that the
+tier path invokes them.
 """
 
 from __future__ import annotations

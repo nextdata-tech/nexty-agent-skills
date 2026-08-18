@@ -3,6 +3,10 @@
 An oracle is ``satisfied`` only after it examined the required artifact and
 verified it.  Missing fixtures, unavailable control ports, and absent counter
 snapshots are ``not-examined``; they are never silently treated as passing.
+
+The capability and counter oracles are public scenario APIs and are not
+implicitly invoked by the tier path.  The tier wires the marker, gold, and
+control-total seams explicitly where a scenario declares them.
 """
 
 from __future__ import annotations

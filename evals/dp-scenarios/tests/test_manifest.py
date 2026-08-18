@@ -95,7 +95,7 @@ def test_fixture_hash_is_stable_across_paths_copies_and_metadata(tmp_path: Path)
     second = tmp_path / "second"
     shutil.copytree(first, second)
     assert fixture_dir_hash(first) == fixture_dir_hash(second)
-    assert fixture_dir_hash(first) == fixture_dir_hash(first)
+    assert fixture_dir_hash(first) == fixture_dir_hash(first / ".")
 
     (nested / "a.bin").write_bytes(b"alphA")
     assert fixture_dir_hash(first) != fixture_dir_hash(second)

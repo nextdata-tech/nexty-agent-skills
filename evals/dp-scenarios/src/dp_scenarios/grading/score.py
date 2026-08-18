@@ -9,6 +9,9 @@ An absent gate is an unexamined zero-point criterion, rather than an ungraded
 run, because G7 is scenario-specific and may never fire.  Only an explicit
 ``ungraded`` result voids a run; this is a deliberate policy, not an accident
 of input normalization.
+
+The centralized pass helper is also a public scenario API: the tier path uses
+the score vector returned by ``score_run`` and does not re-implement this rule.
 """
 
 from __future__ import annotations

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from dp_scenarios.grading.gates import (
     gate_build,
     gate_capability,
@@ -74,10 +76,15 @@ def test_g1_passes_and_reports_ordering_code() -> None:
     assert "g1_spec_approval_missing" in missing.codes
     unknown = gate_intake(_ledger({"turn": 2, "action_kind": "spec_approved"}, {"turn": 3, "action_kind": "codegen"}, {"turn": 4, "action_kind": "not-a-real-action"}))
     assert "g1_unknown_action_kind" in unknown.codes
+    no_codegen = gate_intake(_ledger({"turn": 2, "action_kind": "spec_approved"}))
+    assert "g1_codegen_missing" in no_codegen.codes
+    with pytest.raises(TypeError):
+        gate_intake(object())
 
 
 def test_g2_and_g3_check_artifact_labels_and_approvals() -> None:
     assert gate_capability({"metrics": {"revenue": "supported"}}, {"metrics": {"revenue": "supported"}}).passed
+    assert not gate_capability({"metrics": {"revenue": "Supported"}}, {"metrics": {"revenue": "supported"}}).passed
     mismatch = gate_capability({"metrics": {"revenue": "proxy"}}, {"metrics": {"revenue": "supported"}})
     assert not mismatch.passed
     assert "g2_capability_label_mismatch" in mismatch.codes
@@ -107,7 +114,15 @@ def test_g2_and_g3_check_artifact_labels_and_approvals() -> None:
     assert "g3_unapproved_metric_in_closure" in metric_specific.codes
     absent = gate_narrowing({"turn": 4, "metrics": ["revenue"]}, _ledger({"turn": 6, "action_kind": "spec_approved"}), None)
     assert not absent.passed
+    assert not absent.examined
     assert "g3_closure_not_examined" in absent.codes
+    same_turn = gate_narrowing(
+        {"turn": 4, "metrics": ["revenue"]},
+        _ledger({"turn": 4, "action_kind": "spec_approved"}),
+        {"metrics": ["revenue"]},
+    )
+    assert not same_turn.passed
+    assert "g3_approval_missing_after_diff" in same_turn.codes
 
     assert not gate_capability({}, {"metrics": {}}).passed
     assert "g2_metrics_not_examined" in gate_capability({}, {"metrics": {}}).codes
@@ -126,6 +141,14 @@ def test_g4_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: Path) -> N
     missing = gate_construction(missing_path)
     assert not missing.passed
     assert "g4_adversarial_review_outcome_missing" in missing.codes
+    null_outcome_path = tmp_path / "construction-null.jsonl"
+    _write_rows(null_outcome_path, [
+        {"run_id": "run", "scenario_id": "scenario", "turn": 1, "phase": 4, "action_kind": "self_check", "action": "self-check", "claim": {"outcome": None}},
+        {"run_id": "run", "scenario_id": "scenario", "turn": 2, "phase": 4, "action_kind": "adversarial_review", "action": "review", "claim": "passed"},
+    ])
+    null_outcome = gate_construction(null_outcome_path)
+    assert not null_outcome.passed
+    assert "g4_self_check_outcome_missing" in null_outcome.codes
 
 
 def test_honesty_gate_delegates_to_real_ledger_lint(tmp_path: Path) -> None:
@@ -177,9 +200,16 @@ def test_g5_uses_supervisor_counts_and_identifiers() -> None:
     assert not absent_counts.passed
     assert not absent_counts.examined
     assert "g5_row_counts_not_examined" in absent_counts.codes
+    one_sided = gate_build(supervisor, {})
+    assert not one_sided.passed
+    assert not one_sided.examined
+    assert "g5_row_counts_not_examined" in one_sided.codes
+    typed_mismatch = gate_build(supervisor, {"model": "5"})
+    assert not typed_mismatch.passed
+    assert "g5_row_count_mismatch" in typed_mismatch.codes
 
 
-def test_g6_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: Path) -> None:
+def test_g6_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: Path, monkeypatch) -> None:
     fixture = tmp_path / "fixture"
     generate_dataset("grain_trap", 29, fixture)
     write_reference_gold("grain_trap", fixture / "data", fixture / "gold")
@@ -189,7 +219,8 @@ def test_g6_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: Pat
         {"region": row["region"], "regional_revenue": row["naive_fanout_revenue"]}
         for row in diagnostics["regions"]
     ]
-    correct = gate_query(gold, gold)
+    actual = [dict(row) for row in reversed(gold)]
+    correct = gate_query(actual, gold)
     wrong = gate_query(naive, gold)
     assert correct.passed
     assert not wrong.passed
@@ -198,6 +229,18 @@ def test_g6_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: Pat
     assert "g6_gold_not_examined" in gate_query(gold, None).codes
     assert not gate_query({"rows": None}, gold).passed
     assert "g6_actual_not_examined" in gate_query({"rows": None}, gold).codes
+    assert not gate_query({"rows": None}, gold).examined
+    assert not gate_query(actual, None).examined
+
+    abstained = gate_query({"rows": actual, "abstained": True}, gold)
+    errored = gate_query({"rows": actual, "errored": True}, gold)
+    assert not abstained.passed
+    assert not errored.passed
+
+    monkeypatch.setattr("nxd_eval.scoring.score_one", lambda *_args, **_kwargs: "MAYBE")
+    unknown = gate_query(actual, gold)
+    assert not unknown.passed
+    assert "g6_query_rows_differ" in unknown.codes
 
 
 def test_gold_oracle_pins_the_deterministic_scorer(tmp_path: Path, monkeypatch) -> None:
@@ -220,6 +263,8 @@ def test_g7_is_supplied_by_the_scenario() -> None:
     assert not gate_follow_up({"status": "not-examined"}).ungraded
     fired_without_measurement = gate_follow_up({"status": "ungraded"})
     assert fired_without_measurement.ungraded
+    unknown = gate_follow_up(object())
+    assert unknown.ungraded
 
 
 def test_oracles_keep_satisfied_violated_and_not_examined_distinct() -> None:

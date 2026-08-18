@@ -64,7 +64,7 @@ def test_gold_scoring_path_discriminates_correct_and_naive_fanout_answers(tmp_pa
         for row in diagnostics["regions"]
     )
 
-    correct = SCENARIO.score_query(gold.rows, generated.out_dir)
+    correct = SCENARIO.score_query(correct_rows, generated.out_dir)
     wrong = SCENARIO.score_query(naive, generated.out_dir)
     assert correct.verdict == "correct"
     assert correct.gold_gate.passed

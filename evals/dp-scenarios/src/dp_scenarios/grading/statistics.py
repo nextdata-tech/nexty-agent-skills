@@ -4,6 +4,9 @@ The invariant is that invalid runs do not enter rates, demonstrated-once
 results have no percentage representation, and paired changes are refused
 unless the ledger manifest proves a one-field comparison on the same fixture
 and operator script.
+
+``render_rate`` is a public scenario/report API; the tier report has its own
+structured rendering and does not call this helper directly.
 """
 
 from __future__ import annotations

@@ -48,12 +48,62 @@ def test_skip_in_any_stage_is_blocking(stage: str) -> None:
     assert any("skipped" in issue.message for issue in verdict.issues)
 
 
+@pytest.mark.parametrize(
+    ("status", "expected_code", "message"),
+    [
+        ("skip", "structure/stage_skipped", "skipped stage/check is unexamined"),
+        ("fail", "structure/stage_failed", "failing stage has no approved interpretation"),
+    ],
+)
+def test_stage_level_skip_and_failure_without_checks_are_blocking(
+    status: str, expected_code: str, message: str
+) -> None:
+    report = _report(status=status)
+    report["stages"][0]["checks"] = []
+
+    verdict = aggregate_verdict(report, [_claim()])
+
+    assert verdict.outcome == "blocked"
+    assert any(issue.code == expected_code and message in issue.message for issue in verdict.issues)
+
+
 def test_unknown_finding_state_raises() -> None:
     report = _report(status="pass")
     report["stages"][0]["checks"][0]["status"] = "future-state"
 
     with pytest.raises(UnknownFindingState, match="future-state"):
         aggregate_verdict(report, [_claim()])
+
+
+def test_unknown_stage_state_raises() -> None:
+    report = _report(status="pass")
+    report["stages"][0]["status"] = "future-state"
+
+    with pytest.raises(UnknownFindingState, match="future-state"):
+        aggregate_verdict(report, [_claim()])
+
+
+def test_probe_without_bound_claims_raises() -> None:
+    with pytest.raises(UnknownFindingState, match="no approved claims"):
+        aggregate_verdict(_report(), [_claim(probe_id="other")], probe_id="kitchen-sink")
+
+
+def test_unrecognized_claim_direction_raises() -> None:
+    claim = _claim()
+    object.__setattr__(claim, "direction", "future-direction")
+
+    with pytest.raises(UnknownFindingState, match="future-direction"):
+        aggregate_verdict(_report(), [claim])
+
+
+def test_report_outcome_must_agree_with_stage_outcome() -> None:
+    report = _report(status="fail")
+    report["outcome"] = "pass"
+
+    verdict = aggregate_verdict(report, [_claim()])
+
+    assert verdict.outcome == "blocked"
+    assert any("report outcome 'pass' disagrees with stage outcome 'fail'" in issue.message for issue in verdict.issues)
 
 
 def test_documented_unsupported_without_finding_is_reverse_drift() -> None:
@@ -67,6 +117,18 @@ def test_documented_unsupported_without_finding_is_reverse_drift() -> None:
     assert verdict.outcome == "drift"
     assert verdict.issues[0].kind == "reverse-drift"
     assert "median-unsupported → structure/spec_compile_failed → /fixture/SKILL.md:7" in verdict.issues[0].message
+
+
+def test_documented_unsupported_warning_is_still_reverse_drift() -> None:
+    claim = _claim(
+        claim_id="median-unsupported",
+        code="structure/spec_compile_failed",
+        direction="documented-unsupported",
+    )
+    verdict = aggregate_verdict(_report(status="warn", code="structure/spec_compile_failed"), [claim])
+
+    assert verdict.outcome == "drift"
+    assert verdict.issues[0].kind == "reverse-drift"
 
 
 def test_known_finding_code_maps_to_claim_line() -> None:
@@ -195,3 +257,21 @@ def test_expected_negative_does_not_suppress_an_unexamined_skip() -> None:
 
     assert verdict.outcome == "blocked"
     assert any(issue.code == "runtime/not_examined" for issue in verdict.issues)
+
+
+def test_unknown_failed_check_uses_the_unapproved_interpretation_message() -> None:
+    verdict = aggregate_verdict(
+        _report(status="fail", code="runtime/unclaimed_failure"),
+        [_claim(code="runtime/known_failure")],
+    )
+
+    assert any("no approved interpretation exists for this probe" in issue.message for issue in verdict.issues)
+
+
+def test_failed_stage_without_checks_uses_the_stage_failure_message() -> None:
+    report = _report(status="fail")
+    report["stages"][0]["checks"] = []
+
+    verdict = aggregate_verdict(report, [_claim()])
+
+    assert any("failing stage has no approved interpretation" in issue.message for issue in verdict.issues)

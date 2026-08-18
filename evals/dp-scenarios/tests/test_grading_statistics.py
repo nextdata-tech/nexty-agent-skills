@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from dp_scenarios.grading.gates import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import score_run
@@ -76,6 +77,36 @@ def test_declared_repeatability_and_one_shot_have_distinct_surfaces() -> None:
         gate_pass_rates([_run()])
     with pytest.raises(ValueError, match="demonstrated-once"):
         gate_pass_rates([_run(tier="demonstrated-once") for _ in range(3)])
+
+
+def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
+    declared = SimpleNamespace(
+        tier=RepeatabilityTier.DETERMINISTIC,
+        epochs=30,
+        certification_rule="wilson_lower_bound",
+        gates=("G5",),
+        lower_bound=0.90,
+        confidence=0.95,
+    )
+    bound_between_thresholds = repeatability_certificate(
+        [_run(g5=index < 29) for index in range(30)],
+        declared,
+    )
+    assert bound_between_thresholds.rates is not None
+    lower_bound = bound_between_thresholds.rates.rates["G5"].lower_bound
+    assert 0.80 < lower_bound < 0.90
+    assert not bound_between_thresholds.certified
+
+    short_declared = SimpleNamespace(
+        tier=RepeatabilityTier.DETERMINISTIC,
+        epochs=30,
+        certification_rule="wilson_lower_bound",
+        gates=("G5",),
+        lower_bound=0.80,
+        confidence=0.95,
+    )
+    short_batch = repeatability_certificate([_run() for _ in range(29)], short_declared)
+    assert not short_batch.certified
 
 
 def test_mock_source_epoch_plan_and_observed_count_are_pinned() -> None:

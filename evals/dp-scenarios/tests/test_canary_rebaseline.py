@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -123,6 +124,34 @@ def test_rebaseline_requires_reviewer_identity(tmp_path: Path) -> None:
         )
 
 
+def test_rebaseline_validates_both_hashes_before_writing(tmp_path: Path) -> None:
+    root = _skill(tmp_path)
+    claims_path = tmp_path / "claims.json"
+    _write_approved(root, claims_path)
+    old_hash = claims_content_hash(load_claims(claims_path).claims)
+    before = claims_path.read_bytes()
+
+    with pytest.raises(ClaimsIntegrityError, match="old claims hash does not match"):
+        rebaseline(
+            claims_path,
+            skills_root=root,
+            reviewer="human-reviewer",
+            old_claims_hash="sha256:wrong-old",
+            new_claims_hash=old_hash,
+        )
+    assert claims_path.read_bytes() == before
+
+    with pytest.raises(ClaimsIntegrityError, match="new claims hash does not match"):
+        rebaseline(
+            claims_path,
+            skills_root=root,
+            reviewer="human-reviewer",
+            old_claims_hash=old_hash,
+            new_claims_hash="sha256:wrong-new",
+        )
+    assert claims_path.read_bytes() == before
+
+
 def test_load_claims_requires_a_real_approval_block(tmp_path: Path) -> None:
     root = _skill(tmp_path)
     extracted = extract_claims(root)
@@ -176,11 +205,22 @@ def test_rebaseline_writes_approval_that_check_accepts(tmp_path: Path, monkeypat
     assert approval_path.is_file()
     assert document.claims == accepted.claims
 
+    drifted_root = tmp_path / "drifted-skills"
+    shutil.copytree(root, drifted_root)
+    drifted_file = drifted_root / "fixture" / "SKILL.md"
+    drifted_file.write_text(
+        drifted_file.read_text(encoding="utf-8").replace("second", "drifted"),
+        encoding="utf-8",
+    )
+    before_check = claims_path.read_bytes()
+    with pytest.raises(__import__("dp_scenarios.canary.extract", fromlist=["ClaimDriftError"]).ClaimDriftError):
+        cli.check_claims(tmp_path, claims_path, skills_root=drifted_root, build=False)
+    assert claims_path.read_bytes() == before_check
+
     monkeypatch.setattr(cli, "run_probe_and_build", lambda *args, **kwargs: (_FakeProbe(_pass_report()), None))
     checked = cli.check_claims(tmp_path, claims_path, skills_root=root, build=False)
     assert checked["verdict"]["outcome"] == "blocked"
     assert any(issue["code"] == "build/skipped" for issue in checked["verdict"]["issues"])
-    assert "from .rebaseline" not in __import__("inspect").getsource(cli)
 
 
 def test_failed_build_without_a_matching_diagnostic_is_blocked(

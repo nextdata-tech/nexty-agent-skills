@@ -11,6 +11,7 @@ from dp_scenarios.operator import OperatorScript
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.runner.environment import EnvironmentError, PinnedVersions, RunEnvironment
+from dp_scenarios.synthgen.generator import GenerationResult
 
 
 ROOT = Path(__file__).parents[1]
@@ -80,6 +81,42 @@ def test_missing_pinned_value_is_a_hard_error() -> None:
                 "canary_claims_hash": "claims-1",
             }
         )
+
+
+def test_empty_pinned_value_is_a_hard_error() -> None:
+    with pytest.raises(EnvironmentError, match="skill_pack_version"):
+        PinnedVersions.from_mapping(
+            {
+                "skill_pack_version": "",
+                "supervisor_version": "supervisor-1",
+                "runtime_wheel_version": "wheel-1",
+                "mock_api_version": "mock-1",
+                "canary_claims_hash": "claims-1",
+            }
+        )
+
+
+def test_fixture_manifest_without_base_instant_is_a_hard_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = make_scenario()
+
+    def missing_base(_scenario: FixtureScenario, out_dir: str | Path) -> GenerationResult:
+        target = Path(out_dir)
+        return GenerationResult(
+            "zero_row_optional",
+            29,
+            target,
+            target / "data",
+            target / "gold",
+            target / "fixture-manifest.json",
+            {"fixture_hash": "fixture"},
+        )
+
+    monkeypatch.setattr(FixtureScenario, "generate_fixture", missing_base)
+    with pytest.raises(EnvironmentError, match="base_instant"):
+        with RunEnvironment(scenario, pins(), root=tmp_path):
+            pass
 
 
 def test_each_environment_gets_a_fresh_home_and_a_row_zero_manifest(tmp_path: Path) -> None:
