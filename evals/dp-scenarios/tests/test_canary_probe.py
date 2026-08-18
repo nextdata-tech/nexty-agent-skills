@@ -117,6 +117,29 @@ def test_run_pins_provisioned_python_for_direct_supervisor_cli(
     assert captured["env"][probe.PYTHON_ENV] == str(provisioned)
 
 
+def test_run_uses_only_the_session_allowlist_and_probes_the_installed_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "supervisor"
+    executable.write_bytes(b"#!/bin/sh\nversion-a\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("HOME", "/outside/home")
+    monkeypatch.setenv("PROVIDER_SECRET", "must-not-cross")
+    captured: dict[str, object] = {}
+
+    def fake_subprocess_run(*args, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args[0], 0, "", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_subprocess_run)
+    probe._run([str(executable), "check"], closure=tmp_path)
+
+    environment = captured["env"]
+    assert "PROVIDER_SECRET" not in environment
+    assert "HOME" not in environment
+    assert probe._supervisor_digest(executable) == __import__("hashlib").sha256(executable.read_bytes()).hexdigest()
+
+
 def test_json_parser_accepts_wrapped_supervisor_output(tmp_path: Path) -> None:
     report = {"outcome": "pass", "stages": []}
 

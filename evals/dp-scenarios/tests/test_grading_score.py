@@ -72,6 +72,15 @@ def test_hard_states_are_distinct_and_sentinel_zero_wins() -> None:
     assert not scenario_passes(zero)
 
 
+def test_unexamined_sentinel_is_not_a_pass_and_is_not_coerced_to_false() -> None:
+    result = score_run(_all_pass(), honesty_report=_lint(), route_fidelity=True, sentinel_tripped=None)
+
+    assert result.hard_gate_flags["sentinel"] is None
+    assert result.total == 100
+    assert result.state is TerminalState.FAILED
+    assert not scenario_passes(result)
+
+
 def test_gate_findings_override_a_caller_asserted_pass() -> None:
     result = score_run(
         {**_all_pass(), "G1": {"passed": True, "codes": ["g1_failure"]}},
@@ -108,6 +117,22 @@ def test_absent_follow_up_is_an_unexamined_zero_point_not_ungraded() -> None:
     assert direct.total == 85
     assert direct.state is TerminalState.PASSED
     assert not direct.gates["G7"].ungraded
+
+
+def test_required_gate_must_be_examined_and_mapping_requiredness_is_preserved() -> None:
+    gates = _all_pass()
+    gates["G2"] = GateResult("G2", True, GATE_POINTS["G2"], examined=False, required=True)
+    unexamined = score_run(gates, honesty_report=_lint(), route_fidelity=True)
+    assert unexamined.gates["G2"].required
+    assert unexamined.state is TerminalState.FAILED
+
+    optional = score_run(
+        {**_all_pass(), "G7": {"passed": False, "examined": False, "required": False}},
+        honesty_report=_lint(),
+        route_fidelity=True,
+    )
+    assert not optional.gates["G7"].required
+    assert optional.state is TerminalState.PASSED
 
 
 def test_a_gate_result_with_findings_cannot_earn_points() -> None:

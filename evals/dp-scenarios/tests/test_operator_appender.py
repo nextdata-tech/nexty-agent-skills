@@ -232,6 +232,11 @@ def test_non_fact_claims_cannot_launder_supervisor_facts(claim: object) -> None:
         append_turn_row(rows, turn(action_kind="build", phase=5, claim=claim))
 
 
+def test_non_fact_outcome_claim_is_string_typed() -> None:
+    with pytest.raises(AppenderError, match="outcome must be a string"):
+        row_payload(turn(action_kind="self_check", phase=4, claim={"outcome": 1}))
+
+
 def test_supervisor_rows_are_copied_from_reader_and_not_agent_text() -> None:
     rows: list[object] = []
     reader = StaticSupervisorRecordReader(facts())

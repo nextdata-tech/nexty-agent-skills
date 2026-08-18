@@ -12,7 +12,7 @@ from dp_scenarios.canary.verdict import Verdict
 from dp_scenarios.operator import OperatorEngine
 from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
 from dp_scenarios.runner import CanaryResult, PinnedVersions, RecordingSession, ReplayRecording, TierError, TierRunner
-from dp_scenarios.runner.report import human_summary, machine_report, write_report
+from dp_scenarios.runner.report import _NON_REPRODUCIBLE_KEYS, _stable_document, human_summary, machine_report, write_report
 from dp_scenarios.runner.cli import _canary_from_mapping
 
 from test_runner_tier import clean_canary, make_scenario, pins, recording_for, responses_for
@@ -93,3 +93,14 @@ def test_replayed_canary_hash_is_bound_to_the_loaded_claims_file() -> None:
             skills_root=claims_path.parent,
             expected_claims_hash=expected,
         )
+
+
+def test_stable_document_removes_all_non_reproducible_keys_and_keeps_format_version() -> None:
+    value = {key: f"discard-{key}" for key in _NON_REPRODUCIBLE_KEYS}
+    value["stable"] = {"nested": [{key: True for key in _NON_REPRODUCIBLE_KEYS}, {"keep": 1}]}
+
+    filtered = _stable_document(value)
+    assert filtered == {"stable": {"nested": [{}, {"keep": 1}]}}
+
+    result = machine_report(TierRunner([], pins=pins(), canary=clean_canary()).run())
+    assert result["report_format_version"] == 1

@@ -126,6 +126,18 @@ def test_row_count_oracle_is_primary_over_closure_source_csvs(tmp_path: Path) ->
     assert result["actual_counts"] == {"optional_events": 0, "primary": 5}
 
 
+def test_zero_row_scenario_has_no_scoreable_answer_gold_or_query_follow_up(tmp_path: Path) -> None:
+    generated = SCENARIO.generate_fixture(tmp_path / "zero")
+    closure = _hand_built_closure(generated, tmp_path / "closure")
+
+    assert not SCENARIO.has_scoreable_answer_gold
+    result = SCENARIO.follow_up_check(closure, query_rows=[{"unrelated": 1}])
+
+    assert result["passed"]
+    assert "query_verdict" not in result
+    assert "query_gate_passed" not in result
+
+
 def test_generated_fixture_manifest_is_the_named_oracle_fallback(tmp_path: Path) -> None:
     generated = SCENARIO.generate_fixture(tmp_path / "zero")
     closure = _hand_built_closure(generated, tmp_path / "closure")

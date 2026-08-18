@@ -112,6 +112,9 @@ def _coerce_gate(name: str, value: object) -> GateResult:
 def _pass_rule(vector: ScoreVector) -> bool:
     """The one scenario pass rule used by scoring and callers."""
 
+    # Keep the explicit G5/G6 conjuncts below: required_gates_pass is the
+    # examined/required vector check, while these remain named hard-gate
+    # assertions.  The redundancy is intentional and protects both seams.
     required_gates_pass = all(
         result.passed and result.examined
         for result in vector.gates.values()

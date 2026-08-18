@@ -143,6 +143,19 @@ def test_follow_up_diagnosis_distinguishes_naive_from_other_wrong() -> None:
     assert SCENARIO.follow_up_check(closure, other)["query_verdict"] == "other_wrong"
 
 
+def test_follow_up_merges_control_total_findings_with_query_findings() -> None:
+    closure = {"semantic": {"grain": "order", "metrics": {"regional_revenue": {"aggregation": "sum"}}}}
+    rows = [dict(row) for row in SCENARIO.load_gold("answer").rows]
+    rows[0]["regional_revenue"] = float(rows[0]["regional_revenue"]) + 1.0
+
+    result = SCENARIO.follow_up_check(closure, query_rows=rows)
+
+    assert SCENARIO.has_scoreable_answer_gold
+    assert result["query_verdict"] == "other_wrong"
+    assert result["control_total_verdict"] == "violated"
+    assert "control_total_mismatch" in result["findings"]
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

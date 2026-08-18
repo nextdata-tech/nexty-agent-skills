@@ -11,6 +11,7 @@ from dp_scenarios.operator import OperatorScript
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.runner.environment import EnvironmentError, PinnedVersions, RunEnvironment
+from dp_scenarios.canary.probe import SESSION_ENVIRONMENT_ALLOWLIST
 from dp_scenarios.synthgen.generator import GenerationResult
 
 
@@ -133,6 +134,26 @@ def test_each_environment_gets_a_fresh_home_and_a_row_zero_manifest(tmp_path: Pa
         assert second.manifest.trial_index == 1
 
 
+def test_fixture_hash_is_derived_from_the_generated_fixture(tmp_path: Path) -> None:
+    first_scenario = make_scenario()
+    second_scenario = FixtureScenario(
+        first_scenario.package_dir,
+        first_scenario.id,
+        first_scenario.tier,
+        first_scenario.seed + 1,
+        first_scenario.turn_budget,
+        first_scenario.script,
+    )
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    with RunEnvironment(first_scenario, pins(), root=tmp_path / "first") as first:
+        first_hash = first.manifest.fixture_dir_hash
+    with RunEnvironment(second_scenario, pins(), root=tmp_path / "second") as second:
+        second_hash = second.manifest.fixture_dir_hash
+
+    assert first_hash != second_hash
+
+
 def test_mock_control_secret_never_enters_agent_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     scenario = make_scenario()
     monkeypatch.setenv("EVAL_SOURCE_TOKEN", "harness-only")
@@ -153,6 +174,11 @@ def test_agent_environment_is_allowlisted_not_parent_environment_copy(
     assert "PROVIDER_API_KEY" not in values
     assert "UNRELATED_CONTROL_VALUE" not in values
     assert values["HOME"].endswith("/home")
+
+
+def test_canary_environment_allowlist_does_not_admit_home_or_parent_secrets() -> None:
+    assert "HOME" not in SESSION_ENVIRONMENT_ALLOWLIST
+    assert "USERPROFILE" not in SESSION_ENVIRONMENT_ALLOWLIST
 
 
 def test_replay_manifest_mismatch_is_rejected(tmp_path: Path) -> None:

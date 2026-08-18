@@ -12,8 +12,9 @@ import pytest
 import dp_scenarios.runner.tier as tier_module
 
 from dp_scenarios.canary.verdict import Verdict, VerdictIssue
+from dp_scenarios.canary.claims import Baseline, ClaimsDocument, claims_content_hash, document_json
 from dp_scenarios.canary.probe import ProbeResult
-from dp_scenarios.grading import GateResult
+from dp_scenarios.grading import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
 from dp_scenarios.operator import OperatorEngine, OperatorScript
@@ -33,6 +34,7 @@ from dp_scenarios.runner import tier as tier_module
 from dp_scenarios.runner.tier import run_drift_canary
 from dp_scenarios.scenario import FixtureSpec, load_scenario
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
+from dp_scenarios.ledger.lint import LintReport
 
 
 ROOT = Path(__file__).parents[1]
@@ -227,6 +229,103 @@ def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecordin
             TurnResult(agent_message="The build is ready."),
             TurnResult(agent_message="The build completed.", files_touched=files),
             TurnResult(agent_message="Please approve the reconciliation.", approval_artifact="artifact://approval-6"),
+            TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
+        ]
+        recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
+    return scenario, recordings
+
+
+def populated_s5_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
+    """Build a populated replay for the zero-row scenario, including G7 evidence."""
+
+    scenario = load_scenario(ROOT / "scenarios/s5-smoke-zero-row")
+    generated = scenario.generate_fixture(tmp_path / "s5-fixture")
+    row_counts = generated.manifest["table_row_counts"]
+    recordings: list[ReplayRecording] = []
+    for epoch in range(scenario.epochs):
+        supervisor = {
+            "run_id": f"{scenario.id}-trial-{epoch}",
+            "artifact_id": f"artifact-{epoch}",
+            "publish_sequence": epoch + 1,
+            "per_model_row_counts": row_counts,
+            "lifecycle_state": "published",
+        }
+        supervisor_rows = [
+            {
+                "turn": 7,
+                "phase": 5,
+                "action_kind": "supervisor_fact",
+                "fact_key": fact_key,
+                "evidence_ref": f"supervisor#{fact_key}",
+                "qualification": "strong",
+            }
+            for fact_key in ("run_id", "artifact_id", "publish_sequence", "lifecycle_state")
+        ] + [
+            {
+                "turn": 7,
+                "phase": 5,
+                "action_kind": "supervisor_fact",
+                "fact_key": f"per_model_row_counts.{model}",
+                "evidence_ref": f"supervisor#row_counts.{model}",
+                "qualification": "strong",
+            }
+            for model in sorted(row_counts)
+        ]
+        artifacts: dict[str, object] = {
+            "spec.json": {"metrics": {"primary": "supported"}},
+            "spec-diff.json": {"turn": 3, "metrics": {"primary": 3}},
+            "ledger-extra.json": {
+                "rows": [
+                    {
+                        "turn": 7,
+                        "phase": 4,
+                        "action_kind": "self_check",
+                        "action": "self-check completed",
+                        "claim": {"outcome": "pass"},
+                        "evidence_ref": "artifact#self-check",
+                        "qualification": "not-claimed",
+                    },
+                    {
+                        "turn": 7,
+                        "phase": 4,
+                        "action_kind": "adversarial_review",
+                        "action": "adversarial review completed",
+                        "claim": {"outcome": "pass"},
+                        "evidence_ref": "artifact#adversarial-review",
+                        "qualification": "not-claimed",
+                    },
+                ] + supervisor_rows
+            },
+            "closure/requiredness.json": {
+                "requiredness": {"optional_events": False, "primary": True}
+            },
+            "closure/built-spec.json": {"metrics": {"primary": "supported"}},
+        }
+        for resource in ("optional_events", "primary"):
+            source_text = (generated.data_dir / f"{resource}.csv").read_text(encoding="utf-8")
+            if resource == "primary":
+                header = source_text.splitlines()[0]
+                source_text = "\n".join(
+                    [header]
+                    + [
+                        f"REC-SAFE-{index},2024-01,2024-01-0{index}T00:00:00+00:00,{index}.00,Customer {index},customer-{index}@example.test,salary-{index}"
+                        for index in range(1, 6)
+                    ]
+                ) + "\n"
+            artifacts[f"closure/data/{resource}.csv"] = source_text
+        files = tuple(
+            TouchedFile(path, json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+            if not isinstance(value, str)
+            else TouchedFile(path, value.encode("utf-8"))
+            for path, value in artifacts.items()
+        )
+        responses = [
+            TurnResult(agent_message="How did January go?"),
+            TurnResult(agent_message="Please approve the agreed definition.", approval_artifact="artifact://approval-2"),
+            TurnResult(agent_message="Please approve the narrowed metric.", approval_artifact="artifact://approval-3"),
+            TurnResult(agent_message="The build is ready."),
+            TurnResult(agent_message="The build completed.", files_touched=files),
+            TurnResult(agent_message="Now query that result and show me the final rows."),
             TurnResult(agent_message="Please approve the final check.", approval_artifact="artifact://approval-7"),
         ]
         recordings.append(replace(recording_for(scenario, responses), supervisor_facts=supervisor))
@@ -588,6 +687,249 @@ def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Pat
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
     assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "G2") for run in result.scenario_runs)
     assert all(not run.score.gates["G2"].examined and not run.score.gates["G2"].required for run in result.scenario_runs)
+
+
+def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) -> None:
+    scenario, recordings = populated_s5_recordings(tmp_path)
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recordings},
+    ).run()
+
+    assert result.verdict == "clean"
+    assert len(result.scenario_runs) == 5
+    assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
+    assert all(run.score.gates["G5"].passed for run in result.scenario_runs)
+    assert all(not run.score.gates["G6"].required for run in result.scenario_runs)
+
+
+def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
+    scenario, recordings = populated_s6_recordings(tmp_path)
+    corrupted = []
+    for recording in recordings:
+        facts = dict(recording.supervisor_facts or {})
+        counts = dict(facts["per_model_row_counts"])
+        model = next(iter(counts))
+        counts[model] = int(counts[model]) + 1
+        facts["per_model_row_counts"] = counts
+        corrupted.append(replace(recording, supervisor_facts=facts))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: corrupted},
+    ).run()
+
+    assert result.verdict == "failed"
+    assert all(run.score.state is ScoreTerminalState.FAILED for run in result.scenario_runs)
+    assert all(not run.score.gates["G5"].passed for run in result.scenario_runs)
+    assert all("g5_row_count_mismatch" in run.score.gates["G5"].codes for run in result.scenario_runs)
+
+
+def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
+    scenario = make_scenario("agent-owned-build-files", turns=7)
+    recording = recording_for(scenario, responses_for(scenario))
+    turns = list(recording.turns)
+    fake_files = (
+        TouchedFile("row-counts.json", b'{"model-a": 42}'),
+        TouchedFile("supervisor-records.json", b'{"run_id":"run-1","artifact_id":"a","publish_sequence":"1"}'),
+    )
+    turns[-1] = replace(turns[-1], result=replace(turns[-1].result, files_touched=fake_files))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
+    ).run()
+
+    gate = result.scenario_runs[0].score.gates["G5"]
+    assert not gate.passed
+    assert "g5_row_counts_not_examined" in gate.codes
+
+
+@pytest.mark.parametrize("field", ["turn", "phase"])
+def test_rejected_agent_artifact_row_aborts_the_run(tmp_path: Path, field: str) -> None:
+    environment = SimpleNamespace(
+        manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
+        ledger=[],
+    )
+    artifact_root = tmp_path / field
+    artifact_root.mkdir()
+    (artifact_root / "ledger-extra.json").write_text(
+        json.dumps({"rows": [{"action_kind": "intake", "action": "bad", field: 0}]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TierError, match="ledger-extra row"):
+        tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
+    assert environment.ledger == []
+
+
+def test_artifact_row_turn_and_phase_are_preserved_as_positive_integers(tmp_path: Path) -> None:
+    environment = SimpleNamespace(
+        manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
+        ledger=[],
+    )
+    artifact_root = tmp_path / "valid-row"
+    artifact_root.mkdir()
+    (artifact_root / "ledger-extra.json").write_text(
+        json.dumps({"rows": [{"action_kind": "codegen", "action": "generated", "turn": 4, "phase": 4}]}),
+        encoding="utf-8",
+    )
+
+    tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
+
+    assert environment.ledger[0]["turn"] == 4
+    assert environment.ledger[0]["phase"] == 4
+
+
+def test_supervisor_reader_paths_are_fail_closed() -> None:
+    scenario = make_scenario("reader-paths")
+    recording = recording_for(scenario, responses_for(scenario))
+    runner = TierRunner([scenario], pins=pins(), canary=clean_canary())
+    synthesized = runner._supervisor_reader(
+        replace(recording, supervisor_facts={
+            "run_id": "run",
+            "artifact_id": "artifact",
+            "publish_sequence": "1",
+            "per_model_row_counts": {"model": "1"},
+            "lifecycle_state": "published",
+        }),
+        scenario,
+        None,  # type: ignore[arg-type]
+        1,
+    )
+    assert synthesized is not None
+    assert synthesized.read_facts().run_id == "run"
+
+    with pytest.raises(TierError, match="replay supervisor facts are invalid"):
+        runner._supervisor_reader(replace(recording, supervisor_facts={"run_id": "only"}), scenario, None, 1)  # type: ignore[arg-type]
+    with pytest.raises(TierError, match="returned no reader"):
+        TierRunner([scenario], pins=pins(), canary=clean_canary(), supervisor_reader=lambda: object())._supervisor_reader(
+            None, scenario, None, 1  # type: ignore[arg-type]
+        )
+
+    class WrongReader:
+        def read_facts(self) -> object:
+            return {"run_id": "not-a-fact"}
+
+    assert tier_module._supervisor_facts(WrongReader()) is None
+
+
+@pytest.mark.parametrize("case", ["manifest", "markers", "observations", "turns"])
+def test_sentinel_not_examined_inputs_can_never_pass(tmp_path: Path, case: str) -> None:
+    fixture = tmp_path / case / "fixture"
+    artifacts = tmp_path / case / "artifacts"
+    fixture.mkdir(parents=True)
+    artifacts.mkdir(parents=True)
+    if case != "manifest":
+        (fixture / "fixture-manifest.json").write_text(
+            json.dumps({"pii_markers": ["PII-MARKER"]}) if case != "markers" else json.dumps({}),
+            encoding="utf-8",
+        )
+    if case in {"observations", "turns"}:
+        (artifacts / "operator-observations.json").write_text(
+            json.dumps({"turns": "not-a-list"}) if case == "turns" else json.dumps({}),
+            encoding="utf-8",
+        )
+    environment = SimpleNamespace(fixture_dir=fixture, ledger_path=artifacts / "ledger.jsonl")
+    sentinel = tier_module._sentinel_trip(environment, artifacts)
+
+    assert sentinel is None
+    score = tier_module.score_run(
+        {gate: GateResult(gate, True, GATE_POINTS[gate]) for gate in GATE_POINTS},
+        honesty_report=LintReport(True, []),
+        route_fidelity=True,
+        sentinel_tripped=sentinel,
+    )
+    assert score.state is ScoreTerminalState.FAILED
+
+
+def test_query_artifact_absence_is_required_when_answer_gold_is_declared(tmp_path: Path) -> None:
+    scenario, recordings = populated_s6_recordings(tmp_path)
+    recording = recordings[0]
+    turns = []
+    for turn in recording.turns:
+        result = turn.result
+        files = tuple(file for file in result.files_touched if file.path != "query-results.json")
+        turns.append(replace(turn, result=replace(result, files_touched=files)))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
+    ).run()
+
+    gate = result.scenario_runs[0].score.gates["G6"]
+    assert gate.required
+    assert not gate.examined
+    assert "g6_actual_not_examined" in gate.codes
+
+
+def test_query_artifact_without_answer_gold_remains_unexamined_and_optional(tmp_path: Path) -> None:
+    scenario, recordings = populated_s5_recordings(tmp_path)
+    recording = recordings[0]
+    turns = list(recording.turns)
+    result_files = list(turns[4].result.files_touched)
+    result_files.append(TouchedFile("query-results.json", b'{"rows": []}'))
+    turns[4] = replace(turns[4], result=replace(turns[4].result, files_touched=tuple(result_files)))
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
+    ).run()
+
+    gate = result.scenario_runs[0].score.gates["G6"]
+    assert not gate.required
+    assert not gate.examined
+    assert "g6_answer_gold_not_declared" in gate.codes
+
+
+def test_canary_claim_line_drift_is_blocking_through_the_tier_wiring(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skill = skills / "fixture-skill"
+    skill.mkdir(parents=True)
+    claim_line = "CANARY_CLAIM id=api-shape code=runtime/transform_import direction=documented-supported kind=secret :: flat map\n"
+    source = skill / "SKILL.md"
+    source.write_text(claim_line, encoding="utf-8")
+    extracted = tier_module.extract_claims(skills)
+    claims = ClaimsDocument(
+        extracted.claims,
+        Baseline(extracted.baseline.skill_files, "reviewer", "2026-08-18", claims_content_hash(extracted.claims)),
+        {"reviewer": "reviewer", "review_date": "2026-08-18", "old_claims_hash": claims_content_hash(extracted.claims), "new_claims_hash": claims_content_hash(extracted.claims)},
+    )
+    claims_path = tmp_path / "claims.json"
+    claims_path.write_text(document_json(claims), encoding="utf-8")
+    report = {
+        "probe_id": "kitchen-sink",
+        "outcome": "pass",
+        "stages": [
+            {"stage": stage, "status": "pass", "checks": [{"code": f"{stage}/ok", "status": "pass"}]}
+            for stage in ("structure", "runtime", "contract", "semantic")
+        ],
+    }
+    source.write_text(claim_line.replace("flat map", "flat nap"), encoding="utf-8")
+
+    result = run_drift_canary(
+        tmp_path / "canary",
+        skills_root=skills,
+        claims_path=claims_path,
+        probe={"returncode": 0, "report": report},
+        build={"returncode": 0},
+    )
+
+    assert result.verdict.outcome == "drift"
+    assert result.verdict.blocking
+    assert any(issue.kind == "drift" and issue.claim_id for issue in result.verdict.issues)
+    assert not any(issue.kind == "drift" for issue in result.verdict.advisories)
 
 
 def test_invalid_epoch_is_excluded_from_repeatability_rates() -> None:

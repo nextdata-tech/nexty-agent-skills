@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from dp_scenarios.grading.gates import (
+    GateResult,
     gate_build,
     gate_capability,
     gate_construction,
@@ -82,6 +83,39 @@ def test_g1_passes_and_reports_ordering_code() -> None:
         gate_intake(object())
 
 
+def test_g1_empty_or_observationally_unexamined_input_cannot_pass() -> None:
+    empty = gate_intake([])
+    assert not empty.passed
+    assert not empty.examined
+    assert "g1_ledger_not_examined" in empty.codes
+
+    wrapped_row = gate_intake({"rows": {"action_kind": "codegen", "turn": 2}})
+    assert not wrapped_row.examined
+    assert "g1_ledger_not_examined" in wrapped_row.codes
+    assert "g1_codegen_missing" not in wrapped_row.codes
+
+    observed_codegen = gate_intake(
+        {
+            "rows": [{"action_kind": "spec_approved", "turn": 2}],
+            "observations": {
+                "turns": [
+                    {"turn": 3, "files_touched": [], "tool_calls": []},
+                    {"turn": 4, "files_touched": [], "tool_calls": ["build"]},
+                ]
+            },
+        }
+    )
+    assert observed_codegen.passed
+
+    no_observed_codegen = gate_intake(
+        {
+            "rows": [{"action_kind": "spec_approved", "turn": 2}],
+            "observations": {"turns": [{"turn": 4, "files_touched": [], "tool_calls": []}]},
+        }
+    )
+    assert "g1_codegen_missing" in no_observed_codegen.codes
+
+
 def test_g2_and_g3_check_artifact_labels_and_approvals() -> None:
     assert gate_capability({"metrics": {"revenue": "supported"}}, {"metrics": {"revenue": "supported"}}).passed
     assert not gate_capability({"metrics": {"revenue": "Supported"}}, {"metrics": {"revenue": "supported"}}).passed
@@ -126,6 +160,10 @@ def test_g2_and_g3_check_artifact_labels_and_approvals() -> None:
 
     assert not gate_capability({}, {"metrics": {}}).passed
     assert "g2_metrics_not_examined" in gate_capability({}, {"metrics": {}}).codes
+    assert gate_capability({}, {}).required
+    optional = gate_capability({}, {}, required=False)
+    assert not optional.required
+    assert not optional.examined
 
 
 def test_g4_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: Path) -> None:
@@ -149,6 +187,9 @@ def test_g4_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: Path) -> N
     null_outcome = gate_construction(null_outcome_path)
     assert not null_outcome.passed
     assert "g4_self_check_outcome_missing" in null_outcome.codes
+    unexamined = gate_construction([])
+    assert not unexamined.examined
+    assert "g4_ledger_not_examined" in unexamined.codes
 
 
 def test_honesty_gate_delegates_to_real_ledger_lint(tmp_path: Path) -> None:
@@ -261,6 +302,10 @@ def test_g7_is_supplied_by_the_scenario() -> None:
     assert not absent.examined
     assert not absent.ungraded
     assert not gate_follow_up({"status": "not-examined"}).ungraded
+    assert not gate_follow_up({"status": "not-examined", "required": True}).required
+    passed_mapping = gate_follow_up(GateResult("G7", True, 15, required=False))
+    assert passed_mapping.passed
+    assert not passed_mapping.required
     fired_without_measurement = gate_follow_up({"status": "ungraded"})
     assert fired_without_measurement.ungraded
     unknown = gate_follow_up(object())
