@@ -18,7 +18,7 @@ import tempfile
 from typing import Any
 
 from .claims import Baseline, ClaimsDocument, ClaimsIntegrityError, claims_content_hash, document_json, load_claims
-from .extract import DEFAULT_SKILLS_ROOT, extract_claims
+from .extract import extract_claims
 
 
 def _write_text_atomically(path: Path, content: str) -> None:
@@ -41,7 +41,7 @@ def _write_text_atomically(path: Path, content: str) -> None:
 def rebaseline(
     claims_path: Path | str,
     *,
-    skills_root: Path | str = DEFAULT_SKILLS_ROOT,
+    skills_root: Path | str,
     reviewer: str,
     old_claims_hash: str,
     new_claims_hash: str,
@@ -109,7 +109,12 @@ def rebaseline(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Explicitly re-baseline reviewed canary claims")
     parser.add_argument("--claims", required=True, type=Path)
-    parser.add_argument("--skills-root", type=Path, default=DEFAULT_SKILLS_ROOT)
+    parser.add_argument(
+        "--skills-root",
+        type=Path,
+        required=True,
+        help="skill pack installed in the isolated environment under test",
+    )
     parser.add_argument("--reviewer", required=True)
     parser.add_argument("--old-claims-hash", required=True)
     parser.add_argument("--new-claims-hash", required=True)

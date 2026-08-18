@@ -16,7 +16,7 @@ import tempfile
 from typing import Any, Mapping
 
 from .claims import ClaimsIntegrityError, load_claims
-from .extract import DEFAULT_SKILLS_ROOT, ClaimDriftError, extract_claims
+from .extract import ClaimDriftError, extract_claims
 from .probe import ProbeError, run_probe_and_build
 from .verdict import VerdictIssue, aggregate_verdict, build_failure_issues
 
@@ -113,7 +113,7 @@ def check_claims(
     closure: Path | str,
     claims_path: Path | str,
     *,
-    skills_root: Path | str = DEFAULT_SKILLS_ROOT,
+    skills_root: Path | str,
     supervisor: Path | str | None = None,
     data_dir: Path | str | None = None,
     workflow: str = "drift-canary",
@@ -276,7 +276,12 @@ def _parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser("check", help="check claims and run the supervisor canary")
     check.add_argument("--closure", type=Path, default=_default_closure())
     check.add_argument("--claims", type=Path, default=_default_claims())
-    check.add_argument("--skills-root", type=Path, default=DEFAULT_SKILLS_ROOT)
+    check.add_argument(
+        "--skills-root",
+        type=Path,
+        required=True,
+        help="skill pack installed in the isolated environment under test",
+    )
     check.add_argument("--supervisor", type=Path)
     check.add_argument("--data-dir", type=Path)
     check.add_argument("--workflow", default="drift-canary")
@@ -288,7 +293,12 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     extract = subparsers.add_parser("extract", help="extract claims without writing them")
-    extract.add_argument("--skills-root", type=Path, default=DEFAULT_SKILLS_ROOT)
+    extract.add_argument(
+        "--skills-root",
+        type=Path,
+        required=True,
+        help="skill pack installed in the isolated environment under test",
+    )
     return parser
 
 

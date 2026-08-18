@@ -15,7 +15,11 @@ from typing import Iterable, Mapping
 from .claims import Baseline, Claim, ClaimsDocument, sha256_bytes
 
 
-DEFAULT_SKILLS_ROOT = Path.home() / ".claude" / "skills"
+# There is deliberately no default skills root. The pack under test is the one
+# installed in the isolated environment the agent runs in, so the caller must
+# name it. A home-directory default would silently measure a globally installed
+# pack that no agent actually uses, and report drift against text the runtime
+# never saw.
 
 
 @dataclass(frozen=True)
@@ -84,7 +88,7 @@ _UNSUPPORTED_BULLET_RE = re.compile(
 _DIRECTORY_RE = re.compile(r"^\s*└── data/|Same per-model layout as CSV:")
 
 
-def source_skill_files(root: Path | str = DEFAULT_SKILLS_ROOT) -> tuple[Path, ...]:
+def source_skill_files(root: Path | str) -> tuple[Path, ...]:
     """Return installed skill Markdown files, including reference text."""
 
     skills_root = Path(root).expanduser().resolve()
@@ -384,7 +388,7 @@ def _compare(
 
 
 def extract_claims(
-    skills_root: Path | str = DEFAULT_SKILLS_ROOT,
+    skills_root: Path | str,
     *,
     existing: ClaimsDocument | None = None,
     fail_on_drift: bool = True,

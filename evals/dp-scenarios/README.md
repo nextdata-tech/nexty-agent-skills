@@ -47,6 +47,17 @@ run on every change.
 | `scenarios/` | Per-scenario fixtures, operator scripts, gold row-sets |
 | `tests/` | Unit tests for the harness itself |
 
+## Which skill pack is under test
+
+The canary takes `--skills-root` and has no default. The pack it measures is the
+one installed in the isolated environment the agent under test runs in — a build
+pinned in the run manifest alongside the supervisor binary and the runtime wheel.
+
+There is deliberately no fallback to a globally installed pack. A global install
+drifts from the build an agent actually runs, so a default pointing at one would
+measure text no runtime ever saw and report drift the agent could never hit —
+while hiding drift in the pack that matters.
+
 ## Fixture hygiene
 
 Large or hostile fixtures are **generated at harness start** from the seeded
