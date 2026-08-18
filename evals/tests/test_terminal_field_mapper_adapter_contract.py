@@ -17,6 +17,7 @@ import ast
 import importlib.util
 from collections.abc import Iterator
 import json
+import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -360,9 +361,14 @@ def test_generated_closure_negative_fixtures_use_the_shipped_checker() -> None:
 
 
 def test_contract_names_callback_shape_and_sanitized_boundaries() -> None:
-    contract = " ".join(CONTRACT.read_text(encoding="utf-8").split())
+    contract_text = CONTRACT.read_text(encoding="utf-8")
+    contract = " ".join(contract_text.split())
     checker = _load_checker("nex884_contract_checker")
-    assert all(name in contract for name in checker.DOCUMENTED_PROPOSAL_ATTRIBUTES)
+    proposal_table = contract_text.split("### 2.1 `mapper_proposals`", 1)[1].split(
+        "### 2.2", 1
+    )[0]
+    contract_attributes = set(re.findall(r"^\| `([^`]+)` \|", proposal_table, re.MULTILINE))
+    assert contract_attributes | {"evidence"} == checker.DOCUMENTED_PROPOSAL_ATTRIBUTES
     for required in ("`item`", "`spec`", "`wire_schema`", "`violations`"):
         assert required in contract
     for required in ("coroutine", "provider SDK", "transport.Client", "SDK response object",
@@ -409,6 +415,9 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
         "def f():\n    return proposal.value\n"
     )
     assert "undocumented proposal attribute" not in checker.findings(
+        "def f():\n    return proposal.evidence.quote\n"
+    )
+    assert "undocumented proposal attribute" not in checker.findings(
         "def f():\n    return proposal.value_status\n"
     )
     assert "undocumented proposal attribute" in checker.findings(
@@ -431,6 +440,9 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     )
     assert "private mapper import" in checker.findings(
         "import nxd\nnxd.experimental.field_mapper.ledger.append(1)\n"
+    )
+    assert "private mapper import" in checker.findings(
+        "from nxd import experimental\nexperimental.field_mapper.transport.Client()\n"
     )
 
     assert checker.trace_errors("nxd-desktop build_data_product\n") == [

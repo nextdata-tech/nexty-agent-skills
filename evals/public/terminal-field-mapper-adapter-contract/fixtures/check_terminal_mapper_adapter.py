@@ -13,20 +13,30 @@ PUBLIC_MAPPER_MODULE = "nxd.experimental.field_mapper"
 DOCUMENTED_PROPOSAL_ATTRIBUTES = frozenset({
     "target_row_key",
     "field",
-    "typed",
+    "value_string",
+    "value_int",
+    "value_float",
+    "value_bool",
+    "value_timestamp",
+    "value_type",
+    "value_hash",
     "value_status",
-    "mapper_spec_id",
-    "input_snapshot_id",
-    "execution_id",
-    "observation_id",
-    "emission_ordinal",
+    # Nested mapper_evidence rows are the documented object behind the
+    # proposal's evidence relationship; allow access to the relationship only.
     "evidence",
     "error_code",
     "error_detail",
     "attempt_count",
     "attempt_id",
     "needs_review",
+    "evidence_count",
+    "observation_id",
+    "input_snapshot_id",
+    "mapper_spec_id",
+    "execution_id",
+    "emission_ordinal",
 })
+
 
 def _attribute_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
@@ -72,6 +82,10 @@ def findings(source: str) -> list[str]:
                 for alias in node.names:
                     if alias.name == "field_mapper":
                         module_aliases.add(alias.asname or alias.name)
+            elif module == "nxd":
+                for alias in node.names:
+                    if alias.name == "experimental":
+                        module_aliases.add(f"{alias.asname or alias.name}.field_mapper")
         elif isinstance(node, ast.Call):
             dotted = _attribute_name(node.func)
             if dotted in {"importlib.import_module", "import_module"}:
@@ -107,7 +121,7 @@ def findings(source: str) -> list[str]:
                 make_call_calls.append(node)
         elif isinstance(node, ast.Attribute):
             target = _attribute_name(node.value)
-            if target and target.split(".", 1)[0] == "proposal" and node.attr not in DOCUMENTED_PROPOSAL_ATTRIBUTES:
+            if target == "proposal" and node.attr not in DOCUMENTED_PROPOSAL_ATTRIBUTES:
                 proposal_attribute_access = True
             if target and any(target == alias or target.startswith(f"{alias}.") for alias in module_aliases):
                 if node.attr in {"transport", "ledger"}:
