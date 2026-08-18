@@ -213,7 +213,8 @@ Only 11 of 35 public scenarios use this today
 `coauthor-supplied-rubric`, `derive-models-from-questions`,
 `dp-static-artifact-lifecycle`, `desktop-custom-contracts`,
 `multi-source-labeled-roots`, `multi-source-labeled-roots-supervisor`,
-`treasury-yield-curve`, `worldbank-live`). It is the strongest signal available — prefer it
+`treasury-yield-curve`, `worldbank-live`,
+`terminal-field-mapper-adapter-contract`). It is the strongest signal available — prefer it
 whenever a claim can be checked by running something.
 
 ### 2. Workspace-file quoting (mechanical facts, judged)

@@ -32,7 +32,8 @@ CONTRACT = REPO_ROOT / "src/nxd-generate-data-product/mapper/CONTRACT.md"
 E2E_RUNNER = REPO_ROOT / "src/nxd-generate-data-product/mapper/examples/e2e/run_e2e.py"
 TERMINAL_SCENARIO = REPO_ROOT / "evals/public/terminal-field-mapper-adapter-contract"
 SAMPLE = "samples/01-row-scores"
-SYNTHETIC_SECRET = "nex884-opaque-synthetic-secret-8f0d"
+SCENARIO_CHECKS = json.loads((TERMINAL_SCENARIO / "checks.json").read_text(encoding="utf-8"))
+SYNTHETIC_SECRET = SCENARIO_CHECKS["deterministic_check"]["redaction_markers"][0]
 ARBITRARY_SECRET = "opaque-credential-value-7f8b92"
 
 
@@ -329,10 +330,17 @@ def test_generated_closure_negative_fixtures_use_the_shipped_checker() -> None:
             "from anthropic.types import Message\n\ndef adapter(**kwargs):\n    return Message\n",
             {"provider SDK import", "raw provider response return", "public make_call call missing", "map_inputs call missing"},
         ),
+        "multiple-returns": (
+            "def f(flag):\n    if flag:\n        return response\n    return result\n",
+            {"raw provider response return", "public make_call call missing", "map_inputs call missing"},
+        ),
+        "dynamic-sdk": (
+            "import importlib\nimportlib.import_module(\"anthropic\")\n",
+            {"provider SDK import", "public make_call call missing", "map_inputs call missing"},
+        ),
     }
     for _name, (source, expected) in fixtures.items():
         assert set(checker.findings(source)) == expected
-        assert SYNTHETIC_SECRET not in "\n".join(checker.findings(source))
 
     aliased_public = (
         "import nxd.experimental.field_mapper as fm\n"
@@ -341,6 +349,13 @@ def test_generated_closure_negative_fixtures_use_the_shipped_checker() -> None:
         "    return fm.map_inputs(inputs, spec=spec, grant=grant, call=call)\n"
     )
     assert checker.findings(aliased_public) == []
+    from_submodule = (
+        "from nxd.experimental import field_mapper as fm\n"
+        "def run():\n"
+        "    call = fm.make_call(spec=spec, grant=grant, allow_env=False)\n"
+        "    return fm.map_inputs(inputs, spec=spec, grant=grant, call=call)\n"
+    )
+    assert checker.findings(from_submodule) == []
 
 
 def test_contract_names_callback_shape_and_sanitized_boundaries() -> None:
@@ -352,7 +367,7 @@ def test_contract_names_callback_shape_and_sanitized_boundaries() -> None:
         assert required in contract
 
 
-def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists(tmp_path: Path) -> None:
+def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> None:
     """Register the E2E in the existing terminal evaluator, not as pytest-only.
 
     The marker explains the missing runtime capability precisely.  The checker
@@ -360,7 +375,7 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists(tmp_p
     nxd-desktop MCP build/inspect trace, so enabling the scenario without the
     missing stdio harness cannot accidentally manufacture a passing result.
     """
-    checks = json.loads((TERMINAL_SCENARIO / "checks.json").read_text(encoding="utf-8"))
+    checks = SCENARIO_CHECKS
     assert checks["wants_trace"] is True
     assert checks["deterministic_check"]["wants_trace"] is True
     assert checks["deterministic_check"]["trace_source"] == "runner_mcp"

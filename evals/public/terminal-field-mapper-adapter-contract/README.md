@@ -18,8 +18,9 @@ The present runner has two adjacent but insufficient paths:
 To enable this scenario, add a runner capability that, for each cell:
 
 1. starts `nxd-desktop` as a stdio MCP child with isolated data/run directories;
-2. injects the recorded mapper provider and one synthetic secret without adding
-   either to the agent workspace or environment;
+2. injects the recorded mapper provider and the fixed synthetic canary declared
+   in `checks.json` without adding either to the agent workspace or environment;
+   the canary is test data, not a credential;
 3. exposes the public MCP tools to the terminal agent and records redacted
    JSONL events with `source: runner`, `protocol: mcp`, method, and tool fields;
    the synthetic secret is supplied through a runner-owned private file; and

@@ -1127,12 +1127,14 @@ def _private_text_file(
     """Create a runner-owned 0600 text file and its private temp directory."""
     holder = tempfile.TemporaryDirectory(prefix=directory_prefix)
     path = Path(holder.name) / filename
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+    def opener(file_path: str, flags: int) -> int:
+        return os.open(file_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with open(path, "w", encoding="utf-8", opener=opener) as handle:
             handle.write(text)
     except BaseException:
-        os.close(fd)
         holder.cleanup()
         raise
     return holder, path
@@ -1187,7 +1189,13 @@ def deterministic_check_fact(
         # A checker may need to prove redaction of a runner-supplied synthetic
         # secret. Pass it through a runner-owned 0600 file, never argv: argv is
         # visible to other processes and may be echoed into CI diagnostics.
-        markers = [str(marker) for marker in cfg.get("redaction_markers", []) if str(marker)]
+        raw_markers = cfg.get("redaction_markers", [])
+        if not isinstance(raw_markers, list):
+            return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+                {"passed": False, "infrastructure_error": "redaction_markers must be a list"},
+                sort_keys=True,
+            )
+        markers = [str(marker) for marker in raw_markers if str(marker)]
         if markers:
             marker_holder, marker_file = _private_text_file(
                 "nxd-eval-markers-", "markers.txt", "\n".join(markers) + "\n"

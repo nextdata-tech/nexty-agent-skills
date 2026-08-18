@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 from pathlib import Path
 
 
@@ -36,6 +37,8 @@ def findings(source: str) -> list[str]:
                 imported.add(alias.name)
                 if alias.name == PUBLIC_MAPPER_MODULE:
                     module_aliases.add(alias.asname or alias.name)
+                elif alias.name == "nxd.experimental":
+                    module_aliases.add(f"{alias.asname or alias.name}.field_mapper")
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             imported.add(module)
@@ -47,8 +50,17 @@ def findings(source: str) -> list[str]:
                         adapter_names.add(local)
                     elif alias.name == "map_inputs":
                         map_names.add(local)
+            elif module == "nxd.experimental":
+                for alias in node.names:
+                    if alias.name == "field_mapper":
+                        module_aliases.add(alias.asname or alias.name)
         elif isinstance(node, ast.Call):
             dotted = _attribute_name(node.func)
+            if dotted == "importlib.import_module" and node.args:
+                module_arg = node.args[0]
+                if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
+                    if module_arg.value == "anthropic" or module_arg.value.startswith("anthropic."):
+                        imported.add(module_arg.value)
             if (
                 isinstance(node.func, ast.Name) and node.func.id in map_names
             ) or dotted in {f"{alias}.map_inputs" for alias in module_aliases}:
@@ -58,7 +70,7 @@ def findings(source: str) -> list[str]:
             ) or dotted in {f"{alias}.make_call" for alias in module_aliases}:
                 make_call_calls.append(node)
         elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name):
-            raw_return = node.value.id.lower() in {
+            raw_return = raw_return or node.value.id.lower() in {
                 "message", "response", "resp", "raw_response", "sdk_response"
             }
 
@@ -79,13 +91,30 @@ def findings(source: str) -> list[str]:
 
 
 def artifact_contains_secret(root: Path, markers: tuple[str, ...]) -> bool:
-    """Scan landed text artifacts without echoing the matching content."""
-    for path in root.rglob("*"):
-        if path.is_symlink() or not path.is_file():
-            continue
-        text = path.read_text(encoding="utf-8", errors="ignore").lower()
-        if any(marker.lower() in text for marker in markers):
-            return True
+    """Scan landed artifacts in bounded chunks without following symlinks."""
+    needles = tuple(marker.lower().encode("utf-8") for marker in markers)
+    if not needles:
+        return False
+    overlap = max(len(needle) for needle in needles) - 1
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [
+            name for name in dirnames if not (Path(directory) / name).is_symlink()
+        ]
+        for filename in filenames:
+            path = Path(directory) / filename
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                with path.open("rb") as handle:
+                    carry = b""
+                    while chunk := handle.read(64 * 1024):
+                        data = carry + chunk
+                        if any(needle in data for needle in needles):
+                            return True
+                        carry = data[-overlap:] if overlap else b""
+            except OSError:
+                # An unreadable artifact cannot be cleared as secret-free.
+                return True
     return False
 
 
