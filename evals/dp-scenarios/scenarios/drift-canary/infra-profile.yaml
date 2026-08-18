@@ -1,0 +1,33 @@
+apiVersion: infra.nextdata.com/v1
+kind: Profile
+metadata:
+  name: desktop-local
+spec:
+  services:
+    - name: duckdb
+      driver: nxd:local/duckdb/storage:0.1.0
+      attributes: []
+    - name: python-compute
+      driver: nxd:local/python/compute:0.1.0
+      attributes: []
+    - name: csv-source
+      driver: nxd:local/file/storage:0.1.0
+      attributes: []
+    - name: file-source
+      driver: nxd:generic-secrets:1.0.0
+      attributes: []
+    - name: db-source
+      driver: nxd:generic-secrets:1.0.0
+      attributes:
+        - key: host
+          value: catalog.example.invalid
+          public: true
+        - key: database
+          value: canary
+          public: true
+    - name: api-source
+      driver: nxd:generic-secrets:1.0.0
+      attributes:
+        - key: base_url
+          value: https://api.example.invalid/v1
+          public: true

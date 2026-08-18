@@ -1,0 +1,7 @@
+{
+  "claims_file": "evals/dp-scenarios/scenarios/drift-canary/claims.json",
+  "reviewer": "canary-review",
+  "review_date": "2026-08-18",
+  "old_claims_hash": "sha256:06f594aaa023f4b28c2b48b2736be6b53f81ebd39b58e1e10da3f34c1d380afd",
+  "new_claims_hash": "sha256:6fb136ee752acd75b5546156a9974554c5c121cd5b7097309dc014c20810a27a"
+}

@@ -1,0 +1,23 @@
+{
+  "probes": [
+    {"probe_id": "kitchen-sink", "closure": ".", "build": true},
+    {
+      "probe_id": "unsupported-c01ac5c27a958249",
+      "closure": "negative-probes/unsupported-c01ac5c27a958249",
+      "build": false,
+      "negative_control": {"remove": ".semantic_tools("}
+    },
+    {
+      "probe_id": "unsupported-8231b08d4e9b9f2f",
+      "closure": "negative-probes/unsupported-8231b08d4e9b9f2f",
+      "build": false,
+      "negative_control": {"remove": ".semantic_tools("}
+    },
+    {
+      "probe_id": "unsupported-8e881fd02fa38db5",
+      "closure": "negative-probes/unsupported-8e881fd02fa38db5",
+      "build": false,
+      "negative_control": {"remove": ".semantic_tools("}
+    }
+  ]
+}
