@@ -406,11 +406,23 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     assert "undocumented proposal attribute" in checker.findings(
         "def f():\n    return proposal.value\n"
     )
+    assert "undocumented proposal attribute" not in checker.findings(
+        "def f():\n    return proposal.value_status\n"
+    )
     assert "undocumented proposal attribute" in checker.findings(
         "def f():\n    return getattr(proposal, name)\n"
     )
     assert "private mapper import" in checker.findings(
         "import nxd.experimental.field_mapper as fm\ngetattr(fm, name)\n"
+    )
+    assert "private mapper import" not in checker.findings(
+        "getattr(row, column_name)\n"
+    )
+    assert "private mapper import" in checker.findings(
+        'import nxd.experimental.field_mapper as fm\ngetattr(fm, "transport")\n'
+    )
+    assert "private mapper import" in checker.findings(
+        'importlib.import_module("nxd.experimental.field_mapper.transport")\n'
     )
 
     assert checker.trace_errors("nxd-desktop build_data_product\n") == [

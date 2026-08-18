@@ -10,6 +10,21 @@ from pathlib import Path
 
 
 PUBLIC_MAPPER_MODULE = "nxd.experimental.field_mapper"
+DOCUMENTED_PROPOSAL_ATTRIBUTES = frozenset({
+    "target_row_key",
+    "field",
+    "value_status",
+    "error_code",
+    "value_string",
+    "value_int",
+    "value_float",
+    "value_bool",
+    "value_date",
+    "value_datetime",
+    "value_json",
+    "evidence",
+    "evidence_statuses",
+})
 
 
 def _attribute_name(node: ast.AST) -> str | None:
@@ -60,23 +75,26 @@ def findings(source: str) -> list[str]:
             if dotted in {"importlib.import_module", "import_module"}:
                 if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
                     imported.add("<dynamic import>")
-                elif node.args[0].value == "anthropic" or node.args[0].value.startswith("anthropic."):
+                else:
                     imported.add(node.args[0].value)
             if dotted == "__import__":
                 if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
                     imported.add("<dynamic import>")
-                elif node.args[0].value == "anthropic" or node.args[0].value.startswith("anthropic."):
+                else:
                     imported.add(node.args[0].value)
             if dotted == "getattr" and node.args:
                 target = _attribute_name(node.args[0])
-                if target and target.split(".", 1)[0] == "proposal":
-                    proposal_attribute_access = True
-            if dotted == "getattr" and len(node.args) > 1:
-                attribute = node.args[1]
-                if isinstance(attribute, ast.Constant) and attribute.value in {"transport", "ledger"}:
-                    imported.add(f"field_mapper.{attribute.value}")
-                elif not isinstance(attribute, ast.Constant):
-                    imported.add("field_mapper.<dynamic private access>")
+                target_root = target.split(".", 1)[0] if target else ""
+                if target and target_root == "proposal":
+                    attribute = node.args[1] if len(node.args) > 1 else None
+                    if not isinstance(attribute, ast.Constant) or attribute.value not in DOCUMENTED_PROPOSAL_ATTRIBUTES:
+                        proposal_attribute_access = True
+                if target and (target in module_aliases or target_root in module_aliases) and len(node.args) > 1:
+                    attribute = node.args[1]
+                    if isinstance(attribute, ast.Constant) and attribute.value in {"transport", "ledger"}:
+                        imported.add(f"field_mapper.{attribute.value}")
+                    elif not isinstance(attribute, ast.Constant):
+                        imported.add("field_mapper.<dynamic private access>")
             if (
                 isinstance(node.func, ast.Name) and node.func.id in map_names
             ) or dotted in {f"{alias}.map_inputs" for alias in module_aliases}:
@@ -87,7 +105,7 @@ def findings(source: str) -> list[str]:
                 make_call_calls.append(node)
         elif isinstance(node, ast.Attribute):
             target = _attribute_name(node.value)
-            if target and target.split(".", 1)[0] == "proposal":
+            if target and target.split(".", 1)[0] == "proposal" and node.attr not in DOCUMENTED_PROPOSAL_ATTRIBUTES:
                 proposal_attribute_access = True
         elif isinstance(node, ast.Return):
             value = node.value
