@@ -283,6 +283,7 @@ Needs a live desktop supervisor that CI cannot provision.
 export EVAL_DESKTOP_SUPERVISOR_DIR=/path/to/supervisor
 export EVAL_DESKTOP_PYTHON=/path/to/python
 export NXD_DESKTOP_REPO_ROOT=/path/to/desktop/repo
+export EVAL_NXD_REPO_ROOT=/path/to/nxd/repo
 ```
 
 These scenarios also narrow the agent's tool surface (they withhold `WebFetch`
@@ -317,6 +318,7 @@ Set by you:
 | `EVAL_DESKTOP_SUPERVISOR_DIR` | 3 | desktop supervisor location |
 | `EVAL_DESKTOP_PYTHON` | 3 | interpreter for the supervisor |
 | `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by job-loop fixtures |
+| `EVAL_NXD_REPO_ROOT` | 3 | NXD repo root used to build the isolated stdio evaluation profile |
 | `NXD_EVAL_JUDGE_RETEST=1` | 1 | opt-in judge test-retest pass |
 | `NXD_CA_BUNDLE` | 1/2 | per-cluster TLS trust store; unset = system store |
 | `NXD_SKILL_PYTHON` | — | interpreter for skill-invoked subprocesses |
