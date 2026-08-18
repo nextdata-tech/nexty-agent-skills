@@ -1,0 +1,35 @@
+[project]
+name = "dp-scenarios"
+version = "0.1.0"
+description = "Multi-turn data-product scenario suite for the NXD lean-desktop build path — harness, fixtures, evidence ledger, and mechanical grading for the T0 tier."
+requires-python = ">=3.11"
+dependencies = [
+    "nxd-eval",              # EX scorer, Wilson/McNemar statistics, report emitters
+    "pyyaml>=6.0",           # scenario / route-table / persona definitions
+    "duckdb>=1.0",           # gold-row-set reconciliation against landed data
+]
+
+[project.optional-dependencies]
+# Provider SDKs are the responsibility of nxd_eval's own extras; nothing in the
+# T0 tier calls a model directly.
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-timeout>=2.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dp_scenarios"]
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+nxd-eval = { path = "../nxd_eval", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+timeout = 300

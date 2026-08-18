@@ -1,0 +1,16 @@
+# Agent briefs and codex logs: working notes, not part of the suite.
+.briefs/
+
+# Python / uv build and cache artifacts.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Generated at harness start from a pinned seed, never committed: large or
+# hostile fixture data is reproducible from synthgen, so only small
+# hand-inspectable goldens belong in git.
+.nexty-test-data/
+scenarios/.nexty-test-data/
+scenarios/.drift-canary-*/
