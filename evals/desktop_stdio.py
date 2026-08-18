@@ -33,15 +33,34 @@ _SECRET_KEY = re.compile(
     re.IGNORECASE,
 )
 _BEARER = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
-_URL_AUTH = re.compile(r"(https?://)([^/@\s:]+):([^/@\s]+)@")
+_URL_AUTH = re.compile(
+    r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@", re.IGNORECASE
+)
 _QUERY_SECRET = re.compile(
     r"(?i)([?&](?:token|api[_-]?key|secret|password|authorization)=)[^&#\s]+"
 )
 _ASSIGN_SECRET = re.compile(
-    r"(?i)(\b(?:token|api[_-]?key|secret|password|authorization)"
-    r"\s*[:=]\s*)[^\s,;]+"
+    r"(?i)((?<![A-Za-z0-9_])(?:token|api[_-]?key|secret|password|"
+    r"authorization|cookie|credential|bearer|private[_-]?key|grant|"
+    r"passwd|access[_-]?key|aws[_-]?secret[_-]?access[_-]?key|"
+    r"pg\w*password)\s*(?:[:=]|\bis\b)\s*)[^\s,;]+"
 )
 PROXY_MODULE = Path(__file__).resolve()
+_TRACE_LOCK = threading.Lock()
+
+
+def _write_private_text(path: Path, text: str) -> None:
+    """Atomically create/truncate a runner-owned file with mode 0600."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+    finally:
+        if fd != -1:
+            os.close(fd)
 
 
 def redact_json_rpc(value: Any, *, key: str = "") -> Any:
@@ -119,7 +138,11 @@ class DesktopStdioSession:
         self.server_command = tuple(command)
         self.server_env = {str(k): str(v) for k, v in (server_env or {}).items()}
         self.server_name = server_name
-        self.allowed_tools = tuple(allowed_tools or ("mcp__nxd-desktop__*",))
+        self.allowed_tools = (
+            tuple(allowed_tools)
+            if allowed_tools is not None
+            else (f"mcp__{server_name}__*",)
+        )
         self.startup_timeout_s = startup_timeout_s
         self.shutdown_timeout_s = shutdown_timeout_s
         self._provided_root = Path(root) if root is not None else None
@@ -169,7 +192,9 @@ class DesktopStdioSession:
                 self._root = Path(self._temp.name)
             else:
                 self._root = self._provided_root
-                self._root.mkdir(parents=True, exist_ok=True)
+                self._root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with contextlib.suppress(OSError):
+                self.root.chmod(0o700)
             spec = {
                 "command": list(self.server_command),
                 "env": self.server_env,
@@ -178,9 +203,7 @@ class DesktopStdioSession:
                 "shutdown_timeout_s": self.shutdown_timeout_s,
             }
             spec_path = self.root / "server-spec.json"
-            spec_path.write_text(json.dumps(spec, sort_keys=True), encoding="utf-8")
-            with contextlib.suppress(OSError):
-                spec_path.chmod(0o600)
+            _write_private_text(spec_path, json.dumps(spec, sort_keys=True))
             config = {
                 "mcpServers": {
                     self.server_name: {
@@ -195,12 +218,11 @@ class DesktopStdioSession:
                     }
                 }
             }
-            self.config_path.write_text(
-                json.dumps(config, indent=2, sort_keys=True), encoding="utf-8"
+            _write_private_text(
+                self.config_path, json.dumps(config, indent=2, sort_keys=True)
             )
-            with contextlib.suppress(OSError):
-                self.config_path.chmod(0o600)
-            self.trace_path.write_text("", encoding="utf-8")
+            _write_private_text(self.trace_path, "")
+            _write_private_text(self.server_result_path, "{}")
             self.setup_result = StdioOutcome("passed")
             self._started = True
             return self
@@ -279,9 +301,25 @@ class DesktopStdioSession:
                     self.server_result_path.read_text(encoding="utf-8")
                 )
                 pid = int(result.get("proxy_pid", 0))
+                group_killed = False
                 if pid > 0 and pid != os.getpid():
-                    with contextlib.suppress(OSError):
+                    try:
                         os.killpg(pid, signal.SIGTERM)
+                        group_killed = True
+                    except OSError:
+                        pass
+                child_pid = int(result.get("child_pid", 0))
+                if (
+                    result.get("status") == "started"
+                    and not group_killed
+                    and child_pid > 0
+                    and child_pid != os.getpid()
+                ):
+                    # The proxy normally forwards SIGTERM to its dedicated
+                    # child group. Keep the recorded PID as a fallback for a
+                    # proxy that was killed before its signal handler ran.
+                    with contextlib.suppress(OSError):
+                        os.kill(child_pid, signal.SIGTERM)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 pass
         if self._temp is not None:
@@ -310,10 +348,7 @@ def _write_proxy_result(path: Path, **payload: Any) -> None:
         "finished_at", _dt.datetime.now(_dt.timezone.utc).isoformat()
     )
     with contextlib.suppress(OSError):
-        path.write_text(
-            json.dumps(redact_json_rpc(payload), sort_keys=True),
-            encoding="utf-8",
-        )
+        _write_private_text(path, json.dumps(redact_json_rpc(payload), sort_keys=True))
 
 
 def _trace_line(path: Path, direction: str, line: bytes) -> None:
@@ -327,10 +362,11 @@ def _trace_line(path: Path, direction: str, line: bytes) -> None:
         "direction": direction,
         "message": redact_json_rpc(value),
     }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(
-            json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n"
-        )
+    with _TRACE_LOCK:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n"
+            )
 
 
 def run_stdio_proxy(spec_path: Path) -> int:
@@ -360,14 +396,27 @@ def run_stdio_proxy(spec_path: Path) -> int:
             env=env,
             start_new_session=True,
         )
+        child_pid = child.pid
+
+        def terminate_child(signum: int, _frame: Any) -> None:
+            # The proxy and server intentionally have separate sessions. The
+            # proxy owns the server group and forwards shutdown before exiting.
+            if child.poll() is None:
+                with contextlib.suppress(OSError):
+                    os.killpg(child_pid, signum)
+            raise SystemExit(128 + signum)
+
+        signal.signal(signal.SIGTERM, terminate_child)
+        signal.signal(signal.SIGINT, terminate_child)
         _write_proxy_result(
-            result_path, status="started", proxy_pid=os.getpid(), child_pid=child.pid
+            result_path, status="started", proxy_pid=os.getpid(), child_pid=child_pid
         )
 
         def forward_responses() -> None:
             assert child is not None and child.stdout is not None
             for line in child.stdout:
-                _trace_line(trace_path, "response", line)
+                with contextlib.suppress(OSError):
+                    _trace_line(trace_path, "response", line)
                 try:
                     sys.stdout.buffer.write(line)
                     sys.stdout.buffer.flush()
@@ -419,11 +468,16 @@ def run_stdio_proxy(spec_path: Path) -> int:
             error=error,
             exit_code=code,
             proxy_pid=os.getpid(),
+            child_pid=child_pid,
         )
         return 0 if status == "passed" else 1
     except (OSError, ValueError) as exc:
         _write_proxy_result(
-            result_path, status="failed", error=str(exc), proxy_pid=os.getpid()
+            result_path,
+            status="failed",
+            error=str(exc),
+            proxy_pid=os.getpid(),
+            child_pid=child.pid if child is not None else None,
         )
         if child is not None:
             DesktopStdioSession._kill_process(child)

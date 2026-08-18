@@ -458,7 +458,8 @@ def isolated_mcp_allowed_tools(
     an agent from reaching an unrelated configured MCP namespace even if a
     scenario broadens its normal shell/file tools.
     """
-    values = [item.strip() for item in (allowed_tools or "").split(",") if item.strip()]
+    source = allowed_tools or CLAUDE_AGENT_ALLOWED_TOOLS
+    values = [item.strip() for item in source.split(",") if item.strip()]
     prefix = f"mcp__{server_name}__"
     values = [item for item in values if not item.startswith("mcp__")]
     values.append(prefix + "*")

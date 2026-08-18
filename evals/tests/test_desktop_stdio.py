@@ -8,8 +8,12 @@ without a Desktop binary, an MCP SDK, or provider credentials.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -44,6 +48,12 @@ print(json.dumps({"type": "result", "result": "done", "is_error": False,
                   "num_turns": 1, "usage": {}}), flush=True)
 """
 
+HOLDING_SERVER = r"""
+import os, pathlib, time
+pathlib.Path(os.environ["PID_FILE"]).write_text(str(os.getpid()))
+time.sleep(60)
+"""
+
 
 def _script(path: Path, body: str) -> Path:
     path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
@@ -68,6 +78,14 @@ def test_session_writes_private_strict_config_and_mcp_allowlist(tmp_path):
         assert session.allowed_tools_csv == "mcp__nxd-desktop__*"
         assert session.setup_result.status == "passed"
         assert "secret" not in session.config_path.read_text()
+        assert stat.S_IMODE(session.root.stat().st_mode) == 0o700
+        for private_file in (
+            session.config_path,
+            session.root / "server-spec.json",
+            session.trace_path,
+            session.server_result_path,
+        ):
+            assert stat.S_IMODE(private_file.stat().st_mode) == 0o600
     finally:
         session.cleanup()
     assert not (tmp_path / "session" / "mcp-config.json").exists()
@@ -159,6 +177,9 @@ def test_isolated_mcp_allowlist_drops_other_namespaces():
     assert eb.isolated_mcp_allowed_tools(
         "Bash,mcp__nxd-desktop__build_data_product,mcp__other__secret"
     ) == "Bash,mcp__nxd-desktop__*"
+    default = eb.isolated_mcp_allowed_tools(None)
+    assert "Skill" in default.split(",")
+    assert "mcp__nxd-desktop__*" in default.split(",")
 
 
 def test_session_cleanup_kills_attached_process_group(tmp_path):
@@ -174,14 +195,76 @@ def test_session_cleanup_kills_attached_process_group(tmp_path):
     assert child.poll() is not None
 
 
+def test_session_cleanup_kills_proxy_server_child(tmp_path):
+    child = _script(tmp_path / "holding-server.py", HOLDING_SERVER)
+    pid_file = tmp_path / "server.pid"
+    session = ds.DesktopStdioSession(
+        [sys.executable, str(child)],
+        server_env={"PID_FILE": str(pid_file)},
+        root=tmp_path / "session",
+    ).start()
+    proxy = subprocess.Popen(
+        [
+            sys.executable,
+            str(ds.PROXY_MODULE),
+            "--proxy",
+            "--spec",
+            str(session.root / "server-spec.json"),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert pid_file.exists(), "proxy did not start the server child"
+        server_pid = int(pid_file.read_text())
+        session.cleanup()
+        proxy.wait(timeout=5)
+        with pytest.raises(ProcessLookupError):
+            os.kill(server_pid, 0)
+    finally:
+        if proxy.poll() is None:
+            proxy.kill()
+            proxy.wait()
+        session.cleanup()
+
+
 @pytest.mark.parametrize(
     "payload",
     [
         {"password": "hunter2", "nested": {"access_token": "abc"}},
         {"text": "Bearer abc.def", "url": "https://u:p@example.test/?token=xyz"},
+        {"dsn": "postgres://svc:S3cr3tPw@db.internal:5432/prod"},
+        {"text": "PGPASSWORD=hunter2 psql --host db"},
+        {"text": "aws_secret_access_key is AKIAIOSFODNN7EXAMPLE"},
     ],
 )
 def test_redaction_is_recursive_and_fail_closed(payload):
     value = json.dumps(ds.redact_json_rpc(payload))
     assert all(secret not in value for secret in ("hunter2", "abc", "xyz", "u:p"))
+    assert all(secret not in value for secret in ("S3cr3tPw", "AKIAIOSFODNN7EXAMPLE"))
     assert ds.REDACTED in value
+
+
+def test_trace_writes_remain_parseable_under_concurrency(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    payload = json.dumps({"text": "x" * 20_000}).encode()
+
+    def write_records(direction: str) -> None:
+        for _ in range(20):
+            ds._trace_line(path, direction, payload)
+
+    threads = [
+        threading.Thread(target=write_records, args=(direction,))
+        for direction in ("request", "response")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(records) == 40
