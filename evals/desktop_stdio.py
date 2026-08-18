@@ -361,6 +361,8 @@ def _trace_line(path: Path, direction: str, line: bytes) -> None:
     except (UnicodeDecodeError, json.JSONDecodeError):
         value = {"parse_error": True}
     record = {
+        "source": "runner",
+        "protocol": "mcp",
         "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "direction": direction,
         "message": redact_json_rpc(value),

@@ -11,15 +11,7 @@ record: null
 
 ## Notes
 
-This remains `NO_EVAL`: the change now includes the runner-owned stdio MCP
-harness and a public scenario, but a valid before/after agent arm was not
-obtained in this environment. The local run reached the isolated MCP proxy
-and recorded setup/JSON-RPC activity, then stopped at the Claude CLI
-authentication boundary (`Not logged in`). A direct supervisor probe also
-reached initialize/tools-list but could not bind the loopback approval surface
-inside the restricted test sandbox. Neither condition is a mapper verdict, so
-no benchmark number is recorded. Re-run with an authenticated Claude CLI and
-loopback permission before claiming NEX-884 complete.
+The entry remains `NO_EVAL` for benchmark purposes because no pre-change arm exists: this scenario was introduced by this change, so a before/after comparison would manufacture a baseline. The first authenticated live acceptance arm now passes with the runner-owned stdio MCP path: Claude Code used the isolated server, passed self-check, built through synthetic approval, inspected the terminal run, and the deterministic checker passed both public-adapter-only and redacted-MCP-trace checks. The run used Sonnet for a 28-turn/27-tool-call acceptance check; no production credential or provider payload was used. This is acceptance evidence, not a comparative benchmark number.
 
 ## Evidence
 

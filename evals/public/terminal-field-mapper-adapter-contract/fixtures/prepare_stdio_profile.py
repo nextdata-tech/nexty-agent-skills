@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 import sys
@@ -43,6 +44,50 @@ def sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def _definition_files(root: Path) -> list[tuple[str, bytes]]:
+    files = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.name == "definition.json":
+            continue
+        files.append((path.relative_to(root).as_posix(), path.read_bytes()))
+    return sorted(files)
+
+
+def _definition_manifest(root: Path) -> bytes:
+    files = _definition_files(root)
+    digest = hashlib.sha256()
+    digest.update(b"nxd-definition\0")
+    digest.update((1).to_bytes(2, "big"))
+    manifest_files = []
+    for rel, data in files:
+        raw = rel.encode()
+        digest.update(b"\x01")
+        digest.update(len(raw).to_bytes(8, "big"))
+        digest.update(raw)
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+        manifest_files.append(
+            {
+                "path": rel,
+                "size": str(len(data)),
+                "sha256": sha(data),
+            }
+        )
+    definition_id = "sha256-v1:" + digest.hexdigest()
+    return (
+        json.dumps(
+            {
+                "schema": "nxd-definition-manifest-v1",
+                "definition_id": definition_id,
+                "files": manifest_files,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode()
+
+
 def layout_digest(root: Path) -> str:
     entries = []
     for path in sorted(root.rglob("*"), key=lambda x: x.relative_to(root).as_posix()):
@@ -50,16 +95,20 @@ def layout_digest(root: Path) -> str:
         st = path.lstat()
         if stat.S_ISLNK(st.st_mode):
             raise RuntimeError(f"symlink in starter closure: {rel}")
-        mode = stat.S_IMODE(st.st_mode)
         if path.is_dir():
-            entries.append((0, rel, mode, b""))
+            entries.append((0, rel, 0o555, b""))
         elif path.is_file():
-            entries.append((1, rel, mode, path.read_bytes()))
+            data = (
+                _definition_manifest(root)
+                if rel == "definition.json"
+                else path.read_bytes()
+            )
+            entries.append((1, rel, 0o444, data))
         else:
             raise RuntimeError(f"unsupported starter entry: {rel}")
     entries.sort(key=lambda x: (x[0], x[1]))
     h = hashlib.sha256()
-    h.update(b"nxd-mapper-executable-layout-v1\\0")
+    h.update(b"nxd-mapper-executable-layout-v1\0")
     for kind, rel, mode, data in entries:
         raw = rel.encode()
         h.update(bytes([kind]))
@@ -89,7 +138,7 @@ def subject_id(spec_path: Path, grant_path: Path) -> str:
         "max_tokens",
         "max_usd",
     )
-    scope = {key: proposal[key] for key in fields if key in proposal}
+    scope = {key: proposal[key] for key in sorted(fields) if key in proposal}
     payload = {
         "schema": "nxd-mapper-approval-subject-v1",
         "workflow": WORKFLOW,
@@ -142,6 +191,30 @@ def main() -> int:
     source = Path(__file__).resolve().parent / "reference-closure"
     shutil.copytree(source, args.workspace, dirs_exist_ok=True)
     root = args.workspace
+    repo = os.environ.get("EVAL_NXD_REPO_ROOT")
+    if not repo:
+        raise RuntimeError(
+            "EVAL_NXD_REPO_ROOT is required for the NXD admission normalizer"
+        )
+    compiler = Path(repo) / "components/desktop/supervisor/py/spec_compile.py"
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "EVAL_NXD_REPO_ROOT": repo,
+    }
+    admitted = subprocess.run(
+        [sys.executable, str(compiler), "--admit", str(root), str(root)],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if admitted.returncode != 0:
+        raise RuntimeError(
+            "NXD admission normalizer failed: "
+            + (admitted.stderr.strip() or admitted.stdout.strip() or "unknown error")
+        )
     spec_path = root / "contracts/mapper_spec.json"
     grant_path = root / "contracts/mapper_grant.json"
     dummy = {
@@ -176,6 +249,9 @@ def main() -> int:
     temp.write_text(json.dumps(dummy))
     temp.chmod(0o444)
     hashes = request_hashes(root, temp)
+    definition_manifest = _definition_manifest(root)
+    (root / "definition.json").write_bytes(definition_manifest)
+    (root / "definition.json").chmod(0o444)
     source = Path(root / "data/orders/orders.csv").read_text()
     responses = []
     for request_hash, category in zip(hashes, ("freight", "warehousing")):

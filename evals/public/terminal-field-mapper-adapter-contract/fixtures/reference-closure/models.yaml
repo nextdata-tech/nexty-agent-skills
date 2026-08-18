@@ -6,7 +6,7 @@ models:
       order_id:
         data-type: string
         metadata:
-          __nxd_semantic__: '{"kind":"primary_key"}'
+          __nxd_semantic__: '{"roles":[{"kind":"primary_key"},{"kind":"metric","name":"order_count","agg":"count","description":"Number of orders."}]}'
       product_category:
         data-type: string
         metadata:

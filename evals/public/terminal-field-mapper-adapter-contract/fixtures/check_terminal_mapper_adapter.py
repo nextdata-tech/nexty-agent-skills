@@ -189,7 +189,7 @@ def artifact_contains_secret(root: Path, markers: tuple[str, ...]) -> bool | str
 
 
 def trace_errors(trace_text: str) -> list[str]:
-    """Require runner-authored JSON-RPC events, never agent prose."""
+    """Require runner-authored, wrapped JSON-RPC events, never agent prose."""
     events: list[dict[str, object]] = []
     for line in trace_text.splitlines():
         if not line.strip():
@@ -200,19 +200,27 @@ def trace_errors(trace_text: str) -> list[str]:
             return ["trace is not runner-authored JSON-RPC"]
         if not isinstance(event, dict) or event.get("source") != "runner" or event.get("protocol") != "mcp":
             return ["trace is not runner-authored JSON-RPC"]
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+            return ["trace is not runner-authored JSON-RPC"]
+        if event.get("direction") not in {"request", "response"}:
+            return ["trace is not runner-authored JSON-RPC"]
         events.append(event)
     if not events:
         return ["missing runner-authored MCP trace event"]
-    if not any(event.get("method") == "tools/call" for event in events):
+    calls = []
+    for event in events:
+        message = event["message"]
+        if event.get("direction") != "request" or message.get("method") != "tools/call":
+            continue
+        params = message.get("params")
+        if isinstance(params, dict) and isinstance(params.get("name"), str):
+            calls.append(params["name"])
+    if not calls:
         return ["trace has no nxd-desktop MCP tool call"]
-    if not any(
-        event.get("method") == "tools/call"
-        and event.get("tool") in {"build_data_product", "inspect_run"}
-        for event in events
-    ):
+    if not any(name in {"build_data_product", "inspect_run"} for name in calls):
         return ["trace has no mapper build/inspection event"]
     return []
-
 
 def main() -> int:
     ap = argparse.ArgumentParser()

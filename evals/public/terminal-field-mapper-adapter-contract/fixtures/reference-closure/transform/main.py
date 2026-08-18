@@ -3,20 +3,21 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from dataclasses import replace
 from typing import Any
-import sys
-repo_root = Path(os.environ["NXD_DESKTOP_REPO_ROOT"])
-for source in reversed((repo_root / "components/nxd_py/data_product", repo_root / "components/nxd_py/core", repo_root / "components/nxd_py/drivers")):
-    sys.path.insert(0, str(source))
 import dlt
 from dlt.sources.filesystem import filesystem, read_csv
 import duckdb
 from nxd import data_product
 from nxd.core.context import DuckDbOutput
-from nxd.experimental.field_mapper import EvaluationProfile, Grant, MapperInput, MapperSpec, make_call, map_inputs
-
 @data_product.on_transform()
 def ingest(output: DuckDbOutput, secrets: dict[str, Any]) -> None:
+    import nxd.experimental as nxd_experimental
+    repo_root = os.environ.get("NXD_DESKTOP_REPO_ROOT")
+    if repo_root:
+        nxd_experimental.__path__.insert(0, str(Path(repo_root) / "components/nxd_py/data_product/nxd/experimental"))
+    from nxd.experimental.field_mapper import EvaluationProfile, Grant, MapperInput, MapperSpec, __version__, make_call, map_inputs
+    from nxd.experimental.field_mapper.schema import compile_schema
     source_root = Path(secrets["csv_source"])
     run_dir = Path(output.path).parent
     os.environ["DLT_DATA_DIR"] = str(run_dir / "dlt-data")
@@ -28,6 +29,9 @@ def ingest(output: DuckDbOutput, secrets: dict[str, Any]) -> None:
     con.close()
     root = Path(__file__).resolve().parents[1]
     spec = MapperSpec.load(root / "contracts" / "mapper_spec.json")
+    spec = spec.with_wire_schema(compile_schema(spec))
+    if not spec.harness_version:
+        spec = replace(spec, harness_version=__version__)
     grant_data = json.loads((root / "contracts" / "mapper_grant.json").read_text())
     grant_data["mapper_spec_id"] = spec.mapper_spec_id
     grant = Grant.from_dict(grant_data)

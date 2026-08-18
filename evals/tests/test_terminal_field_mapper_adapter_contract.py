@@ -451,7 +451,8 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     ]
     good_trace = json.dumps({
         "source": "runner", "protocol": "mcp", "direction": "request",
-        "method": "tools/call", "tool": "build_data_product",
+        "message": {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "build_data_product"}},
     }) + "\n"
     assert checker.trace_errors(good_trace) == []
 
@@ -479,8 +480,8 @@ def test_terminal_checker_redacts_secret_bearing_trace_and_artifact(
     trace.write_text(
         json.dumps({
             "source": "runner", "protocol": "mcp", "direction": "request",
-            "method": "tools/call", "tool": "build_data_product",
-            "detail": mixed_case_secret,
+            "message": {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "build_data_product", "detail": mixed_case_secret}},
         }) + "\n",
         encoding="utf-8",
     )
