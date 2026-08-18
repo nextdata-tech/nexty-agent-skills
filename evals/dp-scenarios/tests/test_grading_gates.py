@@ -231,6 +231,12 @@ def test_g5_uses_supervisor_counts_and_identifiers() -> None:
         "per_model_row_counts": {"model": 5},
     }
     assert gate_build(supervisor, {"model": 5}).passed
+    missing_model = gate_build(supervisor, {"model": 5, "other-model": 3})
+    assert not missing_model.passed
+    assert any(
+        finding.code == "g5_row_count_mismatch" and finding.value["model"] == "other-model"
+        for finding in missing_model.findings
+    )
     result = gate_build({**supervisor, "per_model_row_counts": {"model": 4}}, {"model": 5})
     assert not result.passed
     assert "g5_row_count_mismatch" in result.codes

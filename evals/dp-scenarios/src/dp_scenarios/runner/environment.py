@@ -89,6 +89,9 @@ class PinnedVersions:
         missing = [name for name, item in required.items() if not isinstance(item, str) or not item.strip()]
         if missing:
             raise EnvironmentError("missing pinned value(s): " + ", ".join(missing))
+        agent_model_id = value.get("agent_model_id", "replay")
+        if not isinstance(agent_model_id, str) or not agent_model_id.strip():
+            raise EnvironmentError("pinned value agent_model_id must be a non-empty string")
         sampling = value.get("agent_sampling_params", {"temperature": 0})
         return cls(
             skill_pack_version=required["skill_pack_version"],  # type: ignore[arg-type]
@@ -96,7 +99,7 @@ class PinnedVersions:
             runtime_wheel_version=required["runtime_wheel_version"],  # type: ignore[arg-type]
             mock_api_version=required["mock_api_version"],  # type: ignore[arg-type]
             canary_claims_hash=required["canary_claims_hash"],  # type: ignore[arg-type]
-            agent_model_id=str(value.get("agent_model_id", "replay")),
+            agent_model_id=agent_model_id,
             agent_sampling_params=sampling,  # type: ignore[arg-type]
         )
 

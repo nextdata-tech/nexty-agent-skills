@@ -33,7 +33,6 @@ class DriftFinding:
     after: str
     reason: str
     code: str = "claims/source_changed"
-    blocking: bool = True
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -44,7 +43,6 @@ class DriftFinding:
             "after": self.after,
             "reason": self.reason,
             "code": self.code,
-            "blocking": self.blocking,
         }
 
 
@@ -381,7 +379,6 @@ def _compare(
                 after="<file present>" if filename in current_files else "<file absent>",
                 reason="source skill file inventory changed; claim spans remain the blocking baseline",
                 code="claims/source_file_inventory_changed",
-                blocking=False,
             )
         )
     return tuple(findings), tuple(advisories)

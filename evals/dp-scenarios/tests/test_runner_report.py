@@ -12,7 +12,7 @@ from dp_scenarios.canary.verdict import Verdict
 from dp_scenarios.operator import OperatorEngine
 from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
 from dp_scenarios.runner import CanaryResult, PinnedVersions, RecordingSession, ReplayRecording, TierError, TierRunner
-from dp_scenarios.runner.report import _NON_REPRODUCIBLE_KEYS, _stable_document, human_summary, machine_report, write_report
+from dp_scenarios.runner.report import _stable_document, human_summary, machine_report, write_report
 from dp_scenarios.runner.cli import _canary_from_mapping
 
 from test_runner_tier import clean_canary, make_scenario, pins, recording_for, responses_for
@@ -96,8 +96,33 @@ def test_replayed_canary_hash_is_bound_to_the_loaded_claims_file() -> None:
 
 
 def test_stable_document_removes_all_non_reproducible_keys_and_keeps_format_version() -> None:
-    value = {key: f"discard-{key}" for key in _NON_REPRODUCIBLE_KEYS}
-    value["stable"] = {"nested": [{key: True for key in _NON_REPRODUCIBLE_KEYS}, {"keep": 1}]}
+    value = {
+        "wall_clock": "discard-wall_clock",
+        "wall_clock_seconds": "discard-wall_clock_seconds",
+        "total_wall_clock_seconds": "discard-total_wall_clock_seconds",
+        "observed_wall_clock_seconds": "discard-observed_wall_clock_seconds",
+        "ledger_path": "discard-ledger_path",
+        "fixture_dir": "discard-fixture_dir",
+        "supervisor": "discard-supervisor",
+        "closure": "discard-closure",
+        "command": "discard-command",
+        "stable": {
+            "nested": [
+                {
+                    "wall_clock": True,
+                    "wall_clock_seconds": True,
+                    "total_wall_clock_seconds": True,
+                    "observed_wall_clock_seconds": True,
+                    "ledger_path": True,
+                    "fixture_dir": True,
+                    "supervisor": True,
+                    "closure": True,
+                    "command": True,
+                },
+                {"keep": 1},
+            ]
+        },
+    }
 
     filtered = _stable_document(value)
     assert filtered == {"stable": {"nested": [{}, {"keep": 1}]}}

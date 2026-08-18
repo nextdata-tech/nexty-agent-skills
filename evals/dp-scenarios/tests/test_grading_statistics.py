@@ -85,7 +85,7 @@ def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
         epochs=30,
         certification_rule="wilson_lower_bound",
         gates=("G5",),
-        lower_bound=0.90,
+        lower_bound=0.85,
         confidence=0.95,
     )
     bound_between_thresholds = repeatability_certificate(
@@ -94,6 +94,7 @@ def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
     )
     assert bound_between_thresholds.rates is not None
     lower_bound = bound_between_thresholds.rates.rates["G5"].lower_bound
+    assert lower_bound < declared.lower_bound
     assert 0.80 < lower_bound < 0.90
     assert not bound_between_thresholds.certified
 
@@ -112,21 +113,22 @@ def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
 def test_declared_observed_epoch_contract_requires_all_declared_epochs() -> None:
     declared = SimpleNamespace(
         tier=RepeatabilityTier.DETERMINISTIC,
-        epochs=5,
+        epochs=6,
         certification_rule="observed_epochs",
         gates=("G5",),
+        lower_bound=0.73,
         confidence=0.80,
     )
 
-    short = repeatability_certificate([_run() for _ in range(4)], declared)
-    complete = repeatability_certificate([_run() for _ in range(5)], declared)
+    short = repeatability_certificate([_run() for _ in range(5)], declared)
+    complete = repeatability_certificate([_run() for _ in range(6)], declared)
 
-    assert short.required_epochs == 5
-    assert short.observed_epochs == 4
+    assert short.required_epochs == 6
+    assert short.observed_epochs == 5
     assert not short.certified
     assert complete.certified
     assert complete.rates is not None
-    assert complete.rates.rates["G5"].lower_bound == wilson_ci(5, 5, alpha=0.20).low
+    assert complete.rates.rates["G5"].lower_bound == wilson_ci(6, 6, alpha=0.20).low
 
 
 def test_mock_source_epoch_plan_and_observed_count_are_pinned() -> None:

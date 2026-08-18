@@ -49,13 +49,16 @@ def test_create_always_receives_an_auto_data_dir(tmp_path: Path, monkeypatch: py
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(probe, "_run", fake_run)
-    probe.run_probe_and_build(closure, supervisor=executable)
+    preflight, build = probe.run_probe_and_build(closure, supervisor=executable)
 
     assert len(commands) == 2
     check_dir = commands[0][commands[0].index("--data-dir") + 1]
     build_dir = commands[1][commands[1].index("--data-dir") + 1]
     assert check_dir == build_dir
     assert check_dir != str(closure)
+    expected_digest = __import__("hashlib").sha256(executable.read_bytes()).hexdigest()
+    assert preflight.supervisor_digest == expected_digest
+    assert build is not None and build.supervisor_digest == expected_digest
 
 
 def test_failed_build_reads_the_run_diagnostic_before_cleanup(

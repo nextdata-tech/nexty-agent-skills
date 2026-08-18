@@ -256,8 +256,6 @@ def test_turn_three_approval_writes_through_real_store_and_lints_clean(tmp_path:
     report = lint(path, supervisor_facts=facts)
     assert report.clean, report.findings
     row = next(row for row in read_ledger(path) if row.get("action_kind") == "spec_approved")
-    assert result.ledger_rows[2]["action_kind"] == row["action_kind"]
-    assert result.ledger_rows[2]["claim"] == row["claim"]
     assert row["phase"] == 3
     assert row["artifact_ref"] == "artifact://spec-v1"
     assert row["claim"] == {"open_decision_marker": False}

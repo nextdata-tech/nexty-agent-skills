@@ -17,7 +17,8 @@ from dp_scenarios.canary.probe import ProbeResult
 from dp_scenarios.grading import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
-from dp_scenarios.operator import OperatorEngine, OperatorScript
+from dp_scenarios.ledger import SupervisorFacts
+from dp_scenarios.operator import OperatorEngine, OperatorScript, StaticSupervisorRecordReader
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, TouchedFile, TurnResult
 from dp_scenarios.runner import (
@@ -349,6 +350,13 @@ def test_blocking_canary_returns_before_any_scenario_transport_is_constructed() 
     assert result.scenarios == ()
     assert calls == []
     assert result.blocked_reason[0]["code"] == "code"
+
+
+def test_empty_tier_is_failed_instead_of_clean() -> None:
+    result = TierRunner([], pins=pins(), canary=clean_canary()).run()
+
+    assert result.scenarios == ()
+    assert result.verdict == "failed"
 
 
 def test_nonblocking_canary_hash_is_required() -> None:
@@ -708,14 +716,12 @@ def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) 
 
 def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
     scenario, recordings = populated_s6_recordings(tmp_path)
-    corrupted = []
-    for recording in recordings:
-        facts = dict(recording.supervisor_facts or {})
-        counts = dict(facts["per_model_row_counts"])
-        model = next(iter(counts))
-        counts[model] = int(counts[model]) + 1
-        facts["per_model_row_counts"] = counts
-        corrupted.append(replace(recording, supervisor_facts=facts))
+    first_facts = dict(recordings[0].supervisor_facts or {})
+    first_counts = dict(first_facts["per_model_row_counts"])
+    model = next(iter(first_counts))
+    first_counts[model] = int(first_counts[model]) + 1
+    first_facts["per_model_row_counts"] = first_counts
+    corrupted = [replace(recordings[0], supervisor_facts=first_facts), *recordings[1:]]
 
     result = TierRunner(
         [scenario],
@@ -725,9 +731,10 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     ).run()
 
     assert result.verdict == "failed"
-    assert all(run.score.state is ScoreTerminalState.FAILED for run in result.scenario_runs)
-    assert all(not run.score.gates["G5"].passed for run in result.scenario_runs)
-    assert all("g5_row_count_mismatch" in run.score.gates["G5"].codes for run in result.scenario_runs)
+    assert result.scenario_runs[0].score.state is ScoreTerminalState.FAILED
+    assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
+    assert not result.scenario_runs[0].score.gates["G5"].passed
+    assert "g5_row_count_mismatch" in result.scenario_runs[0].score.gates["G5"].codes
 
 
 def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
@@ -770,7 +777,45 @@ def test_rejected_agent_artifact_row_aborts_the_run(tmp_path: Path, field: str) 
     assert environment.ledger == []
 
 
-def test_artifact_row_turn_and_phase_are_preserved_as_positive_integers(tmp_path: Path) -> None:
+def test_fabricated_supervisor_claim_in_artifact_row_aborts_before_append(tmp_path: Path) -> None:
+    environment = SimpleNamespace(
+        manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
+        ledger=[],
+    )
+    artifact_root = tmp_path / "forged-claim"
+    artifact_root.mkdir()
+    (artifact_root / "ledger-extra.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "action_kind": "build",
+                        "action": "build completed",
+                        "turn": 5,
+                        "phase": 5,
+                        "claim": {"run_id": "forged-run"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    reader = StaticSupervisorRecordReader(
+        SupervisorFacts(
+            run_id="run-1",
+            artifact_id="artifact-1",
+            publish_sequence="7",
+            per_model_row_counts={"model-a": "42"},
+            lifecycle_state="served",
+        )
+    )
+
+    with pytest.raises(TierError, match="supervisor-owned claim"):
+        tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=reader)
+    assert environment.ledger == []
+
+
+def test_valid_artifact_row_is_appended_after_positive_integer_validation(tmp_path: Path) -> None:
     environment = SimpleNamespace(
         manifest=SimpleNamespace(run_id="run-1", scenario_id="scenario-1"),
         ledger=[],
@@ -784,8 +829,8 @@ def test_artifact_row_turn_and_phase_are_preserved_as_positive_integers(tmp_path
 
     tier_module._append_artifact_rows(environment, artifact_root, supervisor_reader=None)
 
-    assert environment.ledger[0]["turn"] == 4
-    assert environment.ledger[0]["phase"] == 4
+    assert len(environment.ledger) == 1
+    assert environment.ledger[0]["action_kind"] == "codegen"
 
 
 def test_supervisor_reader_paths_are_fail_closed() -> None:
@@ -821,6 +866,32 @@ def test_supervisor_reader_paths_are_fail_closed() -> None:
     assert tier_module._supervisor_facts(WrongReader()) is None
 
 
+def test_tier_preserves_unexamined_sentinel_through_grade_and_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = make_scenario("unexamined-sentinel")
+    recording = recording_for(scenario, responses_for(scenario))
+    observed: list[object] = []
+    original_score_run = tier_module.score_run
+
+    def capture_score_run(*args: object, **kwargs: object):
+        observed.append(kwargs["sentinel_tripped"])
+        return original_score_run(*args, **kwargs)
+
+    monkeypatch.setattr(tier_module, "_sentinel_trip", lambda *_args: None)
+    monkeypatch.setattr(tier_module, "score_run", capture_score_run)
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        replay_recordings={scenario.id: recording},
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert observed == [None]
+    assert run.score.hard_gate_flags["sentinel"] is None
+    assert run.score.state is ScoreTerminalState.UNGRADED
+
+
 @pytest.mark.parametrize("case", ["manifest", "markers", "observations", "turns"])
 def test_sentinel_not_examined_inputs_can_never_pass(tmp_path: Path, case: str) -> None:
     fixture = tmp_path / case / "fixture"
@@ -834,7 +905,7 @@ def test_sentinel_not_examined_inputs_can_never_pass(tmp_path: Path, case: str) 
         )
     if case in {"observations", "turns"}:
         (artifacts / "operator-observations.json").write_text(
-            json.dumps({"turns": "not-a-list"}) if case == "turns" else json.dumps({}),
+            json.dumps({"turns": "not-a-list"}) if case == "turns" else json.dumps([]),
             encoding="utf-8",
         )
     environment = SimpleNamespace(fixture_dir=fixture, ledger_path=artifacts / "ledger.jsonl")

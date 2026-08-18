@@ -725,7 +725,10 @@ class TierRunner:
             )
             summaries.append(ScenarioSummary(scenario.id, repeatability, tuple(runs)))
         states = [run.score.state for summary in summaries for run in summary.runs]
-        if states and all(state is ScoreTerminalState.PASSED for state in states):
+        if not states:
+            # A tier that examined no scenario is not evidence of a clean run.
+            verdict = "failed"
+        elif all(state is ScoreTerminalState.PASSED for state in states):
             verdict = "clean"
         elif states and all(state in {ScoreTerminalState.PASSED, ScoreTerminalState.UNGRADED} for state in states) and any(
             state is ScoreTerminalState.UNGRADED for state in states

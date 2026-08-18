@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from dp_scenarios.operator import OperatorScript
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.persona import load_persona
+from dp_scenarios.runner import environment as environment_module
 from dp_scenarios.runner.environment import EnvironmentError, PinnedVersions, RunEnvironment
-from dp_scenarios.canary.probe import SESSION_ENVIRONMENT_ALLOWLIST
+from dp_scenarios.canary import probe
 from dp_scenarios.synthgen.generator import GenerationResult
 
 
@@ -97,6 +99,67 @@ def test_empty_pinned_value_is_a_hard_error() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "skill_pack_version",
+        "supervisor_version",
+        "runtime_wheel_version",
+        "mock_api_version",
+        "canary_claims_hash",
+        "agent_model_id",
+    ],
+)
+def test_pinned_versions_reject_whitespace_only_values(field: str) -> None:
+    values: dict[str, object] = {
+        "skill_pack_version": "skills-1",
+        "supervisor_version": "supervisor-1",
+        "runtime_wheel_version": "wheel-1",
+        "mock_api_version": "mock-1",
+        "canary_claims_hash": "claims-1",
+        "agent_model_id": "replay",
+    }
+    values[field] = " \t"
+
+    with pytest.raises(EnvironmentError, match=field):
+        PinnedVersions(**values)  # type: ignore[arg-type]
+
+
+def test_from_mapping_rejects_each_missing_required_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Keep this test on the mapping guard itself; otherwise __post_init__'s
+    # duplicate scalar check would mask a disabled missing-values branch.
+    monkeypatch.setattr(environment_module, "_required_text", lambda value, field_name: value)
+    complete: dict[str, object] = {
+        "skill_pack_version": "skills-1",
+        "supervisor_version": "supervisor-1",
+        "runtime_wheel_version": "wheel-1",
+        "mock_api_version": "mock-1",
+        "canary_claims_hash": "claims-1",
+    }
+
+    for field in complete:
+        missing = {key: value for key, value in complete.items() if key != field}
+        with pytest.raises(EnvironmentError, match=field):
+            PinnedVersions.from_mapping(missing)
+
+
+@pytest.mark.parametrize("value", [None, 7])
+def test_from_mapping_rejects_non_text_agent_model_id(value: object) -> None:
+    with pytest.raises(EnvironmentError, match="agent_model_id"):
+        PinnedVersions.from_mapping(
+            {
+                "skill_pack_version": "skills-1",
+                "supervisor_version": "supervisor-1",
+                "runtime_wheel_version": "wheel-1",
+                "mock_api_version": "mock-1",
+                "canary_claims_hash": "claims-1",
+                "agent_model_id": value,
+            }
+        )
+
+
 def test_fixture_manifest_without_base_instant_is_a_hard_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -176,9 +239,26 @@ def test_agent_environment_is_allowlisted_not_parent_environment_copy(
     assert values["HOME"].endswith("/home")
 
 
-def test_canary_environment_allowlist_does_not_admit_home_or_parent_secrets() -> None:
-    assert "HOME" not in SESSION_ENVIRONMENT_ALLOWLIST
-    assert "USERPROFILE" not in SESSION_ENVIRONMENT_ALLOWLIST
+def test_canary_environment_allowlist_excludes_parent_home_and_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("HOME", "/parent/home")
+    monkeypatch.setenv("USERPROFILE", r"C:\parent\profile")
+    monkeypatch.setenv("PARENT_SECRET", "must-not-cross")
+
+    def fake_subprocess_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args[0], 0, "", "")  # type: ignore[arg-type]
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_subprocess_run)
+    probe._run(["supervisor", "check"], closure=tmp_path)
+
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert "HOME" not in environment
+    assert "USERPROFILE" not in environment
+    assert "PARENT_SECRET" not in environment
 
 
 def test_replay_manifest_mismatch_is_rejected(tmp_path: Path) -> None:
