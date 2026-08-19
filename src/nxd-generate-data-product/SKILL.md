@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.38.0
+  version: 0.38.1
 ---
 
 # nxd-generate-data-product skill
@@ -242,8 +242,8 @@ per set of metrics over that table:
 - `semantic_model("<name>")` — the bare lowercase physical table name.
 - `.schema({...})` maps each column to `field(<type>(), <role>())`. A column with no role
   produces no metric, dimension or join and is absent from `describe_models` — unqueryable.
-- **Base models carry ONLY `primary_key()`, `dimension(...)`, or `join(...)`** —
-  the DSL RAISES on a metric attached to a base-model field.
+- **Base models carry ONLY `primary_key()`, `dimension(...)`, or `join(...)`** — a metric there RAISES.
+  Roles COMPOSE, and a bare `primary_key()` is **not groupable**: pair every key with a `dimension(...)`.
 - A metric belongs on `semantic_view("<base>_metrics", <base>)` with
   `metric_field(<type>(), metric(Agg.<AGG>, of=<base>.field("<column>"), ...))` —
   query-time, not a physical table.

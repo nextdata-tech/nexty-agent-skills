@@ -27,7 +27,18 @@ customers = (
         {
             # Type IDs from observed values, not habit: numeric-looking is not
             # numeric, and these keys are "C0417"-style strings.
-            "customer_id": field(string(), primary_key()),
+            # primary_key() AND dimension(): a key with only the key role is
+            # not groupable, so `describe_models` offers no way to ask WHICH
+            # customer a row belongs to — every answer comes back as a count
+            # with no identity. Roles compose; keys nearly always need both.
+            "customer_id": field(
+                string(),
+                primary_key(),
+                dimension(
+                    name="customer_id",
+                    description="Account key, e.g. C0417. Group by this to name a customer.",
+                ),
+            ),
             "country_id": field(
                 string(),
                 dimension(

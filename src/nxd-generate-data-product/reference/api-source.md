@@ -4,6 +4,8 @@
 
 - Scope
 - The `RESTAPIConfig` / `rest_api_resources` shape
+  - A POST body is scanned for dlt expressions — escape every literal brace
+  - Paginating a GraphQL connection
 - Credential handling — read this before shipping
 - Custom request headers
 - Naming
@@ -12,6 +14,7 @@
 - `requirements.txt`
 - `spec.py` / `infra-profile.yaml` diffs
 - Self-check (connectivity smoke test)
+  - Two ways a probe lies
 
 This is a sibling of the proven CSV connector documented inline in
 `SKILL.md` — same closure shape (`duckdb` port, `PHYSICAL_MODELS`,
@@ -80,6 +83,77 @@ request per resource.
 Re-confirm this shape against the pinned `dlt==1.28.2` changelog before
 relying on it in code — it was verified against current dlt docs, not
 version-pinned documentation.
+
+### A POST body is scanned for dlt expressions — escape every literal brace
+
+`endpoint` accepts `method: "POST"` and a `json` body (verified by introspection
+against the pinned `dlt==1.28.2`: `Endpoint.method` is
+`Optional[Literal["GET", "POST"]]` and `Endpoint.json` is
+`Optional[Dict[str, Any]]`), which is what an API with no GET surface needs — a
+GraphQL endpoint being the common case.
+
+**dlt scans every string in `json` for its OWN placeholder expressions** —
+`{resources.other_resource.field}`, `{incremental.start_value}` — using
+`string.Formatter`. A GraphQL query is nothing but braces, so the resource list
+is rejected before a single request is sent, and the message names neither
+GraphQL nor the query:
+
+```
+ValueError: Expression `
+  issues(
+    first` defined in `json` is not valid. Valid expressions must start with
+one of: `{'resources'}`. If you need to use literal curly braces in your
+expression, escape them by doubling them: {{ and }}
+```
+
+Read it as "the body was treated as a template", not as a malformed query. The
+fix is the one the message names — double every brace when building the config,
+never in the query constant itself:
+
+```python
+_ISSUES_QUERY = """
+query PocketIssues($first: Int!, $after: String, $project: String!) {
+  issues(first: $first, after: $after,
+         filter: { project: { name: { eqIgnoreCase: $project } } }) {
+    nodes { id identifier title }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+"""
+
+# Keep the constant readable; escape at the boundary.
+escaped_query = _ISSUES_QUERY.replace("{", "{{").replace("}", "}}")
+```
+
+**The doubled braces are not sent to the API.** dlt's `expand_placeholders()`
+collapses `{{` back to `{` when it builds the request — verified against the
+pinned version to round-trip to the byte-identical query, so the upstream sees
+exactly what you wrote. Do not "fix" a working escape by removing it because the
+query looks wrong in the source: the escape and the expansion are a pair.
+
+### Paginating a GraphQL connection
+
+The cursor paginator writes the next cursor into the request **body** rather
+than a query parameter, which is what a Relay-style connection needs.
+`JSONResponseCursorPaginator` takes `cursor_body_path` and `has_more_path`
+(both present in the pinned `dlt==1.28.2`; `cursor_param` and `cursor_body_path`
+are mutually exclusive and passing both raises):
+
+```python
+"data_selector": "data.issues.nodes",
+"paginator": {
+    "type": "cursor",
+    "cursor_path": "data.issues.pageInfo.endCursor",
+    "cursor_body_path": "variables.after",     # into the POSTed json
+    "has_more_path": "data.issues.pageInfo.hasNextPage",
+},
+```
+
+**A GraphQL error is an HTTP 200.** The body carries `{"errors": [...]}` with
+`data: null`, so dlt raises nothing on the transport and the resource simply
+yields no rows — which surfaces much later as an empty promised model. Do not
+diagnose that as a credential problem before checking the response body; the
+standalone probe below is what distinguishes them.
 
 ## Credential handling — read this before shipping
 
@@ -475,10 +549,38 @@ same path, or a judgement model whose `score` is `field(number(), ...)` under an
 convert measures, not identifiers; `Decimal` for money, cast to `float` only in
 the final dict.
 
-It is still a base model everywhere else — promised in `spec.py`, declared in
-`models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. What changes is how
-the rows reach the port, because on this connector there is no reader loop to
-carry them — and, because you are now reading the file yourself, their types.
+It is still a base model everywhere else — promised in `spec.py` and declared
+in `models.py`. What changes is how the rows reach the port, because on this
+connector there is no reader loop to carry them — and, because you are now
+reading the file yourself, their types.
+
+**It also changes which tuple it belongs to.** The self-check enforces
+`BASE_MODELS == the data/ directory listing` whenever `data/` exists, so an api
+closure that carries reference data cannot put its FETCHED models in
+`BASE_MODELS` too:
+
+```
+struct.base_models_vs_data_dirs: BASE_MODELS ['linear_comments_landed',
+'linear_issues_landed', 'nxd_decisions', 'scoring_rubric',
+'verdict_thresholds'] != data/ directories ['nxd_decisions', 'scoring_rubric',
+'verdict_thresholds']
+```
+
+Use three tuples, with `PHYSICAL_MODELS` written as a literal (the structural
+check cannot evaluate a computed one and reports it `unverified`):
+
+```python
+API_MODELS = ("issues", "comments")               # fetched; no data/ dir
+BASE_MODELS = ("scoring_rubric", "nxd_decisions")  # == the data/ listing
+DERIVED_MODELS = ("open_tickets",)
+PHYSICAL_MODELS = (
+    "issues", "comments", "scoring_rubric", "nxd_decisions", "open_tickets",
+)
+assert set(PHYSICAL_MODELS) == set(API_MODELS + BASE_MODELS + DERIVED_MODELS)
+```
+
+Derive the fetched set from `API_MODELS`, not `BASE_MODELS`:
+`tuple(m for m in API_MODELS if f"endpoint_{m}" in secrets)`.
 
 Build the `RESTAPIConfig` from `secrets` at runtime — never
 hard-code a base URL or credential in the transform source. The `auth_type`
@@ -608,8 +710,25 @@ add it explicitly rather than assuming it's already covered.
   `public:` per the sensitivity classification (secrets `false`, non-secret
   config like `auth_key_name`/`auth_key_location` `true`).
 
-  **No `data/` directory, no path file, no companion artifact of any kind** —
-  an api-source closure ships none. Everything the transform needs is an
+  **No connector artifact** — an api-source closure's endpoint map lives in
+  these attributes, not in a companion file.
+
+  **But a `data/` tree the closure authored itself still needs
+  `csv-source-path`.** An api closure that carries landed reference data (see
+  "Landed reference data in an API closure" above) must ship a `csv-source-path`
+  file holding the relative export root, exactly as a CSV closure does.
+  Without it the supervisor refuses to stage the definition at all:
+
+  ```
+  structure/definition_files_missing:
+    stage the kernel definition files: snapshot missing csv-source-path
+  ```
+
+  That finding does NOT mention `data/`, and it arrives before any Python runs,
+  so it reads as a spec or manifest problem. `printf 'data\n' > csv-source-path`
+  clears it. The file is about staging a directory, not about declaring a CSV
+  connector — the closure still names only `api-source` in `.secrets([...])`,
+  and there is still no `csv-source` service in the profile. Everything the transform needs is an
   attribute on this service. For 2+ API sources, add one labeled service per
   instance instead (`api-source-<label>` / label-prefixed attribute keys such
   as `secrets["orders_base_url"]` and `secrets["orders_endpoint_<model>"]`) —
@@ -618,13 +737,57 @@ add it explicitly rather than assuming it's already covered.
 ## Self-check (connectivity smoke test)
 
 A REST API connector needs live credentials to dry-run at all. When
-credentials are available in the authoring session: run one bounded GET per
+credentials are available in the authoring session: run one bounded request per
 configured resource (respecting any stated pagination/rate limit), assert a
 parseable response matching the expected shape — not an exact fixture
 count, since remote data isn't static. When credentials are not available
 in-session, report the connectivity self-check as **not run** — do not
 claim it passed. Structural checks (naming invariant, no
 `.semantic_tools()`, import correctness) still run regardless.
+
+**Phase B of `self_check.py` cannot pass for this connector, and that is not a
+defect to code around.** The harness calls `ingest()` with an empty `secrets`
+map, so the first `secrets["base_url"]` raises. Do not add a profile-reading
+fallback to make it green — that reintroduces the sidecar channel this file
+spends a section rejecting. Report Phase B as **not runnable**, and verify the
+closure with `check_data_product` instead: it pins and compiles the real
+closure under the supervisor's own interpreter, which is stronger evidence than
+the dry run it replaces.
+
+### Two ways a probe lies
+
+**Anchor the probe on its own directory, never the caller's cwd.** A probe that
+opens `"infra-profile.yaml"` relative to the working directory fails with
+`[Errno 2] No such file or directory: 'infra-profile.yaml'` the moment anyone
+runs it by absolute path — which is how you will hand it to the user, since the
+closure is not their working directory:
+
+```python
+_CLOSURE = Path(__file__).resolve().parent
+profile = yaml.safe_load((_CLOSURE / "infra-profile.yaml").read_text())
+```
+
+**Never lead with OK when the response was empty.** A reachable endpoint that
+accepts the credential and returns zero rows is a FAILED check — the filter is
+wrong — and it is the single most likely thing to be wrong at this step. A
+probe that prints `OK — 0 node(s)` and appends the warning below it will be read
+as a pass, the build will be launched, and the failure resurfaces minutes later
+as an empty promised model. Print the verdict first:
+
+```python
+if not nodes:
+    print(f"{model}: NO ROWS — the endpoint answered and the credential is "
+          f"accepted, but the filter matched nothing.")
+    ok = False
+    continue
+print(f"{model}: OK — {len(nodes)} node(s) on the first page, ...")
+```
+
+The filter itself is the usual culprit, and equality comparators are stricter
+than they read: Linear's `eqIgnoreCase` is exact-match-ignoring-case, so a
+project displayed as `Nexty Pocket` is not matched by `pocket`. When a probe
+returns nothing, ask the API what values it does hold — list the projects, the
+teams, the accounts — before touching the credential.
 
 **The probe is a standalone script beside the closure — never inside
 `transform/`.** It runs once, at authoring time, from the author's shell. A

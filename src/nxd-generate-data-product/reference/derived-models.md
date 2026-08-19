@@ -730,6 +730,65 @@ table named `<parent>__<field>`, which appears in
 `pipeline.default_schema.data_table_names()` and fails the read-back assert —
 correctly, because the promised model's shape is then not what landed.
 
+### A column that is all-None is DROPPED, not landed as nulls
+
+dlt infers each column's type from the values it sees, so a column whose value
+is `None` in every row gets no type and is silently left out of the destination
+table. It warns and continues:
+
+```
+The following columns in table 'open_tickets' did not receive any data during
+this load and therefore could not have their types inferred:
+  - days_to_due
+Unless type hints are provided, these columns will not be materialized in the
+destination.
+```
+
+This is a shape that depends on the DATA rather than on the closure, which is
+exactly what a promised model must not have: a source with no due dates lands a
+table missing `days_to_due`, `models.py` still declares the dimension, and the
+query fails at consume time on a column the catalog advertises. The read-back
+assert does not catch it — the TABLE is present, only a column is missing.
+
+Pin the shape with explicit column hints, one entry per declared column:
+
+```python
+@dlt.resource(name=table_name, columns={
+    "identifier": {"data_type": "text"},
+    "days_to_due": {"data_type": "bigint"},
+    ...
+})
+def _emit() -> Iterator[dict[str, Any]]:
+    yield from rows
+```
+
+Hints do NOT create a table for a resource that yields zero rows — that lands
+nothing at all and fails the read-back assert with an opaque table-name
+mismatch. When a promised model can legitimately be empty, check it before
+`pipeline.run(...)` and raise a message that names the model and the likely
+cause; the assert cannot.
+
+### Closing over rows: use a factory, not a default argument
+
+`dlt.resource` inspects the generator's signature and treats its parameters as
+configuration, so the obvious `def _emit(rows=rows)` raises before any row is
+yielded:
+
+```
+ValueError: mutable default <class 'list'> for field rows is not allowed:
+use default_factory
+```
+
+Bind through an enclosing function instead:
+
+```python
+def _resource_for(table_name: str, rows: list[dict[str, Any]]):
+    @dlt.resource(name=table_name, columns=COLUMN_HINTS[table_name])
+    def _emit() -> Iterator[dict[str, Any]]:
+        yield from rows
+    return _emit()
+```
+
 ## The assert template
 
 ```python
