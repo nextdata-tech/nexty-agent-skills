@@ -388,8 +388,9 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     assert checks["wants_trace"] is True
     assert checks["deterministic_check"]["wants_trace"] is True
     assert checks["deterministic_check"]["trace_source"] == "runner_mcp"
-    assert "per-run nxd-desktop stdio MCP server" in checks["ci_skip"]
-    assert "JSON-RPC trace sink" in checks["ci_skip"]
+    assert "ci_skip" not in checks
+    assert (TERMINAL_SCENARIO / "fixtures" / "desktop_stdio.json").is_file()
+    assert "scenario_needs_desktop_stdio" in (REPO_ROOT / "evals/run.py").read_text(encoding="utf-8")
     assert '"terminal-field-mapper-adapter-contract": frozenset' in (
         REPO_ROOT / "evals/run.py"
     ).read_text(encoding="utf-8")
@@ -450,7 +451,8 @@ def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> 
     ]
     good_trace = json.dumps({
         "source": "runner", "protocol": "mcp", "direction": "request",
-        "method": "tools/call", "tool": "build_data_product",
+        "message": {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "build_data_product"}},
     }) + "\n"
     assert checker.trace_errors(good_trace) == []
 
@@ -478,8 +480,8 @@ def test_terminal_checker_redacts_secret_bearing_trace_and_artifact(
     trace.write_text(
         json.dumps({
             "source": "runner", "protocol": "mcp", "direction": "request",
-            "method": "tools/call", "tool": "build_data_product",
-            "detail": mixed_case_secret,
+            "message": {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "build_data_product", "detail": mixed_case_secret}},
         }) + "\n",
         encoding="utf-8",
     )

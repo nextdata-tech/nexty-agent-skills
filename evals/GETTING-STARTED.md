@@ -110,10 +110,9 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-20 of 35 public scenarios. The remaining 15 declare `ci_skip` in their
+21 of 35 public scenarios. The remaining 14 declare `ci_skip` in their
 `checks.json`. Twelve need a Tier 2 or Tier 3 install; one is gated on the agent
-backend; one requires an operator-provided source-isolation wrapper; and one
-requires the future runner-owned Desktop stdio MCP capability:
+backend; and one requires an operator-provided source-isolation wrapper:
 
 | Scenario | Needs |
 |---|---|
@@ -130,7 +129,6 @@ requires the future runner-owned Desktop stdio MCP capability:
 | `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
 | `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 | `desktop-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |
-| `terminal-field-mapper-adapter-contract` | per-run `nxd-desktop` stdio MCP server, synthetic mapper-provider injection, and a redacted public JSON-RPC trace sink |
 
 Full detail on scenarios, authoring, the baseline, and CI gating:
 [`evals/README.md`](README.md).
@@ -285,6 +283,7 @@ Needs a live desktop supervisor that CI cannot provision.
 export EVAL_DESKTOP_SUPERVISOR_DIR=/path/to/supervisor
 export EVAL_DESKTOP_PYTHON=/path/to/python
 export NXD_DESKTOP_REPO_ROOT=/path/to/desktop/repo
+export EVAL_NXD_REPO_ROOT=/path/to/nxd/repo
 ```
 
 These scenarios also narrow the agent's tool surface (they withhold `WebFetch`
@@ -319,6 +318,7 @@ Set by you:
 | `EVAL_DESKTOP_SUPERVISOR_DIR` | 3 | desktop supervisor location |
 | `EVAL_DESKTOP_PYTHON` | 3 | interpreter for the supervisor |
 | `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by job-loop fixtures |
+| `EVAL_NXD_REPO_ROOT` | 3 | NXD repo root used to build the isolated stdio evaluation profile |
 | `NXD_EVAL_JUDGE_RETEST=1` | 1 | opt-in judge test-retest pass |
 | `NXD_CA_BUNDLE` | 1/2 | per-cluster TLS trust store; unset = system store |
 | `NXD_SKILL_PYTHON` | — | interpreter for skill-invoked subprocesses |
