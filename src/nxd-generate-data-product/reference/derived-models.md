@@ -16,6 +16,8 @@ shows the source-independent checks and concrete failure shapes they require.
 - [The resource template](#the-resource-template)
 - [Reading the sources yourself](#reading-the-sources-yourself)
 - [Flat dicts, and why](#flat-dicts-and-why)
+  - [A column that is all-None is DROPPED, not landed as nulls](#a-column-that-is-all-none-is-dropped-not-landed-as-nulls)
+  - [Closing over rows: use a factory, not a default argument](#closing-over-rows-use-a-factory-not-a-default-argument)
 - [The assert template](#the-assert-template)
 - [Choosing the invariant](#choosing-the-invariant)
 - [Chained derivations stay in memory](#chained-derivations-stay-in-memory)
@@ -120,7 +122,7 @@ invoices = (
         {
             # number() because every observed invoice_id is numeric. Check the
             # source first: a "T1257"-style ID is string(), not number().
-            "invoice_id": field(number(), primary_key()),
+            "invoice_id": field(number(), primary_key(), dimension(name="invoice_id", description="Invoice key.")),
             "customer": field(
                 string(),
                 dimension(name="customer", description="Billed customer name as it appears on the invoice."),
@@ -155,7 +157,7 @@ amortization_schedule = (
     )
     .schema(
         {
-            "schedule_id": field(string(), primary_key()),
+            "schedule_id": field(string(), primary_key(), dimension(name="schedule_id", description="Invoice-month key: <invoice_id>-<period>.")),
             "invoice_id": field(
                 number(),
                 join(to="invoices", to_column="invoice_id"),
@@ -297,7 +299,7 @@ classified_spend = (
     )
     .schema(
         {
-            "transaction_id": field(number(), primary_key()),
+            "transaction_id": field(number(), primary_key(), dimension(name="transaction_id", description="Transaction key.")),
             "merchant": field(
                 string(),
                 dimension(name="merchant", description="Merchant name as it appears on the source transaction, unnormalised."),

@@ -329,7 +329,7 @@ nxd_decisions = (
     )
     .schema(
         {
-            "decision_id": field(string(), primary_key()),
+            "decision_id": field(string(), primary_key(), dimension(name="decision_id", description="Stable id of the ruling.")),
             "status": field(
                 string(),
                 dimension(

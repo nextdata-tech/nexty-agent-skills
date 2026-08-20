@@ -82,7 +82,17 @@ orders = (
         {
             # order_id is number() here because its observed values are numeric —
             # the two ID shapes sit side by side deliberately.
-            "order_id": field(number(), primary_key()),
+            # Same pairing as customers.customer_id above, and for the same
+            # reason: a key carrying only primary_key() cannot be grouped by,
+            # so "which orders..." has no answerable form.
+            "order_id": field(
+                number(),
+                primary_key(),
+                dimension(
+                    name="order_id",
+                    description="Order key. Group by this to name an order.",
+                ),
+            ),
             "customer_id": field(
                 # Matches the customers.customer_id type; join endpoints must agree.
                 string(),

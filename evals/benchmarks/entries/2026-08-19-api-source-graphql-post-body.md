@@ -13,7 +13,7 @@ record: null
 
 No public scenario builds an api-source closure against a GraphQL endpoint. The
 existing api-source scenarios drive GET resources against a local stub, so none
-of the four defects this change fixes can appear in them: the expression
+of the five defects this change fixes can appear in them: the expression
 collision needs braces in a POSTed body, the staging finding needs an api
 closure that also carries `data/`, the `BASE_MODELS` conflict needs both a
 fetched model and a landed reference model in one closure, and the probe
@@ -42,19 +42,29 @@ All four were observed in one live build (a Linear closure over project
 
 ## Evidence
 
-`evals/tests/test_api_source_graphql_body_contract.py` carries the change. Eight
-of its nine tests were verified to fail against the previous revision of
-`reference/api-source.md` and `reference/derived-models.md`, and pass after it.
-Its ninth test is the one assertion whose truth lives outside this repo: it runs
+`evals/tests/test_api_source_graphql_body_contract.py` carries the change. It
+defines **twelve** tests. Eleven assert the documented contract and were each
+verified to fail against the previous revisions of the files they cover —
+`reference/api-source.md`, `reference/derived-models.md`, `SKILL.md`,
+`reference/models-example.md`, `reference/nxd-spec-api.md`, the
+`nxd-build-semantic-data-product` role grammar and templates, and
+`scripts/self_check.py` — and to pass after them.
+
+The twelfth is the one assertion whose truth lives outside this repo: it runs
 the pinned `dlt[duckdb]==1.28.2` in a subprocess and proves that a
 brace-doubled GraphQL body carries no dlt expressions, that the unescaped body
 still trips the scanner, and that `expand_placeholders` collapses the escape
 back to the byte-identical query before the request — so a dlt bump that broke
-the round-trip would fail here rather than silently posting doubled braces.
+the round-trip would fail here rather than silently posting doubled braces. It
+resolves that pin from the network on a cold `uv` cache, which is the one place
+this suite reaches outside the repo.
 
-The same file's `test_recipe_requires_a_dimension_role_beside_every_primary_key`
-carries the key-role fix in `SKILL.md` and `reference/models-example.md`, and
-fails against both files' previous revisions.
+Three of the twelve cover the key-role defect specifically: a spelling-independent
+scan for `field(<type>(), primary_key())` across both the placing and the
+inferring skill, a check that the inference skill's own grammar and templates
+teach the pairing, and a check that `self_check.py` reports
+`struct.key_not_groupable` as a warning — the mechanical backstop, since that
+defect has no error, no failed assert and no missing table to catch it.
 
 `evals/tests/test_api_source_header_contract.py` and
 `evals/tests/test_api_source_connector_gate.py` continue to cover the GET-side

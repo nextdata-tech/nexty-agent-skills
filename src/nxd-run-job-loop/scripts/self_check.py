@@ -40,6 +40,7 @@ _codes("error", "agent",
        "struct.naming_invariant_promised_vs_models",
        "struct.naming_invariant_promised_vs_physical",
        "struct.base_models_vs_data_dirs")
+_codes("warning", "agent", "struct.key_not_groupable")
 _codes("info", "agent", "struct.unverified")
 _codes("error", "agent",
        "runtime.import_failed", "runtime.transform_raised",
@@ -321,6 +322,17 @@ def bad(code, msg, at=""):
     errors.append(msg)
     diag("s1_structure", code, msg, path=cpath(at))
 
+def warn(code, msg, at=""):
+    """A real defect that must not fail the closure.
+
+    `bad` fails the phase, which would reject closures that already build,
+    publish and answer. A warning still reaches the report and the build record,
+    which is what `struct.key_not_groupable` needs: it is invisible at runtime
+    (no error, no failed assert, no missing table) but it is not fatal.
+    """
+    diag("s1_structure", code, msg, path=cpath(at))
+    say(f"  warning: {msg}")
+
 def unv(msg, at=""):
     """A construct this static pass cannot see. Recorded, never a failure —
     the printed list is the honest scope boundary, and it belongs in the build
@@ -564,6 +576,18 @@ def parse_models(src, path):
                 if isinstance(v, ast.Tuple) and v.elts:
                     check_dtype(v.elts[0], where)
                 walk_roles(v, where, in_view=in_view)
+                field_roles = {call_name(sub) for sub in ast.walk(v)}
+                if not in_view and "primary_key" in field_roles \
+                        and "dimension" not in field_roles:
+                    # Roles compose. A key carrying ONLY primary_key() never
+                    # reaches describe_models, so no query can group by it and
+                    # every entity-level question loses its answerable form —
+                    # with no error, no failed assert and no missing table to
+                    # show for it.
+                    warn("struct.key_not_groupable",
+                         f"{where}: primary_key() with no dimension(...) on the "
+                         f"same field — the key is not groupable, so no query "
+                         f"can return which entity a row is about", where)
                 for sub in ast.walk(v):
                     if call_name(sub) == "primary_key":
                         has_pk[model] = True

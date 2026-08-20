@@ -248,7 +248,7 @@ per set of metrics over that table:
   `metric_field(<type>(), metric(Agg.<AGG>, of=<base>.field("<column>"), ...))` —
   query-time, not a physical table.
 
-Role builders: `field(number(), primary_key())` — never the deprecated `grain`;
+Role builders: `field(number(), primary_key(), dimension(name=..., description=...))` — key roles compose with a dimension, and `grain` is deprecated;
 `field(string(), dimension(name=..., description=..., pii=<flag>))`; `field(number(), join(to="<model>", to_column="<col>"))` — `to=`, NOT `to_model=`.
 
 **Every field takes a role, except a measure a metric aggregates. Dimensions

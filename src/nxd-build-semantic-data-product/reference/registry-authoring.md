@@ -18,7 +18,7 @@ only with the public `nxd.spec` DSL:
 
 | Element | Where it belongs | Public form |
 |---|---|---|
-| Entity key | Physical `semantic_model` field | `field(type, primary_key())` |
+| Entity key | Physical `semantic_model` field | `field(type, primary_key(), dimension(name=..., description=...))` — pair the key role with a dimension or the key is not groupable |
 | Dimension | Physical `semantic_model` field | `field(type, dimension(...))` |
 | Join | Physical `semantic_model` field | `field(type, join(...))` |
 | Metric | Query-time `semantic_view` field | `metric_field(type, metric(...))` |
@@ -55,7 +55,7 @@ from nxd.spec.data_types import float64, int64, string
 ### Entity key
 
 ```python
-"ORDER_ID": field(int64(), primary_key())
+"ORDER_ID": field(int64(), primary_key(), dimension(name="order_id", description="Order key."))
 ```
 
 The key must identify one row of the physical model. Use more than one field when
@@ -190,7 +190,7 @@ people = (
     .description("One row per registered person.")
     .schema(
         {
-            "PERSON_ID": field(int64(), primary_key()),
+            "PERSON_ID": field(int64(), primary_key(), dimension(name="person_id", description="Person key.")),
             "COUNTRY_CODE": field(
                 string(),
                 dimension(
@@ -215,7 +215,7 @@ activity_events = (
     .description("One row per product activity event emitted by a person.")
     .schema(
         {
-            "EVENT_ID": field(int64(), primary_key()),
+            "EVENT_ID": field(int64(), primary_key(), dimension(name="event_id", description="Event key.")),
             "EVENT_TYPE": field(
                 string(),
                 dimension(

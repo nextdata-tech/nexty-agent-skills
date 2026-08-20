@@ -387,22 +387,29 @@ from dlt.sources.rest_api import rest_api_resources, RESTAPIConfig
 # `secrets` is the FLAT merge of every service in `.secrets([...])` — read the
 # attribute keys directly. There is no per-service level to index first.
 #
-# The API-backed models are exactly the ones the profile gives an endpoint for.
+# The fetched models are exactly the ones the profile gives an endpoint for,
+# filtered out of API_MODELS — the module-level tuple of models this closure
+# fetches over HTTP.
 #
-# Not PHYSICAL_MODELS and not BASE_MODELS. A derived model (Step 3a) is computed
-# in Python and has no endpoint. But neither is every BASE_MODEL fetched: landed
+# Do NOT filter PHYSICAL_MODELS, and do NOT filter BASE_MODELS. A derived model
+# (Step 3a) is computed in Python and has no endpoint. BASE_MODELS is the landed
 # reference data — `nxd_decisions`, agent judgement rulings, anything from
-# `derivation-plan.md` / `llm-judgments.md` — is a base model too, and reaches
-# the port as its own `@dlt.resource` rather than over HTTP. Iterating either
-# tuple asks the API for a model it does not serve, or demands an
-# `endpoint_<model>` attribute for a path that does not exist.
+# `derivation-plan.md` / `llm-judgments.md` — which reaches the port as its own
+# `@dlt.resource` rather than over HTTP, and which must equal the `data/`
+# listing exactly (see "Landed reference data in an API closure" below).
+# Filtering either one asks the API for a model it does not serve, or yields an
+# empty fetch list because nothing in it has an `endpoint_<model>` attribute.
 #
 # A model that SHOULD be fetched but whose attribute you forgot drops out here
 # rather than raising. That is caught: the mandatory read-back assert at the end
 # of the transform compares what landed against PHYSICAL_MODELS and names the
 # missing table. Do not delete that assert — here it is the only thing standing
 # between a typo'd attribute key and a silently empty model.
-API_MODELS = tuple(model for model in BASE_MODELS if f"endpoint_{model}" in secrets)
+#
+# The filtered subset gets its OWN name. Assigning it back over API_MODELS makes
+# the module-level tuple and the runtime subset the same identifier, so a later
+# reader cannot tell which one a line means.
+fetched_models = tuple(m for m in API_MODELS if f"endpoint_{m}" in secrets)
 
 client_config = {"base_url": secrets["base_url"]}
 auth_type = secrets.get("auth_type")
@@ -450,7 +457,7 @@ config: RESTAPIConfig = {
     "client": client_config,
     "resources": [
         {"name": model, "endpoint": {"path": secrets[f"endpoint_{model}"]}}
-        for model in API_MODELS
+        for model in fetched_models
     ],
 }
 # rest_api_resources returns a LIST of DltResource, not a DltSource. Verified
@@ -465,12 +472,12 @@ config: RESTAPIConfig = {
 # `rest_api_source` DOES return a DltSource whose `.resources` mapping is real.
 # Pick one and stay with it; the two names differ by one word and not by shape.
 resources = {r.name: r for r in rest_api_resources(config)}
-# API_MODELS again, matching the resource list above. Everything else promised —
+# fetched_models again, matching the resource list above. Everything else promised —
 # derived models (Step 3a) and landed reference data — reaches the same
 # `pipeline.run` as `@dlt.resource` generators appended to this same list. They
 # are landed in the one run, just not fetched over HTTP.
 readers = []
-for model in API_MODELS:
+for model in fetched_models:
     table_name = duckdb.model_tables[model]
     readers.append(resources[model].with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
@@ -549,15 +556,16 @@ same path, or a judgement model whose `score` is `field(number(), ...)` under an
 convert measures, not identifiers; `Decimal` for money, cast to `float` only in
 the final dict.
 
-It is still a base model everywhere else — promised in `spec.py` and declared
-in `models.py`. What changes is how the rows reach the port, because on this
-connector there is no reader loop to carry them — and, because you are now
-reading the file yourself, their types.
+It is still a base model everywhere else — promised in `spec.py`, declared in
+`models.py`, listed in `BASE_MODELS` and `PHYSICAL_MODELS`. What changes is how
+the rows reach the port, because on this connector there is no reader loop to
+carry them — and, because you are now reading the file yourself, their types.
 
-**It also changes which tuple it belongs to.** The self-check enforces
-`BASE_MODELS == the data/ directory listing` whenever `data/` exists, so an api
-closure that carries reference data cannot put its FETCHED models in
-`BASE_MODELS` too:
+**What moves is the FETCHED models, not this one.** The self-check enforces
+`BASE_MODELS == the data/ directory listing` whenever `data/` exists. The landed
+reference model has a `data/` directory and belongs in `BASE_MODELS`; the models
+fetched over HTTP have none, so leaving them in `BASE_MODELS` breaks that
+equality:
 
 ```
 struct.base_models_vs_data_dirs: BASE_MODELS ['linear_comments_landed',
@@ -570,17 +578,36 @@ Use three tuples, with `PHYSICAL_MODELS` written as a literal (the structural
 check cannot evaluate a computed one and reports it `unverified`):
 
 ```python
-API_MODELS = ("issues", "comments")               # fetched; no data/ dir
-BASE_MODELS = ("scoring_rubric", "nxd_decisions")  # == the data/ listing
+# Fetched over HTTP; no data/ directory of their own.
+API_MODELS = ("linear_issues_landed", "linear_comments_landed")
+# Landed from data/<name>/. This tuple must equal the data/ listing exactly —
+# all three directories from the finding above, none missing.
+BASE_MODELS = ("nxd_decisions", "scoring_rubric", "verdict_thresholds")
+# Computed in Python from the rows above.
 DERIVED_MODELS = ("open_tickets",)
+# A literal: the structural check cannot evaluate a computed tuple and reports
+# it `unverified`. The assert keeps the literal honest as the others change.
 PHYSICAL_MODELS = (
-    "issues", "comments", "scoring_rubric", "nxd_decisions", "open_tickets",
+    "linear_issues_landed",
+    "linear_comments_landed",
+    "nxd_decisions",
+    "scoring_rubric",
+    "verdict_thresholds",
+    "open_tickets",
 )
 assert set(PHYSICAL_MODELS) == set(API_MODELS + BASE_MODELS + DERIVED_MODELS)
 ```
 
-Derive the fetched set from `API_MODELS`, not `BASE_MODELS`:
-`tuple(m for m in API_MODELS if f"endpoint_{m}" in secrets)`.
+That is the same closure the finding above came from, with the fetched models
+moved out of `BASE_MODELS` and nothing dropped: `BASE_MODELS` is now byte-equal
+to the `data/` listing the finding named.
+
+At transform time, filter `API_MODELS` — never `BASE_MODELS` — into a subset
+under its own name, as the template above does:
+
+```python
+fetched_models = tuple(m for m in API_MODELS if f"endpoint_{m}" in secrets)
+```
 
 Build the `RESTAPIConfig` from `secrets` at runtime — never
 hard-code a base URL or credential in the transform source. The `auth_type`

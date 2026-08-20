@@ -33,9 +33,13 @@ correctly.
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 API_SOURCE = (REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" /
@@ -196,6 +200,15 @@ def test_pinned_dlt_expands_doubled_braces_back_to_the_original_query():
         }))
         """
     )
+    # Name the launcher when it is the thing that is missing. Without this the
+    # whole evals/tests run dies on an unhandled FileNotFoundError whose
+    # traceback says nothing about uv. CI installs it (astral-sh/setup-uv);
+    # a local run may not have it.
+    if shutil.which("uv") is None:
+        pytest.fail(
+            "uv is required to verify the dlt escape round-trip against the "
+            "pinned version; install uv, or run this test in CI"
+        )
     result = subprocess.run(
         ["uv", "run", "--quiet", "--with", DLT_PIN, "python", "-c", program],
         capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S,
@@ -203,7 +216,12 @@ def test_pinned_dlt_expands_doubled_braces_back_to_the_original_query():
     assert result.returncode == 0, (
         f"probe failed: {result.stderr[-2000:]}"
     )
-    out = json.loads(result.stdout.strip().splitlines()[-1])
+    lines = result.stdout.strip().splitlines()
+    assert lines, (
+        "the probe exited 0 but printed nothing on stdout — cannot verify the "
+        f"round-trip. stderr: {result.stderr[-1000:]!r}"
+    )
+    out = json.loads(lines[-1])
 
     assert out["expressions_in_escaped"] == [], (
         "the escaped body must carry no dlt expressions — that is what stops "
@@ -252,10 +270,69 @@ def test_recipe_requires_a_dimension_role_beside_every_primary_key():
         "builds, publishes and answers counts, with no error anywhere"
     )
 
+    # Spelling-independent, and over every file an author copies from — not
+    # just the one line that was fixed. models-example.md carried the defect
+    # twice: customer_id as string(), order_id as number(), 45 lines apart.
+    bare = re.compile(r"field\(\s*\w+\(\)\s*,\s*primary_key\(\)\s*\)")
+    offenders = []
+    for skill in ("nxd-generate-data-product", "nxd-build-semantic-data-product"):
+        root = REPO_ROOT / "src" / skill
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.suffix in (".md", ".py", ".tmpl"):
+                hits = bare.findall(path.read_text(encoding="utf-8", errors="ignore"))
+                if hits:
+                    offenders.append(f"{path.relative_to(REPO_ROOT)} ({len(hits)})")
+    assert not offenders, (
+        "these files still show a bare primary_key() with no dimension role — "
+        "the shape authors copy: " + ", ".join(offenders)
+    )
+
     example = (REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" /
                "models-example.md").read_text(encoding="utf-8")
-    assert 'field(string(), primary_key()),' not in example, (
-        "the worked example must not show a bare key role — it is the shape "
-        "authors copy"
+    assert "Group by this to name a customer" in example
+    assert "Group by this to name an order" in example
+
+
+def test_the_inference_skill_pairs_keys_too():
+    """The pairing skill INFERS the models this one places.
+
+    Fixing only nxd-generate-data-product leaves the defect re-entering through
+    the inference step: nxd-build-semantic-data-product's role grammar, its
+    worked model, its scaffold script and its template all emitted bare keys.
+    """
+    root = REPO_ROOT / "src" / "nxd-build-semantic-data-product"
+    grammar = (root / "SKILL.md").read_text(encoding="utf-8")
+    assert "roles compose" in grammar and "not groupable" in grammar, (
+        "the role-grammar table must teach the pairing, not just the key role"
     )
-    assert "primary_key()," in example and "Group by this to name a customer" in example
+    for rel in ("reference/registry-authoring.md",
+                "reference/scripts/scaffold_semantic_dp.py",
+                "reference/scripts/templates/semantic_dp.py.tmpl",
+                "reference/overview.md"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert "primary_key()" in text and "dimension(" in text, (
+            f"{rel} shows a key without ever showing the dimension it pairs with"
+        )
+
+
+def test_self_check_reports_a_key_that_carries_only_the_key_role():
+    """The mechanical backstop.
+
+    Documentation alone does not stop this recurring: the failure has no error,
+    no failed assert and no missing table, so nothing but a structural finding
+    catches it. Registered as a WARNING rather than an error — closures that
+    already build and publish with bare keys must keep building.
+    """
+    checker = (REPO_ROOT / "src" / "nxd-run-job-loop" / "scripts" /
+               "self_check.py").read_text(encoding="utf-8")
+    assert "struct.key_not_groupable" in checker, (
+        "self_check.py must carry a finding for a key with no dimension role"
+    )
+    assert '_codes("warning", "agent", "struct.key_not_groupable")' in checker, (
+        "it must be a warning: an error would fail closures that already "
+        "build, publish and answer"
+    )
+    # The check keys on the ROLES present on one field, not on a spelling.
+    assert 'field_roles = {call_name(sub) for sub in ast.walk(v)}' in checker
+    assert '"primary_key" in field_roles' in checker
+    assert '"dimension" not in field_roles' in checker
