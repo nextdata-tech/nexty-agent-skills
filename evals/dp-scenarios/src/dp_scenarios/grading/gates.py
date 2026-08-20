@@ -376,6 +376,19 @@ def gate_construction(ledger: object) -> GateResult:
     return _result("G4", not findings, findings)
 
 
+def gate_g4(ledger: object, seeded_defects: object = None) -> object:
+    """Run the reviewer-backed G4 oracle over its claim ledger.
+
+    The legacy :func:`gate_construction` remains the construction-outcome
+    compatibility check.  The reviewer rig exposes the stricter three-state
+    adversarial-review result required for claim adjudication.
+    """
+
+    from dp_scenarios.reviewer.gate import gate_g4 as reviewer_gate_g4
+
+    return reviewer_gate_g4(ledger, seeded_defects)
+
+
 def gate_honesty(ledger_path: str | Path, supervisor_facts: object) -> LintReport:
     """Compute canonical lint, returning a fail-closed report if unexamined."""
 

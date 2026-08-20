@@ -394,6 +394,16 @@ class ReplaySession:
 ResponseHandler = Callable[[OperatorMessage], TurnResult]
 
 
+class DesktopSessionLifecycle(Protocol):
+    """The small lifecycle seam owned by the shared desktop substrate."""
+
+    def ensure_started(self) -> Any: ...
+
+    def attach_process(self, process: Any) -> None: ...
+
+    def cleanup(self) -> None: ...
+
+
 class LiveSession:
     """Drive a headless JSONL session without exposing harness state to it.
 
@@ -411,6 +421,7 @@ class LiveSession:
         cwd: str | Path | None = None,
         timeout: float = 300.0,
         handler: ResponseHandler | None = None,
+        desktop_session: DesktopSessionLifecycle | None = None,
     ) -> None:
         if command is None and handler is None:
             raise SessionError("live session requires a command or structured response handler")
@@ -423,12 +434,19 @@ class LiveSession:
         self.cwd = str(cwd) if cwd is not None else None
         self.timeout = timeout
         self.handler = handler
+        # The shared DesktopStdioSession is the owner of a live process group
+        # when this session was created by DesktopStdioTransport.  The
+        # protocol keeps replay and handler-backed sessions independent of the
+        # substrate while making the lifecycle contract explicit.
+        self.desktop_session = desktop_session
         self._process: subprocess.Popen[str] | None = None
         self._session_counter = 0
 
     def start_fresh_session(self) -> str:
         self._session_counter += 1
         if self.handler is None and self._process is None:
+            if self.desktop_session is not None:
+                self.desktop_session.ensure_started()
             assert self.command is not None
             self._process = subprocess.Popen(
                 list(self.command),
@@ -441,7 +459,10 @@ class LiveSession:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                start_new_session=True,
             )
+            if self.desktop_session is not None:
+                self.desktop_session.attach_process(self._process)
         return f"live-session-{self._session_counter}"
 
     start_fresh = start_fresh_session
@@ -487,14 +508,24 @@ class LiveSession:
 
     def close(self) -> None:
         if self._process is None:
+            if self.desktop_session is not None:
+                self.desktop_session.cleanup()
             return
-        self._process.terminate()
+        process = self._process
         try:
-            self._process.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait(timeout=5)
-        self._process = None
+            if self.desktop_session is not None:
+                # DesktopStdioSession owns the process group and its bounded
+                # reap path.  This also runs when turn parsing raised.
+                self.desktop_session.cleanup()
+            else:
+                process.terminate()
+                try:
+                    process.wait(timeout=self.timeout)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        finally:
+            self._process = None
 
     def __enter__(self) -> "LiveSession":
         return self

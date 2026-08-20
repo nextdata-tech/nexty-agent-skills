@@ -52,6 +52,7 @@ by the T0 operator.
 | `src/dp_scenarios/synthgen/` | Seeded fixture generator + gold reference implementation |
 | `src/dp_scenarios/mockrest/` | Configurable HTTP mock source |
 | `src/dp_scenarios/operator/` | Scripted multi-turn operator runner |
+| `src/dp_scenarios/grantkit/` | Native field-mapper grant fixtures, cumulative budget ledger, and profile delegation |
 | `src/dp_scenarios/grading/` | Mechanical gate checks and oracles |
 | `src/dp_scenarios/canary/` | C1 claims extraction and verdict matrix |
 | `scenarios/` | Per-scenario fixtures, operator scripts, gold row-sets |

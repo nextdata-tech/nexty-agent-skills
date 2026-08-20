@@ -16,26 +16,73 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import tempfile
 import threading
+from collections.abc import Callable, Sequence
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from dp_scenarios.canary.probe import SESSION_ENVIRONMENT_ALLOWLIST
-from dp_scenarios.ledger import LedgerStore, Manifest
+from dp_scenarios.ledger import LedgerStore, Manifest, fixture_dir_hash
+from dp_scenarios.ledger.manifest import REPLAY_SESSION_PATH_FIELDS
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios.scenario import Scenario
 
 
-class RunEnvironmentError(RuntimeError):
+class EnvironmentError(RuntimeError):
     """Raised when a trial cannot be prepared with a comparable identity."""
 
 
-_SESSION_ENVIRONMENT_ALLOWLIST = SESSION_ENVIRONMENT_ALLOWLIST
+RunEnvironmentError = EnvironmentError
+
+
+_SESSION_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "COLORTERM",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "NO_COLOR",
+        "PATH",
+        "PYTHONIOENCODING",
+        "PYTHONUNBUFFERED",
+        "SHELL",
+        "TERM",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "USER",
+        "VIRTUAL_ENV",
+    }
+)
 
 
 def _required_text(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise RunEnvironmentError(f"pinned value {field_name} must be a non-empty string")
+        raise EnvironmentError(f"pinned value {field_name} must be a non-empty string")
     return value
+
+
+LiveCommandBuilder = Callable[[Path, bool, str], Sequence[str]]
+
+
+def _desktop_command_builder(
+    command: Sequence[str] | LiveCommandBuilder,
+) -> LiveCommandBuilder:
+    """Adapt the legacy base argv to the shared substrate's command seam."""
+
+    if callable(command):
+        return command
+    base = tuple(str(argument) for argument in command)
+    if not base:
+        raise EnvironmentError("live desktop command must not be empty")
+
+    def build(config_path: Path, strict_mcp_config: bool, allowed_tools_csv: str) -> Sequence[str]:
+        result = [*base, "--mcp-config", str(config_path)]
+        if strict_mcp_config:
+            result.append("--strict-mcp-config")
+        result.extend(("--allowedTools", allowed_tools_csv))
+        return result
+
+    return build
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +98,8 @@ class PinnedVersions:
     agent_sampling_params: Mapping[str, object] = field(
         default_factory=lambda: MappingProxyType({"temperature": 0})
     )
+    supervisor_binary_path: str = "not-applicable"
+    session_config_sha256: str = "not-applicable"
 
     def __post_init__(self) -> None:
         for name in (
@@ -60,10 +109,12 @@ class PinnedVersions:
             "mock_api_version",
             "canary_claims_hash",
             "agent_model_id",
+            "supervisor_binary_path",
+            "session_config_sha256",
         ):
             _required_text(getattr(self, name), name)
         if not isinstance(self.agent_sampling_params, Mapping) or not self.agent_sampling_params:
-            raise RunEnvironmentError("pinned value agent_sampling_params must be a non-empty mapping")
+            raise EnvironmentError("pinned value agent_sampling_params must be a non-empty mapping")
         object.__setattr__(self, "agent_sampling_params", MappingProxyType(dict(self.agent_sampling_params)))
 
     @property
@@ -77,7 +128,7 @@ class PinnedVersions:
         """Build pins without accepting absent values or aliases silently."""
 
         if not isinstance(value, Mapping):
-            raise RunEnvironmentError("pinned versions must be a mapping")
+            raise EnvironmentError("pinned versions must be a mapping")
         runtime = value.get("runtime_wheel_version", value.get("nxd_data_product_wheel_version"))
         required = {
             "skill_pack_version": value.get("skill_pack_version"),
@@ -88,10 +139,10 @@ class PinnedVersions:
         }
         missing = [name for name, item in required.items() if not isinstance(item, str) or not item.strip()]
         if missing:
-            raise RunEnvironmentError("missing pinned value(s): " + ", ".join(missing))
+            raise EnvironmentError("missing pinned value(s): " + ", ".join(missing))
         agent_model_id = value.get("agent_model_id", "replay")
         if not isinstance(agent_model_id, str) or not agent_model_id.strip():
-            raise RunEnvironmentError("pinned value agent_model_id must be a non-empty string")
+            raise EnvironmentError("pinned value agent_model_id must be a non-empty string")
         sampling = value.get("agent_sampling_params", {"temperature": 0})
         return cls(
             skill_pack_version=required["skill_pack_version"],  # type: ignore[arg-type]
@@ -101,6 +152,8 @@ class PinnedVersions:
             canary_claims_hash=required["canary_claims_hash"],  # type: ignore[arg-type]
             agent_model_id=agent_model_id,
             agent_sampling_params=sampling,  # type: ignore[arg-type]
+            supervisor_binary_path=str(value.get("supervisor_binary_path", "not-applicable")),
+            session_config_sha256=str(value.get("session_config_sha256", "not-applicable")),
         )
 
 
@@ -141,9 +194,9 @@ class MockSourceHandle:
         self._thread = threading.Thread(target=serve, name="dp-scenarios-mock-source", daemon=True)
         self._thread.start()
         if not self._ready.wait(30):
-            raise RunEnvironmentError("mock source did not become ready within 30 seconds")
+            raise EnvironmentError("mock source did not become ready within 30 seconds")
         if self._error is not None:
-            raise RunEnvironmentError(f"mock source failed during startup: {self._error}") from self._error
+            raise EnvironmentError(f"mock source failed during startup: {self._error}") from self._error
         return self
 
     @property
@@ -151,7 +204,7 @@ class MockSourceHandle:
         """Return the started server, or fail closed if startup did not finish."""
 
         if self._server is None:
-            raise RunEnvironmentError("mock source has not started")
+            raise EnvironmentError("mock source has not started")
         return self._server
 
     @property
@@ -167,7 +220,7 @@ class MockSourceHandle:
         if self._thread is not None:
             self._thread.join(timeout=30)
             if self._thread.is_alive():
-                raise RunEnvironmentError("mock source did not stop cleanly")
+                raise EnvironmentError("mock source did not stop cleanly")
         self._thread = None
         self._server = None
 
@@ -196,12 +249,20 @@ class RunEnvironment:
     route_config: object | None = None
     control_secret: str | None = None
     manifest_override: Manifest | Mapping[str, object] | None = None
+    live_command: Sequence[str] | LiveCommandBuilder | None = None
+    supervisor_command: str | Path | Sequence[str] | None = None
+    supervisor_args: Sequence[str] = ()
+    supervisor_environment: Mapping[str, str] | None = None
+    desktop_server_name: str = "nxd-desktop"
+    desktop_allowed_tools: Sequence[str] | None = None
+    desktop_session_root: Path | None = None
     _temporary: tempfile.TemporaryDirectory[str] | None = field(default=None, init=False, repr=False)
     _mock_source: MockSourceHandle | None = field(default=None, init=False, repr=False)
     _ledger: LedgerStore | None = field(default=None, init=False, repr=False)
     _manifest: Manifest | None = field(default=None, init=False, repr=False)
     _fixture: Path | None = field(default=None, init=False, repr=False)
     _home: Path | None = field(default=None, init=False, repr=False)
+    _live_transport: Any | None = field(default=None, init=False, repr=False)
 
     def __enter__(self) -> "RunEnvironment":
         return self.prepare()
@@ -216,61 +277,137 @@ class RunEnvironment:
             return self
         parent = str(self.root.expanduser().resolve()) if self.root is not None else None
         if parent is not None and not Path(parent).is_dir():
-            raise RunEnvironmentError(f"environment root is not a directory: {parent}")
+            raise EnvironmentError(f"environment root is not a directory: {parent}")
         self._temporary = tempfile.TemporaryDirectory(prefix="dp-scenario-run-", dir=parent)
+        base = Path(self._temporary.name)
+        self._home = base / "home"
+        self._home.mkdir()
+        for relative in (".nxd", ".config", ".local/share", ".cache", ".state"):
+            (self._home / relative).mkdir(parents=True, exist_ok=True)
+        self._fixture = base / "fixture"
+        generation = self.scenario.generate_fixture(self._fixture)
+
+        route_config = self.route_config if self.route_config is not None else _scenario_route_config(self.scenario)
+        requested_validation_mode = "live" if self.live_command is not None else "replay"
+
+        # A live desktop transport must exist before row zero is anchored: its
+        # resolved executable and session artifact paths are part of identity.
+        # Replay and handler-backed runs leave this unset and never import the
+        # desktop substrate.
         try:
-            base = Path(self._temporary.name)
-            self._home = base / "home"
-            self._home.mkdir()
-            for relative in (".nxd", ".config", ".local/share", ".cache", ".state"):
-                (self._home / relative).mkdir(parents=True, exist_ok=True)
-            self._fixture = base / "fixture"
-            generation = self.scenario.generate_fixture(self._fixture)
-
-            route_config = self.route_config if self.route_config is not None else _scenario_route_config(self.scenario)
-
-            generated_manifest = generation.manifest
-            base_instant = generated_manifest.get("base_instant")
-            if not isinstance(base_instant, str) or not base_instant:
-                raise RunEnvironmentError("generated fixture manifest has no pinned base_instant")
-            effective_run_id = self.run_id or f"{self.scenario.id}-trial-{self.trial_index}"
-            if not isinstance(effective_run_id, str) or not effective_run_id:
-                raise RunEnvironmentError("run_id must be a non-empty string")
-            manifest = Manifest(
-                agent_model_id=self.pins.agent_model_id,
-                agent_sampling_params=dict(self.pins.agent_sampling_params),
-                judge_model_id="not-applicable",
-                judge_prompt_hash="not-applicable",
-                skill_pack_version=self.pins.skill_pack_version,
-                supervisor_version=self.pins.supervisor_version,
-                nxd_data_product_wheel_version=self.pins.runtime_wheel_version,
-                fixture_dir_hash=str(generation.manifest.get("fixture_hash", "")),
-                mock_api_version=self.pins.mock_api_version,
-                operator_script_hash=self.scenario.script_hash,
-                turn_budget=self.scenario.turn_budget,
-                grant_fixture_hash="not-applicable",
-                scenario_id=self.scenario.id,
-                tier=self.scenario.tier,
-                trial_index=self.trial_index,
-                canary_claims_hash=self.pins.canary_claims_hash,
-                persona_paraphrase_prompt_hash="not-applicable",
-                judge_calibration_set_hash="not-applicable",
-                fixture_seed=self.scenario.seed,
-                fixture_base_instant=base_instant,
-                run_id=effective_run_id,
-            )
-            if self.manifest_override is not None:
-                override = self.manifest_override if isinstance(self.manifest_override, Manifest) else Manifest.from_mapping(self.manifest_override)
-                for field_name in Manifest.fields:
-                    if field_name == "run_id":
-                        continue
-                    if getattr(override, field_name) != getattr(manifest, field_name):
-                        raise RunEnvironmentError(f"replay manifest mismatch in {field_name}")
-                manifest = override
-            self._manifest = manifest
-            self._ledger = LedgerStore.open(base / "evidence.jsonl", manifest)
             if route_config is not None:
                 self._mock_source = MockSourceHandle(route_config, control_secret=self.control_secret).start()
+            if self.live_command is not None:
+                if self.supervisor_command is None:
+                    raise EnvironmentError("live desktop environment requires a supervisor_command")
+                from .desktop import DesktopStdioTransport
+
+                transport = DesktopStdioTransport.create(
+                    _desktop_command_builder(self.live_command),
+                    environment=self.agent_environment,
+                    cwd=self.base_dir,
+                    server_command=self.supervisor_command,
+                    server_args=self.supervisor_args,
+                    server_environment=self.supervisor_environment or self.agent_environment,
+                    root=self.desktop_session_root or (base / "desktop-session"),
+                    server_name=self.desktop_server_name,
+                    allowed_tools=self.desktop_allowed_tools,
+                )
+                self._live_transport = transport
+                transport.start()
+        except Exception:
+            self.close()
+            raise
+
+        generated_manifest = generation.manifest
+        base_instant = generated_manifest.get("base_instant")
+        if not isinstance(base_instant, str) or not base_instant:
+            raise EnvironmentError("generated fixture manifest has no pinned base_instant")
+        effective_run_id = self.run_id or f"{self.scenario.id}-trial-{self.trial_index}"
+        if not isinstance(effective_run_id, str) or not effective_run_id:
+            raise EnvironmentError("run_id must be a non-empty string")
+        override: Manifest | None = None
+        if self.manifest_override is not None:
+            try:
+                override = (
+                    self.manifest_override
+                    if isinstance(self.manifest_override, Manifest)
+                    else Manifest.from_mapping(
+                        self.manifest_override,
+                        replay=False if requested_validation_mode == "live" else None,
+                    )
+                )
+            except Exception:
+                self.close()
+                raise
+
+        manifest = Manifest(
+            agent_model_id=self.pins.agent_model_id,
+            agent_sampling_params=dict(self.pins.agent_sampling_params),
+            judge_model_id="not-applicable",
+            judge_prompt_hash="not-applicable",
+            skill_pack_version=self.pins.skill_pack_version,
+            supervisor_version=self.pins.supervisor_version,
+            nxd_data_product_wheel_version=self.pins.runtime_wheel_version,
+            fixture_dir_hash=fixture_dir_hash(generation.out_dir),
+            mock_api_version=self.pins.mock_api_version,
+            operator_script_hash=self.scenario.script_hash,
+            turn_budget=self.scenario.turn_budget,
+            grant_fixture_hash="not-applicable",
+            scenario_id=self.scenario.id,
+            tier=self.scenario.tier,
+            trial_index=self.trial_index,
+            canary_claims_hash=self.pins.canary_claims_hash,
+            persona_paraphrase_prompt_hash="not-applicable",
+            judge_calibration_set_hash="not-applicable",
+            fixture_seed=self.scenario.seed,
+            fixture_base_instant=base_instant,
+            run_id=effective_run_id,
+            supervisor_binary_path=(
+                self._live_transport.supervisor_binary_path
+                if self._live_transport is not None
+                else self.pins.supervisor_binary_path
+            ),
+            session_root=(
+                str(self._live_transport.root)
+                if self._live_transport is not None
+                else "not-applicable"
+            ),
+            session_config_path=(
+                str(self._live_transport.config_path)
+                if self._live_transport is not None
+                else "not-applicable"
+            ),
+            session_config_sha256=(
+                self._live_transport.session_config_sha256
+                if self._live_transport is not None
+                else self.pins.session_config_sha256
+            ),
+            session_trace_path=(
+                str(self._live_transport.trace_path)
+                if self._live_transport is not None
+                else "not-applicable"
+            ),
+            session_server_result_path=(
+                str(self._live_transport.server_result_path)
+                if self._live_transport is not None
+                else "not-applicable"
+            ),
+            validation_mode=requested_validation_mode,
+        )
+        if override is not None:
+            for field_name in Manifest.fields:
+                if field_name in {"run_id", "validation_mode"}:
+                    continue
+                if self._live_transport is None and field_name in REPLAY_SESSION_PATH_FIELDS:
+                    continue
+                if getattr(override, field_name) != getattr(manifest, field_name):
+                    self.close()
+                    raise EnvironmentError(f"replay manifest mismatch in {field_name}")
+            manifest = override
+        self._manifest = manifest
+        try:
+            self._ledger = LedgerStore.open(base / "evidence.jsonl", manifest)
         except Exception:
             self.close()
             raise
@@ -281,7 +418,7 @@ class RunEnvironment:
         """Return the private run directory."""
 
         if self._temporary is None:
-            raise RunEnvironmentError("environment has not been prepared")
+            raise EnvironmentError("environment has not been prepared")
         return Path(self._temporary.name)
 
     @property
@@ -289,7 +426,7 @@ class RunEnvironment:
         """Return the fresh sandboxed home directory."""
 
         if self._home is None:
-            raise RunEnvironmentError("environment has not been prepared")
+            raise EnvironmentError("environment has not been prepared")
         return self._home
 
     @property
@@ -297,7 +434,7 @@ class RunEnvironment:
         """Return generated fixture data and gold artifacts."""
 
         if self._fixture is None:
-            raise RunEnvironmentError("environment has not been prepared")
+            raise EnvironmentError("environment has not been prepared")
         return self._fixture
 
     @property
@@ -305,7 +442,7 @@ class RunEnvironment:
         """Return the append-only ledger path."""
 
         if self._ledger is None:
-            raise RunEnvironmentError("environment has not been prepared")
+            raise EnvironmentError("environment has not been prepared")
         return self._ledger.path
 
     @property
@@ -313,7 +450,7 @@ class RunEnvironment:
         """Return the open ledger handle used by the runner."""
 
         if self._ledger is None:
-            raise RunEnvironmentError("environment has not been prepared")
+            raise EnvironmentError("environment has not been prepared")
         return self._ledger
 
     @property
@@ -321,7 +458,7 @@ class RunEnvironment:
         """Return the exact row-zero identity."""
 
         if self._manifest is None:
-            raise RunEnvironmentError("environment has not been prepared")
+            raise EnvironmentError("environment has not been prepared")
         return self._manifest
 
     @property
@@ -331,11 +468,24 @@ class RunEnvironment:
         return self._mock_source
 
     @property
+    def live_transport(self) -> Any:
+        """Return the prepared desktop adapter for a live run."""
+
+        if self._live_transport is None:
+            raise EnvironmentError("environment has no live desktop transport")
+        return self._live_transport
+
+    def live_session(self, *, timeout: float = 300.0) -> Any:
+        """Build the turn-protocol session from the prepared desktop adapter."""
+
+        return self.live_transport.live_session(timeout=timeout)
+
+    @property
     def agent_environment(self) -> Mapping[str, str]:
         """Return only explicitly safe parent variables plus run-local values."""
 
         if self._temporary is None:
-            raise RunEnvironmentError("environment has not been prepared")
+            raise EnvironmentError("environment has not been prepared")
         values = {
             key: value
             for key, value in os.environ.items()
@@ -365,6 +515,9 @@ class RunEnvironment:
     def close(self) -> None:
         """Close the ledger/source and remove the disposable run tree."""
 
+        if self._live_transport is not None:
+            self._live_transport.cleanup()
+            self._live_transport = None
         if self._ledger is not None:
             self._ledger.close()
             self._ledger = None
@@ -385,9 +538,10 @@ RunSetup = RunEnvironment
 
 __all__ = [
     "Environment",
-    "RunEnvironmentError",
+    "EnvironmentError",
     "MockSourceHandle",
     "PinnedVersions",
     "RunEnvironment",
+    "RunEnvironmentError",
     "RunSetup",
 ]

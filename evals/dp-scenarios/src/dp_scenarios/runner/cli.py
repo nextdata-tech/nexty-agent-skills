@@ -161,10 +161,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         if not args.session_command:
             raise TierError("live mode requires --session-command")
+        if args.supervisor is None:
+            raise TierError("live mode requires --supervisor")
         command = tuple(shlex.split(args.session_command))
 
         def factory(scenario: object, environment: object, epoch: int) -> LiveSession:
-            return LiveSession(command, environment=environment.agent_environment, cwd=environment.base_dir)
+            return environment.live_session()  # type: ignore[attr-defined, no-any-return]
 
         session_factory = factory
     result = TierRunner(
@@ -173,6 +175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         canary=canary,
         session_factory=session_factory,
         replay_recordings=replays,
+        live_command=command if args.mode == "live" else None,
+        supervisor_command=args.supervisor if args.mode == "live" else None,
         budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
     ).run()
     write_report(result, json_path=args.report_json, summary_path=args.report_summary)

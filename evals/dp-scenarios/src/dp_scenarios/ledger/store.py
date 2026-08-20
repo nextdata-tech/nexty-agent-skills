@@ -121,7 +121,7 @@ def _manifest_from_first(path: Path, records: list[Any]) -> Manifest:
     if not records:
         raise LedgerError(f"ledger {path} has no row 0 manifest")
     try:
-        return Manifest.from_record(records[0])
+        return Manifest.from_record(records[0], replay=None)
     except ManifestError as exc:
         raise LedgerError(f"ledger {path} row 0 is not a valid manifest: {exc}") from exc
 
@@ -340,5 +340,5 @@ def _coerce_manifest(value: Manifest | Mapping[str, object] | None) -> Manifest:
     if isinstance(value, Manifest):
         return value
     if isinstance(value, Mapping):
-        return Manifest.from_mapping(value)
+        return Manifest.from_mapping(value, replay=None)
     raise ManifestError("LedgerStore.open requires a Manifest or manifest mapping")

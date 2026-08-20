@@ -75,6 +75,38 @@ def test_not_applicable_is_waived_only_for_smoke_fields() -> None:
         make_manifest(agent_model_id="not-applicable")
 
 
+def test_live_manifest_requires_desktop_fields_but_replay_can_waive_them() -> None:
+    with pytest.raises(ManifestError, match="supervisor_binary_path"):
+        make_manifest(validation_mode="live")
+
+    replay_values = make_manifest().to_dict()
+    replay_values.pop("session_root")
+    replay = Manifest.from_mapping(replay_values, replay=True)
+    assert replay.session_root == "not-applicable"
+
+    with pytest.raises(ManifestError, match="session_root"):
+        Manifest.from_mapping(replay_values)
+
+
+def test_validation_mode_is_persisted_and_used_by_stored_readers() -> None:
+    live_values = make_manifest(
+        validation_mode="live",
+        supervisor_binary_path="/opt/supervisor#sha256:abc",
+        session_root="/tmp/session",
+        session_config_path="/tmp/session/mcp-config.json",
+        session_config_sha256="sha256:config",
+        session_trace_path="/tmp/session/mcp-trace.jsonl",
+        session_server_result_path="/tmp/session/server-result.json",
+    ).to_dict()
+    assert live_values["validation_mode"] == "live"
+    parsed = Manifest.from_mapping(live_values, replay=None)
+    assert parsed.validation_mode == "live"
+
+    live_values.pop("session_root")
+    with pytest.raises(ManifestError, match="session_root"):
+        Manifest.from_mapping(live_values, replay=None)
+
+
 def test_manifest_rejects_an_unknown_tier() -> None:
     with pytest.raises(ManifestError, match="unknown tier"):
         make_manifest(tier="banana")

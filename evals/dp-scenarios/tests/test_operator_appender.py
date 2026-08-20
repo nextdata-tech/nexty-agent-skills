@@ -171,8 +171,6 @@ def test_empty_per_model_row_counts_are_rejected_by_fact_appender() -> None:
         )
 
 
-=======
->>>>>>> 28065cd6 (feat(evals): scripted multi-turn operator harness)
 def test_agent_authored_supervisor_count_is_rejected_even_with_reader() -> None:
     rows: list[object] = []
     reader = StaticSupervisorRecordReader(facts())
@@ -234,7 +232,6 @@ def test_non_fact_claims_cannot_launder_supervisor_facts(claim: object) -> None:
         append_turn_row(rows, turn(action_kind="build", phase=5, claim=claim))
 
 
-<<<<<<< HEAD
 def test_non_fact_outcome_claim_is_string_typed() -> None:
     with pytest.raises(AppenderError, match="outcome must be a string"):
         row_payload(turn(action_kind="self_check", phase=4, claim={"outcome": 1}))

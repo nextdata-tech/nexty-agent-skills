@@ -199,3 +199,20 @@ def test_mcnemar_refuses_multi_field_manifests_and_accepts_one_field() -> None:
         paired_mcnemar(first, {**first, "fixture_dir_hash": "fixture-2"}, [_run()], [_run()])
     with pytest.raises(ValueError, match="fixture and operator"):
         paired_mcnemar(first, {**first, "operator_script_hash": "operator-2"}, [_run()], [_run()])
+
+
+def test_mcnemar_refuses_validation_mode_as_a_pairing_axis() -> None:
+    live = {
+        **_manifest(),
+        "validation_mode": "live",
+        "supervisor_binary_path": "/opt/supervisor#sha256:abc",
+        "session_root": "/tmp/session",
+        "session_config_path": "/tmp/session/mcp-config.json",
+        "session_config_sha256": "sha256:config",
+        "session_trace_path": "/tmp/session/mcp-trace.jsonl",
+        "session_server_result_path": "/tmp/session/server-result.json",
+    }
+    replay = {**live, "validation_mode": "replay"}
+
+    with pytest.raises(ValueError, match="exactly one"):
+        paired_mcnemar(live, replay, [_run()], [_run()])

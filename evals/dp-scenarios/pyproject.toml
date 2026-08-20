@@ -8,11 +8,15 @@ dependencies = [
     "pyyaml>=6.0",           # scenario / route-table / persona definitions
     "duckdb>=1.0",           # gold-row-set reconciliation against landed data
     "aiohttp>=3.9",          # the mock HTTP source server and its client-side tests
+    "psycopg[binary]>=3.2",  # live Postgres readiness, seeding, and probes
 ]
 
 [project.optional-dependencies]
 # Provider SDKs are the responsibility of nxd_eval's own extras; nothing in the
-# T0 tier calls a model directly.
+# T0 tier calls a model directly.  The source-bound mapper is resolved at run
+# time from EVAL_NXD_REPO_ROOT rather than declared here: pinning it as a path
+# dependency would hardwire one machine's checkout layout into the lock file
+# and break every environment that does not reproduce it.
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-timeout>=2.3"]
@@ -34,3 +38,7 @@ nxd-eval = { path = "../nxd_eval", editable = true }
 testpaths = ["tests"]
 pythonpath = ["src"]
 timeout = 300
+markers = [
+    "integration: requires a local Docker runtime and the configured Postgres image",
+    "field_mapper: requires the source-bound NXD field_mapper dependency via EVAL_NXD_REPO_ROOT",
+]
