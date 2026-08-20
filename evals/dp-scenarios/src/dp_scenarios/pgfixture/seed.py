@@ -1,7 +1,8 @@
 """Deterministic source data for the live Postgres fixture.
 
 The existing synthgen ``grain_trap`` dataset supplies the source tables and
-independent gold reference.  B5 adds its quantity defect through the public
+independent gold reference.  The credential-rotation scenario adds its
+quantity defect through the public
 synthgen injector, keeping the source and every planted defect tied to the
 scenario seed without committing a large CSV fixture.
 """
@@ -94,7 +95,7 @@ def _lookup_rows(line_items: Frame) -> tuple[Mapping[str, Any], ...]:
 
 
 def seed_inventory(seed: int, work_dir: str | Path) -> SeededData:
-    """Materialize deterministic B5 rows and gold data under ``work_dir``.
+    """Materialize deterministic rotation-scenario rows and gold data under ``work_dir``.
 
     ``generate_dataset`` owns the grain-trap source, orphan-FK defect, and
     reference implementation.  The additional negative-quantity injector is

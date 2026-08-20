@@ -1,4 +1,4 @@
-"""Tests for the read-only adversarial-review rig and G4 oracle."""
+"""Tests for the read-only adversarial-review rig and construction oracle."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from dp_scenarios.reviewer import (
     closure_content_digest,
     coerce_review_ledger,
     dispatch_review,
-    gate_g4,
+    gate_construction_claims,
     score_review,
 )
 from dp_scenarios.grading.oracles import OracleState
@@ -79,20 +79,20 @@ def test_recorded_claims_are_selected_by_closure_content_digest(tmp_path: Path) 
     assert run.claims[0].claim_id == "null-handling"
 
 
-def test_g4_is_not_examined_when_reviewer_fails(tmp_path: Path) -> None:
+def test_construction_is_not_examined_when_reviewer_fails(tmp_path: Path) -> None:
     closure = _closure(tmp_path)
 
     def failing_reviewer(_snapshot: Path, _request: str) -> object:
         raise RuntimeError("review provider unavailable")
 
     run = dispatch_review(closure, "request", reviewer=failing_reviewer)
-    result = gate_g4(ReviewLedger.from_run(run), [SeededDefect("wrong-grain")])
+    result = gate_construction_claims(ReviewLedger.from_run(run), [SeededDefect("wrong-grain")])
 
     assert not run.examined
     assert result.state is OracleState.NOT_EXAMINED
     assert result.outcome == "not-examined"
     assert not result.passed
-    assert "g4_reviewer_failed" in {finding.code for finding in result.findings}
+    assert "construction_reviewer_failed" in {finding.code for finding in result.findings}
 
 
 def test_uncited_rejection_is_unadjudicated_and_not_a_pass(tmp_path: Path) -> None:
@@ -110,7 +110,7 @@ def test_uncited_rejection_is_unadjudicated_and_not_a_pass(tmp_path: Path) -> No
     assert score.unadjudicated_claims == 1
     assert score.claims_about_nothing_planted == 0
     assert score.precision_ratio.fraction == "0/0"
-    assert gate_g4(ledger, ["x"]).state is OracleState.NOT_EXAMINED
+    assert gate_construction_claims(ledger, ["x"]).state is OracleState.NOT_EXAMINED
 
 
 def test_citation_backed_rejection_counts_as_a_false_positive(tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ def test_citation_backed_rejection_counts_as_a_false_positive(tmp_path: Path) ->
     assert score.claims_about_nothing_planted == 1
     assert score.unadjudicated_claims == 0
     assert score.precision_ratio.fraction == "0/1"
-    assert gate_g4(ledger, ["x"]).state is OracleState.VIOLATED
+    assert gate_construction_claims(ledger, ["x"]).state is OracleState.VIOLATED
 
 
 def test_score_reports_recall_precision_counts_and_one_attempt_qualification(tmp_path: Path) -> None:
@@ -160,10 +160,10 @@ def test_score_reports_recall_precision_counts_and_one_attempt_qualification(tmp
 def test_zero_claims_from_a_healthy_review_do_not_hide_seeded_misses(tmp_path: Path) -> None:
     closure = _closure(tmp_path)
     run = dispatch_review(closure, "request", reviewer=lambda _path, _request: {"claims": []})
-    result = gate_g4(run, ["wrong-grain"])
+    result = gate_construction_claims(run, ["wrong-grain"])
 
     assert result.state is OracleState.VIOLATED
-    assert "g4_seeded_defect_missed" in {finding.code for finding in result.findings}
+    assert "construction_seeded_defect_missed" in {finding.code for finding in result.findings}
 
 
 def test_serialized_ledger_normalizes_uncited_and_nonexistent_rejections(tmp_path: Path) -> None:
@@ -186,7 +186,7 @@ def test_serialized_ledger_normalizes_uncited_and_nonexistent_rejections(tmp_pat
         }
         ledger = coerce_review_ledger(payload)
         assert ledger.entries[0].status is AdjudicationState.UNADJUDICATED
-        assert gate_g4(ledger, []).state is OracleState.NOT_EXAMINED
+        assert gate_construction_claims(ledger, []).state is OracleState.NOT_EXAMINED
 
 
 def test_serialized_reviewer_status_cannot_adjudicate_its_own_claim(tmp_path: Path) -> None:
@@ -198,7 +198,7 @@ def test_serialized_reviewer_status_cannot_adjudicate_its_own_claim(tmp_path: Pa
     ledger = coerce_review_ledger(payload)
 
     assert ledger.entries[0].status is AdjudicationState.UNADJUDICATED
-    assert gate_g4(ledger, []).state is OracleState.NOT_EXAMINED
+    assert gate_construction_claims(ledger, []).state is OracleState.NOT_EXAMINED
 
 
 def test_serialized_and_typed_ledgers_have_the_same_verdict(tmp_path: Path) -> None:
@@ -211,8 +211,8 @@ def test_serialized_and_typed_ledgers_have_the_same_verdict(tmp_path: Path) -> N
     serialized = typed.as_dict()
     serialized["rows"] = typed.to_rows()
 
-    typed_result = gate_g4(typed, [])
-    serialized_result = gate_g4(serialized, [])
+    typed_result = gate_construction_claims(typed, [])
+    serialized_result = gate_construction_claims(serialized, [])
 
     assert typed_result.state is OracleState.NOT_EXAMINED
     assert serialized_result.state is typed_result.state
@@ -222,10 +222,10 @@ def test_unreadable_closure_is_not_examined(tmp_path: Path) -> None:
     missing = tmp_path / "unreadable-closure"
     ledger = ReviewLedger(missing, "not-a-real-digest", True, "reviewer")
 
-    result = gate_g4(ledger, [])
+    result = gate_construction_claims(ledger, [])
 
     assert result.state is OracleState.NOT_EXAMINED
-    assert "g4_closure_not_examined" in result.codes
+    assert "construction_closure_not_examined" in result.codes
 
 
 def test_claim_identity_is_stable_when_claim_order_changes(tmp_path: Path) -> None:
@@ -263,13 +263,13 @@ def test_missing_declaration_is_not_a_zero_defect_declaration(tmp_path: Path) ->
     run = dispatch_review(closure, "request", reviewer=lambda _path, _request: {"claims": []})
 
     score = score_review(run, {"planted_defects": ["grain"]})
-    result = gate_g4(run, {"planted_defects": ["grain"]})
+    result = gate_construction_claims(run, {"planted_defects": ["grain"]})
 
     assert not score.declaration_examined
     assert not score.examined
     assert score.qualification == "not-claimed"
     assert result.state is OracleState.NOT_EXAMINED
-    assert "g4_seeded_defects_not_declared" in result.codes
+    assert "construction_seeded_defects_not_declared" in result.codes
 
 
 def test_explicit_empty_declaration_remains_examined(tmp_path: Path) -> None:
@@ -328,4 +328,4 @@ def test_a_flat_row_cannot_carry_its_own_adjudication(tmp_path: Path) -> None:
     ledger = coerce_review_ledger(payload)
 
     assert ledger.entries[0].status is AdjudicationState.UNADJUDICATED
-    assert gate_g4(ledger, []).state is OracleState.NOT_EXAMINED
+    assert gate_construction_claims(ledger, []).state is OracleState.NOT_EXAMINED

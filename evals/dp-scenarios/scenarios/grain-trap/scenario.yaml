@@ -1,6 +1,7 @@
 version: 1
-id: S6
+id: grain-trap
 tier: smoke
+run_order: 2
 fixture:
   dataset: grain_trap
   seed: 29
@@ -13,10 +14,10 @@ repeatability:
   tier: deterministic
   epochs: 5
   certification:
-    rule: observed_epochs
-    gates: [G5, G6]
-    lower_bound: null
-    confidence: null
+    rule: wilson_lower_bound
+    gates: [build, query]
+    lower_bound: 0.90
+    confidence: 0.95
 persona: ../_personas/smoke.yaml
 answer_sheet: answer-sheet.yaml
 events: events.yaml
@@ -31,13 +32,13 @@ phase_map:
 required_plants:
   - grain_trap_fanout
 gates:
-  G1: intake
-  G2: capability
-  G3: narrowing
-  G4: construction
-  G5: build
-  G6: query
-  G7:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
     kind: grain_and_aggregation
     document: semantic.json
     grain_path: semantic.grain

@@ -1,4 +1,4 @@
-"""Least-privilege Postgres fixture used by the T1 B5 scenario."""
+"""Least-privilege Postgres fixture for the credential-rotation scenario."""
 
 from .fixture import (
     ConnectionInfo,

@@ -290,7 +290,7 @@ def run_drift_canary(
     probe: ProbeResult | Mapping[str, object] | None = None,
     build: BuildResult | Mapping[str, object] | None = None,
 ) -> CanaryResult:
-    """Run or consume the C1 probe and aggregate its exact claim verdict."""
+    """Run or consume the drift-canary probe and aggregate its exact claim verdict."""
 
     started = time.monotonic()
     root = Path(canary_dir).expanduser().resolve()
@@ -880,28 +880,28 @@ class TierRunner:
             raise TierError("operator observations were not persisted before grading")
 
         gates: dict[str, GateResult] = {
-            "G1": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
-            "G2": gate_capability(spec, capability, required=environment.mock_source is not None),
-            "G3": gate_narrowing(spec_diff, ledger_artifact, closure),
-            "G4": gate_construction(ledger_artifact),
-            "G5": gate_build(facts, row_counts),
+            "intake": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
+            "capability": gate_capability(spec, capability, required=environment.mock_source is not None),
+            "narrowing": gate_narrowing(spec_diff, ledger_artifact, closure),
+            "construction": gate_construction(ledger_artifact),
+            "build": gate_build(facts, row_counts),
         }
         answer_gold_declared = bool(getattr(scenario, "has_scoreable_answer_gold", True))
         if query is None:
-            gates["G6"] = GateResult(
-                "G6",
+            gates["query"] = GateResult(
+                "query",
                 False,
                 0,
-                (Finding("g6_actual_not_examined", "actual query rows are absent or unreadable"),),
+                (Finding("query_actual_not_examined", "actual query rows are absent or unreadable"),),
                 examined=False,
                 required=answer_gold_declared,
             )
         elif not answer_gold_declared:
-            gates["G6"] = GateResult(
-                "G6",
+            gates["query"] = GateResult(
+                "query",
                 False,
                 0,
-                (Finding("g6_answer_gold_not_declared", "scenario declares no scoreable answer gold"),),
+                (Finding("query_answer_gold_not_declared", "scenario declares no scoreable answer gold"),),
                 examined=False,
                 required=False,
             )
@@ -909,16 +909,16 @@ class TierRunner:
             try:
                 gold = scenario.load_gold("answer", environment.fixture_dir)
             except Exception as exc:
-                gates["G6"] = GateResult(
-                    "G6",
+                gates["query"] = GateResult(
+                    "query",
                     False,
                     0,
-                    (Finding("g6_gold_not_examined", str(exc)),),
+                    (Finding("query_gold_not_examined", str(exc)),),
                     examined=False,
                     required=True,
                 )
             else:
-                gates["G6"] = gate_query(query, gold)
+                gates["query"] = gate_query(query, gold)
         query_rows: Sequence[Mapping[str, object]] | None = None
         if isinstance(query, Mapping):
             candidate = query.get("rows", query.get("query_rows", query.get("result")))
@@ -953,14 +953,14 @@ class TierRunner:
             ungraded = ()
         if ungraded and not follow_up.ungraded:
             follow_up = GateResult(
-                "G7",
+                "follow-up",
                 False,
                 0,
-                follow_up.findings + (Finding("g7_planted_difficulty_not_fired", ", ".join(sorted(map(str, ungraded)))),),
+                follow_up.findings + (Finding("follow_up_planted_difficulty_not_fired", ", ".join(sorted(map(str, ungraded)))),),
                 examined=False,
                 ungraded=True,
             )
-        gates["G7"] = follow_up
+        gates["follow-up"] = follow_up
 
         if facts is None:
             honesty = LintReport(False, [LintFinding("incomplete_supervisor_facts", 1, "supervisor facts not examined")])

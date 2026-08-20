@@ -1,4 +1,4 @@
-"""Deterministic and live connection-level checks for the B5 Postgres fixture."""
+"""Deterministic and live connection-level checks for the rotation Postgres fixture."""
 
 from __future__ import annotations
 

@@ -25,15 +25,15 @@ def _resolve_declarations(value: object) -> tuple[bool, object]:
             if key in value:
                 return True, value[key]
         gates = value.get("gates")
-        if isinstance(gates, Mapping) and "G4" in gates:
-            return _resolve_declarations(gates["G4"])
+        if isinstance(gates, Mapping) and "construction" in gates:
+            return _resolve_declarations(gates["construction"])
         return False, ()
     for attribute in ("seeded_defects", "review_defects"):
         if hasattr(value, attribute):
             return True, getattr(value, attribute)
     gates = getattr(value, "gates", None)
-    if isinstance(gates, Mapping) and "G4" in gates:
-        settings = getattr(gates["G4"], "settings", gates["G4"])
+    if isinstance(gates, Mapping) and "construction" in gates:
+        settings = getattr(gates["construction"], "settings", gates["construction"])
         return _resolve_declarations(settings)
     return True, value
 

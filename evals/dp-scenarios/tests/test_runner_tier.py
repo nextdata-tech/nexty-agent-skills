@@ -73,7 +73,7 @@ class FakeScenario:
         raise ValueError("fake scenario has no query gold")
 
     def follow_up_gate(self, closure: object, query_rows: object = None) -> GateResult:
-        return GateResult("G7", False, 0, examined=False, ungraded=True)
+        return GateResult("follow-up", False, 0, examined=False, ungraded=True)
 
 
 @dataclass(frozen=True)
@@ -88,7 +88,7 @@ class NoPlantScenario(FakeScenario):
         *,
         fired_plants: object = None,
     ) -> GateResult:
-        return GateResult("G7", True, 15)
+        return GateResult("follow-up", True, 15)
 
 
 def make_scenario(scenario_id: str = "fake", *, turns: int = 1, deterministic: bool = False) -> FakeScenario:
@@ -149,9 +149,9 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
 
 
 def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build populated replay artifacts from the real S6 package."""
+    """Build populated replay artifacts from the real grain-trap package."""
 
-    scenario = load_scenario(ROOT / "scenarios/s6-grain-trap")
+    scenario = load_scenario(ROOT / "scenarios/grain-trap")
     generated = scenario.generate_fixture(tmp_path / "s6-fixture")
     row_counts = generated.manifest["table_row_counts"]
     recordings: list[ReplayRecording] = []
@@ -237,9 +237,9 @@ def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecordin
 
 
 def populated_s5_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build a populated replay for the zero-row scenario, including G7 evidence."""
+    """Build a populated replay for the zero-row scenario, including follow-up evidence."""
 
-    scenario = load_scenario(ROOT / "scenarios/s5-smoke-zero-row")
+    scenario = load_scenario(ROOT / "scenarios/zero-row-output")
     generated = scenario.generate_fixture(tmp_path / "s5-fixture")
     row_counts = generated.manifest["table_row_counts"]
     recordings: list[ReplayRecording] = []
@@ -626,7 +626,7 @@ def test_tier_reports_ungraded_when_a_required_plant_did_not_fire() -> None:
 
     assert result.verdict == "ungraded"
     assert result.scenario_runs[0].score.state is ScoreTerminalState.UNGRADED
-    assert result.scenario_runs[0].score.gates["G7"].ungraded
+    assert result.scenario_runs[0].score.gates["follow-up"].ungraded
 
 
 def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: Path) -> None:
@@ -656,8 +656,8 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
     ).run()
     live_run = live.scenario_runs[0]
 
-    assert not live_run.score.gates["G2"].examined
-    assert not live_run.score.gates["G2"].required
+    assert not live_run.score.gates["capability"].examined
+    assert not live_run.score.gates["capability"].required
     assert live_run.replay_recording.turns[0].result.files_touched[0].path == "spec.json"
 
     replay = TierRunner(
@@ -667,7 +667,7 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
         replay_recordings={scenario.id: live_run.replay_recording},
         environment_root=tmp_path,
     ).run()
-    assert not replay.scenario_runs[0].score.gates["G2"].examined
+    assert not replay.scenario_runs[0].score.gates["capability"].examined
 
 
 def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Path) -> None:
@@ -693,8 +693,8 @@ def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Pat
     assert result.verdict == "clean"
     assert len(result.scenario_runs) == 5
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
-    assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "G2") for run in result.scenario_runs)
-    assert all(not run.score.gates["G2"].examined and not run.score.gates["G2"].required for run in result.scenario_runs)
+    assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "capability") for run in result.scenario_runs)
+    assert all(not run.score.gates["capability"].examined and not run.score.gates["capability"].required for run in result.scenario_runs)
 
 
 def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) -> None:
@@ -710,8 +710,8 @@ def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) 
     assert result.verdict == "clean"
     assert len(result.scenario_runs) == 5
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
-    assert all(run.score.gates["G5"].passed for run in result.scenario_runs)
-    assert all(not run.score.gates["G6"].required for run in result.scenario_runs)
+    assert all(run.score.gates["build"].passed for run in result.scenario_runs)
+    assert all(not run.score.gates["query"].required for run in result.scenario_runs)
 
 
 def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
@@ -733,8 +733,8 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     assert result.verdict == "failed"
     assert result.scenario_runs[0].score.state is ScoreTerminalState.FAILED
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
-    assert not result.scenario_runs[0].score.gates["G5"].passed
-    assert "g5_row_count_mismatch" in result.scenario_runs[0].score.gates["G5"].codes
+    assert not result.scenario_runs[0].score.gates["build"].passed
+    assert "build_row_count_mismatch" in result.scenario_runs[0].score.gates["build"].codes
 
 
 def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
@@ -754,9 +754,9 @@ def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
         replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
     ).run()
 
-    gate = result.scenario_runs[0].score.gates["G5"]
+    gate = result.scenario_runs[0].score.gates["build"]
     assert not gate.passed
-    assert "g5_row_counts_not_examined" in gate.codes
+    assert "build_row_counts_not_examined" in gate.codes
 
 
 @pytest.mark.parametrize("field", ["turn", "phase"])
@@ -937,10 +937,10 @@ def test_query_artifact_absence_is_required_when_answer_gold_is_declared(tmp_pat
         replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
     ).run()
 
-    gate = result.scenario_runs[0].score.gates["G6"]
+    gate = result.scenario_runs[0].score.gates["query"]
     assert gate.required
     assert not gate.examined
-    assert "g6_actual_not_examined" in gate.codes
+    assert "query_actual_not_examined" in gate.codes
 
 
 def test_query_artifact_without_answer_gold_remains_unexamined_and_optional(tmp_path: Path) -> None:
@@ -958,10 +958,10 @@ def test_query_artifact_without_answer_gold_remains_unexamined_and_optional(tmp_
         replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
     ).run()
 
-    gate = result.scenario_runs[0].score.gates["G6"]
+    gate = result.scenario_runs[0].score.gates["query"]
     assert not gate.required
     assert not gate.examined
-    assert "g6_answer_gold_not_declared" in gate.codes
+    assert "query_answer_gold_not_declared" in gate.codes
 
 
 def test_canary_claim_line_drift_is_blocking_through_the_tier_wiring(tmp_path: Path) -> None:

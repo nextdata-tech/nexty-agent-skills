@@ -13,7 +13,7 @@ from dp_scenarios.operator.matcher import Category, MatcherBank
 
 
 ROOT = Path(__file__).parents[1]
-SCENARIO = load_scenario(ROOT / "scenarios/s5-smoke-zero-row")
+SCENARIO = load_scenario(ROOT / "scenarios/zero-row-output")
 
 
 def _hand_built_closure(generated: object, root: Path) -> Path:
@@ -176,8 +176,8 @@ def test_unrecognized_or_unparseable_targets_are_not_examined(tmp_path: Path) ->
     assert SCENARIO.follow_up_gate(tmp_path / "does-not-exist").ungraded
 
 
-def test_resource_roles_are_machine_readable_and_g7_is_wired() -> None:
-    binding = SCENARIO.gates["G7"]
+def test_resource_roles_are_machine_readable_and_follow_up_is_wired() -> None:
+    binding = SCENARIO.gates["follow-up"]
     assert binding.kind == "optional_required_outputs"
     resources = binding.settings["resources"]
     assert resources["optional_events"]["required"] is False
@@ -226,7 +226,7 @@ def test_optional_resource_is_reachable_from_plausible_follow_up_questions() -> 
 
 
 def test_s5_certifies_only_the_examinable_build_gate() -> None:
-    assert SCENARIO.repeatability.gates == ("G5",)
+    assert SCENARIO.repeatability.gates == ("build",)
     assert "counts" in SCENARIO.gold_paths
 
 

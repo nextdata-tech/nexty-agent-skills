@@ -4,9 +4,6 @@ The invariant is that invalid runs do not enter rates, demonstrated-once
 results have no percentage representation, and paired changes are refused
 unless the ledger manifest proves a one-field comparison on the same fixture
 and operator script.
-
-``render_rate`` is a public scenario/report API; the tier report has its own
-structured rendering and does not call this helper directly.
 """
 
 from __future__ import annotations
@@ -171,7 +168,7 @@ def gate_pass_rates(runs: Sequence[object], *, twins: Mapping[str, str] | None =
     if len(valid) < 2:
         raise ValueError("a rate request requires at least two valid observations")
     rates: dict[str, GateRate] = {}
-    for gate in ("G1", "G2", "G3", "G4", "G5", "G6", "G7"):
+    for gate in ("intake", "capability", "narrowing", "construction", "build", "query", "follow-up"):
         passed = 0
         examined = 0
         for run in valid:
@@ -198,7 +195,7 @@ def repeatability_certificate(runs: Sequence[object], tier: RepeatabilityTier | 
     tier_value = RepeatabilityTier(getattr(declared, "tier", tier))
     required = int(getattr(declared, "epochs", repeatability_plan(tier_value)))
     certification_rule = str(getattr(declared, "certification_rule", "wilson_lower_bound"))
-    certification_gates = tuple(getattr(declared, "gates", ("G5", "G6")))
+    certification_gates = tuple(getattr(declared, "gates", ("build", "query")))
     lower_bound = getattr(declared, "lower_bound", 0.90)
     confidence = getattr(declared, "confidence", 0.95)
     if tier_value is RepeatabilityTier.DEMONSTRATED_ONCE:
@@ -258,8 +255,8 @@ def paired_mcnemar(
         raise ValueError("paired comparison requires identical fixture and operator script")
     if len(before) != len(after):
         raise ValueError("paired comparison requires one outcome per identical trial")
-    base = [_gate_passed(value, "G6") for value in before]
-    current = [_gate_passed(value, "G6") for value in after]
+    base = [_gate_passed(value, "query") for value in before]
+    current = [_gate_passed(value, "query") for value in after]
     both_right = sum(a and b for a, b in zip(base, current))
     base_only = sum(a and not b for a, b in zip(base, current))
     current_only = sum((not a) and b for a, b in zip(base, current))

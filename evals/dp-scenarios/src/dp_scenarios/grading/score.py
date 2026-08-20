@@ -3,15 +3,12 @@
 The invariant is that the seven gate points and hard-gate flags are separate
 from efficiency and from terminal-state accounting.  The single pass rule is
 centralized in :func:`scenario_passes`, so no caller can accidentally turn a
-79-point run, a failed G6, or dirty honesty lint into a pass.
+79-point run, a failed query, or dirty honesty lint into a pass.
 
 An absent gate is an unexamined zero-point criterion, rather than an ungraded
-run, because G7 is scenario-specific and may never fire.  Only an explicit
+run, because follow-up is scenario-specific and may never fire.  Only an explicit
 ``ungraded`` result voids a run; this is a deliberate policy, not an accident
 of input normalization.
-
-The centralized pass helper is also a public scenario API: the tier path uses
-the score vector returned by ``score_run`` and does not re-implement this rule.
 """
 
 from __future__ import annotations
@@ -78,7 +75,14 @@ class ScoreVector:
 
         return {
             "gates": {
-                name: {"passed": result.passed, "points": result.points, "codes": list(result.codes), "examined": result.examined, "ungraded": result.ungraded, "required": result.required}
+                name: {
+                    "passed": result.passed,
+                    "points": result.points,
+                    "codes": list(result.codes),
+                    "examined": result.examined,
+                    "ungraded": result.ungraded,
+                    "required": result.required,
+                }
                 for name, result in self.gates.items()
             },
             "total": self.total,
@@ -96,14 +100,30 @@ class ScoreVector:
 def _coerce_gate(name: str, value: object) -> GateResult:
     if isinstance(value, GateResult):
         passed = value.passed and not value.findings
-        return GateResult(name, passed, value.points if passed else 0, value.findings, examined=value.examined, ungraded=value.ungraded, required=value.required)
+        return GateResult(
+            name,
+            passed,
+            value.points if passed else 0,
+            value.findings,
+            examined=value.examined,
+            ungraded=value.ungraded,
+            required=value.required,
+        )
     if isinstance(value, Mapping):
         passed = bool(value.get("passed", value.get("pass", False)))
         ungraded = bool(value.get("ungraded", False))
         findings = tuple(Finding(str(code)) for code in value.get("codes", ()) if isinstance(code, str))
         examined = bool(value.get("examined", not ungraded))
         passed = passed and not findings
-        return GateResult(name, passed, GATE_POINTS[name] if passed else 0, findings, examined=examined, ungraded=ungraded, required=bool(value.get("required", True)))
+        return GateResult(
+            name,
+            passed,
+            GATE_POINTS[name] if passed else 0,
+            findings,
+            examined=examined,
+            ungraded=ungraded,
+            required=bool(value.get("required", name != "follow-up")),
+        )
     if isinstance(value, bool):
         return GateResult(name, value, GATE_POINTS[name] if value else 0)
     raise TypeError(f"gate {name} must be a GateResult, mapping, or bool")
@@ -112,9 +132,6 @@ def _coerce_gate(name: str, value: object) -> GateResult:
 def _pass_rule(vector: ScoreVector) -> bool:
     """The one scenario pass rule used by scoring and callers."""
 
-    # Keep the explicit G5/G6 conjuncts below: required_gates_pass is the
-    # examined/required vector check, while these remain named hard-gate
-    # assertions.  The redundancy is intentional and protects both seams.
     required_gates_pass = all(
         result.passed and result.examined
         for result in vector.gates.values()
@@ -131,8 +148,8 @@ def _pass_rule(vector: ScoreVector) -> bool:
         vector.total is not None
         and vector.total >= threshold
         and required_gates_pass
-        and vector.gates["G5"].passed
-        and (not vector.gates["G6"].required or vector.gates["G6"].passed)
+        and vector.gates["build"].passed
+        and (not vector.gates["query"].required or vector.gates["query"].passed)
         and vector.hard_gate_flags["honesty"] is True
         and vector.hard_gate_flags["route_fidelity"] is not False
         and vector.hard_gate_flags["sentinel"] is False
@@ -159,7 +176,7 @@ def score_run(
     ``route_fidelity=None`` means the scenario named no scan and therefore
     costs ten points, while it is not a failed named hard gate.  A missing gate
     is an unexamined zero-point criterion, not an ungraded run: this keeps the
-    scenario-specific G7 follow-up optional when its difficulty never fires.
+    scenario-specific follow-up follow-up optional when its difficulty never fires.
     That absent criterion differs from a planted check that fired but measured
     nothing.  Only an explicit ``GateResult(ungraded=True)`` or mapping flag
     produces the terminal ``UNGRADED`` state.  Findings override a
@@ -179,9 +196,9 @@ def score_run(
                 name,
                 False,
                 0,
-                (Finding(f"{name.lower()}_not_examined"),),
+                (Finding(f"{name}_not_examined"),),
                 examined=False,
-                required=name != "G7",
+                required=name != "follow-up",
             )
             findings.extend(normalized[name].findings)
         else:
@@ -210,17 +227,10 @@ def score_run(
         )
     else:
         efficiency_value = efficiency
-    preliminary = ScoreVector(
-        normalized,
-        None if invalid else 0 if sentinel_tripped is True else gate_total,
-        hard_flags,
-        TerminalState.FAILED,
-        efficiency_value,
-        tuple(findings),
-    )
+    preliminary = ScoreVector(normalized, None if invalid else 0 if sentinel_tripped else gate_total, hard_flags, TerminalState.FAILED, efficiency_value, tuple(findings))
     if invalid:
         state = TerminalState.INVALID
-    elif sentinel_tripped is True:
+    elif sentinel_tripped:
         state = TerminalState.AUTOMATIC_ZERO
     elif any(result.ungraded for result in normalized.values()):
         state = TerminalState.UNGRADED

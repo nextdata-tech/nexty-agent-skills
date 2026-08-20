@@ -1,6 +1,7 @@
 """Mechanical grading primitives for artifact-owned scenario evidence."""
 
 from .gates import (
+    GATE_PHASES,
     GATE_POINTS,
     Finding,
     GateResult,
@@ -8,7 +9,7 @@ from .gates import (
     gate_capability,
     gate_construction,
     gate_follow_up,
-    gate_g4,
+    gate_construction_claims,
     gate_honesty,
     gate_intake,
     gate_narrowing,
@@ -48,6 +49,7 @@ from .statistics import (
 )
 
 __all__ = [
+    "GATE_PHASES",
     "GATE_POINTS",
     "Finding",
     "GateResult",
@@ -59,7 +61,7 @@ __all__ = [
     "gate_build",
     "gate_query",
     "gate_follow_up",
-    "gate_g4",
+    "gate_construction_claims",
     "OracleState",
     "OracleOutcome",
     "OracleFinding",

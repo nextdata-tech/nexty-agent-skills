@@ -114,19 +114,11 @@ REPLAY_SESSION_PATH_FIELDS = frozenset(
 # never create a statistical pairing axis.
 COMPARABILITY_EXCLUDED_FIELDS = REPLAY_SESSION_PATH_FIELDS | frozenset({"validation_mode"})
 
-# T0 is the package's smoke tier.  Keeping the descriptive spelling as an
-# alias lets callers use either name without weakening the waiver policy.
+# Tiers are named for what they are: the smoke tier runs on every change, the
+# core tier weekly, the full tier per release.  Only the smoke tier is
+# implemented here, and it waives the pins for surfaces it never exercises.
 TIER_WAIVERS: dict[str, frozenset[str]] = {
     "smoke": frozenset(
-        {
-            "judge_model_id",
-            "judge_prompt_hash",
-            "judge_calibration_set_hash",
-            "grant_fixture_hash",
-            "persona_paraphrase_prompt_hash",
-        }
-    ),
-    "T0": frozenset(
         {
             "judge_model_id",
             "judge_prompt_hash",

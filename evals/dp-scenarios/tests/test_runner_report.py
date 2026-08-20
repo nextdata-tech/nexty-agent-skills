@@ -44,7 +44,7 @@ def test_clean_tier_definition_and_unexamined_gate_status_are_pinned() -> None:
     )
     assert "clean_tier_means" in document
     assert "unkeyed" in document["clean_tier_means"]
-    assert "G2=UNEXAMINED" in summary
+    assert "capability=UNEXAMINED" in summary
     assert "UNEXAMINED" in summary
 
 

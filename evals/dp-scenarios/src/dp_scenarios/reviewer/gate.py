@@ -1,4 +1,4 @@
-"""G4 wiring for the adversarial-review claim ledger."""
+"""construction wiring for the adversarial-review claim ledger."""
 
 from __future__ import annotations
 
@@ -139,10 +139,10 @@ def coerce_review_ledger(value: object) -> ReviewLedger:
     )
 
 
-def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
-    """Evaluate G4 as a three-state, fail-closed oracle.
+def gate_construction_claims(ledger: object, seeded_defects: object = None) -> OracleResult:
+    """Evaluate construction as a three-state, fail-closed oracle.
 
-    A clean review satisfies G4 only when every claim is adjudicated and no
+    A clean review satisfies construction only when every claim is adjudicated and no
     claim is upheld.  Known seeded defects missed by the reviewer violate the
     gate when the scenario supplies their explicit declaration.  A failed or
     incomplete review is ``not-examined`` and never a pass.
@@ -151,13 +151,13 @@ def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
     review = coerce_review_ledger(ledger)
     if not review.examined:
         if review.error:
-            code = "g4_reviewer_failed"
+            code = "construction_reviewer_failed"
             detail = review.error
         elif not review.reviewer_ran:
-            code = "g4_reviewer_not_run"
+            code = "construction_reviewer_not_run"
             detail = "adversarial reviewer did not run"
         else:
-            code = "g4_closure_not_examined"
+            code = "construction_closure_not_examined"
             detail = "closure was not readable or its digest could not be verified"
         return OracleResult(
             OracleState.NOT_EXAMINED,
@@ -169,20 +169,20 @@ def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
         return OracleResult(
             OracleState.NOT_EXAMINED,
             value=review,
-            findings=(OracleFinding("g4_closure_not_examined", "closure identity is absent"),),
+            findings=(OracleFinding("construction_closure_not_examined", "closure identity is absent"),),
         )
     try:
         if closure_content_digest(review.closure_path) != review.closure_digest:
             return OracleResult(
                 OracleState.NOT_EXAMINED,
                 value=review,
-                findings=(OracleFinding("g4_closure_changed", "closure digest no longer matches review"),),
+                findings=(OracleFinding("construction_closure_changed", "closure digest no longer matches review"),),
             )
     except Exception as exc:
         return OracleResult(
             OracleState.NOT_EXAMINED,
             value=review,
-            findings=(OracleFinding("g4_closure_not_examined", str(exc)),),
+            findings=(OracleFinding("construction_closure_not_examined", str(exc)),),
         )
 
     score = score_review(review, seeded_defects)
@@ -192,7 +192,7 @@ def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
             value=score,
             findings=(
                 OracleFinding(
-                    "g4_seeded_defects_not_declared",
+                    "construction_seeded_defects_not_declared",
                     "scenario did not provide a recognized seeded-defect declaration",
                 ),
             ),
@@ -203,7 +203,7 @@ def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
             value=score,
             findings=(
                 OracleFinding(
-                    "g4_claim_unadjudicated",
+                    "construction_claim_unadjudicated",
                     "every reviewer claim needs a builder adjudication",
                     len(review.unadjudicated),
                 ),
@@ -215,7 +215,7 @@ def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
     for entry in upheld:
         findings.append(
             OracleFinding(
-                "g4_claim_upheld",
+                "construction_claim_upheld",
                 "adversarial review found a defect in the closure",
                 entry.identity,
             )
@@ -223,7 +223,7 @@ def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
     if score.missed_defects:
         findings.append(
             OracleFinding(
-                "g4_seeded_defect_missed",
+                "construction_seeded_defect_missed",
                 "review did not find every scenario-declared defect",
                 list(score.missed_defects),
             )
@@ -233,4 +233,4 @@ def gate_g4(ledger: object, seeded_defects: object = None) -> OracleResult:
     return OracleResult(OracleState.SATISFIED, value=score)
 
 
-__all__ = ["coerce_review_ledger", "gate_g4"]
+__all__ = ["coerce_review_ledger", "gate_construction_claims"]

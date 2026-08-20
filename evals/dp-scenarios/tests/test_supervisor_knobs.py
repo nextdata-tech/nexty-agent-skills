@@ -1,4 +1,4 @@
-"""Deterministic runtime-control tests for T1-U1."""
+"""Deterministic runtime-control tests for the supervisor knobs."""
 
 from __future__ import annotations
 

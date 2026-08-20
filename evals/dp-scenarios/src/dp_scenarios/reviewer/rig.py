@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .adjudication import Adjudicator, adjudicate_review
 from .dispatch import RecordedClaims, ReviewDispatcher, Reviewer
-from .gate import gate_g4
+from .gate import gate_construction_claims
 from .models import ReviewLedger, ReviewRun, ReviewScore
 from .scoring import score_review
 
@@ -43,9 +43,9 @@ class ReviewerRig:
         return score_review(review, seeded_defects)
 
     def gate(self, ledger: ReviewLedger | Mapping[str, object], seeded_defects: object = None) -> object:
-        """Return the three-state G4 result."""
+        """Return the three-state construction result."""
 
-        return gate_g4(ledger, seeded_defects)
+        return gate_construction_claims(ledger, seeded_defects)
 
 
 __all__ = ["ReviewerRig"]

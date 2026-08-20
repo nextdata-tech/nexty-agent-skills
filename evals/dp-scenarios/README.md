@@ -7,27 +7,29 @@ The suite runs scenarios the way a BI analyst actually works — a vague first
 message, corrections mid-stream, disputes after the fact — and grades the runs
 mechanically, without trusting the agent's own narrative.
 
-## Scope of this checkout: the T0 tier
+## Scope of this checkout: the smoke tier
 
-T0 is the smoke tier: it runs on every skill, runtime, or generator change, takes
-minutes, and spends nearly nothing on models. It contains three scenarios in a
-fixed order.
+The smoke tier runs on every skill, runtime, or generator change, takes minutes,
+and spends nearly nothing on models. The tiers above it are the core tier
+(weekly, before platform-facing skill releases) and the full tier (per release).
+The smoke tier contains three scenarios, run in the order each declares through
+`run_order`.
 
-1. **C1 — drift canary.** A frozen kitchen-sink closure that exercises every
+1. **drift-canary.** A frozen kitchen-sink closure that exercises every
    surface the installed skill texts claim to support, probed with
    `nxd-desktop-supervisor check` and one real build. A DRIFT verdict **gates the
    tier**: running the rest against known guidance-vs-runtime drift just
    re-measures the canary's finding at far higher cost.
-2. **S5-smoke — zero-row optional output.** A valid resource that materializes no
-   rows. Manufacturing a placeholder row fails; so does relaxing the checks that
+2. **zero-row-output.** A valid resource that materializes no rows.
+   Manufacturing a placeholder row fails; so does relaxing the checks that
    still guard required outputs.
-3. **S6 — grain trap.** Seeded parent/child data where a naive join fans the
+3. **grain-trap.** Seeded parent/child data where a naive join fans the
    parent amount out across children. Both answers are fixed numbers under the
    seed, and reconciliation is against a fixture ground-truth control total —
    internal self-consistency is not enough, because self-consistent wrong numbers
    agree with each other.
 
-The T0 tier runs the agent under test only: no judge model, no field-mapper
+The smoke tier runs the agent under test only: no judge model, no field-mapper
 provider calls, no export. It **does** serve and query, because on lean desktop a
 read-only serving session is a local bearer-gated child process — no cluster, no
 spend — and the governed-query gate is a mandatory conjunct of the pass rule.
@@ -54,7 +56,7 @@ by the T0 operator.
 | `src/dp_scenarios/operator/` | Scripted multi-turn operator runner |
 | `src/dp_scenarios/grantkit/` | Native field-mapper grant fixtures, cumulative budget ledger, and profile delegation |
 | `src/dp_scenarios/grading/` | Mechanical gate checks and oracles |
-| `src/dp_scenarios/canary/` | C1 claims extraction and verdict matrix |
+| `src/dp_scenarios/canary/` | Drift-canary claims extraction and verdict matrix |
 | `scenarios/` | Per-scenario fixtures, operator scripts, gold row-sets |
 | `tests/` | Unit tests for the harness itself |
 

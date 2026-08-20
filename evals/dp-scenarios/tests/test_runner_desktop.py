@@ -27,7 +27,7 @@ from dp_scenarios.runner.session import SessionError
 from test_runner_environment import make_scenario, pins
 
 
-MARKER = "T1-U0-UNIQUE-BEARER-MARKER"
+MARKER = "DESKTOP-SESSION-UNIQUE-BEARER-MARKER"
 
 
 def _script(path: Path, body: str) -> Path:
@@ -80,7 +80,7 @@ import json, sys
 for raw in sys.stdin:
     request = json.loads(raw)
     print(json.dumps({"jsonrpc": "2.0", "id": request.get("id"),
-                      "result": {"authorization": "Bearer T1-U0-UNIQUE-BEARER-MARKER"}}), flush=True)
+                      "result": {"authorization": "Bearer DESKTOP-SESSION-UNIQUE-BEARER-MARKER"}}), flush=True)
 '''
 
 

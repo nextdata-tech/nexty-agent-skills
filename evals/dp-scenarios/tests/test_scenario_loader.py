@@ -8,6 +8,7 @@ import shutil
 import pytest
 import yaml
 
+from dp_scenarios.grading import GATE_PHASES
 from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios
 from dp_scenarios.synthgen import get_dataset
 
@@ -19,24 +20,24 @@ SCENARIO_ROOT = ROOT / "scenarios"
 def _copy_s6_package(tmp_path: Path) -> Path:
     root = tmp_path / "scenarios"
     root.mkdir()
-    shutil.copytree(SCENARIO_ROOT / "s6-grain-trap", root / "s6-grain-trap")
+    shutil.copytree(SCENARIO_ROOT / "grain-trap", root / "grain-trap")
     (root / "_personas").mkdir()
     shutil.copy2(SCENARIO_ROOT / "_personas/smoke.yaml", root / "_personas/smoke.yaml")
-    return root / "s6-grain-trap"
+    return root / "grain-trap"
 
 
 def _copy_s5_package(tmp_path: Path) -> Path:
     root = tmp_path / "scenarios"
     root.mkdir()
-    shutil.copytree(SCENARIO_ROOT / "s5-smoke-zero-row", root / "s5-smoke-zero-row")
+    shutil.copytree(SCENARIO_ROOT / "zero-row-output", root / "zero-row-output")
     (root / "_personas").mkdir()
     shutil.copy2(SCENARIO_ROOT / "_personas/smoke.yaml", root / "_personas/smoke.yaml")
-    return root / "s5-smoke-zero-row"
+    return root / "zero-row-output"
 
 
 def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_path: Path) -> None:
     scenarios = load_scenarios(SCENARIO_ROOT)
-    assert {scenario.id for scenario in scenarios} == {"S6", "S5-smoke"}
+    assert {scenario.id for scenario in scenarios} == {"grain-trap", "zero-row-output"}
     for scenario in scenarios:
         assert get_dataset(scenario.dataset).name == scenario.dataset
         assert scenario.seed == 29
@@ -47,8 +48,8 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
         assert scenario.answer_sheet_path.is_file()
         assert scenario.events_path.is_file()
         assert scenario.required_plants
-        assert set(scenario.gates) == {f"G{index}" for index in range(1, 8)}
-        assert scenario.gates["G7"].kind in {"grain_and_aggregation", "optional_required_outputs"}
+        assert set(scenario.gates) == set(GATE_PHASES)
+        assert scenario.gates["follow-up"].kind in {"grain_and_aggregation", "optional_required_outputs"}
         generated = scenario.generate_fixture(tmp_path / scenario.id)
         for name, path in scenario.gold.items():
             assert path.is_file()
@@ -130,7 +131,7 @@ def test_loader_rejects_an_unknown_follow_up_kind(tmp_path: Path) -> None:
     package = _copy_s6_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
-    source["gates"]["G7"]["kind"] = "bogus_follow_up"
+    source["gates"]["follow-up"]["kind"] = "bogus_follow_up"
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ScenarioError, match="supported"):
@@ -152,10 +153,10 @@ def test_loader_rejects_a_certified_gate_without_scoreable_gold(tmp_path: Path) 
     package = _copy_s5_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
-    source["repeatability"]["certification"]["gates"] = ["G6"]
+    source["repeatability"]["certification"]["gates"] = ["query"]
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
-    with pytest.raises(ScenarioError, match="G6.*answer"):
+    with pytest.raises(ScenarioError, match="query.*answer"):
         load_scenario(package)
 
 
@@ -250,7 +251,7 @@ def test_loader_rejects_an_answer_sheet_identity_mismatch(tmp_path: Path) -> Non
     package = _copy_s6_package(tmp_path)
     answer = package / "answer-sheet.yaml"
     source = yaml.safe_load(answer.read_text(encoding="utf-8"))
-    source["scenario_id"] = "not-S6"
+    source["scenario_id"] = "not-grain-trap"
     answer.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ScenarioError, match="scenario_id"):
@@ -261,7 +262,7 @@ def test_follow_up_gate_propagates_scenario_finding_and_machine_readability_is_c
     package = _copy_s5_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
-    source["gates"]["G7"]["resources"]["optional_events"]["required"] = True
+    source["gates"]["follow-up"]["resources"]["optional_events"]["required"] = True
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
     with pytest.raises(ScenarioError, match="diagnostics gold requiredness"):
         load_scenario(package)
@@ -280,7 +281,7 @@ def test_loader_rejects_a_required_plant_without_manifest_evidence(tmp_path: Pat
     package = _copy_s5_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
-    source["gates"]["G7"]["plant_evidence"] = {}
+    source["gates"]["follow-up"]["plant_evidence"] = {}
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ScenarioError, match="plant_evidence.*missing"):
@@ -300,5 +301,60 @@ def test_loader_rejects_a_non_positive_turn_budget(tmp_path: Path) -> None:
 
 def test_discovery_does_not_need_a_python_registry() -> None:
     discovered = load_scenarios(SCENARIO_ROOT)
-    direct = tuple(load_scenario(SCENARIO_ROOT / name) for name in ("s5-smoke-zero-row", "s6-grain-trap"))
+    direct = tuple(load_scenario(SCENARIO_ROOT / name) for name in ("zero-row-output", "grain-trap"))
     assert tuple(item.id for item in discovered) == tuple(item.id for item in direct)
+
+
+def _rename_answer_sheet(package: Path, reference: str, scenario_id: str) -> None:
+    sheet_path = (package / reference).resolve()
+    sheet = yaml.safe_load(sheet_path.read_text(encoding="utf-8"))
+    sheet["scenario_id"] = scenario_id
+    sheet_path.write_text(yaml.safe_dump(sheet, sort_keys=False), encoding="utf-8")
+
+
+def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path) -> None:
+    root = tmp_path / "scenarios"
+    shutil.copytree(SCENARIO_ROOT, root)
+    shutil.rmtree(root / "zero-row-output")
+    shutil.rmtree(root / "grain-trap")
+    for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
+        package = root / name
+        shutil.copytree(SCENARIO_ROOT / "grain-trap", package)
+        declaration = package / "scenario.yaml"
+        source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+        source["id"] = name
+        source["run_order"] = run_order
+        declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+        _rename_answer_sheet(package, source["answer_sheet"], name)
+
+    assert [scenario.id for scenario in load_scenarios(root)] == [
+        "zzz-last-by-name",
+        "aaa-first-by-name",
+    ]
+
+
+def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
+    root = tmp_path / "scenarios"
+    shutil.copytree(SCENARIO_ROOT, root)
+    shutil.rmtree(root / "zero-row-output")
+    shutil.rmtree(root / "grain-trap")
+    for name in ("one", "two"):
+        package = root / name
+        shutil.copytree(SCENARIO_ROOT / "grain-trap", package)
+        declaration = package / "scenario.yaml"
+        source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+        source["id"] = name
+        source["run_order"] = 1
+        declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+        _rename_answer_sheet(package, source["answer_sheet"], name)
+
+    with pytest.raises(ScenarioError, match="run_order"):
+        load_scenarios(root)
+
+
+def test_an_omitted_gate_value_means_the_gate_runs_its_standard_check() -> None:
+    scenario = load_scenario(SCENARIO_ROOT / "grain-trap")
+
+    assert scenario.gates["intake"].kind == "intake"
+    assert scenario.gates["query"].kind == "query"
+    assert scenario.gates["follow-up"].kind == "grain_and_aggregation"

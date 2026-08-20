@@ -1,4 +1,4 @@
-"""Adversarial-review dispatcher, claim ledger, scorer, and G4 oracle."""
+"""Adversarial-review dispatcher, claim ledger, scorer, and construction oracle."""
 
 from .adjudication import (
     Adjudicator,
@@ -17,7 +17,7 @@ from .dispatch import (
     closure_content_digest,
     dispatch_review,
 )
-from .gate import coerce_review_ledger, gate_g4
+from .gate import coerce_review_ledger, gate_construction_claims
 from .models import (
     Adjudication,
     AdjudicationStatus,
@@ -62,7 +62,7 @@ __all__ = [
     "closure_content_digest",
     "coerce_review_ledger",
     "dispatch_review",
-    "gate_g4",
+    "gate_construction_claims",
     "normalize_adjudication",
     "normalize_seeded_defects",
     "score_review",
