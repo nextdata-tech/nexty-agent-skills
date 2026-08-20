@@ -136,6 +136,9 @@ The `.schema()` dictionary accepts three equivalent field shapes:
 ```python
 orders = semantic_model("orders").schema(
     {
+        # The pairing rule holds in every shape: `("order_id": (int64(),
+        # primary_key()))` is the same bare key as the call form, and is just
+        # as unqueryable.
         "order_id": field(int64(), primary_key(), dimension(name="order_id", description="Order key.")),
         "status": (
             string(),

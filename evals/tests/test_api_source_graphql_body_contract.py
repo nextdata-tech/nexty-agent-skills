@@ -290,10 +290,17 @@ def test_recipe_requires_a_dimension_role_beside_every_primary_key():
     # across lines with a trailing comma, so `primary_key(),\n)` is the form a
     # formatter produces and the one that would slip through otherwise.
     #
+    # No `field` prefix, because `.schema()` accepts two sanctioned shapes and
+    # both can carry a bare key: the call `field(int64(), primary_key())` and
+    # the tuple `"order_id": (int64(), primary_key())`. `semantic_model_spec.md`
+    # teaches the tuple form explicitly, so a guard keyed to `field(` would
+    # report clean on the very doc that invites it. The call form still matches,
+    # since its own argument list is `(<type>(), primary_key())`.
+    #
     # All THREE skills that teach this DSL are scanned. The describe_models
     # consequence is not desktop-specific: an author working from the platform
     # skill writes exactly the shape struct.key_not_groupable fires on.
-    bare = re.compile(r"field\(\s*\w+\(\)\s*,\s*primary_key\(\)\s*,?\s*\)")
+    bare = re.compile(r"\(\s*\w+\(\)\s*,\s*primary_key\(\)\s*,?\s*\)")
     offenders = []
     for skill_dir in ("nxd-generate-data-product", "nxd-build-semantic-data-product",
                       "nxd-build-data-product"):
