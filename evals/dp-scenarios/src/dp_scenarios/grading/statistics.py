@@ -231,7 +231,9 @@ def render_rate(value: GateRate | DemonstratedOnce) -> str:
 
 
 def _manifest(value: Manifest | Mapping[str, object]) -> Manifest:
-    return value if isinstance(value, Manifest) else Manifest.from_mapping(value, replay=None)
+    if isinstance(value, Manifest):
+        return value
+    return Manifest.from_mapping(value, replay=None)
 
 
 def paired_mcnemar(

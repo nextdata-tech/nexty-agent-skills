@@ -20,8 +20,9 @@ from collections.abc import Callable, Sequence
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from dp_scenarios.ledger import LedgerStore, Manifest, fixture_dir_hash
+from dp_scenarios.ledger import LedgerRow, LedgerStore, Manifest, fixture_dir_hash
 from dp_scenarios.ledger.manifest import REPLAY_SESSION_PATH_FIELDS
+from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchEvidence, apply_transform_latency
 from dp_scenarios.mockrest import MockRestServer
 from dp_scenarios.scenario import Scenario
 
@@ -256,6 +257,8 @@ class RunEnvironment:
     desktop_server_name: str = "nxd-desktop"
     desktop_allowed_tools: Sequence[str] | None = None
     desktop_session_root: Path | None = None
+    knobs: SupervisorKnobs = field(default_factory=SupervisorKnobs.off)
+    attempt: int = 1
     _temporary: tempfile.TemporaryDirectory[str] | None = field(default=None, init=False, repr=False)
     _mock_source: MockSourceHandle | None = field(default=None, init=False, repr=False)
     _ledger: LedgerStore | None = field(default=None, init=False, repr=False)
@@ -295,6 +298,14 @@ class RunEnvironment:
         # Replay and handler-backed runs leave this unset and never import the
         # desktop substrate.
         try:
+            if isinstance(self.attempt, bool) or not isinstance(self.attempt, int) or self.attempt < 1:
+                raise EnvironmentError("attempt must be a positive integer")
+            if self.knobs.transform_window is not None:
+                if route_config is None:
+                    raise EnvironmentError("transform_window requires a mock-rest route configuration")
+                route_config = apply_transform_latency(route_config, self.knobs.transform_window)
+            if self.knobs.broker_fault is not None and self.live_command is None:
+                raise EnvironmentError("broker_fault requires a live desktop environment")
             if route_config is not None:
                 self._mock_source = MockSourceHandle(route_config, control_secret=self.control_secret).start()
             if self.live_command is not None:
@@ -302,13 +313,24 @@ class RunEnvironment:
                     raise EnvironmentError("live desktop environment requires a supervisor_command")
                 from .desktop import DesktopStdioTransport
 
+                supervisor_args = tuple(str(argument) for argument in self.supervisor_args)
+                supervisor_environment = dict(self.supervisor_environment or self.agent_environment)
+                if self.knobs.broker_fault is not None:
+                    supervisor_args = self.knobs.broker_fault.supervisor_args_for_attempt(  # type: ignore[union-attr]
+                        self.attempt,
+                        supervisor_args,
+                    )
+                    supervisor_environment.update(
+                        self.knobs.broker_fault.environment_for_attempt(self.attempt)  # type: ignore[union-attr]
+                    )
+
                 transport = DesktopStdioTransport.create(
                     _desktop_command_builder(self.live_command),
                     environment=self.agent_environment,
                     cwd=self.base_dir,
                     server_command=self.supervisor_command,
-                    server_args=self.supervisor_args,
-                    server_environment=self.supervisor_environment or self.agent_environment,
+                    server_args=supervisor_args,
+                    server_environment=supervisor_environment,
                     root=self.desktop_session_root or (base / "desktop-session"),
                     server_name=self.desktop_server_name,
                     allowed_tools=self.desktop_allowed_tools,
@@ -393,6 +415,7 @@ class RunEnvironment:
                 if self._live_transport is not None
                 else "not-applicable"
             ),
+            runtime_knobs=self.knobs.to_manifest(attempt=self.attempt),
             validation_mode=requested_validation_mode,
         )
         if override is not None:
@@ -479,6 +502,30 @@ class RunEnvironment:
         """Build the turn-protocol session from the prepared desktop adapter."""
 
         return self.live_transport.live_session(timeout=timeout)
+
+    def record_workflow_switch(
+        self,
+        evidence: WorkflowSwitchEvidence,
+        *,
+        turn: int = 1,
+    ) -> None:
+        """Append the endpoint identity returned by the post-switch call."""
+
+        if self.knobs.workflow_switch is None:
+            raise EnvironmentError("workflow switch evidence requires the workflow_switch knob")
+        self.ledger.append(
+            LedgerRow(
+                run_id=self.manifest.run_id,
+                scenario_id=self.manifest.scenario_id,
+                turn=turn,
+                phase=6,
+                action_kind="query",
+                action="first post-switch call endpoint recorded",
+                claim=evidence.to_dict(),
+                evidence_ref="runtime-knobs/workflow-switch",
+                qualification="demonstrated-once",
+            )
+        )
 
     @property
     def agent_environment(self) -> Mapping[str, str]:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from dp_scenarios.grading.gates import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import score_run
+from dp_scenarios.ledger.manifest import default_runtime_knobs
 from dp_scenarios.grading.statistics import (
     DemonstratedOnce,
     RepeatabilityTier,
@@ -18,6 +19,7 @@ from dp_scenarios.grading.statistics import (
     repeatability_certificate,
 )
 from dp_scenarios.ledger.lint import LintReport
+from dp_scenarios.ledger.manifest import ManifestError
 from nxd_eval.stats import wilson_ci
 
 
@@ -51,6 +53,7 @@ def _manifest() -> dict[str, object]:
         "fixture_seed": 1,
         "fixture_base_instant": "2024-01-01T00:00:00+00:00",
         "run_id": "run",
+        "runtime_knobs": default_runtime_knobs(),
     }
 
 
@@ -216,3 +219,11 @@ def test_mcnemar_refuses_validation_mode_as_a_pairing_axis() -> None:
 
     with pytest.raises(ValueError, match="exactly one"):
         paired_mcnemar(live, replay, [_run()], [_run()])
+
+
+def test_mcnemar_refuses_a_manifest_whose_runtime_knobs_are_unpinned() -> None:
+    pinned = _manifest()
+    unpinned = {key: value for key, value in pinned.items() if key != "runtime_knobs"}
+
+    with pytest.raises(ManifestError, match="runtime_knobs"):
+        paired_mcnemar(pinned, unpinned, [_run()], [_run()])

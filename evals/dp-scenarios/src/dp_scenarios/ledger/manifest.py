@@ -24,7 +24,7 @@ import os
 import stat
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PureWindowsPath
 from typing import ClassVar
@@ -62,11 +62,29 @@ MANIFEST_FIELDS = (
     "session_config_sha256",
     "session_trace_path",
     "session_server_result_path",
+    "runtime_knobs",
     "validation_mode",
 )
 
 MANIFEST_RECORD_TYPE = "run_manifest"
 NOT_APPLICABLE = "not-applicable"
+
+
+def _default_runtime_knobs() -> dict[str, object]:
+    """Return the explicit all-off pin used by direct manifest constructors."""
+
+    return {
+        "schema_version": 1,
+        "transform_window": {"enabled": False},
+        "broker_fault": {"enabled": False, "active_attempt": 1, "active_fault": "none"},
+        "workflow_switch": {"enabled": False},
+    }
+
+
+def default_runtime_knobs() -> dict[str, object]:
+    """Return a fresh all-off pin for legacy report adapters."""
+
+    return _default_runtime_knobs()
 
 # These fields describe the live desktop substrate.  They are required for a
 # live manifest; replay has an explicit, tier-keyed waiver below because it
@@ -192,6 +210,12 @@ class Manifest:
     session_config_sha256: str = NOT_APPLICABLE
     session_trace_path: str = NOT_APPLICABLE
     session_server_result_path: str = NOT_APPLICABLE
+    # Every run carries an explicit off/on record for the supervisor knobs.
+    # The default is the canonical all-off pin for callers that construct a
+    # replay manifest directly; RunEnvironment always supplies its own value.
+    runtime_knobs: Mapping[str, object] = field(
+        default_factory=_default_runtime_knobs
+    )
     # Persist this distinction.  A stored live manifest must still require
     # desktop identity when a later validator reads it without the substrate.
     validation_mode: str = "replay"
@@ -239,6 +263,13 @@ class Manifest:
                 field="agent_sampling_params",
                 value=self.agent_sampling_params,
             )
+        if not isinstance(self.runtime_knobs, Mapping) or not self.runtime_knobs:
+            raise ManifestError(
+                "manifest field runtime_knobs must be a non-empty mapping",
+                field="runtime_knobs",
+                value=self.runtime_knobs,
+            )
+        object.__setattr__(self, "runtime_knobs", dict(self.runtime_knobs))
         if isinstance(self.turn_budget, bool) or not isinstance(self.turn_budget, int) or self.turn_budget < 1:
             raise ManifestError(
                 "manifest field turn_budget must be an integer of at least 1",
@@ -323,6 +354,9 @@ class Manifest:
                 field="validation_mode",
                 value=validation_mode,
             )
+        # runtime_knobs is never defaulted on parse.  A run whose active knobs
+        # are unknown cannot be compared with any other run, so an omitted pin
+        # is a parse failure rather than an assumption that nothing was on.
         missing = [
             field_name
             for field_name in cls.fields
