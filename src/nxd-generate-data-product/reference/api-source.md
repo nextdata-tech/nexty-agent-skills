@@ -738,7 +738,8 @@ add it explicitly rather than assuming it's already covered.
   config like `auth_key_name`/`auth_key_location` `true`).
 
   **No connector artifact** — an api-source closure's endpoint map lives in
-  these attributes, not in a companion file.
+  these attributes, not in a companion file. Everything the transform reads at run
+  time is an attribute on the `api-source` service.
 
   **But a `data/` tree the closure authored itself still needs
   `csv-source-path`.** An api closure that carries landed reference data (see
@@ -755,8 +756,9 @@ add it explicitly rather than assuming it's already covered.
   so it reads as a spec or manifest problem. `printf 'data\n' > csv-source-path`
   clears it. The file is about staging a directory, not about declaring a CSV
   connector — the closure still names only `api-source` in `.secrets([...])`,
-  and there is still no `csv-source` service in the profile. Everything the transform needs is an
-  attribute on this service. For 2+ API sources, add one labeled service per
+  and there is still no `csv-source` service in the profile.
+
+  For 2+ API sources, add one labeled service per
   instance instead (`api-source-<label>` / label-prefixed attribute keys such
   as `secrets["orders_base_url"]` and `secrets["orders_endpoint_<model>"]`) —
   see `reference/multi-source.md`.

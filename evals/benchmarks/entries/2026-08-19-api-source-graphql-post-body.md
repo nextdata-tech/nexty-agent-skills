@@ -60,11 +60,16 @@ resolves that pin from the network on a cold `uv` cache, which is the one place
 this suite reaches outside the repo.
 
 Three of the twelve cover the key-role defect specifically: a spelling-independent
-scan for `field(<type>(), primary_key())` across both the placing and the
-inferring skill, a check that the inference skill's own grammar and templates
-teach the pairing, and a check that `self_check.py` reports
-`struct.key_not_groupable` as a warning — the mechanical backstop, since that
-defect has no error, no failed assert and no missing table to catch it.
+scan for a bare `primary_key()` across all THREE skills that teach this DSL —
+the placing skill, the inferring skill, and the platform skill, since the
+`describe_models` consequence is not desktop-specific — plus a check that the
+inference skill's own grammar and templates teach the pairing, and a check that
+`self_check.py` reports `struct.key_not_groupable` as a warning. That warning is
+the mechanical backstop: the defect has no error, no failed assert and no
+missing table to catch it, so documentation alone would not stop it recurring.
+Its code is registered in `dp_diagnostics.CODES` so the shared vocabulary and
+the checker cannot drift apart. The scan skips the vendored
+`nextdata-public-examples` submodule, which is upstream.
 
 `evals/tests/test_api_source_header_contract.py` and
 `evals/tests/test_api_source_connector_gate.py` continue to cover the GET-side

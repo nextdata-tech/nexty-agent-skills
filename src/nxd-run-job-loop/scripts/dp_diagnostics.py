@@ -661,6 +661,13 @@ _register(
     owner="agent",
     summary="Phase A could not verify a dynamic construct — its declared blind spot",
 )
+_register(
+    "struct.key_not_groupable",
+    stage="s1_structure",
+    severity="warning",
+    owner="agent",
+    summary="A key field carries only primary_key() — not groupable, so no query can name the entity",
+)
 
 # --- domain `reach.` — stage s1_structure (Phase E) --------------------------
 # The reach gate: a transform lands data and never calls a model. Filed under

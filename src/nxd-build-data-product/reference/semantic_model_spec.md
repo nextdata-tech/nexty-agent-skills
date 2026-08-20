@@ -26,6 +26,10 @@ trending_sales = (
             "sale_id": field(
                 int64(),
                 primary_key(),
+                # Roles compose, and a key needs the pairing: primary_key()
+                # alone never reaches describe_models, so no query can group by
+                # it and "which sale..." has no answerable form.
+                dimension(name="sale_id", description="Sale key. Group by this to name a sale."),
             ),
             "product_id": field(
                 string(),
@@ -101,7 +105,8 @@ from nxd.spec.data_types import int64, string
 
 orders = semantic_model("orders").schema(
     {
-        "order_id": field(int64(), primary_key()),
+        # primary_key() alone is not groupable — pair it with a dimension.
+        "order_id": field(int64(), primary_key(), dimension(name="order_id", description="Order key.")),
         "status": field(
             string(),
             dimension(
@@ -119,7 +124,7 @@ orders = semantic_model("orders").schema(
 
 | Role | Meaning | Where to use it |
 | --- | --- | --- |
-| `primary_key()` | Entity key for one physical model row. Use multiple key fields for a composite key. | Physical `semantic_model` field |
+| `primary_key()` | Entity key for one physical model row. Use multiple key fields for a composite key. **Pair it with a `dimension(...)` on the same field** — roles compose, and a key carrying only this role is not groupable, so no query can return which entity a row is about. | Physical `semantic_model` field |
 | `dimension(name=None, pii=False, label=None, description="")` | Query concept that can be used for grouping and filtering. Put agent-visible dimension descriptions here. `pii=True` marks governed personal data. | Physical `semantic_model` field |
 | `join(to, to_column=None, cardinality=None, to_data_product=None)` | Validated foreign-key edge to another semantic model. Declare it on the many-side field. | Physical `semantic_model` field |
 
@@ -131,7 +136,7 @@ The `.schema()` dictionary accepts three equivalent field shapes:
 ```python
 orders = semantic_model("orders").schema(
     {
-        "order_id": field(int64(), primary_key()),
+        "order_id": field(int64(), primary_key(), dimension(name="order_id", description="Order key.")),
         "status": (
             string(),
             dimension(

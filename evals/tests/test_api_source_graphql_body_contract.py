@@ -209,10 +209,22 @@ def test_pinned_dlt_expands_doubled_braces_back_to_the_original_query():
             "uv is required to verify the dlt escape round-trip against the "
             "pinned version; install uv, or run this test in CI"
         )
-    result = subprocess.run(
-        ["uv", "run", "--quiet", "--with", DLT_PIN, "python", "-c", program],
-        capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S,
-    )
+    # `--no-project` matches the sibling dlt probes in
+    # test_api_source_header_contract.py and test_api_source_secret_redaction.py:
+    # without it the probe's environment depends on where pytest was invoked
+    # from, and on nothing adding a pyproject.toml at the repo root later.
+    try:
+        result = subprocess.run(
+            ["uv", "run", "--no-project", "--quiet", "--with", DLT_PIN,
+             "python", "-c", program],
+            capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"the dlt round-trip probe did not finish within "
+            f"{SUBPROCESS_TIMEOUT_S}s (a cold uv cache resolves the pin from "
+            f"the network)"
+        )
     assert result.returncode == 0, (
         f"probe failed: {result.stderr[-2000:]}"
     )
@@ -273,11 +285,23 @@ def test_recipe_requires_a_dimension_role_beside_every_primary_key():
     # Spelling-independent, and over every file an author copies from — not
     # just the one line that was fixed. models-example.md carried the defect
     # twice: customer_id as string(), order_id as number(), 45 lines apart.
-    bare = re.compile(r"field\(\s*\w+\(\)\s*,\s*primary_key\(\)\s*\)")
+    #
+    # The `,?` matters: long fields in this pack are conventionally written
+    # across lines with a trailing comma, so `primary_key(),\n)` is the form a
+    # formatter produces and the one that would slip through otherwise.
+    #
+    # All THREE skills that teach this DSL are scanned. The describe_models
+    # consequence is not desktop-specific: an author working from the platform
+    # skill writes exactly the shape struct.key_not_groupable fires on.
+    bare = re.compile(r"field\(\s*\w+\(\)\s*,\s*primary_key\(\)\s*,?\s*\)")
     offenders = []
-    for skill in ("nxd-generate-data-product", "nxd-build-semantic-data-product"):
-        root = REPO_ROOT / "src" / skill
+    for skill_dir in ("nxd-generate-data-product", "nxd-build-semantic-data-product",
+                      "nxd-build-data-product"):
+        root = REPO_ROOT / "src" / skill_dir
         for path in sorted(root.rglob("*")):
+            # Vendored upstream examples are not ours to edit.
+            if "nextdata-public-examples" in path.parts:
+                continue
             if path.is_file() and path.suffix in (".md", ".py", ".tmpl"):
                 hits = bare.findall(path.read_text(encoding="utf-8", errors="ignore"))
                 if hits:
