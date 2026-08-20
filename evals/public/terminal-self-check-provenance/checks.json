@@ -1,0 +1,40 @@
+{
+  "name": "Terminal self-check and closure provenance",
+  "skills": [
+    "nxd-generate-data-product",
+    "nxd-run-job-loop"
+  ],
+  "ci_skip": "needs an authenticated Claude CLI plus a provisioned nxd-desktop-supervisor runtime (EVAL_DESKTOP_SUPERVISOR_DIR, EVAL_DESKTOP_PYTHON, and EVAL_NXD_REPO_ROOT); run explicitly on a host with those components or via workflow_dispatch",
+  "wants_trace": true,
+  "deterministic_check": {
+    "script": "check_terminal_self_check.py",
+    "deps": [],
+    "redaction_markers": [
+      "nex887-opaque-synthetic-secret-2d4c"
+    ],
+    "wants_trace": true,
+    "trace_source": "runner_mcp"
+  },
+  "checks": [
+    {
+      "id": "supervisor-self-check-path",
+      "check": "The agent used the connected nxd-desktop MCP check_data_product tool, not a copied helper or direct script, and the runner-authored trace contains a structured self-check response."
+    },
+    {
+      "id": "positive-provenance",
+      "check": "The positive starter closure reports a content-addressed definition_id, interpreter/package provenance, and all four stages. No skipped check is presented as passed."
+    },
+    {
+      "id": "negative-diagnostics",
+      "check": "The malformed deployment spec, missing transform source, failed import, failed transform, and missing helper cases each have distinct supervisor stable diagnostic codes and the result preserves stage/outcome information."
+    },
+    {
+      "id": "snapshot-identity",
+      "check": "The mutation case reports a different content-addressed definition_id after the authoring file changes and does not claim that the first pinned snapshot changed in place."
+    },
+    {
+      "id": "redacted-public-trace",
+      "check": "The public runner MCP trace is present and contains no synthetic credential marker or raw provider payload."
+    }
+  ]
+}

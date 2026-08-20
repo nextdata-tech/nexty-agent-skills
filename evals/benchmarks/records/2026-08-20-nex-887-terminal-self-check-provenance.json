@@ -1,0 +1,104 @@
+{
+  "id": "2026-08-20-nex-887-terminal-self-check-provenance",
+  "date": "2026-08-20",
+  "label": "NEX-887: terminal self-check and closure provenance",
+  "notes": "Fresh authenticated local acceptance run against the isolated stdio MCP supervisor and synthetic NXD profile. This is acceptance evidence for a new scenario, not a before/after benchmark; the scenario is ci_skip in hosted CI because that runtime is not provisioned.",
+  "plugin_version": "0.37.4",
+  "report_tags": {
+    "current_pack": "current_pack"
+  },
+  "reports": {
+    "current_pack": {
+      "elapsed_s": 220.0,
+      "agent_backend": "claude",
+      "judge_backend": "claude",
+      "agent_model": "sonnet",
+      "scenario_agent_models": {
+        "terminal-self-check-provenance": "sonnet"
+      },
+      "judge_model": "opus",
+      "agent_effort": "high",
+      "judge_effort": "xhigh",
+      "concurrency": 1,
+      "results": [
+        {
+          "skill_set": "current_pack",
+          "scenario": "terminal-self-check-provenance",
+          "ok": true,
+          "error": "",
+          "metrics": {
+            "num_turns": 20,
+            "duration_ms": 195173,
+            "total_cost_usd": 1.0123085,
+            "input_tokens": 34,
+            "output_tokens": 12952,
+            "is_error": false,
+            "tool_calls": 19,
+            "setup_result": {
+              "status": "passed",
+              "error": null,
+              "exit_code": null,
+              "trace_path": null
+            },
+            "agent_result": {
+              "status": "passed",
+              "error": null,
+              "exit_code": null,
+              "trace_path": null
+            },
+            "server_result": {
+              "status": "started",
+              "error": null,
+              "exit_code": null,
+              "trace_path": "/var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-terminal-self-check-provenance-rny_jv9o/stdio-session/mcp-trace.jsonl"
+            },
+            "mcp_config": "/var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-terminal-self-check-provenance-rny_jv9o/stdio-session/mcp-config.json",
+            "mcp_trace": "/var/folders/1q/yn949chx1gn7v6zzg3j7xpsw0000gn/T/eval-current_pack-terminal-self-check-provenance-rny_jv9o/stdio-session/mcp-trace.jsonl",
+            "source_access_audit": {
+              "status": "not_required",
+              "matched_marker_ids": []
+            },
+            "stdio_mcp_trace_source": "runner",
+            "stdio_mcp_trace_events": 22,
+            "agent_model": "claude-opus-4-8",
+            "deterministic_check": "passed"
+          },
+          "verdict": {
+            "checks": [
+              {
+                "id": "supervisor-self-check-path",
+                "pass": true,
+                "why": "The trace shows seven `mcp__nxd-desktop__check_data_product` calls with workflow `terminal-self-check-provenance` returning structured JSON responses, with no copied helper or direct Python self-check script invoked."
+              },
+              {
+                "id": "positive-provenance",
+                "pass": true,
+                "why": "The baseline run reports `definition_id sha256-v1:28b17867…6ecd77`, python 3.12.10 in desktop-venv with nxd package versions 0.41.170 and tooling sha256 digests, and all four stages (structure/runtime/contract/semantic) as examined and passed with no skip presented as a pass."
+              },
+              {
+                "id": "negative-diagnostics",
+                "pass": true,
+                "why": "Each of the five cases yields a distinct supervisor code — `structure/manifest_admission_failed`, `runtime/transform_source_missing`, `runtime/import_failed`, `runtime/transform_entrypoint_missing`, `runtime/companion_missing` — and the report preserves per-stage status including the malformed case's `*/not_reached` skips explicitly labeled unexamined rather than passed."
+              },
+              {
+                "id": "snapshot-identity",
+                "pass": true,
+                "why": "After appending a comment to `transform/main.py`, the re-check returned `463d4ef6…c4a1` versus the original `28b17867…ecd77`, and the answer states the second result is a different pinned snapshot, not a recheck of the first."
+              },
+              {
+                "id": "redacted-public-trace",
+                "pass": true,
+                "why": "The MCP trace is present with paths redacted as `<path>`/`<home>`/`<data-dir>` and contains no synthetic credential marker or raw provider payload; the deterministic runner check passed with zero failures."
+              }
+            ],
+            "overall_pass": true,
+            "summary": "The agent drove every check through the connected nxd-desktop MCP tool, produced distinct stable diagnostic codes for all five negative cases with stage/skip semantics preserved, and correctly framed the mutated closure as a different content-addressed snapshot."
+          },
+          "facts": [
+            "DETERMINISTIC CHECK (authoritative runner facts): {\"exit_code\": 0, \"failures\": [], \"passed\": true}"
+          ]
+        }
+      ]
+    }
+  }
+}

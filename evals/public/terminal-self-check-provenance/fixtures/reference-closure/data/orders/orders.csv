@@ -1,0 +1,3 @@
+order_id,product_category,order_text
+ORD-1001,freight,"Order ORD-1001 category freight."
+ORD-1002,warehousing,"Order ORD-1002 category warehousing."
