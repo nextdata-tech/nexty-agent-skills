@@ -423,7 +423,8 @@ nxd_decisions_metrics = semantic_view(
 
    Both connector templates already scope their reader loops to the models the
    remote actually serves — `db-source` iterates `table_map`, `api-source`
-   iterates `API_MODELS` — so appending the resource is the whole change. Do not
+   iterates `fetched_models`, its endpoint-filtered subset of `API_MODELS` — so
+   appending the resource is the whole change. Do not
    "fix" either loop back to `PHYSICAL_MODELS`: that is what made a reference
    model raise `KeyError` out of `table_map[model]`, pointing at the
    `db-source-tables` companion as though an entry were missing there.

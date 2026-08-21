@@ -290,12 +290,16 @@ def test_recipe_requires_a_dimension_role_beside_every_primary_key():
     # across lines with a trailing comma, so `primary_key(),\n)` is the form a
     # formatter produces and the one that would slip through otherwise.
     #
-    # No `field` prefix, because `.schema()` accepts two sanctioned shapes and
-    # both can carry a bare key: the call `field(int64(), primary_key())` and
-    # the tuple `"order_id": (int64(), primary_key())`. `semantic_model_spec.md`
-    # teaches the tuple form explicitly, so a guard keyed to `field(` would
-    # report clean on the very doc that invites it. The call form still matches,
-    # since its own argument list is `(<type>(), primary_key())`.
+    # No `field` prefix. `.schema()` accepts three shapes; TWO of them carry
+    # roles and so can carry a bare key — the `field(...)` call and the tuple —
+    # while the third is a bare dtype with no roles at all, which cannot.
+    # `semantic_model_spec.md` teaches the tuple form explicitly, so a guard
+    # keyed to `field(` would report clean on the very doc that invites it. The
+    # call form still matches, since its own argument list has the same shape.
+    #
+    # Comment lines are stripped before matching: prose that NAMES the defect is
+    # not an instance of it, and a doc explaining the rule should not be able to
+    # fail the guard by being rewrapped.
     #
     # All THREE skills that teach this DSL are scanned. The describe_models
     # consequence is not desktop-specific: an author working from the platform
@@ -310,7 +314,13 @@ def test_recipe_requires_a_dimension_role_beside_every_primary_key():
             if "nextdata-public-examples" in path.parts:
                 continue
             if path.is_file() and path.suffix in (".md", ".py", ".tmpl"):
-                hits = bare.findall(path.read_text(encoding="utf-8", errors="ignore"))
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                # The guard is about copyable examples, not about prose.
+                text = "\n".join(
+                    line for line in text.splitlines()
+                    if not line.lstrip().startswith(("#", "<!--"))
+                )
+                hits = bare.findall(text)
                 if hits:
                     offenders.append(f"{path.relative_to(REPO_ROOT)} ({len(hits)})")
     assert not offenders, (

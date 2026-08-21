@@ -488,14 +488,15 @@ pipeline.run(readers, write_disposition="replace")
 `derivation-plan.md` and `llm-judgments.md` tell you to write
 `data/<name>/<name>.csv`, add the model to `BASE_MODELS`, and let it flow
 through the reader loop with "no special casing anywhere". **Step 1 still
-applies; the reader-loop half does not.** The loop above iterates `API_MODELS`,
-so a reference model added to `BASE_MODELS` and nothing else is neither fetched
-nor read, and drops out silently until the read-back assert reports a table that
-never landed.
+applies; the reader-loop half does not.** The loop above iterates
+`fetched_models` — the endpoint-filtered subset of `API_MODELS`, not
+`BASE_MODELS` — so a reference model added to `BASE_MODELS` and nothing else is
+neither fetched nor read, and drops out silently until the read-back assert
+reports a table that never landed.
 
-**Still write the CSV, at `data/<name>/<name>.csv`.** "No `data/` directory"
-above means this connector brings no *export* — it does not mean the closure may
-not carry one. The supervisor materializes `transform/` and `data/` into the
+**Still write the CSV, at `data/<name>/<name>.csv`.** "No connector artifact"
+below, under `spec.py` / `infra-profile.yaml` diffs, means this connector brings
+no *export* of its own — it does not mean the closure may not carry one. The supervisor materializes `transform/` and `data/` into the
 pinned snapshot for every closure, by path and not by connector type, so a
 `data/` tree an api closure authors itself travels with it. Do **not** inline
 the rows as a literal in the transform instead: `SKILL.md`'s "Reference data is
