@@ -1,0 +1,44 @@
+{
+  "description": "Read the product category from each landed order document.",
+  "instruction": "Read order_category from the landed order text. Cite the exact category span. If no category is present, return the absent sentinel.",
+  "target_fields": [
+    {
+      "name": "order_category",
+      "value_type": "string",
+      "min_length": 2,
+      "max_length": 64,
+      "required": true,
+      "min_evidence": 1
+    }
+  ],
+  "grain": {
+    "identity_fields": [
+      "order_id"
+    ],
+    "canonical_sort": [
+      "order_id"
+    ],
+    "duplicate_policy": "reject",
+    "source_locators": [],
+    "identity_bearing_inputs": [
+      "order_id"
+    ]
+  },
+  "cardinality": {
+    "min_rows": 1,
+    "max_rows": 100,
+    "expected_per_input": 1
+  },
+  "thresholds": {
+    "max_degrade_share": 0.0,
+    "max_error_rate": 0.0,
+    "max_unverified_share": 0.0,
+    "max_absent_share": 0.0,
+    "max_validation_retries": 1
+  },
+  "input_adapter": "landed_text",
+  "model": "claude-haiku-4-5-20251001",
+  "effort": "low",
+  "accepts_media": [],
+  "spec_version": "1"
+}

@@ -1,0 +1,18 @@
+domain: desktop.local
+inputs: {}
+name: job loop reference closure
+executor:
+  driver: nxd:local/python/compute:0.1.0
+  secrets:
+    - csv-source
+output:
+  ports:
+    output:
+      service: output
+      config:
+        model_tables:
+          customers: customers
+          orders: orders
+        path: __NXD_STAGING_DATA__
+        schema: main
+version: 0.0.1

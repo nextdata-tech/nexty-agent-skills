@@ -232,6 +232,9 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     # The terminal mapper checker is withheld from the agent; it is runner-side
     # oracle material and is passed directly to the deterministic subprocess.
     "terminal-field-mapper-adapter-contract": frozenset({"check_terminal_mapper_adapter.py"}),
+    # The self-check provenance checker is runner-side oracle material and must
+    # not be staged into the agent workspace.
+    "terminal-self-check-provenance": frozenset({"check_terminal_self_check.py"}),
     "multi-source-labeled-roots": frozenset({"check_labeled_multi_source.py"}),
     "multi-source-labeled-roots-supervisor": frozenset({"check_supervisor_pin.py"}),
     # Names the banned host/path literals and the exact connector architecture
