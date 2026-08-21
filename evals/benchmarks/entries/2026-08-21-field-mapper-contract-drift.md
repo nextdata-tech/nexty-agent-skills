@@ -45,13 +45,19 @@ dispatch in CI, which the suite deliberately does not do.
 
 ## Evidence
 
-`evals/tests/test_field_mapper_contract_drift.py`, ten tests in two halves.
+`evals/tests/test_field_mapper_contract_drift.py`, eleven tests in two halves.
 
 Six assert the documentation and run everywhere, including in CI, which has no
 `nxd` wheel; all six were verified to fail against the previous revisions of
-`mapper/CONTRACT.md` and `reference/field-mapper.md`. Four use the installed
+`mapper/CONTRACT.md` and `reference/field-mapper.md`. Five use the installed
 package as the signature oracle and skip where it is absent — deliberately not
 `importorskip` at module scope, so the doc half cannot vanish silently with it.
+
+The doc assertions compare against whitespace-normalized text. A negative
+assertion ("this phrasing must be gone") over raw file text only fires while the
+sentence sits on one physical line, so restoring the old wording and letting the
+paragraph reflow would put the residue back with a green suite. Verified against
+a constructed reflow: the raw guard misses it, the normalized one catches it.
 
 Every one of the four corrections has at least one **ungated** carrier. An
 earlier revision gated the `Grant.check` doc assertions behind the oracle skip,

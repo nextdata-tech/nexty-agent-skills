@@ -48,12 +48,26 @@ needs_harness = pytest.mark.skipif(
 )
 
 
+def _normalized(path: Path) -> str:
+    """Ignore Markdown line wrapping while keeping exact contract phrases.
+
+    The negative assertions below ("this phrasing must be gone") are the ones
+    that need it: against raw text they only fire while the sentence happens to
+    sit on one physical line, so restoring the old wording and letting the
+    paragraph reflow puts the residue back with a green suite. A reflow makes a
+    POSITIVE assertion fail loudly, which is the safe direction; a negative one
+    fails open. Same helper, and same reason, as
+    `test_mapper_supervisor_approval_contract.py`.
+    """
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
 def _contract() -> str:
-    return CONTRACT.read_text(encoding="utf-8")
+    return _normalized(CONTRACT)
 
 
 def _reference() -> str:
-    return REFERENCE.read_text(encoding="utf-8")
+    return _normalized(REFERENCE)
 
 
 # --- the four corrections -------------------------------------------------
@@ -142,6 +156,25 @@ def test_provider_default_is_documented_as_grant_resolved():
         "is why the pack's own e2e example omits it"
     )
     assert "name it." not in contract, "that read as a hard rule and was wrong"
+
+
+@needs_harness
+def test_provider_resolution_actually_falls_back_to_the_grant():
+    """The oracle for the provider claim.
+
+    Every other harness-behaviour claim in this file has a gated carrier, so a
+    release that changes it fails here rather than leaving the doc stale. This
+    one asserted an internal (`provider = grant.provider`) on prose alone.
+    """
+    import inspect as _inspect
+
+    from nxd.experimental.field_mapper import call_adapter
+
+    source = _inspect.getsource(call_adapter)
+    assert "self._grant.provider" in source or "grant.provider" in source, (
+        "provider no longer resolves from the grant; re-document the default "
+        "rather than leaving CONTRACT.md asserting it"
+    )
 
 
 def test_the_spec_id_binding_trap_is_documented():

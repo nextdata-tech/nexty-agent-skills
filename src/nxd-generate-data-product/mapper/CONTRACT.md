@@ -214,6 +214,11 @@ nothing. That policy needs a projection that passes `ordinal=` per emitted row �
 and a `dict` keyed by row key stops being the right shape. Every `samples/*/spec.json`
 uses `reject`, so no fixture exercises this.
 
+**`ordinal_suffix` is a documented trap, not a supported alternative** (open
+question 8): a source reorder changes the key and mass-invalidates every review
+bound to it. Read this caveat as "here is why the recipe does not cover that
+policy", not as an invitation to adopt it.
+
 Treating `target_row_key` as the business key is the failure this section
 exists to prevent: downstream asserts then reject every row for belonging to an
 entity that does not exist, and the message points at the data rather than at
@@ -233,7 +238,7 @@ credential that is present. Pass it explicitly when the supervisor supplies the
 key through the environment:
 
 ```python
-call = make_call(spec=spec, grant=grant, allow_env=True, provider="anthropic")
+call = make_call(spec=spec, grant=grant, allow_env=True)
 ```
 
 `provider` also defaults to `None`, but that is not a hole: when it is omitted
@@ -282,7 +287,7 @@ every build** — it is this run's output, not durable state.
 
 | Column | Type | Null? | Key | Description |
 |---|---|---|---|---|
-| `target_row_key` | `string()` | no | PK | Content/source-derived row identity (§5). Never an emission ordinal. |
+| `target_row_key` | `string()` | no | PK | Content/source-derived row identity (§5). Never an emission ordinal — except under `duplicate_policy = ordinal_suffix`, where §5 admits it after the identity fields are exhausted. |
 | `field` | `string()` | no | PK | Target field name. Must be declared in the spec's target fields. |
 | `value_string` | `string()` | **yes** | | Typed value slot. Exactly one `value_*` column is non-null when `value_status = ok`; **all are null** for every other status. |
 | `value_int` | `int64()` | **yes** | | ditto |
@@ -302,7 +307,7 @@ every build** — it is this run's output, not durable state.
 | `input_snapshot_id` | `string()` | no | | Deterministic hash of the inputs this cell was derived from (§5). |
 | `mapper_spec_id` | `string()` | no | | Canonical spec hash (§5). |
 | `execution_id` | `string()` | no | | Nondeterministic, harness-supplied. **Never a business key.** Present for ledger join only. |
-| `emission_ordinal` | `int64()` | no | | Display-only. Explicitly NOT part of any key and NOT stable across runs. |
+| `emission_ordinal` | `int64()` | no | | Display-only and NOT stable across runs. Not part of any key under `reject` or `merge_by_rule`; under `ordinal_suffix` it participates in `target_row_key` (§5), which is why that policy makes review binding fragile. |
 
 Uniqueness: `(target_row_key, field)`. A duplicate is a hard build failure, not a
 last-write-wins — duplicate emission means the spec's row identity is
