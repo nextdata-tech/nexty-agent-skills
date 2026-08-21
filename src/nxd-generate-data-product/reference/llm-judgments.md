@@ -277,10 +277,10 @@ candidate_judgments = (
     )
     .schema(
         {
-            "entity_key": field(string(), primary_key()),
-            "criterion": field(string(), primary_key()),
-            "rubric_version": field(string(), primary_key()),
-            "judged_by": field(string(), primary_key()),
+            "entity_key": field(string(), primary_key(), dimension(name="judged_entity", description="Entity this judgement is about.")),
+            "criterion": field(string(), primary_key(), dimension(name="judged_criterion", description="Rubric criterion this row scores.")),
+            "rubric_version": field(string(), primary_key(), dimension(name="rubric_version", description="Rubric version this judgement was made under.")),
+            "judged_by": field(string(), primary_key(), dimension(name="judged_by", description="Model identity, or human for an override.")),
             "score": field(
                 number(),
                 dimension(

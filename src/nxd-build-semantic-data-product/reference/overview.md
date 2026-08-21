@@ -115,4 +115,7 @@ from nxd.spec import primary_key, semantic_model, semantic_view
 ```
 
 Use `primary_key()` for an entity key; the older alias is not part of this kit.
+Pair it with a `dimension(...)` on the same field — roles compose, and a key
+carrying only `primary_key()` never appears in `describe_models`, so no query
+can group by it.
 See `registry-authoring.md` for the role grammar and a complete example.

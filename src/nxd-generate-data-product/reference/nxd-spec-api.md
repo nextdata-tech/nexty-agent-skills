@@ -70,6 +70,16 @@ All return a `RoleSpec` (a `(kind, blob)` pair) except `field()`/`metric_field()
 which return an `AttributeSpec` (a full column) already carrying the role blob.
 
 - **`primary_key()`** — no arguments. The entity-key role.
+
+  **Pair it with a `dimension(...)` on the same field.** Roles compose —
+  `field(string(), primary_key(), dimension(name=..., description=...))` is
+  accepted — and a key that carries only `primary_key()` is **not groupable**:
+  it never appears in `describe_models`, so no query can return which entity a
+  row belongs to. The product still builds, publishes and answers aggregate
+  counts, which is what makes this one expensive to find: there is no error, no
+  failed assert, and no missing table — only every entity-level question
+  quietly having no answerable form. The same applies to a `join()` column a
+  consumer needs to group by.
 - **`dimension(name=None, pii=False, label=None, description="")`** — a
   groupable/filterable column. `label` attaches a companion display column
   (`label_column` in the compiled blob).

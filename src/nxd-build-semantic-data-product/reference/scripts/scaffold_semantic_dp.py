@@ -63,7 +63,8 @@ your_model = (
     .description("One row per <entity_a>.")
     .schema(
         {
-            "<KEY_A>": field(int64(), primary_key()),
+            # primary_key() alone is not groupable; pair it with a dimension.
+            "<KEY_A>": field(int64(), primary_key(), dimension(name="<key_a>", description="<Entity> key.")),
             "<DIM_COL>": field(
                 string(),
                 dimension(

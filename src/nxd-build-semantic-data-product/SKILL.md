@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.38.0
+  version: 0.38.1
 ---
 
 # nxd-build-semantic-data-product skill
@@ -237,7 +237,7 @@ Use the public `nxd.spec` field builders only. The platform compiles those publi
 roles for every **promised** model at build time; never mutate private attribute
 metadata or add a second semantic representation.
 
-`primary_key()` is canonical (never the deprecated `grain` alias). Use
+`primary_key()` is canonical (never the deprecated `grain` alias), and pairs with a `dimension(...)` on the same field — a bare key never reaches `describe_models`, so nothing can group by it. Use
 `join(to="<model>", to_column="<col>")`, not `to_model=`, and give every
 dimension its stable business name and PII flag when applicable.
 
@@ -256,7 +256,7 @@ orders = (
     .description("One row per order.")
     .schema(
         {
-            "ORDER_ID": field(int64(), primary_key()),
+            "ORDER_ID": field(int64(), primary_key(), dimension(name="order_id", description="Order key.")),  # bare key = not groupable
             "REGION": field(
                 string(),
                 # The description goes INSIDE dimension() — on the enclosing
@@ -291,7 +291,7 @@ order_metrics = semantic_view("order_metrics", orders).schema(
 
 | Role | Public DSL |
 |------|------|
-| primary key | `field(<type>(), primary_key())` |
+| primary key | `field(<type>(), primary_key(), dimension(name=..., description=...))` — roles compose, and a bare `primary_key()` is not groupable |
 | dimension | `field(<type>(), dimension(name=..., description=..., pii=<bool>))` |
 | metric | define on a `semantic_view(...)` with `metric_field(metric(..., description=...))`; do not add it to a physical base field |
 | join | `field(<type>(), join(to=..., to_column=...))` — no description parameter |

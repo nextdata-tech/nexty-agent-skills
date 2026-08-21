@@ -41,7 +41,8 @@ customer_profile = (
     .description("One row per customer.")
     .schema(
         {
-            "CUSTOMER_ID": field(int64(), primary_key()),
+            # primary_key() alone is not groupable; pair it with a dimension.
+            "CUSTOMER_ID": field(int64(), primary_key(), dimension(name="customer_id", description="Customer key.")),
             "COUNTRY": field(
                 string(),
                 dimension(name="country", description="ISO country of the customer's billing address."),
@@ -59,7 +60,7 @@ order_event = (
     .description("One row per order or sales event.")
     .schema(
         {
-            "ORDER_ID": field(int64(), primary_key()),
+            "ORDER_ID": field(int64(), primary_key(), dimension(name="order_id", description="Order key.")),
             "CUSTOMER_ID": field(
                 int64(),
                 join(to="customer_profile", to_column="CUSTOMER_ID"),
