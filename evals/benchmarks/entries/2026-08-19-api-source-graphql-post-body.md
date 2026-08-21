@@ -2,7 +2,7 @@
 id: 2026-08-19-api-source-graphql-post-body
 date: 2026-08-19
 label: "nxd-generate-data-product: POSTed-JSON-body api-source closures, and groupable keys"
-plugin_version: 0.37.5
+plugin_version: 0.38.1
 status: NO_EVAL
 scenarios: []
 record: null
