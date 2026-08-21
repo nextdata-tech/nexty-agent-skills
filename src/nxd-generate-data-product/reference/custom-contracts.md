@@ -10,7 +10,7 @@
 
 ## What belongs in a custom contract
 
-The active `dp-spec.md` is v3 prose-first Markdown. A user expresses guarantees
+The active `dp-blueprint.md` is v3 prose-first Markdown. A user expresses guarantees
 as natural-language **Expectations** under an Input and **Promises** under an
 Output; there is no user-authored `Contracts`, `Delivery`, or standalone policy
 payload. The compiler derives the internal contract inventory from those

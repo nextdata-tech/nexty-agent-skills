@@ -21,20 +21,20 @@
 
 ## What this file is
 
-`dp-spec.md` is the plan. `build-record.json` is **what happened when the plan
+`dp-blueprint.md` is the plan. `build-record.json` is **what happened when the plan
 was compiled and run** — and it is the only place that content lives.
 
 The split is not filing tidiness. The compiler framing behind this pack is: user
-intent is the source, [`dp-spec.md`](dp-spec.md) is the IR, `nxd-generate-data-product` is
+intent is the source, [`dp-blueprint.md`](dp-blueprint.md) is the IR, `nxd-generate-data-product` is
 codegen, the closure's Python is the output artifact. An IR is a pure function
 of its source, so an outcome — a row count, a runtime blocker, a review round, a
 build result — cannot live in it. It lives here.
 
 ```
 closure/
-├── dp-spec.approved.md    byte copy of the approved IR       — the plan
-├── dp-spec.lock.json      its canonical hash + compiler version — the binding
-└── build-record.json      outcomes, reviews, attempts, concessions — this file
+├── dp-blueprint.approved.md    byte copy of the approved IR       — the plan
+├── dp-blueprint.lock.json      its canonical hash + compiler version — the binding
+└── build-record.json           outcomes, reviews, attempts, concessions — this file
 ```
 
 Three properties, all load-bearing:
@@ -53,7 +53,7 @@ Three properties, all load-bearing:
 
 **This is not the old hand-written closure context document under a new name.**
 The plan sections such a document used to duplicate are gone —
-`dp-spec.approved.md` carries them, byte for byte, so there is nothing to copy
+`dp-blueprint.approved.md` carries them, byte for byte, so there is nothing to copy
 and nothing to drift. What remains here is outcome-only and mostly mechanical.
 
 ## The unified diagnostic record
@@ -234,7 +234,7 @@ disguise an observation as a measurement. `record append` rejects a report whose
   "workflow": "candidate-scoring",
   "data_product": "candidate_scoring",
   "closure_path": "/abs/path/to/closure",
-  "compiled_from": "sha256:…",          // == dp-spec.lock.json spec_hash
+  "compiled_from": "sha256:…",          // == dp-blueprint.lock.json spec_hash
   "compiler_version": {
     "plugin": "0.29.0",
     "generator_skill": "nxd-generate-data-product",
@@ -378,7 +378,7 @@ and nothing in the artifact reveals the difference.
   "stage": "s6_run",
   "path": "v2:open_questions[fx_rates]",
   "discovered": "build_time",     // pre_build | build_time
-  "written_back": true,           // written into the LIVE dp-spec.md
+  "written_back": true,           // written into the LIVE dp-blueprint.md
   "at_unix_ms": 1769904090000,
   "origin": "agent_observed"
 }
@@ -391,7 +391,7 @@ and it already carries the rule that a measurement you must not propose belongs
 there rather than being invented into `criteria` or `decisions`. Inventing a
 parallel "build issues" channel would split the user's queue in two.
 
-`written_back: true` means the entry was added to the live `dp-spec.md`. That
+`written_back: true` means the entry was added to the live `dp-blueprint.md`. That
 **un-approves** the spec by design: the canonical hash moves, `compiled_from` no
 longer matches the live IR, and the materialization predicate correctly reports
 not-materialized. The elicitation contract is a loop, not a pre-build-only gate,
@@ -552,7 +552,7 @@ So the sequence is fixed:
    `spec_hash_before == spec_hash_after ==` the **pre-write-back** hash. They are
    equal truthfully: the attempt itself never edited the IR.
 4. Append the `blockers[]` entry.
-5. *Then* edit the live `dp-spec.md` and set `written_back: true`.
+5. *Then* edit the live `dp-blueprint.md` and set `written_back: true`.
 
 The write-back is a separate, separately recorded event. It is carried by
 `blockers[].written_back`, never by `attempts[]`. The divergence it creates

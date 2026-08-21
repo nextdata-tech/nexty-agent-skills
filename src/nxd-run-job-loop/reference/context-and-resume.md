@@ -23,14 +23,19 @@ Draw the line clearly, because the recovery path depends on it:
 
 - The **closure directory** at `…/nxd-jobs/<workflow>/closure/` on the file-writing
   surface — the source copy, `spec.py`, `models.py`, `transform/`, and the
-  generated record files: `dp-spec.approved.md`, `dp-spec.lock.json`,
+  generated record files: `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
   `build-record.json`, `README.md`, and — for a v3 closure —
-  `dp-spec.proposal.approved.json`. This is the one key a later session always
+  `dp-blueprint.proposal.approved.json`. This is the one key a later session always
   has.
-- The **live `dp-spec.md`**, *beside* the closure at
-  `…/nxd-jobs/<workflow>/dp-spec.md` — the hand-edited plan, with its drafting
+- The **live `dp-blueprint.md`**, *beside* the closure at
+  `…/nxd-jobs/<workflow>/dp-blueprint.md` — the hand-edited plan, with its drafting
   history, rejected options and open questions. It is upstream of the closure,
-  not a file inside it.
+  not a file inside it. **A job started before v0.38.0 has this file as
+  `dp-spec.md`.** Unlike the closure's artifacts, it gets no automatic fallback:
+  it is a path you pass, not one a verifier resolves. If `dp-blueprint.md` is
+  absent, look for `dp-spec.md` beside the closure and `git mv` / rename it
+  before Step 1b — do **not** re-author the plan, which would discard exactly
+  the drafting history this file exists to keep.
 - The supervisor's **published catalog** — every workflow ever built and
   published on this machine, queryable without booting anything via
   `list_data_products`.
@@ -54,19 +59,20 @@ closure carries its own answer, and the check is two commands.
 
 | file at the closure root | what it is |
 |---|---|
-| `dp-spec.approved.md` | a byte copy of the approved `dp-spec.md` this closure was compiled from |
-| `dp-spec.lock.json` | that copy's v3 canonical hash (v2 for an existing legacy closure), snapshot hash, and compiler version |
-| `dp-spec.proposal.approved.json` | v3 closures: the typed proposal snapshot, byte-hashed into the lock. Phase C fails if it is missing or does not match |
+| `dp-blueprint.approved.md` | a byte copy of the approved `dp-blueprint.md` this closure was compiled from |
+| `dp-blueprint.lock.json` | that copy's v3 canonical hash (v2 for an existing legacy closure), snapshot hash, and compiler version. A closure built before v0.38.0 has this as `dp-spec.lock.json`; both verifiers fall back to that name, and the snapshot and proposal filenames come from inside the lock, so a legacy closure resolves without being renamed |
+| `dp-blueprint.proposal.approved.json` | v3 closures: the typed proposal snapshot, byte-hashed into the lock. Phase C fails if it is missing or does not match |
 | `build-record.json` | what happened: stages, attempts, concessions, blockers, the read-back |
 
 ```bash
-python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec <workflow>/dp-spec.md
+python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec <workflow>/dp-blueprint.md
+# --lock resolves a pre-v0.38.0 closure's dp-spec.lock.json on its own; --spec does NOT
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" materialized --record <closure>/build-record.json \
-    --lock <closure>/dp-spec.lock.json --spec <workflow>/dp-spec.md
+    --lock <closure>/dp-blueprint.lock.json --spec <workflow>/dp-blueprint.md
 ```
 
 `lock verify` answers *"is this closure's snapshot intact, and does the live
-`dp-spec.md` still hash to it?"* `materialized` answers *"was the approved plan
+`dp-blueprint.md` still hash to it?"* `materialized` answers *"was the approved plan
 compiled, run and published, with nothing still open?"* — and when the answer is
 no, it names **which** no. That name is the next move:
 
@@ -74,7 +80,7 @@ no, it names **which** no. That name is the next move:
 |---|---|---|
 | `materialized: true` | the approved plan compiled, ran and published | **resume** — reattach below; there is nothing to rebuild |
 | `needs_user` | a blocker is still open in the record | **ask** the one smallest question, then regenerate |
-| `plan_moved` | the live `dp-spec.md` no longer hashes to the lock | **regenerate** — this closure was built from an older plan |
+| `plan_moved` | the live `dp-blueprint.md` no longer hashes to the lock | **regenerate** — this closure was built from an older plan |
 | `code_wrong` | the plan matches and an offline check failed | **heal the code** — an offline failure is never environmental |
 | `unsettled` | the plan matches, a later stage failed, no supervisor-reported evidence | **treat it as `code_wrong`** — fail closed |
 | `environment_suspect` | every failing diagnostic is a supervisor-reported environment fault | **retry** — the closure is not known-bad |
@@ -82,7 +88,20 @@ no, it names **which** no. That name is the next move:
 | `awaiting_answer` | green build, wrong answer | **refine** (Step 6) |
 | `in_progress` | a required stage was never reached | **continue** where it stopped |
 
-Two rules hang off this table. **`plan_moved` is a regenerate, never a heal** —
+Neither command reaches that table if `--spec` names a file that is not there,
+and a pre-v0.38.0 job is exactly that case: its live IR is still `dp-spec.md`.
+The two commands fail differently, so recognize both —
+
+| command | what you see | do |
+|---|---|---|
+| `materialized` | exits **2**, `could not hash <path>: No such file or directory` on stderr, no verdict | **look for `dp-spec.md`** beside the closure and rename it, then re-run |
+| `lock verify` | exits **1**, `closure.live_spec_unparseable` | same |
+
+Only if there is genuinely no plan beside the closure does Step 1b author one.
+Re-authoring over a job whose plan is merely under the old name discards the
+drafting history, rejected options and open questions that file exists to keep.
+
+Two rules hang off the verdict table. **`plan_moved` is a regenerate, never a heal** —
 the closure is not broken, it is stale, and editing generated code to match a
 moved plan is the one thing a compiler must never do. And **none of these names
 are said out loud**: the user hears "I'm reattaching to it", "the plan changed

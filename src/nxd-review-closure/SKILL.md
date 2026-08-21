@@ -7,7 +7,7 @@ allowed-tools:
   - Grep
 metadata:
   author: nextdata
-  version: 0.37.4
+  version: 0.38.0
 ---
 
 # Review a generated closure — adversarially
@@ -25,14 +25,14 @@ this review.
 
 1. **The closure** — a directory containing
    `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-   `requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
+   `requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
    `build-record.json`, `README.md`, the connector companion artifact where the type has one — and,
    for a credentialed source, `SENSITIVE` and `.gitignore`
    — plus `data/` where the connector is file-based.
 2. **The original request** — the questions the user asked and any procedure
    they supplied.
 
-`dp-spec.approved.md` is the **approved plan**, byte for byte: it is the closure's
+`dp-blueprint.approved.md` is the **approved plan**, byte for byte: it is the closure's
 own statement of what it was supposed to do, and it is the sharpest thing you
 have to review the code against. `build-record.json` is what happened when that
 plan was compiled and run — read its `concessions[]` before you accept a clean
@@ -58,7 +58,7 @@ subtracted by the caller is not an answer the semantic layer can give.
 
 ### 2. A capability dismissed rather than researched
 
-The closure, or its `dp-spec.approved.md`, states or implies that the platform
+The closure, or its `dp-blueprint.approved.md`, states or implies that the platform
 cannot do something. Before accepting that, look for it in the pack. A closure that
 concluded a capability does not exist, when a reference doc describes it, made
 a research error and shipped a lesser product because of it.
@@ -105,7 +105,7 @@ must come from an INDEPENDENT read of the source.
 file set, the naming invariant across the four surfaces, `PHYSICAL_MODELS`
 membership, import discipline, the port name, `write_disposition`, the presence
 of `.transform-complete`, and the snapshot/lock/record checks — that
-`dp-spec.approved.md` and `dp-spec.lock.json` are present and the snapshot's
+`dp-blueprint.approved.md` and `dp-blueprint.lock.json` are present and the snapshot's
 bytes still match the lock's `snapshot_sha256`, that `README.md` is present, and
 that `build-record.json` exists with `compiled_from` equal to the lock's
 `spec_hash`.

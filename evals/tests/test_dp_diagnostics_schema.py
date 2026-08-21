@@ -41,6 +41,7 @@ FROZEN_CODES = (
   'closure.contract_verifier_unreferenced', 'closure.csv_root_invalid',
   'closure.escaping_reference', 'closure.gitignore_missing',
   'closure.gitignore_not_naming_profile', 'closure.input_service_mismatch',
+  'closure.legacy_artifact_superseded',
   'closure.live_spec_diverged', 'closure.live_spec_unparseable',
   'closure.lock_missing',
   'closure.lock_snapshot_byte_mismatch', 'closure.lock_status_not_approved',
@@ -392,7 +393,7 @@ def test_tool_is_a_closed_enum_of_four():
 
 
 def test_a_tool_may_not_carry_a_stage_it_cannot_produce():
-    report = dpd.Report("validate_dp_spec", target="dp-spec.md")
+    report = dpd.Report("validate_dp_spec", target="dp-blueprint.md")
     with pytest.raises(dpd.DiagnosticError):
         report.add(dpd.diagnostic("pin.build_failed", message="x"))
     problems = dpd.validate_report(
@@ -410,7 +411,7 @@ def test_a_tool_may_not_carry_a_stage_it_cannot_produce():
 
 
 def test_report_envelope_shape():
-    report = dpd.Report("validate_dp_spec", target="dp-spec.md", spec_hash="sha256:" + "0" * 64)
+    report = dpd.Report("validate_dp_spec", target="dp-blueprint.md", spec_hash="sha256:" + "0" * 64)
     report.error("invalid v2 field", code="spec.v2.invalid", path="v2:models[orders].fields")
     report.warn("invalid v2 field", code="spec.v2.invalid", path="v2:models[orders].fields")
     payload = report.to_dict()
@@ -440,7 +441,7 @@ def test_lock_and_build_record_are_v2_only():
         "dp_spec_version": 1,
         "name": "x",
         "workflow": "x",
-        "source_basename": "dp-spec.md",
+        "source_basename": "dp-blueprint.md",
         "contract_names": [],
         "compiler_version": {"plugin": "x", "generator_skill": "x", "self_check": "x"},
         "copied_at_unix_ms": 1,

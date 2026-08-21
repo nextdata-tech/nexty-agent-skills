@@ -85,7 +85,7 @@ recipient needs and the header cannot know:
 
 - What the data is and what the product answers.
 - Any ruling or derived-model caveat worth flagging. The bundle already carries
-  the contract: `dp-spec.approved.md` is the approved plan, byte for byte, and
+  the contract: `dp-blueprint.approved.md` is the approved plan, byte for byte, and
   `build-record.json` is what happened when it was built — `import_notes` can
   point at either rather than restating them.
 - Who to ask, or where the live source lives, if the recipient must supply their
@@ -121,15 +121,15 @@ The call returns:
 
 The zip contains the whole closure —
 `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
+`requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
 `build-record.json`, `README.md`, the connector companion artifact where the type has one — and,
 for a credentialed source, `SENSITIVE` and `.gitignore`
 — with `infra-profile.yaml`'s credentials replaced by placeholders, plus the
 generated `IMPORT.md` and a machine-readable `export.json`.
 
 The recipient gets the plan and the outcome together and needs no separate
-document: `dp-spec.approved.md` is the approved plan byte for byte,
-`dp-spec.lock.json` binds it to this closure by hash, and `build-record.json`
+document: `dp-blueprint.approved.md` is the approved plan byte for byte,
+`dp-blueprint.lock.json` binds it to this closure by hash, and `build-record.json`
 records what the build actually did — including any concession taken to reach
 green. Nothing in the bundle points outside itself.
 

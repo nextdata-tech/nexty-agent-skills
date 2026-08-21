@@ -149,7 +149,7 @@ Two hard boundaries on fan-out:
 Profiling (Step 2) and code generation (Step 3) are the loop's heaviest context
 consumers: source sample reads, model inference, and authoring `spec.py` /
 `models.py` / `transform/main.py` plus the generated record files
-(`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`,
+(`dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`,
 `README.md`). None of that touches the
 supervisor — it is pure file authoring against a durable closure directory — so
 it MAY run in an isolated subagent whose intermediate reads never enter the main
@@ -228,7 +228,7 @@ would re-inflate the context this split exists to save). Its return is
 path to `build_data_product` unverified: confirm the path resolves on the
 supervisor's **host** surface and that
 `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
+`requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
 `build-record.json`, `README.md`, the connector companion artifact where the type has one — and,
 for a credentialed source, `SENSITIVE` and `.gitignore`
 — all exist under it. The connector companion artifact is a file source's `data/`
@@ -237,8 +237,8 @@ endpoint map is `endpoint_<model>` attributes in the profile, so there is nothin
 extra to look for. `infra-profile.yaml` matters most: it is the
 file host-side credential injection writes into, so a closure missing it passes a
 naive check and then fails the build. The three generated record files matter
-next: `dp-spec.approved.md` is the byte copy of the approved plan the closure was
-compiled from, `dp-spec.lock.json` carries its hash, and `build-record.json`
+next: `dp-blueprint.approved.md` is the byte copy of the approved plan the closure was
+compiled from, `dp-blueprint.lock.json` carries its hash, and `build-record.json`
 carries what happened — without them nothing downstream can tell whether the
 closure still matches the plan. A path that does not resolve host-side, or is
 missing a required file, is a handoff failure, not a build input.

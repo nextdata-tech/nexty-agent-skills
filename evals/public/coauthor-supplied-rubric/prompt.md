@@ -45,7 +45,7 @@ Build it at the workspace root: `spec.py`, `models.py`, `infra-profile.yaml`,
 containing the relative path `data`. Do not author `deployment-spec.yaml`,
 `manifest.yaml`, or `models.yaml` — the supervisor compiles those.
 The complete closure also carries the approved-spec snapshot and compiler
-record: `dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, and
+record: `dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`, and
 `README.md`.
 
 Preserve the supplied CSV byte-for-byte. Use a local DuckDB output port named

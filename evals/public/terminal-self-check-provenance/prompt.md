@@ -18,7 +18,7 @@ closure first so each case is independent) and call the same MCP tool on each:
 
 * `malformed-dp-spec`: make the actual pinned `deployment-spec.yaml` malformed
   YAML (this is the supervisor's deployment-spec artifact; do not invent a
-  separate `dp-spec.md` helper).
+  separate `dp-blueprint.md` helper).
 * `missing-transform-source`: remove the declared `transform/main.py` source.
 * `failed-import`: make `transform/main.py` import a module that is not present.
 * `failed-transform`: keep `transform/main.py` syntactically valid but register
