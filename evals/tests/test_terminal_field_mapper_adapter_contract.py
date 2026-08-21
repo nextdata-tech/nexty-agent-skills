@@ -376,19 +376,44 @@ def test_contract_names_callback_shape_and_sanitized_boundaries() -> None:
         assert required in contract
 
 
-def test_terminal_evaluator_scenario_fails_closed_until_mcp_harness_exists() -> None:
+def test_terminal_evaluator_scenario_is_ci_skipped_and_fails_closed() -> None:
     """Register the E2E in the existing terminal evaluator, not as pytest-only.
 
-    The marker explains the missing runtime capability precisely.  The checker
-    already rejects an ordinary shell transcript: it needs a public
-    nxd-desktop MCP build/inspect trace, so enabling the scenario without the
-    missing stdio harness cannot accidentally manufacture a passing result.
+    The marker explains the missing runtime capability precisely.  The stdio
+    harness itself landed with #189 — ``fixtures/desktop_stdio.json`` and
+    ``run.py``'s stdio branch, both asserted below.  What no workflow provides
+    is the *provisioned runtime* behind it.  The checker already rejects an
+    ordinary shell transcript: it needs a public nxd-desktop MCP build/inspect
+    trace, so enabling the scenario without that runtime cannot accidentally
+    manufacture a passing result.
+
+    It also declares ``ci_skip``, which is not the same as being pytest-only.
+    The scenario stays registered, stays visible to ``affected_scenarios.py``
+    — which reports it under ``skipped_hits`` rather than selecting it, so a PR
+    touching these skills is told the coverage exists and did not run — still
+    runs on ``workflow_dispatch`` and locally, and still fails closed on a
+    shell-only transcript. ``ci_skip`` records one fact: no workflow provisions
+    ``EVAL_DESKTOP_SUPERVISOR_DIR`` / ``EVAL_DESKTOP_PYTHON``, so an unattended
+    run cannot reach a verdict here.
+
+    Without it, ``_desktop_runtime`` raised ``RuntimeError`` on those unset
+    variables and the cell became an INFRASTRUCTURE failure, which is the one
+    thing ``run.py`` exits non-zero on (a graded FAIL is deliberately not a CI
+    break).  That killed the whole ``evals-pr`` step under ``set -euo
+    pipefail`` before the regression gate could run — so a PR broad enough to
+    select this scenario lost its baseline comparison entirely and reported red
+    for a reason unrelated to its diff.  Every one of the nine sibling desktop
+    scenarios declares ``ci_skip`` for exactly this reason.
     """
     checks = SCENARIO_CHECKS
     assert checks["wants_trace"] is True
     assert checks["deterministic_check"]["wants_trace"] is True
     assert checks["deterministic_check"]["trace_source"] == "runner_mcp"
-    assert "ci_skip" not in checks
+    assert checks.get("ci_skip"), (
+        "CI provisions no desktop supervisor, so without ci_skip this cell is an "
+        "infrastructure failure that fails the whole eval job and skips the "
+        "regression gate"
+    )
     assert (TERMINAL_SCENARIO / "fixtures" / "desktop_stdio.json").is_file()
     assert "scenario_needs_desktop_stdio" in (REPO_ROOT / "evals/run.py").read_text(encoding="utf-8")
     assert '"terminal-field-mapper-adapter-contract": frozenset' in (
