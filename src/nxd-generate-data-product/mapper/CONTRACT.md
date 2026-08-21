@@ -110,7 +110,7 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | Symbol | Module | Purpose |
 |---|---|---|
 | `map_inputs(inputs, *, spec, grant, run_dir, call, ...) -> MapResult` | `field_mapper` | the N→M primitive |
-| `make_call(*, spec, grant, secrets=None, allow_env=True, provider="anthropic", provider_model=None, provider_cwd=None) -> callable` | `field_mapper` | lazy, budgeted provider seam; explicit secret first, then allowlisted environment fallback; creates the client only on first dispatch |
+| `make_call(*, spec, grant, secrets=None, allow_env=False, provider=None, provider_model=None, provider_cwd=None) -> callable` | `field_mapper` | lazy, budgeted provider seam; explicit secret first, then allowlisted environment fallback **only when `allow_env=True` is passed**; creates the client only on first dispatch |
 | `MapperInput(input_id, identity, ...)` | `field_mapper` | one source record handed to the mapper |
 | `MapperSpec.load(path)` / `.mapper_spec_id` | `spec` | landed spec → runtime object |
 | `MapperProposal` / `MapperReview` / `MapperEvidence` | `records` | the three record types |
@@ -118,8 +118,9 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | `resolve(proposals, reviews, evidence, spec) -> Resolution` | `resolver` | wide projection + sidecar, one bundle |
 | `Resolution.wide_rows` / `.provenance` / `.assert_bijection()` | `resolver` | §7 |
 | `PreflightEstimate` / `estimate(inputs, spec)` | `transport` | §10 of the design |
-| `Grant.load(path)` / `Grant.check(spec, inputs)` | `grant` | §9 |
+| `Grant.load(path)` / `Grant.check(spec, *, input_fields=(), document_classes=(), now=None)` | `grant` | §9 |
 | `FieldMapperError` and subclasses | `errors` | so callers can catch by class, not string |
+| `target_row_key_for_input(*, identity, fields, identity_fields, source_locators=(), ordinal=None)` | `mapper` | derive a row key the way `map_inputs` does — the only way to attribute a proposal back to its source row |
 
 Everything else is private. `transport.Client` is deliberately **not** public —
 Layer 2 must use `make_call` so provider construction, credential resolution,
@@ -180,10 +181,55 @@ Generated code must **not** introspect these signatures to decide how to call
 them. A mapper that adapts itself to whatever is installed converts a loud,
 immediate `TypeError` into a silent behavioural difference between two runtimes.
 
+#### Nothing returned carries the input identity back
+
+`target_row_key` is a content-derived hash (§5), **not** your `input_id`.
+`MapperProposal`, `MapperEvidence` and `Resolution` are all keyed by it, and
+none of them carries `identity` — so a caller that needs to attribute a
+proposal back to its source row must derive the key itself, with the same
+projection `map_inputs` used:
+
+```python
+from nxd.experimental.field_mapper.mapper import target_row_key_for_input
+
+row_key_to_source = {
+    target_row_key_for_input(
+        identity=item.identity,
+        fields=item.fields,
+        identity_fields=spec.grain.identity_fields,
+        source_locators=spec.grain.source_locators,
+    ): item.input_id
+    for item in mapper_inputs
+}
+```
+
+Take `identity_fields` and `source_locators` from **the spec's grain**, never
+from a repeated literal, or the projection drifts from the one that produced the
+keys and every proposal fails to resolve.
+
+Treating `target_row_key` as the business key is the failure this section
+exists to prevent: downstream asserts then reject every row for belonging to an
+entity that does not exist, and the message points at the data rather than at
+the key.
+
 `map_inputs` returns a `MapResult` carrying proposals + evidence + ledger handle
 **in one in-memory bundle** (design §7). There is no API that returns proposals
 without their evidence, because that API is how the orphan-evidence bug gets
 written.
+
+#### `allow_env` defaults to False — pass it explicitly
+
+The environment fallback is **opt-in**. A closure that omits `allow_env` gets no
+ambient credential, however visible the key is in the child's environment, and
+fails at the first dispatch with `credential_missing` — a credential error for a
+credential that is present. Pass it explicitly when the supervisor supplies the
+key through the environment:
+
+```python
+call = make_call(spec=spec, grant=grant, allow_env=True, provider="anthropic")
+```
+
+`provider` also defaults to `None` rather than `"anthropic"`; name it.
 
 ### Provider adapter contract
 

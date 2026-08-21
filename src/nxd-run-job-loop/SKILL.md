@@ -11,7 +11,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.38.1
+  version: 0.38.2
 ---
 
 # nxd-run-job-loop skill
