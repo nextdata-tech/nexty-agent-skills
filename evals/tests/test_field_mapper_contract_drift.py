@@ -160,26 +160,44 @@ def test_provider_default_is_documented_as_grant_resolved():
 
 
 @needs_harness
-def test_provider_is_bound_to_the_grant_not_merely_defaulted():
-    """The oracle for the provider claim.
+def test_provider_and_model_are_bound_to_the_grant():
+    """The oracle for the binding claim — behavioural, not a source scan.
 
-    Scoped to `make_call` itself, not the module: a whole-file scan stays green
-    as long as anything in a module named `call_adapter` still mentions the
-    grant's provider, which is not the guarantee the docs need.
-
-    The binding is stronger than "falls back": an explicit provider that
-    disagrees with the grant is REFUSED, not silently preferred.
+    An earlier revision asserted an error-message substring inside
+    `inspect.getsource(make_call)`. That is the weakest instrument in this file:
+    it goes green if the guard moves into the dispatch closure (the seam is
+    documented as lazy), and red if the message is merely reworded. Calling
+    `make_call` with a mismatched override tests the guarantee itself, and it
+    needs no network — the pack ships grants and specs to bind against.
     """
-    source = inspect.getsource(fm.make_call)
-    assert "grant.provider" in source, (
-        "provider no longer resolves from the grant; re-document the default "
-        "rather than leaving CONTRACT.md asserting it"
-    )
-    assert "does not match the consented provider" in source, (
-        "make_call no longer refuses a provider that disagrees with the grant "
-        "— CONTRACT.md says consent binds it, so re-document or restore"
+    sample = (SKILL / "mapper" / "samples" / "01-row-scores")
+    grant = fm.Grant.load(str(sample / "grant.json"))
+    spec = fm.MapperSpec.load(str(sample / "spec.json"))
+
+    # Sanity: the fixture must actually declare both, or the asserts below are
+    # vacuous against a grant that never had a provider to disagree with.
+    assert grant.provider and grant.model
+
+    # Omitting them is the documented, working call.
+    fm.make_call(spec=spec, grant=grant, allow_env=True)
+
+    with pytest.raises(Exception) as provider_mismatch:
+        fm.make_call(
+            spec=spec, grant=grant, allow_env=True, provider=grant.provider + "-other"
+        )
+    assert "does not match the consented provider" in str(provider_mismatch.value), (
+        "an explicit provider that disagrees with the grant must be REFUSED, "
+        "not preferred — CONTRACT.md says consent binds it"
     )
 
+    with pytest.raises(Exception) as model_mismatch:
+        fm.make_call(
+            spec=spec, grant=grant, allow_env=True, provider_model=grant.model + "-other"
+        )
+    assert "does not match the consented model" in str(model_mismatch.value), (
+        "the provider_model half of the claim — previously asserted in the "
+        "docs with no carrier at all"
+    )
 
 def test_the_spec_id_binding_trap_is_documented():
     reference = _reference()

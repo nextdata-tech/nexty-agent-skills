@@ -50,8 +50,9 @@ dispatch in CI, which the suite deliberately does not do.
 Six assert the documentation and run everywhere, including in CI, which has no
 `nxd` wheel; all six were verified to fail against the previous revisions of
 `mapper/CONTRACT.md` and `reference/field-mapper.md`. Five use the installed
-package as the oracle — four check signatures and record fields, one checks that
-`make_call` still binds provider selection to the grant — and skip where the
+package as the oracle — two check signatures, one checks record fields, one
+calls the row-key helper and asserts on its return, and one calls `make_call`
+with a mismatched override and asserts the grant refuses it — and skip where the
 package is absent — deliberately not
 `importorskip` at module scope, so the doc half cannot vanish silently with it.
 
