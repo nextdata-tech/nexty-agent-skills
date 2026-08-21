@@ -41,7 +41,7 @@ Do NOT: create the closure directory · copy source data into it · write any
 closure file · generate transform code · create tables · score rows · invoke a
 build.
 
-Allowed: reading the source and its headers; writing `dp-spec.md` itself (it
+Allowed: reading the source and its headers; writing `dp-blueprint.md` itself (it
 lives **outside** the closure, so it is not a materialization); asking technical
 delivery questions.
 
@@ -51,9 +51,9 @@ your own recommended defaults.
 
 ## The read-back artifact
 
-`dp-spec.md` — the user-editable IR, written beside the closure and validated
+`dp-blueprint.md` — the user-editable IR, written beside the closure and validated
 with `"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"`. Schema and authoring modes:
-**nxd-run-job-loop**'s `reference/dp-spec.md`.
+**nxd-run-job-loop**'s `reference/dp-blueprint.md`.
 
 It must **enumerate**, in the user's vocabulary and understandable without
 reading generated code:
@@ -93,7 +93,7 @@ that skill owns the user-facing read-back and approval.
 ## Invoked as a generation subagent
 
 The orchestrator ran the read-back, the user approved, and the approved
-`dp-spec.md` (or the policy enumerated verbatim) arrived in your prompt. The
+`dp-blueprint.md` (or the policy enumerated verbatim) arrived in your prompt. The
 **user turn is the orchestrator's; you never open one.**
 
 The gate is not a rubber stamp. Re-run the [when it fires](#when-it-fires)
@@ -108,7 +108,7 @@ Encoding a defensible-but-unseen interpretation is the same unrecoverable
 failure as skipping the gate.
 
 On the happy path the approved text is carried verbatim by the byte-copied
-`dp-spec.approved.md` — the snapshot is the copy, so there is nothing to
+`dp-blueprint.approved.md` — the snapshot is the copy, so there is nothing to
 transcribe and nothing to drift — and it lands as data in `nxd_decisions`.
 **Surface the encoded bands in your return** so the orchestrator can confirm
 shipped-matches-approved.

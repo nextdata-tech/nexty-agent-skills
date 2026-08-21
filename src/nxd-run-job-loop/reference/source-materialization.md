@@ -25,7 +25,7 @@ derive the corrected model beside it; `nxd-generate-data-product` owns how.
 
 Materialization is also **gated**: if the request supplied a procedure with a
 result-changing gap, copying a source into a closure waits for the user's reply
-to the `dp-spec.md` read-back. Reading a source is always allowed.
+to the `dp-blueprint.md` read-back. Reading a source is always allowed.
 
 With 2+ sources, repeat the matching section once per source and tag every
 artifact with that source's label.
@@ -70,7 +70,7 @@ asking the user to type it into chat is the last of them.
 
 A database or API credential lands in exactly one place: the generated
 `infra-profile.yaml` connector service's `attributes`. Never in chat, never in
-`dp-spec.md` (which names key names only), never in a subagent's prompt or
+`dp-blueprint.md` (which names key names only), never in a subagent's prompt or
 return. Per-type shape is in `nxd-generate-data-product`'s `reference/database-source.md`
 and `reference/api-source.md`; labeled instances in its
 `reference/multi-source.md`.

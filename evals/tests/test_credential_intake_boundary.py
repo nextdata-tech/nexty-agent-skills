@@ -9,7 +9,7 @@ the real value is injected host-side before the build
 The HUMAN half had no such rule. Step 1's source intake told the agent to record
 "the live token/key if auth is required", and the only credential rules that
 existed bound the agent's own output — never narrate one, never write one into
-`dp-spec.md`, redact one out of a probe traceback. Nothing stopped the agent from
+`dp-blueprint.md`, redact one out of a probe traceback. Nothing stopped the agent from
 *inviting* the value into chat, which is the identical leak the subagent rule
 exists to prevent: the main thread is also a transcript, and conversation history
 is the one surface `SENSITIVE`, `.gitignore` and `chmod 0600` cannot reach.

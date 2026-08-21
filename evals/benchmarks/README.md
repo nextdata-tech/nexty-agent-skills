@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-08-20 | NEX-887: terminal self-check and closure provenance | PASS | terminal-self-check-provenance | [`2026-08-20-nex-887-terminal-self-check-provenance`](entries/2026-08-20-nex-887-terminal-self-check-provenance.md) |
+| 2026-08-20 | the user-owned IR is named dp-blueprint.md; the whole artifact family follows | NO_EVAL | — | [`2026-08-20-dp-blueprint-rename`](entries/2026-08-20-dp-blueprint-rename.md) |
 | 2026-08-18 | NEX-884: terminal field-mapper adapter contract scenario | NO_EVAL | — | [`2026-08-18-nex-884-terminal-mapper-adapter-contract`](entries/2026-08-18-nex-884-terminal-mapper-adapter-contract.md) |
 | 2026-08-18 | evals: isolated Desktop stdio MCP substrate | NO_EVAL | — | [`2026-08-18-desktop-stdio-substrate`](entries/2026-08-18-desktop-stdio-substrate.md) |
 | 2026-08-16 | nxd-run-job-loop: desktop closure preflight and phase-c recovery | PASS | job-loop-serve-query-refine | [`2026-08-16-desktop-closure-phase-c-recovery`](entries/2026-08-16-desktop-closure-phase-c-recovery.md) |

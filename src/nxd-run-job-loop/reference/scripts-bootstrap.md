@@ -85,13 +85,13 @@ environment that has installed that file's requirements. For example:
 
 ```bash
 python3 -m pip install -r "$JOB_HELPER_DIR/scripts/requirements.txt"
-python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <workflow>/dp-spec.md --json
+python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <workflow>/dp-blueprint.md --json
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> \
-    --spec <workflow>/dp-spec.md
+    --spec <workflow>/dp-blueprint.md
 
 # The v3 parser owns user-facing authoring. v2 remains only for verifying old
 # closure evidence; v1 is rejected by both paths.
-python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <workflow>/dp-spec.md --json
+python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <workflow>/dp-blueprint.md --json
 
 # Only when inspecting an existing v2 closure artifact:
 python3 "$JOB_HELPER_DIR/scripts/dp_spec_v2.py" validate <legacy-v2-spec.md>

@@ -45,7 +45,7 @@ def find_closure(base: Path) -> Path:
     """The closure root under `base`, which is not necessarily `base` itself.
 
     `nxd-run-job-loop` documents `…/nxd-jobs/<workflow>/closure/` (SKILL.md
-    "Author dp-spec.md"), with the IR beside it — so an agent following the
+    "Author dp-blueprint.md"), with the IR beside it — so an agent following the
     skill correctly writes `transform/main.py` several directories down. A
     checker hardcoding `<root>/transform/main.py` fails a correct closure and
     reports it as a missing one, which is worse than not checking: it is a

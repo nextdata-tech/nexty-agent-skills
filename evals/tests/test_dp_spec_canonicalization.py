@@ -10,7 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
-WORKED_EXAMPLE = REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md"
+WORKED_EXAMPLE = REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md"
 sys.path.insert(0, str(SCRIPTS))
 
 import dp_spec_v2 as v2  # noqa: E402
@@ -67,7 +67,7 @@ def test_crlf_is_not_normalized():
 
 
 def test_approve_and_patch_bind_and_revoke_content(tmp_path: Path):
-    path = tmp_path / "dp-spec.md"
+    path = tmp_path / "dp-blueprint.md"
     path.write_text(sample(), encoding="utf-8")
     proposed = v2.parse(path.read_text(encoding="utf-8"))
     approved = v2.approve(proposed, base_hash=v2.semantic_hash(proposed))

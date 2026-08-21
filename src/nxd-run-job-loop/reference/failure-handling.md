@@ -111,7 +111,7 @@ where every other one goes:
 
 1. Record the attempt with `exit: "blocked"` **first**.
 2. Record the blocker.
-3. **Then** write the question back into the live `dp-spec.md`'s
+3. **Then** write the question back into the live `dp-blueprint.md`'s
    `## Open Questions`, with a `blocks:` list naming what it stops.
 4. That **un-approves** the spec — the plan the closure was built from no longer
    matches the live plan — so re-enter Step 1b: ask, get the ruling, re-approve,
@@ -231,8 +231,9 @@ python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record query --record <closu
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record query --record <closure>/build-record.json --owner user
 
 # did the plan move, is anything still open, is this actually finished
+# --lock resolves a pre-v0.38.0 closure's dp-spec.lock.json on its own; --spec does NOT
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" materialized --record <closure>/build-record.json \
-    --lock <closure>/dp-spec.lock.json --spec <workflow>/dp-spec.md
+    --lock <closure>/dp-blueprint.lock.json --spec <workflow>/dp-blueprint.md
 ```
 
 `materialized` is the word. **Never `correct`.** It says the approved plan was

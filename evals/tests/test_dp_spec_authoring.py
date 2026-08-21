@@ -598,8 +598,8 @@ def test_proposal_hash_excludes_only_derived_hash_fields():
 def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: Path):
     text = sample()
     proposal = proposal_for(text)
-    spec = tmp_path / "dp-spec.md"
-    proposal_path = tmp_path / "dp-spec.proposal.json"
+    spec = tmp_path / "dp-blueprint.md"
+    proposal_path = tmp_path / "dp-blueprint.proposal.json"
     closure = tmp_path / "closure"
     proposal_path.write_text(json.dumps(proposal, indent=2), encoding="utf-8")
     supplied_proposal_bytes = proposal_path.read_bytes()
@@ -630,8 +630,8 @@ def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: 
     assert writer.returncode == 0, writer.stderr
     lock = json.loads(writer.stdout)
     assert lock["schema"] == "nxd-dp-spec-lock-v3"
-    assert (closure / "dp-spec.approved.md").read_text() == spec.read_text()
-    assert (closure / "dp-spec.proposal.approved.json").read_bytes() == supplied_proposal_bytes
+    assert (closure / "dp-blueprint.approved.md").read_text() == spec.read_text()
+    assert (closure / "dp-blueprint.proposal.approved.json").read_bytes() == supplied_proposal_bytes
     assert lock["terms_hash"]
     assert lock["contract_inventory_hash"]
     assert lock["locked_decisions_hash"]
@@ -651,7 +651,7 @@ def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: 
             sys.executable,
             str(SCRIPTS / "dp_diagnostics.py"),
             "record", "init", "--record", str(closure / "build-record.json"),
-            "--lock", str(closure / "dp-spec.lock.json"), "--json",
+            "--lock", str(closure / "dp-blueprint.lock.json"), "--json",
         ],
         capture_output=True,
         text=True,
@@ -660,15 +660,15 @@ def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: 
     assert record_init.returncode == 0, record_init.stderr
     assert json.loads(record_init.stdout)["stages"]["s0_spec"]["status"] == "passed"
 
-    tampered_proposal = json.loads((closure / "dp-spec.proposal.approved.json").read_text())
+    tampered_proposal = json.loads((closure / "dp-blueprint.proposal.approved.json").read_text())
     tampered_proposal["proposal"]["terms"][0]["definition"] = "A changed definition."
-    (closure / "dp-spec.proposal.approved.json").write_text(json.dumps(tampered_proposal) + "\n", encoding="utf-8")
+    (closure / "dp-blueprint.proposal.approved.json").write_text(json.dumps(tampered_proposal) + "\n", encoding="utf-8")
     tampered_record_init = subprocess.run(
         [
             sys.executable,
             str(SCRIPTS / "dp_diagnostics.py"),
             "record", "init", "--record", str(closure / "tampered-record.json"),
-            "--lock", str(closure / "dp-spec.lock.json"), "--json",
+            "--lock", str(closure / "dp-blueprint.lock.json"), "--json",
         ],
         capture_output=True,
         text=True,
@@ -676,17 +676,17 @@ def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: 
     )
     assert tampered_record_init.returncode == 2
     assert "typed proposal hash does not match the lock" in tampered_record_init.stderr
-    (closure / "dp-spec.proposal.approved.json").write_bytes(supplied_proposal_bytes)
+    (closure / "dp-blueprint.proposal.approved.json").write_bytes(supplied_proposal_bytes)
 
     valid_lock = dict(lock)
     lock["snapshot"] = "../foreign-spec.md"
-    (closure / "dp-spec.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    (closure / "dp-blueprint.lock.json").write_text(json.dumps(lock), encoding="utf-8")
     escaping_record_init = subprocess.run(
         [
             sys.executable,
             str(SCRIPTS / "dp_diagnostics.py"),
             "record", "init", "--record", str(closure / "escaping-record.json"),
-            "--lock", str(closure / "dp-spec.lock.json"), "--json",
+            "--lock", str(closure / "dp-blueprint.lock.json"), "--json",
         ],
         capture_output=True,
         text=True,
@@ -696,10 +696,10 @@ def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: 
     assert "escapes the closure" in escaping_record_init.stderr
 
     lock = valid_lock
-    (closure / "dp-spec.lock.json").write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+    (closure / "dp-blueprint.lock.json").write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
     lock["terms_hash"] = "0" * 64
     lock["locked_decisions_hash"] = "0" * 64
-    (closure / "dp-spec.lock.json").write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+    (closure / "dp-blueprint.lock.json").write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
     tampered = subprocess.run(
         [sys.executable, str(SCRIPTS / "dp_diagnostics.py"), "lock", "verify", str(closure), "--json"],
         capture_output=True,
@@ -719,7 +719,7 @@ def test_v3_validator_and_lock_writer_snapshot_the_prose_and_proposal(tmp_path: 
 def test_v3_lock_verify_rechecks_contract_inventory_delivery_and_decision_locks(tmp_path: Path):
     text = sample()
     proposal = proposal_for(text)
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     proposal_path = tmp_path / "proposal.json"
     closure = tmp_path / "closure"
     spec.write_text(v3.approve(v3.parse(text), proposal, base_hash=v3.semantic_hash(text)), encoding="utf-8")
@@ -735,7 +735,7 @@ def test_v3_lock_verify_rechecks_contract_inventory_delivery_and_decision_locks(
     lock = json.loads(writer.stdout)
 
     lock["contract_inventory_hash"] = "0" * 64
-    (closure / "dp-spec.lock.json").write_text(json.dumps(lock) + "\n", encoding="utf-8")
+    (closure / "dp-blueprint.lock.json").write_text(json.dumps(lock) + "\n", encoding="utf-8")
     contract_result = subprocess.run(
         [sys.executable, str(SCRIPTS / "dp_diagnostics.py"), "lock", "verify", str(closure), "--json"],
         capture_output=True,
@@ -749,7 +749,7 @@ def test_v3_lock_verify_rechecks_contract_inventory_delivery_and_decision_locks(
 
     lock["contract_inventory_hash"] = json.loads(writer.stdout)["contract_inventory_hash"]
     lock["delivery_profile"] = "unsupported"
-    (closure / "dp-spec.lock.json").write_text(json.dumps(lock) + "\n", encoding="utf-8")
+    (closure / "dp-blueprint.lock.json").write_text(json.dumps(lock) + "\n", encoding="utf-8")
     delivery_result = subprocess.run(
         [sys.executable, str(SCRIPTS / "dp_diagnostics.py"), "lock", "verify", str(closure), "--json"],
         capture_output=True,
@@ -763,8 +763,8 @@ def test_v3_lock_verify_rechecks_contract_inventory_delivery_and_decision_locks(
 
     lock["delivery_profile"] = v3.FIXED_DELIVERY_PROFILE
     proposal["proposal"]["decisions"][0]["status"] = "proposed"
-    (closure / "dp-spec.proposal.approved.json").write_text(json.dumps(proposal) + "\n", encoding="utf-8")
-    (closure / "dp-spec.lock.json").write_text(json.dumps(lock) + "\n", encoding="utf-8")
+    (closure / "dp-blueprint.proposal.approved.json").write_text(json.dumps(proposal) + "\n", encoding="utf-8")
+    (closure / "dp-blueprint.lock.json").write_text(json.dumps(lock) + "\n", encoding="utf-8")
     decision_result = subprocess.run(
         [sys.executable, str(SCRIPTS / "dp_diagnostics.py"), "lock", "verify", str(closure), "--json"],
         capture_output=True,
@@ -778,7 +778,7 @@ def test_v3_lock_verify_rechecks_contract_inventory_delivery_and_decision_locks(
 
 
 def test_malformed_proposal_json_returns_diagnostic_not_traceback(tmp_path: Path):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(sample(), encoding="utf-8")
     proposal = tmp_path / "proposal.json"
     proposal.write_text("[]", encoding="utf-8")
@@ -796,7 +796,7 @@ def test_malformed_proposal_json_returns_diagnostic_not_traceback(tmp_path: Path
 
 
 def test_validate_cli_without_proposal_returns_json_without_traceback(tmp_path: Path):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(sample(), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, str(SCRIPTS / "validate_dp_spec.py"), str(spec), "--json"],
@@ -826,7 +826,7 @@ def test_diagnostics_accepts_a_valid_failing_v3_report():
     report = {
         "schema": "nxd-diagnostic-report-v3",
         "tool": "validate_dp_spec",
-        "target": "dp-spec.md",
+        "target": "dp-blueprint.md",
         "ok": False,
         "counts": {"error": 1, "warning": 0, "info": 0},
         "spec_hash": "sha256:" + "0" * 64,
@@ -837,7 +837,7 @@ def test_diagnostics_accepts_a_valid_failing_v3_report():
 
 
 def test_authoring_validate_cli_without_proposal_returns_json_without_traceback(tmp_path: Path):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(sample(), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, str(SCRIPTS / "dp_spec_authoring.py"), "validate", str(spec), "--json"],
@@ -861,14 +861,21 @@ def test_authoring_validate_cli_without_proposal_returns_json_without_traceback(
 # `ok: true` for a proposal that was never read.
 
 def _v2_lock_closure(tmp_path: Path, snapshot_text: str) -> Path:
-    """A v2-schema closure whose snapshot bytes match its lock."""
+    """A v2-schema closure whose snapshot bytes match its lock.
+
+    The golden lock is a real pre-v0.38.0 artifact, so this lays the closure out
+    under the names it declares — `dp-spec.approved.md` beside
+    `dp-spec.lock.json` — rather than under today's. That makes these two tests
+    legacy-layout coverage as well: reaching the assertions at all requires
+    `verify_lock` to find a lock that is not named `dp-blueprint.lock.json`.
+    """
     closure = tmp_path / "closure"
     closure.mkdir()
-    snapshot = closure / "dp-spec.approved.md"
+    lock = json.loads((REPO / "evals" / "tests" / "fixtures" / "golden-legacy-dp-spec.lock.json").read_text())
+    snapshot = closure / str(lock["snapshot"])
     snapshot.write_text(snapshot_text, encoding="utf-8")
-    lock = json.loads((REPO / "evals" / "tests" / "fixtures" / "golden-dp-spec.lock.json").read_text())
     lock["snapshot_sha256"] = hashlib.sha256(snapshot.read_bytes()).hexdigest()
-    (closure / "dp-spec.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    (closure / dpd.LEGACY_CLOSURE_LOCK).write_text(json.dumps(lock), encoding="utf-8")
     return closure
 
 
@@ -884,9 +891,9 @@ def test_v2_lock_verify_reports_an_unparseable_v3_snapshot_instead_of_raising(tm
 
 
 def test_v2_lock_verify_reports_an_unparseable_v3_live_spec_instead_of_raising(tmp_path: Path):
-    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8")
     closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
-    live = tmp_path / "dp-spec.md"
+    live = tmp_path / "dp-blueprint.md"
     live.write_text(
         "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n",
         encoding="utf-8",
@@ -899,7 +906,7 @@ def test_v2_lock_verify_reports_an_unparseable_v3_live_spec_instead_of_raising(t
 
 def test_v2_lock_verify_still_crashes_on_nothing_for_a_well_formed_closure(tmp_path: Path):
     """The guard must not swallow the genuine hash comparison it wraps."""
-    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8")
     closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
     report = dpd.verify_lock(closure).to_dict()
     assert "closure.spec_hash_mismatch" in [d["code"] for d in report["diagnostics"]]
@@ -907,9 +914,9 @@ def test_v2_lock_verify_still_crashes_on_nothing_for_a_well_formed_closure(tmp_p
 
 
 def test_validate_dp_spec_rejects_a_proposal_supplied_against_a_v2_spec(tmp_path: Path):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(
-        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     proposal = tmp_path / "proposal.json"
@@ -921,9 +928,9 @@ def test_validate_dp_spec_rejects_a_proposal_supplied_against_a_v2_spec(tmp_path
 
 
 def test_validate_dp_spec_still_accepts_a_v2_spec_without_a_proposal(tmp_path: Path):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(
-        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     report = vds.validate(spec)
@@ -932,9 +939,9 @@ def test_validate_dp_spec_still_accepts_a_v2_spec_without_a_proposal(tmp_path: P
 
 
 def _approved_v2_spec(tmp_path: Path) -> Path:
-    raw = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    raw = (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8")
     parsed = v2.parse(raw)
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(v2.approve(parsed, base_hash=v2.semantic_hash(parsed)), encoding="utf-8")
     return spec
 
@@ -965,7 +972,7 @@ def test_lock_write_still_writes_a_v2_lock_without_a_proposal(tmp_path: Path):
     lock, report = dpd.write_lock(spec, closure, now_ms=1769904000000)
     assert report.ok is True, report.to_dict()
     assert lock["schema"] == "nxd-dp-spec-lock-v2"
-    assert sorted(p.name for p in closure.iterdir()) == ["dp-spec.approved.md", "dp-spec.lock.json"]
+    assert sorted(p.name for p in closure.iterdir()) == ["dp-blueprint.approved.md", "dp-blueprint.lock.json"]
 
 
 @pytest.mark.parametrize(
@@ -979,7 +986,7 @@ def test_lock_write_still_writes_a_v2_lock_without_a_proposal(tmp_path: Path):
 def test_proposal_rejection_never_masks_the_reason_a_spec_cannot_be_read(
     tmp_path: Path, label: str, source: str, expected: str
 ):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(source, encoding="utf-8")
     proposal = tmp_path / "proposal.json"
     proposal.write_text('{"schema": "totally-wrong"}', encoding="utf-8")
@@ -989,9 +996,9 @@ def test_proposal_rejection_never_masks_the_reason_a_spec_cannot_be_read(
 
 
 def test_the_rejected_proposal_message_names_only_a_parsed_version(tmp_path: Path):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(
-        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8"),
+        (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     proposal = tmp_path / "proposal.json"
@@ -1044,19 +1051,19 @@ def test_both_lock_generations_report_one_code_for_an_uncanonicalizable_live_spe
     Both closures are real and internally consistent; only the live spec they
     are verified against is the same unparseable v3 document.
     """
-    live = tmp_path / "dp-spec.md"
+    live = tmp_path / "dp-blueprint.md"
     live.write_text(
         "---\ndp_spec_version: 3\nname: x\nworkflow: x\nstatus: proposed\n---\n\n## Bogus\n",
         encoding="utf-8",
     )
 
-    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8")
     v2_closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
     v2_codes = [d["code"] for d in dpd.verify_lock(v2_closure, live).to_dict()["diagnostics"]]
 
     text = sample()
     proposal = proposal_for(text)
-    v3_spec = tmp_path / "v3-dp-spec.md"
+    v3_spec = tmp_path / "v3-dp-blueprint.md"
     v3_spec.write_text(v3.approve(v3.parse(text), proposal, base_hash=v3.semantic_hash(text)), encoding="utf-8")
     v3_proposal = tmp_path / "v3-proposal.json"
     v3_proposal.write_text(json.dumps(proposal, indent=2) + "\n", encoding="utf-8")
@@ -1076,19 +1083,19 @@ def test_both_lock_generations_report_one_code_for_a_missing_live_spec(tmp_path:
     """A missing live spec is the live spec's fault, not the snapshot's.
 
     The v2 verifier used to answer this with `closure.spec_snapshot_missing`
-    addressed at `closure:dp-spec.approved.md` — a file that is present and
+    addressed at `closure:dp-blueprint.approved.md` — a file that is present and
     intact — while v3, which has no pre-check, let the read raise and reported
     the live-spec code. Same fault, two answers.
     """
     missing = tmp_path / "does-not-exist.md"
 
-    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+    v2_source = (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8")
     v2_closure = _v2_lock_closure(tmp_path, v2_source.replace("status: proposed", "status: approved"))
     v2_report = dpd.verify_lock(v2_closure, missing).to_dict()
 
     text = sample()
     proposal = proposal_for(text)
-    v3_spec = tmp_path / "v3-dp-spec.md"
+    v3_spec = tmp_path / "v3-dp-blueprint.md"
     v3_spec.write_text(v3.approve(v3.parse(text), proposal, base_hash=v3.semantic_hash(text)), encoding="utf-8")
     v3_proposal = tmp_path / "v3-proposal.json"
     v3_proposal.write_text(json.dumps(proposal, indent=2) + "\n", encoding="utf-8")

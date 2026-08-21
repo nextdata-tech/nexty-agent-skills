@@ -49,6 +49,7 @@ _codes("info", "agent", "runtime.row_count")
 _codes("error", "agent",
        "closure.spec_snapshot_missing", "closure.lock_missing",
        "closure.lock_unparseable", "closure.lock_snapshot_byte_mismatch",
+       "closure.spec_hash_mismatch",
        "closure.build_record_missing", "closure.build_record_invalid",
        "closure.build_record_hash_mismatch", "closure.build_record_merge_failed",
        "closure.readme_missing",
@@ -69,7 +70,8 @@ _codes("error", "agent",
 # The one closure.* code the AGENT cannot fix: a snapshot taken from a spec the
 # user never approved is a governance fault, and only the user can approve.
 _codes("error", "user", "closure.lock_status_not_approved")
-_codes("info", "agent", "closure.canonical_hash_deferred")
+_codes("info", "agent", "closure.canonical_hash_deferred",
+       "closure.legacy_artifact_superseded")
 _codes("error", "agent",
        "policy.decisions_not_base_model", "policy.decisions_csv_missing",
        "policy.decisions_column_missing", "policy.decisions_value_out_of_vocab",
@@ -104,6 +106,40 @@ if "--record" in sys.argv:                 # no argparse: the closure's copy of
     _i = sys.argv.index("--record")        # this script stays small and its
     RECORD_PATH = (sys.argv[_i + 1]        # byte-identical twin stays readable
                    if _i + 1 < len(sys.argv) else "build-record.json")
+
+# The closure's own artifact names. This script is COPIED INTO THE CLOSURE and
+# run with a bare interpreter, so the shared diagnostics helper is out of reach
+# and its constants have to be inlined here: these are the twins of
+# CLOSURE_SNAPSHOT / CLOSURE_LOCK / V3_PROPOSAL_SNAPSHOT, and LEGACY is the twin
+# of LEGACY_CLOSURE_LOCK. Before v0.38.0 these three were named after the
+# dp-spec; a closure built then is still a valid closure.
+CLOSURE_SNAPSHOT = "dp-blueprint.approved.md"
+CLOSURE_LOCK = "dp-blueprint.lock.json"
+CLOSURE_PROPOSAL = "dp-blueprint.proposal.approved.json"
+# Only these two are resolved by NAME. The proposal snapshot is not here on
+# purpose: its filename travels inside the lock, so it is resolved from
+# lock["proposal_snapshot"] and a legacy entry for it could never fire.
+LEGACY = {CLOSURE_SNAPSHOT: "dp-spec.approved.md",
+          CLOSURE_LOCK: "dp-spec.lock.json"}
+
+
+def closure_path(name):
+    """Resolve a closure artifact, preferring the current name.
+
+    Falls back to the pre-v0.38.0 spelling, and returns the CURRENT-name path
+    when neither exists so a genuinely missing artifact still reports the name
+    a fresh closure should have. A name with no legacy spelling degrades to "no
+    fallback" rather than raising: this runs inside a user's closure under a
+    bare interpreter, where a traceback is the worst possible output.
+    """
+    current = Path(name)
+    if current.is_file():
+        return current
+    legacy = LEGACY.get(name)
+    if legacy and Path(legacy).is_file():
+        return Path(legacy)
+    return current
+
 
 DIAGS = []
 STAGE_STATE = {"s1_structure": None, "s2_transform": None, "s3_closure": None}
@@ -246,7 +282,7 @@ def finish(exit_code):
             counts[d["severity"]] += 1
         try:
             spec_hash = json.loads(
-                Path("dp-spec.lock.json").read_text(encoding="utf-8")).get("spec_hash")
+                closure_path(CLOSURE_LOCK).read_text(encoding="utf-8")).get("spec_hash")
         except Exception:
             spec_hash = None
         print(json.dumps({"schema": "nxd-diagnostic-report-v2",
@@ -1815,7 +1851,7 @@ say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
 # ---------------------------------------------------------------- Phase C ---
 # Closure-record gate (Step 6a). The closure must be a SUFFICIENT handoff, and
 # after this change that is a HASH-CHECKABLE property rather than a prose
-# discipline: the approved spec is byte-copied in as dp-spec.approved.md, the
+# discipline: the approved spec is byte-copied in as dp-blueprint.approved.md, the
 # lock carries its hash and the compiler version, and build-record.json says
 # which spec the closure was compiled from. A structurally valid closure can
 # still be uncontinuable if the plan it was built from lives in ../../some-doc.md
@@ -1825,36 +1861,76 @@ def cerr(code, msg, at="", ev=None):
     cerrors.append(msg)
     diag("s3_closure", code, msg, path=cpath(at), evidence=ev)
 
+# Resolve the closure's own artifacts once, before anything reports on them, so
+# every Phase C diagnostic names the file that is actually there.
+#
+# The LOCK is resolved by name (current, then the pre-v0.38.0 dp-spec.* spelling
+# — a closure built then is still valid). The SNAPSHOT is not: its filename
+# travels inside the lock, which is what dp_diagnostics resolves, and the lock
+# schema allows an in-closure sub-path. Guessing the name here instead would let
+# the two verifiers disagree about the same closure — `lock verify` passing
+# while Phase C reports a missing snapshot, and C8 silently skipping the plan.
+# The name fallback is the LAST resort, for a closure whose lock is unreadable.
+lockp = closure_path(CLOSURE_LOCK)
+lock_name = lockp.name
+
+
+def _lock_snapshot_ref(path):
+    """The snapshot as the lock declares it. Returns (path or None, escaped)."""
+    try:
+        ref = str(json.loads(path.read_text(encoding="utf-8")).get("snapshot") or "")
+    except Exception:
+        return None, False
+    if not ref:
+        return None, False
+    candidate = Path(ref)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None, True
+    try:
+        candidate.resolve().relative_to(Path.cwd().resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None, True
+    return candidate, False
+
+
+_snap_ref, _snap_escaped = _lock_snapshot_ref(lockp)
+snap = _snap_ref if _snap_ref is not None else closure_path(CLOSURE_SNAPSHOT)
+snap_name = str(snap)
+if _snap_escaped:
+    cerr("closure.escaping_reference",
+         "the lock's snapshot reference points outside the closure.", lock_name)
+
 # C11 first, so it is in the report whatever else happens: Phase C compares the
 # snapshot's BYTES, which is sufficient inside the closure (the bytes are the
 # ones the canonical hash was computed from) and needs nothing but hashlib. The
 # semantic comparison against the live IR is a separate v2 lock verification.
 diag("s3_closure", "closure.canonical_hash_deferred",
-     "Phase C checked the snapshot's raw bytes against dp-spec.lock.json. The "
-     "canonical (semantic) hash and the comparison against the live dp-spec.md "
+     f"Phase C checked the snapshot's raw bytes against {lock_name}. The "
+     "canonical (semantic) hash and the comparison against the live dp-blueprint.md "
      "are NOT checked here — re-run generator canonical lock verification with its "
      "resolved job_helper_dir for that.",
-     path=cpath("dp-spec.lock.json"))
+     path=cpath(lock_name))
 
 # C1 / C2 — the approved plan and its lock must both be in the closure.
-snap = Path("dp-spec.approved.md")
 snap_bytes = snap.read_bytes() if snap.exists() else None
 if snap_bytes is None:
+    # snap_name, not the constant: when the lock declared the snapshot, that is
+    # the name the closure is missing, and _verify_v3_lock reports the same one.
+    # The constant would send a legacy closure's reader after the wrong file.
     cerr("closure.spec_snapshot_missing",
-         "dp-spec.approved.md is missing from the closure root — the closure "
+         f"{snap_name} is missing from the closure root — the closure "
          "carries no copy of the approved plan it was compiled from, so a cold "
          "reader cannot tell what it was supposed to build. Byte-copy the "
-         "approved dp-spec.md in at generation (Step 6a).", "dp-spec.approved.md")
+         "approved dp-blueprint.md in at generation (Step 6a).", snap_name)
 lock = None
 is_v3_lock = False
 v3_approved_contracts = set()
-lockp = Path("dp-spec.lock.json")
 if not lockp.exists():
     cerr("closure.lock_missing",
-         "dp-spec.lock.json is missing from the closure root — without it the "
+         f"{CLOSURE_LOCK} is missing from the closure root — without it the "
          "snapshot is an unattributed copy: no hash, no compiler version, "
          "nothing to check it against. Run `dp_diagnostics.py lock write`.",
-         "dp-spec.lock.json")
+         CLOSURE_LOCK)
 else:
     try:
         lock = json.loads(lockp.read_text(encoding="utf-8"))
@@ -1894,8 +1970,8 @@ else:
     except Exception as exc:
         lock = None
         cerr("closure.lock_unparseable",
-             f"dp-spec.lock.json could not be read as a lock file — "
-             f"{type(exc).__name__}: {exc}", "dp-spec.lock.json")
+             f"{lock_name} could not be read as a lock file — "
+             f"{type(exc).__name__}: {exc}", lock_name)
 
 # C3 — tamper check. The snapshot is EVIDENCE; evidence edited after it was
 # written is not evidence. This is the mechanical half of "once approved, the
@@ -1908,9 +1984,9 @@ if lock is not None and snap_bytes is not None:
     expected_snapshot_version = 3 if is_v3_lock else 2
     if snapshot_version != expected_snapshot_version:
         cerr("closure.spec_hash_mismatch",
-             f"dp-spec.approved.md declares dp_spec_version={snapshot_version!r}, "
+             f"{snap_name} declares dp_spec_version={snapshot_version!r}, "
              f"but the lock envelope is for version {expected_snapshot_version}.",
-             "dp-spec.approved.md",
+             snap_name,
              {"expected": expected_snapshot_version, "actual": snapshot_version})
     if is_v3_lock:
         for field in ("name", "workflow"):
@@ -1918,20 +1994,21 @@ if lock is not None and snap_bytes is not None:
             snapshot_value = match.group(1).decode("utf-8") if match else None
             if snapshot_value != lock.get(field):
                 cerr("closure.spec_hash_mismatch",
-                     f"dp-spec.approved.md {field} does not match the v3 lock.",
-                     "dp-spec.approved.md",
+                     f"{snap_name} {field} does not match the v3 lock.",
+                     snap_name,
                      {"expected": lock.get(field), "actual": snapshot_value})
     got = hashlib.sha256(snap_bytes).hexdigest()
     want = lock.get("snapshot_sha256")
     if got != want:
         cerr("closure.lock_snapshot_byte_mismatch",
-             f"dp-spec.approved.md does not match dp-spec.lock.json "
+             f"{snap_name} does not match {lock_name} "
              f"snapshot_sha256 — the in-closure copy was edited after it was "
              f"written. The plan a build was compiled from is not editable "
-             f"in place: change the live dp-spec.md, re-approve, regenerate.",
-             "dp-spec.approved.md", {"expected": want, "actual": got})
+             f"in place: change the live dp-blueprint.md, re-approve, regenerate.",
+             snap_name, {"expected": want, "actual": got})
     if is_v3_lock:
         proposal_path = Path(str(lock.get("proposal_snapshot", "")))
+        proposal_name = proposal_path.name or CLOSURE_PROPOSAL
         try:
             proposal_path.resolve().relative_to(Path.cwd().resolve())
             inside_closure = True
@@ -1940,17 +2017,17 @@ if lock is not None and snap_bytes is not None:
         if proposal_path.is_absolute() or ".." in proposal_path.parts or not inside_closure:
             cerr("closure.escaping_reference",
                  "the v3 typed proposal snapshot points outside the closure.",
-                 "dp-spec.lock.json")
+                 lock_name)
             proposal_path = Path("")
         proposal_bytes = proposal_path.read_bytes() if proposal_path.is_file() else None
         if proposal_bytes is None:
             cerr("closure.spec_snapshot_missing",
                  "the v3 typed proposal snapshot is missing from the closure.",
-                 "dp-spec.proposal.approved.json")
+                 proposal_name)
         elif hashlib.sha256(proposal_bytes).hexdigest() != lock.get("proposal_snapshot_sha256"):
             cerr("closure.lock_snapshot_byte_mismatch",
-                 "dp-spec.proposal.approved.json does not match its lock hash.",
-                 "dp-spec.proposal.approved.json")
+                 f"{proposal_name} does not match its lock hash.",
+                 proposal_name)
         else:
             try:
                 proposal = json.loads(proposal_bytes.decode("utf-8"))
@@ -1969,7 +2046,7 @@ if lock is not None and snap_bytes is not None:
                 if proposal_hash != lock.get("proposal_hash"):
                     cerr("closure.spec_hash_mismatch",
                          "the typed proposal hash does not match the v3 lock.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
                 proposal_body = proposal.get("proposal")
                 if not isinstance(proposal_body, dict):
                     raise ValueError("the v3 typed proposal payload is not an object")
@@ -1987,7 +2064,7 @@ if lock is not None and snap_bytes is not None:
                 if terms_hash != lock.get("terms_hash"):
                     cerr("closure.terms_hash_mismatch",
                          "the inline Terms inventory does not match its v3 lock hash.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
                 contracts = proposal_body.get("contracts", [])
                 if not isinstance(contracts, list):
                     raise ValueError("the v3 contract inventory is not a list")
@@ -2006,7 +2083,7 @@ if lock is not None and snap_bytes is not None:
                 if contract_hash != lock.get("contract_inventory_hash"):
                     cerr("closure.contract_inventory_hash_mismatch",
                          "the compiled contract inventory does not match its v3 lock hash.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
                 decisions = proposal_body.get("decisions", [])
                 if not isinstance(decisions, list):
                     raise ValueError("the v3 decision inventory is not a list")
@@ -2025,20 +2102,20 @@ if lock is not None and snap_bytes is not None:
                 if decisions_hash != lock.get("locked_decisions_hash"):
                     cerr("closure.decision_inventory_mismatch",
                          "the settled locked-decision inventory does not match its v3 lock hash.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
             except Exception as exc:
                 cerr("closure.lock_unparseable",
                      f"the v3 typed proposal snapshot is invalid: "
                      f"{type(exc).__name__}: {exc}",
-                     "dp-spec.proposal.approved.json")
+                     proposal_name)
 
 # C4 — a snapshot of an unapproved spec is a build nobody signed off.
 if lock is not None and lock.get("spec_status_at_copy") != "approved":
     cerr("closure.lock_status_not_approved",
-         f"dp-spec.lock.json records spec_status_at_copy="
+         f"{lock_name} records spec_status_at_copy="
          f"{lock.get('spec_status_at_copy')!r} — the closure was generated from "
          f"a spec that was not approved. Approval is what gets copied and "
-         f"hashed; without it nothing here was signed off.", "dp-spec.lock.json",
+         f"hashed; without it nothing here was signed off.", lock_name,
          {"expected": "approved", "actual": lock.get("spec_status_at_copy")})
 
 # C5 / C6 — the build record exists and names the SAME plan as the lock. It is
@@ -2090,7 +2167,7 @@ else:
 if lock is not None and record is not None and \
         record.get("compiled_from") != lock.get("spec_hash"):
     cerr("closure.build_record_hash_mismatch",
-         f"build-record.json compiled_from does not equal dp-spec.lock.json "
+         f"build-record.json compiled_from does not equal {lock_name} "
          f"spec_hash — the record describes a build of a DIFFERENT plan than "
          f"the one snapshotted here. Regenerate rather than reconciling by "
          f"hand.", "build-record.json",
@@ -2111,7 +2188,7 @@ if not Path("README.md").exists():
 # the approved plan is exactly the dangling pointer this design removes, and no
 # carve-out is needed anywhere because the IR is COPIED rather than pointed at.
 ESCAPE = re.compile(r"\.\.(?:/[^\s\)\"']*)+\.md", re.IGNORECASE)
-scan = ["README.md", "dp-spec.approved.md", "spec.py", "models.py",
+scan = ["README.md", snap_name, "spec.py", "models.py",
         "transform/main.py"]
 # rglob, not glob: contracts/ now holds expectations/ and promises/ subtrees as
 # well as the flat contracts/<name>.md, and a verifier that points out of the
@@ -2131,7 +2208,7 @@ for rel in scan:
         cerr("closure.escaping_reference",
              f"{rel}: references '{m}' — a contract/design path that escapes "
              f"the closure. Materialize it inside the closure "
-             f"(dp-spec.approved.md / contracts/<name>.md / inert derived "
+             f"(dp-blueprint.approved.md / contracts/<name>.md / inert derived "
              f"model), never a ../ pointer.", rel, {"found": m})
 
 # C10 — sensitivity artifacts. The trigger is STRUCTURAL: a *-source service

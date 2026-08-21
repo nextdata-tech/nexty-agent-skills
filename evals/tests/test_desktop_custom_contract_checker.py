@@ -198,7 +198,7 @@ def _write_closure_record(root: Path, *, spec_text: str = FIXTURE_SPEC) -> None:
     lock would test the fixture's idea of the format instead of the one
     `dp_diagnostics.py` actually writes.
     """
-    spec = root.parent / f"{root.name}-dp-spec.md"
+    spec = root.parent / f"{root.name}-dp-blueprint.md"
     parsed = dpv2.parse(spec_text)
     spec.write_text(
         dpv2.approve(parsed, base_hash=dpv2.semantic_hash(parsed)),
@@ -212,12 +212,12 @@ def _write_closure_record(root: Path, *, spec_text: str = FIXTURE_SPEC) -> None:
     record = subprocess.run(
         [sys.executable, str(DIAG), "record", "init",
          "--record", str(root / "build-record.json"),
-         "--lock", str(root / "dp-spec.lock.json")],
+         "--lock", str(root / "dp-blueprint.lock.json")],
         capture_output=True, text=True,
     )
     assert record.returncode == 0, record.stderr
     (root / "README.md").write_text(
-        "# orders\n\n## Reopen\n\nRun the loop against dp-spec.md.\n",
+        "# orders\n\n## Reopen\n\nRun the loop against dp-blueprint.md.\n",
         encoding="utf-8",
     )
 

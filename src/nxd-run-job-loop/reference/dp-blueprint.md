@@ -1,4 +1,4 @@
-# `dp-spec.md` — the user-owned plan between intent and a local data product
+# `dp-blueprint.md` — the user-owned plan between intent and a local data product
 
 ## Contents
 
@@ -10,7 +10,7 @@
 - [Claude Desktop form contract](#claude-desktop-form-contract)
 - [Worked example](#worked-example)
 
-`dp-spec.md` is the document the user writes and edits. It is ordinary
+`dp-blueprint.md` is the document the user writes and edits. It is ordinary
 Markdown with fixed top-level navigation and free prose inside each section.
 The user is never expected to author or inspect the terse typed proposal used
 by the compiler.
@@ -122,7 +122,7 @@ revokes the approval; it is never silently merged.
 Formatting-only edits may retain approval only after re-extraction proves the
 typed proposal is unchanged. Behavioral edits, Terms edits, contract-inventory
 edits, or delivery-profile changes require a new approval. The closure stores
-the byte-identical `dp-spec.approved.md` and the approved typed proposal JSON;
+the byte-identical `dp-blueprint.approved.md` and the approved typed proposal JSON;
 it never points back to the live document.
 
 ## Claude Desktop form contract

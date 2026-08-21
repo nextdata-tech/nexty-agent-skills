@@ -3,11 +3,11 @@
   "skills": ["nxd-run-job-loop", "nxd-generate-data-product"],
   "ci_skip": "requires a manually operated default-deny source-isolation wrapper plus operator-resolved protected roots; the automatic PR runner has no such adapter. Run explicitly outside CI with the isolation attestation, wrapper, and roots configured.",
   "workspace_files": [
-    "dp-spec.approved.md",
+    "dp-blueprint.approved.md",
     "spec.py",
     "infra-profile.yaml",
     "contracts/**/*.py",
-    "**/dp-spec.approved.md",
+    "**/dp-blueprint.approved.md",
     "**/spec.py",
     "**/infra-profile.yaml",
     "**/contracts/**/*.py"
@@ -38,7 +38,7 @@
     ]
   },
   "checks": [
-    {"id": "contract-inventory", "check": "The two user-stated guarantees are carried as `## expectations` / `## promises` entries in the approved dp-spec, each with `authority: user_stated`, and are kept distinct from constraints merely inferred from the CSV (which belong in models.py and an ordinary .promise(model)). The closure's byte copy, dp-spec.approved.md, declares exactly the contracts spec.py wires \u2014 no more, no fewer."},
+    {"id": "contract-inventory", "check": "The two user-stated guarantees are carried as `## expectations` / `## promises` entries in the approved blueprint, each with `authority: user_stated`, and are kept distinct from constraints merely inferred from the CSV (which belong in models.py and an ordinary .promise(model)). The closure's byte copy, dp-blueprint.approved.md, declares exactly the contracts spec.py wires \u2014 no more, no fewer."},
     {"id": "csv-input-expectation", "check": "Attach a named custom expectation to a declared source-aligned CSV input with relative model_paths, local-file csv-source, and a per-contract verifier script."},
     {"id": "duckdb-output-promise", "check": "Attach a distinct named custom promise to the DuckDB output while retaining the ordinary schema promise."},
     {"id": "verifier-script-shape", "check": "Each referenced verifier has exactly one on_verify registration and an exact data_product.verify() __main__ guard; every custom contract owns one safe relative script path; no decorative contract scripts or secrets."},

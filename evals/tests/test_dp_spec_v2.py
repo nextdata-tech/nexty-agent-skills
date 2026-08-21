@@ -11,7 +11,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
-FIXTURE = Path(__file__).parent / "fixtures" / "dp-spec-v2-valid.md"
+FIXTURE = Path(__file__).parent / "fixtures" / "dp-blueprint-v2-valid.md"
 sys.path.insert(0, str(SCRIPTS))
 
 import dp_spec_v2 as v2  # noqa: E402
