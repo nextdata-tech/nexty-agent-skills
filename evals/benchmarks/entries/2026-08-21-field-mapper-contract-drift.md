@@ -50,7 +50,9 @@ dispatch in CI, which the suite deliberately does not do.
 Six assert the documentation and run everywhere, including in CI, which has no
 `nxd` wheel; all six were verified to fail against the previous revisions of
 `mapper/CONTRACT.md` and `reference/field-mapper.md`. Five use the installed
-package as the signature oracle and skip where it is absent — deliberately not
+package as the oracle — four check signatures and record fields, one checks that
+`make_call` still binds provider selection to the grant — and skip where the
+package is absent — deliberately not
 `importorskip` at module scope, so the doc half cannot vanish silently with it.
 
 The doc assertions compare against whitespace-normalized text. A negative

@@ -151,29 +151,33 @@ def test_ordinal_suffix_caveat_is_documented():
 
 def test_provider_default_is_documented_as_grant_resolved():
     contract = _contract()
-    assert "resolves the provider from **the grant**" in contract, (
-        "provider=None is not a hole — it falls back to grant.provider, which "
-        "is why the pack's own e2e example omits it"
+    assert "bound to the grant" in contract, (
+        "provider=None is not a hole — selection is bound to the grant, and a "
+        "disagreeing override raises GrantError rather than winning"
     )
+    assert "GrantError" in contract
     assert "name it." not in contract, "that read as a hard rule and was wrong"
 
 
 @needs_harness
-def test_provider_resolution_actually_falls_back_to_the_grant():
+def test_provider_is_bound_to_the_grant_not_merely_defaulted():
     """The oracle for the provider claim.
 
-    Every other harness-behaviour claim in this file has a gated carrier, so a
-    release that changes it fails here rather than leaving the doc stale. This
-    one asserted an internal (`provider = grant.provider`) on prose alone.
+    Scoped to `make_call` itself, not the module: a whole-file scan stays green
+    as long as anything in a module named `call_adapter` still mentions the
+    grant's provider, which is not the guarantee the docs need.
+
+    The binding is stronger than "falls back": an explicit provider that
+    disagrees with the grant is REFUSED, not silently preferred.
     """
-    import inspect as _inspect
-
-    from nxd.experimental.field_mapper import call_adapter
-
-    source = _inspect.getsource(call_adapter)
-    assert "self._grant.provider" in source or "grant.provider" in source, (
+    source = inspect.getsource(fm.make_call)
+    assert "grant.provider" in source, (
         "provider no longer resolves from the grant; re-document the default "
         "rather than leaving CONTRACT.md asserting it"
+    )
+    assert "does not match the consented provider" in source, (
+        "make_call no longer refuses a provider that disagrees with the grant "
+        "— CONTRACT.md says consent binds it, so re-document or restore"
     )
 
 

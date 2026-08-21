@@ -241,12 +241,15 @@ key through the environment:
 call = make_call(spec=spec, grant=grant, allow_env=True)
 ```
 
-`provider` also defaults to `None`, but that is not a hole: when it is omitted
-the adapter resolves the provider from **the grant** (`provider = grant.provider`),
-which is the field the user consented to. Passing it explicitly is optional, and
-a value that disagrees with the grant is worse than omitting it. The pack's own
-`examples/e2e/run_e2e.py` calls `make_call(spec=spec, grant=grant, allow_env=True)`
-with no provider for exactly this reason.
+`provider` also defaults to `None`, but that is not a hole: provider and model
+selection are **bound to the grant**. Omit it and `grant.provider` is used; pass
+one that disagrees and `make_call` raises `GrantError` ("provider override ...
+does not match the consented provider") rather than honouring it. The same holds
+for `provider_model` against `grant.model`. Both arguments are retained for
+compatibility, not as an override channel — consent is not something a caller
+can widen at the call site. The pack's own `examples/e2e/run_e2e.py` calls
+`make_call(spec=spec, grant=grant, allow_env=True)` with no provider for exactly
+this reason.
 
 ### Provider adapter contract
 
