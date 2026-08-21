@@ -145,18 +145,27 @@ def main() -> int:
             errors.append(f"invalid runner MCP trace: {type(exc).__name__}")
             events = []
 
-    if args.secret_marker_file:
+    marker_read_failed = False
+    if not args.secret_marker_file:
+        errors.append("redaction markers are required")
+        markers: tuple[str, ...] = ()
+    else:
         try:
             markers = tuple(
-                line
+                marker
                 for line in Path(args.secret_marker_file)
                 .read_text(encoding="utf-8")
                 .splitlines()
-                if line
+                if (marker := line.strip())
             )
         except OSError:
             errors.append("secret marker file unreadable")
+            marker_read_failed = True
             markers = ()
+        if not marker_read_failed and not markers:
+            errors.append("redaction markers are required")
+    normalized_markers = tuple(marker.casefold() for marker in markers)
+    if not marker_read_failed and normalized_markers:
         for path in (root, trace):
             if not path.exists():
                 continue
@@ -171,7 +180,8 @@ def main() -> int:
                 except OSError:
                     errors.append("artifact unreadable")
                     continue
-                if any(marker in text for marker in markers):
+                lowered = text.casefold()
+                if any(marker in lowered for marker in normalized_markers):
                     errors.append(
                         "synthetic credential marker appears in public output"
                     )
@@ -341,7 +351,7 @@ def main() -> int:
 
     if errors:
         for error in errors:
-            print(f"FAIL: {error}")
+            print(f"FAIL {error}")
         return 1
     print("ALL CHECKS PASSED")
     return 0

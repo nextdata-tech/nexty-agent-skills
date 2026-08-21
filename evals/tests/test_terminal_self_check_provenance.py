@@ -177,21 +177,22 @@ def test_checker_requires_distinct_structured_reports(tmp_path: Path) -> None:
 
 
 def _run_checker(
-    root: Path, trace: Path, marker: Path
+    root: Path, trace: Path, marker: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(CHECKER),
+        "--fixtures",
+        str(SCENARIO / "fixtures"),
+        "--root",
+        str(root),
+        "--trace",
+        str(trace),
+    ]
+    if marker is not None:
+        command.extend(("--secret-marker-file", str(marker)))
     return subprocess.run(
-        [
-            sys.executable,
-            str(CHECKER),
-            "--fixtures",
-            str(SCENARIO / "fixtures"),
-            "--root",
-            str(root),
-            "--trace",
-            str(trace),
-            "--secret-marker-file",
-            str(marker),
-        ],
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -232,3 +233,29 @@ def test_checker_rejects_token_matches_without_exact_failure_provenance(
         trace.write_text(mutated, encoding="utf-8")
         result = _run_checker(tmp_path, trace, marker)
         assert result.returncode != 0, result.stdout
+        assert "FAIL " in result.stdout
+
+
+def test_checker_requires_and_casefolds_redaction_markers(tmp_path: Path) -> None:
+    (tmp_path / "transform").mkdir()
+    (tmp_path / "transform/main.py").write_text("# fixture\n", encoding="utf-8")
+    trace = _trace(tmp_path)
+
+    missing = _run_checker(tmp_path, trace)
+    assert missing.returncode != 0
+    assert "redaction markers are required" in missing.stdout
+
+    empty = tmp_path / "empty-markers.txt"
+    empty.write_text("\n", encoding="utf-8")
+    empty_result = _run_checker(tmp_path, trace, empty)
+    assert empty_result.returncode != 0
+    assert "redaction markers are required" in empty_result.stdout
+
+    marker = tmp_path / "casefold-markers.txt"
+    marker.write_text("NEX887-OPAQUE-SYNTHETIC-SECRET-2D4C\n", encoding="utf-8")
+    (tmp_path / "leaked.txt").write_text(
+        "nex887-opaque-synthetic-secret-2d4c\n", encoding="utf-8"
+    )
+    casefolded = _run_checker(tmp_path, trace, marker)
+    assert casefolded.returncode != 0
+    assert "synthetic credential marker" in casefolded.stdout

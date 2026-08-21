@@ -252,7 +252,6 @@ def main() -> int:
     definition_manifest = _definition_manifest(root)
     (root / "definition.json").write_bytes(definition_manifest)
     (root / "definition.json").chmod(0o444)
-    source = Path(root / "data/orders/orders.csv").read_text()
     responses = []
     for request_hash, category in zip(hashes, ("freight", "warehousing")):
         responses.append(

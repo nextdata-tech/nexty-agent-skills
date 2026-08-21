@@ -1,13 +1,14 @@
 # Terminal self-check provenance
 
-Use the starter closure in `reference-closure/` as the only authored data
-product. The connected `nxd-desktop` MCP server is the supported supervisor
-surface for this task. Do not invoke a copied helper from a plugin cache, an
-unrelated checkout, or a direct Python self-check script.
+The starter closure is already materialized in the workspace root and is the
+only authored data product. The connected `nxd-desktop` MCP server is the
+supported supervisor surface for this task.
 
 ## Task for the agent
 
-Use `mcp__nxd-desktop__check_data_product` on the starter closure with workflow
+Use only the connected `mcp__nxd-desktop__check_data_product` tool on the
+workspace-root starter closure. Do not invoke a copied helper from a plugin
+cache, an unrelated checkout, or a direct Python self-check script. Use workflow
 `terminal-self-check-provenance`. Record the structured outcome, all four stage
 summaries, the stable finding codes, the content-addressed `definition_id`, and
 the interpreter/package provenance. Treat `skip` as unexamined, never as pass.
