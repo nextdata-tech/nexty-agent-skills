@@ -251,7 +251,7 @@ def test_checker_requires_and_casefolds_redaction_markers(tmp_path: Path) -> Non
     assert empty_result.returncode != 0
     assert "redaction markers are required" in empty_result.stdout
 
-    marker = tmp_path / "casefold-markers.txt"
+    marker = tmp_path.parent / "casefold-markers.txt"
     marker.write_text("NEX887-OPAQUE-SYNTHETIC-SECRET-2D4C\n", encoding="utf-8")
     (tmp_path / "leaked.txt").write_text(
         "nex887-opaque-synthetic-secret-2d4c\n", encoding="utf-8"

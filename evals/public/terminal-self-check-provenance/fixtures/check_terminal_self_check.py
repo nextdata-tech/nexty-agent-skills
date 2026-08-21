@@ -165,7 +165,7 @@ def main() -> int:
         if not marker_read_failed and not markers:
             errors.append("redaction markers are required")
     normalized_markers = tuple(marker.casefold() for marker in markers)
-    if not marker_read_failed and normalized_markers:
+    if normalized_markers:
         for path in (root, trace):
             if not path.exists():
                 continue
