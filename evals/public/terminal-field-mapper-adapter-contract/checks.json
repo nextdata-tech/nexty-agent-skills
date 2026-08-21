@@ -4,6 +4,7 @@
     "nxd-generate-data-product",
     "nxd-run-job-loop"
   ],
+  "ci_skip": "needs a live desktop supervisor over stdio MCP (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
   "wants_trace": true,
   "deterministic_check": {
     "script": "check_terminal_mapper_adapter.py",
