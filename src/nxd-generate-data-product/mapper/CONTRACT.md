@@ -207,6 +207,13 @@ Take `identity_fields` and `source_locators` from **the spec's grain**, never
 from a repeated literal, or the projection drifts from the one that produced the
 keys and every proposal fails to resolve.
 
+**This recipe assumes `duplicate_policy` is `reject` or `merge_by_rule`.** Under
+`ordinal_suffix` the emission ordinal participates in the key (§5), so one
+`input_id` no longer maps to one key and the lookup above silently resolves
+nothing. That policy needs a projection that passes `ordinal=` per emitted row —
+and a `dict` keyed by row key stops being the right shape. Every `samples/*/spec.json`
+uses `reject`, so no fixture exercises this.
+
 Treating `target_row_key` as the business key is the failure this section
 exists to prevent: downstream asserts then reject every row for belonging to an
 entity that does not exist, and the message points at the data rather than at
@@ -229,7 +236,12 @@ key through the environment:
 call = make_call(spec=spec, grant=grant, allow_env=True, provider="anthropic")
 ```
 
-`provider` also defaults to `None` rather than `"anthropic"`; name it.
+`provider` also defaults to `None`, but that is not a hole: when it is omitted
+the adapter resolves the provider from **the grant** (`provider = grant.provider`),
+which is the field the user consented to. Passing it explicitly is optional, and
+a value that disagrees with the grant is worse than omitting it. The pack's own
+`examples/e2e/run_e2e.py` calls `make_call(spec=spec, grant=grant, allow_env=True)`
+with no provider for exactly this reason.
 
 ### Provider adapter contract
 
@@ -673,9 +685,10 @@ gate. The `claude-haiku-4-5` E2E run in `examples/e2e/` exercises it.
   determinism" — they never guaranteed it.
 - No `budget_tokens`. Depth is `output_config.effort`, declared by the spec.
 - The API key may reach the transform via `.secrets([...])` in `spec.py`, with
-  the allowlisted `ANTHROPIC_API_KEY` environment variable as fallback for a
-  CLI or explicitly configured local run. An explicit secret wins. Pass
-  `allow_env=False` when ambient credentials must be refused. The key is read
+  the allowlisted `ANTHROPIC_API_KEY` environment variable as an **opt-in**
+  fallback for a CLI or explicitly configured local run: it applies only when
+  the caller passes `allow_env=True`, which is not the default. An explicit
+  secret wins over it. The key is read
   once into the client and **never** written to the ledger, a record, a log
   line, an error message, or a `repr`.
 

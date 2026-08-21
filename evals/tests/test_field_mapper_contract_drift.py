@@ -65,10 +65,16 @@ def test_grant_check_signature_matches_the_installed_harness():
     assert "input_fields" in params and "document_classes" in params, (
         "the harness changed; re-document Grant.check rather than adapting to it"
     )
-    assert "Grant.check(spec, inputs)" not in _contract(), (
+
+
+def test_grant_check_is_documented_with_keyword_only_params():
+    """Ungated on purpose: CI has no nxd wheel, so an oracle-gated assertion
+    would leave this correction uncarried anywhere CI can see."""
+    contract = _contract()
+    assert "Grant.check(spec, inputs)" not in contract, (
         "the documented form raises TypeError before any dispatch"
     )
-    assert "input_fields=(), document_classes=()" in _contract()
+    assert "input_fields=(), document_classes=()" in contract
 
 
 @needs_harness
@@ -91,6 +97,12 @@ def test_allow_env_is_documented_as_opt_in():
         "name the symptom: a credential error for a credential that is present"
     )
     assert "OPT-IN" in _reference()
+    # The twin sentence elsewhere in CONTRACT.md said "pass allow_env=False to
+    # refuse", which only parses if the default permits — the belief this file
+    # exists to correct. Nothing else catches that residue.
+    assert "`allow_env=False` when ambient credentials must be refused" not in contract, (
+        "that phrasing implies the default permits the environment fallback"
+    )
 
 
 @needs_harness
@@ -111,6 +123,25 @@ def test_row_key_round_trip_is_documented():
     assert "spec.grain.identity_fields" in contract, (
         "take the projection from the spec's grain, never a repeated literal"
     )
+
+
+def test_ordinal_suffix_caveat_is_documented():
+    """The recipe derives one key per input, which `ordinal_suffix` breaks."""
+    contract = _contract()
+    assert "ordinal_suffix" in contract and "duplicate_policy" in contract
+    assert "assumes `duplicate_policy` is `reject`" in contract, (
+        "state the policy the recipe assumes, or a caller under ordinal_suffix "
+        "follows it verbatim and resolves nothing"
+    )
+
+
+def test_provider_default_is_documented_as_grant_resolved():
+    contract = _contract()
+    assert "resolves the provider from **the grant**" in contract, (
+        "provider=None is not a hole — it falls back to grant.provider, which "
+        "is why the pack's own e2e example omits it"
+    )
+    assert "name it." not in contract, "that read as a hard rule and was wrong"
 
 
 def test_the_spec_id_binding_trap_is_documented():

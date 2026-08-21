@@ -251,8 +251,12 @@ inputs = [
 call = make_call(
     spec=spec,
     grant=grant,
-    # Optional explicit secret mapping; use None for the environment fallback.
+    # Explicit secret mapping. `None` plus `allow_env=True` uses the
+    # allowlisted ANTHROPIC_API_KEY instead. Without `allow_env=True` there
+    # is NO environment fallback and the first dispatch fails with
+    # `credential_missing`, however visible the key is.
     secrets=None,
+    allow_env=True,
 )
 
 result = map_inputs(

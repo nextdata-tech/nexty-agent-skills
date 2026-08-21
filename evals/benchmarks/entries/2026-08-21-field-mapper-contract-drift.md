@@ -45,15 +45,18 @@ dispatch in CI, which the suite deliberately does not do.
 
 ## Evidence
 
-`evals/tests/test_field_mapper_contract_drift.py`, seven tests in two halves.
+`evals/tests/test_field_mapper_contract_drift.py`, ten tests in two halves.
 
-Three assert the documentation and run everywhere; all three were verified to
-fail against the previous revisions of `mapper/CONTRACT.md` and
-`reference/field-mapper.md`. Four use the installed `nxd` package as the
-signature oracle and are skipped where no wheel is available — deliberately not
+Six assert the documentation and run everywhere, including in CI, which has no
+`nxd` wheel; all six were verified to fail against the previous revisions of
+`mapper/CONTRACT.md` and `reference/field-mapper.md`. Four use the installed
+package as the signature oracle and skip where it is absent — deliberately not
 `importorskip` at module scope, so the doc half cannot vanish silently with it.
-Against the pre-fix docs under an interpreter that has the harness, four of the
-seven fail; after the fix all seven pass.
+
+Every one of the four corrections has at least one **ungated** carrier. An
+earlier revision gated the `Grant.check` doc assertions behind the oracle skip,
+which left that correction unverified anywhere CI could see it — the failure
+mode this split exists to prevent.
 
 The oracle half is what keeps this from drifting again: if a future release
 changes `Grant.check`, the `allow_env` default, or starts returning identity on
