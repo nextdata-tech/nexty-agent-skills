@@ -156,6 +156,10 @@ def test_provider_default_is_documented_as_grant_resolved():
         "disagreeing override raises GrantError rather than winning"
     )
     assert "GrantError" in contract
+    # Both refusal messages are quoted in the contract, which is what makes the
+    # gated oracle's exact-string assertions cross-checkable rather than magic.
+    assert "does not match the consented provider" in contract
+    assert "does not match the consented model" in contract
     assert "name it." not in contract, "that read as a hard rule and was wrong"
 
 
@@ -164,11 +168,17 @@ def test_provider_and_model_are_bound_to_the_grant():
     """The oracle for the binding claim — behavioural, not a source scan.
 
     An earlier revision asserted an error-message substring inside
-    `inspect.getsource(make_call)`. That is the weakest instrument in this file:
-    it goes green if the guard moves into the dispatch closure (the seam is
-    documented as lazy), and red if the message is merely reworded. Calling
-    `make_call` with a mismatched override tests the guarantee itself, and it
-    needs no network — the pack ships grants and specs to bind against.
+    `inspect.getsource(make_call)`, which went green if the guard moved into the
+    dispatch closure — and that seam is documented as lazy, so the move is
+    plausible. Calling `make_call` with a mismatched override closes that: it
+    tests the guarantee rather than where the code for it lives, and needs no
+    network, since the pack ships grants and specs to bind against.
+
+    Both assertions below still pin exact message text, so a rewording turns
+    them red. That coupling is deliberate rather than residual: both phrases are
+    quoted verbatim in `CONTRACT.md`, which makes them documented contract
+    phrases a reviewer can cross-check — and a reworded message that the docs
+    still quote is itself a drift worth failing on.
     """
     sample = (SKILL / "mapper" / "samples" / "01-row-scores")
     grant = fm.Grant.load(str(sample / "grant.json"))
@@ -198,6 +208,7 @@ def test_provider_and_model_are_bound_to_the_grant():
         "the provider_model half of the claim — previously asserted in the "
         "docs with no carrier at all"
     )
+
 
 def test_the_spec_id_binding_trap_is_documented():
     reference = _reference()

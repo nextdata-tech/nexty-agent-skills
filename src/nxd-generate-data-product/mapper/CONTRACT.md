@@ -245,7 +245,8 @@ call = make_call(spec=spec, grant=grant, allow_env=True)
 selection are **bound to the grant**. Omit it and `grant.provider` is used; pass
 one that disagrees and `make_call` raises `GrantError` ("provider override ...
 does not match the consented provider") rather than honouring it. The same holds
-for `provider_model` against `grant.model`. Both arguments are retained for
+for `provider_model` against `grant.model` ("provider model override ... does
+not match the consented model"). Both arguments are retained for
 compatibility, not as an override channel — consent is not something a caller
 can widen at the call site. The pack's own `examples/e2e/run_e2e.py` calls
 `make_call(spec=spec, grant=grant, allow_env=True)` with no provider for exactly

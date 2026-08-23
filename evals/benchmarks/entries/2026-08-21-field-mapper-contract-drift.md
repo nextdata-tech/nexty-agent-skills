@@ -50,11 +50,11 @@ dispatch in CI, which the suite deliberately does not do.
 Six assert the documentation and run everywhere, including in CI, which has no
 `nxd` wheel; all six were verified to fail against the previous revisions of
 `mapper/CONTRACT.md` and `reference/field-mapper.md`. Five use the installed
-package as the oracle — two check signatures, one checks record fields, one
-calls the row-key helper and asserts on its return, and one calls `make_call`
-with a mismatched override and asserts the grant refuses it — and skip where the
-package is absent — deliberately not
-`importorskip` at module scope, so the doc half cannot vanish silently with it.
+package as the oracle: two check signatures, one checks record fields, one calls
+the row-key helper and asserts on its return, and one calls `make_call` with a
+mismatched override and asserts the grant refuses it. Those five skip where the
+package is absent. The skip is deliberately not an `importorskip` at module
+scope, so the doc half cannot vanish silently with them.
 
 The doc assertions compare against whitespace-normalized text. A negative
 assertion ("this phrasing must be gone") over raw file text only fires while the
