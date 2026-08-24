@@ -40,9 +40,17 @@ def test_standalone_harness_still_requires_a_user_authored_grant() -> None:
 def test_normative_contract_publishes_the_bounded_call_adapter() -> None:
     contract = _normalized(MAPPER_CONTRACT)
 
+    # Pins the signature as the INSTALLED harness has it. The previous pin
+    # carried `allow_env=True, provider="anthropic"`, which the harness never
+    # had — so this test was holding the defect in place rather than catching
+    # it: a closure following the pinned signature omits `allow_env` and dies on
+    # `credential_missing` with the key sitting in its environment.
+    # `test_field_mapper_contract_drift.py` checks these defaults against the
+    # package itself, so a future change fails there rather than being
+    # re-pinned wrong here.
     assert (
-        '`make_call(*, spec, grant, secrets=None, allow_env=True, '
-        'provider="anthropic", provider_model=None, provider_cwd=None) -> callable`'
+        '`make_call(*, spec, grant, secrets=None, allow_env=False, '
+        'provider=None, provider_model=None, provider_cwd=None) -> callable`'
     ) in contract
     assert "provider construction, credential resolution" in contract
     assert "allowlisted environment fallback" in contract

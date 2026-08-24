@@ -110,7 +110,7 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | Symbol | Module | Purpose |
 |---|---|---|
 | `map_inputs(inputs, *, spec, grant, run_dir, call, ...) -> MapResult` | `field_mapper` | the N→M primitive |
-| `make_call(*, spec, grant, secrets=None, allow_env=True, provider="anthropic", provider_model=None, provider_cwd=None) -> callable` | `field_mapper` | lazy, budgeted provider seam; explicit secret first, then allowlisted environment fallback; creates the client only on first dispatch |
+| `make_call(*, spec, grant, secrets=None, allow_env=False, provider=None, provider_model=None, provider_cwd=None) -> callable` | `field_mapper` | lazy, budgeted provider seam; explicit secret first, then allowlisted environment fallback **only when `allow_env=True` is passed**; creates the client only on first dispatch |
 | `MapperInput(input_id, identity, ...)` | `field_mapper` | one source record handed to the mapper |
 | `MapperSpec.load(path)` / `.mapper_spec_id` | `spec` | landed spec → runtime object |
 | `MapperProposal` / `MapperReview` / `MapperEvidence` | `records` | the three record types |
@@ -118,8 +118,9 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | `resolve(proposals, reviews, evidence, spec) -> Resolution` | `resolver` | wide projection + sidecar, one bundle |
 | `Resolution.wide_rows` / `.provenance` / `.assert_bijection()` | `resolver` | §7 |
 | `PreflightEstimate` / `estimate(inputs, spec)` | `transport` | §10 of the design |
-| `Grant.load(path)` / `Grant.check(spec, inputs)` | `grant` | §9 |
+| `Grant.load(path)` / `Grant.check(spec, *, input_fields=(), document_classes=(), now=None)` | `grant` | §9 |
 | `FieldMapperError` and subclasses | `errors` | so callers can catch by class, not string |
+| `target_row_key_for_input(*, identity, fields, identity_fields, source_locators=(), ordinal=None)` | `mapper` | derive a row key the way `map_inputs` does — the only way to attribute a proposal back to its source row |
 
 Everything else is private. `transport.Client` is deliberately **not** public —
 Layer 2 must use `make_call` so provider construction, credential resolution,
@@ -180,10 +181,76 @@ Generated code must **not** introspect these signatures to decide how to call
 them. A mapper that adapts itself to whatever is installed converts a loud,
 immediate `TypeError` into a silent behavioural difference between two runtimes.
 
+#### Nothing returned carries the input identity back
+
+`target_row_key` is a content-derived hash (§5), **not** your `input_id`.
+`MapperProposal`, `MapperEvidence` and `Resolution` are all keyed by it, and
+none of them carries `identity` — so a caller that needs to attribute a
+proposal back to its source row must derive the key itself, with the same
+projection `map_inputs` used:
+
+```python
+from nxd.experimental.field_mapper.mapper import target_row_key_for_input
+
+row_key_to_source = {
+    target_row_key_for_input(
+        identity=item.identity,
+        fields=item.fields,
+        identity_fields=spec.grain.identity_fields,
+        source_locators=spec.grain.source_locators,
+    ): item.input_id
+    for item in mapper_inputs
+}
+```
+
+Take `identity_fields` and `source_locators` from **the spec's grain**, never
+from a repeated literal, or the projection drifts from the one that produced the
+keys and every proposal fails to resolve.
+
+**This recipe assumes `duplicate_policy` is `reject` or `merge_by_rule`.** Under
+`ordinal_suffix` the emission ordinal participates in the key (§5), so one
+`input_id` no longer maps to one key and the lookup above silently resolves
+nothing. That policy needs a projection that passes `ordinal=` per emitted row —
+and a `dict` keyed by row key stops being the right shape. Every `samples/*/spec.json`
+uses `reject`, so no fixture exercises this.
+
+**`ordinal_suffix` is a documented trap, not a supported alternative** (open
+question 8): a source reorder changes the key and mass-invalidates every review
+bound to it. Read this caveat as "here is why the recipe does not cover that
+policy", not as an invitation to adopt it.
+
+Treating `target_row_key` as the business key is the failure this section
+exists to prevent: downstream asserts then reject every row for belonging to an
+entity that does not exist, and the message points at the data rather than at
+the key.
+
 `map_inputs` returns a `MapResult` carrying proposals + evidence + ledger handle
 **in one in-memory bundle** (design §7). There is no API that returns proposals
 without their evidence, because that API is how the orphan-evidence bug gets
 written.
+
+#### `allow_env` defaults to False — pass it explicitly
+
+The environment fallback is **opt-in**. A closure that omits `allow_env` gets no
+ambient credential, however visible the key is in the child's environment, and
+fails at the first dispatch with `credential_missing` — a credential error for a
+credential that is present. Pass it explicitly when the supervisor supplies the
+key through the environment:
+
+```python
+call = make_call(spec=spec, grant=grant, allow_env=True)
+```
+
+`provider` also defaults to `None`, but that is not a hole: provider and model
+selection are **bound to the grant**. Omit it and `grant.provider` is used; pass
+one that disagrees and `make_call` raises `GrantError` ("provider override ...
+does not match the consented provider") rather than honouring it. The same holds
+for `provider_model` against `grant.model` ("provider model override ... does
+not match the consented model"). Both arguments are retained for
+compatibility, not as an override channel — consent is not something a caller
+can widen at the call site. The pack's own `examples/e2e/run_e2e.py` calls
+`make_call(spec=spec, grant=grant, allow_env=True)` with no provider for exactly
+this reason.
 
 ### Provider adapter contract
 
@@ -224,7 +291,7 @@ every build** — it is this run's output, not durable state.
 
 | Column | Type | Null? | Key | Description |
 |---|---|---|---|---|
-| `target_row_key` | `string()` | no | PK | Content/source-derived row identity (§5). Never an emission ordinal. |
+| `target_row_key` | `string()` | no | PK | Content/source-derived row identity (§5). Never an emission ordinal — except under `duplicate_policy = ordinal_suffix`, where §5 admits it after the identity fields are exhausted. |
 | `field` | `string()` | no | PK | Target field name. Must be declared in the spec's target fields. |
 | `value_string` | `string()` | **yes** | | Typed value slot. Exactly one `value_*` column is non-null when `value_status = ok`; **all are null** for every other status. |
 | `value_int` | `int64()` | **yes** | | ditto |
@@ -244,7 +311,7 @@ every build** — it is this run's output, not durable state.
 | `input_snapshot_id` | `string()` | no | | Deterministic hash of the inputs this cell was derived from (§5). |
 | `mapper_spec_id` | `string()` | no | | Canonical spec hash (§5). |
 | `execution_id` | `string()` | no | | Nondeterministic, harness-supplied. **Never a business key.** Present for ledger join only. |
-| `emission_ordinal` | `int64()` | no | | Display-only. Explicitly NOT part of any key and NOT stable across runs. |
+| `emission_ordinal` | `int64()` | no | | Display-only and NOT stable across runs. Not part of any key under `reject` or `merge_by_rule`; under `ordinal_suffix` it participates in `target_row_key` (§5), which is why that policy makes review binding fragile. |
 
 Uniqueness: `(target_row_key, field)`. A duplicate is a hard build failure, not a
 last-write-wins — duplicate emission means the spec's row identity is
@@ -627,9 +694,10 @@ gate. The `claude-haiku-4-5` E2E run in `examples/e2e/` exercises it.
   determinism" — they never guaranteed it.
 - No `budget_tokens`. Depth is `output_config.effort`, declared by the spec.
 - The API key may reach the transform via `.secrets([...])` in `spec.py`, with
-  the allowlisted `ANTHROPIC_API_KEY` environment variable as fallback for a
-  CLI or explicitly configured local run. An explicit secret wins. Pass
-  `allow_env=False` when ambient credentials must be refused. The key is read
+  the allowlisted `ANTHROPIC_API_KEY` environment variable as an **opt-in**
+  fallback for a CLI or explicitly configured local run: it applies only when
+  the caller passes `allow_env=True`, which is not the default. An explicit
+  secret wins over it. The key is read
   once into the client and **never** written to the ledger, a record, a log
   line, an error message, or a `repr`.
 

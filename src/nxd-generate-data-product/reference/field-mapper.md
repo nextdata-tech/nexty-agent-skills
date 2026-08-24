@@ -83,6 +83,18 @@ Paste that value into the grant's `mapper_spec_id` and write the grant to
 `contracts/`. A hand-computed hash, or the `"<derived>"` placeholder the
 `samples/` fixtures use, binds nothing — the gate rejects `<derived>` by name.
 
+**The id is taken over the BOUND spec, and binding is not what `load` does.**
+`spec-id` loads the spec, compiles the wire schema into it, and stamps
+`harness_version` before reading `mapper_spec_id` — the same sequence
+`map_inputs` re-derives at its gate. `MapperSpec.load(path).mapper_spec_id` on a
+spec that does not declare `harness_version` is a **different** 32-hex string.
+So a grant carrying the id `spec-id` printed is correct, and any check that
+compares it against an unbound spec refuses it with `spec_mismatch` — a consent
+failure invented by the checker, on a grant the user authored correctly. Use
+`grant-check`, which binds the way a run does, and do not hand-roll the
+comparison. Declaring `harness_version` in the spec file does not fix it either:
+that changes the canonical bytes, and so moves the id again.
+
 `python -m nxd.experimental.field_mapper grant-check <spec> <grant>` applies the same statically
 decidable checks the gate subprocesses (hash, primary and corroboration model,
 expiry) and prints JSON. It has no `<derived>`-specific rule: it fails that value
@@ -239,8 +251,12 @@ inputs = [
 call = make_call(
     spec=spec,
     grant=grant,
-    # Optional explicit secret mapping; use None for the environment fallback.
+    # Explicit secret mapping. `None` plus `allow_env=True` uses the
+    # allowlisted ANTHROPIC_API_KEY instead. Without `allow_env=True` there
+    # is NO environment fallback and the first dispatch fails with
+    # `credential_missing`, however visible the key is.
     secrets=None,
+    allow_env=True,
 )
 
 result = map_inputs(
@@ -256,7 +272,7 @@ result = map_inputs(
 the provider client and resolves credentials lazily, after `map_inputs` has
 checked the grant. An explicitly supplied `secrets["anthropic_api_key"]` wins;
 when it is absent, the adapter may use the allowlisted `ANTHROPIC_API_KEY`
-environment fallback. Pass `allow_env=False` when a closure must refuse ambient
+environment fallback, which is OPT-IN: `allow_env` defaults to False, so a closure that omits it gets no ambient
 credentials. Missing credentials are a blocking, sanitized
 `CredentialMissingError`; the key never appears in diagnostics or artifacts.
 Do not import `anthropic`, use tool-use output, construct a private transport
