@@ -158,6 +158,34 @@ def test_derived_models_pins_column_shape_and_the_resource_factory():
     )
 
 
+def test_recipe_teaches_flattening_of_nested_selections():
+    """Both failure modes, not just the one the assert catches.
+
+    A nested list becomes a child table and the read-back assert fires. A nested
+    dict becomes `state__name`-style columns, produces no extra table, and is
+    therefore invisible to that assert — the product ships with an empty
+    dimension. The doc has to name the second explicitly, or a reader fixes only
+    the failure they were shown.
+    """
+    t = _doc()
+    assert "add_map" in t, (
+        "api-source.md must name .add_map() — it is the hook that flattens a "
+        "fetched row before it reaches the port"
+    )
+    assert "state__name" in t, (
+        "the doc must show the __-joined column shape a nested dict produces; "
+        "it is the half the read-back assert cannot catch"
+    )
+    assert "child table" in t and "read-back assert cannot see" in t, (
+        "both failure modes must be distinguished: the list case is caught for "
+        "you, the dict case is not"
+    )
+    assert "state { name type }" in t, (
+        "the worked GraphQL query must select a nested object, or the example "
+        "is the one shape that never hits this"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Layer 2: the wire — does the pinned dlt really round-trip the escape?
 # ---------------------------------------------------------------------------
@@ -377,3 +405,73 @@ def test_self_check_reports_a_key_that_carries_only_the_key_role():
     assert 'field_roles = {call_name(sub) for sub in ast.walk(v)}' in checker
     assert '"primary_key" in field_roles' in checker
     assert '"dimension" not in field_roles' in checker
+
+
+def test_pinned_dlt_really_splits_nested_lists_and_flattens_nested_dicts():
+    """The claim whose truth lives in dlt, not in our prose.
+
+    If a future dlt stops creating the child table, or starts flattening lists
+    too, the guidance in api-source.md is wrong and this fails rather than the
+    doc quietly rotting.
+    """
+    program = textwrap.dedent(
+        """
+        import json, os, tempfile
+        d = tempfile.mkdtemp()
+        os.environ["DLT_DATA_DIR"] = d + "/dltdata"
+        import dlt
+
+        pipe = dlt.pipeline(
+            pipelines_dir=d + "/pipes",
+            destination=dlt.destinations.duckdb(credentials=d + "/x.duckdb"),
+            dataset_name="main",
+        )
+
+        @dlt.resource(name="linear_issues_landed")
+        def issues():
+            yield {
+                "id": "u1", "identifier": "ENG-1", "title": "t",
+                "state": {"name": "Todo", "type": "unstarted"},
+                "labels": {"nodes": [{"name": "bug"}, {"name": "p1"}]},
+            }
+
+        pipe.run([issues()], write_disposition="replace")
+        cols = sorted(pipe.default_schema.get_table_columns("linear_issues_landed"))
+        print(json.dumps({
+            "tables": sorted(pipe.default_schema.data_table_names()),
+            "columns": [c for c in cols if not c.startswith("_dlt")],
+        }))
+        """
+    )
+    if shutil.which("uv") is None:
+        pytest.fail(
+            "uv is required to verify dlt's nested-field handling against the "
+            "pinned version; install uv, or run this test in CI"
+        )
+    try:
+        result = subprocess.run(
+            ["uv", "run", "--no-project", "--quiet", "--with", DLT_PIN,
+             "--with", "duckdb==1.5.4", "python", "-c", program],
+            capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"the dlt nesting probe did not finish within {SUBPROCESS_TIMEOUT_S}s"
+        )
+    assert result.returncode == 0, f"probe failed: {result.stderr[-2000:]}"
+    lines = result.stdout.strip().splitlines()
+    assert lines, f"probe printed nothing. stderr: {result.stderr[-1000:]!r}"
+    out = json.loads(lines[-1])
+
+    assert "linear_issues_landed__labels__nodes" in out["tables"], (
+        "a nested LIST must still land as a child table — that is what makes "
+        f"the read-back assert catch it. tables: {out['tables']}"
+    )
+    assert "state__name" in out["columns"] and "state__type" in out["columns"], (
+        "a nested DICT must still flatten to __-joined columns — the silent "
+        f"half of the hazard. columns: {out['columns']}"
+    )
+    assert "state_name" not in out["columns"], (
+        "if dlt produced the single-underscore name a models.py would declare, "
+        "the doc's warning would be obsolete"
+    )
