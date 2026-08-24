@@ -23,6 +23,11 @@ file export. "No `data/`" is about the *connector*: this type brings no
 export of its own. A closure may still carry `data/` for landed reference
 data it authored — see § "Landed reference data in an API closure".
 
+> **Building against Linear?** The GraphQL mechanics below are generic, but the
+> auth convention, the exact-match filter semantics, the workflow-state
+> vocabulary and the `priority` encoding are not — see
+> [linear-source.md](linear-source.md) for those, and read this file first.
+
 ## Scope
 
 An **off-mesh** REST API the user names directly — not an upstream
