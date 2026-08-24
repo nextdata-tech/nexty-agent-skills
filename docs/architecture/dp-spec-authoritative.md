@@ -64,6 +64,12 @@ The proposal envelope is `nxd-dp-spec-proposal-v3`. It contains:
 The proposal is an internal compiler artifact. It is persisted for approval and
 closure reproducibility, but it is not a second authoring surface.
 
+The live proposal is persisted beside the document it interprets, at
+`…/nxd-jobs/<workflow>/dp-blueprint.proposal.json`. Neither file names the
+other: `workflow` plus that convention recovers the pair, the same way the lock
+recovers the live document without storing a path to it. The approved copy is
+byte-snapshotted into the closure and is what the lock binds.
+
 ## Approval and locks
 
 Approval binds:

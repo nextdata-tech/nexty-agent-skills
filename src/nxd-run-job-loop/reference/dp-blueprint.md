@@ -125,6 +125,31 @@ edits, or delivery-profile changes require a new approval. The closure stores
 the byte-identical `dp-blueprint.approved.md` and the approved typed proposal JSON;
 it never points back to the live document.
 
+### Sharing the document
+
+What approval binds is normative in `docs/architecture/dp-spec-authoritative.md`
+§ "Approval and locks" and is not restated here. One consequence of it governs
+sharing, and is easy to miss.
+
+`dp-blueprint.md` alone carries the plan's **content** — every Section, Term,
+Model and Decision re-parses from the Markdown with no other file present. It
+does not carry **approval**, because `approved_proposal_hash` binds a typed
+snapshot the document does not contain. A regenerated proposal is a new reading
+of the same prose and will not match; `lock write` reports the mismatch as
+`v3:frontmatter.approved_proposal_hash`.
+
+So the unit of sharing is never the lone file:
+
+| handed over | plan | approval |
+|---|---|---|
+| `dp-blueprint.md` alone | yes | no — the recipient approves it themselves |
+| the job directory, document plus its proposal | yes | yes |
+| an exported closure (`export_data_product`) | yes | yes, hash-verified |
+
+This is deliberate rather than a gap to close. Approval binds an
+interpretation, not just prose; an approval that travelled with the words alone
+would let a different reading of the same document inherit it.
+
 ## Claude Desktop form contract
 
 The form layer should:
