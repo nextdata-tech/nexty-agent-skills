@@ -747,6 +747,56 @@ if physical and promised != physical:
     bad("struct.naming_invariant_promised_vs_physical",
         f"naming invariant: promised names {sorted(promised)} != "
         f"PHYSICAL_MODELS {sorted(physical)}", "transform/main.py")
+# The declared connector type comes from spec.py's service references, read from
+# the AST — every ast.Constant string node, and nothing else. NOT a regex over
+# the source text: a regex counts a service path mentioned inside a `#` comment
+# or a docstring, so a spec.py whose only occurrence of api-source is
+#
+#     # I could have used "/infra-profile/desktop-local#/services/api-source"
+#
+# would declare api-source and collect the transport waiver below from a line
+# Python never evaluates. The waiver is the permissive branch of this gate, so
+# granting it from a comment is granting it to anyone who can type one.
+#
+# Reading Constant nodes also makes quote style irrelevant — '...' and "..." are
+# the same node — which the regex got wrong in the other direction by only ever
+# matching double quotes.
+#
+# Labeled instances per reference/multi-source.md ("db-source-orders") are
+# matched by prefix, so a multi-source closure declares each of its types.
+CONNECTOR_KINDS = ("csv-source", "file-source", "db-source", "api-source")
+# Both documented spellings: the preferred relative path and the absolute
+# https://<host>/infra-profile/... form the platform also accepts.
+SERVICE_REF = re.compile(
+    r"^(?:https?://[^/]+)?/infra-profile/[^/]+#/services/(?P<svc>[A-Za-z0-9_-]+)$")
+
+def declared_connectors(src):
+    """Connector kinds spec.py actually declares, from string LITERALS only.
+
+    An unparseable spec.py declares nothing and warns — see below. It is not this
+    gate's job to report a syntax error; Phase A owns that finding, and it has
+    already run and exited by the time control reaches here.
+    """
+    try:
+        tree = ast.parse(src, "spec.py")
+    except SyntaxError:
+        return set(), False
+    kinds, saw_ref = set(), False
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        m = SERVICE_REF.match(node.value.strip())
+        if not m:
+            continue
+        saw_ref = True
+        svc = m.group("svc")
+        for kind in CONNECTOR_KINDS:
+            if svc == kind or svc.startswith(kind + "-"):
+                kinds.add(kind)
+    return kinds, saw_ref
+
+declared_sources, saw_service_ref = declared_connectors(spec_src)
+
 if "BASE_MODELS" in consts:
     # data/ is NOT universal. A csv-source or file-source closure exports its
     # inputs to data/ and the BASE_MODELS-vs-directories comparison is the
@@ -765,7 +815,35 @@ if "BASE_MODELS" in consts:
     # not enumerated above.
     if Path("data").is_dir():
         dirs = {d.name for d in Path("data").iterdir() if d.is_dir()}
-        if set(consts["BASE_MODELS"]) != dirs:
+        base = set(consts["BASE_MODELS"])
+        # EQUALITY is the invariant only when every base model is EXPORTED to
+        # data/. That is true of a csv-source or file-source closure and false
+        # of an api-source or db-source one, whose base models are fetched over
+        # the network and correctly have no directory. Such a closure may still
+        # carry data/ for reference data it authored itself — nxd_decisions, a
+        # rubric, fx rates — which reference/api-source.md § "Landed reference
+        # data in an API closure" tells the author to write. Landing
+        # nxd_decisions is required of every closure that records a ruling, so
+        # equality here fired on EVERY correct api-source closure, and a rule
+        # that fires on every correct closure gets worked around rather than
+        # obeyed — the same reasoning the transport waiver below is built on.
+        #
+        # For those connectors the invariant is CONTAINMENT: a data/ directory
+        # with no matching base model is still a finding (it lands nothing), but
+        # a base model with no directory is normal. An unreadable declaration
+        # takes the containment branch for Phase E's reason — it is not evidence
+        # of a non-network closure — and a mixed closure declaring both families
+        # takes it too, because some of its base models really are fetched.
+        fetched = bool(declared_sources & {"api-source", "db-source"}) \
+            or not saw_service_ref
+        if fetched:
+            orphans = dirs - base
+            if orphans:
+                bad("struct.base_models_vs_data_dirs",
+                    f"data/ directories {sorted(orphans)} have no matching "
+                    f"BASE_MODELS entry {sorted(base)} — a directory that names "
+                    f"no base model lands nothing", "transform/main.py")
+        elif base != dirs:
             bad("struct.base_models_vs_data_dirs",
                 f"BASE_MODELS {sorted(consts['BASE_MODELS'])} != data/ "
                 f"directories {sorted(dirs)}", "transform/main.py")
@@ -816,55 +894,9 @@ eerrors = []
 def eerr(code, msg, at="transform/main.py"):
     eerrors.append((code, msg, at))
 
-# The declared connector type comes from spec.py's service references, read from
-# the AST — every ast.Constant string node, and nothing else. NOT a regex over
-# the source text: a regex counts a service path mentioned inside a `#` comment
-# or a docstring, so a spec.py whose only occurrence of api-source is
-#
-#     # I could have used "/infra-profile/desktop-local#/services/api-source"
-#
-# would declare api-source and collect the transport waiver below from a line
-# Python never evaluates. The waiver is the permissive branch of this gate, so
-# granting it from a comment is granting it to anyone who can type one.
-#
-# Reading Constant nodes also makes quote style irrelevant — '...' and "..." are
-# the same node — which the regex got wrong in the other direction by only ever
-# matching double quotes.
-#
-# Labeled instances per reference/multi-source.md ("db-source-orders") are
-# matched by prefix, so a multi-source closure declares each of its types.
-CONNECTOR_KINDS = ("csv-source", "file-source", "db-source", "api-source")
-# Both documented spellings: the preferred relative path and the absolute
-# https://<host>/infra-profile/... form the platform also accepts.
-SERVICE_REF = re.compile(
-    r"^(?:https?://[^/]+)?/infra-profile/[^/]+#/services/(?P<svc>[A-Za-z0-9_-]+)$")
-
-def declared_connectors(src):
-    """Connector kinds spec.py actually declares, from string LITERALS only.
-
-    An unparseable spec.py declares nothing and warns — see below. It is not this
-    gate's job to report a syntax error; Phase A owns that finding, and it has
-    already run and exited by the time control reaches here.
-    """
-    try:
-        tree = ast.parse(src, "spec.py")
-    except SyntaxError:
-        return set(), False
-    kinds, saw_ref = set(), False
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
-            continue
-        m = SERVICE_REF.match(node.value.strip())
-        if not m:
-            continue
-        saw_ref = True
-        svc = m.group("svc")
-        for kind in CONNECTOR_KINDS:
-            if svc == kind or svc.startswith(kind + "-"):
-                kinds.add(kind)
-    return kinds, saw_ref
-
-declared_sources, saw_service_ref = declared_connectors(spec_src)
+# The connector declaration is read once, above Phase A, because two gates
+# need it: Phase A's data/-directory comparison and the transport waiver
+# below. `declared_sources` and `saw_service_ref` are already bound.
 
 # A closure whose spec.py yields NO parseable service reference at all is a
 # different situation from one that declares a non-network service: the first is

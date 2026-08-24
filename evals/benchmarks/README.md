@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-24 | Phase A's data/ comparison respects the connector type instead of firing on every api-source closure | NO_EVAL | — | [`2026-08-24-phase-a-connector-aware-data-dirs`](entries/2026-08-24-phase-a-connector-aware-data-dirs.md) |
 | 2026-08-21 | nxd-generate-data-product: field-mapper contract drift against the installed harness | NO_EVAL | — | [`2026-08-21-field-mapper-contract-drift`](entries/2026-08-21-field-mapper-contract-drift.md) |
 | 2026-08-20 | NEX-887: terminal self-check and closure provenance | PASS | terminal-self-check-provenance | [`2026-08-20-nex-887-terminal-self-check-provenance`](entries/2026-08-20-nex-887-terminal-self-check-provenance.md) |
 | 2026-08-20 | the user-owned IR is named dp-blueprint.md; the whole artifact family follows | NO_EVAL | — | [`2026-08-20-dp-blueprint-rename`](entries/2026-08-20-dp-blueprint-rename.md) |

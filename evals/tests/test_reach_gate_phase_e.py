@@ -68,7 +68,22 @@ def _phase_e_source() -> str:
     """
     body = _script_body()
     block = body[body.index("eerrors = []"):body.index("=== PHASE-G-BEGIN ===")]
-    return block[:block.rindex("\n#")]
+    return _connector_block() + block[:block.rindex("\n#")]
+
+
+def _connector_block() -> str:
+    """The connector declaration Phase E reads, which now sits above Phase A.
+
+    `declared_connectors()` used to live inside Phase E's own block. Phase A's
+    data/-directory comparison needs the same answer — equality is its invariant
+    only for an exported connector — so the read was hoisted above Phase A and
+    both gates now share one declaration rather than two parsers that can drift.
+    It is still Phase E's input, so the slice has to carry it or every waiver
+    test fails on a NameError that says nothing about waivers.
+    """
+    body = _script_body()
+    anchor = "declared_sources, saw_service_ref = declared_connectors(spec_src)"
+    return body[body.index("CONNECTOR_KINDS = ("):body.index(anchor)] + anchor + "\n"
 
 
 def _run_phase_e(
