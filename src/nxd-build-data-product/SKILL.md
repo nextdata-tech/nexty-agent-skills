@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.38.5
+  version: 0.38.6
 ---
 
 # Nextdata OS data product builder

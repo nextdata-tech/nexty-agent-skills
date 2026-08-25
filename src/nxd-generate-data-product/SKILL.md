@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.38.5
+  version: 0.38.6
 ---
 
 # nxd-generate-data-product skill
@@ -166,7 +166,7 @@ is not part of the build. Asking technical delivery questions is allowed and
 **does not satisfy this gate**; a delivery answer is not policy approval, and
 your own recommended defaults are not a reason to proceed.
 
-**The read-back artifact is `dp-blueprint.md`**, validated with
+**Where the answer goes is fixed too**: a resolved threshold, band or scale level is a landed model declared in the plan's `Models` (see **nxd-run-job-loop**'s `reference/dp-blueprint.md` § "Procedures are landed, not described"), never a literal this skill supplies later. **The read-back artifact is `dp-blueprint.md`**, validated with
 `"$JOB_HELPER_DIR/scripts/validate_dp_spec.py"`, which finds those gap classes deterministically.
 It must ENUMERATE every gate with its UNKNOWN handling, every criterion weight,
 **every anchor you propose for an incomplete scale**, the score aggregation, the
