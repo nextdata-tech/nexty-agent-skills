@@ -4,10 +4,10 @@
 
 - Scope
 - The `RESTAPIConfig` / `rest_api_resources` shape
-- Paginator `type` values
-- Flatten fetched rows before they reach the port
+  - Paginator `type` values
   - A POST body is scanned for dlt expressions — escape every literal brace
   - Paginating a GraphQL connection
+  - Flatten fetched rows before they reach the port
 - Credential handling — read this before shipping
 - Custom request headers
 - Naming
