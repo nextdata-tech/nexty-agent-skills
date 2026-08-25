@@ -72,6 +72,12 @@ The document has exactly these top-level headings, in this order:
 10. **Open Questions** — unresolved questions, their target, and whether they
     block approval or materialization.
 
+There is deliberately no user-authored `Delivery` section: local DPs currently
+produce a DuckDB-backed semantic-query result. There is no user-authored
+`Contracts` section: executable contracts are compiled internally from Input
+expectations and Output promises. A request for unsupported delivery is an
+Open Question, not a user-selectable transport setting.
+
 ### Procedures are landed, not described
 
 Prose states the intent of a procedure; **rows decide the result**. When
@@ -95,12 +101,6 @@ built product and travels with this document to anyone who receives it.
 Prose anchors remain useful and are not replaced — they explain *why* a band is
 where it is, which rows cannot. They simply do not decide anything.
 
-There is deliberately no user-authored `Delivery` section: local DPs currently
-produce a DuckDB-backed semantic-query result. There is no user-authored
-`Contracts` section: executable contracts are compiled internally from Input
-expectations and Output promises. A request for unsupported delivery is an
-Open Question, not a user-selectable transport setting.
-
 ## Terms
 
 Terms are inline. A term may use a simple `###` heading and natural prose:
@@ -113,6 +113,13 @@ Terms are inline. A term may use a simple `###` heading and natural prose:
 A customer is the person or organization responsible for an order.
 Also known as an account holder. Examples include a company buying a plan.
 ```
+
+The extraction layer derives a stable local id and NXD-compatible metadata:
+`name`, `definition`, `synonyms`, `related_terms`, `examples`, `term_values`,
+`priority`, and an NXD glossary string-to-string `tags` map. `related_terms` must resolve to another
+term in this document. External glossary DPs, URLs, and implicit external
+definitions are not supported. Omitted priority uses NXD's P3 default and is
+disclosed in the echo-back.
 
 ### A Term relative to the clock must name its anchor
 
@@ -127,13 +134,6 @@ other rulings. The instant is itself a ruling: a landed fetch timestamp, the
 latest event time in the source, or an explicit as-of date all give different
 answers for the same rows, and a reader comparing two builds needs to know which
 one produced the number.
-
-The extraction layer derives a stable local id and NXD-compatible metadata:
-`name`, `definition`, `synonyms`, `related_terms`, `examples`, `term_values`,
-`priority`, and an NXD glossary string-to-string `tags` map. `related_terms` must resolve to another
-term in this document. External glossary DPs, URLs, and implicit external
-definitions are not supported. Omitted priority uses NXD's P3 default and is
-disclosed in the echo-back.
 
 ## Interpretation and approval
 

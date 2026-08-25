@@ -81,3 +81,25 @@ def test_the_policy_gate_points_at_where_the_answer_goes():
         "the generator's policy gate must point at the blueprint rule; the ask "
         "and the destination belong together"
     )
+
+
+def test_new_subsections_are_section_terminal():
+    """A `###` mid-section orphans the `##` content that follows it.
+
+    The paragraphs after these blocks are general commentary about their parent
+    section — what `Sections` deliberately omits, what the extraction layer
+    derives from `Terms` — and a subsection placed above them makes them render
+    as its own content. The doc's existing `### Sharing the document` is
+    section-terminal for the same reason.
+    """
+    t = _blueprint()
+    assert t.index("There is deliberately no user-authored `Delivery` section") \
+        < t.index("### Procedures are landed, not described"), (
+        "the Delivery/Contracts commentary belongs to ## Sections, so the new "
+        "subsection must follow it"
+    )
+    assert t.index("The extraction layer derives a stable local id") \
+        < t.index("### A Term relative to the clock must name its anchor"), (
+        "the extraction-layer paragraph belongs to ## Terms, so the new "
+        "subsection must follow it"
+    )
