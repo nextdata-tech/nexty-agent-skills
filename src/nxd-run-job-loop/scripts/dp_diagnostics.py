@@ -666,7 +666,14 @@ _register(
     stage="s1_structure",
     severity="warning",
     owner="agent",
-    summary="A key field carries only primary_key() — not groupable, so no query can name the entity",
+    summary="A key field carries only primary_key() or only join() — not groupable, so no query can name the entity",
+)
+_register(
+    "struct.model_not_queryable",
+    stage="s1_structure",
+    severity="warning",
+    owner="agent",
+    summary="A promised model backs no semantic_view, so no metric reaches it and it cannot be selected",
 )
 
 # --- domain `reach.` — stage s1_structure (Phase E) --------------------------
@@ -784,6 +791,9 @@ _register_table(
          "a promised model produced no table"),
         ("runtime.row_count", "info", "agent", "none", False,
          "row count for one model in the Phase B scratch database"),
+        ("runtime.dry_run_not_runnable", "info", "agent", "none", False,
+         "the offline dry run could not execute because the closure reads a "
+         "credential from secrets; phase B reports nothing about the transform"),
     ),
 )
 _register_table(
@@ -822,6 +832,9 @@ _register_table(
          "the live IR cannot be canonicalized, so no hash comparison is possible"),
         ("closure.lock_status_not_approved", "error", "user", "confirm", False,
          "the snapshot was copied from a spec that was not approved"),
+        ("closure.contract_phase_unsupported", "error", "user", "confirm", False,
+         "approved pre_transform input expectations cannot execute: this "
+         "runtime runs them only for a declared CSV source-aligned input"),
         ("closure.build_record_missing", "error", "agent", "none", False,
          "build-record.json is missing"),
         ("closure.build_record_invalid", "error", "agent", "none", False,
