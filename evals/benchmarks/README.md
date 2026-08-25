@@ -8,6 +8,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
 | 2026-08-24 | nxd-spec-api.md documents registry-wide dimension names and join-covers-grain | NO_EVAL | — | [`2026-08-24-spec-api-compiler-rules`](entries/2026-08-24-spec-api-compiler-rules.md) |
+| 2026-08-24 | api-source closures flatten nested GraphQL selections before the port | NO_EVAL | — | [`2026-08-24-api-source-flatten-nested`](entries/2026-08-24-api-source-flatten-nested.md) |
 | 2026-08-21 | nxd-generate-data-product: field-mapper contract drift against the installed harness | NO_EVAL | — | [`2026-08-21-field-mapper-contract-drift`](entries/2026-08-21-field-mapper-contract-drift.md) |
 | 2026-08-20 | NEX-887: terminal self-check and closure provenance | PASS | terminal-self-check-provenance | [`2026-08-20-nex-887-terminal-self-check-provenance`](entries/2026-08-20-nex-887-terminal-self-check-provenance.md) |
 | 2026-08-20 | the user-owned IR is named dp-blueprint.md; the whole artifact family follows | NO_EVAL | — | [`2026-08-20-dp-blueprint-rename`](entries/2026-08-20-dp-blueprint-rename.md) |

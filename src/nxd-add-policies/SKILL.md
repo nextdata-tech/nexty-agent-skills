@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.38.4
+  version: 0.38.5
 ---
 
 # NXD Adding Policy

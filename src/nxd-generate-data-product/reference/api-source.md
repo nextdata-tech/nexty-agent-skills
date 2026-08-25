@@ -4,8 +4,10 @@
 
 - Scope
 - The `RESTAPIConfig` / `rest_api_resources` shape
+  - Paginator `type` values
   - A POST body is scanned for dlt expressions — escape every literal brace
   - Paginating a GraphQL connection
+  - Flatten fetched rows before they reach the port
 - Credential handling — read this before shipping
 - Custom request headers
 - Naming
@@ -115,7 +117,8 @@ _ISSUES_QUERY = """
 query PocketIssues($first: Int!, $after: String, $project: String!) {
   issues(first: $first, after: $after,
          filter: { project: { name: { eqIgnoreCase: $project } } }) {
-    nodes { id identifier title }
+    nodes { id identifier title state { name type } assignee { name }
+            labels { nodes { name } } }
     pageInfo { hasNextPage endCursor }
   }
 }
@@ -148,6 +151,69 @@ are mutually exclusive and passing both raises):
     "has_more_path": "data.issues.pageInfo.hasNextPage",
 },
 ```
+
+### Flatten fetched rows before they reach the port
+
+The query above selects `state { name type }` and `labels { nodes { name } }`,
+because a real GraphQL selection almost always does. dlt restructures both, in
+**two different ways, only one of which is caught for you**. Verified against the
+pinned `dlt==1.28.2`:
+
+```
+TABLES:  ['linear_issues_landed', 'linear_issues_landed__labels__nodes']
+COLUMNS: ['assignee__name', 'id', 'identifier', 'state__name', 'state__type', 'title']
+```
+
+**A nested LIST becomes a child table.** `labels.nodes` lands as
+`linear_issues_landed__labels__nodes`, which appears in
+`pipeline.default_schema.data_table_names()`, so the mandatory read-back assert
+fires and the build stops. Loud, and correct.
+
+**A nested DICT becomes `__`-joined columns.** `state` lands as `state__name` and
+`state__type`, `assignee` as `assignee__name`. No extra table is produced, so
+**the read-back assert cannot see this one**. A `models.py` declaring the obvious
+`state_name` binds to a column that does not exist: the product builds,
+publishes and serves, and that dimension is simply empty. It is the same silent
+class as a `primary_key()` with no `dimension()` — no error, no failed assert, no
+missing table, only questions that quietly have no answer.
+
+So flatten each fetched row into flat scalars before it reaches the port, with
+`.add_map()` on the resource, ahead of `.with_name(...)`:
+
+```python
+def _flatten_issue(node: dict[str, Any]) -> dict[str, Any]:
+    """Flat scalars only. Names here are what models.py must declare."""
+    state = node.get("state") or {}
+    assignee = node.get("assignee") or {}
+    labels = (node.get("labels") or {}).get("nodes") or []
+    return {
+        "id": node.get("id"),
+        "identifier": node.get("identifier"),
+        "title": node.get("title") or "",
+        "state_name": state.get("name") or "",
+        "state_type": state.get("type") or "",
+        "assignee_name": assignee.get("name") or "",
+        # A list must collapse to a scalar, or it lands as a child table.
+        "label_names": ",".join(sorted(l.get("name", "") for l in labels)),
+    }
+
+FLATTENERS = {"linear_issues_landed": _flatten_issue}
+```
+
+Then, in the reader loop:
+
+```python
+resource = resources[model]
+flatten = FLATTENERS.get(model)
+if flatten is not None:
+    resource = resource.add_map(flatten)
+readers.append(resource.with_name(table_name))
+```
+
+The read-back assert already covers the list case. The dict case needs a check
+of its own, so once the rows land confirm every column `models.py` declares
+actually exists on the landed table — a `__` anywhere in a landed column name
+means something nested got through.
 
 **A GraphQL error is an HTTP 200.** The body carries `{"errors": [...]}` with
 `data: null`, so dlt raises nothing on the transport and the resource simply
@@ -479,7 +545,14 @@ resources = {r.name: r for r in rest_api_resources(config)}
 readers = []
 for model in fetched_models:
     table_name = duckdb.model_tables[model]
-    readers.append(resources[model].with_name(table_name))
+    # Flatten nested selections first - see "Flatten fetched rows before they
+    # reach the port". A nested dict silently becomes `state__name`-style
+    # columns the read-back assert cannot catch.
+    resource = resources[model]
+    flatten = FLATTENERS.get(model)
+    if flatten is not None:
+        resource = resource.add_map(flatten)
+    readers.append(resource.with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
 ```
 
