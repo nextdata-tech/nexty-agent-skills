@@ -31,10 +31,13 @@ every row and looking like it worked. Its sibling, a `join(...)` with no
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 EVALS_DIR = Path(__file__).resolve().parents[1]
@@ -229,40 +232,105 @@ def test_join_composed_with_a_dimension_is_not_flagged(tmp_path):
 
 
 # --- runtime.dry_run_not_runnable, and the phases it must not eat -----------
+#
+# The decision itself is a named predicate so it can be tested WITHOUT importing
+# the closure's transform. CI installs neither `dlt` nor `nxd`, so a synthetic
+# transform fails at `runtime.import_failed` long before `ingest()` runs — which
+# is exactly why the reach- and grant-gate suites extract their blocks rather
+# than executing a closure end to end. These extraction tests therefore run
+# everywhere; the end-to-end pair below is an extra that runs only where the
+# runtime deps exist.
 
+_WAIVER = re.compile(r"(def dry_run_waived\(exc, network_declared\):[\s\S]*?\n    return [^\n]*\n)")
+
+
+def _waived(exc, network_declared):
+    src = SELF_CHECK.read_text()
+    match = _WAIVER.search(src)
+    assert match, "the dry_run_waived predicate was renamed or removed"
+    ns: dict = {}
+    exec(match.group(1), ns)
+    return ns["dry_run_waived"](exc, network_declared)
+
+
+def test_missing_secret_is_waived_only_for_a_network_connector():
+    assert _waived(KeyError("base_url"), True), (
+        "an api-source/db-source closure reads its connection from secrets, "
+        "which the offline harness cannot supply — a known limit, not a defect"
+    )
+    assert not _waived(KeyError("csv_source"), False), (
+        "a CSV closure declares no network source, so a missing secret is a "
+        "real fault and must still fail Phase B"
+    )
+
+
+def test_the_waiver_is_keyed_on_the_connector_not_the_exception_type():
+    assert not _waived(RuntimeError("base_url"), True), (
+        "only a missing secret is waived. A transform that genuinely raises "
+        "must still fail Phase B on a network closure too — otherwise the "
+        "waiver becomes a blanket amnesty for every api-source transform."
+    )
+    assert not _waived(ValueError("boom"), True)
+
+
+def test_phase_b_failure_no_longer_short_circuits_phase_c():
+    """The regression this whole gate exists for, asserted on the source.
+
+    Losing Phases C, D and E to an expected KeyError is how a missing contract
+    wiring and a hardcoded policy value reached a build. The read-back sweeps and
+    the completion-marker check must all be guarded by `dry_run_runnable`, and
+    the stage must close as `skipped` — never `passed`.
+    """
+    src = SELF_CHECK.read_text()
+    assert 'close_stage("s2_transform", "skipped"' in src, (
+        "a not-runnable dry run must not report the stage as passed"
+    )
+    guarded = src.count("if dry_run_runnable else ()")
+    assert guarded >= 3, (
+        f"every sweep over the dry-run database must be guarded; found {guarded}"
+    )
+    assert "if dry_run_runnable and not (run / \".transform-complete\").exists():" in src, (
+        "the completion marker cannot exist when the transform never ran"
+    )
+    # and the guard must sit BEFORE Phase C, or C is skipped anyway
+    assert src.index("dry_run_runnable = True") < src.index("Phase C ---")
+
+
+# `dlt` is the real discriminator, and `nxd` deliberately is not: self_check
+# installs stub `nxd` modules so a closure parses without the wheel, but nothing
+# stubs dlt — a synthetic transform importing it dies at runtime.import_failed
+# before `ingest()` is ever called. CI installs neither.
+_HAS_DLT = importlib.util.find_spec("dlt") is not None
+_needs_dlt = pytest.mark.skipif(
+    not _HAS_DLT, reason="dlt not installed; the transform cannot be imported"
+)
+
+
+@_needs_dlt
 def test_credentialed_dry_run_reports_not_runnable_and_reaches_phase_c(tmp_path):
     models = MODELS_HEAD + _model("orders", view=True)
     report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], API_SERVICE),
                   API_TRANSFORM, ("orders",))
     codes = _codes(report)
-    assert "runtime.dry_run_not_runnable" in codes, (
-        "an api-source closure reads its connection from secrets, which the "
-        "offline harness cannot supply — that is a known limit, not a defect"
-    )
+    assert "runtime.dry_run_not_runnable" in codes, codes
     assert "runtime.transform_raised" not in codes, (
         "the expected KeyError must not be reported as a transform fault"
     )
-    stage = report["diagnostics"]
-    unreached = [d for d in stage
+    unreached = [d for d in report["diagnostics"]
                  if d["code"] == "meta.stage_not_reached" and "s3_closure" in d["message"]]
     assert not unreached, (
-        "THE REGRESSION THIS TEST EXISTS FOR: Phase B being not-runnable must "
-        "not skip Phase C. Losing C/D/E to an expected KeyError is how a missing "
-        "contract wiring and a hardcoded policy value reached a build."
+        "Phase B being not-runnable must not skip Phase C"
     )
 
 
+@_needs_dlt
 def test_a_csv_closure_still_fails_on_a_real_key_error(tmp_path):
-    """The waiver is keyed on the connector, not on the exception type."""
     models = MODELS_HEAD + _model("orders", view=True)
     broken = CSV_TRANSFORM.replace('secrets["csv_source"]', 'secrets["nope"]')
     report = _run(tmp_path, models, _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
                   broken, ("orders",))
     codes = _codes(report)
-    assert "runtime.transform_raised" in codes, (
-        "a CSV closure declares no network source, so a missing secret is a "
-        "real fault and must still fail Phase B"
-    )
+    assert "runtime.transform_raised" in codes, codes
     assert "runtime.dry_run_not_runnable" not in codes
 
 

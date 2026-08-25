@@ -1661,6 +1661,21 @@ def berr(code, msg, at="", ev=None, tb=""):
         ev["traceback"] = tb
     diag("s2_transform", code, msg, path=cpath(at), evidence=ev)
 
+def dry_run_waived(exc, network_declared):
+    """Is this dry-run failure a KNOWN LIMIT rather than a closure defect?
+
+    A db-source/api-source closure reads its connection out of `secrets`, and
+    the offline harness has no credential to give it, so the first `secrets[...]`
+    raises KeyError before the transform does anything. That is expected, and
+    reference/api-source.md tells the author not to code around it.
+
+    It is waived ONLY on that pairing. A CSV closure declaring no network source
+    has no such excuse: a missing secret there is a real fault and must still
+    fail Phase B. Keyed on the connector, never on the exception type alone.
+    """
+    return isinstance(exc, KeyError) and bool(network_declared)
+
+
 def fail_b():
     say("\nPHASE B FAILED — transform dry-run (this EXECUTED: what it reports "
         "is what will happen):")
@@ -1890,7 +1905,7 @@ try:
     )
     ingest(duckdb=out, secrets=dry_run_secrets)
 except KeyError as exc:
-    if not network_declared:
+    if not dry_run_waived(exc, network_declared):
         berr("runtime.transform_raised",
              f"transform/main.py: KeyError: {exc}",
              "transform/main.py", tb=traceback.format_exc())

@@ -76,27 +76,41 @@ new one decides *whether the model can be reached at all*.
 
 ## Evidence
 
-`evals/tests/test_self_check_queryability_and_phase_gates.py` — nine tests, and
-six of them fail against the previous implementation:
+`evals/tests/test_self_check_queryability_and_phase_gates.py` — twelve tests,
+**eight of which fail against the previous implementation**:
 
 - `test_promised_model_backing_no_view_is_flagged`
 - `test_join_without_a_dimension_is_flagged`
-- `test_credentialed_dry_run_reports_not_runnable_and_reaches_phase_c`
+- `test_missing_secret_is_waived_only_for_a_network_connector`
+- `test_the_waiver_is_keyed_on_the_connector_not_the_exception_type`
+- `test_phase_b_failure_no_longer_short_circuits_phase_c`
 - `test_pre_transform_contracts_on_an_api_source_are_rejected`
 - `test_pre_transform_contracts_on_a_csv_source_are_fine`
 - `test_no_pre_transform_contracts_is_fine`
 
-The three that pass either way are negative controls asserting a code does NOT
-fire, which is the half that keeps these gates usable: a rule firing on every
-correct closure gets deleted rather than obeyed.
+Two of the remaining four are negative controls asserting a code does NOT fire,
+which is the half that keeps these gates usable: a rule firing on every correct
+closure gets deleted rather than obeyed. The other two run the whole script
+against a synthetic closure and are skipped where `dlt` is absent — CI installs
+neither `dlt` nor `nxd`, so a synthetic transform dies at
+`runtime.import_failed` before `ingest()` is ever called.
 
-`test_credentialed_dry_run_reports_not_runnable_and_reaches_phase_c` carries the
-regression the first gate exists for — it asserts no `meta.stage_not_reached` for
-`s3_closure`, so a future edit that lets Phase B swallow Phases C, D and E again
-fails here rather than degrading into a green run that checked less than it
-appears to.
+**That skip costs no coverage**, and arranging for it not to is the reason the
+dry-run decision is a named predicate (`dry_run_waived`) rather than an inline
+condition. The predicate and the guard placement are asserted by extraction, the
+same way `evals/tests/test_reach_gate_phase_e.py` and
+`evals/tests/test_grant_gate_phase_g.py` assert theirs, so all eight regression cases run in CI. `nxd` is deliberately not part
+of the skip condition: `self_check` installs stub `nxd` modules itself, so `dlt`
+is the real discriminator.
+
+`test_phase_b_failure_no_longer_short_circuits_phase_c` carries the regression
+the first gate exists for. It asserts the stage closes as `skipped` rather than
+`passed`, that every sweep over the dry-run database is guarded, and that the
+guard is established before Phase C — so a future edit that lets Phase B swallow
+Phases C, D and E fails here rather than degrading into a green run that checked
+less than it appears to.
 
 `evals/tests/test_dp_diagnostics_schema.py` and
-`evals/tests/test_self_check_diagnostic_vocab.py` carry the three new codes through
-`FROZEN_CODES` and the shared registry; both failed on the first run of this
-change, which is the drift guard working.
+`evals/tests/test_self_check_diagnostic_vocab.py` carry the three new codes
+through `FROZEN_CODES` and the shared registry; both failed on the first run of
+this change, which is the drift guard working.
