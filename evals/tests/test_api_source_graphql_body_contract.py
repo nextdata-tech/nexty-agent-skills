@@ -432,6 +432,7 @@ def test_pinned_dlt_really_splits_nested_lists_and_flattens_nested_dicts():
             yield {
                 "id": "u1", "identifier": "ENG-1", "title": "t",
                 "state": {"name": "Todo", "type": "unstarted"},
+                "assignee": {"name": "ada"},
                 "labels": {"nodes": [{"name": "bug"}, {"name": "p1"}]},
             }
 
@@ -470,6 +471,10 @@ def test_pinned_dlt_really_splits_nested_lists_and_flattens_nested_dicts():
     assert "state__name" in out["columns"] and "state__type" in out["columns"], (
         "a nested DICT must still flatten to __-joined columns — the silent "
         f"half of the hazard. columns: {out['columns']}"
+    )
+    assert "assignee__name" in out["columns"], (
+        "every column the doc's evidence block prints must be reproducible from "
+        f"the doc's own query, or the block is not verified. columns: {out['columns']}"
     )
     assert "state_name" not in out["columns"], (
         "if dlt produced the single-underscore name a models.py would declare, "

@@ -4,6 +4,8 @@
 
 - Scope
 - The `RESTAPIConfig` / `rest_api_resources` shape
+- Paginator `type` values
+- Flatten fetched rows before they reach the port
   - A POST body is scanned for dlt expressions — escape every literal brace
   - Paginating a GraphQL connection
 - Credential handling — read this before shipping
@@ -115,7 +117,8 @@ _ISSUES_QUERY = """
 query PocketIssues($first: Int!, $after: String, $project: String!) {
   issues(first: $first, after: $after,
          filter: { project: { name: { eqIgnoreCase: $project } } }) {
-    nodes { id identifier title state { name type } labels { nodes { name } } }
+    nodes { id identifier title state { name type } assignee { name }
+            labels { nodes { name } } }
     pageInfo { hasNextPage endCursor }
   }
 }
@@ -181,6 +184,7 @@ So flatten each fetched row into flat scalars before it reaches the port, with
 def _flatten_issue(node: dict[str, Any]) -> dict[str, Any]:
     """Flat scalars only. Names here are what models.py must declare."""
     state = node.get("state") or {}
+    assignee = node.get("assignee") or {}
     labels = (node.get("labels") or {}).get("nodes") or []
     return {
         "id": node.get("id"),
@@ -188,6 +192,7 @@ def _flatten_issue(node: dict[str, Any]) -> dict[str, Any]:
         "title": node.get("title") or "",
         "state_name": state.get("name") or "",
         "state_type": state.get("type") or "",
+        "assignee_name": assignee.get("name") or "",
         # A list must collapse to a scalar, or it lands as a child table.
         "label_names": ",".join(sorted(l.get("name", "") for l in labels)),
     }
@@ -205,11 +210,10 @@ if flatten is not None:
 readers.append(resource.with_name(table_name))
 ```
 
-Two checks worth running once the rows land, because the assert only covers the
-first failure: confirm `data_table_names()` holds exactly the promised models,
-and confirm every column `models.py` declares actually exists on the landed
-table. A `__` anywhere in a landed column name means something nested got
-through.
+The read-back assert already covers the list case. The dict case needs a check
+of its own, so once the rows land confirm every column `models.py` declares
+actually exists on the landed table — a `__` anywhere in a landed column name
+means something nested got through.
 
 **A GraphQL error is an HTTP 200.** The body carries `{"errors": [...]}` with
 `data: null`, so dlt raises nothing on the transport and the resource simply
