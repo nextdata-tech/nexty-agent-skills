@@ -706,6 +706,13 @@ def _read_source_rows(source_root: Path, model: str) -> list[dict[str, str]]:
 `sorted(...)` is not cosmetic: glob order is filesystem-dependent, and an
 unsorted read makes a derivation whose output depends on file arrival order.
 
+**This applies only where there IS an export to re-read.** On an `api-source` or
+`db-source` closure the fetched models have no `data/` directory — there is no
+second copy of what the API returned — so a derived model computed from fetched
+rows needs them captured as they stream past, and lands in its own run. That
+pattern, and why the two obvious alternatives are wrong, is in
+[api-source.md](api-source.md) § "Deriving from a fetched source".
+
 `csv.DictReader` yields strings for every column. Convert **measures, not
 identifiers**: `Decimal(row["amount"])` (`from decimal import Decimal`) — while
 an ID stays the string `csv.DictReader` gave you unless you have checked that

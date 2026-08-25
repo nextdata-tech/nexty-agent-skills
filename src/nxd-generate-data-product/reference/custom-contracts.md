@@ -173,15 +173,68 @@ Each script has exactly one `@data_product.on_verify()` verifier and ends with
 has one small `verify` function for its named custom contract; make its
 diagnostics name the contract, model, and observed/expected values.
 
-Use concrete runtime contexts. A CSV expectation takes `LocalFileInput` from
-`nxd.core.context`, reads only `source.path_for("model")` with `csv.DictReader`,
-and returns `VerifyResult(VerifyResultEnum.FAILED, context)` or
-`VerifyResult(VerifyResultEnum.PASS, context)`. An output promise takes
-`DuckDbOutput`, resolves its table through `output.full_table_name("model")`,
-opens `output.path` read-only with `duckdb`, and returns the same result type.
+Use concrete runtime contexts. **Every context and result type comes from the
+one module** — there is no `nxd.core.contract`, and importing it is the natural
+guess that fails at verification time, after the transform has already run:
+
+```python
+from nxd import data_product
+from nxd.core.context import (
+    DuckDbOutput,        # output promise context
+    LocalFileInput,      # CSV input expectation context
+    VerifyResult,
+    VerifyResultEnum,
+)
+```
+
+A CSV expectation takes `LocalFileInput`, reads only `source.path_for("model")`
+with `csv.DictReader`. An output promise takes `DuckDbOutput`, resolves its table
+through `output.full_table_name("model")`, and opens `output.path` read-only with
+`duckdb`. Resolve **every** table that way, including a second one the check
+joins to — never spell a table name as a literal.
+
+`VerifyResult`'s second argument is `context: Optional[dict[str, Any]]` — a
+**dict, not a message string**. A string is accepted by Python and reaches a
+reviewer as an unreadable blob, so make it structured and make it name the
+observed-vs-expected values:
+
+```python
+    if rows:
+        return VerifyResult(
+            VerifyResultEnum.FAILED,
+            {
+                "contract": "order-total-reconciles",
+                "model": "orders",
+                "guarantee": "output line totals reconcile to order totals",
+                "observed_offending_rows": len(rows),
+                "expected_offending_rows": 0,
+                "examples": repr(rows[:3]),
+            },
+        )
+    return VerifyResult(
+        VerifyResultEnum.PASS,
+        {"contract": "order-total-reconciles", "model": "orders",
+         "observed_offending_rows": 0},
+    )
+```
+
 The current enum values are `PASS`, `WARNING`, and `FAILED`; use `FAILED` for a
 broken user guarantee. A bare `pass`, `...`, or unconditional PASS is a
 decorative verifier and fails preflight.
+
+**Write the predicate against the landed types, not the authored ones.** A
+column whose CSV carries an empty cell lands as `VARCHAR`, so `TRIM()` on a
+column dlt typed as `TIMESTAMP`, or `upper_bound + 1` on one it typed as
+`VARCHAR`, fails with a DuckDB binder error at verification time rather than a
+failed promise. Cast the reference model's numeric columns in the transform (see
+[derived-models.md](derived-models.md) § "Reading the sources yourself") so the
+landed type matches what `models.py` declares, and the verifier's SQL can be
+written plainly.
+
+**Prove the predicate is non-vacuous before shipping it.** Run it against the
+landed rows, then against a deliberately broken copy, and confirm it returns
+zero rows and then non-zero. A contract that cannot fail is worse than no
+contract: it reports PASS forever and reads as evidence.
 
 Verifiers only inspect their supplied input/output context and return the
 runtime's supported pass/fail result. They never mutate tables, repair rows,
@@ -208,6 +261,8 @@ The closure self-check must fail when any custom-contract invariant is broken:
 - `infra-profile.yaml` omits a service `spec.py` references, binds one to the
   wrong driver, or is not named `desktop-local`;
 - the verifier script path escapes the closure; or
+- a contract script imports `nxd.core.contract`, which does not exist — the
+  contexts and result types are in `nxd.core.context`; or
 - a contract script carries a literal secret.
 
 **What it does NOT check**, so the gap is stated rather than assumed: it does

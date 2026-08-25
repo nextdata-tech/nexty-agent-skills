@@ -5,8 +5,10 @@
 - [Authoring contract](#authoring-contract)
 - [Frontmatter](#frontmatter)
 - [Sections](#sections)
+- [Where an Input expectation can actually run](#where-an-input-expectation-can-actually-run)
 - [Terms](#terms)
 - [Interpretation and approval](#interpretation-and-approval)
+- [Porting a blueprint to a new workflow](#porting-a-blueprint-to-a-new-workflow)
 - [Claude Desktop form contract](#claude-desktop-form-contract)
 - [Worked example](#worked-example)
 
@@ -51,8 +53,15 @@ The required lifecycle fields are `dp_spec_version`, `name`, `workflow`, and
 `approved_proposal_hash`. When an approved document is edited, the resulting
 `status: proposed` document retains `prior_approved_proposal_hash`; the next
 approval must supply that prior typed snapshot so locked Decisions cannot be
-silently replaced. Lifecycle fields are excluded from the source semantic
-hash.
+silently replaced.
+
+`status`, `approved_content_hash`, `approved_proposal_hash` and
+`prior_approved_proposal_hash` are excluded from the source semantic hash.
+`dp_spec_version`, `name` and `workflow` **are** hashed: identity is part of the
+plan, not metadata about it. Retargeting a blueprint to a new `workflow` id
+therefore changes the content hash by design and requires a fresh approval —
+that is the expected porting path, not a defect. See
+[Porting a blueprint to a new workflow](#porting-a-blueprint-to-a-new-workflow).
 
 ## Sections
 
@@ -71,6 +80,30 @@ The document has exactly these top-level headings, in this order:
    locked after approval.
 10. **Open Questions** — unresolved questions, their target, and whether they
     block approval or materialization.
+
+### Where an Input expectation can actually run
+
+An Input's `#### Expectations` compile to **`pre_transform`** executable
+contracts, and this runtime executes a custom input expectation **only** for a
+declared CSV source-aligned input bound to the `csv-source` service. A product
+whose source is a REST API or a database declares no such input — there is
+nowhere to attach one — so those expectations cannot execute at that phase.
+
+State the guarantee under the corresponding **Output's `#### Promises`**
+instead, against the landed relation. Same rule, same columns, verified after
+the transform rather than before it. On this runtime the landed relations *are*
+DuckDB tables, so that is where they are checkable at all.
+
+The cost is worth naming in a Decision, because it is real and one-directional:
+a violation is caught after the rows have landed rather than before, so a bad
+fetch produces a failed promise rather than a refused ingest. What it does not
+cost is the guarantee — the same predicate over the same columns still runs, and
+still fails the build.
+
+Authoring an API- or database-backed Input with executable expectations is not
+caught by the prose validators; it surfaces as
+`closure.contract_phase_unsupported` once a closure exists. Getting the phase
+right here is much cheaper than discovering it there.
 
 There is deliberately no user-authored `Delivery` section: local DPs currently
 produce a DuckDB-backed semantic-query result. There is no user-authored
@@ -186,6 +219,33 @@ So the unit of sharing is never the lone file:
 This is deliberate rather than a gap to close. Approval binds an
 interpretation, not just prose; an approval that travelled with the words alone
 would let a different reading of the same document inherit it.
+
+### Porting a blueprint to a new workflow
+
+Reproducing a plan as a **new** data product — a second user rebuilding it, or
+the same user standing up a parallel copy — is a supported path, and it starts a
+fresh approval chain rather than inheriting one:
+
+1. Copy `dp-blueprint.md` to the new job directory.
+2. Change `name` and `workflow` to the new identity. Both are hashed, so this
+   invalidates the old `approved_content_hash` — expected.
+3. Set `status: proposed` and **delete** `approved_content_hash`,
+   `approved_proposal_hash` **and** `prior_approved_proposal_hash`.
+4. Re-extract the typed proposal, show the echo-back, and take a fresh approval.
+
+Step 3's last deletion is the one that is easy to get wrong.
+`prior_approved_proposal_hash` exists only for an **in-place** re-approval, where
+the prior typed snapshot is actually on hand to supply. Carrying it into a port
+names evidence the new holder does not have, and the next approval fails with
+`cannot re-approve an approved v3 document without prior locked proposal
+evidence`.
+
+What must survive the copy is the **logic**: every Term, Model, Transform step,
+threshold, band, precedence rule and Decision. What is expected NOT to survive is
+**identity and approval** — the workflow id, the hashes, and any credential,
+which never lived in this document anyway. A port that has to re-derive a
+threshold or re-ask a settled ruling is an encapsulation defect in the blueprint;
+a port that has to be re-approved under a new id is the system working.
 
 ## Claude Desktop form contract
 
