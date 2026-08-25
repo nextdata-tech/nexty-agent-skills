@@ -79,15 +79,52 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
   counts, which is what makes this one expensive to find: there is no error, no
   failed assert, and no missing table — only every entity-level question
   quietly having no answerable form. The same applies to a `join()` column a
-  consumer needs to group by.
+  consumer needs to group by — and give that companion dimension a
+  model-tagged name, per `dimension` below: naming it after the key it
+  points at duplicates the dimension the target already declares, and a
+  join makes the two models connected by construction.
 - **`dimension(name=None, pii=False, label=None, description="")`** — a
   groupable/filterable column. `label` attaches a companion display column
   (`label_column` in the compiled blob).
+
+  **`name` is unique across the join-connected registry, not per model.** Two
+  models that a `join()` relates may not both declare a dimension called
+  `created_at`, and the compiler refuses the whole spec:
+
+  ```
+  error: Duplicate dimension name 'created_at', declared 2 times across models
+  'm1', 'm2'. Every dimension must have a unique name within the registry —
+  rename all but one of those declarations.
+  ```
+
+  Unconnected models do not collide, which is what makes the timing surprising:
+  the same two columns compile fine until the join that relates them is added,
+  so the error arrives with a change that touched neither column. Tag every
+  dimension with its model — `dimension(name="issue_created_at", ...)` — rather
+  than renaming only the collisions already reported. Piecemeal renaming is not
+  closed under itself: a tag invented for one collision can land on a real
+  column of another model and produce a fresh one (`status` renamed to
+  `judgment_status` colliding with an existing `judgment_status`).
 - **`join(to, to_column=None, cardinality=None, to_data_product=None)`** —
   `to` is the target model name (positional or keyword). `cardinality`
   defaults to `Cardinality.MANY_TO_ONE` — nearly always leave it unset.
   `to_data_product` is for a cross-DP join edge (mesh only); leave `None` on
   desktop.
+
+  **`to_column` must cover the target model's `primary_key()`**, not merely a
+  column whose values happen to be unique:
+
+  ```
+  error: join declares MANY_TO_ONE onto 'linear_issues_landed', but key id does
+  not cover that model's grain identifier; missing key columns: identifier. A
+  lookup row is not uniquely identified, so measures would be double-counted.
+  ```
+
+  The usual trap is a landed source key sitting beside the declared one — an
+  API's opaque `id` next to the human-readable `identifier` the model actually
+  keys on. Join on whichever column the target declares as its key, or declare
+  the other one as the key; a composite key needs every one of its columns.
+
 - **`metric(agg, of=None, name=None, description="", boolean=False, extra_dimensions=(), column=None)`**
   — `agg` is an `Agg` value. `of` is a `FieldRef` (from `<model>.field("<col>")`)
   pointing at the base column being aggregated; mutually exclusive with the
@@ -101,6 +138,13 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
 - **`metric_field(dtype, metric_role, description=None, name="")`** — the
   `semantic_view` counterpart to `field()`. `metric_role` must be a
   `metric()` result; anything else raises.
+
+**Neither rule is visible offline.** `self_check.py`'s structural phase parses
+`models.py` against the surface described here and passes on both; they are the
+compiler's own validation, so `check_data_product` is what reports them, as
+`structure/spec_compile_failed`. Note also that the compiler prints
+`deployment-spec.yaml: OK` / `manifest.yaml: OK` *after* the error line and
+still exits non-zero — read the `error:` line, not the tail.
 
 A field may also be written as a bare `dtype` (no role) or a
 `(dtype, *rest)` tuple inside `.schema({...})` — see `SemanticModelSpec`
@@ -232,7 +276,10 @@ product surface gains a first-class supported aggregation.
 ## Version pin and drift
 
 Verified against the installed `nxd` package at **`v0.41.139`**
-(`nxd/version.py`). Treat this the same way the closure pins
+(`nxd/version.py`). The two compiler rules above — registry-wide dimension
+names and join-covers-grain — were additionally reproduced against `0.41.172`
+by compiling closures that violate each; the rest of this file has not been
+re-verified at that version. Treat this the same way the closure pins
 `dlt[duckdb]==1.28.2` — if the installed version differs, this file may be
 stale; re-derive only the specific signature that produces an unexpected
 error, not the whole surface.
