@@ -79,7 +79,10 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
   counts, which is what makes this one expensive to find: there is no error, no
   failed assert, and no missing table — only every entity-level question
   quietly having no answerable form. The same applies to a `join()` column a
-  consumer needs to group by.
+  consumer needs to group by — and give that companion dimension a
+  model-tagged name, per `dimension` below: naming it after the key it
+  points at duplicates the dimension the target already declares, and a
+  join makes the two models connected by construction.
 - **`dimension(name=None, pii=False, label=None, description="")`** — a
   groupable/filterable column. `label` attaches a companion display column
   (`label_column` in the compiled blob).
@@ -122,12 +125,6 @@ which return an `AttributeSpec` (a full column) already carrying the role blob.
   keys on. Join on whichever column the target declares as its key, or declare
   the other one as the key; a composite key needs every one of its columns.
 
-**Neither rule is visible offline.** `self_check.py`'s structural phase parses
-`models.py` against the surface described here and passes on both; they are the
-compiler's own validation, so `check_data_product` is what reports them, as
-`structure/spec_compile_failed`. Note also that the compiler prints
-`deployment-spec.yaml: OK` / `manifest.yaml: OK` *after* the error line and
-still exits non-zero — read the `error:` line, not the tail.
 - **`metric(agg, of=None, name=None, description="", boolean=False, extra_dimensions=(), column=None)`**
   — `agg` is an `Agg` value. `of` is a `FieldRef` (from `<model>.field("<col>")`)
   pointing at the base column being aggregated; mutually exclusive with the
@@ -141,6 +138,13 @@ still exits non-zero — read the `error:` line, not the tail.
 - **`metric_field(dtype, metric_role, description=None, name="")`** — the
   `semantic_view` counterpart to `field()`. `metric_role` must be a
   `metric()` result; anything else raises.
+
+**Neither rule is visible offline.** `self_check.py`'s structural phase parses
+`models.py` against the surface described here and passes on both; they are the
+compiler's own validation, so `check_data_product` is what reports them, as
+`structure/spec_compile_failed`. Note also that the compiler prints
+`deployment-spec.yaml: OK` / `manifest.yaml: OK` *after* the error line and
+still exits non-zero — read the `error:` line, not the tail.
 
 A field may also be written as a bare `dtype` (no role) or a
 `(dtype, *rest)` tuple inside `.schema({...})` — see `SemanticModelSpec`
