@@ -41,12 +41,13 @@ _codes("error", "agent",
        "struct.naming_invariant_promised_vs_physical",
        "struct.base_models_vs_data_dirs")
 _codes("warning", "agent", "struct.key_not_groupable")
+_codes("warning", "agent", "struct.model_not_queryable")
 _codes("info", "agent", "struct.unverified")
 _codes("error", "agent",
        "runtime.import_failed", "runtime.transform_raised",
        "runtime.assert_failed", "runtime.base_models_mismatch",
        "runtime.transform_incomplete", "runtime.model_table_missing")
-_codes("info", "agent", "runtime.row_count")
+_codes("info", "agent", "runtime.row_count", "runtime.dry_run_not_runnable")
 _codes("error", "agent",
        "closure.spec_snapshot_missing", "closure.lock_missing",
        "closure.lock_unparseable", "closure.lock_snapshot_byte_mismatch",
@@ -70,7 +71,8 @@ _codes("error", "agent",
        "closure.model_path_unresolved")
 # The one closure.* code the AGENT cannot fix: a snapshot taken from a spec the
 # user never approved is a governance fault, and only the user can approve.
-_codes("error", "user", "closure.lock_status_not_approved")
+_codes("error", "user", "closure.lock_status_not_approved",
+       "closure.contract_phase_unsupported")
 _codes("info", "agent", "closure.canonical_hash_deferred",
        "closure.legacy_artifact_superseded")
 _codes("error", "agent",
@@ -487,9 +489,10 @@ def walk_roles(node, where, *, in_view):
                     f"member (e.g. Agg.SUM), not a bare value", where)
 
 def parse_models(src, path):
-    """-> ({var: name}, {var: kind}, {name: joins}, {name: has_pk})"""
+    """-> ({var: name}, {var: kind}, {name: joins}, {name: has_pk},
+           {view_name: base_var})"""
     tree = ast.parse(src, path)
-    var_name, var_kind, joins, has_pk = {}, {}, {}, {}
+    var_name, var_kind, joins, has_pk, view_bases = {}, {}, {}, {}, {}
     for imp in ast.walk(tree):
         if isinstance(imp, ast.ImportFrom) and (imp.module or "").startswith("nxd"):
             head = imp.module.split(".")
@@ -524,6 +527,16 @@ def parse_models(src, path):
                 f"literal, got {shown}", path)
             continue
         var_name[target.id], var_kind[target.id] = model, kind
+        if kind == "semantic_view":
+            # semantic_view("<name>", <base>) - the base is the second positional
+            # in every documented form. Recorded as the VARIABLE id and resolved
+            # to a model name after the file is parsed, since a view may be
+            # defined above its base.
+            base_arg = (root.args[1] if len(root.args) > 1 else
+                        next((k.value for k in root.keywords
+                              if k.arg in ("model", "base")), None))
+            if isinstance(base_arg, ast.Name):
+                view_bases[model] = base_arg.id
         joins.setdefault(model, []); has_pk[model] = False
         # Either authoring form counts: the chained .description(...) is the
         # verified one, but the description= constructor kwarg is pinned in
@@ -588,6 +601,22 @@ def parse_models(src, path):
                          f"{where}: primary_key() with no dimension(...) on the "
                          f"same field — the key is not groupable, so no query "
                          f"can return which entity a row is about", where)
+                if not in_view and "join" in field_roles \
+                        and "dimension" not in field_roles \
+                        and "primary_key" not in field_roles:
+                    # Exactly the same failure wearing a different role. A column
+                    # carrying ONLY join(...) is a traversal edge and nothing
+                    # else: it is absent from describe_models, so a caller cannot
+                    # filter or group this model by the entity it points at. The
+                    # rows are reachable only through the OTHER model's metric,
+                    # where a filter scopes that model's aggregate rather than
+                    # this model's spine — which returns every row and looks like
+                    # it worked.
+                    warn("struct.key_not_groupable",
+                         f"{where}: join(...) with no dimension(...) on the same "
+                         f"field — the foreign key is not groupable, so this "
+                         f"model cannot be filtered or grouped by the entity it "
+                         f"joins to", where)
                 for sub in ast.walk(v):
                     if call_name(sub) == "primary_key":
                         has_pk[model] = True
@@ -597,7 +626,7 @@ def parse_models(src, path):
                                      if k.arg == "to"), None))
                         if tgt:
                             joins[model].append((tgt, where))
-    return var_name, var_kind, joins, has_pk
+    return var_name, var_kind, joins, has_pk, view_bases
 
 def parse_spec(src, path, var_name, var_kind):
     """-> set of promised model names"""
@@ -721,7 +750,7 @@ except (OSError, UnicodeDecodeError) as exc:
           file=sys.stderr)
     finish(2)
 
-var_name, var_kind, joins, has_pk = parse_models(models_src, "models.py")
+var_name, var_kind, joins, has_pk, view_bases = parse_models(models_src, "models.py")
 promised, modelled = parse_spec(spec_src, "spec.py", var_name, var_kind)
 
 base_names = {n for v, n in var_name.items() if var_kind[v] == "semantic_model"}
@@ -731,6 +760,23 @@ for model, edges in joins.items():
             bad("struct.join_target_missing",
                 f"{where}: join(to=\"{tgt}\") — no semantic_model of that name "
                 f"in models.py", where)
+# Which base models a metric can actually reach. run_semantic_query REQUIRES at
+# least one measure, so a promised model that backs no semantic_view is landed
+# but unreachable: its dimensions never appear in a selection, and the only way
+# to touch its rows is through ANOTHER model's metric across a join - where a
+# filter scopes that model's aggregate rather than this model's spine, quietly
+# returning every row. A bare COUNT view is enough to fix it.
+_metric_backed = {var_name[v] for v in view_bases.values() if v in var_name}
+for model in sorted(promised & base_names):
+    if model not in _metric_backed:
+        warn("struct.model_not_queryable",
+             f"models.py: semantic_model('{model}') is promised but backs no "
+             f"semantic_view, so no metric reaches it — run_semantic_query "
+             f"requires a measure, making this model unqueryable however well "
+             f"its dimensions are described. Add a semantic_view with at least "
+             f"one metric (a COUNT of its key will do) if any Question or "
+             f"Output reads it.",
+             f"models.py:{model}")
 for model in base_names:
     if not has_pk[model]:
         bad("struct.no_primary_key",
@@ -1615,6 +1661,21 @@ def berr(code, msg, at="", ev=None, tb=""):
         ev["traceback"] = tb
     diag("s2_transform", code, msg, path=cpath(at), evidence=ev)
 
+def dry_run_waived(exc, network_declared):
+    """Is this dry-run failure a KNOWN LIMIT rather than a closure defect?
+
+    A db-source/api-source closure reads its connection out of `secrets`, and
+    the offline harness has no credential to give it, so the first `secrets[...]`
+    raises KeyError before the transform does anything. That is expected, and
+    reference/api-source.md tells the author not to code around it.
+
+    It is waived ONLY on that pairing. A CSV closure declaring no network source
+    has no such excuse: a missing secret there is a real fault and must still
+    fail Phase B. Keyed on the connector, never on the exception type alone.
+    """
+    return isinstance(exc, KeyError) and bool(network_declared)
+
+
 def fail_b():
     say("\nPHASE B FAILED — transform dry-run (this EXECUTED: what it reports "
         "is what will happen):")
@@ -1825,12 +1886,42 @@ run = Path(tempfile.mkdtemp())
 # from directories KeyErrors the moment a derived model resolves its table name.
 out = DuckDbOutput(path=str(run / "data.duckdb"), schema="main",
                    model_tables={m: m for m in PHYSICAL_MODELS})
+# A db-source/api-source closure reads its connection out of `secrets`, and the
+# harness has no credential to give it — so `secrets["base_url"]` raises before
+# the transform does anything. That is a KNOWN LIMIT of the offline dry run, not
+# a defect in the closure, and reference/api-source.md tells the author not to
+# code around it with a profile-reading fallback.
+#
+# It must therefore not fail Phase B, because failing Phase B also skips Phases
+# C, D and E — the closure-record, policy-boundary and reach-gate checks. Those
+# are exactly the checks a credentialed, network-shaped closure most needs, and
+# losing them silently to an expected KeyError is how a missing contract wiring
+# or a hardcoded policy value reaches a build.
+dry_run_runnable = True
 try:
     dry_run_secrets = (
         {"csv_source": str(Path("data").resolve())}
         if Path("data").is_dir() else {}
     )
     ingest(duckdb=out, secrets=dry_run_secrets)
+except KeyError as exc:
+    if not dry_run_waived(exc, network_declared):
+        berr("runtime.transform_raised",
+             f"transform/main.py: KeyError: {exc}",
+             "transform/main.py", tb=traceback.format_exc())
+    else:
+        dry_run_runnable = False
+        diag("s2_transform", "runtime.dry_run_not_runnable",
+             f"the dry run could not execute: this closure declares "
+             f"{sorted(declared_sources) or ['a network source']} and reads "
+             f"{exc} out of `secrets`, which the offline harness cannot supply. "
+             f"Phase B is NOT RUNNABLE here and reports nothing about the "
+             f"transform - verify it with check_data_product, which runs the "
+             f"real closure under the supervisor's interpreter. Phases C, D and "
+             f"E still run below.",
+             path=cpath("transform/main.py"),
+             evidence={"missing_secret": str(exc),
+                       "declared_sources": sorted(declared_sources)})
 except AssertionError as exc:
     # A fired assert is the transform's OWN invariant rejecting the data it
     # produced. That is the check working, not the check being wrong.
@@ -1844,8 +1935,8 @@ except Exception as exc:
 if berrors:
     fail_b()
 import duckdb
-con = duckdb.connect(out.path, read_only=True)
-for m in PHYSICAL_MODELS:  # unquoted main.<name> — the invariant, physically
+con = duckdb.connect(out.path, read_only=True) if dry_run_runnable else None
+for m in (PHYSICAL_MODELS if dry_run_runnable else ()):  # unquoted main.<name> — the invariant, physically
     try:
         n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     except Exception as exc:
@@ -1858,15 +1949,25 @@ for m in PHYSICAL_MODELS:  # unquoted main.<name> — the invariant, physically
     diag("s2_transform", "runtime.row_count", f"{m}: {n_rows} rows",
          path=cpath(f"transform/main.py:{m}"),
          evidence={"model": m, "count": n_rows})
-if not (run / ".transform-complete").exists():
+if dry_run_runnable and not (run / ".transform-complete").exists():
     berr("runtime.transform_incomplete",
          "the transform returned without writing .transform-complete — it did "
          "not finish", "transform/main.py")
 if berrors:
     fail_b()
-close_stage("s2_transform", "passed",
-            models_counted=len(PHYSICAL_MODELS), unverified=len(unverified))
-say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
+if not dry_run_runnable:
+    close_stage("s2_transform", "skipped",
+                reason="dry_run_not_runnable", unverified=len(unverified))
+    say(f"phase B NOT RUNNABLE — this closure needs a credential the offline "
+        f"harness cannot supply, so the transform was never executed and "
+        f"nothing below is evidence about it. models.py/spec.py were still "
+        f"checked STRUCTURALLY; {len(unverified)} unverified entries listed "
+        f"above. Verify the transform with check_data_product. Continuing to "
+        f"phases C, D and E.")
+else:
+    close_stage("s2_transform", "passed",
+                models_counted=len(PHYSICAL_MODELS), unverified=len(unverified))
+    say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
     f"STRUCTURALLY against the pinned nxd v0.41.139 DSL surface (not "
     f"executed — no nxd wheel installable here); {len(unverified)} "
     f"unverified entries listed above. A spec fault only the real wheel or "
@@ -1949,6 +2050,7 @@ if snap_bytes is None:
 lock = None
 is_v3_lock = False
 v3_approved_contracts = set()
+v3_pre_transform_contracts = set()
 if not lockp.exists():
     cerr("closure.lock_missing",
          f"{CLOSURE_LOCK} is missing from the closure root — without it the "
@@ -2055,9 +2157,17 @@ if lock is not None and snap_bytes is not None:
         else:
             try:
                 proposal = json.loads(proposal_bytes.decode("utf-8"))
-                v3_approved_contracts = {
-                    item.get("id") for item in proposal.get("proposal", {}).get("contracts", [])
+                _v3_contracts = [
+                    item for item in proposal.get("proposal", {}).get("contracts", [])
                     if isinstance(item, dict) and isinstance(item.get("id"), str)
+                ]
+                v3_approved_contracts = {item["id"] for item in _v3_contracts}
+                # Phase travels on the compiled contract, and the runtime can only
+                # execute a pre_transform one for a declared CSV source-aligned
+                # input. Keep the split so the support check below can name ids.
+                v3_pre_transform_contracts = {
+                    item["id"] for item in _v3_contracts
+                    if item.get("phase") == "pre_transform"
                 }
                 proposal_payload = {
                     key: proposal[key] for key in proposal
@@ -2380,6 +2490,36 @@ if _spec_tree is not None:
         else set(lock.get("contract_names") or []) if isinstance(lock, dict) else set()
     )
     wired_contracts = set(contracts)
+    # An Input's Expectations compile to pre_transform contracts, and the desktop
+    # runtime executes a custom input expectation ONLY for a declared CSV
+    # source-aligned input bound to the `csv-source` service. A db-source or
+    # api-source closure declares no such input, so there is nowhere to attach
+    # them and the inventory can never be satisfied.
+    #
+    # Without this check the author learns that from a bare
+    # contract_inventory_mismatch, AFTER a whole closure exists, and the obvious
+    # way to make it green is to wire them as output promises - which silently
+    # moves a phase the user approved. Name it, and name the three ways out.
+    if is_v3_lock and v3_pre_transform_contracts and "csv-source" not in declared_sources:
+        cerr(
+            "closure.contract_phase_unsupported",
+            f"{len(v3_pre_transform_contracts)} approved contract(s) are "
+            f"pre_transform input expectations - "
+            f"{sorted(v3_pre_transform_contracts)} - but spec.py declares "
+            f"{sorted(declared_sources) or 'no connector service'} and no "
+            f"csv-source. This runtime runs a custom input expectation only for "
+            f"a declared CSV source-aligned input, so these cannot execute at "
+            f"that phase and the inventory cannot be satisfied. Resolve it in "
+            f"dp-blueprint.md, not here: state the guarantee under the matching "
+            f"Output's Promises (verified post-transform against the landed "
+            f"relation), keep it as prose with no executable contract, or supply "
+            f"a CSV export. Each is a spec edit needing re-approval - wiring an "
+            f"input expectation as an output promise to clear this check moves a "
+            f"phase the user approved.",
+            "spec.py",
+            {"pre_transform_contracts": sorted(v3_pre_transform_contracts),
+             "declared_sources": sorted(declared_sources)},
+        )
     if approved_contracts != wired_contracts:
         cerr(
             "closure.contract_inventory_mismatch",
@@ -2894,7 +3034,7 @@ say("SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), "
 # user before the build (see nxd-run-job-loop Step 3). It is also the designated
 # stage-8 predictor: a green build that answers wrongly shows up here first, so
 # it is recorded as DATA in build-record.readback, not only printed.
-for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
+for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)) if dry_run_runnable else ()):
     n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     cols = [r[0] for r in con.execute(
         f"SELECT name FROM pragma_table_info('{m}') WHERE type = 'VARCHAR'").fetchall()
@@ -2941,7 +3081,7 @@ for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
 # landed data, never from a transform literal, so this is independent of the
 # code it is checking.
 produced = set()
-for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
+for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)) if dry_run_runnable else ()):
     for (c,) in con.execute(
             f"SELECT name FROM pragma_table_info('{m}') "
             f"WHERE type = 'VARCHAR'").fetchall():

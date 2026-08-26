@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-25 | nxd-run-job-loop: three self-check gates that shift a silent failure left | NO_EVAL | — | [`2026-08-25-self-check-shift-left-gates`](entries/2026-08-25-self-check-shift-left-gates.md) |
 | 2026-08-24 | nxd-spec-api.md documents registry-wide dimension names and join-covers-grain | NO_EVAL | — | [`2026-08-24-spec-api-compiler-rules`](entries/2026-08-24-spec-api-compiler-rules.md) |
 | 2026-08-24 | a resolved procedure value is a landed model, and a clock-relative Term names its anchor | NO_EVAL | — | [`2026-08-24-blueprint-procedure-encapsulation`](entries/2026-08-24-blueprint-procedure-encapsulation.md) |
 | 2026-08-24 | api-source closures flatten nested GraphQL selections before the port | NO_EVAL | — | [`2026-08-24-api-source-flatten-nested`](entries/2026-08-24-api-source-flatten-nested.md) |

@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.38.7
+  version: 0.39.0
 ---
 
 # nxd-generate-data-product skill
@@ -253,7 +253,7 @@ Role builders: `field(number(), primary_key(), dimension(name=..., description=.
 
 **Every field takes a role, except a measure a metric aggregates. Dimensions
 and metrics also take a description; `primary_key()`/`join()` have none. Every
-`semantic_model` takes a `.description(...)`.** `describe_models` is all a later
+`semantic_model` takes a `.description(...)`. A `join(...)` needs a `dimension(...)` on the same field, exactly as a key does. And a model a Question or Output reads needs a view with at least one metric — a bare `COUNT` will do — because `run_semantic_query` requires a measure, so a model backing no view is unqueryable whatever its dimensions say. Both fail silently (`struct.model_not_queryable`, `struct.key_not_groupable`); `reference/models-example.md` shows how.** `describe_models` is all a later
 consumer sees, so a bare column is invisible and a bare name unusable. Put the
 description INSIDE the role — on `field()`/`metric_field()` it never reaches
 the agent. A dimension a **ruling** created must state that ruling. Metrics
