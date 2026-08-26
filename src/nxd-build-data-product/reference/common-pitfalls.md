@@ -99,8 +99,8 @@ Both `nxd_core` and `nxd_data_product` are always required. Omitting either caus
 **Missing `databricks-sql-connector`**
 Required when using `dbsql.connect()` in transforms. Add to requirements.txt — it's not included transitively.
 
-**Adding `soda-core-spark-df` directly**
-Already included via `nxd_core[soda]`. Adding it separately causes version conflicts. Use `nxd_core[soda]` instead of plain `nxd_core`.
+**Adding `soda-core-spark-df` at a mismatched version**
+The `soda` extra lives on `nxd_data_product`, not `nxd_core`, and it pins `soda-core==3.5.6` (plus `soda-core-snowflake==3.5.6`). The Spark/Databricks backend is *not* bundled, so add `soda-core-spark-df` yourself — pinned to the same `==3.5.6`, or pip resolves a conflicting `soda-core`.
 
 ---
 

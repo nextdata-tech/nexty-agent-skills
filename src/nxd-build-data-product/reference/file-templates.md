@@ -303,7 +303,7 @@ or a driver dependency path actually imports it.
 | `Snowflake` (read or write) | `snowflake-connector-python[pandas]` |
 | `DatabricksRead` / `DatabricksWrite` via `dbsql.connect()` | `databricks-sql-connector` |
 
-See [common-pitfalls.md](common-pitfalls.md) for `nxd_core[soda]` / `nxd_core[gx]`
+See [common-pitfalls.md](common-pitfalls.md) for `nxd_data_product[soda]` / `nxd_data_product[gx]`
 extras and other packaging gotchas.
 
 ## Driver Classification Reference
