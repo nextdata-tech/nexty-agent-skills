@@ -11,7 +11,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.39.0
+  version: 0.40.0
 ---
 
 # nxd-run-job-loop skill
@@ -414,23 +414,25 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   redaction is the credential boundary
   ([reference/handoff-export.md](reference/handoff-export.md)).
 - **Label every source once there are 2+.** A single-source data product needs no
-  label. With multiple sources each gets a short, distinct label used
-  consistently across materialization, inference, and generation; two sources of
-  the same connector type sharing an unlabeled or duplicate name is a collision
+  label. With multiple sources each gets a short, distinct label used consistently
+  across materialization, inference, and generation; two sources of the same
+  connector type sharing an unlabeled or duplicate name is a collision
   nxd-generate-data-product can't resolve for you.
-- **Correct data downstream, never upstream.** Cleaning, deduplication,
-  amortization, currency normalization, reclassification and regrain belong in
-  **derived models computed from the pristine source** — authored by
-  nxd-generate-data-product, landed through the DuckDB output port, asserted in the
-  transform. Never edit the source export to reach that outcome, never emulate it
-  agent-side.
+- **Correct data downstream, never upstream.** Cleaning, dedup, amortization,
+  currency normalization, reclassification and regrain belong in **derived models
+  computed from the pristine source** — authored by nxd-generate-data-product,
+  landed through the DuckDB output port, asserted in the transform. Never edit the
+  source export to reach that outcome, never emulate it agent-side.
 - **A judgement not in the data is confirmed and landed, not hardcoded.** FX
   rates, merchant→category and similar mappings are surfaced, confirmed, and
   landed as their own queryable model — never embedded as transform constants.
   **This covers agent-produced judgement too** — a per-entity
-  score/verdict/classification read from evidence, landed agent-side as data
-  (`status = proposed`, evidence-cited, rubric taught first); the build never
-  invokes a model, and a baked-in judgement is hardcoded even when weighted.
+  score/verdict/classification read from evidence, landed as data
+  (`status = proposed`, evidence-cited, rubric taught first); a baked-in
+  judgement is hardcoded even when weighted. **Which lane judges depends on
+  whether the product is packaged** — agent-side CSV while exploring, the
+  field-mapper seam once it ships, so the logic travels with the closure and the
+  credential never enters it ([reference/inference.md](reference/inference.md)).
 - **A supplied procedure with a result-changing gap is read back BEFORE any
   materialization.** No closure directory, source copy, generated code, table,
   scoring, or build until the user has seen every proposed anchor, band and

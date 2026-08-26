@@ -304,7 +304,12 @@ def test_model_sdk_import_fails_on_csv_closure(tmp_path):
     out = _run_phase_e(tmp_path, CSV, CLEAN_CSV_TRANSFORM + "import anthropic\n", expect_exit=1)
     assert "PHASE E FAILED" in out
     assert "model-provider SDK" in out
-    assert "never calls a model" in out
+    # The denial is about the SEAM, not about inference as such: a packaged
+    # closure is expected to infer, through nxd.experimental.field_mapper under
+    # Phase G's grant. A message that just said "never calls a model" sent the
+    # author to the wrong remedy, so the finding must name the seam it wants.
+    assert "field_mapper" in out
+    assert "grant" in out
 
 
 def test_model_sdk_submodule_import_fails_once(tmp_path):
