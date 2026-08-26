@@ -8,6 +8,7 @@
   - A POST body is scanned for dlt expressions — escape every literal brace
   - Paginating a GraphQL connection
   - Flatten fetched rows before they reach the port
+  - Deriving from a fetched source
 - Credential handling — read this before shipping
 - Custom request headers
 - Naming
@@ -555,6 +556,70 @@ for model in fetched_models:
     readers.append(resource.with_name(table_name))
 pipeline.run(readers, write_disposition="replace")
 ```
+
+### Deriving from a fetched source
+
+`derived-models.md` § "Reading the sources yourself" tells you to re-read the
+base export with stdlib `csv` because dlt's reader "streams straight to the
+destination and cannot hand rows back to Python". That reasoning is correct and
+it applies here too — but the remedy does not, because **a fetched model has no
+`data/` directory to re-read**. There is no second copy of what the API
+returned. Land it and it is in DuckDB; don't and it is nowhere.
+
+So a derived model computed from fetched rows needs the rows captured on their
+way past. Tee them in the flattener you already have:
+
+```python
+# Every fetched row is captured here on its way to the port. dlt streams a
+# resource straight to the destination and cannot hand rows back to Python, and
+# a fetched model has no data/ directory to re-read - so the flattener tees each
+# row into these lists as it flattens it.
+_FETCHED: dict[str, list[dict[str, Any]]] = {model: [] for model in API_MODELS}
+
+
+def _flatten_issue(node: dict[str, Any]) -> dict[str, Any]:
+    row = {...}                      # flat scalars, as above
+    _FETCHED["issues_landed"].append(row)
+    return row
+```
+
+Then land the derived models in a **second** `pipeline.run(...)`, after the
+fetch run has returned:
+
+```python
+pipeline.run(readers, write_disposition="replace")     # fetch + reference data
+
+rows = _FETCHED["issues_landed"]                       # now fully populated
+derived = _derive(rows)
+_assert_derived(derived, rows)                         # Step 3b, complete set
+
+pipeline.run(                                          # second replace run
+    [_rows_resource(derived, duckdb.model_tables["open_tickets"])],
+    write_disposition="replace",
+)
+```
+
+**This is a deliberate exception to "same list, same run"**, and the reason that
+rule exists is preserved rather than waived: `replace` applies per table, so the
+first run's tables are untouched, a rerun is still idempotent, and the Step-3b
+asserts still run over the complete derived set before a single row is yielded.
+Record it as a `concession.other` naming the two alternatives below, so a
+reviewer sees the choice rather than inferring it.
+
+Both obvious alternatives are wrong here:
+
+- **Fetch by hand** (`requests`/`urllib` in `transform/main.py`) so the rows are
+  already in Python. This is ingestion by hand — § "Two ways a probe lies" and
+  the reach gate both forbid it, and it puts an HTTP client on the ingestion
+  path where only the dlt connector belongs.
+- **Append the derived resources to the same `readers` list.** dlt gives no
+  guarantee that the fetched resources are exhausted before a later resource in
+  the same list is pulled, so `_FETCHED` may be partial when the derived
+  generator runs. That produces a derived model computed from some of the rows,
+  with asserts that pass because they only see the same partial set — the
+  failure mode Step 3b exists to prevent.
+
+`db-source` has the same shape and the same remedy.
 
 ### Landed reference data in an API closure
 
