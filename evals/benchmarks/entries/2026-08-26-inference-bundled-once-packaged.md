@@ -92,6 +92,15 @@ where an author reading about inference will actually meet it.
   the verifier scan, or the Phase G grant oracle. The self-check diff is the one
   finding message, the phase banner, and the header comment explaining what the
   gate is about.
+- Two shipped surfaces carrying the retired framing were missed in the first
+  pass and corrected after review:
+  `src/nxd-run-job-loop/scripts/dp_diagnostics.py` (the `reach.model_sdk_import`
+  registry summary — consumer-resolvable, so a build record or a downstream
+  agent keying on the code was still being told inference belongs in the
+  authoring session, contradicting the self-check message for the same code),
+  and `docs/architecture/field-mapper.md` (§ "What it relaxes" quoted a SKILL.md
+  sentence this change had replaced and stated the inverted default; rewritten,
+  with the reversal dated in place rather than deleted).
 - Docs changed, all in the same direction:
   `src/nxd-generate-data-product/reference/llm-judgments.md` (§ "Where the judging
   happens" rewritten to the two lanes),

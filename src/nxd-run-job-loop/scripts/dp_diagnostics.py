@@ -677,10 +677,11 @@ _register(
 )
 
 # --- domain `reach.` — stage s1_structure (Phase E) --------------------------
-# The reach gate: a transform lands data and never calls a model. Filed under
-# s1_structure because it is static, offline and must DECIDE before Phase B
-# imports the transform — a verdict delivered after the socket is already open
-# is a post-mortem, not a gate.
+# The reach gate: a transform never imports a provider SDK, and reaches a model
+# only through the sanctioned seam. Filed under s1_structure because it is
+# static, offline and must DECIDE before Phase B imports the transform — a
+# verdict delivered after the socket is already open is a post-mortem, not a
+# gate.
 #
 # owner: agent on all four. Every one is fixed by editing the closure — drop the
 # import, or declare the service the import implies. None is a question for the
@@ -689,8 +690,8 @@ _register_table(
     "s1_structure",
     (
         ("reach.model_sdk_import", "error", "agent", "none", False,
-         "transform/main.py or a contracts/ verifier imports a model-provider SDK — inference belongs in "
-         "the authoring session and lands as data"),
+         "transform/main.py or a contracts/ verifier imports a model-provider SDK directly — a packaged "
+         "closure infers through nxd.experimental.field_mapper under a consent grant, not a raw SDK"),
         ("reach.undeclared_transport", "error", "agent", "none", False,
          "transform/main.py imports raw network transport but spec.py declares "
          "no network-shaped connector"),
