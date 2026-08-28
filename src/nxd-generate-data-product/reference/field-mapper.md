@@ -1,8 +1,11 @@
 # Field mapper — mapping from inside a transform
 
-The one sanctioned way a transform may call a model. Everything else about
-inference in a closure is agent-side and lands as CSV before the build; this is
-the exception, and it is gated by consent rather than trusted.
+The one sanctioned way a transform may call a model, and the way a **packaged**
+data product infers. Agent-side judging that lands as CSV before the build
+(llm-judgments.md) is the exploration lane — right while the rubric is still
+moving, wrong as a shipping shape, because it leaves the procedure outside the
+artifact. This path is gated by consent rather than trusted, and the gate is the
+price of having the logic travel with the closure.
 
 ## Contents
 
@@ -19,15 +22,30 @@ the exception, and it is gated by consent rather than trusted.
 
 ## When to use it (and when not to)
 
-Use [reference/llm-judgments.md](llm-judgments.md) — agent-side judging, landed
-as CSV — whenever the judgements are a **fixed set** you can enumerate once: FX
-rates, merchant→category rulings, a rubric applied to a bounded list. That path
-needs no grant and no model call at build time.
+**Use the field mapper whenever a packaged closure's answers depend on
+inference.** That covers the case it was first written for — a mapping over rows
+the transform itself produces, where no fixed CSV can be authored ahead of it —
+and it also covers the ordinary case of a rubric applied to a bounded list, once
+that product stops being an experiment and starts being something that ships,
+gets handed off, or is rebuilt later. In every one of those, the procedure has to
+be inside the closure, and this is what puts it there.
 
-Use the field mapper only when the mapping must run **over rows the transform
-itself produces**, so no fixed CSV can be authored ahead of it. It brings real
-cost: a consent grant the user must author, and live model calls during the
-self-check.
+It brings real cost, and the cost is worth stating plainly: a consent grant the
+user must author, a supervisor approval interaction, and live model calls (with
+real spend) during the self-check and every build.
+
+**Use [reference/llm-judgments.md](llm-judgments.md) — agent-side judging, landed
+as CSV — while the product is still being explored.** Judging a bounded list
+in-session costs nothing, needs no grant, and is the right tool while the
+criteria are still changing and the whole product may be discarded. It is a
+scaffold. When the same product is packaged, the judging moves here; a closure
+that ships with agent-authored score rows is carrying an output whose procedure
+nobody can re-run from the artifact.
+
+A fixed set of rulings that is **not** inference — an FX rate, a
+merchant→category mapping the user confirmed — stays landed reference data in
+both lanes. Those are not judgements the closure re-derives; they are values it
+was told.
 
 ## Before you build: run the preflight
 

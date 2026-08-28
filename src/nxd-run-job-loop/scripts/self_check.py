@@ -839,8 +839,14 @@ say(f"phase A ok — {len(base_names)} semantic_model, "
 # model, already spent the money. The decision must precede the import, so this
 # block sits above Phase B and exits before sys.path.insert(0, ".").
 #
-# What it enforces: the transform never calls a model, and reaches the network
-# only through the connector it declares. That invariant used to be prose only,
+# What it enforces: the transform never calls a model THROUGH A RAW PROVIDER SDK,
+# and reaches the network only through the connector it declares. The gate is
+# about the seam, not about inference as such: a packaged closure is expected to
+# infer, and does it through nxd.experimental.field_mapper under Phase G's
+# consent grant, which keeps the procedure inside the closure, the credential
+# outside it, and the approval in front of the user. A direct `import anthropic`
+# has none of those properties, which is why it stays denied here.
+# That invariant used to be prose only,
 # on the belief that the desktop venv was closed. It is not — requests, httpx,
 # httpcore and urllib3 all arrive transitively via dlt and mcp, and urllib and
 # socket are stdlib. A closure can call a model today; nothing structural stops
@@ -1079,11 +1085,15 @@ for mod, (needs, human) in (SHAPE.items() if saw_service_ref else ()):
 for root in sorted(r for r in MODEL_ROOTS
                    if any(denied_hit(m, {r}) for m in t_imports)):
     eerr("reach.model_sdk_import",
-        f"transform/main.py imports {root!r} — a model-provider SDK. A "
-        f"transform lands data; it never calls a model. Inference belongs in "
-        f"the session that AUTHORS the closure, and its output lands as data "
-        f"(reference/derivation-plan.md) so a rerun of the transform "
-        f"reproduces the same rows instead of re-deciding them.")
+        f"transform/main.py imports {root!r} — a model-provider SDK directly. A "
+        f"transform may infer, but only through the sanctioned seam: "
+        f"nxd.experimental.field_mapper, called via make_call, under a consent "
+        f"grant (reference/field-mapper.md). A raw SDK import routes around the "
+        f"grant check, the supervisor approval boundary, and the sanitized "
+        f"credential handling — so nobody receiving this closure can see what "
+        f"content leaves it or authorize the call. While the product is still "
+        f"being explored, judging agent-side and landing the rows as CSV "
+        f"(reference/llm-judgments.md) is the cheaper lane and needs no grant.")
 if not network_declared:
     for root in sorted(r for r in TRANSPORT_ROOTS
                        if any(denied_hit(m, {r}) for m in t_imports)):
@@ -1143,7 +1153,7 @@ for vpath in sorted(p for p in Path("contracts").rglob("*.py")
             f"can pass today and fail tomorrow.", str(vpath))
 
 if eerrors:
-    say("\nPHASE E FAILED — reach gate (the transform does not call a model):")
+    say("\nPHASE E FAILED — reach gate (no raw provider SDK; infer through the seam):")
     seen = set()
     for ecode, e, eat in eerrors:
         if e in seen:

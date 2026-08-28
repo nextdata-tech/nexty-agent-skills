@@ -255,6 +255,15 @@ model was called. Specifically:
   plus the raw transports. A provider shipping under a name nobody added here
   passes. Report a green Phase E as "no *listed* model-provider SDK", never as
   "no model call".
+- **A green Phase E is not "this closure does not infer", and is not meant to
+  be.** A packaged closure that infers does it through
+  `nxd.experimental.field_mapper` under Phase G's consent grant — that is the
+  sanctioned seam, and Phase E passes it by design (the harness's own
+  `import anthropic` is function-local and invisible to an import-level walk).
+  What Phase E denies is a *raw* provider SDK in the transform, which reaches a
+  model while routing around the grant check, the supervisor approval boundary
+  and the sanitized credential handling. Denied-here and inferring-legitimately
+  are different questions; Phase G answers the second.
 - **`subprocess` and `os.popen` are a documented gap, by decision — not a rule.**
   `subprocess.run(["curl", …])` reaches anything. Neither spelling is denied:
   `os` is imported by nearly every correct transform for `os.path`, so denying

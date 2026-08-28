@@ -3,7 +3,7 @@
 ## Contents
 
 - [The third class: inference](#the-third-class-inference)
-- [Where the judging happens: the agent session, never the transform](#where-the-judging-happens-the-agent-session-never-the-transform)
+- [Where the judging happens: agent-side while exploring, bundled once packaged](#where-the-judging-happens-agent-side-while-exploring-bundled-once-packaged)
 - [The rubric is landed first, as a ruling](#the-rubric-is-landed-first-as-a-ruling)
 - [The judgement model: one row per entity × criterion](#the-judgement-model-one-row-per-entity--criterion)
 - [The evidence-citation obligation](#the-evidence-citation-obligation)
@@ -46,27 +46,63 @@ evidence and applying a rubric. That production step is nondeterministic, so it
 carries one obligation the other two classes do not — [an evidence citation into
 the source](#the-evidence-citation-obligation).
 
-## Where the judging happens: the agent session, never the transform
+## Where the judging happens: agent-side while exploring, bundled once packaged
 
-The judging is a **teach-time, agent-side materialization act** — structurally
-the same as eliciting reference data from the user, except the source of the
-ruling is the agent reading evidence rather than the user typing it. The
-orchestrating agent (running **nxd-run-job-loop**) reads the entity facts and
-**writes the judgement rows as CSV** into the closure's export, before the build
-runs.
+There are **two lanes**, and which one is correct depends on whether the product
+is still being explored or is being packaged as a durable artifact.
 
-The transform then consumes those rows exactly as it consumes
-`merchant_categories`: it reads a landed table. **The transform never invokes a
-model.** There is no model call, no API key, and no network in the deterministic
-build — the judging already happened, its output is landed data, and the build
-only joins and arithmetics over it. A closure that calls an LLM from
-`transform/main.py` is the defect this whole class exists to prevent: it makes
-the build nondeterministic, needs a secret in the closure, and re-judges silently
-on every rerun.
+| | **Exploration lane** | **Packaged lane** |
+|---|---|---|
+| When | the user is iterating — trying criteria, reshaping the rubric, deciding whether the product is worth having at all | the plan is settled and the closure is being built as something that ships, is handed off, or is rebuilt later |
+| Who judges | the orchestrating agent, in its own session, before the build | the transform, through the field-mapper seam |
+| How it lands | judgement rows written as CSV into the closure's export | judgement rows produced by `map_inputs` during the run |
+| Rerun behaviour | same rows every time — the values are frozen | the values may move; that is disclosed, not prevented |
+| Cost | free, fast, no grant, no spend | a consent grant, supervisor approval, and real model spend per build |
 
-This is the exact inversion of the anti-pattern that motivated the class: a
-generated scoring transform that **hardcoded** a per-entity score dict as a
-module-level literal. That is hardcoded even though the downstream weighting was
+**The exploration lane is a scaffold, not a shipping shape.** It is genuinely the
+right tool while the rubric is in flux: judging fifty tickets by hand in-session
+costs nothing and can be thrown away when the criteria change an hour later.
+
+**Once the product is packaged and built, the judging must be bundled.** A
+closure whose scores were produced in some earlier agent session is not
+self-contained, whatever its file list says: the prompt, the reading of the
+evidence, and the model identity all lived outside it, and what ships is a frozen
+output nobody who receives the closure can re-derive from the closure. That is
+the defect — not the nondeterminism.
+
+**Self-containment is a property of the logic, not of the values.** A closure is
+self-contained when everything needed to *run its own procedure* travels inside
+it: the rubric as landed rows, the mapper spec under `contracts/`, the grant
+bound to that spec by hash. Rerunning that procedure may score a borderline
+entity 3 today and 4 tomorrow. **That is understood and acceptable**, and the
+honest response is to disclose it — the judgement rows carry `rubric_version`,
+`judged_by` and `status = proposed` precisely so a moving value stays
+attributable. A closure that guarantees stable values by keeping its logic
+somewhere else has bought reproducibility with the thing reproducibility was for.
+
+The seam for the packaged lane is the field mapper, and it is the **only** one:
+`nxd.experimental.field_mapper`, called through `make_call`, gated by Phase G's
+consent check. See [field-mapper.md](field-mapper.md). Two things it settles that
+a hand-rolled model call does not:
+
+- **The credential never enters the closure or the blueprint.** `make_call`
+  resolves it lazily, from an explicit secrets mapping or the opt-in allowlisted
+  `ANTHROPIC_API_KEY` environment fallback — outside the artifact, never in
+  `infra-profile.yaml`, never in `dp-blueprint.md`, never in chat. In a Desktop
+  build the user authorizes the subject through the supervisor's own
+  client-mediated confirmation, which no agent-authored field can forge.
+- **A direct provider SDK import stays denied.** `import anthropic` in
+  `transform/main.py` is still a Phase E failure, and correctly so: it bypasses
+  the grant check, the approval boundary, and the sanitized credential handling.
+  Reach for the harness, not the SDK.
+
+What both lanes still share, unchanged: the rubric is landed as data first, every
+judgement row cites verbatim evidence, absence takes no score, and nothing is
+hardcoded in transform logic.
+
+Both lanes invert the anti-pattern that motivated the class: a generated
+scoring transform that **hardcoded** a per-entity score dict as a module-level
+literal. That is hardcoded even though the downstream weighting was
 computed — a per-entity judgement literal in transform code is a fabrication
 sitting in a governed answer, invisible and uncorrectable, the same defect as an
 invented FX rate. Land the judgements as rows; keep the transform free of
