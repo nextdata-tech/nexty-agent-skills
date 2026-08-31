@@ -7,6 +7,16 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-26 | inference: agent-side while exploring, bundled through the seam once packaged | NO_EVAL | — | [`2026-08-26-inference-bundled-once-packaged`](entries/2026-08-26-inference-bundled-once-packaged.md) |
+| 2026-08-25 | nxd-run-job-loop: three self-check gates that shift a silent failure left | NO_EVAL | — | [`2026-08-25-self-check-shift-left-gates`](entries/2026-08-25-self-check-shift-left-gates.md) |
+| 2026-08-24 | nxd-spec-api.md documents registry-wide dimension names and join-covers-grain | NO_EVAL | — | [`2026-08-24-spec-api-compiler-rules`](entries/2026-08-24-spec-api-compiler-rules.md) |
+| 2026-08-24 | a resolved procedure value is a landed model, and a clock-relative Term names its anchor | NO_EVAL | — | [`2026-08-24-blueprint-procedure-encapsulation`](entries/2026-08-24-blueprint-procedure-encapsulation.md) |
+| 2026-08-24 | api-source closures flatten nested GraphQL selections before the port | NO_EVAL | — | [`2026-08-24-api-source-flatten-nested`](entries/2026-08-24-api-source-flatten-nested.md) |
+| 2026-08-21 | nxd-generate-data-product: field-mapper contract drift against the installed harness | NO_EVAL | — | [`2026-08-21-field-mapper-contract-drift`](entries/2026-08-21-field-mapper-contract-drift.md) |
+| 2026-08-20 | NEX-887: terminal self-check and closure provenance | PASS | terminal-self-check-provenance | [`2026-08-20-nex-887-terminal-self-check-provenance`](entries/2026-08-20-nex-887-terminal-self-check-provenance.md) |
+| 2026-08-20 | the user-owned IR is named dp-blueprint.md; the whole artifact family follows | NO_EVAL | — | [`2026-08-20-dp-blueprint-rename`](entries/2026-08-20-dp-blueprint-rename.md) |
+| 2026-08-19 | nxd-generate-data-product: POSTed-JSON-body api-source closures, and groupable keys | NO_EVAL | — | [`2026-08-19-api-source-graphql-post-body`](entries/2026-08-19-api-source-graphql-post-body.md) |
+| 2026-08-18 | NEX-884: terminal field-mapper adapter contract scenario | NO_EVAL | — | [`2026-08-18-nex-884-terminal-mapper-adapter-contract`](entries/2026-08-18-nex-884-terminal-mapper-adapter-contract.md) |
 | 2026-08-18 | evals: isolated Desktop stdio MCP substrate | NO_EVAL | — | [`2026-08-18-desktop-stdio-substrate`](entries/2026-08-18-desktop-stdio-substrate.md) |
 | 2026-08-16 | nxd-run-job-loop: desktop closure preflight and phase-c recovery | PASS | job-loop-serve-query-refine | [`2026-08-16-desktop-closure-phase-c-recovery`](entries/2026-08-16-desktop-closure-phase-c-recovery.md) |
 | 2026-08-15 | NEX-877: public field-mapper provider adapter contract | NO_EVAL | — | [`2026-08-15-nex-877-provider-adapter-contract`](entries/2026-08-15-nex-877-provider-adapter-contract.md) |

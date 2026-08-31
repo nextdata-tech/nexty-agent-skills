@@ -1,8 +1,11 @@
 # Field mapper — mapping from inside a transform
 
-The one sanctioned way a transform may call a model. Everything else about
-inference in a closure is agent-side and lands as CSV before the build; this is
-the exception, and it is gated by consent rather than trusted.
+The one sanctioned way a transform may call a model, and the way a **packaged**
+data product infers. Agent-side judging that lands as CSV before the build
+(llm-judgments.md) is the exploration lane — right while the rubric is still
+moving, wrong as a shipping shape, because it leaves the procedure outside the
+artifact. This path is gated by consent rather than trusted, and the gate is the
+price of having the logic travel with the closure.
 
 ## Contents
 
@@ -19,15 +22,30 @@ the exception, and it is gated by consent rather than trusted.
 
 ## When to use it (and when not to)
 
-Use [reference/llm-judgments.md](llm-judgments.md) — agent-side judging, landed
-as CSV — whenever the judgements are a **fixed set** you can enumerate once: FX
-rates, merchant→category rulings, a rubric applied to a bounded list. That path
-needs no grant and no model call at build time.
+**Use the field mapper whenever a packaged closure's answers depend on
+inference.** That covers the case it was first written for — a mapping over rows
+the transform itself produces, where no fixed CSV can be authored ahead of it —
+and it also covers the ordinary case of a rubric applied to a bounded list, once
+that product stops being an experiment and starts being something that ships,
+gets handed off, or is rebuilt later. In every one of those, the procedure has to
+be inside the closure, and this is what puts it there.
 
-Use the field mapper only when the mapping must run **over rows the transform
-itself produces**, so no fixed CSV can be authored ahead of it. It brings real
-cost: a consent grant the user must author, and live model calls during the
-self-check.
+It brings real cost, and the cost is worth stating plainly: a consent grant the
+user must author, a supervisor approval interaction, and live model calls (with
+real spend) during the self-check and every build.
+
+**Use [reference/llm-judgments.md](llm-judgments.md) — agent-side judging, landed
+as CSV — while the product is still being explored.** Judging a bounded list
+in-session costs nothing, needs no grant, and is the right tool while the
+criteria are still changing and the whole product may be discarded. It is a
+scaffold. When the same product is packaged, the judging moves here; a closure
+that ships with agent-authored score rows is carrying an output whose procedure
+nobody can re-run from the artifact.
+
+A fixed set of rulings that is **not** inference — an FX rate, a
+merchant→category mapping the user confirmed — stays landed reference data in
+both lanes. Those are not judgements the closure re-derives; they are values it
+was told.
 
 ## Before you build: run the preflight
 
@@ -82,6 +100,18 @@ python -m nxd.experimental.field_mapper spec-id contracts/mapper_spec.json
 Paste that value into the grant's `mapper_spec_id` and write the grant to
 `contracts/`. A hand-computed hash, or the `"<derived>"` placeholder the
 `samples/` fixtures use, binds nothing — the gate rejects `<derived>` by name.
+
+**The id is taken over the BOUND spec, and binding is not what `load` does.**
+`spec-id` loads the spec, compiles the wire schema into it, and stamps
+`harness_version` before reading `mapper_spec_id` — the same sequence
+`map_inputs` re-derives at its gate. `MapperSpec.load(path).mapper_spec_id` on a
+spec that does not declare `harness_version` is a **different** 32-hex string.
+So a grant carrying the id `spec-id` printed is correct, and any check that
+compares it against an unbound spec refuses it with `spec_mismatch` — a consent
+failure invented by the checker, on a grant the user authored correctly. Use
+`grant-check`, which binds the way a run does, and do not hand-roll the
+comparison. Declaring `harness_version` in the spec file does not fix it either:
+that changes the canonical bytes, and so moves the id again.
 
 `python -m nxd.experimental.field_mapper grant-check <spec> <grant>` applies the same statically
 decidable checks the gate subprocesses (hash, primary and corroboration model,
@@ -239,8 +269,12 @@ inputs = [
 call = make_call(
     spec=spec,
     grant=grant,
-    # Optional explicit secret mapping; use None for the environment fallback.
+    # Explicit secret mapping. `None` plus `allow_env=True` uses the
+    # allowlisted ANTHROPIC_API_KEY instead. Without `allow_env=True` there
+    # is NO environment fallback and the first dispatch fails with
+    # `credential_missing`, however visible the key is.
     secrets=None,
+    allow_env=True,
 )
 
 result = map_inputs(
@@ -256,7 +290,7 @@ result = map_inputs(
 the provider client and resolves credentials lazily, after `map_inputs` has
 checked the grant. An explicitly supplied `secrets["anthropic_api_key"]` wins;
 when it is absent, the adapter may use the allowlisted `ANTHROPIC_API_KEY`
-environment fallback. Pass `allow_env=False` when a closure must refuse ambient
+environment fallback, which is OPT-IN: `allow_env` defaults to False, so a closure that omits it gets no ambient
 credentials. Missing credentials are a blocking, sanitized
 `CredentialMissingError`; the key never appears in diagnostics or artifacts.
 Do not import `anthropic`, use tool-use output, construct a private transport

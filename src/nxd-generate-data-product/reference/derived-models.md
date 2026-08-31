@@ -16,6 +16,8 @@ shows the source-independent checks and concrete failure shapes they require.
 - [The resource template](#the-resource-template)
 - [Reading the sources yourself](#reading-the-sources-yourself)
 - [Flat dicts, and why](#flat-dicts-and-why)
+  - [A column that is all-None is DROPPED, not landed as nulls](#a-column-that-is-all-none-is-dropped-not-landed-as-nulls)
+  - [Closing over rows: use a factory, not a default argument](#closing-over-rows-use-a-factory-not-a-default-argument)
 - [The assert template](#the-assert-template)
 - [Choosing the invariant](#choosing-the-invariant)
 - [Chained derivations stay in memory](#chained-derivations-stay-in-memory)
@@ -120,7 +122,7 @@ invoices = (
         {
             # number() because every observed invoice_id is numeric. Check the
             # source first: a "T1257"-style ID is string(), not number().
-            "invoice_id": field(number(), primary_key()),
+            "invoice_id": field(number(), primary_key(), dimension(name="invoice_id", description="Invoice key.")),
             "customer": field(
                 string(),
                 dimension(name="customer", description="Billed customer name as it appears on the invoice."),
@@ -155,7 +157,7 @@ amortization_schedule = (
     )
     .schema(
         {
-            "schedule_id": field(string(), primary_key()),
+            "schedule_id": field(string(), primary_key(), dimension(name="schedule_id", description="Invoice-month key: <invoice_id>-<period>.")),
             "invoice_id": field(
                 number(),
                 join(to="invoices", to_column="invoice_id"),
@@ -297,7 +299,7 @@ classified_spend = (
     )
     .schema(
         {
-            "transaction_id": field(number(), primary_key()),
+            "transaction_id": field(number(), primary_key(), dimension(name="transaction_id", description="Transaction key.")),
             "merchant": field(
                 string(),
                 dimension(name="merchant", description="Merchant name as it appears on the source transaction, unnormalised."),
@@ -704,6 +706,13 @@ def _read_source_rows(source_root: Path, model: str) -> list[dict[str, str]]:
 `sorted(...)` is not cosmetic: glob order is filesystem-dependent, and an
 unsorted read makes a derivation whose output depends on file arrival order.
 
+**This applies only where there IS an export to re-read.** On an `api-source` or
+`db-source` closure the fetched models have no `data/` directory — there is no
+second copy of what the API returned — so a derived model computed from fetched
+rows needs them captured as they stream past, and lands in its own run. That
+pattern, and why the two obvious alternatives are wrong, is in
+[api-source.md](api-source.md) § "Deriving from a fetched source".
+
 `csv.DictReader` yields strings for every column. Convert **measures, not
 identifiers**: `Decimal(row["amount"])` (`from decimal import Decimal`) — while
 an ID stays the string `csv.DictReader` gave you unless you have checked that
@@ -729,6 +738,65 @@ Every value must be a scalar. A nested dict or list makes dlt emit a child
 table named `<parent>__<field>`, which appears in
 `pipeline.default_schema.data_table_names()` and fails the read-back assert —
 correctly, because the promised model's shape is then not what landed.
+
+### A column that is all-None is DROPPED, not landed as nulls
+
+dlt infers each column's type from the values it sees, so a column whose value
+is `None` in every row gets no type and is silently left out of the destination
+table. It warns and continues:
+
+```
+The following columns in table 'open_tickets' did not receive any data during
+this load and therefore could not have their types inferred:
+  - days_to_due
+Unless type hints are provided, these columns will not be materialized in the
+destination.
+```
+
+This is a shape that depends on the DATA rather than on the closure, which is
+exactly what a promised model must not have: a source with no due dates lands a
+table missing `days_to_due`, `models.py` still declares the dimension, and the
+query fails at consume time on a column the catalog advertises. The read-back
+assert does not catch it — the TABLE is present, only a column is missing.
+
+Pin the shape with explicit column hints, one entry per declared column:
+
+```python
+@dlt.resource(name=table_name, columns={
+    "identifier": {"data_type": "text"},
+    "days_to_due": {"data_type": "bigint"},
+    ...
+})
+def _emit() -> Iterator[dict[str, Any]]:
+    yield from rows
+```
+
+Hints do NOT create a table for a resource that yields zero rows — that lands
+nothing at all and fails the read-back assert with an opaque table-name
+mismatch. When a promised model can legitimately be empty, check it before
+`pipeline.run(...)` and raise a message that names the model and the likely
+cause; the assert cannot.
+
+### Closing over rows: use a factory, not a default argument
+
+`dlt.resource` inspects the generator's signature and treats its parameters as
+configuration, so the obvious `def _emit(rows=rows)` raises before any row is
+yielded:
+
+```
+ValueError: mutable default <class 'list'> for field rows is not allowed:
+use default_factory
+```
+
+Bind through an enclosing function instead:
+
+```python
+def _resource_for(table_name: str, rows: list[dict[str, Any]]):
+    @dlt.resource(name=table_name, columns=COLUMN_HINTS[table_name])
+    def _emit() -> Iterator[dict[str, Any]]:
+        yield from rows
+    return _emit()
+```
 
 ## The assert template
 

@@ -2,7 +2,7 @@
 
 ## Decision
 
-The user-facing `dp-spec.md` is prose-first Markdown. It has strict top-level
+The user-facing `dp-blueprint.md` is prose-first Markdown. It has strict top-level
 navigation but is not a typed mini-language. The active authoring boundary is
 v3. Version 1 is rejected; v2 remains only as a read-only verifier for already
 approved closure evidence while those artifacts exist.
@@ -10,7 +10,7 @@ approved closure evidence while those artifacts exist.
 The implementation has two explicit layers:
 
 ```text
-dp-spec.md
+dp-blueprint.md
   → dp_spec_authoring.py structure parser + source map
   → external AI typed proposal with provenance
   → deterministic proposal validation
@@ -64,6 +64,12 @@ The proposal envelope is `nxd-dp-spec-proposal-v3`. It contains:
 The proposal is an internal compiler artifact. It is persisted for approval and
 closure reproducibility, but it is not a second authoring surface.
 
+The live proposal is persisted beside the document it interprets, at
+`…/nxd-jobs/<workflow>/dp-blueprint.proposal.json`. Neither file names the
+other: `workflow` plus that convention recovers the pair, the same way the lock
+recovers the live document without storing a path to it. The approved copy is
+byte-snapshotted into the closure and is what the lock binds.
+
 ## Approval and locks
 
 Approval binds:
@@ -81,9 +87,9 @@ an explicit proposed change and revokes approval. Formatting-only edits can
 retain approval only after re-extraction proves the typed proposal unchanged.
 Blocking Open Questions prevent approval and materialization.
 
-The v3 closure contains byte-identical `dp-spec.approved.md`,
-`dp-spec.proposal.approved.json`, and a v3 lock binding both snapshots. No
-closure file may refer to `../dp-spec.md`.
+The v3 closure contains byte-identical `dp-blueprint.approved.md`,
+`dp-blueprint.proposal.approved.json`, and a v3 lock binding both snapshots. No
+closure file may refer to `../dp-blueprint.md`.
 
 ## Closure compatibility
 
@@ -92,6 +98,28 @@ closures. New v3 closures use `nxd-dp-spec-lock-v3`, a v3 canonicalization id,
 the proposal snapshot, and the same self-contained byte/hash checks. The shared
 diagnostics entry point dispatches by `dp_spec_version` for hashing, validation,
 lock writing, and lock verification. v1 never dispatches to either path.
+
+Compatibility covers the on-disk **filename** as well as the shape. A closure
+built before v0.38.0 carries `dp-spec.approved.md` / `dp-spec.lock.json` /
+`dp-spec.proposal.approved.json`, and nothing rewrites it. Only the **lock**
+needs a name fallback: `resolve_closure_lock()` prefers `dp-blueprint.lock.json`
+and falls back to `dp-spec.lock.json`, and the snapshot and proposal filenames
+travel inside the lock as `snapshot` and `proposal_snapshot`, so once the lock
+is found a legacy closure resolves the rest of itself from its own contents.
+`source_basename` is not that mechanism — it is write-only provenance and is
+never dereferenced. When neither lock name is present the diagnostic reports the
+current one, because a closure with no lock is a different fault from a closure
+with an old one. `self_check.py` cannot import that helper (it runs inside the
+closure), so it carries an inlined twin, `closure_path()`.
+
+## Naming: the schema layer versus the artifact
+
+`dp-blueprint` names the **artifact on disk**. `dp-spec` survives as the name of
+the **schema and format layer** and is not stale there: the `nxd-dp-spec-*`
+envelope ids, the `dp_spec_version` frontmatter key, the `dp_spec_*.py` modules,
+the JSON-schema `title` strings, and this document. Renaming those would
+invalidate every lock and proposal already written. A file that is an instance
+document follows the artifact; a file that describes the format does not.
 
 ## Claude Desktop form contract
 

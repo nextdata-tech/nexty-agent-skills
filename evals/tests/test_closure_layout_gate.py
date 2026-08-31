@@ -12,34 +12,22 @@ exist and must agree.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 
+from _closure_files import FILE_LIST, GENERATED_CLOSURE_FILES, collapse
+
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 
-# §9, frozen. Nothing here may be paraphrased, pluralized or reordered.
-FILE_LIST = (
-    "`spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, "
-    "`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`, "
-    "`build-record.json`, `README.md`, the connector companion artifact where the "
-    "type has one — and, "
-    "for a credentialed source, `SENSITIVE` and `.gitignore`"
-)
-
+# §9, frozen, and defined once in _closure_files so the sibling gate in
+# test_generation_subagent_gate.py cannot drift from it.
 CARRIERS = (
     SRC / "nxd-generate-data-product" / "SKILL.md",
     SRC / "nxd-run-job-loop" / "reference" / "scheduling.md",
     SRC / "nxd-run-job-loop" / "reference" / "handoff-export.md",
     SRC / "nxd-review-closure" / "SKILL.md",
-)
-
-GENERATED_CLOSURE_FILES = (
-    "dp-spec.approved.md",
-    "dp-spec.lock.json",
-    "build-record.json",
 )
 
 COAUTHOR_PROMPTS = (
@@ -48,14 +36,13 @@ COAUTHOR_PROMPTS = (
 )
 
 
-def _collapse(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+
 
 
 @pytest.mark.parametrize("path", CARRIERS, ids=lambda p: p.name)
 def test_the_file_list_appears_verbatim(path):
     assert path.is_file(), f"{path} is missing"
-    assert _collapse(FILE_LIST) in _collapse(path.read_text(encoding="utf-8")), (
+    assert collapse(FILE_LIST) in collapse(path.read_text(encoding="utf-8")), (
         f"{path.relative_to(REPO)} does not carry the frozen verify-before-build "
         "list. An agent that reads this file must verify the same set as an agent "
         "that reads any of the others."

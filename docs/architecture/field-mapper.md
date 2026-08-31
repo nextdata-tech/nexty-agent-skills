@@ -95,11 +95,25 @@ behavioural difference between two runtimes.
 
 ## What it relaxes
 
-`nxd-generate-data-product/SKILL.md` states: *"The transform never calls a model."* This
-harness is the sanctioned exception, narrow by design: it is for sources where
-agent-side judging is infeasible (blob extraction, populations too large to judge
-in-session). Where agent-side judging works, the landed-batch channel in
-`reference/llm-judgments.md` remains the default.
+`nxd-generate-data-product/SKILL.md` states: *"The transform never imports a
+provider SDK, and calls a model only through the sanctioned seam."* This harness
+is that seam. A packaged closure whose answers depend on inference runs it here,
+under a consent grant — that is what keeps the procedure inside the artifact,
+resolves the credential outside it, and puts the approval in front of the user.
+
+The landed-batch channel in `reference/llm-judgments.md` is the **exploration**
+lane: cheaper, no grant, right while the rubric is still moving — and a scaffold
+rather than a shipping shape, because the prompt and the reading of the evidence
+stay outside the closure.
+
+> **This section was reversed on 2026-08-26.** It previously read: *"This harness
+> is the sanctioned exception, narrow by design … Where agent-side judging works,
+> the landed-batch channel … remains the default."* The argument that changed it
+> is that self-containment is a property of the logic, not the values: a closure
+> shipping frozen agent-authored scores has bought value-stability with the very
+> thing value-stability was for, since nobody receiving it can re-derive them.
+> The record is kept rather than deleted because a design doc that silently
+> reverses itself stops being usable as a record.
 
 ---
 

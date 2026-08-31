@@ -40,15 +40,18 @@ _codes("error", "agent",
        "struct.naming_invariant_promised_vs_models",
        "struct.naming_invariant_promised_vs_physical",
        "struct.base_models_vs_data_dirs")
+_codes("warning", "agent", "struct.key_not_groupable")
+_codes("warning", "agent", "struct.model_not_queryable")
 _codes("info", "agent", "struct.unverified")
 _codes("error", "agent",
        "runtime.import_failed", "runtime.transform_raised",
        "runtime.assert_failed", "runtime.base_models_mismatch",
        "runtime.transform_incomplete", "runtime.model_table_missing")
-_codes("info", "agent", "runtime.row_count")
+_codes("info", "agent", "runtime.row_count", "runtime.dry_run_not_runnable")
 _codes("error", "agent",
        "closure.spec_snapshot_missing", "closure.lock_missing",
        "closure.lock_unparseable", "closure.lock_snapshot_byte_mismatch",
+       "closure.spec_hash_mismatch",
        "closure.build_record_missing", "closure.build_record_invalid",
        "closure.build_record_hash_mismatch", "closure.build_record_merge_failed",
        "closure.readme_missing",
@@ -68,8 +71,10 @@ _codes("error", "agent",
        "closure.model_path_unresolved")
 # The one closure.* code the AGENT cannot fix: a snapshot taken from a spec the
 # user never approved is a governance fault, and only the user can approve.
-_codes("error", "user", "closure.lock_status_not_approved")
-_codes("info", "agent", "closure.canonical_hash_deferred")
+_codes("error", "user", "closure.lock_status_not_approved",
+       "closure.contract_phase_unsupported")
+_codes("info", "agent", "closure.canonical_hash_deferred",
+       "closure.legacy_artifact_superseded")
 _codes("error", "agent",
        "policy.decisions_not_base_model", "policy.decisions_csv_missing",
        "policy.decisions_column_missing", "policy.decisions_value_out_of_vocab",
@@ -104,6 +109,40 @@ if "--record" in sys.argv:                 # no argparse: the closure's copy of
     _i = sys.argv.index("--record")        # this script stays small and its
     RECORD_PATH = (sys.argv[_i + 1]        # byte-identical twin stays readable
                    if _i + 1 < len(sys.argv) else "build-record.json")
+
+# The closure's own artifact names. This script is COPIED INTO THE CLOSURE and
+# run with a bare interpreter, so the shared diagnostics helper is out of reach
+# and its constants have to be inlined here: these are the twins of
+# CLOSURE_SNAPSHOT / CLOSURE_LOCK / V3_PROPOSAL_SNAPSHOT, and LEGACY is the twin
+# of LEGACY_CLOSURE_LOCK. Before v0.38.0 these three were named after the
+# dp-spec; a closure built then is still a valid closure.
+CLOSURE_SNAPSHOT = "dp-blueprint.approved.md"
+CLOSURE_LOCK = "dp-blueprint.lock.json"
+CLOSURE_PROPOSAL = "dp-blueprint.proposal.approved.json"
+# Only these two are resolved by NAME. The proposal snapshot is not here on
+# purpose: its filename travels inside the lock, so it is resolved from
+# lock["proposal_snapshot"] and a legacy entry for it could never fire.
+LEGACY = {CLOSURE_SNAPSHOT: "dp-spec.approved.md",
+          CLOSURE_LOCK: "dp-spec.lock.json"}
+
+
+def closure_path(name):
+    """Resolve a closure artifact, preferring the current name.
+
+    Falls back to the pre-v0.38.0 spelling, and returns the CURRENT-name path
+    when neither exists so a genuinely missing artifact still reports the name
+    a fresh closure should have. A name with no legacy spelling degrades to "no
+    fallback" rather than raising: this runs inside a user's closure under a
+    bare interpreter, where a traceback is the worst possible output.
+    """
+    current = Path(name)
+    if current.is_file():
+        return current
+    legacy = LEGACY.get(name)
+    if legacy and Path(legacy).is_file():
+        return Path(legacy)
+    return current
+
 
 DIAGS = []
 STAGE_STATE = {"s1_structure": None, "s2_transform": None, "s3_closure": None}
@@ -246,7 +285,7 @@ def finish(exit_code):
             counts[d["severity"]] += 1
         try:
             spec_hash = json.loads(
-                Path("dp-spec.lock.json").read_text(encoding="utf-8")).get("spec_hash")
+                closure_path(CLOSURE_LOCK).read_text(encoding="utf-8")).get("spec_hash")
         except Exception:
             spec_hash = None
         print(json.dumps({"schema": "nxd-diagnostic-report-v2",
@@ -284,6 +323,17 @@ errors, unverified, unverified_at = [], [], []
 def bad(code, msg, at=""):
     errors.append(msg)
     diag("s1_structure", code, msg, path=cpath(at))
+
+def warn(code, msg, at=""):
+    """A real defect that must not fail the closure.
+
+    `bad` fails the phase, which would reject closures that already build,
+    publish and answer. A warning still reaches the report and the build record,
+    which is what `struct.key_not_groupable` needs: it is invisible at runtime
+    (no error, no failed assert, no missing table) but it is not fatal.
+    """
+    diag("s1_structure", code, msg, path=cpath(at))
+    say(f"  warning: {msg}")
 
 def unv(msg, at=""):
     """A construct this static pass cannot see. Recorded, never a failure —
@@ -439,9 +489,10 @@ def walk_roles(node, where, *, in_view):
                     f"member (e.g. Agg.SUM), not a bare value", where)
 
 def parse_models(src, path):
-    """-> ({var: name}, {var: kind}, {name: joins}, {name: has_pk})"""
+    """-> ({var: name}, {var: kind}, {name: joins}, {name: has_pk},
+           {view_name: base_var})"""
     tree = ast.parse(src, path)
-    var_name, var_kind, joins, has_pk = {}, {}, {}, {}
+    var_name, var_kind, joins, has_pk, view_bases = {}, {}, {}, {}, {}
     for imp in ast.walk(tree):
         if isinstance(imp, ast.ImportFrom) and (imp.module or "").startswith("nxd"):
             head = imp.module.split(".")
@@ -476,6 +527,16 @@ def parse_models(src, path):
                 f"literal, got {shown}", path)
             continue
         var_name[target.id], var_kind[target.id] = model, kind
+        if kind == "semantic_view":
+            # semantic_view("<name>", <base>) - the base is the second positional
+            # in every documented form. Recorded as the VARIABLE id and resolved
+            # to a model name after the file is parsed, since a view may be
+            # defined above its base.
+            base_arg = (root.args[1] if len(root.args) > 1 else
+                        next((k.value for k in root.keywords
+                              if k.arg in ("model", "base")), None))
+            if isinstance(base_arg, ast.Name):
+                view_bases[model] = base_arg.id
         joins.setdefault(model, []); has_pk[model] = False
         # Either authoring form counts: the chained .description(...) is the
         # verified one, but the description= constructor kwarg is pinned in
@@ -528,6 +589,34 @@ def parse_models(src, path):
                 if isinstance(v, ast.Tuple) and v.elts:
                     check_dtype(v.elts[0], where)
                 walk_roles(v, where, in_view=in_view)
+                field_roles = {call_name(sub) for sub in ast.walk(v)}
+                if not in_view and "primary_key" in field_roles \
+                        and "dimension" not in field_roles:
+                    # Roles compose. A key carrying ONLY primary_key() never
+                    # reaches describe_models, so no query can group by it and
+                    # every entity-level question loses its answerable form —
+                    # with no error, no failed assert and no missing table to
+                    # show for it.
+                    warn("struct.key_not_groupable",
+                         f"{where}: primary_key() with no dimension(...) on the "
+                         f"same field — the key is not groupable, so no query "
+                         f"can return which entity a row is about", where)
+                if not in_view and "join" in field_roles \
+                        and "dimension" not in field_roles \
+                        and "primary_key" not in field_roles:
+                    # Exactly the same failure wearing a different role. A column
+                    # carrying ONLY join(...) is a traversal edge and nothing
+                    # else: it is absent from describe_models, so a caller cannot
+                    # filter or group this model by the entity it points at. The
+                    # rows are reachable only through the OTHER model's metric,
+                    # where a filter scopes that model's aggregate rather than
+                    # this model's spine — which returns every row and looks like
+                    # it worked.
+                    warn("struct.key_not_groupable",
+                         f"{where}: join(...) with no dimension(...) on the same "
+                         f"field — the foreign key is not groupable, so this "
+                         f"model cannot be filtered or grouped by the entity it "
+                         f"joins to", where)
                 for sub in ast.walk(v):
                     if call_name(sub) == "primary_key":
                         has_pk[model] = True
@@ -537,7 +626,7 @@ def parse_models(src, path):
                                      if k.arg == "to"), None))
                         if tgt:
                             joins[model].append((tgt, where))
-    return var_name, var_kind, joins, has_pk
+    return var_name, var_kind, joins, has_pk, view_bases
 
 def parse_spec(src, path, var_name, var_kind):
     """-> set of promised model names"""
@@ -661,7 +750,7 @@ except (OSError, UnicodeDecodeError) as exc:
           file=sys.stderr)
     finish(2)
 
-var_name, var_kind, joins, has_pk = parse_models(models_src, "models.py")
+var_name, var_kind, joins, has_pk, view_bases = parse_models(models_src, "models.py")
 promised, modelled = parse_spec(spec_src, "spec.py", var_name, var_kind)
 
 base_names = {n for v, n in var_name.items() if var_kind[v] == "semantic_model"}
@@ -671,6 +760,23 @@ for model, edges in joins.items():
             bad("struct.join_target_missing",
                 f"{where}: join(to=\"{tgt}\") — no semantic_model of that name "
                 f"in models.py", where)
+# Which base models a metric can actually reach. run_semantic_query REQUIRES at
+# least one measure, so a promised model that backs no semantic_view is landed
+# but unreachable: its dimensions never appear in a selection, and the only way
+# to touch its rows is through ANOTHER model's metric across a join - where a
+# filter scopes that model's aggregate rather than this model's spine, quietly
+# returning every row. A bare COUNT view is enough to fix it.
+_metric_backed = {var_name[v] for v in view_bases.values() if v in var_name}
+for model in sorted(promised & base_names):
+    if model not in _metric_backed:
+        warn("struct.model_not_queryable",
+             f"models.py: semantic_model('{model}') is promised but backs no "
+             f"semantic_view, so no metric reaches it — run_semantic_query "
+             f"requires a measure, making this model unqueryable however well "
+             f"its dimensions are described. Add a semantic_view with at least "
+             f"one metric (a COUNT of its key will do) if any Question or "
+             f"Output reads it.",
+             f"models.py:{model}")
 for model in base_names:
     if not has_pk[model]:
         bad("struct.no_primary_key",
@@ -733,8 +839,14 @@ say(f"phase A ok — {len(base_names)} semantic_model, "
 # model, already spent the money. The decision must precede the import, so this
 # block sits above Phase B and exits before sys.path.insert(0, ".").
 #
-# What it enforces: the transform never calls a model, and reaches the network
-# only through the connector it declares. That invariant used to be prose only,
+# What it enforces: the transform never calls a model THROUGH A RAW PROVIDER SDK,
+# and reaches the network only through the connector it declares. The gate is
+# about the seam, not about inference as such: a packaged closure is expected to
+# infer, and does it through nxd.experimental.field_mapper under Phase G's
+# consent grant, which keeps the procedure inside the closure, the credential
+# outside it, and the approval in front of the user. A direct `import anthropic`
+# has none of those properties, which is why it stays denied here.
+# That invariant used to be prose only,
 # on the belief that the desktop venv was closed. It is not — requests, httpx,
 # httpcore and urllib3 all arrive transitively via dlt and mcp, and urllib and
 # socket are stdlib. A closure can call a model today; nothing structural stops
@@ -973,11 +1085,15 @@ for mod, (needs, human) in (SHAPE.items() if saw_service_ref else ()):
 for root in sorted(r for r in MODEL_ROOTS
                    if any(denied_hit(m, {r}) for m in t_imports)):
     eerr("reach.model_sdk_import",
-        f"transform/main.py imports {root!r} — a model-provider SDK. A "
-        f"transform lands data; it never calls a model. Inference belongs in "
-        f"the session that AUTHORS the closure, and its output lands as data "
-        f"(reference/derivation-plan.md) so a rerun of the transform "
-        f"reproduces the same rows instead of re-deciding them.")
+        f"transform/main.py imports {root!r} — a model-provider SDK directly. A "
+        f"transform may infer, but only through the sanctioned seam: "
+        f"nxd.experimental.field_mapper, called via make_call, under a consent "
+        f"grant (reference/field-mapper.md). A raw SDK import routes around the "
+        f"grant check, the supervisor approval boundary, and the sanitized "
+        f"credential handling — so nobody receiving this closure can see what "
+        f"content leaves it or authorize the call. While the product is still "
+        f"being explored, judging agent-side and landing the rows as CSV "
+        f"(reference/llm-judgments.md) is the cheaper lane and needs no grant.")
 if not network_declared:
     for root in sorted(r for r in TRANSPORT_ROOTS
                        if any(denied_hit(m, {r}) for m in t_imports)):
@@ -1037,7 +1153,7 @@ for vpath in sorted(p for p in Path("contracts").rglob("*.py")
             f"can pass today and fail tomorrow.", str(vpath))
 
 if eerrors:
-    say("\nPHASE E FAILED — reach gate (the transform does not call a model):")
+    say("\nPHASE E FAILED — reach gate (no raw provider SDK; infer through the seam):")
     seen = set()
     for ecode, e, eat in eerrors:
         if e in seen:
@@ -1555,6 +1671,21 @@ def berr(code, msg, at="", ev=None, tb=""):
         ev["traceback"] = tb
     diag("s2_transform", code, msg, path=cpath(at), evidence=ev)
 
+def dry_run_waived(exc, network_declared):
+    """Is this dry-run failure a KNOWN LIMIT rather than a closure defect?
+
+    A db-source/api-source closure reads its connection out of `secrets`, and
+    the offline harness has no credential to give it, so the first `secrets[...]`
+    raises KeyError before the transform does anything. That is expected, and
+    reference/api-source.md tells the author not to code around it.
+
+    It is waived ONLY on that pairing. A CSV closure declaring no network source
+    has no such excuse: a missing secret there is a real fault and must still
+    fail Phase B. Keyed on the connector, never on the exception type alone.
+    """
+    return isinstance(exc, KeyError) and bool(network_declared)
+
+
 def fail_b():
     say("\nPHASE B FAILED — transform dry-run (this EXECUTED: what it reports "
         "is what will happen):")
@@ -1765,12 +1896,42 @@ run = Path(tempfile.mkdtemp())
 # from directories KeyErrors the moment a derived model resolves its table name.
 out = DuckDbOutput(path=str(run / "data.duckdb"), schema="main",
                    model_tables={m: m for m in PHYSICAL_MODELS})
+# A db-source/api-source closure reads its connection out of `secrets`, and the
+# harness has no credential to give it — so `secrets["base_url"]` raises before
+# the transform does anything. That is a KNOWN LIMIT of the offline dry run, not
+# a defect in the closure, and reference/api-source.md tells the author not to
+# code around it with a profile-reading fallback.
+#
+# It must therefore not fail Phase B, because failing Phase B also skips Phases
+# C, D and E — the closure-record, policy-boundary and reach-gate checks. Those
+# are exactly the checks a credentialed, network-shaped closure most needs, and
+# losing them silently to an expected KeyError is how a missing contract wiring
+# or a hardcoded policy value reaches a build.
+dry_run_runnable = True
 try:
     dry_run_secrets = (
         {"csv_source": str(Path("data").resolve())}
         if Path("data").is_dir() else {}
     )
     ingest(duckdb=out, secrets=dry_run_secrets)
+except KeyError as exc:
+    if not dry_run_waived(exc, network_declared):
+        berr("runtime.transform_raised",
+             f"transform/main.py: KeyError: {exc}",
+             "transform/main.py", tb=traceback.format_exc())
+    else:
+        dry_run_runnable = False
+        diag("s2_transform", "runtime.dry_run_not_runnable",
+             f"the dry run could not execute: this closure declares "
+             f"{sorted(declared_sources) or ['a network source']} and reads "
+             f"{exc} out of `secrets`, which the offline harness cannot supply. "
+             f"Phase B is NOT RUNNABLE here and reports nothing about the "
+             f"transform - verify it with check_data_product, which runs the "
+             f"real closure under the supervisor's interpreter. Phases C, D and "
+             f"E still run below.",
+             path=cpath("transform/main.py"),
+             evidence={"missing_secret": str(exc),
+                       "declared_sources": sorted(declared_sources)})
 except AssertionError as exc:
     # A fired assert is the transform's OWN invariant rejecting the data it
     # produced. That is the check working, not the check being wrong.
@@ -1784,8 +1945,8 @@ except Exception as exc:
 if berrors:
     fail_b()
 import duckdb
-con = duckdb.connect(out.path, read_only=True)
-for m in PHYSICAL_MODELS:  # unquoted main.<name> — the invariant, physically
+con = duckdb.connect(out.path, read_only=True) if dry_run_runnable else None
+for m in (PHYSICAL_MODELS if dry_run_runnable else ()):  # unquoted main.<name> — the invariant, physically
     try:
         n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     except Exception as exc:
@@ -1798,15 +1959,25 @@ for m in PHYSICAL_MODELS:  # unquoted main.<name> — the invariant, physically
     diag("s2_transform", "runtime.row_count", f"{m}: {n_rows} rows",
          path=cpath(f"transform/main.py:{m}"),
          evidence={"model": m, "count": n_rows})
-if not (run / ".transform-complete").exists():
+if dry_run_runnable and not (run / ".transform-complete").exists():
     berr("runtime.transform_incomplete",
          "the transform returned without writing .transform-complete — it did "
          "not finish", "transform/main.py")
 if berrors:
     fail_b()
-close_stage("s2_transform", "passed",
-            models_counted=len(PHYSICAL_MODELS), unverified=len(unverified))
-say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
+if not dry_run_runnable:
+    close_stage("s2_transform", "skipped",
+                reason="dry_run_not_runnable", unverified=len(unverified))
+    say(f"phase B NOT RUNNABLE — this closure needs a credential the offline "
+        f"harness cannot supply, so the transform was never executed and "
+        f"nothing below is evidence about it. models.py/spec.py were still "
+        f"checked STRUCTURALLY; {len(unverified)} unverified entries listed "
+        f"above. Verify the transform with check_data_product. Continuing to "
+        f"phases C, D and E.")
+else:
+    close_stage("s2_transform", "passed",
+                models_counted=len(PHYSICAL_MODELS), unverified=len(unverified))
+    say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
     f"STRUCTURALLY against the pinned nxd v0.41.139 DSL surface (not "
     f"executed — no nxd wheel installable here); {len(unverified)} "
     f"unverified entries listed above. A spec fault only the real wheel or "
@@ -1815,7 +1986,7 @@ say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
 # ---------------------------------------------------------------- Phase C ---
 # Closure-record gate (Step 6a). The closure must be a SUFFICIENT handoff, and
 # after this change that is a HASH-CHECKABLE property rather than a prose
-# discipline: the approved spec is byte-copied in as dp-spec.approved.md, the
+# discipline: the approved spec is byte-copied in as dp-blueprint.approved.md, the
 # lock carries its hash and the compiler version, and build-record.json says
 # which spec the closure was compiled from. A structurally valid closure can
 # still be uncontinuable if the plan it was built from lives in ../../some-doc.md
@@ -1825,36 +1996,77 @@ def cerr(code, msg, at="", ev=None):
     cerrors.append(msg)
     diag("s3_closure", code, msg, path=cpath(at), evidence=ev)
 
+# Resolve the closure's own artifacts once, before anything reports on them, so
+# every Phase C diagnostic names the file that is actually there.
+#
+# The LOCK is resolved by name (current, then the pre-v0.38.0 dp-spec.* spelling
+# — a closure built then is still valid). The SNAPSHOT is not: its filename
+# travels inside the lock, which is what dp_diagnostics resolves, and the lock
+# schema allows an in-closure sub-path. Guessing the name here instead would let
+# the two verifiers disagree about the same closure — `lock verify` passing
+# while Phase C reports a missing snapshot, and C8 silently skipping the plan.
+# The name fallback is the LAST resort, for a closure whose lock is unreadable.
+lockp = closure_path(CLOSURE_LOCK)
+lock_name = lockp.name
+
+
+def _lock_snapshot_ref(path):
+    """The snapshot as the lock declares it. Returns (path or None, escaped)."""
+    try:
+        ref = str(json.loads(path.read_text(encoding="utf-8")).get("snapshot") or "")
+    except Exception:
+        return None, False
+    if not ref:
+        return None, False
+    candidate = Path(ref)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None, True
+    try:
+        candidate.resolve().relative_to(Path.cwd().resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None, True
+    return candidate, False
+
+
+_snap_ref, _snap_escaped = _lock_snapshot_ref(lockp)
+snap = _snap_ref if _snap_ref is not None else closure_path(CLOSURE_SNAPSHOT)
+snap_name = str(snap)
+if _snap_escaped:
+    cerr("closure.escaping_reference",
+         "the lock's snapshot reference points outside the closure.", lock_name)
+
 # C11 first, so it is in the report whatever else happens: Phase C compares the
 # snapshot's BYTES, which is sufficient inside the closure (the bytes are the
 # ones the canonical hash was computed from) and needs nothing but hashlib. The
 # semantic comparison against the live IR is a separate v2 lock verification.
 diag("s3_closure", "closure.canonical_hash_deferred",
-     "Phase C checked the snapshot's raw bytes against dp-spec.lock.json. The "
-     "canonical (semantic) hash and the comparison against the live dp-spec.md "
+     f"Phase C checked the snapshot's raw bytes against {lock_name}. The "
+     "canonical (semantic) hash and the comparison against the live dp-blueprint.md "
      "are NOT checked here — re-run generator canonical lock verification with its "
      "resolved job_helper_dir for that.",
-     path=cpath("dp-spec.lock.json"))
+     path=cpath(lock_name))
 
 # C1 / C2 — the approved plan and its lock must both be in the closure.
-snap = Path("dp-spec.approved.md")
 snap_bytes = snap.read_bytes() if snap.exists() else None
 if snap_bytes is None:
+    # snap_name, not the constant: when the lock declared the snapshot, that is
+    # the name the closure is missing, and _verify_v3_lock reports the same one.
+    # The constant would send a legacy closure's reader after the wrong file.
     cerr("closure.spec_snapshot_missing",
-         "dp-spec.approved.md is missing from the closure root — the closure "
+         f"{snap_name} is missing from the closure root — the closure "
          "carries no copy of the approved plan it was compiled from, so a cold "
          "reader cannot tell what it was supposed to build. Byte-copy the "
-         "approved dp-spec.md in at generation (Step 6a).", "dp-spec.approved.md")
+         "approved dp-blueprint.md in at generation (Step 6a).", snap_name)
 lock = None
 is_v3_lock = False
 v3_approved_contracts = set()
-lockp = Path("dp-spec.lock.json")
+v3_pre_transform_contracts = set()
 if not lockp.exists():
     cerr("closure.lock_missing",
-         "dp-spec.lock.json is missing from the closure root — without it the "
+         f"{CLOSURE_LOCK} is missing from the closure root — without it the "
          "snapshot is an unattributed copy: no hash, no compiler version, "
          "nothing to check it against. Run `dp_diagnostics.py lock write`.",
-         "dp-spec.lock.json")
+         CLOSURE_LOCK)
 else:
     try:
         lock = json.loads(lockp.read_text(encoding="utf-8"))
@@ -1894,8 +2106,8 @@ else:
     except Exception as exc:
         lock = None
         cerr("closure.lock_unparseable",
-             f"dp-spec.lock.json could not be read as a lock file — "
-             f"{type(exc).__name__}: {exc}", "dp-spec.lock.json")
+             f"{lock_name} could not be read as a lock file — "
+             f"{type(exc).__name__}: {exc}", lock_name)
 
 # C3 — tamper check. The snapshot is EVIDENCE; evidence edited after it was
 # written is not evidence. This is the mechanical half of "once approved, the
@@ -1908,9 +2120,9 @@ if lock is not None and snap_bytes is not None:
     expected_snapshot_version = 3 if is_v3_lock else 2
     if snapshot_version != expected_snapshot_version:
         cerr("closure.spec_hash_mismatch",
-             f"dp-spec.approved.md declares dp_spec_version={snapshot_version!r}, "
+             f"{snap_name} declares dp_spec_version={snapshot_version!r}, "
              f"but the lock envelope is for version {expected_snapshot_version}.",
-             "dp-spec.approved.md",
+             snap_name,
              {"expected": expected_snapshot_version, "actual": snapshot_version})
     if is_v3_lock:
         for field in ("name", "workflow"):
@@ -1918,20 +2130,21 @@ if lock is not None and snap_bytes is not None:
             snapshot_value = match.group(1).decode("utf-8") if match else None
             if snapshot_value != lock.get(field):
                 cerr("closure.spec_hash_mismatch",
-                     f"dp-spec.approved.md {field} does not match the v3 lock.",
-                     "dp-spec.approved.md",
+                     f"{snap_name} {field} does not match the v3 lock.",
+                     snap_name,
                      {"expected": lock.get(field), "actual": snapshot_value})
     got = hashlib.sha256(snap_bytes).hexdigest()
     want = lock.get("snapshot_sha256")
     if got != want:
         cerr("closure.lock_snapshot_byte_mismatch",
-             f"dp-spec.approved.md does not match dp-spec.lock.json "
+             f"{snap_name} does not match {lock_name} "
              f"snapshot_sha256 — the in-closure copy was edited after it was "
              f"written. The plan a build was compiled from is not editable "
-             f"in place: change the live dp-spec.md, re-approve, regenerate.",
-             "dp-spec.approved.md", {"expected": want, "actual": got})
+             f"in place: change the live dp-blueprint.md, re-approve, regenerate.",
+             snap_name, {"expected": want, "actual": got})
     if is_v3_lock:
         proposal_path = Path(str(lock.get("proposal_snapshot", "")))
+        proposal_name = proposal_path.name or CLOSURE_PROPOSAL
         try:
             proposal_path.resolve().relative_to(Path.cwd().resolve())
             inside_closure = True
@@ -1940,23 +2153,31 @@ if lock is not None and snap_bytes is not None:
         if proposal_path.is_absolute() or ".." in proposal_path.parts or not inside_closure:
             cerr("closure.escaping_reference",
                  "the v3 typed proposal snapshot points outside the closure.",
-                 "dp-spec.lock.json")
+                 lock_name)
             proposal_path = Path("")
         proposal_bytes = proposal_path.read_bytes() if proposal_path.is_file() else None
         if proposal_bytes is None:
             cerr("closure.spec_snapshot_missing",
                  "the v3 typed proposal snapshot is missing from the closure.",
-                 "dp-spec.proposal.approved.json")
+                 proposal_name)
         elif hashlib.sha256(proposal_bytes).hexdigest() != lock.get("proposal_snapshot_sha256"):
             cerr("closure.lock_snapshot_byte_mismatch",
-                 "dp-spec.proposal.approved.json does not match its lock hash.",
-                 "dp-spec.proposal.approved.json")
+                 f"{proposal_name} does not match its lock hash.",
+                 proposal_name)
         else:
             try:
                 proposal = json.loads(proposal_bytes.decode("utf-8"))
-                v3_approved_contracts = {
-                    item.get("id") for item in proposal.get("proposal", {}).get("contracts", [])
+                _v3_contracts = [
+                    item for item in proposal.get("proposal", {}).get("contracts", [])
                     if isinstance(item, dict) and isinstance(item.get("id"), str)
+                ]
+                v3_approved_contracts = {item["id"] for item in _v3_contracts}
+                # Phase travels on the compiled contract, and the runtime can only
+                # execute a pre_transform one for a declared CSV source-aligned
+                # input. Keep the split so the support check below can name ids.
+                v3_pre_transform_contracts = {
+                    item["id"] for item in _v3_contracts
+                    if item.get("phase") == "pre_transform"
                 }
                 proposal_payload = {
                     key: proposal[key] for key in proposal
@@ -1969,7 +2190,7 @@ if lock is not None and snap_bytes is not None:
                 if proposal_hash != lock.get("proposal_hash"):
                     cerr("closure.spec_hash_mismatch",
                          "the typed proposal hash does not match the v3 lock.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
                 proposal_body = proposal.get("proposal")
                 if not isinstance(proposal_body, dict):
                     raise ValueError("the v3 typed proposal payload is not an object")
@@ -1987,7 +2208,7 @@ if lock is not None and snap_bytes is not None:
                 if terms_hash != lock.get("terms_hash"):
                     cerr("closure.terms_hash_mismatch",
                          "the inline Terms inventory does not match its v3 lock hash.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
                 contracts = proposal_body.get("contracts", [])
                 if not isinstance(contracts, list):
                     raise ValueError("the v3 contract inventory is not a list")
@@ -2006,7 +2227,7 @@ if lock is not None and snap_bytes is not None:
                 if contract_hash != lock.get("contract_inventory_hash"):
                     cerr("closure.contract_inventory_hash_mismatch",
                          "the compiled contract inventory does not match its v3 lock hash.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
                 decisions = proposal_body.get("decisions", [])
                 if not isinstance(decisions, list):
                     raise ValueError("the v3 decision inventory is not a list")
@@ -2025,20 +2246,20 @@ if lock is not None and snap_bytes is not None:
                 if decisions_hash != lock.get("locked_decisions_hash"):
                     cerr("closure.decision_inventory_mismatch",
                          "the settled locked-decision inventory does not match its v3 lock hash.",
-                         "dp-spec.proposal.approved.json")
+                         proposal_name)
             except Exception as exc:
                 cerr("closure.lock_unparseable",
                      f"the v3 typed proposal snapshot is invalid: "
                      f"{type(exc).__name__}: {exc}",
-                     "dp-spec.proposal.approved.json")
+                     proposal_name)
 
 # C4 — a snapshot of an unapproved spec is a build nobody signed off.
 if lock is not None and lock.get("spec_status_at_copy") != "approved":
     cerr("closure.lock_status_not_approved",
-         f"dp-spec.lock.json records spec_status_at_copy="
+         f"{lock_name} records spec_status_at_copy="
          f"{lock.get('spec_status_at_copy')!r} — the closure was generated from "
          f"a spec that was not approved. Approval is what gets copied and "
-         f"hashed; without it nothing here was signed off.", "dp-spec.lock.json",
+         f"hashed; without it nothing here was signed off.", lock_name,
          {"expected": "approved", "actual": lock.get("spec_status_at_copy")})
 
 # C5 / C6 — the build record exists and names the SAME plan as the lock. It is
@@ -2090,7 +2311,7 @@ else:
 if lock is not None and record is not None and \
         record.get("compiled_from") != lock.get("spec_hash"):
     cerr("closure.build_record_hash_mismatch",
-         f"build-record.json compiled_from does not equal dp-spec.lock.json "
+         f"build-record.json compiled_from does not equal {lock_name} "
          f"spec_hash — the record describes a build of a DIFFERENT plan than "
          f"the one snapshotted here. Regenerate rather than reconciling by "
          f"hand.", "build-record.json",
@@ -2111,7 +2332,7 @@ if not Path("README.md").exists():
 # the approved plan is exactly the dangling pointer this design removes, and no
 # carve-out is needed anywhere because the IR is COPIED rather than pointed at.
 ESCAPE = re.compile(r"\.\.(?:/[^\s\)\"']*)+\.md", re.IGNORECASE)
-scan = ["README.md", "dp-spec.approved.md", "spec.py", "models.py",
+scan = ["README.md", snap_name, "spec.py", "models.py",
         "transform/main.py"]
 # rglob, not glob: contracts/ now holds expectations/ and promises/ subtrees as
 # well as the flat contracts/<name>.md, and a verifier that points out of the
@@ -2131,7 +2352,7 @@ for rel in scan:
         cerr("closure.escaping_reference",
              f"{rel}: references '{m}' — a contract/design path that escapes "
              f"the closure. Materialize it inside the closure "
-             f"(dp-spec.approved.md / contracts/<name>.md / inert derived "
+             f"(dp-blueprint.approved.md / contracts/<name>.md / inert derived "
              f"model), never a ../ pointer.", rel, {"found": m})
 
 # C10 — sensitivity artifacts. The trigger is STRUCTURAL: a *-source service
@@ -2279,6 +2500,36 @@ if _spec_tree is not None:
         else set(lock.get("contract_names") or []) if isinstance(lock, dict) else set()
     )
     wired_contracts = set(contracts)
+    # An Input's Expectations compile to pre_transform contracts, and the desktop
+    # runtime executes a custom input expectation ONLY for a declared CSV
+    # source-aligned input bound to the `csv-source` service. A db-source or
+    # api-source closure declares no such input, so there is nowhere to attach
+    # them and the inventory can never be satisfied.
+    #
+    # Without this check the author learns that from a bare
+    # contract_inventory_mismatch, AFTER a whole closure exists, and the obvious
+    # way to make it green is to wire them as output promises - which silently
+    # moves a phase the user approved. Name it, and name the three ways out.
+    if is_v3_lock and v3_pre_transform_contracts and "csv-source" not in declared_sources:
+        cerr(
+            "closure.contract_phase_unsupported",
+            f"{len(v3_pre_transform_contracts)} approved contract(s) are "
+            f"pre_transform input expectations - "
+            f"{sorted(v3_pre_transform_contracts)} - but spec.py declares "
+            f"{sorted(declared_sources) or 'no connector service'} and no "
+            f"csv-source. This runtime runs a custom input expectation only for "
+            f"a declared CSV source-aligned input, so these cannot execute at "
+            f"that phase and the inventory cannot be satisfied. Resolve it in "
+            f"dp-blueprint.md, not here: state the guarantee under the matching "
+            f"Output's Promises (verified post-transform against the landed "
+            f"relation), keep it as prose with no executable contract, or supply "
+            f"a CSV export. Each is a spec edit needing re-approval - wiring an "
+            f"input expectation as an output promise to clear this check moves a "
+            f"phase the user approved.",
+            "spec.py",
+            {"pre_transform_contracts": sorted(v3_pre_transform_contracts),
+             "declared_sources": sorted(declared_sources)},
+        )
     if approved_contracts != wired_contracts:
         cerr(
             "closure.contract_inventory_mismatch",
@@ -2793,7 +3044,7 @@ say("SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), "
 # user before the build (see nxd-run-job-loop Step 3). It is also the designated
 # stage-8 predictor: a green build that answers wrongly shows up here first, so
 # it is recorded as DATA in build-record.readback, not only printed.
-for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
+for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)) if dry_run_runnable else ()):
     n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     cols = [r[0] for r in con.execute(
         f"SELECT name FROM pragma_table_info('{m}') WHERE type = 'VARCHAR'").fetchall()
@@ -2840,7 +3091,7 @@ for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
 # landed data, never from a transform literal, so this is independent of the
 # code it is checking.
 produced = set()
-for m in sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)):
+for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)) if dry_run_runnable else ()):
     for (c,) in con.execute(
             f"SELECT name FROM pragma_table_info('{m}') "
             f"WHERE type = 'VARCHAR'").fetchall():

@@ -75,10 +75,10 @@ those two phases rather than an accident of how they were added.
   valid and still be an insufficient handoff, and this is the phase that catches
   it. What changed with the snapshot design: sufficiency is now a
   **hash-checkable property**, not a prose discipline. The approved plan is
-  byte-copied into the closure at generation as `dp-spec.approved.md`, and the
+  byte-copied into the closure at generation as `dp-blueprint.approved.md`, and the
   phase checks:
-  - `dp-spec.approved.md` is present at the closure root;
-  - `dp-spec.lock.json` is present, parses, and carries schema
+  - `dp-blueprint.approved.md` is present at the closure root;
+  - `dp-blueprint.lock.json` is present, parses, and carries schema
     the matching `nxd-dp-spec-lock-v2` or `nxd-dp-spec-lock-v3` envelope;
   - the snapshot's raw bytes hash to the lock's `snapshot_sha256` — the **tamper
     check**. The snapshot is evidence, and evidence edited after it was written
@@ -107,7 +107,7 @@ those two phases rather than an accident of how they were added.
   (v2 or v3, dispatched on `dp_spec_version`) computes
   the canonical hash without a YAML dependency. Step 7 still runs
   `python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock verify <closure> --spec
-  <dp-spec.md>` to compare the live IR and the approved snapshot, and Phase C
+  <dp-blueprint.md>` to compare the live IR and the approved snapshot, and Phase C
   emits an informational diagnostic naming that command so a reader of the JSON
   can never mistake the two checks.
   (Note: the naming invariant that Phase A enforces already requires every
@@ -179,7 +179,7 @@ recorded rather than merely printed: the blind spot goes into the report as
 
 Phase C's byte check is not the canonical hash. It answers *"was the in-closure
 copy edited after it was written?"*, not *"did the plan change?"* — that second
-question compares the live `dp-spec.md` against the lock and needs
+question compares the live `dp-blueprint.md` against the lock and needs
 `dp_diagnostics.py lock verify --spec`, which Step 7 runs separately.
 
 ## The JSON report and the build record
@@ -255,6 +255,15 @@ model was called. Specifically:
   plus the raw transports. A provider shipping under a name nobody added here
   passes. Report a green Phase E as "no *listed* model-provider SDK", never as
   "no model call".
+- **A green Phase E is not "this closure does not infer", and is not meant to
+  be.** A packaged closure that infers does it through
+  `nxd.experimental.field_mapper` under Phase G's consent grant — that is the
+  sanctioned seam, and Phase E passes it by design (the harness's own
+  `import anthropic` is function-local and invisible to an import-level walk).
+  What Phase E denies is a *raw* provider SDK in the transform, which reaches a
+  model while routing around the grant check, the supervisor approval boundary
+  and the sanitized credential handling. Denied-here and inferring-legitimately
+  are different questions; Phase G answers the second.
 - **`subprocess` and `os.popen` are a documented gap, by decision — not a rule.**
   `subprocess.run(["curl", …])` reaches anything. Neither spelling is denied:
   `os` is imported by nearly every correct transform for `os.path`, so denying
@@ -493,9 +502,9 @@ working, not the check being wrong. Fix the derivation, never the assert.
 
 Reading a **Phase C** failure: each one names a specific missing or mismatched
 record file, and none of them is fixed by hand-editing the closure.
-`dp-spec.approved.md does not match ... snapshot_sha256` means the in-closure
+`dp-blueprint.approved.md does not match ... snapshot_sha256` means the in-closure
 copy of the plan was edited after it was written — the plan a build was compiled
-from is not editable in place, so change the live `dp-spec.md`, re-approve, and
+from is not editable in place, so change the live `dp-blueprint.md`, re-approve, and
 regenerate. `compiled_from does not equal ... spec_hash` means the build record
 describes a build of a *different* plan than the one snapshotted here; regenerate
 rather than reconciling by hand. `spec_status_at_copy` not `approved` is the one

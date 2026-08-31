@@ -59,6 +59,7 @@ from eval_backends import (
     get_judge_backend,
     parse_followup_turns,
 )
+from desktop_stdio import DesktopStdioError, DesktopStdioSession, redact_text
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -182,6 +183,8 @@ JOB_RUNNER_SIDE_FIXTURES = {
     # These fixtures are trusted runner inputs. The agent gets data/ and the
     # checker, but never the known-good preflight closure or opt-in marker.
     "desktop.json",
+    "desktop_stdio.json",
+    "prepare_stdio_profile.py",
     "reference-closure",
     "build_data.py",     # contains fixture discriminator fingerprints
 }
@@ -226,6 +229,12 @@ EXECUTABLE_POLICY_RUNNER_SIDE_FIXTURES = {
 # scenario may use the same filename as an ordinary fixture and must keep it.
 SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     "desktop-custom-contracts": frozenset({"check_custom_contracts.py"}),
+    # The terminal mapper checker is withheld from the agent; it is runner-side
+    # oracle material and is passed directly to the deterministic subprocess.
+    "terminal-field-mapper-adapter-contract": frozenset({"check_terminal_mapper_adapter.py"}),
+    # The self-check provenance checker is runner-side oracle material and must
+    # not be staged into the agent workspace.
+    "terminal-self-check-provenance": frozenset({"check_terminal_self_check.py"}),
     "multi-source-labeled-roots": frozenset({"check_labeled_multi_source.py"}),
     "multi-source-labeled-roots-supervisor": frozenset({"check_supervisor_pin.py"}),
     # Names the banned host/path literals and the exact connector architecture
@@ -688,6 +697,43 @@ def scenario_needs_desktop(scenario_dir: Path) -> dict | None:
     return json.loads(marker.read_text(encoding="utf-8"))
 
 
+def scenario_needs_desktop_stdio(scenario_dir: Path) -> dict | None:
+    """Return the runner-owned stdio MCP marker for a terminal scenario."""
+    marker = scenario_dir / "fixtures" / "desktop_stdio.json"
+    if not marker.exists():
+        return None
+    return json.loads(marker.read_text(encoding="utf-8"))
+
+
+def _prepare_stdio_profile(
+    scenario_dir: Path,
+    desktop_spec: dict,
+    workspace: Path,
+    output: Path,
+    python: str,
+) -> None:
+    """Build a sealed synthetic profile outside the agent workspace."""
+    builder = scenario_dir / "fixtures" / str(desktop_spec["profile_builder"])
+    if not builder.is_file():
+        raise RuntimeError(f"stdio profile builder not found: {builder}")
+    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    proc = subprocess.run(
+        [python, str(builder), "--workspace", str(workspace), "--output", str(output)],
+        cwd=workspace, capture_output=True, text=True, timeout=30,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+            "EVAL_NXD_REPO_ROOT": os.environ.get("EVAL_NXD_REPO_ROOT", ""),
+        },
+    )
+    if proc.returncode != 0:
+        detail = redact_text(proc.stderr.strip() or proc.stdout.strip() or "profile builder failed")
+        raise RuntimeError(f"stdio evaluation profile setup failed: {detail[-1000:]}")
+    if not output.is_file():
+        raise RuntimeError("stdio profile builder did not create its output")
+    output.chmod(0o444)
+
+
 def scenario_needs_http_stub(scenario_dir: Path) -> dict | None:
     """Return the HTTP-stub marker when a scenario opts into a runner-started
     local REST fixture. Kept parallel to the MCP/desktop opt-ins for the same
@@ -1121,6 +1167,25 @@ DETERMINISTIC_CHECK_PREFIX = "DETERMINISTIC CHECK (authoritative runner facts): 
 DETERMINISTIC_CHECK_FAILED = "deterministic check failed"
 
 
+def _private_text_file(
+    directory_prefix: str, filename: str, text: str
+) -> tuple[tempfile.TemporaryDirectory, Path]:
+    """Create a runner-owned 0600 text file and its private temp directory."""
+    holder = tempfile.TemporaryDirectory(prefix=directory_prefix)
+    path = Path(holder.name) / filename
+
+    def opener(file_path: str, flags: int) -> int:
+        return os.open(file_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+
+    try:
+        with open(path, "w", encoding="utf-8", opener=opener) as handle:
+            handle.write(text)
+    except BaseException:
+        holder.cleanup()
+        raise
+    return holder, path
+
+
 def deterministic_check_fact(
     scenario_dir: Path, ws: Path, cfg: dict, trace: str = ""
 ) -> str:
@@ -1145,6 +1210,20 @@ def deterministic_check_fact(
              "infrastructure_error": f"checker not found: {script}"},
             sort_keys=True,
         )
+    # ``trace`` is normally the agent transcript. A Desktop stdio scenario
+    # supplies the proxy's runner-authored JSON-RPC trace instead; unlike the
+    # transcript it cannot be spoofed by printing tool names.
+    trace_source = cfg.get("trace_source")
+    if trace_source not in (None, "transcript", "runner_mcp"):
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False, "infrastructure_error": f"unknown trace source: {trace_source!r}"},
+            sort_keys=True,
+        )
+    if trace_source == "runner_mcp" and not trace.strip():
+        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+            {"passed": False, "infrastructure_error": "runner-authored MCP trace is empty"},
+            sort_keys=True,
+        )
     # An OMITTED `deps` takes the duckdb default (most checkers read a landed
     # DuckDB). An explicitly EMPTY list means none: a static checker that never
     # opens a database should not pay for the install, and `"deps": []` has to
@@ -1156,27 +1235,55 @@ def deterministic_check_fact(
     for dep in deps:
         cmd += ["--with", str(dep)]
     cmd += ["python", str(script), "--fixtures", str(fixtures), "--root", str(ws)]
-    if cfg.get("wants_trace"):
-        trace_file = Path(tempfile.mkdtemp(prefix="nxd-eval-trace-")) / "trace.txt"
-        trace_file.write_text(trace, encoding="utf-8")
-        cmd += ["--trace", str(trace_file)]
+    private_files: list[tempfile.TemporaryDirectory] = []
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=DETERMINISTIC_CHECK_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return DETERMINISTIC_CHECK_PREFIX + json.dumps(
-            {"passed": False,
-             "infrastructure_error": (
-                 f"checker timed out after {DETERMINISTIC_CHECK_TIMEOUT_S}s: {exc}")},
-            sort_keys=True,
-        )
+        # A checker may need to prove redaction of a runner-supplied synthetic
+        # secret. Pass it through a runner-owned 0600 file, never argv: argv is
+        # visible to other processes and may be echoed into CI diagnostics.
+        raw_markers = cfg.get("redaction_markers", [])
+        if not isinstance(raw_markers, list):
+            return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+                {"passed": False, "infrastructure_error": "redaction_markers must be a list"},
+                sort_keys=True,
+            )
+        markers = [str(marker) for marker in raw_markers if str(marker)]
+        if markers:
+            marker_holder, marker_file = _private_text_file(
+                "nxd-eval-markers-", "markers.txt", "\n".join(markers) + "\n"
+            )
+            private_files.append(marker_holder)
+            cmd += ["--secret-marker-file", str(marker_file)]
+        if cfg.get("wants_trace"):
+            trace_holder, trace_file = _private_text_file(
+                "nxd-eval-trace-", "trace.txt", trace
+            )
+            private_files.append(trace_holder)
+            cmd += ["--trace", str(trace_file)]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=DETERMINISTIC_CHECK_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+                {"passed": False,
+                 "infrastructure_error": (
+                     f"checker timed out after {DETERMINISTIC_CHECK_TIMEOUT_S}s: {exc}")},
+                sort_keys=True,
+            )
+        except OSError as exc:
+            return DETERMINISTIC_CHECK_PREFIX + json.dumps(
+                {"passed": False, "infrastructure_error": f"checker failed to start: {exc}"},
+                sort_keys=True,
+            )
     except OSError as exc:
         return DETERMINISTIC_CHECK_PREFIX + json.dumps(
-            {"passed": False, "infrastructure_error": f"checker failed to start: {exc}"},
+            {"passed": False, "infrastructure_error": f"checker input staging failed: {exc}"},
             sort_keys=True,
         )
+    finally:
+        for holder in private_files:
+            holder.cleanup()
     stdout = proc.stdout
     # Fail closed on the exit code, and require the checker's own success
     # sentinel: a checker that dies mid-report can exit 0 without having run
@@ -1950,7 +2057,7 @@ def _agent_cache_key(skill_set: SkillSet, scenario_dir: Path, prompt: str,
     transcript is discarded by multi-turn support merely existing."""
     h = hashlib.sha256()
     desktop_runtime_key = ""
-    if scenario_needs_desktop(scenario_dir) is not None:
+    if (scenario_needs_desktop(scenario_dir) is not None or scenario_needs_desktop_stdio(scenario_dir) is not None):
         desktop_runtime_key = "|".join((
             os.environ.get("EVAL_DESKTOP_SUPERVISOR_DIR", ""),
             os.environ.get("EVAL_DESKTOP_PYTHON", ""),
@@ -2261,11 +2368,12 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
     )
 
     desktop_spec = scenario_needs_desktop(scenario_dir)
+    desktop_stdio_spec = scenario_needs_desktop_stdio(scenario_dir)
     http_stub_spec = scenario_needs_http_stub(scenario_dir)
     # desktop cells run the agent with extra_dirs=[] (see the agent call below),
     # so the prompt must not advertise an examples directory the agent can never
     # --add-dir, or it wastes turns hunting for it.
-    extra_dirs = [] if desktop_spec is not None else (
+    extra_dirs = [] if (desktop_spec is not None or desktop_stdio_spec is not None) else (
         [EXAMPLES_DIR] if EXAMPLES_DIR.is_dir() else []
     )
     prompt = build_agent_prompt(
@@ -2274,7 +2382,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
         source_isolation=bool(checks.get("agent_source_isolation")),
     )
     agent_model = effective_agent_model(
-        desktop_spec is not None, agent_backend.name, args.agent_model
+        (desktop_spec is not None or desktop_stdio_spec is not None), agent_backend.name, args.agent_model
     )
     preflight_metrics: dict[str, object] = {}
     isolation, isolation_error = _resolve_source_isolation(
@@ -2408,7 +2516,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             max(args.agent_timeout, MCP_AGENT_TIMEOUT_S)
             if mcp_spec is not None
             else max(args.agent_timeout, JOB_AGENT_TIMEOUT_S)
-            if desktop_spec is not None
+            if (desktop_spec is not None or desktop_stdio_spec is not None)
             else args.agent_timeout
         )
         with tempfile.TemporaryDirectory(prefix=f"eval-{skill_set.name}-{name}-") as tmp:
@@ -2421,6 +2529,7 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                 res.error = str(exc)
                 return res
 
+            runner_mcp_trace: str | None = None
             if mcp_spec is not None:
                 bin_dir = Path(tmp) / "bin"
                 bin_dir.mkdir(parents=True, exist_ok=True)
@@ -2439,6 +2548,53 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
                             return failure
                 except (RuntimeError, TimeoutError) as exc:
                     res.error = f"MCP server setup failed: {exc}"
+                    return res
+            elif desktop_stdio_spec is not None:
+                try:
+                    bin_dir, env_over, desktop_python = _desktop_runtime(
+                        scenario_dir, Path(tmp)
+                    )
+                    profile_path = Path(tmp) / "stdio-profile.json"
+                    _prepare_stdio_profile(
+                        scenario_dir, desktop_stdio_spec, ws, profile_path, desktop_python
+                    )
+                    state_dir = Path(tmp) / "stdio-state"
+                    server_args = [
+                        "--data-dir", str(state_dir),
+                        "mcp", "serve",
+                        "--evaluation-profile", str(profile_path),
+                    ]
+                    session = DesktopStdioSession(
+                        [bin_dir / "nxd-desktop-supervisor", *server_args],
+                        server_env={**env_over, "NXD_DESKTOP_PYTHON": desktop_python},
+                        root=Path(tmp) / "stdio-session",
+                        server_name=str(desktop_stdio_spec.get("server_name", "nxd-desktop")),
+                        allowed_tools=desktop_stdio_spec.get("allowed_tools"),
+                        startup_timeout_s=30.0,
+                    )
+                    with session:
+                        ok, trace, metrics = agent_backend.run_agent(
+                            ws, prompt, agent_model, agent_timeout,
+                            extra_dirs=[], effort=args.agent_effort,
+                            env_overrides={**env_over, **source_isolation_env},
+                            path_prepend=bin_dir, skill_pack_dir=plugin_dir,
+                            allowed_tools=str(desktop_stdio_spec.get(
+                                "agent_allowed_tools", "mcp__nxd-desktop__*"
+                            )),
+                            stdio_session=session, **source_audit_kwargs, **turn_kwargs,
+                        )
+                        runner_mcp_trace = session.trace_path.read_text(encoding="utf-8")
+                        metrics["stdio_mcp_trace_source"] = "runner"
+                        metrics["stdio_mcp_trace_events"] = len(
+                            [line for line in runner_mcp_trace.splitlines() if line.strip()]
+                        )
+                        if ok and checks.get("deterministic_check"):
+                            det_fact = deterministic_check_fact(
+                                scenario_dir, ws, checks["deterministic_check"],
+                                runner_mcp_trace,
+                            )
+                except (RuntimeError, DesktopStdioError, OSError) as exc:
+                    res.error = f"desktop stdio setup failed: {redact_text(str(exc))}"
                     return res
             elif desktop_spec is not None:
                 try:
@@ -2556,9 +2712,10 @@ def run_one(skill_set: SkillSet, scenario_dir: Path, args) -> RunResult:
             # Same reason as ws_fact: the checker reads the landed closure off
             # disk, so it has to run before the temporary workspace is removed.
             if ok and checks.get("deterministic_check"):
-                det_fact = deterministic_check_fact(
-                    scenario_dir, ws, checks["deterministic_check"], trace
-                )
+                if runner_mcp_trace is None:
+                    det_fact = deterministic_check_fact(
+                        scenario_dir, ws, checks["deterministic_check"], trace
+                    )
 
         # Never cache a transcript whose facts carry a verifier infrastructure
         # failure: the workspace is gone on a later cache hit, so the verifier

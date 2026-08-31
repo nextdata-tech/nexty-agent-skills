@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
 DIAG = SCRIPTS / "dp_diagnostics.py"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
-WORKED_EXAMPLE = REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md"
+WORKED_EXAMPLE = REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md"
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -56,7 +56,7 @@ def _approved_spec_text() -> str:
 @pytest.fixture
 def workflow(tmp_path) -> dict:
     """The layout the design specifies: the IR beside, the closure below it."""
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(_approved_spec_text(), encoding="utf-8")
     closure = tmp_path / "closure"
     result = _run(str(DIAG), "lock", "write", str(spec), str(closure))
@@ -64,13 +64,13 @@ def workflow(tmp_path) -> dict:
     return {
         "spec": spec,
         "closure": closure,
-        "lock": closure / "dp-spec.lock.json",
+        "lock": closure / "dp-blueprint.lock.json",
         "record": closure / "build-record.json",
     }
 
 
 def test_lock_write_byte_copies_the_spec(workflow):
-    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    snapshot = workflow["closure"] / "dp-blueprint.approved.md"
     assert snapshot.read_bytes() == workflow["spec"].read_bytes(), (
         "the snapshot is evidence, and evidence reformatted on the way in cannot "
         "be compared"
@@ -86,7 +86,7 @@ def test_lock_write_byte_copies_the_spec(workflow):
     assert lock["compiler_version"]["plugin"] == plugin_version
     assert lock["spec_hash"] == dpd.spec_hash(workflow["spec"].read_bytes())
     assert lock["snapshot_sha256"] == dpd.raw_sha256(snapshot.read_bytes())
-    assert lock["source_basename"] == "dp-spec.md"
+    assert lock["source_basename"] == "dp-blueprint.md"
     assert "/" not in lock["source_basename"], (
         "the lock carries no path to the live IR — a '../'-shaped string inside "
         "the closure is exactly the pointer this design removes"
@@ -94,7 +94,7 @@ def test_lock_write_byte_copies_the_spec(workflow):
 
 
 def test_lock_write_rejects_an_unapproved_spec_without_creating_artifacts(tmp_path):
-    spec = tmp_path / "dp-spec.md"
+    spec = tmp_path / "dp-blueprint.md"
     spec.write_text(_proposed_spec_text(), encoding="utf-8")
     closure = tmp_path / "closure"
 
@@ -155,7 +155,7 @@ def test_lock_verify_passes_and_catches_a_moved_live_spec(workflow):
 
 
 def test_lock_verify_catches_an_edited_snapshot(workflow):
-    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    snapshot = workflow["closure"] / "dp-blueprint.approved.md"
     snapshot.write_text(snapshot.read_text() + "\n## sneaky\n\nnothing\n", encoding="utf-8")
     result = _run(str(DIAG), "lock", "verify", str(workflow["closure"]), "--json")
     assert result.returncode == 1
@@ -187,7 +187,7 @@ def test_lock_verify_rejects_snapshot_paths_outside_the_closure(workflow, snapsh
 
 
 def test_lock_verify_rejects_a_snapshot_symlink_outside_the_closure(workflow, tmp_path):
-    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    snapshot = workflow["closure"] / "dp-blueprint.approved.md"
     external = tmp_path / "external-spec.md"
     external.write_bytes(snapshot.read_bytes())
     snapshot.unlink()
@@ -198,7 +198,7 @@ def test_lock_verify_rejects_a_snapshot_symlink_outside_the_closure(workflow, tm
     assert result.returncode == 1
     diagnostics = json.loads(result.stdout)["diagnostics"]
     assert [d["code"] for d in diagnostics] == ["closure.escaping_reference"]
-    assert diagnostics[0]["evidence"] == {"found": "dp-spec.approved.md"}
+    assert diagnostics[0]["evidence"] == {"found": "dp-blueprint.approved.md"}
 
 
 def test_record_init_fills_s0_spec(workflow):
@@ -241,7 +241,7 @@ def test_record_init_on_an_unparseable_snapshot_records_it(workflow):
     Recording is the point: a closure generated against a spec that does not
     validate is exactly the thing that must become visible instead of implicit.
     """
-    snapshot = workflow["closure"] / "dp-spec.approved.md"
+    snapshot = workflow["closure"] / "dp-blueprint.approved.md"
     snapshot.write_text("---\nname: [unclosed\n---\n\n## intent\n\nx\n", encoding="utf-8")
 
     result = _run(
@@ -275,7 +275,7 @@ def test_spec_report_against_different_bytes_exits_two(workflow, tmp_path):
 
 
 def test_spec_report_against_the_right_bytes_is_ingested(workflow, tmp_path):
-    report = _run(str(VALIDATOR), str(workflow["closure"] / "dp-spec.approved.md"), "--json")
+    report = _run(str(VALIDATOR), str(workflow["closure"] / "dp-blueprint.approved.md"), "--json")
     report_path = tmp_path / "report.json"
     report_path.write_text(report.stdout, encoding="utf-8")
 
@@ -314,7 +314,7 @@ def test_record_init_redacts_external_spec_report_diagnostics(workflow, tmp_path
                 "ok": False,
                 "counts": {"error": 1, "warning": 0, "info": 0},
                 "spec_hash": dpd.spec_hash(
-                    (workflow["closure"] / "dp-spec.approved.md").read_bytes()
+                    (workflow["closure"] / "dp-blueprint.approved.md").read_bytes()
                 ),
                 "diagnostics": [diagnostic],
             }

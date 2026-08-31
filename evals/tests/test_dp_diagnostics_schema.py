@@ -36,11 +36,13 @@ FROZEN_CODES = (
   'closure.canonical_hash_deferred', 'closure.contract_duplicate_name',
   'closure.contract_not_wired',
   'closure.contract_inventory_mismatch',
+  'closure.contract_phase_unsupported',
   'closure.contract_verifier_inert', 'closure.contract_verifier_malformed',
   'closure.contract_verifier_missing', 'closure.contract_verifier_secret',
   'closure.contract_verifier_unreferenced', 'closure.csv_root_invalid',
   'closure.escaping_reference', 'closure.gitignore_missing',
   'closure.gitignore_not_naming_profile', 'closure.input_service_mismatch',
+  'closure.legacy_artifact_superseded',
   'closure.live_spec_diverged', 'closure.live_spec_unparseable',
   'closure.lock_missing',
   'closure.lock_snapshot_byte_mismatch', 'closure.lock_status_not_approved',
@@ -75,7 +77,7 @@ FROZEN_CODES = (
   'publish.workflow_not_found', 'reach.connector_shape_mismatch',
   'reach.connector_undeclared', 'reach.model_sdk_import',
   'reach.undeclared_transport', 'runtime.assert_failed',
-  'runtime.base_models_mismatch', 'runtime.import_failed',
+  'runtime.base_models_mismatch', 'runtime.dry_run_not_runnable', 'runtime.import_failed',
   'runtime.model_table_missing', 'runtime.remote_assert_failed',
   'runtime.remote_traceback', 'runtime.row_count',
   'runtime.transform_incomplete', 'runtime.transform_raised',
@@ -137,12 +139,13 @@ FROZEN_CODES = (
   'struct.bad_infra_profile', 'struct.bad_kwarg', 'struct.bad_script_path',
   'struct.base_models_vs_data_dirs', 'struct.description_unreachable',
   'struct.import_not_public_dsl', 'struct.join_target_missing',
-  'struct.join_to_model_kwarg', 'struct.malformed_service_ref',
+  'struct.join_to_model_kwarg', 'struct.key_not_groupable',
+  'struct.malformed_service_ref',
   'struct.metric_first_arg_not_agg', 'struct.metric_in_model',
   'struct.metric_of_and_column', 'struct.missing_call',
   'struct.model_name_not_literal', 'struct.model_no_description',
   'struct.naming_invariant_promised_vs_models',
-  'struct.naming_invariant_promised_vs_physical', 'struct.no_primary_key',
+  'struct.naming_invariant_promised_vs_physical', 'struct.model_not_queryable', 'struct.no_primary_key',
   'struct.port_no_storage', 'struct.port_not_duckdb',
   'struct.primary_key_takes_no_args', 'struct.promise_of_view',
   'struct.role_no_description', 'struct.semantic_tools_forbidden',
@@ -392,7 +395,7 @@ def test_tool_is_a_closed_enum_of_four():
 
 
 def test_a_tool_may_not_carry_a_stage_it_cannot_produce():
-    report = dpd.Report("validate_dp_spec", target="dp-spec.md")
+    report = dpd.Report("validate_dp_spec", target="dp-blueprint.md")
     with pytest.raises(dpd.DiagnosticError):
         report.add(dpd.diagnostic("pin.build_failed", message="x"))
     problems = dpd.validate_report(
@@ -410,7 +413,7 @@ def test_a_tool_may_not_carry_a_stage_it_cannot_produce():
 
 
 def test_report_envelope_shape():
-    report = dpd.Report("validate_dp_spec", target="dp-spec.md", spec_hash="sha256:" + "0" * 64)
+    report = dpd.Report("validate_dp_spec", target="dp-blueprint.md", spec_hash="sha256:" + "0" * 64)
     report.error("invalid v2 field", code="spec.v2.invalid", path="v2:models[orders].fields")
     report.warn("invalid v2 field", code="spec.v2.invalid", path="v2:models[orders].fields")
     payload = report.to_dict()
@@ -440,7 +443,7 @@ def test_lock_and_build_record_are_v2_only():
         "dp_spec_version": 1,
         "name": "x",
         "workflow": "x",
-        "source_basename": "dp-spec.md",
+        "source_basename": "dp-blueprint.md",
         "contract_names": [],
         "compiler_version": {"plugin": "x", "generator_skill": "x", "self_check": "x"},
         "copied_at_unix_ms": 1,

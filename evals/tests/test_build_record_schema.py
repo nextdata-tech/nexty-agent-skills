@@ -31,7 +31,7 @@ if str(SCRIPTS) not in sys.path:
 import dp_diagnostics as dpd  # noqa: E402
 
 GOLDEN = FIXTURES / "golden-build-record.json"
-GOLDEN_LOCK = FIXTURES / "golden-dp-spec.lock.json"
+GOLDEN_LOCK = FIXTURES / "golden-legacy-dp-spec.lock.json"
 
 
 @pytest.fixture

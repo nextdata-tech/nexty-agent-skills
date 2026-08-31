@@ -13,7 +13,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **`dp-scenarios`** | `uv run --project evals/dp-scenarios` | uv project (borrows `nxd_eval` via a path dependency) | Whether an agent builds a correct data product through a multi-turn session — graded from artifacts against an evidence ledger, not from the agent's own account. Its unit tests gate CI; its graded runs are local. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 20 of the 33 public scenarios.**
+installs and covers 20 of the 36 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -111,12 +111,13 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-20 of 34 public scenarios. The remaining 14 declare `ci_skip` in their
-`checks.json`. Eleven need a Tier 2 or Tier 3 install; one is gated on the agent
+20 of 36 public scenarios. The remaining 16 declare `ci_skip` in their
+`checks.json`. Fourteen need a Tier 2 or Tier 3 install; one is gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 
 | Scenario | Needs |
 |---|---|
+| `authenticated-api-source-supervisor` | local desktop supervisor (Tier 3) |
 | `pharma-cross-dp-mesh-query` | semantic MCP server (Tier 2) |
 | `pharma-mesh-query-hard` | semantic MCP server (Tier 2) |
 | `pharma-mesh-query-loop` | semantic MCP server (Tier 2) |
@@ -128,6 +129,8 @@ backend; and one requires an operator-provided source-isolation wrapper:
 | `treasury-yield-curve` | live desktop supervisor (Tier 3) |
 | `multi-source-labeled-roots-supervisor` | compatible live desktop supervisor (Tier 3) |
 | `worldbank-live` | live desktop supervisor (Tier 3) + outbound network to `api.worldbank.org` |
+| `terminal-self-check-provenance` | authenticated Claude CLI + live desktop supervisor and NXD runtime (Tier 3) |
+| `terminal-field-mapper-adapter-contract` | live desktop supervisor over stdio MCP (Tier 3) |
 | `coauthor-executable-policy-readback` | `--agent-backend claude`: it scripts a follow-up turn, which `codex` cannot drive. No install needed |
 | `desktop-custom-contracts` | Codex only, through the default-deny source-isolation wrapper with capability/profile attestation and operator-resolved protected roots |
 
@@ -284,6 +287,7 @@ Needs a live desktop supervisor that CI cannot provision.
 export EVAL_DESKTOP_SUPERVISOR_DIR=/path/to/supervisor
 export EVAL_DESKTOP_PYTHON=/path/to/python
 export NXD_DESKTOP_REPO_ROOT=/path/to/desktop/repo
+export EVAL_NXD_REPO_ROOT=/path/to/nxd/repo
 ```
 
 These scenarios also narrow the agent's tool surface (they withhold `WebFetch`
@@ -318,6 +322,7 @@ Set by you:
 | `EVAL_DESKTOP_SUPERVISOR_DIR` | 3 | desktop supervisor location |
 | `EVAL_DESKTOP_PYTHON` | 3 | interpreter for the supervisor |
 | `NXD_DESKTOP_REPO_ROOT` | 3 | desktop repo root, read by job-loop fixtures |
+| `EVAL_NXD_REPO_ROOT` | 3 | NXD repo root used to build the isolated stdio evaluation profile |
 | `NXD_EVAL_JUDGE_RETEST=1` | 1 | opt-in judge test-retest pass |
 | `NXD_CA_BUNDLE` | 1/2 | per-cluster TLS trust store; unset = system store |
 | `NXD_SKILL_PYTHON` | — | interpreter for skill-invoked subprocesses |

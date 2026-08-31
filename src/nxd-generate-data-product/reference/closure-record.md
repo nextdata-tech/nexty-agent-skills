@@ -12,7 +12,7 @@
 
 ## What the generator emits, and why
 
-`dp-spec.md` is the plan, and it lives **beside** the closure: hand-edited, with
+`dp-blueprint.md` is the plan, and it lives **beside** the closure: hand-edited, with
 its drafting history, its rejected options and its open questions. The closure
 needs the plan too — a cold reader, an export handoff or a later session has only
 the closure — but it must never *depend on a file outside itself* to get it. So
@@ -20,9 +20,9 @@ at generation time, **after** approval, the approved spec is copied in and hashe
 
 | file | what it is | written by |
 |---|---|---|
-| `dp-spec.approved.md` | byte-identical copy of the approved `dp-spec.md` | `cp` / `shutil.copyfile` |
-| `dp-spec.proposal.approved.json` | exact typed interpretation approved by the user (v3 only) | `dp_diagnostics.py lock write` |
-| `dp-spec.lock.json` | its canonical hash, snapshot hash, and compiler version | `dp_diagnostics.py lock write` |
+| `dp-blueprint.approved.md` | byte-identical copy of the approved `dp-blueprint.md` | `cp` / `shutil.copyfile` |
+| `dp-blueprint.proposal.approved.json` | exact typed interpretation approved by the user (v3 only) | `dp_diagnostics.py lock write` |
+| `dp-blueprint.lock.json` | its canonical hash, snapshot hash, and compiler version | `dp_diagnostics.py lock write` |
 | `build-record.json` | what happened: stages, review rounds, attempts, concessions, blockers | `dp_diagnostics.py record …` |
 | `README.md` | the reopen recipe, and a credentials block when one is needed | this skill, from the template below |
 | `contracts/<name>.md` | the contract for a model still to be built | this skill, from the template below |
@@ -41,7 +41,7 @@ two schemas start to differ.
 ## 1. Byte-copy the approved spec
 
 ```bash
-cp "…/nxd-jobs/<workflow>/dp-spec.md" "<closure>/dp-spec.approved.md"
+cp "…/nxd-jobs/<workflow>/dp-blueprint.md" "<closure>/dp-blueprint.approved.md"
 ```
 
 **Byte-identical, never re-serialized.** No reformatting, no re-wrapping, no
@@ -63,15 +63,15 @@ Three preconditions, all hard:
 
 ```bash
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" lock write <spec.md> <closure-dir> \
-  --proposal <workflow>/dp-spec.proposal.json  # v3 only: required there, rejected for v2
+  --proposal <workflow>/dp-blueprint.proposal.json  # v3 only: required there, rejected for v2
 ```
 
-`dp-spec.lock.json` carries the v3 canonical `spec_hash` and typed proposal hash
+`dp-blueprint.lock.json` carries the v3 canonical `spec_hash` and typed proposal hash
 for new prose-first plans (or the v2 canonical `spec_hash` for an existing
 closure), raw
 `snapshot_sha256`, `spec_status_at_copy`, and compiler version. It deliberately
 stores **no path back to the live IR**: the workflow id plus the
-`…/nxd-jobs/<workflow>/dp-spec.md` convention recovers it.
+`…/nxd-jobs/<workflow>/dp-blueprint.md` convention recovers it.
 
 What the hash buys, concretely: regeneration is skippable when nothing changed;
 *"once approved, the spec is frozen for that build"* stops being honour-system
@@ -86,7 +86,7 @@ is not a broken product.
 ```bash
 python3 "$JOB_HELPER_DIR/scripts/dp_diagnostics.py" record init \
     --record <closure>/build-record.json \
-    --lock   <closure>/dp-spec.lock.json
+    --lock   <closure>/dp-blueprint.lock.json
 ```
 
 Run it **before** the self-check: Phase C checks that the record exists and that
@@ -122,8 +122,8 @@ Workflow id:   <workflow-id>
 Closure path:  <abs path to this dir>
 (Together these are the durable key across sessions. Bearer tokens never persist.)
 
-The plan this closure was built from is `dp-spec.approved.md`, bound by
-`dp-spec.lock.json`. What happened while building it is `build-record.json`.
+The plan this closure was built from is `dp-blueprint.approved.md`, bound by
+`dp-blueprint.lock.json`. What happened while building it is `build-record.json`.
 
 ## Reopen
 
@@ -168,7 +168,7 @@ every gating/verdict rule to the source fields they read. The concept has two
 halves, and after this change they live in different files:
 
 - **The plan half** is declared in the spec —
-  `models[].fields[].required_capture: true` in `dp-spec.md`, carried into the
+  `models[].fields[].required_capture: true` in `dp-blueprint.md`, carried into the
   closure by the byte copy. It is part of what the user approved.
 - **The observed half** is generated — `build-record.json`
   `evidence.required_capture`, one entry per field with `required_by`,

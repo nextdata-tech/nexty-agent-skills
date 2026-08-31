@@ -1,0 +1,9 @@
+{
+  "server_name": "nxd-desktop",
+  "workflow": "terminal-mapper-adapter",
+  "profile_builder": "prepare_stdio_profile.py",
+  "allowed_tools": [
+    "mcp__nxd-desktop__*"
+  ],
+  "agent_allowed_tools": "Bash,Read,Write,Edit,Glob,Grep,Skill,mcp__nxd-desktop__*"
+}

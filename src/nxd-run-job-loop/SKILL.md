@@ -1,6 +1,6 @@
 ---
 name: nxd-run-job-loop
-description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request starts HERE, not in nxd-generate-data-product: this skill gathers intent, sources, questions, models, transform logic, explicit inputs and outputs, inline terms, decisions, and open questions into the prose-first editable dp-spec.md, then invokes the generator. Going straight to the generator skips the co-authoring checkpoint. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-query-data-product.
+description: THE ENTRY POINT for local business-data work — whether the user asks a question or asks to BUILD. Use when a task references tabular business data (CSVs, spreadsheets, exports, a live database, a REST API) and the user wants an analytical answer they may revisit (breakdown, ranking, comparison, trend, anomaly, driver) OR asks to build or generate a data product over it. A direct build request starts HERE, not in nxd-generate-data-product: this skill gathers intent, sources, questions, models, transform logic, explicit inputs and outputs, inline terms, decisions, and open questions into the prose-first editable dp-blueprint.md, then invokes the generator. Going straight to the generator skips the co-authoring checkpoint. Answer only from the product's semantic query result; never substitute raw SQL, pandas, or shell aggregation. Not for one-off arithmetic. For a deployed platform product, use nxd-query-data-product.
 allowed-tools:
   - Bash
   - Read
@@ -11,7 +11,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.37.4
+  version: 0.40.0
 ---
 
 # nxd-run-job-loop skill
@@ -25,10 +25,10 @@ language intent plus a local source become a running, queryable desktop product.
 
 ```
 intent + sources + questions
-   → author dp-spec.md, the IR        (user-editable; the policy read-back)
-   → infer the semantic model        (nxd-build-semantic-data-product)
-   → generate the runnable closure    (nxd-generate-data-product)
-   → build + serve on the supervisor  (nxd-desktop MCP)
+   → author dp-blueprint.md, the IR    (user-editable; the policy read-back)
+   → infer the semantic model          (nxd-build-semantic-data-product)
+   → generate the runnable closure     (nxd-generate-data-product)
+   → build + serve on the supervisor   (nxd-desktop MCP)
    → render the pinned static release  (nxd-render-static-artifact)
    → describe → translate NL → query → present → refine
 ```
@@ -39,7 +39,7 @@ you arrive there without Steps 1–1b, come back here first. It invokes the owni
 skills, then drives the supervisor MCP path — routing the user never sees.
 
 > **You own the conversation and sequencing**, except for the policy read-back
-> discharged by the approved `dp-spec.md` in Step 1b. Keep one data product in
+> discharged by the approved `dp-blueprint.md` in Step 1b. Keep one data product in
 > flight at a time while iterating.
 
 ## Route the request before doing work
@@ -140,17 +140,17 @@ which also carries the absolute **fidelity here; derivation downstream** rule �
 landed rows are byte-exact, and every correction is a derived model beside the
 pristine source, never an edit to it.
 
-### Step 1b — Author `dp-spec.md`, the prose-first user plan
+### Step 1b — Author `dp-blueprint.md`, the prose-first user plan
 
-Write what Step 1 gathered into **`dp-spec.md`** at
-`…/nxd-jobs/<workflow>/dp-spec.md`, beside the closure (which lands at
+Write what Step 1 gathered into **`dp-blueprint.md`** at
+`…/nxd-jobs/<workflow>/dp-blueprint.md`, beside the closure (which lands at
 `closure/`). The user-facing document uses the fixed, ordered sections Intent,
 Questions, Scope, Terms, Inputs, Models, Transform, Outputs, Decisions, and
 Open Questions. Keep the headings strict but allow ordinary prose, lists,
 tables, examples, and code blocks within them. The user must never be asked to
 write or inspect the terse typed proposal. Schema, Terms behavior, editing
 rules, and the Claude Desktop form contract are in
-[reference/dp-spec.md](reference/dp-spec.md).
+[reference/dp-blueprint.md](reference/dp-blueprint.md).
 
 **If the user supplied a doc** — a build spec, a rubric page, or a prose
 description — preserve its meaning in the Markdown and show what you filled in.
@@ -164,8 +164,8 @@ internally from the Input expectations and Output promises.
 After writing or editing the document, run the structural validator:
 
 ```bash
-python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-spec.md --json
-python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <path>/dp-spec.md --json
+python3 "$JOB_HELPER_DIR/scripts/validate_dp_spec.py" <path>/dp-blueprint.md --json
+python3 "$JOB_HELPER_DIR/scripts/dp_spec_authoring.py" validate <path>/dp-blueprint.md --json
 ```
 
 The deterministic parser only checks headings, free prose, source spans, and
@@ -181,7 +181,7 @@ typed proposal hashes plus Terms, contract-inventory, compiler, and delivery
 metadata. Lock each approved Decision by id and hash; extraction may not
 overwrite it. A conflicting edit becomes an explicit change proposal and
 revokes approval. The approved Markdown and typed proposal are byte-snapshotted
-into the closure, never referenced through `../dp-spec.md`.
+into the closure, never referenced through `../dp-blueprint.md`.
 
 When a question needs a judgement read from each entity's evidence, model that
 decision as a versioned `apply_procedure` Transform step or reference Model.
@@ -201,9 +201,9 @@ separately, carrying labels forward. That skill owns the role grammar.
 
 Invoke the **nxd-generate-data-product** skill: assemble the complete Python-authored
 closure — `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`,
-`requirements.txt`, `dp-spec.approved.md`, `dp-spec.lock.json`,
+`requirements.txt`, `dp-blueprint.approved.md`, `dp-blueprint.lock.json`,
 `build-record.json`, `README.md`, and the connector-type-specific artifact(s) —
-from the **approved `dp-spec.md`** (Step 1b), the inferred model(s), and the
+from the **approved `dp-blueprint.md`** (Step 1b), the inferred model(s), and the
 connector config. Pass the spec's path: it carries the intent, questions, model
 plan and every ruling, so the generator compiles rather than re-derives, and the
 `decisions:` block becomes `nxd_decisions` row for row. **That skill opens with a
@@ -235,7 +235,7 @@ A timeout needs explicit user consent. No live credential enters either subagent
 
 **Land the closure at a durable, user-visible path — never a temp or scratch
 directory.** Put it under a directory named by the workflow id, with the IR
-beside it: `…/nxd-jobs/<workflow>/dp-spec.md` and
+beside it: `…/nxd-jobs/<workflow>/dp-blueprint.md` and
 `…/nxd-jobs/<workflow>/closure/` — the latter is what `build_data_product`
 receives. Use whichever base the host-visible-path rules in Step 1 make legal,
 and **state both paths to the user in the handoff**. The bearer never persists,
@@ -245,12 +245,12 @@ the published artifact is gone
 ([reference/context-and-resume.md](reference/context-and-resume.md)) — naming the
 dir by the workflow id keeps the two recoverable from each other. The durable
 record a later session reads is **generated, never hand-written**: the approved
-spec byte-copied in as `dp-spec.approved.md`, `dp-spec.lock.json` carrying its
+spec byte-copied in as `dp-blueprint.approved.md`, `dp-blueprint.lock.json` carrying its
 hash and the compiler version, and `build-record.json` carrying what happened —
 stages, attempts, concessions, blockers, the read-back. Self-containment is
 checked against the lock rather than trusted: a derived model's contract lives
 inside the closure, never behind a `../` pointer the handoff would strand —
-`../dp-spec.md` included, since the IR is upstream of the closure, not a
+`../dp-blueprint.md` included, since the IR is upstream of the closure, not a
 dependency of it. **Relay the distribution read-back before building** in one or
 two lines — the per-classification-column value counts (call out a uniform one),
 and which assertions are internal-consistency only rather than checks against the
@@ -357,7 +357,7 @@ exit: `healed`, `healed_with_concessions`, `caps_exhausted`, `blocked`,
   grain, missing join, wrong PII, an undistinguishing description), or the
   question needs a column or grain that doesn't exist (a filtered figure, a
   ratio, a monthly rollup, a classification) — a **derived model**, not a tweak.
-  **Edit `dp-spec.md` first**, re-validate, and re-approve it when the change
+  **Edit `dp-blueprint.md` first**, re-validate, and re-approve it when the change
   touches a ruling (a criteria change is a new `rubric_version`); then go back to
   Step 2/3 and rebuild through MCP with the **same** `workflow`. **After every
   rebuild, refresh:** discard cached artifact resources and current file, render
@@ -367,7 +367,7 @@ exit: `healed`, `healed_with_concessions`, `caps_exhausted`, `blocked`,
   loop indefinitely or give up silently.
 - **Blocked** — the fix is a ruling only the user can make (a missing rate, an
   ambiguous scope, a measurement no source carries). That is an open question
-  found late, not a heal: write it back into `dp-spec.md`'s `## Open Questions`
+  found late, not a heal: write it back into `dp-blueprint.md`'s `## Open Questions`
   with what it blocks, which **un-approves** the spec; ask the one smallest
   question and re-enter Step 1b. Never reach green by changing the plan.
 
@@ -405,7 +405,7 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   table/endpoint the user didn't name, never invent or narrate a raw credential.
   A real credential lands in exactly one place — the generated
   `infra-profile.yaml` connector service's `attributes` — never elsewhere, never
-  in chat, never in `dp-spec.md`, which names key names only. **"Never in chat"
+  in chat, never in `dp-blueprint.md`, which names key names only. **"Never in chat"
   covers a value you invited there**: ask for *slot names*; the value reaches the
   profile off-transcript, via a placeholder the user fills in ([reference/source-materialization.md](reference/source-materialization.md)). Once landed, **the
   closure directory itself is sensitive**: don't commit, zip, attach, or reuse it
@@ -414,30 +414,32 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   redaction is the credential boundary
   ([reference/handoff-export.md](reference/handoff-export.md)).
 - **Label every source once there are 2+.** A single-source data product needs no
-  label. With multiple sources each gets a short, distinct label used
-  consistently across materialization, inference, and generation; two sources of
-  the same connector type sharing an unlabeled or duplicate name is a collision
+  label. With multiple sources each gets a short, distinct label used consistently
+  across materialization, inference, and generation; two sources of the same
+  connector type sharing an unlabeled or duplicate name is a collision
   nxd-generate-data-product can't resolve for you.
-- **Correct data downstream, never upstream.** Cleaning, deduplication,
-  amortization, currency normalization, reclassification and regrain belong in
-  **derived models computed from the pristine source** — authored by
-  nxd-generate-data-product, landed through the DuckDB output port, asserted in the
-  transform. Never edit the source export to reach that outcome, never emulate it
-  agent-side.
+- **Correct data downstream, never upstream.** Cleaning, dedup, amortization,
+  currency normalization, reclassification and regrain belong in **derived models
+  computed from the pristine source** — authored by nxd-generate-data-product,
+  landed through the DuckDB output port, asserted in the transform. Never edit the
+  source export to reach that outcome, never emulate it agent-side.
 - **A judgement not in the data is confirmed and landed, not hardcoded.** FX
   rates, merchant→category and similar mappings are surfaced, confirmed, and
   landed as their own queryable model — never embedded as transform constants.
   **This covers agent-produced judgement too** — a per-entity
-  score/verdict/classification read from evidence, landed agent-side as data
-  (`status = proposed`, evidence-cited, rubric taught first); the build never
-  invokes a model, and a baked-in judgement is hardcoded even when weighted.
+  score/verdict/classification read from evidence, landed as data
+  (`status = proposed`, evidence-cited, rubric taught first); a baked-in
+  judgement is hardcoded even when weighted. **Which lane judges depends on
+  whether the product is packaged** — agent-side CSV while exploring, the
+  field-mapper seam once it ships, so the logic travels with the closure and the
+  credential never enters it ([reference/inference.md](reference/inference.md)).
 - **A supplied procedure with a result-changing gap is read back BEFORE any
   materialization.** No closure directory, source copy, generated code, table,
   scoring, or build until the user has seen every proposed anchor, band and
   precedence rule and replied. A technical delivery question is not approval;
   "use your judgement" licenses authoring the proposal, not skipping the turn.
 - **The plan is a file before it is code.** Every build is preceded by a
-  `dp-spec.md` (Step 1b) written beside the closure, never inside it, and passed
+  `dp-blueprint.md` (Step 1b) written beside the closure, never inside it, and passed
   to the generator. A user-supplied value in it is encoded verbatim; a value you
   authored is marked `agent_authored` and named in the read-back; `status:
   approved` is the user's to set, never yours. Run
@@ -447,7 +449,7 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
   byte-copies and hashes into the closure.
 - **A heal changes generated code, never the plan.** The self-heal loop may
   rewrite `transform/main.py`, `models.py` or `spec.py`; it may never edit
-  `dp-spec.md` to make a build pass. Narrowing the population to dodge a bad
+  `dp-blueprint.md` to make a build pass. Narrowing the population to dodge a bad
   join, dropping a model whose grain won't resolve, relaxing a threshold — those
   are spec edits needing re-approval, and the build record catches one
   mechanically. Escalate instead of quietly re-planning.
@@ -495,4 +497,4 @@ Full rules: [reference/failure-handling.md](reference/failure-handling.md).
 - **Bearer only as a tool parameter** — keep it out of narration, never persist or print it. **Never present a preview or truncated result as verified data**, and never stall silently.
 
 ## Reference docs (this skill)
-Use [dp-spec](reference/dp-spec.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [direct CLI lifecycle](reference/direct-cli-lifecycle.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.
+Use [dp-blueprint](reference/dp-blueprint.md), [build record](reference/build-record.md), [failure handling](reference/failure-handling.md), [direct CLI lifecycle](reference/direct-cli-lifecycle.md), [source materialization](reference/source-materialization.md), [scripts bootstrap](reference/scripts-bootstrap.md), [scheduling](reference/scheduling.md), [context and resume](reference/context-and-resume.md), [inference](reference/inference.md), [handoff export](reference/handoff-export.md), [catalog resources](reference/catalog-resources.md), [query grammar](reference/query-grammar.md), and [dlt](reference/dlt.md) for named details.

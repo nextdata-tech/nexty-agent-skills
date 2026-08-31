@@ -19,15 +19,15 @@ def test_lastupdated_is_runtime_build_evidence_not_approved_spec_content():
     for text in (prompt, disclosure):
         assert "evidence.source_state" in text
         assert "lastupdated" in text
-    assert "must not be frozen into `dp-spec.approved.md`" in disclosure
+    assert "must not be frozen into `dp-blueprint.approved.md`" in disclosure
 
 
 def test_context_retirement_keeps_plan_rules_and_runtime_records_separate():
     """All affected live-supervisor scenarios name the new closure contract."""
     treasury = _check("treasury-yield-curve", "closure-python-only-fileset")
     assert "CONTEXT.md" not in treasury
-    assert "dp-spec.approved.md" in treasury
-    assert "dp-spec.lock.json" in treasury
+    assert "dp-blueprint.approved.md" in treasury
+    assert "dp-blueprint.lock.json" in treasury
     assert "build-record.json" in treasury
 
     country_checks = (
@@ -36,9 +36,9 @@ def test_context_retirement_keeps_plan_rules_and_runtime_records_separate():
         _check("country-income-trajectory", "current-classification-scope-disclosed"),
     )
     assert all("CONTEXT.md" not in check for check in country_checks)
-    assert "dp-spec.approved.md" in country_checks[0]
-    assert "dp-spec.approved.md" in country_checks[1]
-    assert "dp-spec.approved.md" in country_checks[2]
+    assert "dp-blueprint.approved.md" in country_checks[0]
+    assert "dp-blueprint.approved.md" in country_checks[1]
+    assert "dp-blueprint.approved.md" in country_checks[2]
 
     for scenario in ("treasury-yield-curve", "country-income-trajectory"):
         prompt = (PUBLIC / scenario / "prompt.md").read_text(encoding="utf-8")

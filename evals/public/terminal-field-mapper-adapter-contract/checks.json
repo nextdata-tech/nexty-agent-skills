@@ -1,0 +1,28 @@
+{
+  "name": "Terminal field-mapper provider-adapter contract",
+  "skills": [
+    "nxd-generate-data-product",
+    "nxd-run-job-loop"
+  ],
+  "ci_skip": "needs a live desktop supervisor over stdio MCP (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
+  "wants_trace": true,
+  "deterministic_check": {
+    "script": "check_terminal_mapper_adapter.py",
+    "deps": [],
+    "redaction_markers": [
+      "nex884-opaque-synthetic-secret-8f0d"
+    ],
+    "wants_trace": true,
+    "trace_source": "runner_mcp"
+  },
+  "checks": [
+    {
+      "id": "public-adapter-only",
+      "check": "The generated mapper transform constructs its callable with public make_call and passes it to map_inputs. It imports no provider SDK, field_mapper.transport, field_mapper.ledger, or undocumented proposal attributes. The deterministic closure scan is authoritative for the defects enumerated here."
+    },
+    {
+      "id": "public-mcp-trace-redacted",
+      "check": "The captured public nxd-desktop MCP trace contains the mapper build path and no credential material. A missing trace is an evaluator infrastructure failure, never an agent PASS."
+    }
+  ]
+}

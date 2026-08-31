@@ -14,6 +14,7 @@ import csv
 import importlib.util
 import json
 import shutil
+import stat
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -426,3 +427,87 @@ def test_answer_key_stays_out_of_the_agent_workspace():
     """The checker and its truth file must remain runner-side."""
     assert "truth.json" in run.DERIVATION_RUNNER_SIDE_FIXTURES
     assert "check_derived_closure.py" in run.DERIVATION_RUNNER_SIDE_FIXTURES
+
+
+def test_redaction_markers_use_a_private_file_and_are_cleaned_up(tmp_path, monkeypatch):
+    captured = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "ALL CHECKS PASSED\n"
+        stderr = ""
+
+    def fake_run(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        marker_path = Path(cmd[cmd.index("--secret-marker-file") + 1])
+        trace_path = Path(cmd[cmd.index("--trace") + 1])
+        captured["marker_path"] = marker_path
+        captured["trace_path"] = trace_path
+        assert marker_path.read_text(encoding="utf-8") == "opaque-synthetic-secret\n"
+        assert stat.S_IMODE(marker_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(trace_path.stat().st_mode) == 0o600
+        assert not any("opaque-synthetic-secret" in str(part) for part in cmd)
+        return Completed()
+
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+    facts = [
+        run.deterministic_check_fact(
+            SCENARIO,
+            tmp_path,
+            {"script": "check_derived_closure.py", "deps": [],
+             "redaction_markers": ["opaque-synthetic-secret"], "wants_trace": True},
+            trace="runner trace",
+        )
+    ]
+
+    assert run.deterministic_check_passed(facts) is True
+    assert not captured["marker_path"].exists()
+    assert not captured["trace_path"].exists()
+
+
+def test_non_list_redaction_markers_fail_closed(tmp_path):
+    facts = [run.deterministic_check_fact(
+        SCENARIO, tmp_path,
+        {"script": "check_derived_closure.py", "redaction_markers": "secret"},
+    )]
+    assert run.deterministic_check_infrastructure_error(facts) == (
+        "redaction_markers must be a list"
+    )
+
+
+def test_runner_authored_trace_source_requires_nonempty_stdio_trace(tmp_path):
+    facts = [
+        run.deterministic_check_fact(
+            SCENARIO, tmp_path,
+            {"script": "check_derived_closure.py", "trace_source": "runner_mcp"},
+            trace="nxd-desktop build_data_product",
+        )
+    ]
+
+    # A real runner trace is accepted as an input to the checker. The checker
+    # may still fail on this empty fixture workspace; that is an agent/fixture
+    # result, not the former missing-harness infrastructure error.
+    assert run.deterministic_check_infrastructure_error(facts) != (
+        "runner-authored MCP trace source is unavailable"
+    )
+
+    empty = [
+        run.deterministic_check_fact(
+            SCENARIO, tmp_path,
+            {"script": "check_derived_closure.py", "trace_source": "runner_mcp"},
+            trace="",
+        )
+    ]
+    assert run.deterministic_check_infrastructure_error(empty) == (
+        "runner-authored MCP trace is empty"
+    )
+
+
+def test_unknown_trace_source_fails_closed(tmp_path):
+    facts = [run.deterministic_check_fact(
+        SCENARIO, tmp_path,
+        {"script": "check_derived_closure.py", "trace_source": "typo"},
+    )]
+    assert run.deterministic_check_infrastructure_error(facts) == (
+        "unknown trace source: 'typo'"
+    )

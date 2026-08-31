@@ -168,7 +168,7 @@ missing while a populated `attributes` list is present.
    every surface.
 
 **Never write a credential value into `SENSITIVE`, `README.md`,
-`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, or chat
+`dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`, or chat
 narration.** Keys and file paths only. These artifacts exist so the credential's
 location is discoverable without the credential being copied. The generated
 record files are covered by the same rule and by a mandatory redaction pass —

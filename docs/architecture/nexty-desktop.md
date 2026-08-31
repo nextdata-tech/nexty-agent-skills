@@ -41,7 +41,7 @@ infer the semantic model                (nxd-build-semantic-data-product, infere
       ▼
 generate the runnable closure           (nxd-generate-data-product)
       │  spec.py + models.py + infra-profile.yaml + transform/main.py +
-      │  requirements.txt + dp-spec.approved.md + dp-spec.lock.json +
+      │  requirements.txt + dp-blueprint.approved.md + dp-blueprint.lock.json +
       │  build-record.json + README.md + connector artifact
       │  → Step 7 self-check (Phases A–D, see below) before handoff
       ▼
@@ -74,7 +74,7 @@ reattach, rebuild fallback, the session ledger) in `context-and-resume.md`.
 |---|---|---|
 | **`nxd-run-job-loop`** | Entry point and orchestrator. Gathers intent/source/questions/procedure, runs the policy read-back, sequences Steps 2–6, does the NL→selection translation and answer presentation, bounds query-remap/regenerate cycles. | Inference logic and closure authoring — it invokes the two skills below rather than re-teaching either. |
 | **`nxd-build-semantic-data-product`** (inference mode) | Profiles a materialized local source (`nxd-analyze-mesh`'s profiler → `schema.json`) and derives the semantic vocabulary — grains/primary keys, dimensions, metrics, joins, PII flags — from the profile **and** the user's questions. Owns the public semantic role grammar (`primary_key()`, `dimension()`, `metric()`, `join()`). | Placing those roles into the desktop closure shape, or generating `spec.py`/`transform/main.py` — that's `nxd-generate-data-product`. This skill also has a separate **platform flow** (Snowflake/k8s `.semantic_tools()`) that desktop does not use. |
-| **`nxd-generate-data-product`** | Construction specialist. Takes the settled plan (intent + inferred model + connector config) and emits the complete Python-only closure: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, the generated record files (`dp-spec.approved.md`, `dp-spec.lock.json`, `build-record.json`, `README.md`), plus the connector-specific artifact (CSV/file/database/API). Owns the naming invariant, derived-model rules, the in-transform asserts (Step 3b), and the Step 7 self-check. Opens with its own policy read-back gate as a backstop if invoked directly. | Inferring semantic roles (placed, not designed) and driving the supervisor — that's `nxd-run-job-loop` Step 4. |
+| **`nxd-generate-data-product`** | Construction specialist. Takes the settled plan (intent + inferred model + connector config) and emits the complete Python-only closure: `spec.py`, `models.py`, `infra-profile.yaml`, `transform/main.py`, `requirements.txt`, the generated record files (`dp-blueprint.approved.md`, `dp-blueprint.lock.json`, `build-record.json`, `README.md`), plus the connector-specific artifact (CSV/file/database/API). Owns the naming invariant, derived-model rules, the in-transform asserts (Step 3b), and the Step 7 self-check. Opens with its own policy read-back gate as a backstop if invoked directly. | Inferring semantic roles (placed, not designed) and driving the supervisor — that's `nxd-run-job-loop` Step 4. |
 | **`nxd-desktop` MCP** (not a skill in `src/`, a capability of the Claude Desktop/Cowork host) | `build_data_product`, `describe_models`, `run_semantic_query` — compiles `spec.py` into the kernel definition YAML, runs the transform, verifies staging, stands up the semantic MCP endpoint, and answers governed queries. | Everything upstream of a settled closure. |
 | **`nxd-analyze-mesh`** | Supplies the profiler script (`scripts/profile_tabular.py`) `nxd-build-semantic-data-product` calls to build `schema.json` from a local DuckDB sample. | Anything past the profile — it does not infer roles itself. |
 | **`nxd-query-data-product`** | Not part of the Job loop's build path, but Step 5's NL→concept mapping approach is reused from its semantic-layer section. It targets a **deployed** platform DP; desktop routes there instead of building locally when the user names a remote DP. | Local desktop closures. |
@@ -94,24 +94,24 @@ that context, and none substitutes for another.
 The organising idea is a **compiler** one, and it is what retired the old
 hand-written in-closure prose record (see
 [`dp-spec-authoritative.md`](dp-spec-authoritative.md) for the full argument):
-user intent is the *source*, `dp-spec.md` is the *IR*, `nxd-generate-data-product` is the
+user intent is the *source*, `dp-blueprint.md` is the *IR*, `nxd-generate-data-product` is the
 *codegen*, and the closure's Python is the *output artifact*. An IR is a pure
 function of its source, so the **plan** and the **outcomes** live in different
 files and are produced by different actors.
 
-**`dp-spec.md`** (`src/nxd-run-job-loop/reference/dp-spec.md`) is the live,
+**`dp-blueprint.md`** (`src/nxd-run-job-loop/reference/dp-blueprint.md`) is the live,
 user-editable v3 prose-first plan. It stays **beside** the closure, never inside
 it, so that authoring it is not a materialization. Its explicit Outputs define
 the public surface; inline Terms define local vocabulary; Decisions is
 provenance only and executable procedures live under Transform or Models.
 
-**`dp-spec.approved.md`** is a **byte-for-byte copy** of the approved revision,
+**`dp-blueprint.approved.md`** is a **byte-for-byte copy** of the approved revision,
 taken at generation time (Step 6a) and written at the closure root. Because the
 copy happens *after* approval, the gate's bright line is untouched, and
 self-containment becomes a hash-checkable snapshot instead of a prose
 "copy, never point" discipline nobody could enforce.
 
-**`dp-spec.lock.json`** pins that snapshot: the whole-spec canonical hash
+**`dp-blueprint.lock.json`** pins that snapshot: the whole-spec canonical hash
 (`nxd-dp-spec-canon-v3` for new plans), the typed proposal hash, the
 compiler/skill version, `spec_status_at_copy`, and the raw snapshot sha256. It
 is what makes approval
@@ -182,7 +182,7 @@ any handoff. It has four phases plus two non-blocking read-backs:
 |---|---|---|---|
 | **A — structural** | `models.py` / `spec.py` parsed with `ast` against the pinned `nxd.spec` DSL surface (`reference/nxd-spec-api.md`, pinned to a specific `nxd` version): known role kwargs, known data types, known `Agg` members, the naming invariant (`semantic_model` name == `.promise` == `PHYSICAL_MODELS` == `data/<name>/`), `.semantic_tools()` forbidden, output port must be `"duckdb"`, `infra_profile="desktop-local"`, every base model has a `primary_key()`. | Pure `ast.parse` — nothing imported or executed. Dynamic constructs (variables, comprehensions, `**` spreads) are reported `unverified:` rather than silently passed. | Yes |
 | **B — transform dry-run** | Actually **executes** `transform/main.py` against a scratch DuckDB with a stub `DuckDbOutput`, then queries every `PHYSICAL_MODELS` table and asserts `.transform-complete` exists. | Real execution — the only phase that runs code. | Yes |
-| **C — context-completeness** | The snapshot/lock/record gate (C1–C11): `dp-spec.approved.md`, the v3 typed proposal snapshot for new plans, and `README.md` exist at the closure root; `dp-spec.lock.json` parses as the matching v2 or v3 lock; the snapshots' **raw bytes** hash to their lock fields; `lock.spec_status_at_copy == "approved"`; `build-record.json` parses with `compiled_from == lock.spec_hash`; no closure file references a contract/design doc by a `../`-rooted path that escapes the closure; if `infra-profile.yaml` carries a populated `attributes:` list, `.gitignore` and `SENSITIVE` both exist. | sha256 over raw bytes + JSON schema checks + text/regex scan of author-facing files. The **canonical** hash check is deferred to `dp_diagnostics.py lock verify`. | Yes |
+| **C — context-completeness** | The snapshot/lock/record gate (C1–C11): `dp-blueprint.approved.md`, the v3 typed proposal snapshot for new plans, and `README.md` exist at the closure root; `dp-blueprint.lock.json` parses as the matching v2 or v3 lock; the snapshots' **raw bytes** hash to their lock fields; `lock.spec_status_at_copy == "approved"`; `build-record.json` parses with `compiled_from == lock.spec_hash`; no closure file references a contract/design doc by a `../`-rooted path that escapes the closure; if `infra-profile.yaml` carries a populated `attributes:` list, `.gitignore` and `SENSITIVE` both exist. | sha256 over raw bytes + JSON schema checks + text/regex scan of author-facing files. The **canonical** hash check is deferred to `dp_diagnostics.py lock verify`. | Yes |
 | **D — policy boundary** | A promised `nxd_decisions` model must be a **base** model (backed by `data/`, not derived from a Python literal) with a `status` column restricted to `{confirmed, proposed, blocked}`; no distinctive value in a landed policy CSV also appears as a literal in `transform/main.py`. | AST-derived `PHYSICAL_MODELS`/`BASE_MODELS` from the values Phase B actually imported (not the static parse, which can't resolve `BASE_MODELS + DERIVED_MODELS` as a literal) + CSV/text scan. | Yes |
 | **Distribution read-back** | Prints value counts for every classification-shaped column of every derived model; flags `UNIFORM` (a value the code supplied, not one the data produced). | Query over the Phase-B DuckDB connection. | No — always relayed to the user before build, never fails the run. |
 | **ABSENT read-back** | Flags a declared vocabulary value (verdict/bucket/tier/category-named CSV columns) that never appears in any derived output column — a branch that never fired. | Set-difference over declared vs. produced values. | No — informational only. |

@@ -149,10 +149,10 @@ def _assert_helpers_run(skill_dir: Path) -> None:
     assert json.loads(schema.stdout)["schema"] == "nxd-dp-spec-schema-v2"
 
     examples = [
-        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+        (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8")
     ]
     assert len(examples) == 1
-    worked_spec = skill_dir.parent / "worked-dp-spec.md"
+    worked_spec = skill_dir.parent / "worked-dp-blueprint.md"
     worked_spec.write_text(examples[0], encoding="utf-8")
     report = subprocess.run(
         [sys.executable, str(validator), str(worked_spec), "--json"],
@@ -169,9 +169,9 @@ def _assert_helpers_run(skill_dir: Path) -> None:
 
 def _lock_plugin_version(skill_dir: Path) -> str:
     """Exercise the installed diagnostic script, not the source import."""
-    spec = skill_dir.parent / "approved-dp-spec.md"
+    spec = skill_dir.parent / "approved-dp-blueprint.md"
     example = [
-        (REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md").read_text(encoding="utf-8")
+        (REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md").read_text(encoding="utf-8")
     ]
     spec.write_text(example[0], encoding="utf-8")
     sys.path.insert(0, str(skill_dir / "scripts"))

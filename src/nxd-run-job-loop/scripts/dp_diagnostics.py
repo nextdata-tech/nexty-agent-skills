@@ -17,7 +17,7 @@ What lives here:
   semantic hash of a spec. Whitespace, comments and key order do not move it;
   a semantic value or list order does; lifecycle status is excluded from the
   approval binding.
-* the lock writer/verifier (`dp-spec.lock.json`) and the build record
+* the lock writer/verifier (`dp-blueprint.lock.json`) and the build record
   (`build-record.json`), including INVARIANT-D2 and the materialization
   predicate.
 
@@ -211,10 +211,74 @@ DEFAULT_CAPS = {
     "retry_environmental_total": 3,
 }
 
-CLOSURE_SNAPSHOT = "dp-spec.approved.md"
-CLOSURE_LOCK = "dp-spec.lock.json"
+CLOSURE_SNAPSHOT = "dp-blueprint.approved.md"
+CLOSURE_LOCK = "dp-blueprint.lock.json"
 CLOSURE_BUILD_RECORD = "build-record.json"
 CLOSURE_README = "README.md"
+
+# The pre-0.38.0 spelling, when these artifacts were named after the dp-spec
+# rather than the blueprint. Only the LOCK needs a legacy name here: the
+# snapshot and proposal filenames travel inside the lock, as `snapshot` and
+# `proposal_snapshot`, so once the lock is found a legacy closure resolves the
+# rest of itself from its own contents. `source_basename` is not that mechanism
+# — it is write-only provenance and is never dereferenced.
+LEGACY_CLOSURE_LOCK = "dp-spec.lock.json"
+
+
+LEGACY_CLOSURE_ARTIFACTS = (
+    "dp-spec.approved.md",
+    "dp-spec.lock.json",
+    "dp-spec.proposal.approved.json",
+)
+
+
+def _drop_superseded_legacy_artifacts(closure: Path) -> list[str]:
+    """Remove the pre-v0.38.0 pair a fresh lock write has just superseded.
+
+    Writing into an existing legacy closure otherwise leaves TWO approved plans
+    with different hashes and two locks. Every reader prefers the current names,
+    so the stale pair is never looked at again and never reported — but a cold
+    reader opening the closure finds two answers to "what was this supposed to
+    build", which is the single failure mode the byte-copy discipline exists to
+    remove. These are generated artifacts and the copy that replaces them was
+    just written from the same approved spec.
+    """
+    dropped = []
+    for name in LEGACY_CLOSURE_ARTIFACTS:
+        stale = closure / name
+        if stale.is_file():
+            stale.unlink()
+            dropped.append(name)
+    return dropped
+
+
+def resolve_lock_path(lock_path: Path) -> Path:
+    """A caller-supplied --lock path, with the same legacy fallback.
+
+    The resume playbook hands the agent a literal
+    `<closure>/dp-blueprint.lock.json`, so an explicit path has to tolerate a
+    pre-v0.38.0 closure exactly as the directory form does. Only substitutes
+    when the given name is the current one and is absent; any other path is
+    left alone so a genuine typo still reports itself.
+    """
+    if lock_path.is_file() or lock_path.name != CLOSURE_LOCK:
+        return lock_path
+    legacy = lock_path.with_name(LEGACY_CLOSURE_LOCK)
+    return legacy if legacy.is_file() else lock_path
+
+
+def resolve_closure_lock(closure: Path) -> Path:
+    """The closure's lock, preferring the current name over the legacy one.
+
+    Returns the CURRENT-name path when neither exists, so a closure that is
+    simply missing its lock still reports the name a fresh closure should have
+    rather than advertising the retired one.
+    """
+    current = closure / CLOSURE_LOCK
+    if current.is_file():
+        return current
+    legacy = closure / LEGACY_CLOSURE_LOCK
+    return legacy if legacy.is_file() else current
 
 
 # ---------------------------------------------------------------------------
@@ -597,12 +661,27 @@ _register(
     owner="agent",
     summary="Phase A could not verify a dynamic construct — its declared blind spot",
 )
+_register(
+    "struct.key_not_groupable",
+    stage="s1_structure",
+    severity="warning",
+    owner="agent",
+    summary="A key field carries only primary_key() or only join() — not groupable, so no query can name the entity",
+)
+_register(
+    "struct.model_not_queryable",
+    stage="s1_structure",
+    severity="warning",
+    owner="agent",
+    summary="A promised model backs no semantic_view, so no metric reaches it and it cannot be selected",
+)
 
 # --- domain `reach.` — stage s1_structure (Phase E) --------------------------
-# The reach gate: a transform lands data and never calls a model. Filed under
-# s1_structure because it is static, offline and must DECIDE before Phase B
-# imports the transform — a verdict delivered after the socket is already open
-# is a post-mortem, not a gate.
+# The reach gate: a transform never imports a provider SDK, and reaches a model
+# only through the sanctioned seam. Filed under s1_structure because it is
+# static, offline and must DECIDE before Phase B imports the transform — a
+# verdict delivered after the socket is already open is a post-mortem, not a
+# gate.
 #
 # owner: agent on all four. Every one is fixed by editing the closure — drop the
 # import, or declare the service the import implies. None is a question for the
@@ -611,8 +690,8 @@ _register_table(
     "s1_structure",
     (
         ("reach.model_sdk_import", "error", "agent", "none", False,
-         "transform/main.py or a contracts/ verifier imports a model-provider SDK — inference belongs in "
-         "the authoring session and lands as data"),
+         "transform/main.py or a contracts/ verifier imports a model-provider SDK directly — a packaged "
+         "closure infers through nxd.experimental.field_mapper under a consent grant, not a raw SDK"),
         ("reach.undeclared_transport", "error", "agent", "none", False,
          "transform/main.py imports raw network transport but spec.py declares "
          "no network-shaped connector"),
@@ -713,6 +792,9 @@ _register_table(
          "a promised model produced no table"),
         ("runtime.row_count", "info", "agent", "none", False,
          "row count for one model in the Phase B scratch database"),
+        ("runtime.dry_run_not_runnable", "info", "agent", "none", False,
+         "the offline dry run could not execute because the closure reads a "
+         "credential from secrets; phase B reports nothing about the transform"),
     ),
 )
 _register_table(
@@ -730,11 +812,11 @@ _register_table(
     "s3_closure",
     (
         ("closure.spec_snapshot_missing", "error", "agent", "none", False,
-         "dp-spec.approved.md is missing from the closure root"),
+         "dp-blueprint.approved.md is missing from the closure root"),
         ("closure.lock_missing", "error", "agent", "none", False,
-         "dp-spec.lock.json is missing"),
+         "dp-blueprint.lock.json is missing"),
         ("closure.lock_unparseable", "error", "agent", "none", False,
-         "dp-spec.lock.json does not parse or carries the wrong schema"),
+         "dp-blueprint.lock.json does not parse or carries the wrong schema"),
         ("closure.lock_snapshot_byte_mismatch", "error", "agent", "none", False,
          "the snapshot's bytes do not match lock.snapshot_sha256 — edited after copy"),
         ("closure.spec_hash_mismatch", "error", "agent", "none", False,
@@ -751,6 +833,9 @@ _register_table(
          "the live IR cannot be canonicalized, so no hash comparison is possible"),
         ("closure.lock_status_not_approved", "error", "user", "confirm", False,
          "the snapshot was copied from a spec that was not approved"),
+        ("closure.contract_phase_unsupported", "error", "user", "confirm", False,
+         "approved pre_transform input expectations cannot execute: this "
+         "runtime runs them only for a declared CSV source-aligned input"),
         ("closure.build_record_missing", "error", "agent", "none", False,
          "build-record.json is missing"),
         ("closure.build_record_invalid", "error", "agent", "none", False,
@@ -771,6 +856,9 @@ _register_table(
          ".gitignore does not name infra-profile.yaml"),
         ("closure.canonical_hash_deferred", "info", "agent", "none", False,
          "the byte check ran here; the canonical hash check is `lock verify`"),
+        ("closure.legacy_artifact_superseded", "info", "agent", "none", False,
+         "a pre-v0.38.0 dp-spec.* artifact was replaced by its dp-blueprint.* "
+         "equivalent and removed"),
         ("closure.contract_not_wired", "error", "agent", "none", False,
          "a custom contract is not attached to an input or output declaration"),
         ("closure.contract_verifier_missing", "error", "agent", "none", False,
@@ -1637,7 +1725,7 @@ def emit(obj: dict) -> str:
 # ---------------------------------------------------------------------------
 
 PACKAGED_VERSION_STAMP = ".nexty-plugin-version.json"
-V3_PROPOSAL_SNAPSHOT = "dp-spec.proposal.approved.json"
+V3_PROPOSAL_SNAPSHOT = "dp-blueprint.proposal.approved.json"
 
 
 def _json_sha256(value: Any) -> str:
@@ -1724,6 +1812,13 @@ def _write_v3_lock(
         "copied_at_unix_ms": now_ms if now_ms is not None else int(time.time() * 1000),
     }
     (closure / CLOSURE_LOCK).write_text(json.dumps(lock, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    for name in _drop_superseded_legacy_artifacts(closure):
+        report.info(
+            f"removed the superseded pre-v0.38.0 artifact {name}",
+            code="closure.legacy_artifact_superseded",
+            path=f"closure:{name}",
+            stage="s3_closure",
+        )
     return lock, report
 
 
@@ -1774,18 +1869,19 @@ def _validate_v3_lock(lock: Any) -> list[str]:
 
 def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
     report = Report("dp_diagnostics", target=str(closure))
-    lock_path = closure / CLOSURE_LOCK
+    lock_path = resolve_closure_lock(closure)
+    lock_name = lock_path.name
     try:
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        report.error(str(exc), code="closure.lock_unparseable", path=f"closure:{CLOSURE_LOCK}", stage="s3_closure")
+        report.error(str(exc), code="closure.lock_unparseable", path=f"closure:{lock_name}", stage="s3_closure")
         return report
     problems = _validate_v3_lock(lock)
     if problems:
         report.error(
-            f"{CLOSURE_LOCK} is not a complete v3 lock: {'; '.join(problems)}",
+            f"{lock_name} is not a complete v3 lock: {'; '.join(problems)}",
             code="closure.lock_unparseable",
-            path=f"closure:{CLOSURE_LOCK}",
+            path=f"closure:{lock_name}",
             stage="s3_closure",
         )
         return report
@@ -1795,31 +1891,36 @@ def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
             report.error(
                 f"{field} {str(reference)!r} points outside the closure",
                 code="closure.escaping_reference",
-                path=f"closure:{CLOSURE_LOCK}:{field}",
+                path=f"closure:{lock_name}:{field}",
                 stage="s3_closure",
             )
     if report.errors:
         return report
     snapshot = closure / str(lock["snapshot"])
     proposal_snapshot = closure / str(lock["proposal_snapshot"])
+    # Report against the names the LOCK declares, not the current constants: on
+    # a legacy closure the two differ, and an error naming a file that is not
+    # there sends the reader hunting for the wrong fault.
+    snapshot_name = snapshot.name
+    proposal_name = proposal_snapshot.name
     if not snapshot.is_file() or not proposal_snapshot.is_file():
-        report.error("the v3 approved snapshots are incomplete", code="closure.spec_snapshot_missing", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+        report.error("the v3 approved snapshots are incomplete", code="closure.spec_snapshot_missing", path=f"closure:{snapshot_name}", stage="s3_closure")
         return report
     raw = snapshot.read_bytes()
     proposal_raw = proposal_snapshot.read_bytes()
     if raw_sha256(raw) != lock["snapshot_sha256"]:
-        report.error("the approved Markdown snapshot bytes do not match the lock", code="closure.lock_snapshot_byte_mismatch", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+        report.error("the approved Markdown snapshot bytes do not match the lock", code="closure.lock_snapshot_byte_mismatch", path=f"closure:{snapshot_name}", stage="s3_closure")
     if raw_sha256(proposal_raw) != lock["proposal_snapshot_sha256"]:
-        report.error("the typed proposal snapshot bytes do not match the lock", code="closure.lock_snapshot_byte_mismatch", path=f"closure:{V3_PROPOSAL_SNAPSHOT}", stage="s3_closure")
+        report.error("the typed proposal snapshot bytes do not match the lock", code="closure.lock_snapshot_byte_mismatch", path=f"closure:{proposal_name}", stage="s3_closure")
     try:
         parsed = _v3.parse(raw.decode("utf-8"))
         proposal = json.loads(proposal_raw.decode("utf-8"))
         if not isinstance(proposal, dict):
             raise ValueError("the typed proposal snapshot is not a JSON object")
         if _v3.semantic_hash(parsed) != lock["spec_hash"] or _v3.proposal_hash(proposal) != lock["proposal_hash"]:
-            report.error("the v3 snapshot hash does not match the lock", code="closure.spec_hash_mismatch", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+            report.error("the v3 snapshot hash does not match the lock", code="closure.spec_hash_mismatch", path=f"closure:{snapshot_name}", stage="s3_closure")
         if parsed.frontmatter.name != lock["name"] or parsed.frontmatter.workflow != lock["workflow"]:
-            report.error("the v3 snapshot metadata does not match the lock", code="closure.spec_hash_mismatch", path=f"closure:{CLOSURE_LOCK}", stage="s3_closure")
+            report.error("the v3 snapshot metadata does not match the lock", code="closure.spec_hash_mismatch", path=f"closure:{lock_name}", stage="s3_closure")
         payload = proposal.get("proposal")
         if not isinstance(payload, dict):
             raise ValueError("the typed proposal payload is not an object")
@@ -1828,7 +1929,7 @@ def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
             report.error(
                 "the v3 Terms inventory does not match the lock",
                 code="closure.terms_hash_mismatch",
-                path=f"closure:{CLOSURE_LOCK}:terms_hash",
+                path=f"closure:{lock_name}:terms_hash",
                 stage="s3_closure",
             )
         actual_contract_hash = _json_sha256(_v3.canonical_contract_inventory(payload))
@@ -1836,7 +1937,7 @@ def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
             report.error(
                 "the v3 compiled contract inventory does not match the lock",
                 code="closure.contract_inventory_hash_mismatch",
-                path=f"closure:{CLOSURE_LOCK}:contract_inventory_hash",
+                path=f"closure:{lock_name}:contract_inventory_hash",
                 stage="s3_closure",
             )
         decisions = payload.get("decisions")
@@ -1851,9 +1952,9 @@ def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
                 "the v3 locked-decision inventory does not match the lock",
                 code="closure.decision_inventory_mismatch",
                 path=(
-                    f"closure:{CLOSURE_LOCK}:locked_decisions_hash"
+                    f"closure:{lock_name}:locked_decisions_hash"
                     if actual_decisions_hash != lock["locked_decisions_hash"]
-                    else f"closure:{CLOSURE_LOCK}:proposal_hash"
+                    else f"closure:{lock_name}:proposal_hash"
                 ),
                 stage="s3_closure",
             )
@@ -1864,9 +1965,9 @@ def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
         # complete inventory to the lock.
         issues = _v3.validate_approval(parsed, proposal)
         if issues:
-            report.error("the approved v3 proposal no longer validates", code="closure.spec_hash_mismatch", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+            report.error("the approved v3 proposal no longer validates", code="closure.spec_hash_mismatch", path=f"closure:{snapshot_name}", stage="s3_closure")
     except (OSError, UnicodeError, ValueError) as exc:
-        report.error(str(exc), code="closure.lock_unparseable", path=f"closure:{CLOSURE_SNAPSHOT}", stage="s3_closure")
+        report.error(str(exc), code="closure.lock_unparseable", path=f"closure:{snapshot_name}", stage="s3_closure")
     if spec is not None:
         try:
             live = spec_hash(spec.read_bytes())
@@ -1884,7 +1985,7 @@ def _verify_v3_lock(closure: Path, spec: Path | None = None) -> Report:
         else:
             report.spec_hash = live
             if live != lock["spec_hash"]:
-                report.error("the live spec has moved away from the approved v3 plan", code="closure.live_spec_diverged", path=f"closure:{CLOSURE_LOCK}:spec_hash", stage="s3_closure")
+                report.error("the live spec has moved away from the approved v3 plan", code="closure.live_spec_diverged", path=f"closure:{lock_name}:spec_hash", stage="s3_closure")
     else:
         report.spec_hash = lock["spec_hash"]
     return report
@@ -2023,11 +2124,18 @@ def write_lock(
     (closure / CLOSURE_LOCK).write_text(
         json.dumps(lock, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    for name in _drop_superseded_legacy_artifacts(closure):
+        report.info(
+            f"removed the superseded pre-v0.38.0 artifact {name}",
+            code="closure.legacy_artifact_superseded",
+            path=f"closure:{name}",
+            stage="s3_closure",
+        )
     return lock, report
 
 
 def read_lock(closure: Path) -> dict:
-    return json.loads((closure / CLOSURE_LOCK).read_text(encoding="utf-8"))
+    return json.loads(resolve_closure_lock(closure).read_text(encoding="utf-8"))
 
 
 def validate_lock(lock: Any) -> list[str]:
@@ -2091,7 +2199,8 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
     Phase C does the byte check inside the closure with `hashlib` alone; this
     compares the v2 semantic hash against the LIVE IR outside the closure.
     """
-    lock_path = closure / CLOSURE_LOCK
+    lock_path = resolve_closure_lock(closure)
+    lock_name = lock_path.name
     try:
         lock_probe = json.loads(lock_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -2102,9 +2211,9 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
     report = Report("dp_diagnostics", target=str(closure))
     if not lock_path.is_file():
         report.error(
-            f"{CLOSURE_LOCK} is missing from {closure}",
+            f"{lock_name} is missing from {closure}",
             code="closure.lock_missing",
-            path=f"closure:{CLOSURE_LOCK}",
+            path=f"closure:{lock_name}",
             stage="s3_closure",
         )
         return report
@@ -2112,18 +2221,18 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         report.error(
-            f"{CLOSURE_LOCK} does not parse: {exc}",
+            f"{lock_name} does not parse: {exc}",
             code="closure.lock_unparseable",
-            path=f"closure:{CLOSURE_LOCK}",
+            path=f"closure:{lock_name}",
             stage="s3_closure",
         )
         return report
     lock_problems = validate_lock(lock)
     if lock_problems:
         report.error(
-            f"{CLOSURE_LOCK} is not a complete v2 lock: {'; '.join(lock_problems)}",
+            f"{lock_name} is not a complete v2 lock: {'; '.join(lock_problems)}",
             code="closure.lock_unparseable",
-            path=f"closure:{CLOSURE_LOCK}",
+            path=f"closure:{lock_name}",
             stage="s3_closure",
         )
         return report
@@ -2133,7 +2242,7 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
         report.error(
             f"snapshot {snapshot_ref!r} points outside the closure",
             code="closure.escaping_reference",
-            path=f"closure:{CLOSURE_LOCK}:snapshot",
+            path=f"closure:{lock_name}:snapshot",
             evidence={"found": snapshot_ref},
             stage="s3_closure",
         )
@@ -2144,7 +2253,7 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
         report.error(
             f"snapshot {snapshot_ref!r} resolves outside the closure",
             code="closure.escaping_reference",
-            path=f"closure:{CLOSURE_LOCK}:snapshot",
+            path=f"closure:{lock_name}:snapshot",
             evidence={"found": snapshot_ref},
             stage="s3_closure",
         )
@@ -2173,7 +2282,7 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
             f"the snapshot was copied at status {lock.get('spec_status_at_copy')!r}, "
             "not 'approved'",
             code="closure.lock_status_not_approved",
-            path=f"closure:{CLOSURE_LOCK}:spec_status_at_copy",
+            path=f"closure:{lock_name}:spec_status_at_copy",
             stage="s3_closure",
         )
 
@@ -2229,7 +2338,7 @@ def verify_lock(closure: Path, spec: Path | None = None) -> Report:
                     "the live spec has moved away from the plan this closure was "
                     "built from — regenerate, do not heal",
                     code="closure.live_spec_diverged",
-                    path=f"closure:{CLOSURE_LOCK}:spec_hash",
+                    path=f"closure:{lock_name}:spec_hash",
                     evidence={"expected": lock.get("spec_hash"), "actual": live},
                     stage="s3_closure",
                 )
@@ -3748,11 +3857,12 @@ def record_init(
     is frozen with it. The live IR having moved is `plan_moved`, not an
     `s0_spec` regression.
     """
+    lock_path = resolve_lock_path(lock_path)
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     lock_problems = validate_lock(lock)
     if lock_problems:
         raise SpecReadError(
-            f"{CLOSURE_LOCK} is not a complete v2 lock: {'; '.join(lock_problems)}"
+            f"{lock_path.name} is not a complete v2 lock: {'; '.join(lock_problems)}"
         )
     closure = record_path.parent
     if lock.get("schema") == V3_LOCK_SCHEMA_ID:
@@ -4204,10 +4314,11 @@ def cmd_materialized(args) -> int:
         return 2
     lock = None
     if args.lock:
+        lock_path = resolve_lock_path(args.lock)
         try:
-            lock = json.loads(args.lock.read_text(encoding="utf-8"))
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            print(f"could not read {args.lock}: {exc}", file=sys.stderr)
+            print(f"could not read {lock_path}: {exc}", file=sys.stderr)
             return 2
     live = None
     if args.spec:
@@ -4239,12 +4350,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_hash = sub.add_parser("hash", help="canonical semantic hash of a dp-spec.md")
+    p_hash = sub.add_parser("hash", help="canonical semantic hash of a dp-blueprint.md")
     p_hash.add_argument("spec", type=Path)
     p_hash.add_argument("--json", action="store_true")
     p_hash.set_defaults(func=cmd_hash)
 
-    p_canon = sub.add_parser("canonicalize", help="canonical JSON for a dp-spec.md")
+    p_canon = sub.add_parser("canonicalize", help="canonical JSON for a dp-blueprint.md")
     p_canon.add_argument("spec", type=Path)
     p_canon.add_argument("--json", action="store_true", help="accepted; output is JSON")
     p_canon.set_defaults(func=cmd_canonicalize)

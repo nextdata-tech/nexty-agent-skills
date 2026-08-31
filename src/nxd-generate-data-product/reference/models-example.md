@@ -27,7 +27,18 @@ customers = (
         {
             # Type IDs from observed values, not habit: numeric-looking is not
             # numeric, and these keys are "C0417"-style strings.
-            "customer_id": field(string(), primary_key()),
+            # primary_key() AND dimension(): a key with only the key role is
+            # not groupable, so `describe_models` offers no way to ask WHICH
+            # customer a row belongs to — every answer comes back as a count
+            # with no identity. Roles compose; keys nearly always need both.
+            "customer_id": field(
+                string(),
+                primary_key(),
+                dimension(
+                    name="customer_id",
+                    description="Account key, e.g. C0417. Group by this to name a customer.",
+                ),
+            ),
             "country_id": field(
                 string(),
                 dimension(
@@ -71,7 +82,17 @@ orders = (
         {
             # order_id is number() here because its observed values are numeric —
             # the two ID shapes sit side by side deliberately.
-            "order_id": field(number(), primary_key()),
+            # Same pairing as customers.customer_id above, and for the same
+            # reason: a key carrying only primary_key() cannot be grouped by,
+            # so "which orders..." has no answerable form.
+            "order_id": field(
+                number(),
+                primary_key(),
+                dimension(
+                    name="order_id",
+                    description="Order key. Group by this to name an order.",
+                ),
+            ),
             "customer_id": field(
                 # Matches the customers.customer_id type; join endpoints must agree.
                 string(),
@@ -105,6 +126,56 @@ order_metrics = semantic_view("order_metrics", orders).schema(
     }
 )
 ```
+
+## Two ways a model is landed but unanswerable
+
+Both are silent: no error, no failed assert, no missing table — only questions
+that quietly have no answer. They are the join- and view-shaped siblings of the
+bare `primary_key()` already shown above.
+
+**A promised model backing no `semantic_view`.** `run_semantic_query` requires at
+least one measure, so a model no metric reaches cannot be selected at all. Its
+rows are then reachable only through another model's metric across a join — and
+there a filter on the joined model scopes that model's *aggregate*, not this
+model's spine, so the query returns every row of the model you were trying to
+narrow and looks like it worked. A `COUNT` of the key is enough:
+
+```python
+ticket_signals_metrics = semantic_view("ticket_signals_metrics", ticket_signals).schema(
+    {
+        "evidence_count": metric_field(
+            number(),
+            metric(
+                Agg.COUNT,
+                of=ticket_signals.field("evidence_id"),
+                name="evidence_count",
+                description="Number of cited evidence spans.",
+            ),
+        ),
+    }
+)
+```
+
+This does not contradict "metrics stay question-driven". That rule decides *what
+to aggregate*; this one decides *whether the model can be reached at all*.
+
+**A field carrying only `join(...)`.** A join is a traversal edge and nothing
+else — it never reaches `describe_models`, so the model cannot be filtered or
+grouped by the entity it points at. Compose it with a dimension exactly as a key
+is composed:
+
+```python
+"identifier": field(
+    string(),
+    join(to="open_pocket_tickets", to_column="identifier"),
+    dimension(
+        name="evidence_ticket",
+        description="Ticket this evidence was cited for. Filter on this to read one ticket's citations.",
+    ),
+),
+```
+
+`struct.model_not_queryable` and `struct.key_not_groupable` report both.
 
 ## `spec.py`
 

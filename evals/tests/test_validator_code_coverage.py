@@ -11,7 +11,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "src" / "nxd-run-job-loop" / "scripts"
-FIXTURE = REPO / "evals" / "tests" / "fixtures" / "dp-spec-v2-valid.md"
+FIXTURE = REPO / "evals" / "tests" / "fixtures" / "dp-blueprint-v2-valid.md"
 VALIDATOR = SCRIPTS / "validate_dp_spec.py"
 sys.path.insert(0, str(SCRIPTS))
 
@@ -24,7 +24,7 @@ def text() -> str:
 
 
 def report(tmp_path: Path, value: str) -> dict:
-    path = tmp_path / "dp-spec.md"
+    path = tmp_path / "dp-blueprint.md"
     path.write_text(value, encoding="utf-8")
     proc = subprocess.run([sys.executable, str(VALIDATOR), str(path), "--json"], capture_output=True, text=True)
     assert proc.stdout
