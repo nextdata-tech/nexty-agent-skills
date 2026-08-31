@@ -191,7 +191,7 @@ def capability_oracle(source: object) -> OracleResult:
 
 
 def counter_oracle(snapshot: object, *, call_ceiling: int | None = None, expected_pages: int | None = None) -> OracleResult:
-    """Check server-owned request counters without penalizing frugal runs."""
+    """Check server-owned request counters without guessing missing page data."""
 
     if hasattr(snapshot, "snapshot") and callable(getattr(snapshot, "snapshot")):
         snapshot = snapshot.snapshot()
@@ -211,16 +211,6 @@ def counter_oracle(snapshot: object, *, call_ceiling: int | None = None, expecte
         pages = snapshot.get("pages")
         if pages is None:
             pages = snapshot.get("page_count")
-        if pages is None:
-            routes = snapshot.get("routes")
-            if isinstance(routes, Mapping):
-                populated = [
-                    bucket.get("count")
-                    for route, bucket in routes.items()
-                    if route != "__unmatched__" and isinstance(bucket, Mapping) and "count" in bucket
-                ]
-                if len(populated) == 1:
-                    pages = populated[0]
         if pages is None:
             findings.append(OracleFinding("pagination_not_examined", "snapshot has no page count"))
         elif pages != expected_pages:

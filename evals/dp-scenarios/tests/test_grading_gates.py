@@ -343,18 +343,20 @@ def test_counter_oracle_uses_a_ceiling() -> None:
     assert "call_ceiling_violated" in violated.codes
 
 
-def test_counter_oracle_checks_explicit_or_single_route_page_counts() -> None:
+def test_counter_oracle_requires_explicit_page_counts() -> None:
     assert counter_oracle({"total": 2, "pages": 2}, expected_pages=2).passed
-    assert counter_oracle(
-        {"total": 2, "routes": {"/orders": {"count": 2}}},
-        expected_pages=2,
-    ).passed
     not_examined = counter_oracle(
-        {"total": 2, "routes": {"/orders": {"count": 2}, "/users": {"count": 1}}},
+        {"total": 2, "routes": {"/orders": {"count": 2}}},
         expected_pages=2,
     )
     assert not_examined.state is OracleState.NOT_EXAMINED
     assert "pagination_not_examined" in not_examined.codes
+    ordinary_route = counter_oracle(
+        {"total": 3, "routes": {"/health": {"count": 3}}},
+        expected_pages=3,
+    )
+    assert ordinary_route.state is OracleState.NOT_EXAMINED
+    assert "pagination_not_examined" in ordinary_route.codes
 
 
 def test_counter_oracle_rejects_a_null_total_without_raising() -> None:

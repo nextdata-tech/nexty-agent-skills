@@ -159,16 +159,50 @@ def test_counters_are_thread_safe_for_direct_recording() -> None:
         sys.setswitchinterval(previous_interval)
 
 
-def test_counters_track_pagination_requests_separately() -> None:
+def test_counters_track_successful_pagination_responses_separately() -> None:
     counters = RequestCounters()
-    counters.record("/orders", "GET", paginated=True)
-    counters.record("/orders", "GET", paginated=True)
+    counters.record("/orders", "GET")
+    counters.record_page()
+    counters.record("/orders", "GET")
+    counters.record_page()
     counters.record("/health", "GET")
 
     assert counters.snapshot()["total"] == 3
     assert counters.snapshot()["pages"] == 2
     counters.reset()
     assert counters.snapshot()["pages"] == 0
+
+
+def test_rejected_paginated_responses_do_not_count_as_pages() -> None:
+    async def check() -> None:
+        config = load_config(
+            {
+                "routes": [
+                    {
+                        "path": "/orders",
+                        "method": "GET",
+                        "response": {"json": [{"id": 1}, {"id": 2}]},
+                        "pagination": {"page_size": 1},
+                        "rate_limit_every": 2,
+                    }
+                ]
+            }
+        )
+        server = MockRestServer(config)
+        await server.start()
+        try:
+            async with ClientSession() as client:
+                first = await client.get(server.data_url + "/orders")
+                second = await client.get(server.data_url + "/orders")
+                assert first.status == 200
+                assert second.status == 429
+            snapshot = server.counters.snapshot()
+            assert snapshot["total"] == 2
+            assert snapshot["pages"] == 1
+        finally:
+            await server.stop()
+
+    run(check())
 
 
 def test_caller_identity_ignores_whitespace_and_matches_header_names_case_insensitively() -> None:

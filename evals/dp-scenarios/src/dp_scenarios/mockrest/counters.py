@@ -3,11 +3,11 @@
 Every data request is recorded before behavior evaluation, including rejected
 requests.  The snapshot retains aggregate totals and an ordered event list so
 call ceilings can be checked against what the server actually received rather
-than against a client's narration.  Pagination-enabled route requests are
-tracked separately as ``pages`` so a grader can verify pagination without
-guessing from unrelated route traffic.  Control-port maintenance calls are
-kept out of this oracle so a grader can inspect it without changing the source
-call count.
+than against a client's narration.  Successful responses from
+pagination-enabled routes are tracked separately as ``pages`` so a grader can
+verify pagination without guessing from unrelated route traffic or counting
+rejected retries.  Control-port maintenance calls are kept out of this oracle
+so a grader can inspect it without changing the source call count.
 """
 
 from __future__ import annotations
@@ -56,7 +56,6 @@ class RequestCounters:
         headers: Mapping[str, str] | None = None,
         *,
         identity: str | None = None,
-        paginated: bool = False,
     ) -> int:
         """Record a request and return its one-based count for this route."""
 
@@ -77,9 +76,13 @@ class RequestCounters:
             bucket["count"] += 1
             bucket["methods"][method_name] += 1
             bucket["identities"][identity if identity is not None else "anonymous"] += 1
-            if paginated:
-                self._pages += 1
             return int(bucket["count"])
+
+    def record_page(self) -> None:
+        """Record one successfully rendered paginated response."""
+
+        with self._lock:
+            self._pages += 1
 
     def reset(self) -> None:
         """Clear all events; only the control port calls this between runs."""

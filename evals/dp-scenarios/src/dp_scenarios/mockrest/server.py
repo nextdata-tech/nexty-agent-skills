@@ -398,7 +398,6 @@ class MockRestServer:
             route.path,
             request.method,
             request.headers,
-            paginated=route.pagination is not None,
         )
         state_snapshot = dict(self._current_states)
         if route.latency_ms:
@@ -456,7 +455,9 @@ class MockRestServer:
                     route.pagination.items_field: page.records,
                     route.pagination.cursor_field: page.next_cursor,
                 }
-                return web.json_response(payload)
+                response = web.json_response(payload)
+                self.counters.record_page()
+                return response
             if spec.format == "csv":
                 return _csv_response(payload)
             if (
