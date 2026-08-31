@@ -34,6 +34,17 @@ spend — and the governed-query gate is a mandatory conjunct of the pass rule.
 Dropping it would make the grain trap ungradeable in the one tier cheap enough to
 run on every change.
 
+### Approval boundary
+
+T0 does not qualify the job-loop's prose-first authoring lifecycle. In particular,
+it does not require a vague opening prompt to produce an approved
+`dp-blueprint.md` (called `dp-spec.md` in older material), nor does it run an
+independent user-presence approval gate before materialization. The job-loop skill
+and closure validators define that artifact contract; this harness records only
+the scripted scenario phases and the artifacts available to its smoke gates.
+Mapper approval is a separate supervisor admission boundary and is not reproduced
+by the T0 operator.
+
 ## Layout
 
 | Path | Contents |
