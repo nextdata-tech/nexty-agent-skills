@@ -1,0 +1,12 @@
+[
+  {
+    "required": false,
+    "resource": "optional_events",
+    "row_count": 0
+  },
+  {
+    "required": true,
+    "resource": "primary",
+    "row_count": 5
+  }
+]

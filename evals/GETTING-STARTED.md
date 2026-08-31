@@ -1,6 +1,6 @@
 # Getting started with the evals
 
-Start here. `evals/` holds **four independent harnesses** with separate
+Start here. `evals/` holds **six independent harnesses** with separate
 dependencies and separate entry points — this page is the map and the install
 guide. Once you know which harness you need, its own README is authoritative.
 
@@ -10,6 +10,8 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **`nxd_eval`** | `uv run --project evals/nxd_eval` | uv project (`inspect_ai` + stats stack) | How reliably an agent answers questions against a data product/mesh — deterministic execution-accuracy plus a judge, with a Wilson/McNemar/FDR statistics contract. |
 | **Semantic MCP server** | started *by* `run.py` | uv project + private nxd wheels + Snowflake | Not a harness on its own — it makes the semantic tools real for 4 scenarios in the suite. |
 | **Query loop** | `evals/query-loop/run_query_loop.py` | borrows `nxd_eval`'s venv | Multi-turn query refinement against a pharma mesh fixture. |
+| **`dp-scenarios`** | `uv run --project evals/dp-scenarios` | uv project (borrows `nxd_eval` via a path dependency) | Whether an agent builds a correct data product through a multi-turn session — graded from artifacts against an evidence ledger, not from the agent's own account. Its unit tests gate CI; its graded runs are local. |
+| **Cross-DP joins** | `evals/cross-dp-joins/harness/run_eval.py` | local only | Compiler-strategy and agent trials for cross-data-product join fan-out safety. |
 
 **If you are new and want to run something today: Tier 0 below needs no
 installs and covers 20 of the 36 public scenarios.**

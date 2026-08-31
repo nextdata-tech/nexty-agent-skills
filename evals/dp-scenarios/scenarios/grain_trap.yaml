@@ -1,0 +1,5 @@
+version: 1
+dataset: grain_trap
+seed: 29
+query:
+  measure: regional_revenue

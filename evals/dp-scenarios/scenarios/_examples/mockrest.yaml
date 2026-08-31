@@ -1,0 +1,112 @@
+version: 1
+
+docs:
+  /docs:
+    content_type: text/plain
+    body: |
+      The orders endpoint contains 5 records in total. Follow next_cursor until it is null.
+      The settlements endpoint requires X-Source-Key: example-value.
+
+auth:
+  token: example-token
+  initial_requests: 2
+  refresh_path: /ledger-adjustments/reconcile
+
+capability:
+  metrics:
+    records_count: supported
+    future_margin: impossible
+  endpoints:
+    /orders:
+      GET: [200]
+    /settlements:
+      GET: [200]
+    /ledger-adjustments:
+      GET: [200]
+      POST: [403]
+    /cash-balance:
+      GET: [404]
+  known_absent_dimensions:
+    - tombstone_records
+    - nested_pii_sentinels
+    - fx_route_missing_weekend_date
+
+routes:
+  - path: /orders
+    method: GET
+    response:
+      json:
+        - {id: 1, value: alpha}
+        - {id: 2, value: beta}
+        - {id: 3, value: gamma}
+        - {id: 4, value: delta}
+        - {id: 5, value: epsilon}
+    pagination:
+      page_size: 2
+
+  - path: /settlements
+    method: GET
+    response:
+      json: [{id: 1, value: checked}]
+    required_header:
+      name: X-Source-Key
+      value: example-value
+
+  - path: /ledger-adjustments
+    method: GET
+    response:
+      json: [{id: 1, value: private}]
+    auth_required: true
+
+  - path: /ledger-adjustments
+    method: POST
+    write_forbidden: true
+
+  - path: /cash-balance
+    method: GET
+    status: 404
+
+  - path: /inventory
+    method: GET
+    response:
+      json: [{id: 1, value: stocked}]
+    require_user_agent: true
+
+  - path: /cashflows
+    method: GET
+    response:
+      json: [{id: 1, value: posted}]
+    rate_limit_every: 3
+
+  - path: /market-data
+    method: GET
+    response:
+      json: [{id: 1, value: quoted}]
+    latency_ms: 20
+
+  - path: /accounts
+    method: GET
+    response:
+      json:
+        - {id: a1}
+        - {id: a2}
+
+  - path: /accounts/{account_id}/positions
+    method: GET
+    response:
+      json:
+        - {id: p1, account_id: a1}
+        - {id: p2, account_id: a2}
+        - {id: p3, account_id: a2}
+    fanout:
+      child_parent_field: account_id
+
+  - path: /positions/history
+    method: GET
+    state_family: positions
+    initial_state: v1
+    states:
+      v1:
+        json: [{id: 1, status: open}]
+      v2:
+        json: [{id: 1, state: active}]

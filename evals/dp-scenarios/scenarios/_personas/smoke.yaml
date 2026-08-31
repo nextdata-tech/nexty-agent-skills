@@ -1,0 +1,42 @@
+version: 1
+id: smoke
+label: Neutral smoke operator
+patience_turns: 4
+vocabulary: [business outcome, numbers]
+behaviors:
+  browser_level_vocabulary: true
+  business_vocabulary: false
+  loose_technical_vocabulary: false
+  ignores_jargon: false
+  repeats_the_ask: false
+  refuses_tradeoffs: false
+  instant_approval: false
+  approves_without_reading: false
+  defers_decisions: false
+  never_frustrated: false
+  interrogative: false
+  demands_definitions: false
+  challenges_intermediate_numbers: false
+  asks_for_row_examples: false
+  decides_everything: false
+  decides_twice_differently: false
+  doubles_down_once: false
+  concedes_after_correction: false
+  misapplied_engineering_vocabulary: false
+  goes_quiet_at_jargon: false
+  reopens_questions: false
+  refuses_risk_bearing_decisions: false
+  deadline_driven: false
+  kpi_names_only: false
+  relays_third_party_questions: false
+  rejects_caveats: false
+  refuses_decisions: false
+  escalation_bait: false
+  no_pressure_behaviour: true
+reply_bank:
+  source_question: ["I can answer from the sheet."]
+  approval_request: ["Yes, please continue."]
+  decision_request: ["I can answer from the sheet."]
+  status_query: ["Please continue with the planned work."]
+  other: ["I don't know, you tell me."]
+fallback: "I don't know, you tell me."

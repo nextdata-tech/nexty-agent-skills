@@ -1,0 +1,201 @@
+"""Guard tests for Wilson rates, declared repeats, pairing, and clustering."""
+
+from __future__ import annotations
+
+import pytest
+from types import SimpleNamespace
+
+from dp_scenarios.grading.gates import GATE_POINTS, GateResult
+from dp_scenarios.grading.score import score_run
+from dp_scenarios.grading.statistics import (
+    DemonstratedOnce,
+    RepeatabilityTier,
+    discount_twins,
+    gate_pass_rates,
+    paired_mcnemar,
+    render_rate,
+    repeatability_plan,
+    repeatability_certificate,
+)
+from dp_scenarios.ledger.lint import LintReport
+from nxd_eval.stats import wilson_ci
+
+
+def _run(state: str = "passed", *, scenario_id: str = "s", g5: bool = True, g6: bool = True, tier: str | None = None) -> dict[str, object]:
+    result: dict[str, object] = {"state": state, "scenario_id": scenario_id, "gates": {"G5": g5, "G6": g6}}
+    if tier is not None:
+        result["repeatability_tier"] = tier
+    return result
+
+
+def _manifest() -> dict[str, object]:
+    return {
+        "agent_model_id": "agent",
+        "agent_sampling_params": {"temperature": 0},
+        "judge_model_id": "not-applicable",
+        "judge_prompt_hash": "not-applicable",
+        "skill_pack_version": "v1",
+        "supervisor_version": "sup-1",
+        "nxd_data_product_wheel_version": "wheel-1",
+        "fixture_dir_hash": "fixture",
+        "mock_api_version": "mock-1",
+        "operator_script_hash": "operator",
+        "turn_budget": 10,
+        "grant_fixture_hash": "not-applicable",
+        "scenario_id": "scenario",
+        "tier": "smoke",
+        "trial_index": 0,
+        "canary_claims_hash": "claims",
+        "persona_paraphrase_prompt_hash": "not-applicable",
+        "judge_calibration_set_hash": "not-applicable",
+        "fixture_seed": 1,
+        "fixture_base_instant": "2024-01-01T00:00:00+00:00",
+        "run_id": "run",
+    }
+
+
+def test_rates_use_nxd_eval_wilson_and_exclude_invalid() -> None:
+    runs = [_run(), _run("failed", g6=False), _run("invalid"), _run()]
+    report = gate_pass_rates(runs)
+    assert report.excluded_invalid == 1
+    expected = wilson_ci(3, 3)
+    assert report.rates["G5"].lower_bound == expected.low
+    assert report.rates["G6"].passed == 2
+    assert report.rates["G5"].examined == 3
+
+
+def test_declared_repeatability_and_one_shot_have_distinct_surfaces() -> None:
+    deterministic = repeatability_certificate([_run() for _ in range(5)], RepeatabilityTier.DETERMINISTIC)
+    assert deterministic.required_epochs == 5
+    assert not deterministic.certified  # five observations cannot clear a 0.90 Wilson lower bound
+    one_shot = repeatability_certificate([_run()], RepeatabilityTier.DEMONSTRATED_ONCE)
+    assert isinstance(one_shot.demonstrated_once, DemonstratedOnce)
+    assert one_shot.rates is None
+    with pytest.raises(TypeError, match="demonstrated-once"):
+        render_rate(one_shot.demonstrated_once)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="at least two valid"):
+        gate_pass_rates([_run()])
+    with pytest.raises(ValueError, match="demonstrated-once"):
+        gate_pass_rates([_run(tier="demonstrated-once") for _ in range(3)])
+
+
+def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
+    declared = SimpleNamespace(
+        tier=RepeatabilityTier.DETERMINISTIC,
+        epochs=30,
+        certification_rule="wilson_lower_bound",
+        gates=("G5",),
+        lower_bound=0.85,
+        confidence=0.95,
+    )
+    bound_between_thresholds = repeatability_certificate(
+        [_run(g5=index < 29) for index in range(30)],
+        declared,
+    )
+    assert bound_between_thresholds.rates is not None
+    lower_bound = bound_between_thresholds.rates.rates["G5"].lower_bound
+    assert lower_bound < declared.lower_bound
+    assert 0.80 < lower_bound < 0.90
+    assert not bound_between_thresholds.certified
+
+    short_declared = SimpleNamespace(
+        tier=RepeatabilityTier.DETERMINISTIC,
+        epochs=30,
+        certification_rule="wilson_lower_bound",
+        gates=("G5",),
+        lower_bound=0.80,
+        confidence=0.95,
+    )
+    short_batch = repeatability_certificate([_run() for _ in range(29)], short_declared)
+    assert not short_batch.certified
+
+
+def test_declared_observed_epoch_contract_requires_all_declared_epochs() -> None:
+    declared = SimpleNamespace(
+        tier=RepeatabilityTier.DETERMINISTIC,
+        epochs=6,
+        certification_rule="observed_epochs",
+        gates=("G5",),
+        lower_bound=0.73,
+        confidence=0.80,
+    )
+
+    short = repeatability_certificate([_run() for _ in range(5)], declared)
+    complete = repeatability_certificate([_run() for _ in range(6)], declared)
+
+    assert short.required_epochs == 6
+    assert short.observed_epochs == 5
+    assert not short.certified
+    assert complete.certified
+    assert complete.rates is not None
+    assert complete.rates.rates["G5"].lower_bound == wilson_ci(6, 6, alpha=0.20).low
+
+
+def test_mock_source_epoch_plan_and_observed_count_are_pinned() -> None:
+    assert repeatability_plan(RepeatabilityTier.MOCK_SOURCE) == 3
+    report = repeatability_certificate([_run(), _run()], RepeatabilityTier.MOCK_SOURCE)
+    assert report.required_epochs == 3
+    assert report.observed_epochs == 2
+    assert not report.certified
+
+
+def test_rates_use_gate_examination_and_zero_automatic_zero_numerators() -> None:
+    unexamined = _run()
+    unexamined["gates"] = {"G5": {"passed": True, "examined": False}, "G6": True}
+    report = gate_pass_rates([unexamined, _run()])
+    assert report.rates["G5"].passed == 1
+    assert report.rates["G5"].examined == 1
+
+    zero = gate_pass_rates([_run("automatic zero"), _run()])
+    assert zero.rates["G5"].passed == 1
+    assert zero.rates["G5"].examined == 2
+
+    typed_zero = score_run(
+        {gate: GateResult(gate, True, GATE_POINTS[gate]) for gate in GATE_POINTS},
+        honesty_report=LintReport(True, []),
+        route_fidelity=True,
+        sentinel_tripped=True,
+    )
+    typed_report = gate_pass_rates([typed_zero, _run()])
+    assert typed_report.rates["G5"].passed == 1
+    assert typed_report.rates["G5"].examined == 2
+
+
+def test_rate_requests_require_two_valid_observations() -> None:
+    with pytest.raises(ValueError, match="at least two valid"):
+        gate_pass_rates([])
+    with pytest.raises(ValueError, match="at least two valid"):
+        gate_pass_rates([_run(), _run("invalid"), _run("invalid")])
+
+
+def test_twins_are_discounted_before_rates() -> None:
+    selected, discounted = discount_twins([_run(scenario_id="a"), _run(scenario_id="b"), _run(scenario_id="c")], {"a": "t", "b": "t", "c": "c"})
+    assert len(selected) == 2
+    assert discounted == 1
+
+
+def test_mcnemar_refuses_multi_field_manifests_and_accepts_one_field() -> None:
+    first = _manifest()
+    second = {**first, "skill_pack_version": "v2"}
+    result = paired_mcnemar(
+        first,
+        second,
+        [_run(g6=True), _run(g6=True), _run(g6=False), _run(g6=True)],
+        [_run(g6=False), _run(g6=False), _run(g6=True), _run(g6=True)],
+        field_under_test="skill_pack_version",
+    )
+    assert result.b == 2
+    assert result.c == 1
+
+    with pytest.raises(ValueError, match="requested comparison"):
+        paired_mcnemar(first, second, [_run()], [_run()], field_under_test="supervisor_version")
+    with pytest.raises(ValueError, match="one outcome per identical trial"):
+        paired_mcnemar(first, second, [_run()], [_run(), _run()])
+
+    multi = {**first, "skill_pack_version": "v2", "supervisor_version": "sup-2"}
+    with pytest.raises(ValueError, match="exactly one"):
+        paired_mcnemar(first, multi, [_run()], [_run()])
+    with pytest.raises(ValueError, match="fixture and operator"):
+        paired_mcnemar(first, {**first, "fixture_dir_hash": "fixture-2"}, [_run()], [_run()])
+    with pytest.raises(ValueError, match="fixture and operator"):
+        paired_mcnemar(first, {**first, "operator_script_hash": "operator-2"}, [_run()], [_run()])

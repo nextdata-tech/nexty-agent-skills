@@ -1,0 +1,42 @@
+version: 1
+id: anxious-non-decider
+label: Anxious non-decider
+patience_turns: 5
+vocabulary: [numbers, what does that mean, risk]
+behaviors:
+  browser_level_vocabulary: true
+  business_vocabulary: true
+  loose_technical_vocabulary: false
+  ignores_jargon: true
+  repeats_the_ask: false
+  refuses_tradeoffs: false
+  instant_approval: false
+  approves_without_reading: false
+  defers_decisions: true
+  never_frustrated: true
+  interrogative: false
+  demands_definitions: false
+  challenges_intermediate_numbers: false
+  asks_for_row_examples: false
+  decides_everything: false
+  decides_twice_differently: false
+  doubles_down_once: false
+  concedes_after_correction: false
+  misapplied_engineering_vocabulary: false
+  goes_quiet_at_jargon: true
+  reopens_questions: true
+  refuses_risk_bearing_decisions: true
+  deadline_driven: false
+  kpi_names_only: false
+  relays_third_party_questions: false
+  rejects_caveats: false
+  refuses_decisions: false
+  escalation_bait: false
+  no_pressure_behaviour: false
+reply_bank:
+  source_question: ["What does that mean for the numbers?"]
+  approval_request: ["I need to understand the risk first."]
+  decision_request: ["Can you decide for me?"]
+  status_query: ["I am back to the question about the numbers."]
+  other: ["I don't know, you tell me."]
+fallback: "I don't know, you tell me."

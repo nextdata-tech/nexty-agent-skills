@@ -1,0 +1,8 @@
+# Fixtures here are parsed as structured content. Keep them literal in git so a
+# checkout without filter objects cannot leave pointer text where rows are
+# expected — a failure that surfaces as a malformed fixture rather than a
+# missing one, and so sends diagnosis in the wrong direction.
+*.csv -filter -diff -merge text
+*.json -filter -diff -merge text
+*.yaml -filter -diff -merge text
+*.jsonl -filter -diff -merge text

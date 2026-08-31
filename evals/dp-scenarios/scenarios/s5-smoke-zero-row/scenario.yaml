@@ -1,0 +1,60 @@
+version: 1
+id: S5-smoke
+tier: smoke
+fixture:
+  dataset: zero_row_optional
+  seed: 29
+  variant: file-backed
+  plant: optional_zero_row
+coverage:
+  variant: file-backed
+  untested: The pipeline-shaped non-materialisation half is not exercised by this file-backed scenario.
+turn_budget: 9
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: observed_epochs
+    gates: [G5]
+    lower_bound: null
+    confidence: null
+persona: ../_personas/smoke.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+required_plants:
+  - optional_zero_row
+gates:
+  G1: intake
+  G2: capability
+  G3: narrowing
+  G4: construction
+  G5: build
+  G6: query
+  G7:
+    kind: optional_required_outputs
+    count_source: row_count_oracle
+    document: requiredness.json
+    requiredness_path: requiredness
+    resources:
+      optional_events:
+        required: false
+      primary:
+        required: true
+    plant_evidence:
+      optional_zero_row:
+        resource: optional_events
+        row_count: 0
+gold:
+  counts: gold/zero_row_optional_counts.json
+  diagnostics: gold/zero_row_optional_diagnostics.json
+operator:
+  sentinel: null
+  obstacle_terms: []

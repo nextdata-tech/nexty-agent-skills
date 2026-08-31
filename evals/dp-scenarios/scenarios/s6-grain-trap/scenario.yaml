@@ -1,0 +1,53 @@
+version: 1
+id: S6
+tier: smoke
+fixture:
+  dataset: grain_trap
+  seed: 29
+  variant: seeded-parent-child
+coverage:
+  variant: seeded-parent-child
+  untested: No additional fixture half is untested; this declaration covers the seeded parent-child variant.
+turn_budget: 9
+repeatability:
+  tier: deterministic
+  epochs: 5
+  certification:
+    rule: observed_epochs
+    gates: [G5, G6]
+    lower_bound: null
+    confidence: null
+persona: ../_personas/smoke.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+required_plants:
+  - grain_trap_fanout
+gates:
+  G1: intake
+  G2: capability
+  G3: narrowing
+  G4: construction
+  G5: build
+  G6: query
+  G7:
+    kind: grain_and_aggregation
+    document: semantic.json
+    grain_path: semantic.grain
+    expected_grain: order
+    aggregation_path: semantic.metrics.regional_revenue.aggregation
+    expected_aggregation: sum
+gold:
+  answer: gold/grain_trap_by_region.json
+  control_total: gold/grain_trap_control.json
+  diagnostics: gold/grain_trap_diagnostics.json
+operator:
+  sentinel: null
+  obstacle_terms: []

@@ -9,9 +9,9 @@ Use these scenarios to measure how fast and reliably an LLM can complete Nextdat
 > full environment-variable reference. The scenario suite this file documents
 > needs **no installs at all** — see "Running the suite" below.
 
-## This file covers one of four harnesses
+## This file covers one of six harnesses
 
-`evals/` holds four independent harnesses with separate dependencies and
+`evals/` holds six independent harnesses with separate dependencies and
 separate entry points. **This README documents the first one only.**
 
 | Harness | Entry point | Docs |
@@ -20,8 +20,9 @@ separate entry points. **This README documents the first one only.**
 | **`nxd_eval`** — Inspect-based, deterministic-EX + judged scoring with a Wilson/McNemar/FDR statistics contract | `uv run --project evals/nxd_eval` | [`nxd_eval/README.md`](nxd_eval/README.md), [`METHODOLOGY.md`](nxd_eval/METHODOLOGY.md) |
 | **Semantic MCP server** — makes the semantic tools real for 4 scenarios in *this* suite | started by `run.py` | [`mcp/README.md`](mcp/README.md) |
 | **Query loop** — multi-turn query refinement against a pharma mesh fixture | `evals/query-loop/run_query_loop.py` | — |
+| **`dp-scenarios`** — multi-turn data-product scenarios with an evidence ledger and mechanical grading | `uv run --project evals/dp-scenarios` | [`dp-scenarios/README.md`](dp-scenarios/README.md) |
 
-A fifth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
+A sixth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
 customer-facing form lives under `evals/private/cross-dp-joins/`.
 
 ## What runs in CI vs. what only runs locally
@@ -29,6 +30,14 @@ customer-facing form lives under `evals/private/cross-dp-joins/`.
 Nothing in the scenario suite runs automatically on a pull request. Agent runs
 cost model tokens, so a PR spends nothing unless you ask it to: **a green PR is
 not evidence that the skills passed** — it is evidence that they never ran.
+
+`dp-scenarios` splits this in two, and the distinction matters when reading a
+green check. Its **harness unit tests** run unconditionally in `ci.yml`: they
+are deterministic by construction — fixtures generated from pinned seeds, agent
+sessions replayed from recordings — so they need no credentials and a failure is
+a regression rather than a flake. Its **graded scenario runs**, which do drive a
+live agent, are not wired to a PR at all. So a green PR means that harness still
+works, not that any scenario passed.
 
 There are three ways the suite runs, and only one of them is unconditional:
 
@@ -121,7 +130,8 @@ one is responsible when a change ships unmeasured:
 the stdio MCP transport with a cheap OpenAI model, gated on the
 `OPENAI_API_KEY` secret. It is a substrate smoke test — it proves the harness
 runs, not that any skill is good. The query loop and cross-dp-joins have no CI
-entry point at all.
+entry point at all; `dp-scenarios` has an always-on one for its unit tests only
+(see above).
 
 Detail on selection, the baseline, retry-on-regression, and flakiness markers
 is in [CI](#ci) below; per-harness setup is in

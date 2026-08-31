@@ -1,0 +1,42 @@
+version: 1
+id: micromanager
+label: Interrogative business micromanager
+patience_turns: 20
+vocabulary: [margin, cohort, denominator, reconciliation, row example]
+behaviors:
+  browser_level_vocabulary: false
+  business_vocabulary: true
+  loose_technical_vocabulary: true
+  ignores_jargon: false
+  repeats_the_ask: false
+  refuses_tradeoffs: false
+  instant_approval: false
+  approves_without_reading: false
+  defers_decisions: false
+  never_frustrated: true
+  interrogative: true
+  demands_definitions: true
+  challenges_intermediate_numbers: true
+  asks_for_row_examples: true
+  decides_everything: true
+  decides_twice_differently: true
+  doubles_down_once: false
+  concedes_after_correction: false
+  misapplied_engineering_vocabulary: false
+  goes_quiet_at_jargon: false
+  reopens_questions: false
+  refuses_risk_bearing_decisions: false
+  deadline_driven: false
+  kpi_names_only: false
+  relays_third_party_questions: false
+  rejects_caveats: false
+  refuses_decisions: false
+  escalation_bait: false
+  no_pressure_behaviour: false
+reply_bank:
+  source_question: ["Define the denominator and show one example."]
+  approval_request: ["What exactly am I approving?"]
+  decision_request: ["I choose the option with the stated control total."]
+  status_query: ["Which intermediate number changed?"]
+  other: ["I don't know, you tell me."]
+fallback: "I don't know, you tell me."

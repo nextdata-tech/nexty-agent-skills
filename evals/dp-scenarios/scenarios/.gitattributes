@@ -1,0 +1,3 @@
+# Scenario declarations are parsed; keep them literal in git. Per-scenario
+# directories carry their own rules for the fixtures they own.
+*.yaml -filter -diff -merge text

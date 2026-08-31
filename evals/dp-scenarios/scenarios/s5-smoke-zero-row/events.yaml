@@ -1,0 +1,7 @@
+- version: 1
+  id: optional_zero_row
+  trigger_turn: 5
+  type: raw_rows_request
+  content: Please inspect the January optional event records.
+  outcome: optional_zero_row_resource_observed
+  plant: true
