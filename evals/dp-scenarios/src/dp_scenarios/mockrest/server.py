@@ -394,7 +394,12 @@ class MockRestServer:
             self.counters.record(UNMATCHED_ROUTE, request.method, request.headers)
             return _error(404, "not found")
         route, path_parameters = match
-        request_number = self.counters.record(route.path, request.method, request.headers)
+        request_number = self.counters.record(
+            route.path,
+            request.method,
+            request.headers,
+            paginated=route.pagination is not None,
+        )
         state_snapshot = dict(self._current_states)
         if route.latency_ms:
             await asyncio.sleep(route.latency_ms / 1000.0)

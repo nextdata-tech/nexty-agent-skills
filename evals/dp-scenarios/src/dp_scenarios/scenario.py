@@ -298,7 +298,7 @@ class Scenario:
         except (KeyError, TypeError, ValueError) as exc:
             raise ScenarioError("answer gold has no numeric regional_revenue values") from exc
 
-    def reconcile_control_total(self, answer: object) -> object:
+    def reconcile_control_total(self, answer: object, fixture_dir: str | Path | None = None) -> object:
         """Reconcile an answer against the independent control-total artifact."""
 
         from .grading import control_total_oracle
@@ -312,7 +312,7 @@ class Scenario:
             ]
             if values and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
                 observed = {"control_total": round(sum(float(value) for value in values), 2)}
-        return control_total_oracle(observed, self.raw_gold("control_total"))
+        return control_total_oracle(observed, self.raw_gold("control_total", fixture_dir))
 
     def score_query(
         self,
@@ -399,7 +399,10 @@ class Scenario:
             result["query_verdict"] = assessment.verdict
             result["query_gate_passed"] = assessment.gold_gate.passed
             if "control_total" in self.gold:
-                control = self.reconcile_control_total(query_rows)
+                control = self.reconcile_control_total(
+                    query_rows,
+                    fixture_dir if isinstance(fixture_dir, (str, Path)) else None,
+                )
                 result["control_total_verdict"] = control.outcome
                 if not control.passed:
                     result.setdefault("findings", [])

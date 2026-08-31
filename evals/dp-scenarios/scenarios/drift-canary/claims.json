@@ -34,44 +34,44 @@
       "probe_id": "kitchen-sink"
     },
     {
-      "claim_id": "nxd-generate-data-product/SKILL.md:type:174553abdb460654",
+      "claim_id": "nxd-generate-data-product/SKILL.md:type:0c09855adfbe9a2b",
       "skill_file": "nxd-generate-data-product/SKILL.md",
       "line": 42,
-      "quote": "| Database — `reference/database-source.md` | `db-source` | `db_source` | `db-source-tables`, no `data/` |",
-      "content_hash": "sha256:174553abdb460654e23c2d420309e9408e1ed5fdccbefdc3b2a6eac786bca019",
+      "quote": "| Database — `reference/database-source.md` | `db-source` | its attribute keys, flat: `host`, `port`, … | `db-source-tables`, no `data/` **export** |",
+      "content_hash": "sha256:0c09855adfbe9a2bd1ed2c8abd55db1e54fa4e629c32529157556ab6c6893023",
       "expected_finding_code": "structure/spec_compile_failed",
       "direction": "documented-supported",
       "category": "type",
       "probe_id": "kitchen-sink"
     },
     {
-      "claim_id": "nxd-generate-data-product/SKILL.md:type:a6970af5514774b6",
+      "claim_id": "nxd-generate-data-product/SKILL.md:type:ccd7b4fc73d1191e",
       "skill_file": "nxd-generate-data-product/SKILL.md",
       "line": 43,
-      "quote": "| REST API — `reference/api-source.md` | `api-source` | `api_source` | `api-source-endpoints`, no `data/` |",
-      "content_hash": "sha256:a6970af5514774b68754dd24296dcd3ee884befc1c6dcf579a52c8749f40060b",
+      "quote": "| REST API — `reference/api-source.md` | `api-source` | its attribute keys, flat: `base_url`, `endpoint_<model>`, … | **none** — endpoints are `endpoint_<model>` attributes on the service, no `data/` **export** |",
+      "content_hash": "sha256:ccd7b4fc73d1191eaf78f48264100aa70187809677a11d1a1f1fd44e38e1a929",
       "expected_finding_code": "structure/spec_compile_failed",
       "direction": "documented-supported",
       "category": "type",
       "probe_id": "kitchen-sink"
     },
     {
-      "claim_id": "nxd-generate-data-product/SKILL.md:companion:fc603cf6abe78bd8",
+      "claim_id": "nxd-generate-data-product/SKILL.md:companion:904f3f155163d5bf",
       "skill_file": "nxd-generate-data-product/SKILL.md",
       "line": 68,
-      "quote": "    ├── csv-source-path    # one line: relative path to the CSV export root",
-      "content_hash": "sha256:fc603cf6abe78bd83d6d708081f4fdf4b5010ff9f23f8acd53eb48ea21a22a21",
+      "quote": "    ├── csv-source-path          # one line: relative path to the CSV export root",
+      "content_hash": "sha256:904f3f155163d5bf064bc3c0ab0ac4764055a5843d3a19e8a227fda9c56eb925",
       "expected_finding_code": "structure/companion_files_invalid",
       "direction": "documented-supported",
       "category": "companion",
       "probe_id": "kitchen-sink"
     },
     {
-      "claim_id": "nxd-generate-data-product/SKILL.md:directory:ed5431fc28f64b32",
+      "claim_id": "nxd-generate-data-product/SKILL.md:directory:6ebbe71dfdd59c11",
       "skill_file": "nxd-generate-data-product/SKILL.md",
       "line": 69,
-      "quote": "    └── data/              # the connector export: data/<base_model>/*.csv",
-      "content_hash": "sha256:ed5431fc28f64b32cb34749651d93033be545e6e6d035aed2b1483810556d6f4",
+      "quote": "    └── data/                    # the connector export: data/<base_model>/*.csv",
+      "content_hash": "sha256:6ebbe71dfdd59c1174a984e611a8227fdcb2600a29b2271bb78565f2168191f6",
       "expected_finding_code": "structure/csv_source_invalid",
       "direction": "documented-supported",
       "category": "directory",
@@ -91,7 +91,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:unsupported:c01ac5c27a958249",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 387,
+      "line": 386,
       "quote": "- **No `.semantic_tools(...)`.** The supervisor's semantic child builds the MCP",
       "content_hash": "sha256:c01ac5c27a9582499f6d0dd35cc0efbec11417f10aa440cbbee9cd612cf7a76a",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -102,7 +102,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:secret:d145d907512aad71",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 403,
+      "line": 402,
       "quote": "**relative** `csv-source-path` into `secrets[...]` (an absolute path escapes the",
       "content_hash": "sha256:d145d907512aad71a88c27641126e836e561c80246f43e30d1b850877703b8ee",
       "expected_finding_code": "build/transform_import",
@@ -114,7 +114,7 @@
     {
       "claim_id": "nxd-generate-data-product/SKILL.md:unsupported:8231b08d4e9b9f2f",
       "skill_file": "nxd-generate-data-product/SKILL.md",
-      "line": 492,
+      "line": 491,
       "quote": "- **No `.semantic_tools(...)`**: the supervisor's semantic child builds the catalog from compiled semantic roles; the spec must not emit an RPC port.",
       "content_hash": "sha256:8231b08d4e9b9f2f376b1c28e2f6b5ee82642fc7c785b663dd4cbc8737bbe807",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -123,44 +123,9 @@
       "probe_id": "unsupported-8231b08d4e9b9f2f"
     },
     {
-      "claim_id": "nxd-generate-data-product/reference/api-source.md:secret:a409229d2abbd37c",
-      "skill_file": "nxd-generate-data-product/reference/api-source.md",
-      "line": 156,
-      "quote": "- Transform secrets key: `secrets[\"api_source\"]` — a dict with `base_url`",
-      "content_hash": "sha256:a409229d2abbd37c8970023f6f8d7fafa3fb3a79e163ddd10e4f93dcb81d01ce",
-      "expected_finding_code": "build/transform_import",
-      "direction": "documented-supported",
-      "category": "secret",
-      "probe_id": "kitchen-sink",
-      "build_signature": "KeyError: 'api_source'"
-    },
-    {
-      "claim_id": "nxd-generate-data-product/reference/api-source.md:companion:5d4b58b7329deaf2",
-      "skill_file": "nxd-generate-data-product/reference/api-source.md",
-      "line": 159,
-      "quote": "- Companion file: `api-source-endpoints` — one line per model,",
-      "content_hash": "sha256:5d4b58b7329deaf2e52dff0f70a5816620519a7e7935914e3a87a0e60454b703",
-      "expected_finding_code": "structure/companion_files_invalid",
-      "direction": "documented-supported",
-      "category": "companion",
-      "probe_id": "kitchen-sink"
-    },
-    {
-      "claim_id": "nxd-generate-data-product/reference/database-source.md:secret:16113e69cb1a664a",
-      "skill_file": "nxd-generate-data-product/reference/database-source.md",
-      "line": 100,
-      "quote": "- Transform secrets key: `secrets[\"db_source\"]` — a dict with the connection",
-      "content_hash": "sha256:16113e69cb1a664a994a47a822d5a7d117f213bc7b07fe3405ee1abd3fb99239",
-      "expected_finding_code": "build/transform_import",
-      "direction": "documented-supported",
-      "category": "secret",
-      "probe_id": "kitchen-sink",
-      "build_signature": "KeyError: 'db_source'"
-    },
-    {
       "claim_id": "nxd-generate-data-product/reference/database-source.md:companion:8494edb4e37bdf2b",
       "skill_file": "nxd-generate-data-product/reference/database-source.md",
-      "line": 103,
+      "line": 116,
       "quote": "- Companion file: `db-source-tables` — one line per model,",
       "content_hash": "sha256:8494edb4e37bdf2b337c960820378f172b1bdf9f00df8c8831b67ca2f7fc069f",
       "expected_finding_code": "structure/companion_files_invalid",
@@ -205,7 +170,7 @@
     {
       "claim_id": "nxd-generate-data-product/reference/nxd-spec-api.md:semantic:b7fe5b2d72599463",
       "skill_file": "nxd-generate-data-product/reference/nxd-spec-api.md",
-      "line": 161,
+      "line": 215,
       "quote": "- **`semantic_model(name, attributes=None, description=None, sampling=None)`**",
       "content_hash": "sha256:b7fe5b2d725994632ad1f22ea91ee9d8671255da05571cb52b4d4c87a03b2dd2",
       "expected_finding_code": "semantic/registry_invalid",
@@ -216,7 +181,7 @@
     {
       "claim_id": "nxd-generate-data-product/reference/nxd-spec-api.md:semantic:109e09ce51271a35",
       "skill_file": "nxd-generate-data-product/reference/nxd-spec-api.md",
-      "line": 173,
+      "line": 227,
       "quote": "- **`semantic_view(name, base, attributes=None, description=None)`** — starts",
       "content_hash": "sha256:109e09ce51271a3555e8173ddf857fcba94701a8accf1b4da063a985f38b4568",
       "expected_finding_code": "semantic/registry_invalid",
@@ -227,7 +192,7 @@
     {
       "claim_id": "nxd-generate-data-product/reference/nxd-spec-api.md:unsupported:8e881fd02fa38db5",
       "skill_file": "nxd-generate-data-product/reference/nxd-spec-api.md",
-      "line": 190,
+      "line": 244,
       "quote": "  - **No `.semantic_tools(...)`** on desktop — it exists on `DataProductSpec`",
       "content_hash": "sha256:8e881fd02fa38db5671cdb9a2a0b6ba8b532561ba686a0ad0a17b25d01a54e58",
       "expected_finding_code": "structure/spec_compile_failed",
@@ -267,6 +232,7 @@
       "nxd-build-data-product/reference/file-templates.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-data-product/reference/generated-code-preflight.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-data-product/reference/local_transform.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "nxd-build-data-product/reference/nextdata-public-examples/.pre-commit-hooks/README.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-data-product/reference/nextdata-public-examples/CLAUDE.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-data-product/reference/nextdata-public-examples/README.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-build-data-product/reference/nextdata-public-examples/data_products/company_dividends/PROVISION.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -296,12 +262,12 @@
       "nxd-build-semantic-data-product/reference/runtime-and-dependencies.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-debug-data-product/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-fix-policy-failures/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "nxd-generate-data-product/SKILL.md": "sha256:d59e8a81bfe31479900f05f30f6a9570d6007632c0246dcce0e5cecbb124cff8",
+      "nxd-generate-data-product/SKILL.md": "sha256:bf718cea0ee862668b60f283912f39ca50cef6744b7f8eb8254c1bafc292f50d",
       "nxd-generate-data-product/reference/adversarial-review.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "nxd-generate-data-product/reference/api-source.md": "sha256:4606a5a3818ee80b7a489a349676a83697e6a3912d189d2cf417e745e6dccf45",
+      "nxd-generate-data-product/reference/api-source.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/closure-record.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/custom-contracts.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "nxd-generate-data-product/reference/database-source.md": "sha256:63d6c4a51d2ffdace2e7c6fe71af5c8799d6f7332825f90d1e74fa3574a61397",
+      "nxd-generate-data-product/reference/database-source.md": "sha256:cd7e72d6365356ebf4beab52cabb204802d55da1bdc114af578d20f610d7b248",
       "nxd-generate-data-product/reference/derivation-plan.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/derived-models.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-generate-data-product/reference/field-mapper.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -333,8 +299,9 @@
       "nxd-run-job-loop/reference/build-record.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/catalog-resources.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/context-and-resume.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "nxd-run-job-loop/reference/direct-cli-lifecycle.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/dlt.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "nxd-run-job-loop/reference/dp-spec.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "nxd-run-job-loop/reference/dp-blueprint.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/failure-handling.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/handoff-export.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-run-job-loop/reference/inference.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -346,14 +313,14 @@
       "nxd-setup-cli/reference/headless-device-flow.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "nxd-toggle-policies/SKILL.md": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
-    "reviewer": "canary-review",
-    "review_date": "2026-08-18",
-    "approves_claims_hash": "sha256:6fb136ee752acd75b5546156a9974554c5c121cd5b7097309dc014c20810a27a"
+    "reviewer": "Ignacio Duart",
+    "review_date": "2026-08-31",
+    "approves_claims_hash": "sha256:0c9313d775e6c44d7418c2068f1ba437b0f73f977da762585361d6b588a5a9f3"
   },
   "approval": {
-    "reviewer": "canary-review",
-    "review_date": "2026-08-18",
-    "old_claims_hash": "sha256:06f594aaa023f4b28c2b48b2736be6b53f81ebd39b58e1e10da3f34c1d380afd",
-    "new_claims_hash": "sha256:6fb136ee752acd75b5546156a9974554c5c121cd5b7097309dc014c20810a27a"
+    "reviewer": "Ignacio Duart",
+    "review_date": "2026-08-31",
+    "old_claims_hash": "sha256:6fb136ee752acd75b5546156a9974554c5c121cd5b7097309dc014c20810a27a",
+    "new_claims_hash": "sha256:0c9313d775e6c44d7418c2068f1ba437b0f73f977da762585361d6b588a5a9f3"
   }
 }

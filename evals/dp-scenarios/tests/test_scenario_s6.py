@@ -156,6 +156,19 @@ def test_follow_up_merges_control_total_findings_with_query_findings() -> None:
     assert "control_total_mismatch" in result["findings"]
 
 
+def test_follow_up_reconciles_against_generated_fixture_control_total(tmp_path: Path) -> None:
+    changed = replace(SCENARIO, fixture=replace(SCENARIO.fixture, seed=SCENARIO.seed + 1))
+    generated = changed.generate_fixture(tmp_path / "grain")
+    rows = changed.load_gold("answer", generated.out_dir).rows
+    closure = {"semantic": {"grain": "order", "metrics": {"regional_revenue": {"aggregation": "sum"}}}}
+
+    assert changed.raw_gold("control_total", generated.out_dir) != changed.raw_gold("control_total")
+    result = changed.follow_up_check(closure, generated.out_dir, rows)
+
+    assert result["query_verdict"] == "correct"
+    assert result["control_total_verdict"] == "satisfied"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

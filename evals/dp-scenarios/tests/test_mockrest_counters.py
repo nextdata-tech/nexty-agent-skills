@@ -159,6 +159,18 @@ def test_counters_are_thread_safe_for_direct_recording() -> None:
         sys.setswitchinterval(previous_interval)
 
 
+def test_counters_track_pagination_requests_separately() -> None:
+    counters = RequestCounters()
+    counters.record("/orders", "GET", paginated=True)
+    counters.record("/orders", "GET", paginated=True)
+    counters.record("/health", "GET")
+
+    assert counters.snapshot()["total"] == 3
+    assert counters.snapshot()["pages"] == 2
+    counters.reset()
+    assert counters.snapshot()["pages"] == 0
+
+
 def test_caller_identity_ignores_whitespace_and_matches_header_names_case_insensitively() -> None:
     assert caller_identity({"X-Caller-Id": "   \t"}) is None
     assert caller_identity({"x-cAlLeR-iD": "worker-a"}) == "worker-a"

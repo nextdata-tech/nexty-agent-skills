@@ -6,7 +6,7 @@ by live and replay runs so known documentation/runtime drift cannot be
 mistaken for agent behaviour.
 """
 
-from .environment import Environment, EnvironmentError, MockSourceHandle, PinnedVersions, RunEnvironment, RunSetup
+from .environment import Environment, MockSourceHandle, PinnedVersions, RunEnvironment, RunEnvironmentError, RunSetup
 from .report import ReportError, emit_report, human_summary, machine_report, write_report
 from .session import (
     LiveSession,
@@ -37,7 +37,6 @@ from .tier import (
 __all__ = [
     "CanaryResult",
     "Environment",
-    "EnvironmentError",
     "LiveSession",
     "LiveTransport",
     "MockSourceHandle",
@@ -52,6 +51,7 @@ __all__ = [
     "ReportError",
     "RunBudgets",
     "RunEnvironment",
+    "RunEnvironmentError",
     "RunSetup",
     "ScenarioRun",
     "ScenarioSummary",

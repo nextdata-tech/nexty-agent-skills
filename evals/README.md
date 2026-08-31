@@ -9,9 +9,9 @@ Use these scenarios to measure how fast and reliably an LLM can complete Nextdat
 > full environment-variable reference. The scenario suite this file documents
 > needs **no installs at all** — see "Running the suite" below.
 
-## This file covers one of five harnesses
+## This file covers one of six harnesses
 
-`evals/` holds five independent harnesses with separate dependencies and
+`evals/` holds six independent harnesses with separate dependencies and
 separate entry points. **This README documents the first one only.**
 
 | Harness | Entry point | Docs |
@@ -22,7 +22,7 @@ separate entry points. **This README documents the first one only.**
 | **Query loop** — multi-turn query refinement against a pharma mesh fixture | `evals/query-loop/run_query_loop.py` | — |
 | **`dp-scenarios`** — multi-turn data-product scenarios with an evidence ledger and mechanical grading | `uv run --project evals/dp-scenarios` | [`dp-scenarios/README.md`](dp-scenarios/README.md) |
 
-A fifth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
+A sixth, `evals/cross-dp-joins/`, is a compiler-strategy harness whose
 customer-facing form lives under `evals/private/cross-dp-joins/`.
 
 ## What runs in CI vs. what only runs locally

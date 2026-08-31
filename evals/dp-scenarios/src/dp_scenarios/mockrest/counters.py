@@ -3,9 +3,11 @@
 Every data request is recorded before behavior evaluation, including rejected
 requests.  The snapshot retains aggregate totals and an ordered event list so
 call ceilings can be checked against what the server actually received rather
-than against a client's narration.  Control-port maintenance calls are kept
-out of this oracle so a grader can inspect it without changing the source call
-count.
+than against a client's narration.  Pagination-enabled route requests are
+tracked separately as ``pages`` so a grader can verify pagination without
+guessing from unrelated route traffic.  Control-port maintenance calls are
+kept out of this oracle so a grader can inspect it without changing the source
+call count.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ class RequestCounters:
         self._route_counts: Counter[str] = Counter()
         self._method_counts: Counter[tuple[str, str]] = Counter()
         self._buckets: dict[str, dict[str, Any]] = {}
+        self._pages = 0
 
     def record(
         self,
@@ -53,6 +56,7 @@ class RequestCounters:
         headers: Mapping[str, str] | None = None,
         *,
         identity: str | None = None,
+        paginated: bool = False,
     ) -> int:
         """Record a request and return its one-based count for this route."""
 
@@ -73,6 +77,8 @@ class RequestCounters:
             bucket["count"] += 1
             bucket["methods"][method_name] += 1
             bucket["identities"][identity if identity is not None else "anonymous"] += 1
+            if paginated:
+                self._pages += 1
             return int(bucket["count"])
 
     def reset(self) -> None:
@@ -83,6 +89,7 @@ class RequestCounters:
             self._route_counts.clear()
             self._method_counts.clear()
             self._buckets.clear()
+            self._pages = 0
 
     def snapshot(self) -> dict[str, Any]:
         """Return a JSON-serializable point-in-time oracle snapshot."""
@@ -98,7 +105,8 @@ class RequestCounters:
             }
             events = list(self._events)
             total = len(events)
-        return {"total": total, "routes": grouped, "events": [asdict(event) for event in events]}
+            pages = self._pages
+        return {"total": total, "pages": pages, "routes": grouped, "events": [asdict(event) for event in events]}
 
     as_dict = snapshot
 

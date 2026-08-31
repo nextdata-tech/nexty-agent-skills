@@ -175,6 +175,7 @@ def test_static_item_and_cursor_pagination_over_http(tmp_path: Path) -> None:
                     cursor = body["next_cursor"]
                 assert first_only < 5
                 assert len(rows) == 5
+                assert server.counters.snapshot()["pages"] == 3
                 item = await client.get(server.data_url + "/orders/3", headers={"User-Agent": "pytest"})
                 assert await item.json() == {"id": "3", "value": "three"}
                 docs = await client.get(server.data_url + "/docs")

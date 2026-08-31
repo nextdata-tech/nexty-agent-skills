@@ -12,7 +12,7 @@ from dp_scenarios.operator import OperatorScript
 from dp_scenarios.operator.answer_sheet import answer_sheet_from_mapping
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.runner import environment as environment_module
-from dp_scenarios.runner.environment import EnvironmentError, PinnedVersions, RunEnvironment
+from dp_scenarios.runner.environment import PinnedVersions, RunEnvironment, RunEnvironmentError
 from dp_scenarios.canary import probe
 from dp_scenarios.synthgen.generator import GenerationResult
 
@@ -75,7 +75,7 @@ def pins() -> PinnedVersions:
 
 
 def test_missing_pinned_value_is_a_hard_error() -> None:
-    with pytest.raises(EnvironmentError, match="runtime_wheel_version"):
+    with pytest.raises(RunEnvironmentError, match="runtime_wheel_version"):
         PinnedVersions.from_mapping(
             {
                 "skill_pack_version": "skills-1",
@@ -87,7 +87,7 @@ def test_missing_pinned_value_is_a_hard_error() -> None:
 
 
 def test_empty_pinned_value_is_a_hard_error() -> None:
-    with pytest.raises(EnvironmentError, match="skill_pack_version"):
+    with pytest.raises(RunEnvironmentError, match="skill_pack_version"):
         PinnedVersions.from_mapping(
             {
                 "skill_pack_version": "",
@@ -121,7 +121,7 @@ def test_pinned_versions_reject_whitespace_only_values(field: str) -> None:
     }
     values[field] = " \t"
 
-    with pytest.raises(EnvironmentError, match=field):
+    with pytest.raises(RunEnvironmentError, match=field):
         PinnedVersions(**values)  # type: ignore[arg-type]
 
 
@@ -141,13 +141,13 @@ def test_from_mapping_rejects_each_missing_required_pin(
 
     for field in complete:
         missing = {key: value for key, value in complete.items() if key != field}
-        with pytest.raises(EnvironmentError, match=field):
+        with pytest.raises(RunEnvironmentError, match=field):
             PinnedVersions.from_mapping(missing)
 
 
 @pytest.mark.parametrize("value", [None, 7])
 def test_from_mapping_rejects_non_text_agent_model_id(value: object) -> None:
-    with pytest.raises(EnvironmentError, match="agent_model_id"):
+    with pytest.raises(RunEnvironmentError, match="agent_model_id"):
         PinnedVersions.from_mapping(
             {
                 "skill_pack_version": "skills-1",
@@ -178,7 +178,7 @@ def test_fixture_manifest_without_base_instant_is_a_hard_error(
         )
 
     monkeypatch.setattr(FixtureScenario, "generate_fixture", missing_base)
-    with pytest.raises(EnvironmentError, match="base_instant"):
+    with pytest.raises(RunEnvironmentError, match="base_instant"):
         with RunEnvironment(scenario, pins(), root=tmp_path):
             pass
 
@@ -215,6 +215,26 @@ def test_fixture_hash_is_derived_from_the_generated_fixture(tmp_path: Path) -> N
         second_hash = second.manifest.fixture_dir_hash
 
     assert first_hash != second_hash
+
+
+def test_ledger_open_failure_removes_the_disposable_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = make_scenario()
+    ledger_path: dict[str, Path] = {}
+
+    def fail_open(path: Path, manifest: object) -> object:
+        ledger_path["path"] = path
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(environment_module.LedgerStore, "open", fail_open)
+    environment = RunEnvironment(scenario, pins(), root=tmp_path)
+
+    with pytest.raises(RuntimeError, match="ledger unavailable"):
+        environment.prepare()
+
+    assert environment._temporary is None
+    assert not ledger_path["path"].parent.exists()
 
 
 def test_mock_control_secret_never_enters_agent_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -267,6 +287,6 @@ def test_replay_manifest_mismatch_is_rejected(tmp_path: Path) -> None:
         manifest = environment.manifest.to_dict()
     manifest["skill_pack_version"] = "different"
 
-    with pytest.raises(EnvironmentError, match="replay manifest mismatch"):
+    with pytest.raises(RunEnvironmentError, match="replay manifest mismatch"):
         with RunEnvironment(scenario, pins(), root=tmp_path, manifest_override=manifest):
             pass

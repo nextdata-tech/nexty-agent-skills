@@ -202,15 +202,36 @@ def counter_oracle(snapshot: object, *, call_ceiling: int | None = None, expecte
     if "total" not in snapshot:
         return _result(OracleState.VIOLATED, dict(snapshot), OracleFinding("counters_shape_invalid", "counter snapshot has no server-side total"))
     findings: list[OracleFinding] = []
-    if call_ceiling is not None and snapshot.get("total") > call_ceiling:
-        findings.append(OracleFinding("call_ceiling_violated", "server-side total exceeds declared ceiling", {"actual": snapshot.get("total"), "ceiling": call_ceiling}))
+    total = snapshot.get("total")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        findings.append(OracleFinding("counters_shape_invalid", "counter snapshot total must be a non-negative integer", total))
+    elif call_ceiling is not None and total > call_ceiling:
+        findings.append(OracleFinding("call_ceiling_violated", "server-side total exceeds declared ceiling", {"actual": total, "ceiling": call_ceiling}))
     if expected_pages is not None:
-        pages = snapshot.get("pages", snapshot.get("page_count"))
+        pages = snapshot.get("pages")
+        if pages is None:
+            pages = snapshot.get("page_count")
+        if pages is None:
+            routes = snapshot.get("routes")
+            if isinstance(routes, Mapping):
+                populated = [
+                    bucket.get("count")
+                    for route, bucket in routes.items()
+                    if route != "__unmatched__" and isinstance(bucket, Mapping) and "count" in bucket
+                ]
+                if len(populated) == 1:
+                    pages = populated[0]
         if pages is None:
             findings.append(OracleFinding("pagination_not_examined", "snapshot has no page count"))
         elif pages != expected_pages:
             findings.append(OracleFinding("pagination_incomplete", "server-side page count differs", {"actual": pages, "expected": expected_pages}))
-    return _result(OracleState.VIOLATED if findings else OracleState.SATISFIED, dict(snapshot), *findings)
+    if not findings:
+        state = OracleState.SATISFIED
+    elif all(finding.code == "pagination_not_examined" for finding in findings):
+        state = OracleState.NOT_EXAMINED
+    else:
+        state = OracleState.VIOLATED
+    return _result(state, dict(snapshot), *findings)
 
 
 def control_total_oracle(answer: object, control_total: object) -> OracleResult:
