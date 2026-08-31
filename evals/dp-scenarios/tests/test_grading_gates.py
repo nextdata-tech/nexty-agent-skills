@@ -345,6 +345,9 @@ def test_counter_oracle_uses_a_ceiling() -> None:
 
 def test_counter_oracle_requires_explicit_page_counts() -> None:
     assert counter_oracle({"total": 2, "pages": 2}, expected_pages=2).passed
+    incomplete = counter_oracle({"total": 5, "pages": 2}, expected_pages=3)
+    assert incomplete.state is OracleState.VIOLATED
+    assert "pagination_incomplete" in incomplete.codes
     not_examined = counter_oracle(
         {"total": 2, "routes": {"/orders": {"count": 2}}},
         expected_pages=2,
