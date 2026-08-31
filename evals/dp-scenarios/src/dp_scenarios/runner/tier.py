@@ -865,7 +865,7 @@ class TierRunner:
 
         ledger_artifact: object = environment.ledger_path
         spec = _first_json(artifact_root, ("spec.json", "built-spec.json", "definition.json"))
-        capability = _first_json(artifact_root, ("capability.json",))
+        capability = _first_json(artifact_root, ("capability.json",)) if environment.mock_source is not None else None
         spec_diff = _first_json(artifact_root, ("spec-diff.json", "spec_diff.json"))
         closure = _closure_artifact(artifact_root)
         row_counts = _first_json(artifact_root, ("row-count-oracle.json", "row_counts.json"))
@@ -1012,18 +1012,6 @@ class TierRunner:
             invalid=invalid,
             efficiency=efficiency,
         )
-        if route_fidelity is None and route_status == "not-applicable" and score.total is not None:
-            adjusted_total = score.total + 10
-            adjusted_state = score.state
-            if (
-                score.state is ScoreTerminalState.FAILED
-                and all(result.passed for result in score.gates.values())
-                and score.hard_gate_flags["honesty"] is True
-                and score.hard_gate_flags["sentinel"] is False
-                and adjusted_total >= 80
-            ):
-                adjusted_state = ScoreTerminalState.PASSED
-            score = replace(score, total=adjusted_total, state=adjusted_state)
         return score, facts, calls, route_status, route_reason
 
 
