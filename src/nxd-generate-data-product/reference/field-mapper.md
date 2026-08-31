@@ -146,31 +146,44 @@ proposal authoritative; those claims are rejected rather than treated as user
 consent. A green Phase G proves only that the static harness grant check found a
 binding artifact. It is not proof of human authorization in Desktop.
 
-Desktop mapper builds require an MCP session using protocol `2025-06-18` or
-newer whose client advertises form elicitation. The supervisor sends a protected
-client-mediated confirmation before it creates a writer, state database, run,
-or provider client. The client renders the derived subject — workflow, subject
-and mapper-spec hashes, plus the proposed provider, model, purpose, input and
-document/PII categories, recurrence, and call/token/cost/expiry limits — rather
-than an agent-supplied approval assertion. The typed response contains only
-`authorize_this_exact_subject`; the supervisor accepts it only through the
-client's explicit elicitation action. The user approves once in that client
-interaction; there is no OS dialog or secondary approval surface.
+The current NXD Desktop mapper path uses a supervisor-owned loopback review
+surface and a native OS presence decision. Before it creates a writer, state
+database, run, or provider client, the supervisor:
 
-An accepted form admits that exact subject for the current supervisor session.
-An unchanged retry reuses that session approval without another interaction; a
-changed spec or proposed scope gets a new subject and must be confirmed again.
-The supervisor re-derives the subject after elicitation, so a definition changed
-while it was open fails with `mapper_subject_changed` rather than running under
-the earlier confirmation.
+1. freezes and pins the candidate definition;
+2. derives the mapper subject and content manifest from the actual frozen bytes;
+3. creates an opaque request ID and token-free loopback status URL;
+4. delivers a one-time browser capability out of band in the URL fragment;
+5. renders the supervisor-derived scope and receives approve/decline from the
+   browser; and
+6. requires a fresh supervisor-owned OS dialog decision.
 
-**Every non-accept outcome fails closed.** Client Decline, client Cancel,
-elicitation timeout, malformed response, parse/transport failure, and a client
-on an older protocol or without form elicitation return
+Only the matching browser capability, OS decision, subject, manifest, and
+budget can produce one-use admission. The MCP peer never receives the
+capability. The browser click alone is insufficient. The OS dialog is local
+presence confirmation, not cryptographic proof of the user's identity.
+
+The supervisor does not currently use MCP form elicitation for this path: its
+MCP `initialize` request/context is not an admission input. Do not require
+protocol `2025-06-18` form elicitation or claim that the approval surface has
+no second step. A second LLM turn is not an approval mechanism.
+
+An accepted request admits that exact subject for the current supervisor
+session. An unchanged retry reuses that session approval without another
+interaction; a changed spec or proposed scope gets a new subject and must be
+confirmed again. The supervisor re-derives the subject immediately before
+admission, so a definition changed while it was open fails with
+`mapper_subject_changed` rather than running under the earlier confirmation.
+
+**Every non-accept outcome fails closed.** Browser decline, OS decline,
+cancelled or expired requests, malformed or failed transport, binding mismatch,
+and any unsupported approval-surface state return
 `kind: mapper_approval_required` with `run_admitted: false`. Their
-`confirmation` values are `declined`, `cancelled`, `timed_out`, `failed`, and
-`unsupported` as applicable. `unsupported` is terminal for that client: update
-the client rather than trying another approval mechanism. For example:
+`confirmation` values are `declined`, `cancelled`, `expired`,
+`failed`, `unsupported`, or the corresponding binding error as applicable.
+The current diagnostic reports `credential_isolation: not_enforced`: the
+transform inherits the MCP process environment, so this gate is not a claim
+that provider egress is brokered or contained. For example:
 
 ```json
 {
@@ -184,8 +197,9 @@ the client rather than trying another approval mechanism. For example:
 Do not retry by adding approval fields or treat an API key in the child
 environment as a workaround. `credential_isolation: not_enforced` means the
 current diagnostic makes no claim that provider egress is brokered or contained.
-Approval records are session-local: they do not persist receipts or expiry and
-do not enforce cumulative call/token/cost budgets across build attempts.
+Approval records are session-local: they do not persist signed receipts or
+execution attestations, and they do not enforce cumulative call/token/cost
+budgets across build attempts.
 
 ## Evidence modes — what each one proves
 
@@ -217,6 +231,25 @@ is *loss* — the reviews are gone and the cells re-infer — never *corruption*
 because `bound_value_hash`, `bound_input_snapshot_id` and `bound_mapper_spec_id`
 make it impossible for a review to silently attach to the wrong value.
 
+## Review outcomes: `mapper_review_outcomes`
+
+The mapper runtime now emits one deterministic review outcome for every durable
+review considered during resolution. The published outcome projection records
+`applied`, `rejected`, or `ignored`, the stable reason, the review ID,
+reviewer/timestamp, and both the review-side and proposal-side binding evidence
+(value hashes, input snapshot IDs, and mapper-spec IDs where present).
+
+This is proof of how the resolver accounted for a recorded review in the
+published projection. It is not proof that the named reviewer authenticated
+their identity or that the reviewer performed the original action. The
+supervisor's separate pre-call approval gate remains the authority for external
+LLM use.
+
+The resolver asserts that every durable review has exactly one outcome, including
+stale, invalid, missing-target, and superseded reviews. Generated transforms
+must land this projection with the proposals and evidence from the same
+resolution bundle; do not infer it later by joining the wide table.
+
 ## Two dlt runs, in this order
 
 A mapping transform is **two** `pipeline.run` calls, not one:
@@ -226,7 +259,7 @@ A mapping transform is **two** `pipeline.run` calls, not one:
 3. **map** those rows with `map_inputs`.
 4. **gate** on the result — block the build if the spec's thresholds are
    exceeded, *before* landing anything derived.
-5. **run 2** lands the proposals, evidence and ledger.
+5. **run 2** lands the proposals, evidence, review outcomes, and ledger.
 
 The order is load-bearing. Mapping before run 1 maps rows that may never land;
 landing derived rows before the gate publishes judgements the thresholds would

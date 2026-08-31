@@ -14,9 +14,10 @@ What is real here:
   the mapper's inputs, once for its judgements.
 - The **field mapper** is the shipped package — same `map_inputs`, same
   validator, same evidence checker, same resolver, same coverage gate.
-- The **long-form/wide split** lands as three real tables, and the wide table is
-  projected from the same in-memory bundle as the sidecar, so they cannot
-  disagree.
+- The **long-form/wide split** lands three required real tables, plus the
+  replace-loaded `mapper_review_outcomes` audit projection when durable
+  reviews are present. The wide table and audit sidecars come from the same
+  in-memory bundle, so they cannot disagree.
 
 What is stubbed, and why that is honest:
 
@@ -33,7 +34,8 @@ The load-bearing detail this file exists to prove is the ORDER:
     read   ->  base rows + durable mapper_reviews
     map    ->  ONE call per input, the only network in the closure
     gate   ->  may refuse; if it does, NOTHING from run 2 lands
-    run 2  ->  land proposals, evidence, and the wide projection
+    run 2  ->  land proposals, evidence, review outcomes when present, and the
+                wide projection
 
 Two runs, not one. A single run would either judge rows that are not landed yet,
 or land judgements before the gate has spoken. See the atomicity caveat at the
@@ -71,6 +73,8 @@ from nxd.experimental.field_mapper.errors import FieldMapperError  # noqa: E402
 from nxd.experimental.field_mapper.records import (  # noqa: E402
     EVIDENCE_COLUMNS,
     PROPOSAL_COLUMNS,
+    REVIEW_OUTCOME_COLUMNS,
+    ValueType,
     reviews_from_csv,
 )
 from nxd.experimental.field_mapper.schema import ABSENT_SENTINEL, compile_schema  # noqa: E402
@@ -82,6 +86,7 @@ from nxd import data_product  # noqa: E402,F401
 
 BASE_MODEL = "invoice_documents"
 MAPPER_MODELS = ("mapper_proposals", "mapper_evidence", "invoice_terms")
+REVIEW_OUTCOME_MODEL = "mapper_review_outcomes"
 
 #: dlt infers column types from the data it sees, so a column that is null in
 #: every row of a load is NOT MATERIALIZED at all. On a clean run that silently
@@ -121,6 +126,15 @@ _EVIDENCE_HINTS: dict[str, Any] = {
     "source_field_name": {"data_type": "text", "nullable": True},
     "document_hash": {"data_type": "text", "nullable": True},
     "text_hash": {"data_type": "text", "nullable": True},
+}
+
+_REVIEW_OUTCOME_HINTS: dict[str, Any] = {
+    "bound_value_hash": {"data_type": "text", "nullable": True},
+    "proposal_value_hash": {"data_type": "text", "nullable": True},
+    "proposal_input_snapshot_id": {"data_type": "text", "nullable": True},
+    "proposal_mapper_spec_id": {"data_type": "text", "nullable": True},
+    "effective_value_hash": {"data_type": "text", "nullable": True},
+    "winner_review_id": {"data_type": "text", "nullable": True},
 }
 
 
@@ -422,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
     ctx = _ExecutionContextStub(
         path=str(db_path),
         schema="invoices",
-        model_tables={m: m for m in (BASE_MODEL,) + MAPPER_MODELS},
+        model_tables={m: m for m in (BASE_MODEL,) + MAPPER_MODELS + (REVIEW_OUTCOME_MODEL,)},
     )
 
     pipeline = dlt.pipeline(
@@ -492,6 +506,7 @@ def main(argv: list[str] | None = None) -> int:
         reviews,
         result.evidence,
         fields=spec.field_names,
+        field_types={f.name: ValueType(f.value_type) for f in spec.target_fields},
         # The CLI passes this; omitting it here made the copied gate WEAKER
         # than the one the harness actually ships — an ok cell could carry
         # fewer evidence atoms than its field declares and still resolve.
@@ -521,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         resolution.assert_bijection()
         resolution.assert_value_hashes()
+        resolution.assert_review_audit_completeness()
         resolution.assert_cardinality(
             min_rows=spec.cardinality.min_rows,
             max_rows=spec.cardinality.max_rows or len(resolution.row_keys),
@@ -564,6 +580,14 @@ def main(argv: list[str] | None = None) -> int:
     def mapper_evidence():
         yield from (e.as_row() for e in resolution.evidence)
 
+    @dlt.resource(
+        name=ctx.model_tables[REVIEW_OUTCOME_MODEL],
+        write_disposition="replace",
+        columns=_REVIEW_OUTCOME_HINTS,
+    )
+    def mapper_review_outcomes():
+        yield from resolution.review_outcome_rows
+
     @dlt.resource(name=ctx.model_tables["invoice_terms"], write_disposition="replace")
     def invoice_terms():
         # A PROJECTION of the same bundle the sidecar came from — never computed
@@ -571,7 +595,11 @@ def main(argv: list[str] | None = None) -> int:
         # the provenance to disagree.
         yield from resolution.wide_rows
 
-    pipeline.run([mapper_proposals(), mapper_evidence(), invoice_terms()])
+    resources = [mapper_proposals(), mapper_evidence()]
+    if resolution.review_outcome_rows:
+        resources.append(mapper_review_outcomes())
+    resources.append(invoice_terms())
+    pipeline.run(resources)
 
     # ---- prove it, from the database, not from memory --------------------
     print("\n--- landed tables " + "-" * 42)
@@ -588,10 +616,13 @@ def main(argv: list[str] | None = None) -> int:
     # schema honest on exactly the runs where nothing went wrong.
     print("\n--- record-contract conformance " + "-" * 28)
     schema_problems: list[str] = []
-    for model, want in (
+    contract_models = [
         ("mapper_proposals", PROPOSAL_COLUMNS),
         ("mapper_evidence", EVIDENCE_COLUMNS),
-    ):
+    ]
+    if resolution.review_outcome_rows:
+        contract_models.append((REVIEW_OUTCOME_MODEL, REVIEW_OUTCOME_COLUMNS))
+    for model, want in contract_models:
         got = {
             r[0]
             for r in con.execute(
