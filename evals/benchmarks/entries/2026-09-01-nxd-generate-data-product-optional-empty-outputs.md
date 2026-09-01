@@ -12,10 +12,29 @@ record: null
 ## Notes
 
 The opt-in Desktop E2E now covers the generated optional-output and aggregate
-surface, but it has not been run in this environment because the compatible
-supervisor runtime is not provisioned. The entry therefore remains `NO_EVAL`:
-the scenario is registered and fail-closed, but no live agent result is being
-claimed.
+surface. It was exercised manually in a fresh Claude Desktop Cowork task with
+the current `0.42.0` skill pack and the `nxd-desktop` connector. The entry
+remains `NO_EVAL` because this was an acceptance run rather than a comparable
+before/after benchmark arm, and the run did not produce a publishable result.
+
+## Manual Desktop acceptance evidence — 2026-09-01
+
+The task loaded `nxd-run-job-loop`, `nxd-build-semantic-data-product`, and
+`nxd-generate-data-product` in order and authored the Python-only closure. The
+native `check_data_product` preflight passed structure, runtime, contract, and
+semantic stages. `build_data_product` then failed deterministically on both
+attempts at `transform_error` / `child_reaped`: post-transform typed-output
+normalization issued `DESCRIBE main.reviews` even though the explicitly
+optional `reviews` model had no physical table. Publication therefore did not
+issue an endpoint or bearer, so catalog discovery, the grouped aggregate query,
+and endpoint teardown could not run. The task also could not execute the local
+mapper demo because its Cowork sandbox had no `nxd` package; that boundary was
+reported rather than treated as a pass.
+
+This is runtime failure evidence for the follow-up supervisor fix, not a
+passing eval result. The scenario remains registered and fail-closed until the
+compatible runtime accepts absent optional outputs and the full publish/
+describe/query lifecycle is rerun.
 
 The static reader now resolves the standard `PHYSICAL_MODELS = BASE_MODELS +
 DERIVED_MODELS` declaration; this removes one prior `unverified:` line and
