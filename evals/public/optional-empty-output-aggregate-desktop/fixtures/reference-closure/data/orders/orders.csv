@@ -1,0 +1,5 @@
+order_id,product_category,order_text
+ORD-2001,freight,"Order ORD-2001 category freight."
+ORD-2002,freight,"Order ORD-2002 category freight."
+ORD-2003,warehousing,"Order ORD-2003 category warehousing."
+ORD-2004,warehousing,"Order ORD-2004 category warehousing."

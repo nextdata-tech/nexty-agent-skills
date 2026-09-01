@@ -43,6 +43,15 @@ from pathlib import Path
 EVALS_DIR = Path(__file__).resolve().parents[1]
 SELF_CHECK = EVALS_DIR.parent / "src" / "nxd-run-job-loop" / "scripts" / "self_check.py"
 
+# `dlt` is the real discriminator, and `nxd` deliberately is not: self_check
+# installs stub `nxd` modules so a closure parses without the wheel, but nothing
+# stubs dlt. CI installs neither, so the executable transform cases are skipped
+# there while the structural cases still run.
+_HAS_DLT = importlib.util.find_spec("dlt") is not None
+_needs_dlt = pytest.mark.skipif(
+    not _HAS_DLT, reason="dlt not installed; the transform cannot be imported"
+)
+
 MODELS_HEAD = (
     "from nxd.spec import Agg, semantic_model, semantic_view\n"
     "from nxd.spec.data_types import number, string\n"
@@ -72,9 +81,10 @@ def _model(name, *, extra_fields="", view=True):
     return src
 
 
-def _spec(models, views, service):
-    imports = ", ".join(models + views)
+def _spec(models, views, service, optional_models=()):
+    imports = ", ".join(models + list(optional_models) + views)
     promises = "".join(f"    .promise({m})\n" for m in models)
+    optional = "".join(f"    .model({m})\n" for m in optional_models)
     registers = "".join(f"    .model({v})\n" for v in views)
     return (
         "from nxd.spec import data_product, data_product_output, script, storage\n"
@@ -83,7 +93,7 @@ def _spec(models, views, service):
         '_compute = "/infra-profile/desktop-local#/services/python-compute"\n'
         '_duckdb = "/infra-profile/desktop-local#/services/duckdb"\n\n'
         "_output = (\n    data_product_output()\n"
-        f"{promises}{registers}"
+        f"{promises}{optional}{registers}"
         '    .port("duckdb", storage(_duckdb))\n)\n\n'
         "spec = (\n    data_product(name=\"t\", domain=\"desktop.local\", version=\"0.0.1\",\n"
         '                 infra_profile="desktop-local")\n'
@@ -163,6 +173,49 @@ API_TRANSFORM = CSV_TRANSFORM.replace(
     '    base_url = secrets["base_url"]\n',
 )
 
+OPTIONAL_EMPTY_TRANSFORM = (
+    CSV_TRANSFORM.replace(
+        'BASE_MODELS = ("orders",)\nDERIVED_MODELS = ()\n',
+        'BASE_MODELS = ("orders", "reviews")\nDERIVED_MODELS = ()\n'
+        'OPTIONAL_EMPTY_MODELS = ("reviews",)\n',
+    )
+    .replace(
+        "    for model in BASE_MODELS:\n"
+        "        reader = filesystem(bucket_url=str(source_root / model), file_glob='*.csv') | read_csv()\n",
+        "    for model in BASE_MODELS:\n"
+        "        if model in OPTIONAL_EMPTY_MODELS and not (source_root / model).is_dir():\n"
+        "            continue\n"
+        "        reader = filesystem(bucket_url=str(source_root / model), file_glob='*.csv') | read_csv()\n",
+    )
+    .replace(
+        'PHYSICAL_MODELS = ("orders",)\n',
+        'PHYSICAL_MODELS = ("orders", "reviews")\n',
+    )
+    .replace(
+        'PHYSICAL_MODELS = ("orders", "reviews")\n',
+        'PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS\n',
+    )
+    .replace(
+        "    if actual != expected:\n"
+        "        raise RuntimeError(f'{sorted(actual)} != {sorted(expected)}')\n",
+        "    optional = {duckdb.model_tables[m] for m in OPTIONAL_EMPTY_MODELS}\n"
+        "    missing = expected - actual\n"
+        "    absent_optional = missing & optional\n"
+        "    if actual != expected - absent_optional:\n"
+        "        raise RuntimeError(f'{sorted(actual)} != {sorted(expected - absent_optional)}')\n",
+    )
+)
+assert "if model in OPTIONAL_EMPTY_MODELS and not (source_root / model).is_dir()" in OPTIONAL_EMPTY_TRANSFORM
+
+REQUIRED_MISSING_TRANSFORM = CSV_TRANSFORM.replace(
+    'PHYSICAL_MODELS = ("orders",)\n',
+    'PHYSICAL_MODELS = ("orders", "reviews")\n',
+).replace(
+    "    if actual != expected:\n"
+    "        raise RuntimeError(f'{sorted(actual)} != {sorted(expected)}')\n",
+    "    # The self-check must diagnose the missing required table.\n",
+)
+
 
 # --- struct.model_not_queryable ---------------------------------------------
 
@@ -184,6 +237,153 @@ def test_promised_model_with_a_view_is_not_flagged(tmp_path):
         "a single COUNT view is enough to make the model reachable; "
         "flagging it here would fire on every correct closure"
     )
+
+
+def test_optional_model_without_a_view_is_flagged(tmp_path):
+    models = MODELS_HEAD + _model("orders") + _model("reviews", view=False)
+    report = _run(
+        tmp_path,
+        models,
+        _spec(["orders"], ["orders_metrics"], CSV_SERVICE,
+              optional_models=("reviews",)),
+        OPTIONAL_EMPTY_TRANSFORM,
+        ("orders",),
+    )
+    assert "struct.model_not_queryable" in _codes(report), (
+        "an optional physical model still needs a semantic view when it is "
+        "present and queried"
+    )
+
+
+def test_semantic_view_cannot_be_promised(tmp_path):
+    models = MODELS_HEAD + _model("orders", view=True)
+    spec = _spec(["orders"], ["orders_metrics"], CSV_SERVICE).replace(
+        "    .model(orders_metrics)\n", "    .promise(orders_metrics)\n"
+    )
+    report = _run(tmp_path, models, spec, CSV_TRANSFORM, ("orders",))
+    assert "struct.promise_of_view" in _codes(report)
+
+
+# --- optional physical outputs ----------------------------------------------
+
+def _optional_closure(tmp_path, transform=OPTIONAL_EMPTY_TRANSFORM,
+                      optional_models=("reviews",), base_models=("orders",)):
+    models = MODELS_HEAD + _model("orders") + _model("reviews")
+    return _run(
+        tmp_path,
+        models,
+        _spec(["orders"], ["orders_metrics", "reviews_metrics"], CSV_SERVICE,
+              optional_models=optional_models),
+        transform,
+        base_models,
+    )
+
+
+@_needs_dlt
+def test_zero_row_optional_output_may_be_absent(tmp_path):
+    report = _optional_closure(tmp_path)
+    codes = _codes(report)
+    assert "runtime.model_table_missing" not in codes, codes
+    assert "runtime.row_count" in codes, codes
+    optional_count = next(
+        d for d in report["diagnostics"]
+        if d["code"] == "runtime.row_count" and d["evidence"].get("model") == "reviews"
+    )
+    assert optional_count["evidence"] == {
+        "model": "reviews", "count": 0, "materialized": False, "optional": True
+    }
+
+
+@_needs_dlt
+def test_non_empty_optional_output_is_queryable(tmp_path):
+    report = _optional_closure(tmp_path, base_models=("orders", "reviews"))
+    missing = [
+        d for d in report["diagnostics"]
+        if d["code"] == "runtime.model_table_missing" and d["evidence"].get("model") == "reviews"
+    ]
+    assert not missing, missing
+    review_count = next(
+        d for d in report["diagnostics"]
+        if d["code"] == "runtime.row_count" and d["evidence"].get("model") == "reviews"
+    )
+    assert review_count["evidence"]["count"] == 1
+    assert "materialized" not in review_count["evidence"]
+
+
+@_needs_dlt
+def test_required_zero_row_output_still_has_specific_missing_table_diagnostic(tmp_path):
+    report = _run(
+        tmp_path,
+        MODELS_HEAD + _model("orders") + _model("reviews"),
+        _spec(["orders", "reviews"], ["orders_metrics", "reviews_metrics"], CSV_SERVICE),
+        REQUIRED_MISSING_TRANSFORM,
+        ("orders",),
+    )
+    missing = [
+        d for d in report["diagnostics"]
+        if d["code"] == "runtime.model_table_missing"
+        and d["evidence"].get("model") == "reviews"
+    ]
+    assert missing, report["diagnostics"]
+
+
+def test_optional_metadata_requires_a_literal_physical_model_registration(tmp_path):
+    invalid = OPTIONAL_EMPTY_TRANSFORM.replace(
+        'OPTIONAL_EMPTY_MODELS = ("reviews",)',
+        'OPTIONAL_EMPTY_MODELS = ("not_a_physical_model",)',
+    )
+    report = _optional_closure(tmp_path, transform=invalid)
+    assert "struct.optional_models_invalid" in _codes(report)
+
+
+def test_optional_metadata_cannot_name_a_semantic_view(tmp_path):
+    transform = CSV_TRANSFORM.replace(
+        'PHYSICAL_MODELS = ("orders",)\n',
+        'PHYSICAL_MODELS = ("orders", "orders_metrics")\n'
+        'OPTIONAL_EMPTY_MODELS = ("orders_metrics",)\n',
+    )
+    report = _run(
+        tmp_path,
+        MODELS_HEAD + _model("orders"),
+        _spec(["orders"], ["orders_metrics"], CSV_SERVICE),
+        transform,
+        ("orders",),
+    )
+    assert "struct.optional_models_invalid" in _codes(report)
+
+
+def test_optional_metadata_cannot_be_promised(tmp_path):
+    # The tuple is valid but the spec promises the optional model: exercise the
+    # rule without relying on the transform runtime.
+    report = _run(
+        tmp_path,
+        MODELS_HEAD + _model("orders") + _model("reviews"),
+        _spec(["orders", "reviews"], ["orders_metrics", "reviews_metrics"], CSV_SERVICE),
+        OPTIONAL_EMPTY_TRANSFORM,
+        ("orders",),
+    )
+    assert "struct.optional_model_promised" in _codes(report)
+
+
+def test_optional_metadata_requires_catalog_registration(tmp_path):
+    report = _optional_closure(tmp_path, optional_models=())
+    assert "struct.optional_model_not_registered" in _codes(report)
+
+
+def test_every_physical_model_cannot_be_optional(tmp_path):
+    transform = CSV_TRANSFORM.replace(
+        'BASE_MODELS = ("orders",)\nDERIVED_MODELS = ()\n',
+        'BASE_MODELS = ("orders",)\nDERIVED_MODELS = ()\n'
+        'OPTIONAL_EMPTY_MODELS = ("orders",)\n',
+    )
+    report = _run(
+        tmp_path,
+        MODELS_HEAD + _model("orders"),
+        _spec([], [], CSV_SERVICE, optional_models=("orders",)),
+        transform,
+        ("orders",),
+    )
+    assert "struct.optional_models_invalid" in _codes(report), report["diagnostics"]
 
 
 # --- struct.key_not_groupable, the join-shaped half -------------------------
@@ -294,16 +494,6 @@ def test_phase_b_failure_no_longer_short_circuits_phase_c():
     )
     # and the guard must sit BEFORE Phase C, or C is skipped anyway
     assert src.index("dry_run_runnable = True") < src.index("Phase C ---")
-
-
-# `dlt` is the real discriminator, and `nxd` deliberately is not: self_check
-# installs stub `nxd` modules so a closure parses without the wheel, but nothing
-# stubs dlt — a synthetic transform importing it dies at runtime.import_failed
-# before `ingest()` is ever called. CI installs neither.
-_HAS_DLT = importlib.util.find_spec("dlt") is not None
-_needs_dlt = pytest.mark.skipif(
-    not _HAS_DLT, reason="dlt not installed; the transform cannot be imported"
-)
 
 
 @_needs_dlt

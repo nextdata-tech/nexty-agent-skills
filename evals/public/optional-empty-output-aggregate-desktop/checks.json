@@ -1,0 +1,45 @@
+{
+  "name": "Optional empty output and aggregate-only desktop product",
+  "skills": [
+    "nxd-run-job-loop",
+    "nxd-build-semantic-data-product",
+    "nxd-generate-data-product"
+  ],
+  "ci_skip": "needs a live desktop supervisor (EVAL_DESKTOP_SUPERVISOR_DIR / EVAL_DESKTOP_PYTHON) that CI cannot provision; run locally or via workflow_dispatch",
+  "desktop_verify": true,
+  "workspace_files": [
+    "README.md",
+    "spec.py",
+    "models.py",
+    "infra-profile.yaml",
+    "transform/main.py",
+    "requirements.txt",
+    "contracts/*.json"
+  ],
+  "checks": [
+    {
+      "id": "optional-output-contract",
+      "check": "The landed closure declares reviews as an explicitly optional physical model, registers it with output .model(reviews) rather than .promise(reviews), and does not manufacture a placeholder review row or table. The authoritative desktop verifier must publish the closure successfully with the review source absent."
+    },
+    {
+      "id": "mapper-boundary",
+      "check": "The transform uses the public nxd.experimental.field_mapper surface and map_inputs for the synthetic mapper step, without provider SDK or private mapper transport/ledger imports. The mapper material is synthetic and no credential is present."
+    },
+    {
+      "id": "aggregate-only-catalog",
+      "check": "The authoritative desktop verifier reports that describe_models exposes an order_count metric backed by COUNT(*) and that the optional reviews model remains visible in the catalog."
+    },
+    {
+      "id": "aggregate-only-query",
+      "check": "The authoritative desktop verifier reports a successful governed grouped query by product_category with the expected category counts and no record-level columns or rows."
+    },
+    {
+      "id": "supervisor-lifecycle",
+      "check": "The trace shows a real local supervisor publication with published=yes, catalog discovery before the governed query, and teardown."
+    },
+    {
+      "id": "compiler-follow-up-boundary",
+      "check": "This scenario proves the published runtime behavior only. It must not claim that the skills repository has executed the native compiler; compiler execution remains a separately provisioned follow-up."
+    }
+  ]
+}

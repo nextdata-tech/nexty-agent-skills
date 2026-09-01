@@ -110,11 +110,12 @@ those two phases rather than an accident of how they were added.
   <dp-blueprint.md>` to compare the live IR and the approved snapshot, and Phase C
   emits an informational diagnostic naming that command so a reader of the JSON
   can never mistake the two checks.
-  (Note: the naming invariant that Phase A enforces already requires every
-  promised model to be in `PHYSICAL_MODELS`, so a model cannot be
-  *promised-but-deferred*; a deferred contract belongs to a model not yet
-  promised, carried in `contracts/<name>.md` — see Step 6a — until the model is
-  authored and promised.)
+  (Note: the naming invariant that Phase A enforces requires every physical
+  model to be either a required `.promise(model)` or an explicitly listed
+  `OPTIONAL_EMPTY_MODELS` entry registered with `.model(model)`. Optionality is
+  only for physical absence after a zero-row resource; it is not a deferred
+  contract. A deferred contract belongs to a model not yet exposed, carried in
+  `contracts/<name>.md` — see Step 6a — until the model is authored.)
 - **Phase D — policy-boundary gate.** Checks that rulings are landed data the
   user can edit, not literals in transform code: `nxd_decisions`, if promised, is
   a **base** model backed by `data/` with a `status` column **and a `provenance`
@@ -233,6 +234,16 @@ trustworthy rather than decorative:
   and are never merged with published counts.** One is a dry run against a
   temporary database; the other is what shipped. Collapsing them would let a
   scratch count stand in as evidence that the product has rows.
+- **Optional physical tables are absent by design when their resource yields no
+  rows.** Phase A requires `OPTIONAL_EMPTY_MODELS` to be a literal subset of
+  `PHYSICAL_MODELS`, rejects optional models promised with `.promise(...)`, and
+  requires them to be registered with `.model(...)`. Phase B records an absent
+  optional table as zero rows and skips it in the distribution read-back; a
+  missing required table still emits `runtime.model_table_missing`. A catalog
+  entry remains visible through `describe_models`, but a semantic query whose
+  physical source is absent must surface that unavailable table rather than
+  fabricate a zero or a placeholder record. When rows materialize, the same
+  model and view are queryable without changing `spec.py`.
 
 This script is copied into the closure and run there with a bare interpreter, so
 it **cannot import `"$JOB_HELPER_DIR/scripts/dp_diagnostics.py"`**. The code table at the top is an
@@ -499,6 +510,9 @@ failure here is never environmental and is never a reason to retry — it is
 unambiguously the generated code. A fired assert (`runtime.assert_failed`) is the
 transform's own invariant rejecting the data it produced: that is the check
 working, not the check being wrong. Fix the derivation, never the assert.
+An absent table is acceptable only when the model is in
+`OPTIONAL_EMPTY_MODELS`; a required absence is the specific
+`runtime.model_table_missing` finding.
 
 Reading a **Phase C** failure: each one names a specific missing or mismatched
 record file, and none of them is fixed by hand-editing the closure.
@@ -553,7 +567,7 @@ simply the shape of what you produced, and it is worth one line in the handoff.
 Reading a Phase A failure: every message names the file, model, and column. A
 kwarg rejection (`join() takes to=, not to_model=`) is a typo — fix the call. A
 naming-invariant failure is a diverged name — fix the NAME in every place it
-appears (`models.py`, `.promise`, `PHYSICAL_MODELS`, `data/<name>/`), never
-quote around it. If a message contradicts the installed wheel's actual
+appears (`models.py`, `.promise` or optional `.model`, `PHYSICAL_MODELS`,
+`OPTIONAL_EMPTY_MODELS`, `data/<name>/`), never quote around it. If a message contradicts the installed wheel's actual
 behaviour, the pin has drifted: re-derive that one signature, and update
 `nxd-spec-api.md` and this script together.

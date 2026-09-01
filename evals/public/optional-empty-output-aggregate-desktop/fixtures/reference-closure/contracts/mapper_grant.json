@@ -1,0 +1,15 @@
+{
+  "mapper_spec_id": "<derived>",
+  "provider": "recorded",
+  "model": "synthetic-recorded",
+  "purpose": "Synthetic local mapper evaluation.",
+  "input_fields": ["order_id", "product_category"],
+  "document_classes": ["order"],
+  "pii_category": "none",
+  "recurring": false,
+  "max_calls": 10,
+  "max_tokens": 20000,
+  "max_usd": 1.0,
+  "granted_by": "evaluation-runner",
+  "granted_at": "2026-09-01T00:00:00Z"
+}

@@ -217,8 +217,12 @@ the **cost estimate**, not the mapping.
 
 Human reviews live **inside the closure**, at
 `data/mapper_reviews/batch-NNN.csv`. They survive `write_disposition="replace"`
-because dlt replace-loads the full glob every run, and `mapper_reviews` is an
-ordinary base model.
+because dlt replace-loads the full glob every run. `mapper_reviews` is an
+optional-empty base model: add it to `PHYSICAL_MODELS` and
+`OPTIONAL_EMPTY_MODELS`, and register it with `.model(mapper_reviews)` rather
+than `.promise(mapper_reviews)`. A fresh closure may have no
+`data/mapper_reviews/` directory and no physical table; that is valid until a
+human review is written.
 
 - **To review**: add `data/mapper_reviews/batch-<next>.csv`.
 - **To revoke or correct**: add a **new row**, never edit an existing one. Rows

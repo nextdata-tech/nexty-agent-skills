@@ -18,6 +18,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC_API = (REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" /
             "nxd-spec-api.md")
+SKILL = REPO_ROOT / "src" / "nxd-generate-data-product" / "SKILL.md"
 
 
 def _doc() -> str:
@@ -65,6 +66,19 @@ def test_the_offline_blind_spot_is_stated():
     assert "Neither rule is visible offline" in t
     assert "check_data_product" in t, (
         "name what does report them, or the reader has nowhere to go"
+    )
+
+
+def test_semantic_views_use_the_output_model_chain_and_count_is_documented():
+    t = _doc()
+    assert "Never call this for a `semantic_view`" in t, (
+        "semantic views must be registered on data_product_output(), never "
+        "promised as physical tables"
+    )
+    assert "Use this same registration for a physical model whose" in t
+    skill = SKILL.read_text(encoding="utf-8")
+    assert '.model(view)' in skill and 'metric(Agg.COUNT, column="*"' in skill, (
+        "aggregate-only products need the public COUNT(*) metric shape"
     )
 
 

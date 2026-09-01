@@ -146,6 +146,8 @@ FROZEN_CODES = (
   'struct.model_name_not_literal', 'struct.model_no_description',
   'struct.naming_invariant_promised_vs_models',
   'struct.naming_invariant_promised_vs_physical', 'struct.model_not_queryable', 'struct.no_primary_key',
+  'struct.optional_model_not_registered', 'struct.optional_model_promised',
+  'struct.optional_models_invalid',
   'struct.port_no_storage', 'struct.port_not_duckdb',
   'struct.primary_key_takes_no_args', 'struct.promise_of_view',
   'struct.role_no_description', 'struct.semantic_tools_forbidden',

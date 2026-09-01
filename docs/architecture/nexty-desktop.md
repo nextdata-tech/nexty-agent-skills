@@ -180,10 +180,10 @@ any handoff. It has four phases plus two non-blocking read-backs:
 
 | Phase | What it checks | How | Blocking? |
 |---|---|---|---|
-| **A — structural** | `models.py` / `spec.py` parsed with `ast` against the pinned `nxd.spec` DSL surface (`reference/nxd-spec-api.md`, pinned to a specific `nxd` version): known role kwargs, known data types, known `Agg` members, the naming invariant (`semantic_model` name == `.promise` == `PHYSICAL_MODELS` == `data/<name>/`), `.semantic_tools()` forbidden, output port must be `"duckdb"`, `infra_profile="desktop-local"`, every base model has a `primary_key()`. | Pure `ast.parse` — nothing imported or executed. Dynamic constructs (variables, comprehensions, `**` spreads) are reported `unverified:` rather than silently passed. | Yes |
+| **A — structural** | `models.py` / `spec.py` parsed with `ast` against the pinned `nxd.spec` DSL surface (`reference/nxd-spec-api.md`, pinned to a specific `nxd` version): known role kwargs, known data types, known `Agg` members, the naming invariant (`semantic_model` name == required `.promise` plus optional `.model` == `PHYSICAL_MODELS`; only an absent optional table may lack `data/<name>/`), `.semantic_tools()` forbidden, output port must be `"duckdb"`, `infra_profile="desktop-local"`, every physical model has a `primary_key()`. | Pure `ast.parse` — nothing imported or executed. Dynamic constructs (variables, comprehensions, `**` spreads) are reported `unverified:` rather than silently passed. | Yes |
 | **B — transform dry-run** | Actually **executes** `transform/main.py` against a scratch DuckDB with a stub `DuckDbOutput`, then queries every `PHYSICAL_MODELS` table and asserts `.transform-complete` exists. | Real execution — the only phase that runs code. | Yes |
 | **C — context-completeness** | The snapshot/lock/record gate (C1–C11): `dp-blueprint.approved.md`, the v3 typed proposal snapshot for new plans, and `README.md` exist at the closure root; `dp-blueprint.lock.json` parses as the matching v2 or v3 lock; the snapshots' **raw bytes** hash to their lock fields; `lock.spec_status_at_copy == "approved"`; `build-record.json` parses with `compiled_from == lock.spec_hash`; no closure file references a contract/design doc by a `../`-rooted path that escapes the closure; if `infra-profile.yaml` carries a populated `attributes:` list, `.gitignore` and `SENSITIVE` both exist. | sha256 over raw bytes + JSON schema checks + text/regex scan of author-facing files. The **canonical** hash check is deferred to `dp_diagnostics.py lock verify`. | Yes |
-| **D — policy boundary** | A promised `nxd_decisions` model must be a **base** model (backed by `data/`, not derived from a Python literal) with a `status` column restricted to `{confirmed, proposed, blocked}`; no distinctive value in a landed policy CSV also appears as a literal in `transform/main.py`. | AST-derived `PHYSICAL_MODELS`/`BASE_MODELS` from the values Phase B actually imported (not the static parse, which can't resolve `BASE_MODELS + DERIVED_MODELS` as a literal) + CSV/text scan. | Yes |
+| **D — policy boundary** | A promised `nxd_decisions` model must be a **base** model (backed by `data/`, not derived from a Python literal) with a `status` column restricted to `{confirmed, proposed, blocked}`; no distinctive value in a landed policy CSV also appears as a literal in `transform/main.py`. | AST-derived `PHYSICAL_MODELS`/`BASE_MODELS` from the values Phase B actually imported, retaining runtime authority even though the static reader resolves simple literal expressions such as `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` + CSV/text scan. | Yes |
 | **Distribution read-back** | Prints value counts for every classification-shaped column of every derived model; flags `UNIFORM` (a value the code supplied, not one the data produced). | Query over the Phase-B DuckDB connection. | No — always relayed to the user before build, never fails the run. |
 | **ABSENT read-back** | Flags a declared vocabulary value (verdict/bucket/tier/category-named CSV columns) that never appears in any derived output column — a branch that never fired. | Set-difference over declared vs. produced values. | No — informational only. |
 
@@ -284,10 +284,9 @@ was written for:
   built from a Python literal (`DERIVED_MODELS`) that *describes* a threshold
   rather than being editable data. It specifically pins that Phase D keys off
   the values Phase B actually **imports** at runtime (`BASE_MODELS`,
-  `PHYSICAL_MODELS`), not the statically-parsed literal — the first version of
-  Phase D keyed on the static parse, which can't resolve
-  `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` as a literal, and so
-  silently never fired on the very closure it was written to catch.
+  `PHYSICAL_MODELS`), retaining runtime authority even though the static reader
+  now resolves simple literal expressions such as
+  `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS`.
 - **`test_trace_ordering_gate.py`** — the pre-build policy read-back gate
   (`coauthor-supplied-rubric`'s checker): fails a transcript where a `Write`
   precedes the read-back, fails the post-hoc-disclosure loophole (read-back

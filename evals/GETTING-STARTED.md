@@ -14,7 +14,7 @@ guide. Once you know which harness you need, its own README is authoritative.
 | **Cross-DP joins** | `evals/cross-dp-joins/harness/run_eval.py` | local only | Compiler-strategy and agent trials for cross-data-product join fan-out safety. |
 
 **If you are new and want to run something today: Tier 0 below needs no
-installs and covers 20 of the 36 public scenarios.**
+installs and covers 20 of the 37 public scenarios.**
 
 **If you want to understand what a verdict *means* before you trust one:**
 [How a scenario is graded](README.md#how-a-scenario-is-graded) explains the
@@ -112,7 +112,7 @@ you were trying to re-measure.
 
 ### What runs without any further setup
 
-20 of 36 public scenarios. The remaining 16 declare `ci_skip` in their
+20 of 37 public scenarios. The remaining 17 declare `ci_skip` in their
 `checks.json`. Fourteen need a Tier 2 or Tier 3 install; one is gated on the agent
 backend; and one requires an operator-provided source-isolation wrapper:
 
