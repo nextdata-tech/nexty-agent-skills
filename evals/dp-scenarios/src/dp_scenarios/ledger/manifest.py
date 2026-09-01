@@ -336,7 +336,14 @@ class Manifest:
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ManifestError(f"manifest has unknown field(s): {names}", field=names, value=unknown)
         if replay is None:
-            persisted_mode = value.get("validation_mode", "replay")
+            if "validation_mode" in value:
+                persisted_mode = value["validation_mode"]
+            else:
+                has_live_identity = any(
+                    field_name in value and value[field_name] != NOT_APPLICABLE
+                    for field_name in DESKTOP_SESSION_FIELDS
+                )
+                persisted_mode = "live" if has_live_identity else "replay"
             validation_mode = persisted_mode
         else:
             validation_mode = "replay" if replay else "live"

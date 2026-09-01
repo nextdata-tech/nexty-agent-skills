@@ -30,7 +30,7 @@ from dp_scenarios.runner import (
     TierError,
     TierRunner,
 )
-from dp_scenarios.runner.session import LiveSession
+from dp_scenarios.runner.session import LiveSession, SessionError
 from dp_scenarios.runner import tier as tier_module
 from dp_scenarios.runner.tier import run_drift_canary
 from dp_scenarios.scenario import FixtureSpec, load_scenario
@@ -742,21 +742,18 @@ def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
     recording = recording_for(scenario, responses_for(scenario))
     turns = list(recording.turns)
     fake_files = (
-        TouchedFile("row-counts.json", b'{"model-a": 42}'),
-        TouchedFile("supervisor-records.json", b'{"run_id":"run-1","artifact_id":"a","publish_sequence":"1"}'),
+        TouchedFile("row-count-oracle.json", b'{"per_model_row_counts": {"model-a": 42}}'),
+        TouchedFile("route-fidelity.json", b"true"),
     )
     turns[-1] = replace(turns[-1], result=replace(turns[-1].result, files_touched=fake_files))
 
-    result = TierRunner(
-        [scenario],
-        pins=pins(),
-        canary=clean_canary(),
-        replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
-    ).run()
-
-    gate = result.scenario_runs[0].score.gates["build"]
-    assert not gate.passed
-    assert "build_row_counts_not_examined" in gate.codes
+    with pytest.raises(SessionError, match="reserved for harness-owned evidence"):
+        TierRunner(
+            [scenario],
+            pins=pins(),
+            canary=clean_canary(),
+            replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
+        ).run()
 
 
 @pytest.mark.parametrize("field", ["turn", "phase"])

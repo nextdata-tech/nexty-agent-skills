@@ -259,6 +259,41 @@ def test_agent_environment_is_allowlisted_not_parent_environment_copy(
     assert values["HOME"].endswith("/home")
 
 
+def test_close_releases_remaining_resources_after_one_cleanup_fails() -> None:
+    class Resource:
+        def __init__(self, method: str, calls: list[str], failure: bool = False) -> None:
+            self.method = method
+            self.calls = calls
+            self.failure = failure
+
+        def __getattr__(self, name: str):
+            if name != self.method:
+                raise AttributeError(name)
+
+            def close() -> None:
+                self.calls.append(name)
+                if self.failure:
+                    raise RuntimeError(f"{name} failed")
+
+            return close
+
+    calls: list[str] = []
+    environment = RunEnvironment(make_scenario(), pins())
+    environment._live_transport = Resource("cleanup", calls, failure=True)
+    environment._ledger = Resource("close", calls)
+    environment._mock_source = Resource("stop", calls)
+    environment._temporary = Resource("cleanup", calls)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        environment.close()
+
+    assert calls == ["cleanup", "close", "stop", "cleanup"]
+    assert environment._live_transport is None
+    assert environment._ledger is None
+    assert environment._mock_source is None
+    assert environment._temporary is None
+
+
 def test_canary_environment_allowlist_excludes_parent_home_and_secrets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

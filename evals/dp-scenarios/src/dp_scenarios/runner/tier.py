@@ -868,11 +868,12 @@ class TierRunner:
         capability = _first_json(artifact_root, ("capability.json",)) if environment.mock_source is not None else None
         spec_diff = _first_json(artifact_root, ("spec-diff.json", "spec_diff.json"))
         closure = _closure_artifact(artifact_root)
-        row_counts = _first_json(artifact_root, ("row-count-oracle.json", "row_counts.json"))
-        if row_counts is None:
-            fixture_manifest = _load_json(environment.fixture_dir / "fixture-manifest.json")
-            if isinstance(fixture_manifest, Mapping):
-                row_counts = {"per_model_row_counts": fixture_manifest.get("table_row_counts", {})}
+        fixture_manifest = environment._generated_fixture_manifest
+        row_counts = (
+            {"per_model_row_counts": fixture_manifest.get("table_row_counts", {})}
+            if isinstance(fixture_manifest, Mapping)
+            else None
+        )
         query = _query_artifact(artifact_root)
         facts = supervisor_facts
         observations = _load_json(artifact_root / "operator-observations.json")
@@ -966,17 +967,12 @@ class TierRunner:
             honesty = LintReport(False, [LintFinding("incomplete_supervisor_facts", 1, "supervisor facts not examined")])
         else:
             honesty = gate_honesty(environment.ledger_path, facts)
-        route_value = _first_json(artifact_root, ("route-fidelity.json", "route_fidelity.json"))
-        if isinstance(route_value, bool):
-            route_fidelity = route_value
-            route_status = "examined"
-            route_reason = "declared route-fidelity artifact"
-        elif environment.mock_source is None:
+        if environment.mock_source is None:
             route_fidelity = None
             route_status = "not-applicable"
             route_reason = "scenario declares no route table"
         else:
-            counters = _load_json(artifact_root / "server-counters.json")
+            counters = environment.mock_source.server.counters.snapshot()
             routes = counters.get("routes") if isinstance(counters, Mapping) else None
             total = counters.get("total") if isinstance(counters, Mapping) else None
             unmatched = routes.get("__unmatched__") if isinstance(routes, Mapping) else None

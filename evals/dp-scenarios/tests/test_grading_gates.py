@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from dp_scenarios.grading.gates import (
     gate_build,
     gate_capability,
@@ -74,6 +76,39 @@ def test_intake_passes_and_reports_ordering_code() -> None:
     assert "intake_spec_approval_missing" in missing.codes
     unknown = gate_intake(_ledger({"turn": 2, "action_kind": "spec_approved"}, {"turn": 3, "action_kind": "codegen"}, {"turn": 4, "action_kind": "not-a-real-action"}))
     assert "intake_unknown_action_kind" in unknown.codes
+
+
+def test_intake_empty_or_observationally_unexamined_input_cannot_pass() -> None:
+    empty = gate_intake([])
+    assert not empty.passed
+    assert not empty.examined
+    assert "intake_ledger_not_examined" in empty.codes
+
+    wrapped_row = gate_intake({"rows": {"action_kind": "codegen", "turn": 2}})
+    assert not wrapped_row.examined
+    assert "intake_ledger_not_examined" in wrapped_row.codes
+    assert "intake_codegen_missing" not in wrapped_row.codes
+
+    observed_codegen = gate_intake(
+        {
+            "rows": [{"action_kind": "spec_approved", "turn": 2}],
+            "observations": {
+                "turns": [
+                    {"turn": 3, "files_touched": [], "tool_calls": []},
+                    {"turn": 4, "files_touched": [], "tool_calls": ["build"]},
+                ]
+            },
+        }
+    )
+    assert observed_codegen.passed
+
+    no_observed_codegen = gate_intake(
+        {
+            "rows": [{"action_kind": "spec_approved", "turn": 2}],
+            "observations": {"turns": [{"turn": 4, "files_touched": [], "tool_calls": []}]},
+        }
+    )
+    assert "intake_codegen_missing" in no_observed_codegen.codes
 
 
 def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
@@ -245,3 +280,29 @@ def test_counter_oracle_uses_a_ceiling() -> None:
     violated = counter_oracle({"total": 24}, call_ceiling=18)
     assert violated.state is OracleState.VIOLATED
     assert "call_ceiling_violated" in violated.codes
+
+
+def test_counter_oracle_requires_explicit_page_counts() -> None:
+    assert counter_oracle({"total": 2, "pages": 2}, expected_pages=2).passed
+    incomplete = counter_oracle({"total": 5, "pages": 2}, expected_pages=3)
+    assert incomplete.state is OracleState.VIOLATED
+    assert "pagination_incomplete" in incomplete.codes
+    not_examined = counter_oracle(
+        {"total": 2, "routes": {"/orders": {"count": 2}}},
+        expected_pages=2,
+    )
+    assert not_examined.state is OracleState.NOT_EXAMINED
+    assert "pagination_not_examined" in not_examined.codes
+    ordinary_route = counter_oracle(
+        {"total": 3, "routes": {"/health": {"count": 3}}},
+        expected_pages=3,
+    )
+    assert ordinary_route.state is OracleState.NOT_EXAMINED
+    assert "pagination_not_examined" in ordinary_route.codes
+
+
+def test_counter_oracle_rejects_a_null_total_without_raising() -> None:
+    result = counter_oracle({"total": None}, call_ceiling=2)
+
+    assert result.state is OracleState.VIOLATED
+    assert "counters_shape_invalid" in result.codes

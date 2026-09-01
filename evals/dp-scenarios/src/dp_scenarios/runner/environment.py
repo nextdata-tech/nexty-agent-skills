@@ -264,6 +264,7 @@ class RunEnvironment:
     _ledger: LedgerStore | None = field(default=None, init=False, repr=False)
     _manifest: Manifest | None = field(default=None, init=False, repr=False)
     _fixture: Path | None = field(default=None, init=False, repr=False)
+    _generated_fixture_manifest: Mapping[str, object] | None = field(default=None, init=False, repr=False)
     _home: Path | None = field(default=None, init=False, repr=False)
     _live_transport: Any | None = field(default=None, init=False, repr=False)
 
@@ -289,6 +290,7 @@ class RunEnvironment:
             (self._home / relative).mkdir(parents=True, exist_ok=True)
         self._fixture = base / "fixture"
         generation = self.scenario.generate_fixture(self._fixture)
+        self._generated_fixture_manifest = dict(generation.manifest)
 
         route_config = self.route_config if self.route_config is not None else _scenario_route_config(self.scenario)
         requested_validation_mode = "live" if self.live_command is not None else "replay"
@@ -338,7 +340,10 @@ class RunEnvironment:
                 self._live_transport = transport
                 transport.start()
         except Exception:
-            self.close()
+            try:
+                self.close()
+            except BaseException:
+                pass
             raise
 
         generated_manifest = generation.manifest
@@ -360,7 +365,10 @@ class RunEnvironment:
                     )
                 )
             except Exception:
-                self.close()
+                try:
+                    self.close()
+                except BaseException:
+                    pass
                 raise
 
         manifest = Manifest(
@@ -562,21 +570,30 @@ class RunEnvironment:
     def close(self) -> None:
         """Close the ledger/source and remove the disposable run tree."""
 
-        if self._live_transport is not None:
-            self._live_transport.cleanup()
-            self._live_transport = None
-        if self._ledger is not None:
-            self._ledger.close()
-            self._ledger = None
-        if self._mock_source is not None:
-            self._mock_source.stop()
-            self._mock_source = None
-        if self._temporary is not None:
-            self._temporary.cleanup()
-            self._temporary = None
+        first_error: BaseException | None = None
+        resources = (
+            ("_live_transport", "cleanup"),
+            ("_ledger", "close"),
+            ("_mock_source", "stop"),
+            ("_temporary", "cleanup"),
+        )
+        for attribute, method_name in resources:
+            resource = getattr(self, attribute)
+            if resource is None:
+                continue
+            try:
+                getattr(resource, method_name)()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+            finally:
+                setattr(self, attribute, None)
         self._manifest = None
         self._fixture = None
+        self._generated_fixture_manifest = None
         self._home = None
+        if first_error is not None:
+            raise first_error
 
 
 Environment = RunEnvironment

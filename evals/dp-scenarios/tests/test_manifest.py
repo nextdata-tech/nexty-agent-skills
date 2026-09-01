@@ -107,6 +107,25 @@ def test_validation_mode_is_persisted_and_used_by_stored_readers() -> None:
         Manifest.from_mapping(live_values, replay=None)
 
 
+def test_stored_pre_mode_live_identity_is_not_implicitly_waived() -> None:
+    live_values = make_manifest(
+        supervisor_binary_path="/opt/supervisor#sha256:abc",
+        session_root="/tmp/session",
+        session_config_path="/tmp/session/mcp-config.json",
+        session_config_sha256="sha256:config",
+        session_trace_path="/tmp/session/mcp-trace.jsonl",
+        session_server_result_path="/tmp/session/server-result.json",
+    ).to_dict()
+    live_values.pop("validation_mode")
+
+    parsed = Manifest.from_mapping(live_values, replay=None)
+    assert parsed.validation_mode == "live"
+
+    live_values.pop("session_root")
+    with pytest.raises(ManifestError, match="session_root"):
+        Manifest.from_mapping(live_values, replay=None)
+
+
 def test_manifest_rejects_an_unknown_tier() -> None:
     with pytest.raises(ManifestError, match="unknown tier"):
         make_manifest(tier="banana")

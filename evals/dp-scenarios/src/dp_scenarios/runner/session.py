@@ -36,6 +36,19 @@ class ReplayMismatch(SessionError):
     """Raised when a replay receives a different operator message."""
 
 
+# These names are written by the harness from supervisor/source observations.
+# An agent must not be able to manufacture an oracle by reporting a touched
+# file with the same name.
+_RESERVED_HARNESS_ARTIFACT_NAMES = frozenset(
+    {
+        "row-count-oracle.json",
+        "row_counts.json",
+        "route-fidelity.json",
+        "route_fidelity.json",
+    }
+)
+
+
 def _encode(value: object) -> object:
     if isinstance(value, bytes):
         return {"__bytes__": base64.b64encode(value).decode("ascii")}
@@ -311,6 +324,10 @@ def _materialize_touched_files(
     root = artifact_root.resolve()
     for touched in result.files_touched:
         relative = _relative_touched_path(touched.path, None)
+        if relative.name in _RESERVED_HARNESS_ARTIFACT_NAMES:
+            raise SessionError(
+                f"touched-file path is reserved for harness-owned evidence: {relative}"
+            )
         target = (root / relative).resolve()
         if root not in target.parents and target != root:
             raise SessionError(f"touched-file path escapes artifact root: {relative}")
@@ -365,6 +382,10 @@ class ReplaySession:
             raw_path = Path(touched.path)
             if raw_path.is_absolute():
                 raise SessionError(f"replay touched-file path must be relative: {raw_path}")
+            if raw_path.name in _RESERVED_HARNESS_ARTIFACT_NAMES:
+                raise SessionError(
+                    f"touched-file path is reserved for harness-owned evidence: {raw_path}"
+                )
             target = (self.artifact_root / raw_path).resolve()
             if self.artifact_root not in target.parents and target != self.artifact_root:
                 raise SessionError(f"replay touched-file path escapes artifact root: {raw_path}")
