@@ -19,7 +19,7 @@ from .seed import SeededData, seed_inventory
 
 SKIP_UNAVAILABLE_MARKER = "SKIP_FIXTURE_UNAVAILABLE"
 FIXTURE_UNAVAILABLE_MARKER = SKIP_UNAVAILABLE_MARKER
-_POSTGRES_IMAGE = "postgres:16-alpine"
+_POSTGRES_IMAGE = "postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685"
 _DATABASE = "fixture"
 _ADMIN_ROLE = "postgres"
 _EVALUATION_ROLE = "inventory_reader"
@@ -42,6 +42,10 @@ class FixtureUnavailable(RuntimeError):
 
 class FixtureSafetyError(RuntimeError):
     """The fixture cannot prove that a destructive operation is local/owned."""
+
+
+class FixtureTeardownError(RuntimeError):
+    """The fixture could not remove an owned container during teardown."""
 
 
 class RotationError(RuntimeError):
@@ -194,7 +198,12 @@ class PostgresFixture:
         return self.start()
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        self.stop()
+        try:
+            self.stop()
+        except Exception as teardown_error:
+            if exc_value is None:
+                raise
+            exc_value.add_note(f"Postgres fixture teardown failed: {teardown_error}")
 
     @property
     def started(self) -> bool:
@@ -322,8 +331,11 @@ class PostgresFixture:
             ]
             self._live_step = 0
             return self
-        except Exception:
-            self.stop()
+        except Exception as error:
+            try:
+                self.stop()
+            except Exception as teardown_error:
+                error.add_note(f"Postgres fixture teardown failed: {teardown_error}")
             raise
 
     def advance_rotation(self, step: int | None = None) -> RotationRecord:
@@ -342,8 +354,11 @@ class PostgresFixture:
             self._history.append(record)
             self._live_step = record.step
             return record
-        except Exception:
-            self.stop()
+        except Exception as error:
+            try:
+                self.stop()
+            except Exception as teardown_error:
+                error.add_note(f"Postgres fixture teardown failed: {teardown_error}")
             raise
 
     advance = advance_rotation
@@ -354,15 +369,21 @@ class PostgresFixture:
 
         container_id = self._container_id or self._find_owned_container_id()
         temporary = self._temporary
+        teardown_error: FixtureTeardownError | None = None
         try:
             if container_id is not None:
                 try:
-                    self._run_docker(["rm", "--force", container_id], check=False)
-                except FixtureUnavailable:
-                    # The daemon may disappear during teardown.  There is no
-                    # safe non-Docker fallback, but local state must still clear
-                    # and a second stop must remain harmless.
-                    pass
+                    result = self._run_docker(["rm", "--force", container_id], check=False)
+                except FixtureUnavailable as error:
+                    teardown_error = FixtureTeardownError(
+                        f"could not remove owned container {container_id!r}: {error}"
+                    )
+                else:
+                    if result.returncode != 0:
+                        detail = (result.stderr or result.stdout or "docker rm failed").strip()
+                        teardown_error = FixtureTeardownError(
+                            f"could not remove owned container {container_id!r}: {detail}"
+                        )
         finally:
             self._container_id = None
             self._host_port = None
@@ -373,6 +394,8 @@ class PostgresFixture:
             self._temporary = None
             if temporary is not None:
                 temporary.cleanup()
+        if teardown_error is not None:
+            raise teardown_error
 
     close = stop
 

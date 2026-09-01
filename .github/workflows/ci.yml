@@ -98,7 +98,7 @@ jobs:
           python-version: '3.11'
       - uses: astral-sh/setup-uv@v5
       - name: Pull the pinned Postgres fixture image
-        run: docker pull postgres:16-alpine
+        run: docker pull postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
       - name: Run Postgres-backed fixture tests
         working-directory: evals/dp-scenarios
         env:
@@ -126,9 +126,15 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: nextdata-tech/nxd
-          ref: main
+          ref: bb5fa1e3ab4ca381edc8e309449e77639e9ff8af
           path: nxd
           token: ${{ env.NXD_REPO_TOKEN }}
+      - name: Verify pinned NXD source
+        if: env.NXD_REPO_TOKEN != ''
+        working-directory: nxd
+        run: |
+          test "$(git rev-parse HEAD)" = "bb5fa1e3ab4ca381edc8e309449e77639e9ff8af"
+          git rev-parse HEAD
       - name: Build NXD Python bindings
         if: env.NXD_REPO_TOKEN != ''
         working-directory: nxd

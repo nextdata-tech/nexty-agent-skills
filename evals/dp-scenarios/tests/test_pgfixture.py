@@ -13,6 +13,7 @@ import pytest
 from dp_scenarios.pgfixture import (
     ConnectionInfo,
     FixtureSafetyError,
+    FixtureTeardownError,
     FixtureUnavailable,
     PostgresFixture,
     RotationError,
@@ -136,7 +137,11 @@ def test_failed_rotation_preserves_prior_oracle_records(
         "_rotate_select_revoke",
         lambda: (_ for _ in ()).throw(RotationError("step 1 failed")),
     )
-    monkeypatch.setattr(fixture, "_run_docker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        fixture,
+        "_run_docker",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""),
+    )
 
     with pytest.raises(RotationError, match="step 1 failed"):
         fixture.advance_rotation()
@@ -145,6 +150,46 @@ def test_failed_rotation_preserves_prior_oracle_records(
     assert fixture.current_step == -1
     assert fixture.history == (prior_record,)
     assert [record["step"] for record in fixture.oracle_records] == [0]
+
+
+def test_stop_surfaces_container_removal_failure_after_clearing_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = PostgresFixture(29)
+    fixture._container_id = "owned-container"
+    monkeypatch.setattr(
+        fixture,
+        "_run_docker",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 17, "", "permission denied"
+        ),
+    )
+
+    with pytest.raises(FixtureTeardownError, match="permission denied"):
+        fixture.stop()
+
+    assert fixture.started is False
+    assert fixture.current_step == -1
+
+
+def test_context_exit_preserves_body_exception_when_teardown_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = PostgresFixture(29)
+    fixture._container_id = "owned-container"
+    monkeypatch.setattr(fixture, "start", lambda: fixture)
+    monkeypatch.setattr(
+        fixture,
+        "_run_docker",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 17, "", "daemon failed"),
+    )
+
+    with pytest.raises(ValueError, match="body failed") as error:
+        with fixture:
+            raise ValueError("body failed")
+
+    assert any("Postgres fixture teardown failed" in note for note in error.value.__notes__)
+    assert fixture.started is False
 
 
 def test_pgfixture_attributes_are_checked_from_a_staged_blob(tmp_path: Path) -> None:
