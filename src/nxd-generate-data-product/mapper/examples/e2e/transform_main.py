@@ -90,7 +90,7 @@ from nxd.experimental.field_mapper import (  # noqa: E402
     resolve,
 )
 from nxd.experimental.field_mapper.errors import FieldMapperError  # noqa: E402
-from nxd.experimental.field_mapper.records import reviews_from_csv  # noqa: E402
+from nxd.experimental.field_mapper.records import ValueType, reviews_from_csv  # noqa: E402
 
 # The data-chain pieces are imported from the sibling runner rather than
 # duplicated: two copies of the fixture data and the replay caller would drift,
@@ -98,6 +98,8 @@ from nxd.experimental.field_mapper.records import reviews_from_csv  # noqa: E402
 from run_e2e import (  # noqa: E402
     BASE_MODEL,
     MAPPER_MODELS,
+    REVIEW_OUTCOME_MODEL,
+    _REVIEW_OUTCOME_HINTS,
     _EVIDENCE_HINTS,
     _PROPOSAL_HINTS,
     _ReplayCaller,
@@ -144,7 +146,8 @@ def _context_json(db_path: Path) -> str:
                             # A platform run gets these from the driver; the
                             # transform never hardcodes a table name either way.
                             "model_tables": {
-                                m: m for m in (BASE_MODEL,) + MAPPER_MODELS
+                                m: m
+                                for m in (BASE_MODEL,) + MAPPER_MODELS + (REVIEW_OUTCOME_MODEL,)
                             },
                         },
                     },
@@ -246,6 +249,7 @@ def ingest(duckdb: DuckDbOutput) -> None:
         reviews,
         result.evidence,
         fields=spec.field_names,
+        field_types={f.name: ValueType(f.value_type) for f in spec.target_fields},
         # PER FIELD. `min(...)` re-checked a spec declaring 2 and 0 at 0,
         # making the resolve-time backstop weaker than the run-time check it
         # re-checks.
@@ -266,6 +270,7 @@ def ingest(duckdb: DuckDbOutput) -> None:
     try:
         resolution.assert_bijection()
         resolution.assert_value_hashes()
+        resolution.assert_review_audit_completeness()
         resolution.assert_cardinality(
             min_rows=spec.cardinality.min_rows,
             max_rows=spec.cardinality.max_rows or len(resolution.row_keys),
@@ -311,11 +316,23 @@ def ingest(duckdb: DuckDbOutput) -> None:
     def mapper_evidence():
         yield from (e.as_row() for e in resolution.evidence)
 
+    @dlt.resource(
+        name=tables[REVIEW_OUTCOME_MODEL],
+        write_disposition="replace",
+        columns=_REVIEW_OUTCOME_HINTS,
+    )
+    def mapper_review_outcomes():
+        yield from resolution.review_outcome_rows
+
     @dlt.resource(name=tables["invoice_terms"], write_disposition="replace")
     def invoice_terms():
         yield from resolution.wide_rows
 
-    pipeline.run([mapper_proposals(), mapper_evidence(), invoice_terms()])
+    resources = [mapper_proposals(), mapper_evidence()]
+    if resolution.review_outcome_rows:
+        resources.append(mapper_review_outcomes())
+    resources.append(invoice_terms())
+    pipeline.run(resources)
     OUTCOME["landed"] = True
 
 

@@ -7,6 +7,7 @@ The pre-migration append-only history is frozen in [legacy `ledger.md`](ledger.m
 
 | Date | Label | Status | Scenarios | Entry |
 |---|---|---|---|---|
+| 2026-08-31 | supervisor approval transport and mapper review outcome contract | NO_EVAL | — | [`2026-08-31-approval-proof-alignment`](entries/2026-08-31-approval-proof-alignment.md) |
 | 2026-08-26 | inference: agent-side while exploring, bundled through the seam once packaged | NO_EVAL | — | [`2026-08-26-inference-bundled-once-packaged`](entries/2026-08-26-inference-bundled-once-packaged.md) |
 | 2026-08-25 | nxd-run-job-loop: three self-check gates that shift a silent failure left | NO_EVAL | — | [`2026-08-25-self-check-shift-left-gates`](entries/2026-08-25-self-check-shift-left-gates.md) |
 | 2026-08-24 | nxd-spec-api.md documents registry-wide dimension names and join-covers-grain | NO_EVAL | — | [`2026-08-24-spec-api-compiler-rules`](entries/2026-08-24-spec-api-compiler-rules.md) |

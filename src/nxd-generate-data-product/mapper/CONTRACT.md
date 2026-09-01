@@ -12,7 +12,7 @@ Two `nxd_decisions` axes landed after the design was written and bear on this
 machinery: `provenance` (a required second axis, vocabulary `user_confirmed` |
 `agent_authored` | `source_derived` | `deferred`) and `evidence_kind` (`fact` /
 `inference`, on a *deterministic* score-explanation row). Consequences are
-carried in §2.3 and open question 9: `evidence_kind` and this contract's
+carried in §2.4 and open question 9: `evidence_kind` and this contract's
 `verify_status` answer different questions and must never be populated from
 each other.
 
@@ -57,13 +57,13 @@ field_mapper/
   __init__.py        version stamp + the only names Layer 2 may import
   spec.py            mapper spec model, canonicalization, mapper_spec_id
   identity.py        target_row_key derivation, input_snapshot_id, observation_id
-  records.py         the three record types + long-form <-> CSV serialization
+  records.py         proposals/reviews/evidence/outcomes + CSV serialization
   schema.py          mapper spec -> Anthropic JSON Schema (+ what it cannot express)
   validate.py        range/enum/type/evidence checks, retry policy, degrade accounting
   transport.py       anthropic SDK call, budget, backoff, cancellation, heartbeat
   ledger.py          append-only run ledger (hashes only)
   grant.py           consent-grant load + match, refused before any model call
-  resolver.py        proposals + reviews + evidence -> effective wide rows
+  resolver.py        proposals + reviews + evidence -> effective rows + review outcomes
   errors.py          the exception taxonomy value_status maps from
   __main__.py        CLI: preflight | canary | run | resolve | verify
 ```
@@ -113,10 +113,10 @@ Layer 2 (generated code, skills, job-loop closures) may import **only** these:
 | `make_call(*, spec, grant, secrets=None, allow_env=False, provider=None, provider_model=None, provider_cwd=None) -> callable` | `field_mapper` | lazy, budgeted provider seam; explicit secret first, then allowlisted environment fallback **only when `allow_env=True` is passed**; creates the client only on first dispatch |
 | `MapperInput(input_id, identity, ...)` | `field_mapper` | one source record handed to the mapper |
 | `MapperSpec.load(path)` / `.mapper_spec_id` | `spec` | landed spec → runtime object |
-| `MapperProposal` / `MapperReview` / `MapperEvidence` | `records` | the three record types |
+| `MapperProposal` / `MapperReview` / `MapperEvidence` / `ReviewOutcome` | `records` | mapped values, human state, evidence, and review resolution |
 | `ValueStatus` | `records` | the enum in §3 |
-| `resolve(proposals, reviews, evidence, spec) -> Resolution` | `resolver` | wide projection + sidecar, one bundle |
-| `Resolution.wide_rows` / `.provenance` / `.assert_bijection()` | `resolver` | §7 |
+| `resolve(proposals, reviews, evidence=None, *, fields, row_keys=None, field_types=None, min_evidence_per_ok_cell=0) -> Resolution` | `resolver` | wide projection + sidecar + review outcomes, one bundle |
+| `Resolution.wide_rows` / `.provenance` / `.review_outcome_rows` / `.assert_bijection()` / `.assert_value_hashes()` / `.assert_cardinality(...)` / `.assert_review_audit_completeness()` | `resolver` | §7 |
 | `PreflightEstimate` / `estimate(inputs, spec)` | `transport` | §10 of the design |
 | `Grant.load(path)` / `Grant.check(spec, *, input_fields=(), document_classes=(), now=None)` | `grant` | §9 |
 | `FieldMapperError` and subclasses | `errors` | so callers can catch by class, not string |
@@ -277,8 +277,9 @@ provider payloads or credentials, are persisted.
 
 ## 2. Record schemas
 
-Three landed models. Long-form records are authoritative; the wide model is a
-projection (design §2).
+Four landed models. Long-form records are authoritative; the wide model is a
+projection (design §2). `mapper_review_outcomes` is a replace-loaded audit
+projection of the durable reviews for the current published population.
 
 Column type names are the `nxd.spec` types (`string()`, `int64()`, `float64()`,
 `bool()`, `timestamp()`), since these land as base models through the normal dlt
@@ -368,7 +369,45 @@ input + spec only. That is deliberate — a human overriding a cell the model
 never produced (`evidence_absent`) has no value hash to bind to, and forcing one
 would make the "human fills the gap" case unrepresentable.
 
-### 2.3 `mapper_evidence`
+### 2.3 `mapper_review_outcomes`
+
+One replace-loaded row for **every** durable review considered by a resolve.
+This is an audit projection, not a replacement for `mapper_reviews`: the
+original verdict, reviewer, timestamp, and requested override remain in the
+append-only review record. The outcome records whether that decision reached the
+published projection and retains both sides of the binding for diagnosis.
+
+| Column | Type | Null? | Description |
+|---|---|---|---|
+| `review_id` | `string()` | no | Join to the immutable review act. |
+| `target_row_key` | `string()` | no | Review target. |
+| `field` | `string()` | no | Review target field. |
+| `verdict` | `string()` | no | Original human verdict. |
+| `outcome` | `string()` | no | `applied`, `rejected`, or `ignored`. |
+| `reason` | `string()` | no | Stable explanation for the outcome. |
+| `stale_reasons` | `string()` | no | Complete binding failures, empty when not stale. |
+| `bound_value_hash` | `string()` | yes | Value hash the reviewer saw. |
+| `bound_input_snapshot_id` | `string()` | no | Input snapshot the reviewer saw. |
+| `bound_mapper_spec_id` | `string()` | no | Mapper definition the reviewer saw. |
+| `proposal_value_hash` | `string()` | yes | Value hash observed in the resolved run, if the target exists. |
+| `proposal_input_snapshot_id` | `string()` | yes | Input snapshot observed in the resolved run. |
+| `proposal_mapper_spec_id` | `string()` | yes | Mapper definition observed in the resolved run. |
+| `effective_value_hash` | `string()` | yes | Hash published for the cell when a resolution row exists. |
+| `winner_review_id` | `string()` | yes | Winning review for an applied or superseded decision. |
+| `reviewer` | `string()` | no | Original reviewer identity. |
+| `reviewed_at` | `timestamp()` | no | Original review timestamp. |
+
+`applied` means the valid review was the winner, including a human rejection
+that intentionally nulls the effective cell. `ignored` means the binding was
+valid but a later valid review won. `rejected` means the review could not be
+used: stale binding, missing target, undeclared field, or incompatible override
+type. Every review has exactly one outcome row; no decision is silently dropped.
+
+This projection proves deterministic review resolution and publication
+accounting. It does not authenticate the reviewer or replace the supervisor's
+separate pre-call user-authorization gate.
+
+### 2.4 `mapper_evidence`
 
 One-to-many per proposal. Replace-loaded with the proposals it belongs to — the
 two are always produced and landed together, from the same in-memory bundle.
@@ -594,12 +633,14 @@ Per `(target_row_key, field)`:
    `effective_source = model_proposed`, and `needs_review` carries through.
 7. Stale reviews contribute to neither the value nor the status. They are
    emitted into the sidecar with `stale_reason` ∈ `value_changed` |
-   `input_changed` | `spec_changed` so the reviewer can see exactly what came
-   unbound.
+   `input_changed` | `spec_changed` | `target_not_found` so the reviewer
+   can see exactly what came unbound.
 
 The provenance sidecar carries `value_hash`, `effective_source`, `value_status`,
 `observation_id`, `evidence_count`, and the stale-review list. It is built in the
-same call as the wide rows, from the same objects — not joined afterwards.
+same call as the wide rows, from the same objects — not joined afterwards. The
+review-outcome projection is emitted from that same `Resolution`; it is not
+inferred from the published wide table after the fact.
 
 ---
 
@@ -634,6 +675,10 @@ Run before landing; any failure blocks (§4).
    acceptance suite to prove the multi-table publication is atomic. **Do not
    assume one `pipeline.run` gives multi-table atomicity** — the design says so
    explicitly, and the assert exists to test the assumption rather than restate it.
+8. **Review audit completeness.** `len(review_outcomes) == len(reviews)` and
+   every `review_id` is unique. A published run must expose the outcome for
+   every durable review, including stale, invalid, missing-target, and
+   superseded reviews.
 
 ---
 
@@ -879,7 +924,7 @@ stand — each states why it does not gate use of the shipped harness.
    `mapper_evidence.verify_status` is **not** `evidence_kind`: that
    column answers `fact` vs `inference` for a deterministic band, whereas
    `verify_status` answers whether a substring check ran and passed. Disjoint
-   vocabularies, and §2.3 must never be populated from the other.
+   vocabularies, and §2.4 must never be populated from the other.
    *Blocks:* the `nxd_decisions` rows `__main__.py` emits, and Phase D passage.
    *Does not gate use:* this is the decisions-ledger semantics settling, and it
    constrains what the mapper records about itself, not whether it may map.

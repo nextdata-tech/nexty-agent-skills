@@ -10,7 +10,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   author: nextdata
-  version: 0.40.0
+  version: 0.40.1
 ---
 
 # Nexty Mesh Assets

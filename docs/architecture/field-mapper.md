@@ -176,14 +176,19 @@ graph LR
     RES --> W["wide target model"]
     RES --> SC["provenance sidecar"]
     RES --> ST["stale_review_rows"]
+    RES --> RO["mapper_review_outcomes<br/>applied · rejected · ignored"]
 ```
 
-Wide rows and provenance are built from the **same in-memory `Resolution`
-bundle** — the mapper is never called independently per resource, so the two
-cannot disagree.
+Wide rows, provenance, and review outcomes are built from the **same in-memory
+`Resolution` bundle** — the mapper is never called independently per resource,
+so the projections cannot disagree.
 
 `Resolution.assert_bijection()` enforces: every governed wide cell maps to
 exactly one effective record, required evidence atoms present, no orphans.
+`Resolution.assert_review_audit_completeness()` additionally enforces one
+`mapper_review_outcomes` row per durable review, including stale, invalid,
+missing-target, and superseded reviews. This is deterministic publication
+accounting, not authenticated proof of the reviewer's identity.
 
 ### Why not wide-primary
 

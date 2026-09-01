@@ -56,8 +56,9 @@ Two things the seam settles that a hand-rolled model call does not:
   the artifact — an explicit secrets mapping, or the opt-in allowlisted
   `ANTHROPIC_API_KEY` fallback — never in `infra-profile.yaml`, never in
   `dp-blueprint.md`, never in chat. In a Desktop build the user authorizes the
-  subject through the supervisor's own client-mediated confirmation, which no
-  agent-authored field can forge.
+  subject through the supervisor-owned loopback review surface plus native OS
+  presence decision. The MCP peer does not receive the one-time capability, and
+  no agent-authored field can forge the supervisor's subject or admission.
 - **A direct provider SDK import stays denied.** `import anthropic` in
   `transform/main.py` fails the reach gate, and should: it routes around the
   grant check, the approval boundary, and the sanitized credential handling.

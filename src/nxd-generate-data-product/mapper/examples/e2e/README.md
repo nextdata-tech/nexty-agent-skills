@@ -133,8 +133,10 @@ blocked, and nothing landed.
 - **dlt** loads into a real **duckdb** file, twice.
 - The **shipped mapper package** — same `map_inputs`, validator, evidence
   checker, resolver, coverage gate.
-- Three real output tables, with the wide one projected from the same in-memory
-  bundle as the sidecar.
+- Three required output tables, with the wide one projected from the same
+  in-memory bundle as the sidecar. When durable reviews are present, a fourth
+  `mapper_review_outcomes` table records their deterministic publication
+  outcomes.
 
 ## What is stubbed
 
@@ -182,9 +184,11 @@ fixture.
 - **Publication is not atomic.** Two `pipeline.run` calls; a crash between them
   leaves landed inputs with no judgements. CONTRACT §7.7 wants a fault-injection
   test. It does not exist.
-- **The durable-review half never executes here.** `resolve()` runs, but with an
-  empty review set, so override, staleness, and re-binding are unexercised by
-  this script. `python -m nxd.experimental.field_mapper resolve` covers them: it re-resolves from
-  the landed CSVs without re-inferring, which is where a changed `reviews.csv`
-  shows confirmations applying or coming unbound with a `stale_reason`.
+- The checked-in replay has an empty review set, so override, staleness, and
+  re-binding are not exercised by its default run. When
+  `reviews/mapper_reviews.csv` is supplied, `resolve()` emits one
+  `mapper_review_outcomes` row per durable review and the example lands and
+  checks that projection. `python -m nxd.experimental.field_mapper resolve`
+  also covers re-resolution from landed CSVs without re-inferring, where a
+  changed review shows as applied, ignored, or rejected with a stable reason.
 - **No platform integration.** No cluster, no driver, no real output port.

@@ -16,6 +16,7 @@ FIELD_MAPPER = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "
 PREFLIGHT = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "mapper-preflight.md"
 SELF_CHECK = REPO_ROOT / "src" / "nxd-generate-data-product" / "reference" / "self-check.md"
 E2E_RUNNER = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "examples" / "e2e" / "run_e2e.py"
+E2E_TRANSFORM = REPO_ROOT / "src" / "nxd-generate-data-product" / "mapper" / "examples" / "e2e" / "transform_main.py"
 
 
 def _read(path: Path) -> str:
@@ -81,18 +82,16 @@ def test_preflight_and_phase_g_do_not_claim_desktop_authorization() -> None:
     assert "does **not** prove a human authorization" in self_check
 
 
-def test_client_confirmation_is_the_only_surface_with_exact_subject_reuse_and_fail_closed_paths() -> None:
+def test_supervisor_loopback_and_os_approval_surface_has_exact_subject_reuse_and_fail_closed_paths() -> None:
     field_mapper = _normalized(FIELD_MAPPER)
 
-    assert "protected client-mediated" in field_mapper
-    assert "protocol `2025-06-18` or newer" in field_mapper
-    assert "`authorize_this_exact_subject`" in field_mapper
-    assert "there is no OS dialog or secondary approval surface" in field_mapper
-    assert "older protocol or without form elicitation" in field_mapper
-    assert "`unsupported` is terminal for that client" in field_mapper
-    assert "compatibility fallback" not in field_mapper
-    assert "supervisor-owned macOS" not in field_mapper
-    assert "native dialog" not in field_mapper
+    assert "supervisor-owned loopback review surface" in field_mapper
+    assert "native OS presence decision" in field_mapper
+    assert "one-time browser capability" in field_mapper
+    assert "MCP form elicitation" in field_mapper
+    assert "does not currently use MCP form elicitation" in field_mapper
+    assert "there is no secondary approval surface" not in field_mapper
+    assert "OS dialog is local presence confirmation" in field_mapper
     assert "unchanged retry reuses that session approval without another interaction" in field_mapper
     assert "changed spec or proposed scope gets a new subject and must be confirmed again" in field_mapper
     assert "`mapper_subject_changed`" in field_mapper
@@ -100,7 +99,7 @@ def test_client_confirmation_is_the_only_surface_with_exact_subject_reuse_and_fa
     for confirmation in (
         "`declined`",
         "`cancelled`",
-        "`timed_out`",
+        "`expired`",
         "`failed`",
         "`unsupported`",
     ):
@@ -112,7 +111,25 @@ def test_client_confirmation_is_the_only_surface_with_exact_subject_reuse_and_fa
     ):
         assert diagnostic in field_mapper
     assert "Approval records are session-local" in field_mapper
+    assert "do not persist signed receipts or execution attestations" in field_mapper
     assert "do not enforce cumulative call/token/cost budgets across build attempts" in field_mapper
+
+
+def test_mapper_review_publication_has_one_deterministic_outcome_per_review() -> None:
+    contract = _normalized(MAPPER_CONTRACT)
+    field_mapper = _normalized(FIELD_MAPPER)
+
+    for text in (
+        "`ReviewOutcome`",
+        "`mapper_review_outcomes`",
+        "`applied`",
+        "`rejected`",
+        "`ignored`",
+        "every durable review has exactly one outcome",
+        "`.assert_review_audit_completeness()`",
+    ):
+        assert text in contract or text in field_mapper, f"missing review-audit contract: {text}"
+    assert "does not authenticate the reviewer" in contract or "does not authenticate the reviewer" in field_mapper
 
 
 def test_mapper_status_defines_a_safe_unknown_admission_default() -> None:
@@ -141,3 +158,11 @@ def test_public_e2e_example_does_not_bind_sdk_or_private_transport() -> None:
     assert not re.search(r"^\s*(?:import anthropic\b|from anthropic import)\b", source, re.MULTILINE)
     for private_module in ("field_mapper.transport", "field_mapper.ledger"):
         assert private_module not in source
+
+
+def test_public_e2e_examples_land_and_check_review_outcomes() -> None:
+    for path in (E2E_RUNNER, E2E_TRANSFORM):
+        source = _read(path)
+        assert "mapper_review_outcomes" in source
+        assert "assert_review_audit_completeness" in source
+        assert "review_outcome_rows" in source

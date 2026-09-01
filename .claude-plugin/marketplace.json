@@ -11,7 +11,7 @@
       "source": "./",
       "displayName": "Nexty AI Pro",
       "description": "Set up the nxd CLI, analyze your data mesh, and build/query Python data products on Nextdata OS.",
-      "version": "0.40.0",
+      "version": "0.40.1",
       "author": {
         "name": "Nextdata"
       }
