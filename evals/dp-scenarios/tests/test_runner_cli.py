@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import dp_scenarios.runner.cli as cli
+from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchPlan
 
 
 def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: Path) -> None:
@@ -31,6 +34,8 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
     monkeypatch.setattr(cli, "_canary_from_mapping", lambda *args, **kwargs: object())
     monkeypatch.setattr(cli, "write_report", lambda _result, **kwargs: None)
     monkeypatch.setattr(cli, "TierRunner", StubRunner)
+    knob_plan = {("scenario-1", 1): SupervisorKnobs.off()}
+    monkeypatch.setattr(cli, "load_knob_plan", lambda _path: knob_plan)
 
     status = cli.main(
         [
@@ -58,6 +63,8 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
             "mock-1",
             "--canary-claims-hash",
             "claims-1",
+            "--knob-plan",
+            str(tmp_path / "knobs.json"),
             "--report-json",
             str(report),
         ]
@@ -68,3 +75,22 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
     assert captured["supervisor_command"] == supervisor
     assert callable(captured["session_factory"])
     assert captured["replay_recordings"] == {}
+    assert captured["knob_plan"] == knob_plan
+
+
+def test_cli_rejects_workflow_switch_without_endpoint_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "load_knob_plan",
+        lambda _path: {
+            ("scenario-1", 1): SupervisorKnobs(
+                workflow_switch=WorkflowSwitchPlan("old", "new")
+            )
+        },
+    )
+
+    with pytest.raises(cli.TierError, match="cannot execute workflow switches"):
+        cli._load_cli_knob_plan(tmp_path / "knobs.json")

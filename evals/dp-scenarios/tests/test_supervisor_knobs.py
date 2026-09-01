@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from dp_scenarios.knobs import (
     WorkflowSwitchPlan,
     apply_transform_latency,
     broker_entrypoint_path,
+    load_knob_plan,
     script_restart_and_switch,
 )
 from dp_scenarios.mockrest import load_config
@@ -95,6 +97,45 @@ def test_broker_fault_schedule_is_attempt_keyed_and_repeats_identically() -> Non
     assert int(sleep_plan.environment_for_attempt(1)["NXD_EVAL_BROKER_BIND_TIMEOUT_S"]) + int(
         sleep_plan.environment_for_attempt(1)["NXD_EVAL_BROKER_MARGIN_S"]
     ) == 32
+
+
+def test_json_knob_plan_decodes_scenario_epochs(tmp_path: Path) -> None:
+    path = tmp_path / "knobs.json"
+    path.write_text(
+        json.dumps(
+            {
+                "scenarios": {
+                    "scenario-a": {
+                        "1": {
+                            "transform_window": {
+                                "naive": {"name": "naive", "calls": 8},
+                                "bounded": {"name": "bounded", "calls": 1},
+                                "per_call_latency_ms": 5,
+                                "route_keys": ["GET /market-data"],
+                            },
+                            "broker_fault": {
+                                "faults": {"1": "occupied_port"},
+                                "real_entrypoint": "semantic_child.py",
+                            },
+                            "workflow_switch": {
+                                "from_workflow": "workflow-old",
+                                "to_workflow": "workflow-new",
+                            },
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    knobs = load_knob_plan(path)[("scenario-a", 1)]
+
+    assert knobs.transform_window is not None
+    assert knobs.transform_window.naive.total_calls == 8
+    assert knobs.broker_fault is not None
+    assert knobs.broker_fault.fault_for_attempt(1) is BrokerFaultShape.OCCUPIED_PORT
+    assert knobs.workflow_switch == WorkflowSwitchPlan("workflow-old", "workflow-new")
 
 
 def test_occupied_port_shim_has_no_stderr_and_attempt_two_delegates(tmp_path: Path) -> None:

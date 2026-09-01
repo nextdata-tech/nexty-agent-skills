@@ -18,6 +18,7 @@ import select
 import subprocess
 from typing import Any, Protocol
 
+from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
 from dp_scenarios.operator.transport import (
     Attachment,
     OperatorMessage,
@@ -414,6 +415,10 @@ class ReplaySession:
 
 ResponseHandler = Callable[[OperatorMessage], TurnResult]
 
+WorkflowRestart = Callable[[str], Transport]
+WorkflowObserver = Callable[[OperatorMessage, TurnResult, str], EndpointObservation]
+WorkflowEvidenceSink = Callable[[WorkflowSwitchEvidence, int], None]
+
 
 class DesktopSessionLifecycle(Protocol):
     """The small lifecycle seam owned by the shared desktop substrate."""
@@ -564,6 +569,10 @@ class RecordingSession:
         *,
         artifact_root: str | Path | None = None,
         sandbox_home: str | Path | None = None,
+        workflow_switch: WorkflowSwitchPlan | None = None,
+        workflow_restart: WorkflowRestart | None = None,
+        workflow_observer: WorkflowObserver | None = None,
+        workflow_evidence: WorkflowEvidenceSink | None = None,
     ) -> None:
         self.transport = transport
         self.artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
@@ -571,8 +580,30 @@ class RecordingSession:
         if self.artifact_root is not None:
             self.artifact_root.mkdir(parents=True, exist_ok=True)
         self.turns: list[RecordedTurn] = []
+        self.workflow_switch = workflow_switch
+        self.workflow_restart = workflow_restart
+        self.workflow_observer = workflow_observer
+        self.workflow_evidence = workflow_evidence
+        self._session_started = False
+        self._workflow_switched = False
+        self._workflow_observation_pending = False
+
+        if workflow_switch is not None and (workflow_restart is None or workflow_observer is None):
+            raise SessionError(
+                "workflow switching requires a restart factory and endpoint observer"
+            )
 
     def start_fresh_session(self) -> str | None:
+        if self.workflow_switch is not None and self._session_started and not self._workflow_switched:
+            current = self.transport
+            close = getattr(current, "close", None)
+            if callable(close):
+                close()
+            assert self.workflow_restart is not None
+            self.transport = self.workflow_restart(self.workflow_switch.to_workflow)
+            self._workflow_switched = True
+            self._workflow_observation_pending = True
+        self._session_started = True
         return self.transport.start_fresh_session()
 
     start_fresh = start_fresh_session
@@ -588,6 +619,29 @@ class RecordingSession:
         result = self.transport.send_message(message)
         if not isinstance(result, TurnResult):
             raise SessionError("recorded transport returned no TurnResult")
+        if self._workflow_observation_pending:
+            assert self.workflow_switch is not None
+            assert self.workflow_observer is not None
+            observation = self.workflow_observer(message, result, self.workflow_switch.to_workflow)
+            if not isinstance(observation, EndpointObservation):
+                raise SessionError("workflow observer returned no EndpointObservation")
+            if observation.requested_workflow != self.workflow_switch.to_workflow:
+                raise SessionError("post-switch call used the wrong requested workflow")
+            if observation.answered_workflow != self.workflow_switch.to_workflow:
+                raise SessionError(
+                    "post-switch call was served by a stale workflow: "
+                    f"{observation.answered_workflow!r}"
+                )
+            evidence = WorkflowSwitchEvidence(
+                from_workflow=self.workflow_switch.from_workflow,
+                to_workflow=self.workflow_switch.to_workflow,
+                answered_workflow=observation.answered_workflow,
+                answered_endpoint=observation.answered_endpoint,
+                stale_endpoint_rejected=True,
+            )
+            if self.workflow_evidence is not None:
+                self.workflow_evidence(evidence, len(self.turns) + 1)
+            self._workflow_observation_pending = False
         normalized = _normalized_turn_result(result, self.sandbox_home)
         if self.artifact_root is not None:
             _materialize_touched_files(normalized, self.artifact_root, source_root=self.sandbox_home)

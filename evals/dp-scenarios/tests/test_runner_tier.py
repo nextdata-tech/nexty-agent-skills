@@ -17,8 +17,15 @@ from dp_scenarios.canary.probe import ProbeResult
 from dp_scenarios.grading import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
+from dp_scenarios.knobs import EndpointObservation, SupervisorKnobs, WorkflowSwitchPlan
 from dp_scenarios.ledger import SupervisorFacts, fixture_dir_hash
-from dp_scenarios.operator import OperatorEngine, OperatorScript, StaticSupervisorRecordReader
+from dp_scenarios.operator import (
+    EventSchedule,
+    OperatorEngine,
+    OperatorScript,
+    StaticSupervisorRecordReader,
+    event_from_mapping,
+)
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, TouchedFile, TurnResult
 from dp_scenarios.runner import (
@@ -668,6 +675,77 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
         environment_root=tmp_path,
     ).run()
     assert not replay.scenario_runs[0].score.gates["capability"].examined
+
+
+def test_composed_runner_applies_epoch_knobs_and_switches_workflow(tmp_path: Path) -> None:
+    scenario = make_scenario("composed-knob", turns=2)
+    event = event_from_mapping(
+        {
+            "version": 1,
+            "id": "workflow-switch",
+            "trigger_turn": 2,
+            "type": "back_after_lunch",
+            "content": "I am back.",
+            "outcome": "workflow switched",
+            "gap_seconds": 1,
+        }
+    )
+    scenario = replace(scenario, script=replace(scenario.script, events=EventSchedule((event,))))
+    initial = InMemoryTransport(
+        [TurnResult(agent_message="What is the source?")]
+    )
+    replacement = InMemoryTransport(
+        [TurnResult(agent_message="What is the source?")]
+    )
+    transports = iter((initial,))
+    restarted: list[str] = []
+
+    def session_factory(current: FakeScenario, environment: object, epoch: int) -> InMemoryTransport:
+        return next(transports)
+
+    def restart_factory(
+        current: FakeScenario,
+        environment: object,
+        epoch: int,
+        workflow: str,
+    ) -> InMemoryTransport:
+        restarted.append(workflow)
+        return replacement
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=session_factory,
+        environment_root=tmp_path,
+        knob_plan={
+            (scenario.id, 1): SupervisorKnobs(
+                workflow_switch=WorkflowSwitchPlan("workflow-old", "workflow-new")
+            )
+        },
+        workflow_restart_factory=restart_factory,
+        workflow_observer=lambda message, turn, workflow: EndpointObservation(
+            workflow,
+            workflow,
+            "endpoint-new",
+        ),
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert restarted == ["workflow-new"]
+    assert initial.started_fresh == ["session-1"]
+    assert replacement.started_fresh == ["session-1"]
+    assert run.manifest.runtime_knobs["workflow_switch"]["enabled"] is True  # type: ignore[index]
+    assert len(run.replay_recording.turns) == 2
+    rows = [json.loads(line) for line in run.ledger_bytes.splitlines()]
+    switch_rows = [row for row in rows if row.get("evidence_ref") == "runtime-knobs/workflow-switch"]
+    assert switch_rows and switch_rows[0]["claim"] == {
+        "from_workflow": "workflow-old",
+        "to_workflow": "workflow-new",
+        "answered_workflow": "workflow-new",
+        "answered_endpoint": "endpoint-new",
+        "stale_endpoint_rejected": True,
+    }
 
 
 def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Path) -> None:

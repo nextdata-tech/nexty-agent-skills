@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 
 from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.verdict import Verdict
+from dp_scenarios.knobs import KnobError, SupervisorKnobs, load_knob_plan
 from dp_scenarios.scenario import load_scenarios
 
 from .environment import PinnedVersions
@@ -99,6 +100,21 @@ def _load_replays(path: Path, scenario_ids: Sequence[str]) -> dict[str, object]:
     return result
 
 
+def _load_cli_knob_plan(path: Path) -> Mapping[tuple[str, int], SupervisorKnobs]:
+    """Load CLI controls while refusing an unverifiable workflow switch."""
+
+    try:
+        knob_plan = load_knob_plan(path)
+    except KnobError as exc:
+        raise TierError(str(exc)) from exc
+    if any(value.workflow_switch is not None for value in knob_plan.values()):
+        raise TierError(
+            "CLI knob plans cannot execute workflow switches; use TierRunner with "
+            "workflow_restart_factory and workflow_observer callbacks"
+        )
+    return knob_plan
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the runner CLI parser."""
 
@@ -116,6 +132,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-wheel-version", required=True)
     parser.add_argument("--mock-api-version", required=True)
     parser.add_argument("--canary-claims-hash", required=True)
+    parser.add_argument(
+        "--knob-plan",
+        type=Path,
+        help="JSON runtime-knob plan keyed by scenario id and one-based epoch",
+    )
     parser.add_argument("--agent-model-id", default="replay")
     parser.add_argument("--model-call-budget", type=float)
     parser.add_argument("--wall-clock-budget", type=float)
@@ -169,6 +190,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return environment.live_session()  # type: ignore[attr-defined, no-any-return]
 
         session_factory = factory
+    knob_plan = None
+    if args.knob_plan is not None:
+        knob_plan = _load_cli_knob_plan(args.knob_plan)
     result = TierRunner(
         scenarios,
         pins=pins,
@@ -177,6 +201,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         replay_recordings=replays,
         live_command=command if args.mode == "live" else None,
         supervisor_command=args.supervisor if args.mode == "live" else None,
+        knob_plan=knob_plan,
         budgets=RunBudgets(args.model_call_budget, args.wall_clock_budget),
     ).run()
     write_report(result, json_path=args.report_json, summary_path=args.report_summary)

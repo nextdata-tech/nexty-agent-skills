@@ -46,6 +46,34 @@ and closure validators define that artifact contract; this harness records only
 the scripted scenario phases and the artifacts available to its smoke gates.
 Mapper approval is a separate supervisor admission boundary and is not reproduced
 by the T0 operator.
+
+### Runtime control plans
+
+The composed `TierRunner` accepts an epoch-keyed `knob_plan`, so fixed transform
+latency and attempt-keyed broker faults are applied before the environment is
+started and are pinned in each run manifest. The CLI accepts the same controls
+from `--knob-plan`, using either this outer shape or its inner `scenarios` object:
+
+```json
+{
+  "scenarios": {
+    "scenario-id": {
+      "1": {
+        "transform_window": {
+          "naive": {"name": "naive", "calls": 8},
+          "bounded": {"name": "bounded", "calls": 1},
+          "per_call_latency_ms": 5,
+          "route_keys": ["GET /market-data"]
+        }
+      }
+    }
+  }
+}
+```
+
+Workflow switching remains a programmatic control because its replacement
+transport and endpoint observation must be supplied by the caller. A CLI plan
+that declares one is rejected rather than silently running with the switch off.
 ## Layout
 
 | Path | Contents |

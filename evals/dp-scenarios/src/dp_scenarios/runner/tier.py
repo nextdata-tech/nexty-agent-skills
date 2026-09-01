@@ -21,6 +21,7 @@ from typing import Any, TypeAlias
 from dp_scenarios.canary import ClaimsDocument, Verdict, aggregate_verdict, extract_claims, load_claims
 from dp_scenarios.canary.probe import BuildResult, ProbeResult, run_build, run_preflight
 from dp_scenarios.canary.verdict import build_failure_issues
+from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchPlan
 from dp_scenarios.grading import (
     Finding,
     GATE_POINTS,
@@ -53,7 +54,13 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import Scenario, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
-from .session import ReplayRecording, ReplaySession, RecordingSession
+from .session import (
+    ReplayRecording,
+    ReplaySession,
+    RecordingSession,
+    WorkflowObserver,
+    WorkflowRestart,
+)
 
 
 class TierError(RuntimeError):
@@ -260,6 +267,8 @@ class TierResult:
 SessionFactory: TypeAlias = Callable[..., Transport]
 CanaryFactory: TypeAlias = Callable[[], CanaryResult | Verdict]
 SupervisorReaderFactory: TypeAlias = Callable[..., SupervisorRecordReader | None]
+KnobPlan: TypeAlias = Mapping[tuple[str, int], SupervisorKnobs] | Callable[[Scenario, int], SupervisorKnobs]
+WorkflowRestartFactory: TypeAlias = Callable[[Scenario, RunEnvironment, int, str], Transport]
 
 
 def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: ClaimsDocument) -> Verdict:
@@ -432,6 +441,21 @@ def _session_factory(factory: SessionFactory, scenario: Scenario, environment: R
         value = factory()
     if not hasattr(value, "send_message"):
         raise TierError("session factory returned no Transport")
+    return value
+
+
+def _knob_plan_value(plan: KnobPlan | None, scenario: Scenario, epoch: int) -> SupervisorKnobs:
+    """Resolve one immutable runtime-control set for one scenario epoch."""
+
+    if plan is None:
+        return SupervisorKnobs.off()
+    value = (
+        plan(scenario, epoch)
+        if callable(plan)
+        else plan.get((scenario.id, epoch), SupervisorKnobs.off())
+    )
+    if not isinstance(value, SupervisorKnobs):
+        raise TierError(f"knob plan returned no SupervisorKnobs for {scenario.id} epoch {epoch}")
     return value
 
 
@@ -650,6 +674,9 @@ class TierRunner:
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
         live_command: Sequence[str] | None = None,
         supervisor_command: str | Path | Sequence[str] | None = None,
+        knob_plan: KnobPlan | None = None,
+        workflow_restart_factory: WorkflowRestartFactory | None = None,
+        workflow_observer: WorkflowObserver | None = None,
     ) -> None:
         self.scenarios = tuple(scenarios)
         self.pins = pins
@@ -662,6 +689,21 @@ class TierRunner:
         self.supervisor_reader = supervisor_reader
         self.live_command = tuple(live_command) if live_command is not None else None
         self.supervisor_command = supervisor_command
+        self.knob_plan = knob_plan
+        self.workflow_restart_factory = workflow_restart_factory
+        self.workflow_observer = workflow_observer
+
+    def _workflow_restart(
+        self,
+        scenario: Scenario,
+        environment: RunEnvironment,
+        epoch: int,
+    ) -> WorkflowRestart | None:
+        """Bind the caller-owned workflow factory to one scenario epoch."""
+
+        if self.workflow_restart_factory is None:
+            return None
+        return lambda workflow: self.workflow_restart_factory(scenario, environment, epoch, workflow)
 
     def _canary(self) -> CanaryResult:
         value = self.canary() if callable(self.canary) else self.canary
@@ -766,6 +808,14 @@ class TierRunner:
                 else None
             )
             run_id = manifest_override.run_id if manifest_override is not None else None
+            knobs = _knob_plan_value(self.knob_plan, scenario, epoch)
+            workflow_switch = knobs.workflow_switch
+            if workflow_switch is not None and not isinstance(
+                workflow_switch, WorkflowSwitchPlan
+            ):
+                raise TierError(
+                    f"knob plan returned an invalid workflow switch for {scenario.id} epoch {epoch}"
+                )
             with RunEnvironment(
                 scenario,
                 pins,
@@ -776,7 +826,16 @@ class TierRunner:
                 manifest_override=manifest_override,
                 live_command=self.live_command,
                 supervisor_command=self.supervisor_command,
+                knobs=knobs,
+                attempt=epoch,
             ) as environment:
+                workflow_restart = self._workflow_restart(scenario, environment, epoch)
+                if workflow_switch is not None and (
+                    workflow_restart is None or self.workflow_observer is None
+                ):
+                    raise TierError(
+                        "workflow switching requires workflow_restart_factory and workflow_observer"
+                    )
                 artifact_root = environment.base_dir / "artifacts"
                 artifact_root.mkdir()
                 supervisor_reader = self._supervisor_reader(recording, scenario, environment, epoch)
@@ -790,6 +849,13 @@ class TierRunner:
                         _session_factory(self.session_factory, scenario, environment, epoch),
                         artifact_root=artifact_root,
                         sandbox_home=environment.home,
+                        workflow_switch=workflow_switch,
+                        workflow_restart=workflow_restart,
+                        workflow_observer=self.workflow_observer,
+                        workflow_evidence=lambda evidence, turn: environment.record_workflow_switch(
+                            evidence,
+                            turn=turn,
+                        ),
                     )
                 started = time.monotonic()
                 transport_closed = False

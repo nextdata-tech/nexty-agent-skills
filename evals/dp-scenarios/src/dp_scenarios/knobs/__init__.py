@@ -11,6 +11,7 @@ from .broker import (
     BrokerFaultShape,
     broker_entrypoint_path,
 )
+from .config import load_knob_plan, supervisor_knobs_from_mapping
 from .runtime import (
     KnobError,
     PlanShape,
@@ -37,5 +38,7 @@ __all__ = [
     "WorkflowSwitchPlan",
     "apply_transform_latency",
     "broker_entrypoint_path",
+    "load_knob_plan",
     "script_restart_and_switch",
+    "supervisor_knobs_from_mapping",
 ]
