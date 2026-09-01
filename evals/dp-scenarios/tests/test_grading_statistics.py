@@ -134,6 +134,22 @@ def test_declared_observed_epoch_contract_requires_all_declared_epochs() -> None
     assert complete.rates.rates["build"].lower_bound == wilson_ci(6, 6, alpha=0.20).low
 
 
+def test_invalid_epoch_cannot_certify_a_complete_repeatability_batch() -> None:
+    declared = SimpleNamespace(
+        tier=RepeatabilityTier.DETERMINISTIC,
+        epochs=6,
+        certification_rule="observed_epochs",
+        gates=("build",),
+        lower_bound=0.73,
+        confidence=0.80,
+    )
+    report = repeatability_certificate([_run() for _ in range(5)] + [_run("invalid")], declared)
+
+    assert report.rates is not None
+    assert report.rates.excluded_invalid == 1
+    assert not report.certified
+
+
 def test_mock_source_epoch_plan_and_observed_count_are_pinned() -> None:
     assert repeatability_plan(RepeatabilityTier.MOCK_SOURCE) == 3
     report = repeatability_certificate([_run(), _run()], RepeatabilityTier.MOCK_SOURCE)

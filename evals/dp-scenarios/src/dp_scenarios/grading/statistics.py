@@ -209,13 +209,13 @@ def repeatability_certificate(runs: Sequence[object], tier: RepeatabilityTier | 
             _gate_observation(run, gate) == (True, True)
             for run in runs
             for gate in certification_gates
-        )
+        ) and report.excluded_invalid == 0
     else:
         certified = len(runs) == required and all(
             (rate := report.rates.get(gate)) is not None
             and rate.lower_bound >= float(lower_bound)
             for gate in certification_gates
-        )
+        ) and report.excluded_invalid == 0
     return RepeatabilityReport(tier_value, required, len(runs), certified, rates=report)
 
 

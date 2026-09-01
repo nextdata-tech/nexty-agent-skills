@@ -151,6 +151,7 @@ def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
     assert "narrowing_unapproved_metric_in_closure" in metric_specific.codes
     absent = gate_narrowing({"turn": 4, "metrics": ["revenue"]}, _ledger({"turn": 6, "action_kind": "spec_approved"}), None)
     assert not absent.passed
+    assert not absent.examined
     assert "narrowing_closure_not_examined" in absent.codes
     same_turn = gate_narrowing(
         {"turn": 4, "metrics": ["revenue"]},
@@ -268,7 +269,8 @@ def test_query_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: 
         {"region": row["region"], "regional_revenue": row["naive_fanout_revenue"]}
         for row in diagnostics["regions"]
     ]
-    correct = gate_query(gold, gold)
+    actual = [dict(row) for row in reversed(gold)]
+    correct = gate_query(actual, gold)
     wrong = gate_query(naive, gold)
     assert correct.passed
     assert not wrong.passed

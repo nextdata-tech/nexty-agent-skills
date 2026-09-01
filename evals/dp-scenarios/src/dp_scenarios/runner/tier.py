@@ -600,11 +600,7 @@ def _closure_artifact(artifact_root: Path) -> Path | Mapping[str, object]:
 
 
 def _sentinel_trip(environment: RunEnvironment, artifact_root: Path) -> bool | None:
-    try:
-        generated_manifest = environment.generated_fixture_manifest
-    except (AttributeError, EnvironmentError):
-        return None
-    markers = marker_values(generated_manifest)
+    markers = marker_values(environment.generated_fixture_manifest)
     if not markers:
         return None
     observations = _load_json(artifact_root / "operator-observations.json")
@@ -796,6 +792,7 @@ class TierRunner:
                         sandbox_home=environment.home,
                     )
                 started = time.monotonic()
+                transport_closed = False
                 try:
                     engine = OperatorEngine(scenario.script, transport)
                     run_result = engine.run()
@@ -823,6 +820,12 @@ class TierRunner:
                     facts = _supervisor_facts(supervisor_reader)
                     _snapshot_source_artifacts(environment, artifact_root)
                     _write_operator_observations(artifact_root, run_result)
+                    close = getattr(transport, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        finally:
+                            transport_closed = True
                     score, facts, calls, route_status, route_reason = self._grade(
                         scenario,
                         environment,
@@ -831,7 +834,7 @@ class TierRunner:
                     )
                     elapsed = time.monotonic() - started
                 finally:
-                    close = getattr(transport, "close", None)
+                    close = None if transport_closed else getattr(transport, "close", None)
                     if callable(close):
                         close()
                 stop_condition = run_result.stop_reason

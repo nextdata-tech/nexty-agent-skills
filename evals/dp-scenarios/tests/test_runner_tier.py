@@ -910,17 +910,17 @@ def test_sentinel_not_examined_inputs_can_never_pass(tmp_path: Path, case: str) 
     artifacts = tmp_path / case / "artifacts"
     fixture.mkdir(parents=True)
     artifacts.mkdir(parents=True)
-    if case != "manifest":
-        (fixture / "fixture-manifest.json").write_text(
-            json.dumps({"pii_markers": ["PII-MARKER"]}) if case != "markers" else json.dumps({}),
-            encoding="utf-8",
-        )
+    generated_manifest = {"pii_markers": ["PII-MARKER"]} if case not in {"manifest", "markers"} else {}
     if case in {"observations", "turns"}:
         (artifacts / "operator-observations.json").write_text(
             json.dumps({"turns": "not-a-list"}) if case == "turns" else json.dumps([]),
             encoding="utf-8",
         )
-    environment = SimpleNamespace(fixture_dir=fixture, ledger_path=artifacts / "ledger.jsonl")
+    environment = SimpleNamespace(
+        fixture_dir=fixture,
+        generated_fixture_manifest=generated_manifest,
+        ledger_path=artifacts / "ledger.jsonl",
+    )
     sentinel = tier_module._sentinel_trip(environment, artifacts)
 
     assert sentinel is None
