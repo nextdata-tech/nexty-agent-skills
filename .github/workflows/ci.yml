@@ -129,6 +129,16 @@ jobs:
           ref: main
           path: nxd
           token: ${{ env.NXD_REPO_TOKEN }}
+      - name: Build NXD Python bindings
+        if: env.NXD_REPO_TOKEN != ''
+        working-directory: nxd
+        env:
+          UV_DEFAULT_INDEX: https://pypi.org/simple/
+        run: |
+          make -C components/nxd_py/data_product copy-templates
+          uv sync --directory components/nxd_py/data_product --all-extras
+          uv sync --directory components/nxd_py/core
+          uv sync --directory components/nxd_py/drivers --all-extras
       - name: Run field-mapper grant tests
         if: env.NXD_REPO_TOKEN != ''
         working-directory: evals/dp-scenarios
