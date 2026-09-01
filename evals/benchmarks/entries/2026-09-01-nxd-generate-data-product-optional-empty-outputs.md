@@ -2,7 +2,7 @@
 id: 2026-09-01-nxd-generate-data-product-optional-empty-outputs
 date: 2026-09-01
 label: "nxd-generate-data-product: optional empty dlt outputs and aggregate count path"
-plugin_version: 0.41.0
+plugin_version: 0.42.0
 status: NO_EVAL
 scenarios: []
 record: null
@@ -11,11 +11,11 @@ record: null
 
 ## Notes
 
-No existing public agent scenario distinguishes this change. The generator
-scenario only exercises required physical models, while the available desktop
-scenario coverage is either file-backed or requires a live supervisor. A new
-agent arm would measure a different workflow instead of the self-check and
-spec-registration contracts changed here, so this entry records `NO_EVAL`.
+The opt-in Desktop E2E now covers the generated optional-output and aggregate
+surface, but it has not been run in this environment because the compatible
+supervisor runtime is not provisioned. The entry therefore remains `NO_EVAL`:
+the scenario is registered and fail-closed, but no live agent result is being
+claimed.
 
 The static reader now resolves the standard `PHYSICAL_MODELS = BASE_MODELS +
 DERIVED_MODELS` declaration; this removes one prior `unverified:` line and

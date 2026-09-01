@@ -246,6 +246,11 @@ SCENARIO_WORKSPACE_FIXTURE_EXCLUSIONS = {
     # a correct product must reproduce, which is the answer key to the brief's
     # question 1, and it imports runner-side modules the workspace does not have.
     "authenticated-api-source-supervisor": frozenset({"check_api_source_e2e.py"}),
+    # The optional-output desktop verifier is runner-side ground truth: it
+    # re-serves the landed closure and checks the catalog/query contract.
+    "optional-empty-output-aggregate-desktop": frozenset({
+        "check_optional_empty_aggregate.py",
+    }),
 }
 
 _SOURCE_ISOLATION_FINGERPRINT = re.compile(r"[0-9a-fA-F]{64}\Z")

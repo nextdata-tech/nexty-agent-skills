@@ -1,0 +1,6 @@
+{
+  "requires": "nxd-desktop-supervisor",
+  "workflow": "mapper-aggregate-e2e",
+  "verifier": "check_optional_empty_aggregate.py",
+  "description": "Run this opt-in scenario against the pinned local desktop supervisor runtime."
+}
