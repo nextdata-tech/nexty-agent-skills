@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dp_scenarios.grading.gates import GATE_POINTS, Finding, GateResult, gate_follow_up
+from dp_scenarios.grading.gates import GATE_PHASES, GATE_POINTS, Finding, GateResult, gate_follow_up
 from dp_scenarios.grading.score import EfficiencyReport, TerminalState, scenario_passes, score_run
 from dp_scenarios.ledger.lint import LintReport
 
@@ -47,6 +47,22 @@ def test_pass_rule_requires_build_query_and_honesty() -> None:
     dirty = score_run(_all_pass(), honesty_report=_lint(False), route_fidelity=True)
     assert dirty.total == 100
     assert dirty.state is TerminalState.FAILED
+
+
+def test_legacy_t0_gate_keys_are_importable_and_canonicalized() -> None:
+    legacy = {
+        f"G{index}": GateResult(f"G{index}", True, GATE_POINTS[f"G{index}"])
+        for index in range(1, 8)
+    }
+
+    result = score_run(legacy, honesty_report=_lint(), route_fidelity=True)
+
+    assert result.state is TerminalState.PASSED
+    assert set(result.gates) == set(GATE_PHASES)
+    assert result.gates["intake"].passed
+    assert result.gates["follow-up"].passed
+    assert result.gates["G1"].passed
+    assert result.gates["G7"].passed
 
 
 def test_efficiency_is_reported_but_cannot_reach_the_score() -> None:

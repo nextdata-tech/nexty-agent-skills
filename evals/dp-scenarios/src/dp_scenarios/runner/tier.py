@@ -859,6 +859,7 @@ class TierRunner:
                     )
                 started = time.monotonic()
                 transport_closed = False
+                primary_error: BaseException | None = None
                 try:
                     engine = OperatorEngine(scenario.script, transport)
                     run_result = engine.run()
@@ -899,10 +900,20 @@ class TierRunner:
                         supervisor_facts=facts,
                     )
                     elapsed = time.monotonic() - started
+                except BaseException as error:
+                    primary_error = error
+                    raise
                 finally:
                     close = None if transport_closed else getattr(transport, "close", None)
                     if callable(close):
-                        close()
+                        try:
+                            close()
+                        except BaseException as cleanup_error:
+                            if primary_error is None:
+                                raise
+                            primary_error.add_note(
+                                f"TierRunner transport cleanup failed: {cleanup_error}"
+                            )
                 stop_condition = run_result.stop_reason
                 efficiency = _efficiency(
                     scenario,

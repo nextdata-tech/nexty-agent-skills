@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from dp_scenarios.grading.gates import (
+    G1,
+    GATE_POINTS,
     GateResult,
     gate_build,
     gate_capability,
@@ -17,6 +19,7 @@ from dp_scenarios.grading.gates import (
     gate_intake,
     gate_narrowing,
     gate_query,
+    g1_intake,
 )
 from dp_scenarios.grading.oracles import OracleState, capability_oracle, control_total_oracle, counter_oracle, gold_rowset, marker_values
 from dp_scenarios.ledger import LedgerStore, Manifest
@@ -117,6 +120,18 @@ def test_intake_rejects_missing_codegen_and_non_ledger_input() -> None:
     assert "intake_codegen_missing" in no_codegen.codes
     with pytest.raises(TypeError):
         gate_intake(object())
+
+
+def test_legacy_t0_gate_aliases_keep_their_identity() -> None:
+    result = g1_intake(_ledger(
+        {"turn": 2, "action_kind": "spec_approved"},
+        {"turn": 3, "action_kind": "codegen"},
+    ))
+
+    assert G1 is g1_intake
+    assert result.gate == "G1"
+    assert result.passed
+    assert GATE_POINTS["G1"] == GATE_POINTS["intake"] == 10
 
 
 def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:

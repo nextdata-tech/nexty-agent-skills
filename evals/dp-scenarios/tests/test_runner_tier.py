@@ -677,6 +677,37 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
     assert not replay.scenario_runs[0].score.gates["capability"].examined
 
 
+def test_tier_preserves_primary_error_when_transport_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingTransport:
+        def start_fresh_session(self) -> str:
+            return "session-1"
+
+        def send_message(self, message: object) -> TurnResult:
+            return TurnResult(agent_message="What is the source?")
+
+        def close(self) -> None:
+            raise RuntimeError("transport cleanup failed")
+
+    def fail_run(_engine: OperatorEngine) -> object:
+        raise ValueError("evaluation failed")
+
+    monkeypatch.setattr(OperatorEngine, "run", fail_run)
+
+    with pytest.raises(ValueError, match="evaluation failed") as error:
+        TierRunner(
+            [make_scenario("cleanup-primary")],
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=lambda: FailingTransport(),
+            environment_root=tmp_path,
+        ).run()
+
+    assert any("TierRunner transport cleanup failed" in note for note in error.value.__notes__)
+
+
 def test_composed_runner_applies_epoch_knobs_and_switches_workflow(tmp_path: Path) -> None:
     scenario = make_scenario("composed-knob", turns=2)
     event = event_from_mapping(

@@ -19,7 +19,7 @@ from enum import Enum
 
 from dp_scenarios.ledger.lint import LintReport
 
-from .gates import GATE_POINTS, GateResult, Finding
+from .gates import GATE_PHASES, GATE_POINTS, LEGACY_GATE_ALIASES, GateResult, Finding
 
 
 class TerminalState(str, Enum):
@@ -97,6 +97,19 @@ class ScoreVector:
         }
 
 
+class _GateResults(dict[str, GateResult]):
+    """Canonical score results with read compatibility for former T0 keys."""
+
+    def __getitem__(self, key: str) -> GateResult:
+        return super().__getitem__(LEGACY_GATE_ALIASES.get(key, key))
+
+    def get(self, key: str, default: GateResult | None = None) -> GateResult | None:
+        return super().get(LEGACY_GATE_ALIASES.get(key, key), default)
+
+    def __contains__(self, key: object) -> bool:
+        return super().__contains__(LEGACY_GATE_ALIASES.get(key, key) if isinstance(key, str) else key)
+
+
 def _coerce_gate(name: str, value: object) -> GateResult:
     if isinstance(value, GateResult):
         passed = value.passed and not value.findings
@@ -127,6 +140,22 @@ def _coerce_gate(name: str, value: object) -> GateResult:
     if isinstance(value, bool):
         return GateResult(name, value, GATE_POINTS[name] if value else 0)
     raise TypeError(f"gate {name} must be a GateResult, mapping, or bool")
+
+
+def _canonicalize_gates(raw: Mapping[object, object]) -> dict[str, object]:
+    """Accept canonical phase names and the former T0 G1-G7 keys."""
+
+    canonical_names = frozenset(GATE_PHASES)
+    normalized: dict[str, object] = {
+        key: value for key, value in raw.items() if isinstance(key, str) and key in canonical_names
+    }
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        canonical = LEGACY_GATE_ALIASES.get(key)
+        if canonical is not None and canonical not in normalized:
+            normalized[canonical] = value
+    return normalized
 
 
 def _pass_rule(vector: ScoreVector) -> bool:
@@ -185,12 +214,12 @@ def score_run(
     """
 
     if isinstance(gates, Mapping):
-        raw = dict(gates)
+        raw = _canonicalize_gates(gates)
     else:
-        raw = {result.gate: result for result in gates}
-    normalized: dict[str, GateResult] = {}
+        raw = _canonicalize_gates({result.gate: result for result in gates})
+    normalized: _GateResults = _GateResults()
     findings: list[Finding] = []
-    for name in GATE_POINTS:
+    for name in GATE_PHASES:
         if name not in raw:
             normalized[name] = GateResult(
                 name,

@@ -61,7 +61,38 @@ GATE_PHASES: Mapping[str, int] = {
 }
 
 
-GATE_POINTS: Mapping[str, int] = {
+LEGACY_GATE_ALIASES: Mapping[str, str] = {
+    "G1": "intake",
+    "G2": "capability",
+    "G3": "narrowing",
+    "G4": "construction",
+    "G5": "build",
+    "G6": "query",
+    "G7": "follow-up",
+    "g1_intake": "intake",
+    "g2_capability": "capability",
+    "g3_narrowing": "narrowing",
+    "g4_construction": "construction",
+    "g5_build": "build",
+    "g6_query": "query",
+    "g7_follow_up": "follow-up",
+}
+
+
+class _GatePoints(dict[str, int]):
+    """Canonical points with read compatibility for the former G1-G7 keys."""
+
+    def __getitem__(self, key: str) -> int:
+        return super().__getitem__(LEGACY_GATE_ALIASES.get(key, key))
+
+    def get(self, key: str, default: int | None = None) -> int | None:
+        return super().get(LEGACY_GATE_ALIASES.get(key, key), default)
+
+    def __contains__(self, key: object) -> bool:
+        return super().__contains__(LEGACY_GATE_ALIASES.get(key, key) if isinstance(key, str) else key)
+
+
+GATE_POINTS: Mapping[str, int] = _GatePoints({
     "intake": 10,
     "capability": 15,
     "narrowing": 10,
@@ -69,7 +100,7 @@ GATE_POINTS: Mapping[str, int] = {
     "build": 20,
     "query": 20,
     "follow-up": 15,
-}
+})
 
 
 def _rows(value: object) -> list[Mapping[str, object]]:
@@ -548,19 +579,77 @@ construction_construction = gate_construction
 build_build = gate_build
 query_query = gate_query
 follow_up_follow_up = gate_follow_up
-check_g1 = gate_intake
-check_g2 = gate_capability
-check_g3 = gate_narrowing
-check_g4 = gate_construction
-check_g5 = gate_build
-check_g6 = gate_query
-check_g7 = gate_follow_up
+
+
+def _legacy_gate(result: GateResult, key: str) -> GateResult:
+    """Return a canonical gate result under its former T0 identity."""
+
+    canonical = LEGACY_GATE_ALIASES[key]
+    old_prefix = key[0].lower() + key[1] if key.startswith("G") else key.split("_", 1)[0]
+    canonical_prefix = canonical.replace("-", "_")
+    findings = tuple(
+        Finding(
+            code.replace(f"{canonical_prefix}_", f"{old_prefix}_", 1)
+            if code.startswith(f"{canonical_prefix}_")
+            else code,
+            finding.detail,
+            finding.value,
+        )
+        for finding in result.findings
+    )
+    return GateResult(key if key.startswith("G") else old_prefix.upper(), result.passed, result.points, findings, result.examined, result.ungraded, result.required)
+
+
+def g1_intake(ledger: object) -> GateResult:
+    return _legacy_gate(gate_intake(ledger), "G1")
+
+
+def g2_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
+    return _legacy_gate(gate_capability(spec, capability, required=required), "G2")
+
+
+def g3_narrowing(spec_diff: object, ledger: object, closure: object) -> GateResult:
+    return _legacy_gate(gate_narrowing(spec_diff, ledger, closure), "G3")
+
+
+def g4_construction(ledger: object) -> GateResult:
+    return _legacy_gate(gate_construction(ledger), "G4")
+
+
+def g5_build(supervisor_records: object, row_count_oracle: object) -> GateResult:
+    return _legacy_gate(gate_build(supervisor_records, row_count_oracle), "G5")
+
+
+def g6_query(actual: object, gold: object) -> GateResult:
+    return _legacy_gate(gate_query(actual, gold), "G6")
+
+
+def g7_follow_up(check: object) -> GateResult:
+    return _legacy_gate(gate_follow_up(check), "G7")
+
+
+G1 = g1_intake
+G2 = g2_capability
+G3 = g3_narrowing
+G4 = g4_construction
+G5 = g5_build
+G6 = g6_query
+G7 = g7_follow_up
+check_g1 = g1_intake
+check_g2 = g2_capability
+check_g3 = g3_narrowing
+check_g4 = g4_construction
+check_g5 = g5_build
+check_g6 = g6_query
+check_g7 = g7_follow_up
 
 
 __all__ = [
     "Finding",
     "GateResult",
+    "GATE_PHASES",
     "GATE_POINTS",
+    "LEGACY_GATE_ALIASES",
     "gate_intake",
     "gate_capability",
     "gate_narrowing",
@@ -576,6 +665,20 @@ __all__ = [
     "build_build",
     "query_query",
     "follow_up_follow_up",
+    "G1",
+    "G2",
+    "G3",
+    "G4",
+    "G5",
+    "G6",
+    "G7",
+    "g1_intake",
+    "g2_capability",
+    "g3_narrowing",
+    "g4_construction",
+    "g5_build",
+    "g6_query",
+    "g7_follow_up",
     "check_g1",
     "check_g2",
     "check_g3",
