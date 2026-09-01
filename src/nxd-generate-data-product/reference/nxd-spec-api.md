@@ -263,7 +263,10 @@ product surface gains a first-class supported aggregation.
     compiled catalog. `is_public` defaults `True`. `expressions` is
     **validated and then discarded** here — only the port-level `.model()`
     below persists it, so an expression map passed at this level silently
-    does nothing.
+    does nothing. Use this same registration for a physical model whose
+    resource is explicitly allowed to yield zero rows; use `.promise(model)`
+    for required physical models so the output contract still verifies their
+    table.
 - **`storage(url, alias=None) -> OutputPortSpec`** — `url` is the
   infra-profile service reference for the storage backend (e.g.
   `"/infra-profile/desktop-local#/services/duckdb"`).

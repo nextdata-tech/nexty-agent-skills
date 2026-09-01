@@ -299,7 +299,7 @@ Keyed by the nine stage ids, every key present at all times.
   "at_unix_ms": 1769904012345,
   "origin": "tool_computed",
   "diagnostics": [ /* nxd-diagnostic-v2 */ ],
-  "detail": { "models_counted": 4, "unverified": 1 }
+  "detail": { "models_counted": 4, "optional_tables_absent": ["mapper_reviews"], "unverified": 1 }
 }
 ```
 
@@ -408,7 +408,10 @@ predicate false either way.
 "evidence": {
   "phase_b_row_counts": { "origin": "agent_observed",
     "note": "scratch DuckDB dry run — NOT the published product",
-    "models": [ { "table": "scored_candidates", "row_count": 856 } ] },
+    "models": [
+      { "table": "scored_candidates", "row_count": 856 },
+      { "table": "mapper_reviews", "row_count": 0, "materialized": false, "optional": true }
+    ] },
   "published_row_counts": { "origin": "supervisor_reported",
     "source": "verified.json:evidence.model_tables",
     "models": [ { "dataset": "main", "table": "scored_candidates", "row_count": 856 } ] },

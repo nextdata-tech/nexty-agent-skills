@@ -642,6 +642,9 @@ for _code in (
     "struct.naming_invariant_promised_vs_models",
     "struct.naming_invariant_promised_vs_physical",
     "struct.base_models_vs_data_dirs",
+    "struct.optional_models_invalid",
+    "struct.optional_model_promised",
+    "struct.optional_model_not_registered",
 ):
     _register(
         _code,

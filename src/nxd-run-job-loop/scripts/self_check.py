@@ -39,7 +39,9 @@ _codes("error", "agent",
        "struct.malformed_service_ref",
        "struct.naming_invariant_promised_vs_models",
        "struct.naming_invariant_promised_vs_physical",
-       "struct.base_models_vs_data_dirs")
+       "struct.base_models_vs_data_dirs",
+       "struct.optional_models_invalid", "struct.optional_model_promised",
+       "struct.optional_model_not_registered")
 _codes("warning", "agent", "struct.key_not_groupable")
 _codes("warning", "agent", "struct.model_not_queryable")
 _codes("info", "agent", "struct.unverified")
@@ -720,17 +722,71 @@ def parse_spec(src, path, var_name, var_kind):
     return promised, modelled
 
 def model_constants(src):
-    """BASE_MODELS / PHYSICAL_MODELS out of transform/main.py, statically."""
+    """Read transform model declarations without importing the transform."""
     tree, out = ast.parse(src, "transform/main.py"), {}
+    assignments = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
                 isinstance(node.targets[0], ast.Name) and \
-                node.targets[0].id in ("BASE_MODELS", "PHYSICAL_MODELS"):
-            try:
-                out[node.targets[0].id] = list(ast.literal_eval(node.value))
-            except ValueError:
-                unv(f"transform/main.py: {node.targets[0].id} "
-                    f"is not a literal", "transform/main.py")
+                node.targets[0].id in ("BASE_MODELS", "DERIVED_MODELS",
+                                       "PHYSICAL_MODELS",
+                                       "OPTIONAL_EMPTY_MODELS"):
+            assignments[node.targets[0].id] = node.value
+
+    def resolve_model_value(value, seen=()):
+        try:
+            literal = ast.literal_eval(value)
+        except (TypeError, ValueError):
+            if isinstance(value, ast.Name):
+                return resolve_model_tuple(value.id, seen)
+            if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+                return (resolve_model_value(value.left, seen) +
+                        resolve_model_value(value.right, seen))
+            raise
+        if not isinstance(literal, (tuple, list)) or \
+                not all(isinstance(model, str) for model in literal):
+            raise ValueError(value)
+        return list(literal)
+
+    def resolve_model_tuple(name, seen=()):
+        if name in seen or name not in assignments:
+            raise ValueError(name)
+        return resolve_model_value(assignments[name], seen + (name,))
+
+    for name in ("BASE_MODELS", "DERIVED_MODELS", "PHYSICAL_MODELS",
+                 "OPTIONAL_EMPTY_MODELS"):
+        if name not in assignments:
+            continue
+        try:
+            # Optionality is intentionally stricter than the legacy model
+            # constants: it must be an explicit literal declaration.
+            if name == "OPTIONAL_EMPTY_MODELS":
+                literal = ast.literal_eval(assignments[name])
+                if not isinstance(literal, (tuple, list)) or \
+                        not all(isinstance(model, str) for model in literal):
+                    raise ValueError(name)
+                models = list(literal)
+            else:
+                models = resolve_model_tuple(name)
+        except (TypeError, ValueError):
+            if name == "OPTIONAL_EMPTY_MODELS":
+                bad("struct.optional_models_invalid",
+                    "transform/main.py: OPTIONAL_EMPTY_MODELS must be a "
+                    "literal tuple or list of lowercase model names",
+                    "transform/main.py")
+            else:
+                unv(f"transform/main.py: {name} is not a literal",
+                    "transform/main.py")
+            continue
+        if name == "OPTIONAL_EMPTY_MODELS":
+            if len(models) != len(set(models)) or \
+                    any(not SNAKE.fullmatch(model) for model in models):
+                bad("struct.optional_models_invalid",
+                    "transform/main.py: OPTIONAL_EMPTY_MODELS must contain "
+                    "unique lowercase snake_case model names",
+                    "transform/main.py")
+                continue
+        out[name] = models
     return out
 
 # Exit 2 = could not read, distinct from exit 1 = found something. A traceback
@@ -754,6 +810,9 @@ var_name, var_kind, joins, has_pk, view_bases = parse_models(models_src, "models
 promised, modelled = parse_spec(spec_src, "spec.py", var_name, var_kind)
 
 base_names = {n for v, n in var_name.items() if var_kind[v] == "semantic_model"}
+consts = model_constants(transform_src)
+physical = set(consts.get("PHYSICAL_MODELS", []))
+optional = set(consts.get("OPTIONAL_EMPTY_MODELS", []))
 for model, edges in joins.items():
     for tgt, where in edges:
         if tgt not in base_names:
@@ -761,16 +820,17 @@ for model, edges in joins.items():
                 f"{where}: join(to=\"{tgt}\") — no semantic_model of that name "
                 f"in models.py", where)
 # Which base models a metric can actually reach. run_semantic_query REQUIRES at
-# least one measure, so a promised model that backs no semantic_view is landed
+# least one measure, so a declared physical model that backs no semantic_view is landed
 # but unreachable: its dimensions never appear in a selection, and the only way
 # to touch its rows is through ANOTHER model's metric across a join - where a
 # filter scopes that model's aggregate rather than this model's spine, quietly
 # returning every row. A bare COUNT view is enough to fix it.
 _metric_backed = {var_name[v] for v in view_bases.values() if v in var_name}
-for model in sorted(promised & base_names):
+for model in sorted((promised | optional) & base_names):
     if model not in _metric_backed:
         warn("struct.model_not_queryable",
-             f"models.py: semantic_model('{model}') is promised but backs no "
+             f"models.py: semantic_model('{model}') is a declared physical "
+             f"model but backs no "
              f"semantic_view, so no metric reaches it — run_semantic_query "
              f"requires a measure, making this model unqueryable however well "
              f"its dimensions are described. Add a semantic_view with at least "
@@ -783,16 +843,41 @@ for model in base_names:
             f"models.py: semantic_model('{model}') declares no primary_key()",
             f"models.py:{model}")
 
-consts = model_constants(transform_src)
-physical = set(consts.get("PHYSICAL_MODELS", []))
 if promised != base_names:
-    bad("struct.naming_invariant_promised_vs_models",
-        f"naming invariant: semantic_model names {sorted(base_names)} != "
-        f"promised names {sorted(promised)}", "spec.py")
-if physical and promised != physical:
+    # Optional physical models are catalog models, not produce-time promises:
+    # an absent optional dlt resource must not enter the kernel's promise
+    # verifier. Required models retain the historical equality invariant.
+    required_models = base_names - optional
+    if promised != required_models:
+        bad("struct.naming_invariant_promised_vs_models",
+            f"naming invariant: semantic_model names {sorted(base_names)} "
+            f"with optional {sorted(optional)} != promised names "
+            f"{sorted(promised)}", "spec.py")
+if physical and promised | optional != physical:
     bad("struct.naming_invariant_promised_vs_physical",
-        f"naming invariant: promised names {sorted(promised)} != "
-        f"PHYSICAL_MODELS {sorted(physical)}", "transform/main.py")
+        f"naming invariant: promised names {sorted(promised)} plus optional "
+        f"names {sorted(optional)} != PHYSICAL_MODELS {sorted(physical)}",
+        "transform/main.py")
+if physical and optional - physical:
+    bad("struct.optional_models_invalid",
+        f"OPTIONAL_EMPTY_MODELS contains names not in PHYSICAL_MODELS: "
+        f"{sorted(optional - physical)}", "transform/main.py")
+if optional - base_names:
+    bad("struct.optional_models_invalid",
+        f"OPTIONAL_EMPTY_MODELS must name semantic_model outputs, not views or "
+        f"unknown names: {sorted(optional - base_names)}", "transform/main.py")
+if optional & promised:
+    bad("struct.optional_model_promised",
+        f"optional physical models must use .model(), never .promise(): "
+        f"{sorted(optional & promised)}", "spec.py")
+if optional - modelled:
+    bad("struct.optional_model_not_registered",
+        f"optional physical models must be registered with .model(): "
+        f"{sorted(optional - modelled)}", "spec.py")
+if base_names and not (promised & base_names):
+    bad("struct.optional_models_invalid",
+        "every physical model is optional; a data product must promise at "
+        "least one required model", "spec.py")
 if "BASE_MODELS" in consts:
     # data/ is NOT universal. A csv-source or file-source closure exports its
     # inputs to data/ and the BASE_MODELS-vs-directories comparison is the
@@ -811,10 +896,14 @@ if "BASE_MODELS" in consts:
     # not enumerated above.
     if Path("data").is_dir():
         dirs = {d.name for d in Path("data").iterdir() if d.is_dir()}
-        if set(consts["BASE_MODELS"]) != dirs:
+        base = set(consts["BASE_MODELS"])
+        missing = base - dirs
+        unexpected = dirs - base
+        if unexpected or missing - optional:
             bad("struct.base_models_vs_data_dirs",
-                f"BASE_MODELS {sorted(consts['BASE_MODELS'])} != data/ "
-                f"directories {sorted(dirs)}", "transform/main.py")
+                f"BASE_MODELS {sorted(base)} does not match data/ directories "
+                f"{sorted(dirs)}; missing optional models are allowed only from "
+                f"OPTIONAL_EMPTY_MODELS {sorted(optional)}", "transform/main.py")
 
 for u, at in zip(unverified, unverified_at):
     say(f"unverified: {u}")
@@ -1878,12 +1967,17 @@ DIRS = sorted({model for models in root_models.values() for model in models})
 # BASE models are backed by the ordinary data/ root or by labeled data-<label>/
 # roots. Derived models are landed by the transform and appear in
 # PHYSICAL_MODELS with no source directory of their own.
-if set(BASE_MODELS) != set(DIRS):
+base_models = set(BASE_MODELS)
+missing_base_models = base_models - set(DIRS)
+unexpected_base_models = set(DIRS) - base_models
+if unexpected_base_models or missing_base_models - optional:
     berr("runtime.base_models_mismatch",
          f"base models must match source export directories: "
-         f"BASE_MODELS {sorted(set(BASE_MODELS))} != "
-         f"{sorted(set(DIRS))}", "transform/main.py",
-         {"expected": sorted(set(DIRS)), "actual": sorted(set(BASE_MODELS))})
+         f"BASE_MODELS {sorted(base_models)} != {sorted(set(DIRS))}; "
+         f"missing optional models are allowed only from "
+         f"OPTIONAL_EMPTY_MODELS {sorted(optional)}", "transform/main.py",
+         {"expected": sorted(set(DIRS)), "actual": sorted(base_models),
+          "optional": sorted(optional)})
 if not set(BASE_MODELS) <= set(PHYSICAL_MODELS):
     berr("runtime.base_models_mismatch",
          f"base models must be promised: "
@@ -1946,12 +2040,46 @@ if berrors:
     fail_b()
 import duckdb
 con = duckdb.connect(out.path, read_only=True) if dry_run_runnable else None
+absent_optional_models = set()
+actual_tables = None
+if dry_run_runnable:
+    try:
+        actual_tables = {
+            row[0] for row in con.execute("SHOW TABLES").fetchall()
+        }
+    except Exception:
+        # The per-model query below carries the useful exception and keeps the
+        # existing required-table diagnostic stable.
+        pass
+
+def record_absent_optional(model):
+    absent_optional_models.add(model)
+    say(f"{model}: 0 rows (optional table absent)")
+    ROW_COUNTS.append({"table": model, "row_count": 0,
+                       "materialized": False, "optional": True})
+    diag("s2_transform", "runtime.row_count",
+         f"{model}: 0 rows (optional table absent)",
+         path=cpath(f"transform/main.py:{model}"),
+         evidence={"model": model, "count": 0, "materialized": False,
+                   "optional": True})
+
+def is_missing_table_error(exc):
+    message = str(exc).lower()
+    return "does not exist" in message or "not found" in message
+
 for m in (PHYSICAL_MODELS if dry_run_runnable else ()):  # unquoted main.<name> — the invariant, physically
+    if actual_tables is not None and m in optional and m not in actual_tables:
+        record_absent_optional(m)
+        continue
     try:
         n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     except Exception as exc:
+        if actual_tables is None and m in optional and is_missing_table_error(exc):
+            record_absent_optional(m)
+            continue
         berr("runtime.model_table_missing",
-             f"main.{m} is promised but is not queryable after the transform — "
+             f"main.{m} is a declared physical model but is not queryable after "
+             f"the transform — "
              f"{type(exc).__name__}: {exc}", "transform/main.py", {"model": m})
         continue
     say(m, n_rows)
@@ -1976,7 +2104,9 @@ if not dry_run_runnable:
         f"phases C, D and E.")
 else:
     close_stage("s2_transform", "passed",
-                models_counted=len(PHYSICAL_MODELS), unverified=len(unverified))
+                models_counted=len(PHYSICAL_MODELS),
+                optional_tables_absent=sorted(absent_optional_models),
+                unverified=len(unverified))
     say(f"phase B ok — transform dry-run EXECUTED; models.py/spec.py checked "
     f"STRUCTURALLY against the pinned nxd v0.41.139 DSL surface (not "
     f"executed — no nxd wheel installable here); {len(unverified)} "
@@ -2898,10 +3028,10 @@ def derr(code, msg, at=""):
     dcodes.append((code, at))
     derrors.append(msg)
 
-# Use the values Phase B IMPORTED, not the statically-parsed ones: the template
-# writes PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS, which is an expression
-# rather than a literal, so the static reader reports it `unverified` and a gate
-# keyed on it would silently never fire.
+# Use the values Phase B IMPORTED, not only the statically-parsed ones: the
+# template's simple `PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS` expression
+# is resolved statically too, but runtime imports remain authoritative when a
+# closure uses a more dynamic declaration.
 if "nxd_decisions" in set(PHYSICAL_MODELS):
     if "nxd_decisions" not in set(BASE_MODELS):
         derr("policy.decisions_not_base_model",
@@ -3044,7 +3174,8 @@ say("SELF-CHECK OK — Phases A (structural), E (reach, pre-execution), "
 # user before the build (see nxd-run-job-loop Step 3). It is also the designated
 # stage-8 predictor: a green build that answers wrongly shows up here first, so
 # it is recorded as DATA in build-record.readback, not only printed.
-for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)) if dry_run_runnable else ()):
+for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS) - absent_optional_models)
+          if dry_run_runnable else ()):
     n_rows = con.execute(f"SELECT COUNT(*) FROM main.{m}").fetchone()[0]
     cols = [r[0] for r in con.execute(
         f"SELECT name FROM pragma_table_info('{m}') WHERE type = 'VARCHAR'").fetchall()
@@ -3091,7 +3222,8 @@ for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)) if dry_run_runnable el
 # landed data, never from a transform literal, so this is independent of the
 # code it is checking.
 produced = set()
-for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS)) if dry_run_runnable else ()):
+for m in (sorted(set(PHYSICAL_MODELS) - set(BASE_MODELS) - absent_optional_models)
+          if dry_run_runnable else ()):
     for (c,) in con.execute(
             f"SELECT name FROM pragma_table_info('{m}') "
             f"WHERE type = 'VARCHAR'").fetchall():

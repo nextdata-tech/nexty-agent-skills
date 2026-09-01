@@ -32,11 +32,17 @@ from dlt.sources.filesystem import filesystem, read_csv
 from nxd import data_product
 from nxd.core.context import DuckDbOutput
 
-# Landed tables promised by spec.py; never semantic views.
+# Landed tables exposed by spec.py; never semantic views.
+# Required models are produce-time promises. Optional models are catalog-only
+# registrations because a zero-row dlt resource has no physical table.
 # BASE_MODELS have data/<name>/; DERIVED_MODELS are computed below.
 BASE_MODELS = ("<base_model>",)
 DERIVED_MODELS = ()
 PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS
+# A member must be in PHYSICAL_MODELS and may be absent only when its resource
+# yields zero rows. Optional physical models are registered with .model(...),
+# never .promise(...), in spec.py.
+OPTIONAL_EMPTY_MODELS = ()
 
 
 @data_product.on_transform()
@@ -57,8 +63,11 @@ def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:
         dataset_name=duckdb.schema,
     )
     resources = []
-    # Base models: one dlt CSV reader per data/<model>/ directory.
+    # Base models: one dlt CSV reader per data/<model>/ directory. An optional
+    # source directory may be absent before a human supplies its first rows.
     for model in BASE_MODELS:
+        if model in OPTIONAL_EMPTY_MODELS and not (source_root / model).is_dir():
+            continue
         reader = filesystem(
             bucket_url=str(source_root / model), file_glob="*.csv"
         ) | read_csv()
@@ -66,12 +75,20 @@ def ingest(duckdb: DuckDbOutput, secrets: dict[str, Any]) -> None:
     # Derived models (Step 3a) append their @dlt.resource here — same list.
     pipeline.run(resources, write_disposition="replace")
 
-    # dlt must write exactly the promised tables, never semantic views.
+    # dlt must write exactly the declared physical tables, except that an
+    # explicitly optional zero-row resource has no table to write. Unexpected
+    # tables and missing required tables remain failures.
     actual = set(pipeline.default_schema.data_table_names())
     expected = {duckdb.model_tables[model] for model in PHYSICAL_MODELS}
-    if actual != expected:
+    optional = {duckdb.model_tables[model] for model in OPTIONAL_EMPTY_MODELS}
+    missing = expected - actual
+    absent_optional = missing & optional
+    if actual != expected - absent_optional:
         raise RuntimeError(
-            f"dlt produced tables {sorted(actual)!r}, expected {sorted(expected)!r}"
+            f"dlt produced tables {sorted(actual)!r}, expected required tables "
+            f"{sorted(expected - optional)!r}; optional absent tables "
+            f"{sorted(absent_optional)!r}; unexpected tables "
+            f"{sorted(actual - expected)!r}"
         )
     # Produce-verification marker: the supervisor's readiness gate waits for it.
     (run_dir / ".transform-complete").touch()

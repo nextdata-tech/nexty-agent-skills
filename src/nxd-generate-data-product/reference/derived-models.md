@@ -772,10 +772,31 @@ def _emit() -> Iterator[dict[str, Any]]:
 ```
 
 Hints do NOT create a table for a resource that yields zero rows — that lands
-nothing at all and fails the read-back assert with an opaque table-name
-mismatch. When a promised model can legitimately be empty, check it before
-`pipeline.run(...)` and raise a message that names the model and the likely
-cause; the assert cannot.
+nothing at all. If that is a valid state for an append-only or human-review
+physical output, whether base or derived, declare it explicitly in
+`transform/main.py`:
+
+```python
+# `optional_model` is already listed in BASE_MODELS or DERIVED_MODELS.
+PHYSICAL_MODELS = BASE_MODELS + DERIVED_MODELS
+OPTIONAL_EMPTY_MODELS = ("optional_model",)
+```
+
+The tuple is metadata, not a way to hide a failed resource: every name must be
+in `PHYSICAL_MODELS`, the resource must genuinely be allowed to yield zero
+rows, and required outputs stay outside it. Register the optional model with
+`.model(optional_model)` in `spec.py`, not `.promise(optional_model)`, because
+the latter asks the kernel to verify a table that dlt correctly omitted. The
+read-back assert must compare `actual` with the required physical tables and
+allow only the missing names in `OPTIONAL_EMPTY_MODELS`; unexpected tables and
+missing required tables still fail. Do not manufacture a placeholder row.
+
+When the optional table is absent, it remains in the compiled catalog if it was
+registered with `.model(...)`, so `describe_models` can explain the surface. The
+closure contract requires a semantic view over that table to surface the missing
+physical table rather than report a fabricated zero; the self-check does not
+execute that semantic query. Once a row exists, the same model and semantic
+view are queryable without any spec change.
 
 ### Closing over rows: use a factory, not a default argument
 
@@ -996,6 +1017,7 @@ base-reader loop and `pipeline.run(...)` — that is the whole change:
 
 One pipeline, one `pipeline.run(...)`, one `write_disposition="replace"`. Base
 readers and derived resources are peers in the same list — that is what keeps
-every write on the port path and the DDL ban intact. The unchanged read-back
-assert then covers base and derived tables alike, and catches a stray
+every write on the port path and the DDL ban intact. The optional-aware
+read-back assert then covers base and derived tables alike, allows only an
+explicitly empty optional resource to be absent, and catches a stray
 `parent__field` child table from a nested value.
