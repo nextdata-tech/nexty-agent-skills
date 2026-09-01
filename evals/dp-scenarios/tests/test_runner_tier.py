@@ -17,7 +17,7 @@ from dp_scenarios.canary.probe import ProbeResult
 from dp_scenarios.grading import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
-from dp_scenarios.ledger import SupervisorFacts
+from dp_scenarios.ledger import SupervisorFacts, fixture_dir_hash
 from dp_scenarios.operator import OperatorEngine, OperatorScript, StaticSupervisorRecordReader
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, TouchedFile, TurnResult
@@ -887,6 +887,21 @@ def test_tier_preserves_unexamined_sentinel_through_grade_and_run(monkeypatch: p
     assert observed == [None]
     assert run.score.hard_gate_flags["sentinel"] is None
     assert run.score.state is ScoreTerminalState.UNGRADED
+
+
+def test_fixture_integrity_is_checked_against_row_zero(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "data.csv").write_text("id\n1\n", encoding="utf-8")
+    environment = SimpleNamespace(
+        fixture_dir=fixture,
+        manifest=SimpleNamespace(fixture_dir_hash=fixture_dir_hash(fixture)),
+    )
+    assert tier_module._fixture_integrity_error(environment) is None
+    (fixture / "data.csv").write_text("id\n2\n", encoding="utf-8")
+    assert tier_module._fixture_integrity_error(environment) == (
+        "fixture directory changed after row-zero anchoring"
+    )
 
 
 @pytest.mark.parametrize("case", ["manifest", "markers", "observations", "turns"])

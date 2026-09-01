@@ -272,7 +272,11 @@ class RunEnvironment:
         return self.prepare()
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        self.close()
+        try:
+            self.close()
+        except BaseException:
+            if exc_type is None:
+                raise
 
     def prepare(self) -> "RunEnvironment":
         """Generate the fixture, anchor row zero, then start the optional source."""
@@ -433,14 +437,20 @@ class RunEnvironment:
                 if self._live_transport is None and field_name in REPLAY_SESSION_PATH_FIELDS:
                     continue
                 if getattr(override, field_name) != getattr(manifest, field_name):
-                    self.close()
+                    try:
+                        self.close()
+                    except BaseException:
+                        pass
                     raise EnvironmentError(f"replay manifest mismatch in {field_name}")
             manifest = override
         self._manifest = manifest
         try:
             self._ledger = LedgerStore.open(base / "evidence.jsonl", manifest)
         except Exception:
-            self.close()
+            try:
+                self.close()
+            except BaseException:
+                pass
             raise
         return self
 
@@ -467,6 +477,14 @@ class RunEnvironment:
         if self._fixture is None:
             raise EnvironmentError("environment has not been prepared")
         return self._fixture
+
+    @property
+    def generated_fixture_manifest(self) -> Mapping[str, object]:
+        """Return the harness-owned manifest captured before the run."""
+
+        if self._generated_fixture_manifest is None:
+            raise EnvironmentError("generated fixture manifest is not available")
+        return self._generated_fixture_manifest
 
     @property
     def ledger_path(self) -> Path:

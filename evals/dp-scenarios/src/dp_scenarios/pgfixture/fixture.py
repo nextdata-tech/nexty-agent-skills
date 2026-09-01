@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import os
 from types import MappingProxyType
 from typing import Any, NoReturn
 from urllib.parse import quote
@@ -128,10 +129,12 @@ class RotationRecord(Mapping[str, Any]):
 
 
 def skip_unavailable(error: FixtureUnavailable) -> NoReturn:
-    """Turn a fixture-unavailable error into an explicit pytest skip."""
+    """Skip locally when allowed, or fail when live coverage is required."""
 
     if not isinstance(error, FixtureUnavailable):
         raise TypeError("skip_unavailable expects FixtureUnavailable")
+    if os.environ.get("EVAL_REQUIRE_LIVE_FIXTURE") == "1":
+        raise error
     try:
         import pytest
     except ImportError as exc:  # pragma: no cover - only possible outside uv test env

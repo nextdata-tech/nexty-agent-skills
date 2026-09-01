@@ -23,6 +23,7 @@ from dp_scenarios.canary.probe import BuildResult, ProbeResult, run_build, run_p
 from dp_scenarios.canary.verdict import build_failure_issues
 from dp_scenarios.grading import (
     Finding,
+    GATE_POINTS,
     GateResult,
     ScoreVector,
     gate_build,
@@ -40,7 +41,7 @@ from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.grading.scans import sentinel_byte_scan
 from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityReport, RepeatabilityTier
-from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, read_ledger
+from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
 from dp_scenarios.operator import (
     OperatorEngine,
@@ -399,6 +400,18 @@ def _first_json(root: Path, names: Sequence[str]) -> object | None:
     return None
 
 
+def _fixture_integrity_error(environment: RunEnvironment) -> str | None:
+    """Return a grade-time fixture mutation error, if the tree drifted."""
+
+    try:
+        actual = fixture_dir_hash(environment.fixture_dir)
+    except Exception as exc:
+        return f"fixture directory could not be verified: {exc}"
+    if actual != environment.manifest.fixture_dir_hash:
+        return "fixture directory changed after row-zero anchoring"
+    return None
+
+
 def _session_factory(factory: SessionFactory, scenario: Scenario, environment: RunEnvironment, epoch: int) -> Transport:
     """Call a session factory using its declared arity without swallowing errors."""
 
@@ -587,10 +600,11 @@ def _closure_artifact(artifact_root: Path) -> Path | Mapping[str, object]:
 
 
 def _sentinel_trip(environment: RunEnvironment, artifact_root: Path) -> bool | None:
-    raw_manifest = _load_json(environment.fixture_dir / "fixture-manifest.json")
-    if not isinstance(raw_manifest, Mapping):
+    try:
+        generated_manifest = environment.generated_fixture_manifest
+    except (AttributeError, EnvironmentError):
         return None
-    markers = marker_values(raw_manifest)
+    markers = marker_values(generated_manifest)
     if not markers:
         return None
     observations = _load_json(artifact_root / "operator-observations.json")
@@ -863,12 +877,41 @@ class TierRunner:
     ) -> tuple[ScoreVector, SupervisorFacts | None, int, str, str]:
         """Grade only artifacts that have been persisted before this call."""
 
+        integrity_error = _fixture_integrity_error(environment)
+        if integrity_error is not None:
+            gates = {
+                name: GateResult(
+                    name,
+                    False,
+                    0,
+                    (Finding("fixture_integrity_failed", integrity_error),) if name == "build" else (),
+                    examined=False,
+                    required=name != "follow-up",
+                )
+                for name in GATE_POINTS
+            }
+            score = score_run(
+                gates,
+                honesty_report=LintReport(False, [LintFinding("fixture_integrity_failed", 1, integrity_error)]),
+                route_fidelity=None,
+                sentinel_tripped=False,
+                invalid=True,
+                efficiency=_efficiency(
+                    scenario,
+                    turns=0,
+                    calls=0,
+                    wall_clock=0.0,
+                    budgets=self.budgets,
+                ),
+            )
+            return score, supervisor_facts, 0, "unexamined", integrity_error
+
         ledger_artifact: object = environment.ledger_path
         spec = _first_json(artifact_root, ("spec.json", "built-spec.json", "definition.json"))
         capability = _first_json(artifact_root, ("capability.json",)) if environment.mock_source is not None else None
         spec_diff = _first_json(artifact_root, ("spec-diff.json", "spec_diff.json"))
         closure = _closure_artifact(artifact_root)
-        fixture_manifest = environment._generated_fixture_manifest
+        fixture_manifest = environment.generated_fixture_manifest
         row_counts = (
             {"per_model_row_counts": fixture_manifest.get("table_row_counts", {})}
             if isinstance(fixture_manifest, Mapping)

@@ -69,6 +69,14 @@ def test_unavailable_skip_contract_calls_out_missing_integration_coverage() -> N
         skip_unavailable(FixtureUnavailable("runtime is unavailable"))
 
 
+def test_required_live_mode_does_not_convert_fixture_failure_to_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVAL_REQUIRE_LIVE_FIXTURE", "1")
+    with pytest.raises(FixtureUnavailable, match="runtime is unavailable"):
+        skip_unavailable(FixtureUnavailable("runtime is unavailable"))
+
+
 def test_oracle_records_redact_connection_passwords() -> None:
     secret = "oracle-secret"
     record = RotationRecord(

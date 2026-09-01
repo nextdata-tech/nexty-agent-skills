@@ -237,6 +237,21 @@ def test_ledger_open_failure_removes_the_disposable_environment(
     assert not ledger_path["path"].parent.exists()
 
 
+def test_context_manager_preserves_an_in_flight_error_when_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = make_scenario()
+
+    def fail_close(_environment: RunEnvironment) -> None:
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(environment_module.RunEnvironment, "close", fail_close)
+    with pytest.raises(ValueError, match="run failed"):
+        with RunEnvironment(scenario, pins(), root=tmp_path):
+            raise ValueError("run failed")
+
+
 def test_mock_control_secret_never_enters_agent_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     scenario = make_scenario()
     monkeypatch.setenv("EVAL_SOURCE_TOKEN", "harness-only")

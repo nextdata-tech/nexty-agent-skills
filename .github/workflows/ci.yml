@@ -101,6 +101,8 @@ jobs:
         run: docker pull postgres:16-alpine
       - name: Run Postgres-backed fixture tests
         working-directory: evals/dp-scenarios
+        env:
+          EVAL_REQUIRE_LIVE_FIXTURE: "1"
         run: uv run --locked pytest -q -m integration
 
   dp-scenarios-field-mapper:
@@ -110,6 +112,7 @@ jobs:
       contents: read
     env:
       NXD_REPO_TOKEN: ${{ secrets.NXD_DISPATCH_PAT }}
+      EVAL_REQUIRE_LIVE_FIXTURE: "1"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -132,6 +135,8 @@ jobs:
         env:
           EVAL_NXD_REPO_ROOT: ${{ github.workspace }}/nxd
         run: uv run --locked pytest -q -m field_mapper
-      - name: Report unavailable NXD source explicitly
+      - name: Require NXD source for field-mapper integration
         if: env.NXD_REPO_TOKEN == ''
-        run: echo "NXD_DISPATCH_PAT is unavailable; field-mapper integration was not executed."
+        run: |
+          echo "NXD_DISPATCH_PAT is unavailable; field-mapper integration cannot execute." >&2
+          exit 1

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from dp_scenarios.grading.gates import (
+    GateResult,
     gate_build,
     gate_capability,
     gate_construction,
@@ -111,8 +112,16 @@ def test_intake_empty_or_observationally_unexamined_input_cannot_pass() -> None:
     assert "intake_codegen_missing" in no_observed_codegen.codes
 
 
+def test_intake_rejects_missing_codegen_and_non_ledger_input() -> None:
+    no_codegen = gate_intake(_ledger({"turn": 2, "action_kind": "spec_approved"}))
+    assert "intake_codegen_missing" in no_codegen.codes
+    with pytest.raises(TypeError):
+        gate_intake(object())
+
+
 def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
     assert gate_capability({"metrics": {"revenue": "supported"}}, {"metrics": {"revenue": "supported"}}).passed
+    assert not gate_capability({"metrics": {"revenue": "Supported"}}, {"metrics": {"revenue": "supported"}}).passed
     mismatch = gate_capability({"metrics": {"revenue": "proxy"}}, {"metrics": {"revenue": "supported"}})
     assert not mismatch.passed
     assert "capability_capability_label_mismatch" in mismatch.codes
@@ -143,9 +152,20 @@ def test_capability_and_narrowing_check_artifact_labels_and_approvals() -> None:
     absent = gate_narrowing({"turn": 4, "metrics": ["revenue"]}, _ledger({"turn": 6, "action_kind": "spec_approved"}), None)
     assert not absent.passed
     assert "narrowing_closure_not_examined" in absent.codes
+    same_turn = gate_narrowing(
+        {"turn": 4, "metrics": ["revenue"]},
+        _ledger({"turn": 4, "action_kind": "spec_approved"}),
+        {"metrics": ["revenue"]},
+    )
+    assert not same_turn.passed
+    assert "narrowing_approval_missing_after_diff" in same_turn.codes
 
     assert not gate_capability({}, {"metrics": {}}).passed
     assert "capability_metrics_not_examined" in gate_capability({}, {"metrics": {}}).codes
+    assert gate_capability({}, {}).required
+    optional = gate_capability({}, {}, required=False)
+    assert not optional.required
+    assert not optional.examined
 
 
 def test_construction_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: Path) -> None:
@@ -161,6 +181,17 @@ def test_construction_reads_recorded_outcomes_from_real_ledger_claims(tmp_path: 
     missing = gate_construction(missing_path)
     assert not missing.passed
     assert "construction_adversarial_review_outcome_missing" in missing.codes
+    null_outcome_path = tmp_path / "construction-null.jsonl"
+    _write_rows(null_outcome_path, [
+        {"run_id": "run", "scenario_id": "scenario", "turn": 1, "phase": 4, "action_kind": "self_check", "action": "self-check", "claim": {"outcome": None}},
+        {"run_id": "run", "scenario_id": "scenario", "turn": 2, "phase": 4, "action_kind": "adversarial_review", "action": "review", "claim": "passed"},
+    ])
+    null_outcome = gate_construction(null_outcome_path)
+    assert not null_outcome.passed
+    assert "construction_self_check_outcome_missing" in null_outcome.codes
+    unexamined = gate_construction([])
+    assert not unexamined.examined
+    assert "construction_ledger_not_examined" in unexamined.codes
 
 
 def test_honesty_gate_delegates_to_real_ledger_lint(tmp_path: Path) -> None:
@@ -202,6 +233,12 @@ def test_build_uses_supervisor_counts_and_identifiers() -> None:
         "per_model_row_counts": {"model": 5},
     }
     assert gate_build(supervisor, {"model": 5}).passed
+    missing_model = gate_build(supervisor, {"model": 5, "other-model": 3})
+    assert not missing_model.passed
+    assert any(
+        finding.code == "build_row_count_mismatch" and finding.value["model"] == "other-model"
+        for finding in missing_model.findings
+    )
     result = gate_build({**supervisor, "per_model_row_counts": {"model": 4}}, {"model": 5})
     assert not result.passed
     assert "build_row_count_mismatch" in result.codes
@@ -212,6 +249,13 @@ def test_build_uses_supervisor_counts_and_identifiers() -> None:
     assert not absent_counts.passed
     assert not absent_counts.examined
     assert "build_row_counts_not_examined" in absent_counts.codes
+    one_sided = gate_build(supervisor, {})
+    assert not one_sided.passed
+    assert not one_sided.examined
+    assert "build_row_counts_not_examined" in one_sided.codes
+    typed_mismatch = gate_build(supervisor, {"model": "5"})
+    assert not typed_mismatch.passed
+    assert "build_row_count_mismatch" in typed_mismatch.codes
 
 
 def test_query_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: Path) -> None:
@@ -233,6 +277,24 @@ def test_query_uses_the_real_fixture_gold_and_deterministic_ex_scorer(tmp_path: 
     assert "query_gold_not_examined" in gate_query(gold, None).codes
     assert not gate_query({"rows": None}, gold).passed
     assert "query_actual_not_examined" in gate_query({"rows": None}, gold).codes
+    assert not gate_query({"rows": None}, gold).examined
+    assert not gate_query(gold, None).examined
+
+    abstained = gate_query({"rows": gold, "abstained": True}, gold)
+    errored = gate_query({"rows": gold, "errored": True}, gold)
+    assert not abstained.passed
+    assert not errored.passed
+
+
+def test_query_rejects_unknown_scorer_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture = tmp_path / "fixture"
+    generate_dataset("grain_trap", 29, fixture)
+    write_reference_gold("grain_trap", fixture / "data", fixture / "gold")
+    gold = json.loads((fixture / "gold/grain_trap_by_region.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr("nxd_eval.scoring.score_one", lambda *_args, **_kwargs: "MAYBE")
+    unknown = gate_query(gold, gold)
+    assert not unknown.passed
+    assert "query_query_rows_differ" in unknown.codes
 
 
 def test_gold_oracle_pins_the_deterministic_scorer(tmp_path: Path, monkeypatch) -> None:
@@ -253,8 +315,13 @@ def test_follow_up_is_supplied_by_the_scenario() -> None:
     assert not absent.examined
     assert not absent.ungraded
     assert not gate_follow_up({"status": "not-examined"}).ungraded
+    assert not gate_follow_up({"status": "not-examined", "required": True}).required
+    passed_mapping = gate_follow_up(GateResult("follow-up", True, 15, required=False))
+    assert passed_mapping.passed
+    assert not passed_mapping.required
     fired_without_measurement = gate_follow_up({"status": "ungraded"})
     assert fired_without_measurement.ungraded
+    assert gate_follow_up(object()).ungraded
 
 
 def test_oracles_keep_satisfied_violated_and_not_examined_distinct() -> None:

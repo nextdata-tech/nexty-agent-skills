@@ -37,12 +37,20 @@ class _GrantLike:
 def nxd_repo_root(monkeypatch: pytest.MonkeyPatch) -> Path:
     configured = os.environ.get("EVAL_NXD_REPO_ROOT")
     if not configured:
+        if os.environ.get("EVAL_REQUIRE_LIVE_FIXTURE") == "1":
+            raise FieldMapperUnavailable(
+                "field-mapper integration requires EVAL_NXD_REPO_ROOT"
+            )
         pytest.skip(
             "SKIP_FIELD_MAPPER_DEPENDENCY: set EVAL_NXD_REPO_ROOT to an NXD checkout",
             allow_module_level=False,
         )
     root = Path(configured)
     if not (root / "components/nxd_py/data_product/nxd/experimental/field_mapper/__init__.py").is_file():
+        if os.environ.get("EVAL_REQUIRE_LIVE_FIXTURE") == "1":
+            raise FieldMapperUnavailable(
+                "field-mapper integration requires a compatible EVAL_NXD_REPO_ROOT checkout"
+            )
         pytest.skip(
             "SKIP_FIELD_MAPPER_DEPENDENCY: set EVAL_NXD_REPO_ROOT to an NXD checkout",
             allow_module_level=False,
