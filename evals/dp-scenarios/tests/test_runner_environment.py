@@ -247,9 +247,11 @@ def test_context_manager_preserves_an_in_flight_error_when_cleanup_fails(
         raise RuntimeError("cleanup failed")
 
     monkeypatch.setattr(environment_module.RunEnvironment, "close", fail_close)
-    with pytest.raises(ValueError, match="run failed"):
+    with pytest.raises(ValueError, match="run failed") as error:
         with RunEnvironment(scenario, pins(), root=tmp_path):
             raise ValueError("run failed")
+
+    assert any("RunEnvironment cleanup failed" in note for note in error.value.__notes__)
 
 
 def test_mock_control_secret_never_enters_agent_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

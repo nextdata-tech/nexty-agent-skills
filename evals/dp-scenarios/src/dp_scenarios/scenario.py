@@ -734,7 +734,7 @@ _REPEATABILITY_KEYS = {"tier", "epochs", "certification"}
 _CERTIFICATION_KEYS = {"rule", "gates", "lower_bound", "confidence"}
 _OPERATOR_KEYS = {"sentinel", "obstacle_terms"}
 _COVERAGE_KEYS = {"variant", "untested"}
-_SCENARIO_TIERS = frozenset({"smoke"})
+_SCENARIO_TIERS = frozenset({"smoke", "T0"})
 _DATASET_PLANT_DECLARATIONS = {
     "grain_trap": "grain_trap_fanout",
     "zero_row_optional": "optional_zero_row",

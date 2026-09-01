@@ -71,6 +71,7 @@ def test_manifest_requires_scenario_tier_and_typed_positive_budget() -> None:
 
 def test_not_applicable_is_waived_only_for_smoke_fields() -> None:
     make_manifest(judge_model_id="not-applicable")
+    make_manifest(tier="T0", judge_model_id="not-applicable")
     with pytest.raises(ManifestError, match="agent_model_id"):
         make_manifest(agent_model_id="not-applicable")
 

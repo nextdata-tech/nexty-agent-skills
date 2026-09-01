@@ -152,6 +152,32 @@ def test_failed_rotation_preserves_prior_oracle_records(
     assert [record["step"] for record in fixture.oracle_records] == [0]
 
 
+def test_start_failure_removes_container_created_before_ownership_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = PostgresFixture(29)
+    commands: list[list[str]] = []
+
+    def fake_docker(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(fixture, "_ensure_runtime", lambda: None)
+    monkeypatch.setattr(fixture, "_run_docker", fake_docker)
+    monkeypatch.setattr(
+        fixture,
+        "_inspect_owned_container",
+        lambda: (_ for _ in ()).throw(FixtureSafetyError("inspection failed")),
+    )
+
+    with pytest.raises(FixtureSafetyError, match="inspection failed"):
+        fixture.start()
+
+    assert [command[:2] for command in commands] == [["run", "--detach"], ["rm", "--force"]]
+    assert commands[-1][-1] == fixture._container_name
+    assert fixture._container_created is False
+
+
 def test_stop_surfaces_container_removal_failure_after_clearing_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -224,78 +250,74 @@ def test_pgfixture_attributes_are_checked_from_a_staged_blob(tmp_path: Path) -> 
 def test_live_rotation_observes_each_step_at_connection_level() -> None:
     fixture = PostgresFixture(29)
     try:
-        try:
-            fixture.start()
-        except FixtureUnavailable as error:
-            skip_unavailable(error)
-        assert fixture.current_step == 0
-        assert fixture.history[0]["observations"]["inventory_query_succeeds"] is True
+        with fixture:
+            assert fixture.current_step == 0
+            assert fixture.history[0]["observations"]["inventory_query_succeeds"] is True
 
-        admin = fixture._admin
-        role = fixture.credentials
-        assert admin is not None
-        assert admin.password != role.password
+            admin = fixture._admin
+            role = fixture.credentials
+            assert admin is not None
+            assert admin.password != role.password
 
-        for wrong_credentials in (
-            replace(role, password=admin.password),
-            replace(admin, password=role.password),
-        ):
-            with pytest.raises(psycopg.OperationalError):
-                fixture.connect(wrong_credentials)
+            for wrong_credentials in (
+                replace(role, password=admin.password),
+                replace(admin, password=role.password),
+            ):
+                with pytest.raises(psycopg.OperationalError):
+                    fixture.connect(wrong_credentials)
 
-        with fixture.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT nspname FROM pg_catalog.pg_namespace "
-                    "WHERE nspname = 'lookup'"
-                )
-                assert cursor.fetchall() == [("lookup",)]
+            with fixture.connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT nspname FROM pg_catalog.pg_namespace "
+                        "WHERE nspname = 'lookup'"
+                    )
+                    assert cursor.fetchall() == [("lookup",)]
 
-        step_one = fixture.advance_rotation()
-        assert step_one.step == 1
-        assert step_one["observations"] == {
-            "fixture_step": 1,
-            "connection_level_coverage": "executed",
-            "login_succeeds": True,
-            "inventory_query_succeeds": False,
-            "inventory_query_failure": "insufficient_privilege",
-            "lookup_catalog_visible": True,
-            "lookup_information_schema_visible": False,
-            "lookup_relations_catalog_visible": True,
-            "lookup_query_denied": True,
-        }
+            step_one = fixture.advance_rotation()
+            assert step_one.step == 1
+            assert step_one["observations"] == {
+                "fixture_step": 1,
+                "connection_level_coverage": "executed",
+                "login_succeeds": True,
+                "inventory_query_succeeds": False,
+                "inventory_query_failure": "insufficient_privilege",
+                "lookup_catalog_visible": True,
+                "lookup_information_schema_visible": False,
+                "lookup_relations_catalog_visible": True,
+                "lookup_query_denied": True,
+            }
 
-        with pytest.raises(Exception) as query_error:
+            with pytest.raises(Exception) as query_error:
+                with fixture.connect() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT count(*) FROM inventory.line_items")
+            assert getattr(query_error.value, "sqlstate", None) == "42501"
+
+            old = fixture.credentials
+            step_two = fixture.advance_rotation()
+            assert step_two.step == 2
+            old_login_succeeds = False
+            try:
+                with fixture.connect(old):
+                    old_login_succeeds = True
+            except psycopg.OperationalError:
+                pass
+            assert step_two["observations"]["old_credential_login_succeeds"] is old_login_succeeds
+            assert step_two["observations"]["new_credential_login_succeeds"] is True
+            assert step_two["observations"]["new_credential_lookup_catalog_visible"] is True
+            assert step_two["observations"]["new_credential_lookup_information_schema_visible"] is False
+            assert step_two["observations"]["new_credential_lookup_relations_catalog_visible"] is True
+            assert step_two["observations"]["new_credential_lookup_query_denied"] is True
+            assert old.password != fixture.credentials.password
             with fixture.connect() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT count(*) FROM inventory.line_items")
-        assert getattr(query_error.value, "sqlstate", None) == "42501"
-
-        old = fixture.credentials
-        step_two = fixture.advance_rotation()
-        assert step_two.step == 2
-        old_login_succeeds = False
-        try:
-            with fixture.connect(old):
-                old_login_succeeds = True
-        except psycopg.OperationalError:
-            pass
-        assert step_two["observations"]["old_credential_login_succeeds"] is old_login_succeeds
-        assert step_two["observations"]["new_credential_login_succeeds"] is True
-        assert step_two["observations"]["new_credential_lookup_catalog_visible"] is True
-        assert step_two["observations"]["new_credential_lookup_information_schema_visible"] is False
-        assert step_two["observations"]["new_credential_lookup_relations_catalog_visible"] is True
-        assert step_two["observations"]["new_credential_lookup_query_denied"] is True
-        assert old.password != fixture.credentials.password
-        with fixture.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT count(*) FROM inventory.line_items")
-                assert cursor.fetchone()[0] > 0
-        assert [record.step for record in fixture.history] == [0, 1, 2]
-        evidence = fixture.oracle_records
-    finally:
-        fixture.stop()
-        fixture.stop()
+                    assert cursor.fetchone()[0] > 0
+            assert [record.step for record in fixture.history] == [0, 1, 2]
+            evidence = fixture.oracle_records
+    except FixtureUnavailable as error:
+        skip_unavailable(error)
     assert [record["step"] for record in evidence] == [0, 1, 2]
 
 
@@ -303,16 +325,12 @@ def test_live_rotation_observes_each_step_at_connection_level() -> None:
 def test_live_rotation_rejects_reissued_old_credential() -> None:
     fixture = PostgresFixture(29)
     try:
-        try:
-            fixture.start()
-        except FixtureUnavailable as error:
-            skip_unavailable(error)
-
-        fixture.advance_rotation()
-        old_credentials = fixture.credentials
-        fixture._new_password = lambda *, excluding=(): old_credentials.password  # type: ignore[method-assign]
-
-        with pytest.raises(RotationError, match="old credential still authenticated"):
+        with fixture:
             fixture.advance_rotation()
-    finally:
-        fixture.stop()
+            old_credentials = fixture.credentials
+            fixture._new_password = lambda *, excluding=(): old_credentials.password  # type: ignore[method-assign]
+
+            with pytest.raises(RotationError, match="old credential still authenticated"):
+                fixture.advance_rotation()
+    except FixtureUnavailable as error:
+        skip_unavailable(error)

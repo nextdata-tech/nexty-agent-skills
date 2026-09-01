@@ -274,9 +274,10 @@ class RunEnvironment:
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         try:
             self.close()
-        except BaseException:
+        except BaseException as cleanup_error:
             if exc_type is None:
                 raise
+            exc_value.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
 
     def prepare(self) -> "RunEnvironment":
         """Generate the fixture, anchor row zero, then start the optional source."""
@@ -343,11 +344,11 @@ class RunEnvironment:
                 )
                 self._live_transport = transport
                 transport.start()
-        except Exception:
+        except Exception as error:
             try:
                 self.close()
-            except BaseException:
-                pass
+            except BaseException as cleanup_error:
+                error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
             raise
 
         generated_manifest = generation.manifest
@@ -368,11 +369,11 @@ class RunEnvironment:
                         replay=False if requested_validation_mode == "live" else None,
                     )
                 )
-            except Exception:
+            except Exception as error:
                 try:
                     self.close()
-                except BaseException:
-                    pass
+                except BaseException as cleanup_error:
+                    error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
                 raise
 
         manifest = Manifest(
@@ -437,20 +438,21 @@ class RunEnvironment:
                 if self._live_transport is None and field_name in REPLAY_SESSION_PATH_FIELDS:
                     continue
                 if getattr(override, field_name) != getattr(manifest, field_name):
+                    error = EnvironmentError(f"replay manifest mismatch in {field_name}")
                     try:
                         self.close()
-                    except BaseException:
-                        pass
-                    raise EnvironmentError(f"replay manifest mismatch in {field_name}")
+                    except BaseException as cleanup_error:
+                        error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
+                    raise error
             manifest = override
         self._manifest = manifest
         try:
             self._ledger = LedgerStore.open(base / "evidence.jsonl", manifest)
-        except Exception:
+        except Exception as error:
             try:
                 self.close()
-            except BaseException:
-                pass
+            except BaseException as cleanup_error:
+                error.add_note(f"RunEnvironment cleanup failed: {cleanup_error}")
             raise
         return self
 

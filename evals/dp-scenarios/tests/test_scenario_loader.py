@@ -358,3 +358,13 @@ def test_an_omitted_gate_value_means_the_gate_runs_its_standard_check() -> None:
     assert scenario.gates["intake"].kind == "intake"
     assert scenario.gates["query"].kind == "query"
     assert scenario.gates["follow-up"].kind == "grain_and_aggregation"
+
+
+def test_legacy_t0_scenario_tier_remains_accepted(tmp_path: Path) -> None:
+    package = _copy_s6_package(tmp_path)
+    declaration = package / "scenario.yaml"
+    source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    source["tier"] = "T0"
+    declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    assert load_scenario(package).tier == "T0"

@@ -185,6 +185,7 @@ class PostgresFixture:
         self._owner_token = secrets.token_hex(16)
         self._container_name = f"dp-pgfixture-{self._owner_token[:12]}"
         self._container_id: str | None = None
+        self._container_created = False
         self._host_port: int | None = None
         self._admin: ConnectionInfo | None = None
         self._credentials: ConnectionInfo | None = None
@@ -302,6 +303,7 @@ class PostgresFixture:
                     self.image,
                 ]
             )
+            self._container_created = True
             self._container_id, actual_name = self._inspect_owned_container()
             if actual_name != self._container_name:
                 raise FixtureSafetyError("created container name changed unexpectedly")
@@ -367,25 +369,32 @@ class PostgresFixture:
     def stop(self) -> None:
         """Remove only this fixture's owned container; safe to call repeatedly."""
 
-        container_id = self._container_id or self._find_owned_container_id()
+        container_ref = self._container_id
+        if container_ref is None:
+            container_ref = (
+                self._container_name
+                if self._container_created
+                else self._find_owned_container_id()
+            )
         temporary = self._temporary
         teardown_error: FixtureTeardownError | None = None
         try:
-            if container_id is not None:
+            if container_ref is not None:
                 try:
-                    result = self._run_docker(["rm", "--force", container_id], check=False)
+                    result = self._run_docker(["rm", "--force", container_ref], check=False)
                 except FixtureUnavailable as error:
                     teardown_error = FixtureTeardownError(
-                        f"could not remove owned container {container_id!r}: {error}"
+                        f"could not remove owned container {container_ref!r}: {error}"
                     )
                 else:
                     if result.returncode != 0:
                         detail = (result.stderr or result.stdout or "docker rm failed").strip()
                         teardown_error = FixtureTeardownError(
-                            f"could not remove owned container {container_id!r}: {detail}"
+                            f"could not remove owned container {container_ref!r}: {detail}"
                         )
         finally:
             self._container_id = None
+            self._container_created = False
             self._host_port = None
             self._admin = None
             self._credentials = None

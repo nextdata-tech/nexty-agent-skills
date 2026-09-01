@@ -117,16 +117,20 @@ COMPARABILITY_EXCLUDED_FIELDS = REPLAY_SESSION_PATH_FIELDS | frozenset({"validat
 # Tiers are named for what they are: the smoke tier runs on every change, the
 # core tier weekly, the full tier per release.  Only the smoke tier is
 # implemented here, and it waives the pins for surfaces it never exercises.
+# Keep T0 as an alias for persisted manifests produced by the original smoke
+# tier; both spellings use the same waiver policy.
+_SMOKE_TIER_WAIVERS = frozenset(
+    {
+        "judge_model_id",
+        "judge_prompt_hash",
+        "judge_calibration_set_hash",
+        "grant_fixture_hash",
+        "persona_paraphrase_prompt_hash",
+    }
+)
 TIER_WAIVERS: dict[str, frozenset[str]] = {
-    "smoke": frozenset(
-        {
-            "judge_model_id",
-            "judge_prompt_hash",
-            "judge_calibration_set_hash",
-            "grant_fixture_hash",
-            "persona_paraphrase_prompt_hash",
-        }
-    ),
+    "smoke": _SMOKE_TIER_WAIVERS,
+    "T0": _SMOKE_TIER_WAIVERS,
 }
 
 REPLAY_TIER_WAIVERS: dict[str, frozenset[str]] = {
