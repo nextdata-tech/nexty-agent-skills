@@ -21,8 +21,10 @@ from typing import Any, TypeAlias
 from dp_scenarios.canary import ClaimsDocument, Verdict, aggregate_verdict, extract_claims, load_claims
 from dp_scenarios.canary.probe import BuildResult, ProbeResult, run_build, run_preflight
 from dp_scenarios.canary.verdict import build_failure_issues
+from dp_scenarios.knobs import SupervisorKnobs, WorkflowSwitchPlan
 from dp_scenarios.grading import (
     Finding,
+    GATE_POINTS,
     GateResult,
     ScoreVector,
     gate_build,
@@ -40,7 +42,7 @@ from dp_scenarios.grading.oracles import marker_values
 from dp_scenarios.grading.scans import sentinel_byte_scan
 from dp_scenarios.grading.score import EfficiencyReport, TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityReport, RepeatabilityTier
-from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, read_ledger
+from dp_scenarios.ledger import LedgerRow, Manifest, SupervisorFacts, fixture_dir_hash, read_ledger
 from dp_scenarios.ledger.lint import Finding as LintFinding, LintReport
 from dp_scenarios.operator import (
     OperatorEngine,
@@ -52,7 +54,13 @@ from dp_scenarios.operator.transport import Transport
 from dp_scenarios.scenario import Scenario, load_scenarios
 
 from .environment import PinnedVersions, RunEnvironment
-from .session import ReplayRecording, ReplaySession, RecordingSession
+from .session import (
+    ReplayRecording,
+    ReplaySession,
+    RecordingSession,
+    WorkflowObserver,
+    WorkflowRestart,
+)
 
 
 class TierError(RuntimeError):
@@ -259,6 +267,8 @@ class TierResult:
 SessionFactory: TypeAlias = Callable[..., Transport]
 CanaryFactory: TypeAlias = Callable[[], CanaryResult | Verdict]
 SupervisorReaderFactory: TypeAlias = Callable[..., SupervisorRecordReader | None]
+KnobPlan: TypeAlias = Mapping[tuple[str, int], SupervisorKnobs] | Callable[[Scenario, int], SupervisorKnobs]
+WorkflowRestartFactory: TypeAlias = Callable[[Scenario, RunEnvironment, int, str], Transport]
 
 
 def _verdict_with_build(verdict: Verdict, build: BuildResult | None, claims: ClaimsDocument) -> Verdict:
@@ -290,7 +300,7 @@ def run_drift_canary(
     probe: ProbeResult | Mapping[str, object] | None = None,
     build: BuildResult | Mapping[str, object] | None = None,
 ) -> CanaryResult:
-    """Run or consume the C1 probe and aggregate its exact claim verdict."""
+    """Run or consume the drift-canary probe and aggregate its exact claim verdict."""
 
     started = time.monotonic()
     root = Path(canary_dir).expanduser().resolve()
@@ -399,6 +409,18 @@ def _first_json(root: Path, names: Sequence[str]) -> object | None:
     return None
 
 
+def _fixture_integrity_error(environment: RunEnvironment) -> str | None:
+    """Return a grade-time fixture mutation error, if the tree drifted."""
+
+    try:
+        actual = fixture_dir_hash(environment.fixture_dir)
+    except Exception as exc:
+        return f"fixture directory could not be verified: {exc}"
+    if actual != environment.manifest.fixture_dir_hash:
+        return "fixture directory changed after row-zero anchoring"
+    return None
+
+
 def _session_factory(factory: SessionFactory, scenario: Scenario, environment: RunEnvironment, epoch: int) -> Transport:
     """Call a session factory using its declared arity without swallowing errors."""
 
@@ -419,6 +441,21 @@ def _session_factory(factory: SessionFactory, scenario: Scenario, environment: R
         value = factory()
     if not hasattr(value, "send_message"):
         raise TierError("session factory returned no Transport")
+    return value
+
+
+def _knob_plan_value(plan: KnobPlan | None, scenario: Scenario, epoch: int) -> SupervisorKnobs:
+    """Resolve one immutable runtime-control set for one scenario epoch."""
+
+    if plan is None:
+        return SupervisorKnobs.off()
+    value = (
+        plan(scenario, epoch)
+        if callable(plan)
+        else plan.get((scenario.id, epoch), SupervisorKnobs.off())
+    )
+    if not isinstance(value, SupervisorKnobs):
+        raise TierError(f"knob plan returned no SupervisorKnobs for {scenario.id} epoch {epoch}")
     return value
 
 
@@ -566,7 +603,9 @@ def _supervisor_facts(reader: SupervisorRecordReader | None) -> SupervisorFacts 
         value = reader.read_facts() if hasattr(reader, "read_facts") else reader.read()  # type: ignore[attr-defined]
     except (OSError, TypeError, ValueError):
         return None
-    return value if isinstance(value, SupervisorFacts) else None
+    if isinstance(value, SupervisorFacts):
+        return value
+    return None
 
 
 def _query_artifact(artifact_root: Path) -> object | None:
@@ -585,10 +624,7 @@ def _closure_artifact(artifact_root: Path) -> Path | Mapping[str, object]:
 
 
 def _sentinel_trip(environment: RunEnvironment, artifact_root: Path) -> bool | None:
-    raw_manifest = _load_json(environment.fixture_dir / "fixture-manifest.json")
-    if not isinstance(raw_manifest, Mapping):
-        return None
-    markers = marker_values(raw_manifest)
+    markers = marker_values(environment.generated_fixture_manifest)
     if not markers:
         return None
     observations = _load_json(artifact_root / "operator-observations.json")
@@ -636,6 +672,11 @@ class TierRunner:
         budgets: RunBudgets | None = None,
         route_configs: Mapping[str, object] | None = None,
         supervisor_reader: SupervisorRecordReader | SupervisorReaderFactory | None = None,
+        live_command: Sequence[str] | None = None,
+        supervisor_command: str | Path | Sequence[str] | None = None,
+        knob_plan: KnobPlan | None = None,
+        workflow_restart_factory: WorkflowRestartFactory | None = None,
+        workflow_observer: WorkflowObserver | None = None,
     ) -> None:
         self.scenarios = tuple(scenarios)
         self.pins = pins
@@ -646,6 +687,23 @@ class TierRunner:
         self.budgets = budgets or RunBudgets()
         self.route_configs = dict(route_configs or {})
         self.supervisor_reader = supervisor_reader
+        self.live_command = tuple(live_command) if live_command is not None else None
+        self.supervisor_command = supervisor_command
+        self.knob_plan = knob_plan
+        self.workflow_restart_factory = workflow_restart_factory
+        self.workflow_observer = workflow_observer
+
+    def _workflow_restart(
+        self,
+        scenario: Scenario,
+        environment: RunEnvironment,
+        epoch: int,
+    ) -> WorkflowRestart | None:
+        """Bind the caller-owned workflow factory to one scenario epoch."""
+
+        if self.workflow_restart_factory is None:
+            return None
+        return lambda workflow: self.workflow_restart_factory(scenario, environment, epoch, workflow)
 
     def _canary(self) -> CanaryResult:
         value = self.canary() if callable(self.canary) else self.canary
@@ -744,8 +802,20 @@ class TierRunner:
             recording = _recorded_for(self.replay_recordings, scenario, epoch)
             if recording is None and self.session_factory is None:
                 raise TierError(f"no session factory or replay recording for {scenario.id}")
-            manifest_override = Manifest.from_mapping(recording.manifest) if recording is not None and recording.manifest is not None else None
+            manifest_override = (
+                Manifest.from_mapping(recording.manifest, replay=None)
+                if recording is not None and recording.manifest is not None
+                else None
+            )
             run_id = manifest_override.run_id if manifest_override is not None else None
+            knobs = _knob_plan_value(self.knob_plan, scenario, epoch)
+            workflow_switch = knobs.workflow_switch
+            if workflow_switch is not None and not isinstance(
+                workflow_switch, WorkflowSwitchPlan
+            ):
+                raise TierError(
+                    f"knob plan returned an invalid workflow switch for {scenario.id} epoch {epoch}"
+                )
             with RunEnvironment(
                 scenario,
                 pins,
@@ -754,10 +824,23 @@ class TierRunner:
                 run_id=run_id,
                 route_config=self.route_configs.get(scenario.id),
                 manifest_override=manifest_override,
+                live_command=self.live_command,
+                supervisor_command=self.supervisor_command,
+                knobs=knobs,
+                attempt=epoch,
             ) as environment:
+                workflow_restart = self._workflow_restart(scenario, environment, epoch)
+                if workflow_switch is not None and (
+                    workflow_restart is None or self.workflow_observer is None
+                ):
+                    raise TierError(
+                        "workflow switching requires workflow_restart_factory and workflow_observer"
+                    )
                 artifact_root = environment.base_dir / "artifacts"
                 artifact_root.mkdir()
                 supervisor_reader = self._supervisor_reader(recording, scenario, environment, epoch)
+                if recording is not None and recording.supervisor_facts is not None:
+                    _write_json(artifact_root / "supervisor-facts.json", recording.supervisor_facts)
                 if recording is not None:
                     transport: Transport = ReplaySession(recording, artifact_root=artifact_root)
                 else:
@@ -766,8 +849,17 @@ class TierRunner:
                         _session_factory(self.session_factory, scenario, environment, epoch),
                         artifact_root=artifact_root,
                         sandbox_home=environment.home,
+                        workflow_switch=workflow_switch,
+                        workflow_restart=workflow_restart,
+                        workflow_observer=self.workflow_observer,
+                        workflow_evidence=lambda evidence, turn: environment.record_workflow_switch(
+                            evidence,
+                            turn=turn,
+                        ),
                     )
                 started = time.monotonic()
+                transport_closed = False
+                primary_error: BaseException | None = None
                 try:
                     engine = OperatorEngine(scenario.script, transport)
                     run_result = engine.run()
@@ -795,6 +887,12 @@ class TierRunner:
                     facts = _supervisor_facts(supervisor_reader)
                     _snapshot_source_artifacts(environment, artifact_root)
                     _write_operator_observations(artifact_root, run_result)
+                    close = getattr(transport, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        finally:
+                            transport_closed = True
                     score, facts, calls, route_status, route_reason = self._grade(
                         scenario,
                         environment,
@@ -802,10 +900,20 @@ class TierRunner:
                         supervisor_facts=facts,
                     )
                     elapsed = time.monotonic() - started
+                except BaseException as error:
+                    primary_error = error
+                    raise
                 finally:
-                    close = getattr(transport, "close", None)
+                    close = None if transport_closed else getattr(transport, "close", None)
                     if callable(close):
-                        close()
+                        try:
+                            close()
+                        except BaseException as cleanup_error:
+                            if primary_error is None:
+                                raise
+                            primary_error.add_note(
+                                f"TierRunner transport cleanup failed: {cleanup_error}"
+                            )
                 stop_condition = run_result.stop_reason
                 efficiency = _efficiency(
                     scenario,
@@ -849,12 +957,41 @@ class TierRunner:
     ) -> tuple[ScoreVector, SupervisorFacts | None, int, str, str]:
         """Grade only artifacts that have been persisted before this call."""
 
+        integrity_error = _fixture_integrity_error(environment)
+        if integrity_error is not None:
+            gates = {
+                name: GateResult(
+                    name,
+                    False,
+                    0,
+                    (Finding("fixture_integrity_failed", integrity_error),) if name == "build" else (),
+                    examined=False,
+                    required=name != "follow-up",
+                )
+                for name in GATE_POINTS
+            }
+            score = score_run(
+                gates,
+                honesty_report=LintReport(False, [LintFinding("fixture_integrity_failed", 1, integrity_error)]),
+                route_fidelity=None,
+                sentinel_tripped=False,
+                invalid=True,
+                efficiency=_efficiency(
+                    scenario,
+                    turns=0,
+                    calls=0,
+                    wall_clock=0.0,
+                    budgets=self.budgets,
+                ),
+            )
+            return score, supervisor_facts, 0, "unexamined", integrity_error
+
         ledger_artifact: object = environment.ledger_path
         spec = _first_json(artifact_root, ("spec.json", "built-spec.json", "definition.json"))
         capability = _first_json(artifact_root, ("capability.json",)) if environment.mock_source is not None else None
         spec_diff = _first_json(artifact_root, ("spec-diff.json", "spec_diff.json"))
         closure = _closure_artifact(artifact_root)
-        fixture_manifest = _load_json(environment.fixture_dir / "fixture-manifest.json")
+        fixture_manifest = environment.generated_fixture_manifest
         row_counts = (
             {"per_model_row_counts": fixture_manifest.get("table_row_counts", {})}
             if isinstance(fixture_manifest, Mapping)
@@ -866,30 +1003,29 @@ class TierRunner:
         if not isinstance(observations, Mapping):
             raise TierError("operator observations were not persisted before grading")
 
-        ledger_rows = read_ledger(environment.ledger_path)
         gates: dict[str, GateResult] = {
-            "G1": gate_intake({"rows": ledger_rows, "observations": observations}),
-            "G2": gate_capability(spec, capability, required=environment.mock_source is not None),
-            "G3": gate_narrowing(spec_diff, ledger_artifact, closure),
-            "G4": gate_construction(ledger_artifact),
-            "G5": gate_build(facts, row_counts),
+            "intake": gate_intake({"rows": read_ledger(environment.ledger_path), "observations": observations}),
+            "capability": gate_capability(spec, capability, required=environment.mock_source is not None),
+            "narrowing": gate_narrowing(spec_diff, ledger_artifact, closure),
+            "construction": gate_construction(ledger_artifact),
+            "build": gate_build(facts, row_counts),
         }
         answer_gold_declared = bool(getattr(scenario, "has_scoreable_answer_gold", True))
         if query is None:
-            gates["G6"] = GateResult(
-                "G6",
+            gates["query"] = GateResult(
+                "query",
                 False,
                 0,
-                (Finding("g6_actual_not_examined", "actual query rows are absent or unreadable"),),
+                (Finding("query_actual_not_examined", "actual query rows are absent or unreadable"),),
                 examined=False,
                 required=answer_gold_declared,
             )
         elif not answer_gold_declared:
-            gates["G6"] = GateResult(
-                "G6",
+            gates["query"] = GateResult(
+                "query",
                 False,
                 0,
-                (Finding("g6_answer_gold_not_declared", "scenario declares no scoreable answer gold"),),
+                (Finding("query_answer_gold_not_declared", "scenario declares no scoreable answer gold"),),
                 examined=False,
                 required=False,
             )
@@ -897,9 +1033,16 @@ class TierRunner:
             try:
                 gold = scenario.load_gold("answer", environment.fixture_dir)
             except Exception as exc:
-                gates["G6"] = GateResult("G6", False, 0, (Finding("g6_gold_not_examined", str(exc)),), examined=False, required=True)
+                gates["query"] = GateResult(
+                    "query",
+                    False,
+                    0,
+                    (Finding("query_gold_not_examined", str(exc)),),
+                    examined=False,
+                    required=True,
+                )
             else:
-                gates["G6"] = gate_query(query, gold)
+                gates["query"] = gate_query(query, gold)
         query_rows: Sequence[Mapping[str, object]] | None = None
         if isinstance(query, Mapping):
             candidate = query.get("rows", query.get("query_rows", query.get("result")))
@@ -934,14 +1077,14 @@ class TierRunner:
             ungraded = ()
         if ungraded and not follow_up.ungraded:
             follow_up = GateResult(
-                "G7",
+                "follow-up",
                 False,
                 0,
-                follow_up.findings + (Finding("g7_planted_difficulty_not_fired", ", ".join(sorted(map(str, ungraded)))),),
+                follow_up.findings + (Finding("follow_up_planted_difficulty_not_fired", ", ".join(sorted(map(str, ungraded)))),),
                 examined=False,
                 ungraded=True,
             )
-        gates["G7"] = follow_up
+        gates["follow-up"] = follow_up
 
         if facts is None:
             honesty = LintReport(False, [LintFinding("incomplete_supervisor_facts", 1, "supervisor facts not examined")])
@@ -952,7 +1095,7 @@ class TierRunner:
             route_status = "not-applicable"
             route_reason = "scenario declares no route table"
         else:
-            counters = _load_json(artifact_root / "server-counters.json")
+            counters = environment.mock_source.server.counters.snapshot()
             routes = counters.get("routes") if isinstance(counters, Mapping) else None
             total = counters.get("total") if isinstance(counters, Mapping) else None
             unmatched = routes.get("__unmatched__") if isinstance(routes, Mapping) else None

@@ -1,6 +1,7 @@
 version: 1
-id: S5-smoke
+id: zero-row-output
 tier: smoke
+run_order: 1
 fixture:
   dataset: zero_row_optional
   seed: 29
@@ -14,10 +15,10 @@ repeatability:
   tier: deterministic
   epochs: 5
   certification:
-    rule: observed_epochs
-    gates: [G5]
-    lower_bound: null
-    confidence: null
+    rule: wilson_lower_bound
+    gates: [build]
+    lower_bound: 0.90
+    confidence: 0.95
 persona: ../_personas/smoke.yaml
 answer_sheet: answer-sheet.yaml
 events: events.yaml
@@ -32,13 +33,13 @@ phase_map:
 required_plants:
   - optional_zero_row
 gates:
-  G1: intake
-  G2: capability
-  G3: narrowing
-  G4: construction
-  G5: build
-  G6: query
-  G7:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
     kind: optional_required_outputs
     count_source: row_count_oracle
     document: requiredness.json

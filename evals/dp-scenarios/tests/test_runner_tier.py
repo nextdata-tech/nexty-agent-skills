@@ -17,8 +17,15 @@ from dp_scenarios.canary.probe import ProbeResult
 from dp_scenarios.grading import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import TerminalState as ScoreTerminalState
 from dp_scenarios.grading.statistics import RepeatabilityTier
-from dp_scenarios.ledger import SupervisorFacts
-from dp_scenarios.operator import OperatorEngine, OperatorScript, StaticSupervisorRecordReader
+from dp_scenarios.knobs import EndpointObservation, SupervisorKnobs, WorkflowSwitchPlan
+from dp_scenarios.ledger import SupervisorFacts, fixture_dir_hash
+from dp_scenarios.operator import (
+    EventSchedule,
+    OperatorEngine,
+    OperatorScript,
+    StaticSupervisorRecordReader,
+    event_from_mapping,
+)
 from dp_scenarios.operator.persona import load_persona
 from dp_scenarios.operator.transport import InMemoryTransport, TouchedFile, TurnResult
 from dp_scenarios.runner import (
@@ -30,7 +37,7 @@ from dp_scenarios.runner import (
     TierError,
     TierRunner,
 )
-from dp_scenarios.runner.session import LiveSession
+from dp_scenarios.runner.session import LiveSession, SessionError
 from dp_scenarios.runner import tier as tier_module
 from dp_scenarios.runner.tier import run_drift_canary
 from dp_scenarios.scenario import FixtureSpec, load_scenario
@@ -73,7 +80,7 @@ class FakeScenario:
         raise ValueError("fake scenario has no query gold")
 
     def follow_up_gate(self, closure: object, query_rows: object = None) -> GateResult:
-        return GateResult("G7", False, 0, examined=False, ungraded=True)
+        return GateResult("follow-up", False, 0, examined=False, ungraded=True)
 
 
 @dataclass(frozen=True)
@@ -88,7 +95,7 @@ class NoPlantScenario(FakeScenario):
         *,
         fired_plants: object = None,
     ) -> GateResult:
-        return GateResult("G7", True, 15)
+        return GateResult("follow-up", True, 15)
 
 
 def make_scenario(scenario_id: str = "fake", *, turns: int = 1, deterministic: bool = False) -> FakeScenario:
@@ -149,9 +156,9 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
 
 
 def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build populated replay artifacts from the real S6 package."""
+    """Build populated replay artifacts from the real grain-trap package."""
 
-    scenario = load_scenario(ROOT / "scenarios/s6-grain-trap")
+    scenario = load_scenario(ROOT / "scenarios/grain-trap")
     generated = scenario.generate_fixture(tmp_path / "s6-fixture")
     row_counts = generated.manifest["table_row_counts"]
     recordings: list[ReplayRecording] = []
@@ -237,9 +244,9 @@ def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecordin
 
 
 def populated_s5_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build a populated replay for the zero-row scenario, including G7 evidence."""
+    """Build a populated replay for the zero-row scenario, including follow-up evidence."""
 
-    scenario = load_scenario(ROOT / "scenarios/s5-smoke-zero-row")
+    scenario = load_scenario(ROOT / "scenarios/zero-row-output")
     generated = scenario.generate_fixture(tmp_path / "s5-fixture")
     row_counts = generated.manifest["table_row_counts"]
     recordings: list[ReplayRecording] = []
@@ -626,7 +633,7 @@ def test_tier_reports_ungraded_when_a_required_plant_did_not_fire() -> None:
 
     assert result.verdict == "ungraded"
     assert result.scenario_runs[0].score.state is ScoreTerminalState.UNGRADED
-    assert result.scenario_runs[0].score.gates["G7"].ungraded
+    assert result.scenario_runs[0].score.gates["follow-up"].ungraded
 
 
 def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: Path) -> None:
@@ -656,8 +663,8 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
     ).run()
     live_run = live.scenario_runs[0]
 
-    assert not live_run.score.gates["G2"].examined
-    assert not live_run.score.gates["G2"].required
+    assert not live_run.score.gates["capability"].examined
+    assert not live_run.score.gates["capability"].required
     assert live_run.replay_recording.turns[0].result.files_touched[0].path == "spec.json"
 
     replay = TierRunner(
@@ -667,7 +674,109 @@ def test_live_session_artifacts_are_graded_and_its_recording_replays(tmp_path: P
         replay_recordings={scenario.id: live_run.replay_recording},
         environment_root=tmp_path,
     ).run()
-    assert not replay.scenario_runs[0].score.gates["G2"].examined
+    assert not replay.scenario_runs[0].score.gates["capability"].examined
+
+
+def test_tier_preserves_primary_error_when_transport_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingTransport:
+        def start_fresh_session(self) -> str:
+            return "session-1"
+
+        def send_message(self, message: object) -> TurnResult:
+            return TurnResult(agent_message="What is the source?")
+
+        def close(self) -> None:
+            raise RuntimeError("transport cleanup failed")
+
+    def fail_run(_engine: OperatorEngine) -> object:
+        raise ValueError("evaluation failed")
+
+    monkeypatch.setattr(OperatorEngine, "run", fail_run)
+
+    with pytest.raises(ValueError, match="evaluation failed") as error:
+        TierRunner(
+            [make_scenario("cleanup-primary")],
+            pins=pins(),
+            canary=clean_canary(),
+            session_factory=lambda: FailingTransport(),
+            environment_root=tmp_path,
+        ).run()
+
+    assert any("TierRunner transport cleanup failed" in note for note in error.value.__notes__)
+
+
+def test_composed_runner_applies_epoch_knobs_and_switches_workflow(tmp_path: Path) -> None:
+    scenario = make_scenario("composed-knob", turns=2)
+    event = event_from_mapping(
+        {
+            "version": 1,
+            "id": "workflow-switch",
+            "trigger_turn": 2,
+            "type": "back_after_lunch",
+            "content": "I am back.",
+            "outcome": "workflow switched",
+            "gap_seconds": 1,
+        }
+    )
+    scenario = replace(scenario, script=replace(scenario.script, events=EventSchedule((event,))))
+    initial = InMemoryTransport(
+        [TurnResult(agent_message="What is the source?")]
+    )
+    replacement = InMemoryTransport(
+        [TurnResult(agent_message="What is the source?")]
+    )
+    transports = iter((initial,))
+    restarted: list[str] = []
+
+    def session_factory(current: FakeScenario, environment: object, epoch: int) -> InMemoryTransport:
+        return next(transports)
+
+    def restart_factory(
+        current: FakeScenario,
+        environment: object,
+        epoch: int,
+        workflow: str,
+    ) -> InMemoryTransport:
+        restarted.append(workflow)
+        return replacement
+
+    result = TierRunner(
+        [scenario],
+        pins=pins(),
+        canary=clean_canary(),
+        session_factory=session_factory,
+        environment_root=tmp_path,
+        knob_plan={
+            (scenario.id, 1): SupervisorKnobs(
+                workflow_switch=WorkflowSwitchPlan("workflow-old", "workflow-new")
+            )
+        },
+        workflow_restart_factory=restart_factory,
+        workflow_observer=lambda message, turn, workflow: EndpointObservation(
+            workflow,
+            workflow,
+            "endpoint-new",
+        ),
+    ).run()
+
+    run = result.scenario_runs[0]
+    assert restarted == ["workflow-new"]
+    assert initial.started_fresh == ["session-1"]
+    assert replacement.started_fresh == ["session-1"]
+    assert run.manifest.runtime_knobs["workflow_switch"]["enabled"] is True  # type: ignore[index]
+    assert len(run.replay_recording.turns) == 2
+    rows = [json.loads(line) for line in run.ledger_bytes.splitlines()]
+    switch_rows = [row for row in rows if row.get("evidence_ref") == "runtime-knobs/workflow-switch"]
+    assert switch_rows and switch_rows[0]["claim"] == {
+        "from_workflow": "workflow-old",
+        "to_workflow": "workflow-new",
+        "answered_workflow": "workflow-new",
+        "answered_endpoint": "endpoint-new",
+        "stale_endpoint_rejected": True,
+    }
 
 
 def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Path) -> None:
@@ -693,8 +802,8 @@ def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Pat
     assert result.verdict == "clean"
     assert len(result.scenario_runs) == 5
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
-    assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "G2") for run in result.scenario_runs)
-    assert all(not run.score.gates["G2"].examined and not run.score.gates["G2"].required for run in result.scenario_runs)
+    assert all(all(gate.passed for name, gate in run.score.gates.items() if name != "capability") for run in result.scenario_runs)
+    assert all(not run.score.gates["capability"].examined and not run.score.gates["capability"].required for run in result.scenario_runs)
 
 
 def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) -> None:
@@ -710,8 +819,8 @@ def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) 
     assert result.verdict == "clean"
     assert len(result.scenario_runs) == 5
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs)
-    assert all(run.score.gates["G5"].passed for run in result.scenario_runs)
-    assert all(not run.score.gates["G6"].required for run in result.scenario_runs)
+    assert all(run.score.gates["build"].passed for run in result.scenario_runs)
+    assert all(not run.score.gates["query"].required for run in result.scenario_runs)
 
 
 def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
@@ -733,8 +842,8 @@ def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) 
     assert result.verdict == "failed"
     assert result.scenario_runs[0].score.state is ScoreTerminalState.FAILED
     assert all(run.score.state is ScoreTerminalState.PASSED for run in result.scenario_runs[1:])
-    assert not result.scenario_runs[0].score.gates["G5"].passed
-    assert "g5_row_count_mismatch" in result.scenario_runs[0].score.gates["G5"].codes
+    assert not result.scenario_runs[0].score.gates["build"].passed
+    assert "build_row_count_mismatch" in result.scenario_runs[0].score.gates["build"].codes
 
 
 def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
@@ -742,21 +851,18 @@ def test_agent_authored_row_count_and_supervisor_files_do_not_feed_g5() -> None:
     recording = recording_for(scenario, responses_for(scenario))
     turns = list(recording.turns)
     fake_files = (
-        TouchedFile("row-counts.json", b'{"model-a": 42}'),
-        TouchedFile("supervisor-records.json", b'{"run_id":"run-1","artifact_id":"a","publish_sequence":"1"}'),
+        TouchedFile("row-count-oracle.json", b'{"per_model_row_counts": {"model-a": 42}}'),
+        TouchedFile("route-fidelity.json", b"true"),
     )
     turns[-1] = replace(turns[-1], result=replace(turns[-1].result, files_touched=fake_files))
 
-    result = TierRunner(
-        [scenario],
-        pins=pins(),
-        canary=clean_canary(),
-        replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
-    ).run()
-
-    gate = result.scenario_runs[0].score.gates["G5"]
-    assert not gate.passed
-    assert "g5_row_counts_not_examined" in gate.codes
+    with pytest.raises(SessionError, match="reserved for harness-owned evidence"):
+        TierRunner(
+            [scenario],
+            pins=pins(),
+            canary=clean_canary(),
+            replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
+        ).run()
 
 
 @pytest.mark.parametrize("field", ["turn", "phase"])
@@ -892,23 +998,38 @@ def test_tier_preserves_unexamined_sentinel_through_grade_and_run(monkeypatch: p
     assert run.score.state is ScoreTerminalState.UNGRADED
 
 
+def test_fixture_integrity_is_checked_against_row_zero(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "data.csv").write_text("id\n1\n", encoding="utf-8")
+    environment = SimpleNamespace(
+        fixture_dir=fixture,
+        manifest=SimpleNamespace(fixture_dir_hash=fixture_dir_hash(fixture)),
+    )
+    assert tier_module._fixture_integrity_error(environment) is None
+    (fixture / "data.csv").write_text("id\n2\n", encoding="utf-8")
+    assert tier_module._fixture_integrity_error(environment) == (
+        "fixture directory changed after row-zero anchoring"
+    )
+
+
 @pytest.mark.parametrize("case", ["manifest", "markers", "observations", "turns"])
 def test_sentinel_not_examined_inputs_can_never_pass(tmp_path: Path, case: str) -> None:
     fixture = tmp_path / case / "fixture"
     artifacts = tmp_path / case / "artifacts"
     fixture.mkdir(parents=True)
     artifacts.mkdir(parents=True)
-    if case != "manifest":
-        (fixture / "fixture-manifest.json").write_text(
-            json.dumps({"pii_markers": ["PII-MARKER"]}) if case != "markers" else json.dumps({}),
-            encoding="utf-8",
-        )
+    generated_manifest = {"pii_markers": ["PII-MARKER"]} if case not in {"manifest", "markers"} else {}
     if case in {"observations", "turns"}:
         (artifacts / "operator-observations.json").write_text(
             json.dumps({"turns": "not-a-list"}) if case == "turns" else json.dumps([]),
             encoding="utf-8",
         )
-    environment = SimpleNamespace(fixture_dir=fixture, ledger_path=artifacts / "ledger.jsonl")
+    environment = SimpleNamespace(
+        fixture_dir=fixture,
+        generated_fixture_manifest=generated_manifest,
+        ledger_path=artifacts / "ledger.jsonl",
+    )
     sentinel = tier_module._sentinel_trip(environment, artifacts)
 
     assert sentinel is None
@@ -937,10 +1058,10 @@ def test_query_artifact_absence_is_required_when_answer_gold_is_declared(tmp_pat
         replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
     ).run()
 
-    gate = result.scenario_runs[0].score.gates["G6"]
+    gate = result.scenario_runs[0].score.gates["query"]
     assert gate.required
     assert not gate.examined
-    assert "g6_actual_not_examined" in gate.codes
+    assert "query_actual_not_examined" in gate.codes
 
 
 def test_query_artifact_without_answer_gold_remains_unexamined_and_optional(tmp_path: Path) -> None:
@@ -958,10 +1079,10 @@ def test_query_artifact_without_answer_gold_remains_unexamined_and_optional(tmp_
         replay_recordings={scenario.id: [replace(recording, turns=tuple(turns))]},
     ).run()
 
-    gate = result.scenario_runs[0].score.gates["G6"]
+    gate = result.scenario_runs[0].score.gates["query"]
     assert not gate.required
     assert not gate.examined
-    assert "g6_answer_gold_not_declared" in gate.codes
+    assert "query_answer_gold_not_declared" in gate.codes
 
 
 def test_canary_claim_line_drift_is_blocking_through_the_tier_wiring(tmp_path: Path) -> None:

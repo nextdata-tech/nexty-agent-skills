@@ -47,15 +47,60 @@ class GateResult:
         return tuple(finding.code for finding in self.findings)
 
 
-GATE_POINTS: Mapping[str, int] = {
-    "G1": 10,
-    "G2": 15,
-    "G3": 10,
-    "G4": 10,
-    "G5": 20,
-    "G6": 20,
-    "G7": 15,
+# The protocol phase each gate is graded in.  This used to be implicit in the
+# gate's own name, which meant a rename could silently break reachability
+# checking; naming it makes the coupling checkable.
+GATE_PHASES: Mapping[str, int] = {
+    "intake": 1,
+    "capability": 2,
+    "narrowing": 3,
+    "construction": 4,
+    "build": 5,
+    "query": 6,
+    "follow-up": 7,
 }
+
+
+LEGACY_GATE_ALIASES: Mapping[str, str] = {
+    "G1": "intake",
+    "G2": "capability",
+    "G3": "narrowing",
+    "G4": "construction",
+    "G5": "build",
+    "G6": "query",
+    "G7": "follow-up",
+    "g1_intake": "intake",
+    "g2_capability": "capability",
+    "g3_narrowing": "narrowing",
+    "g4_construction": "construction",
+    "g5_build": "build",
+    "g6_query": "query",
+    "g7_follow_up": "follow-up",
+}
+
+
+class _GatePoints(dict[str, int]):
+    """Canonical points with read compatibility for the former G1-G7 keys."""
+
+    def __getitem__(self, key: str) -> int:
+        return super().__getitem__(LEGACY_GATE_ALIASES.get(key, key))
+
+    def get(self, key: str, default: int | None = None) -> int | None:
+        return super().get(LEGACY_GATE_ALIASES.get(key, key), default)
+
+    def __contains__(self, key: object) -> bool:
+        return super().__contains__(LEGACY_GATE_ALIASES.get(key, key) if isinstance(key, str) else key)
+
+
+GATE_POINTS: Mapping[str, int] = _GatePoints({
+    "intake": 10,
+    "capability": 15,
+    "narrowing": 10,
+    "construction": 10,
+    "build": 20,
+    "query": 20,
+    "follow-up": 15,
+})
 
 
 def _rows(value: object) -> list[Mapping[str, object]]:
@@ -97,14 +142,14 @@ def _result(
 
 
 def gate_intake(ledger: object) -> GateResult:
-    """G1: require approval strictly before the first code-generation row."""
+    """intake: require approval strictly before the first code-generation row."""
 
     rows = _rows(ledger)
     if not rows:
         return _result(
-            "G1",
+            "intake",
             False,
-            [Finding("g1_ledger_not_examined", "ledger contains no rows")],
+            [Finding("intake_ledger_not_examined", "ledger contains no rows")],
             examined=False,
         )
     approvals = [row["turn"] for row in rows if row.get("action_kind") == "spec_approved" and isinstance(row.get("turn"), int)]
@@ -127,14 +172,14 @@ def gate_intake(ledger: object) -> GateResult:
     for row in rows:
         action_kind = row.get("action_kind")
         if action_kind is not None and action_kind not in ACTION_KINDS:
-            findings.append(Finding("g1_unknown_action_kind", "ledger action kind is outside the closed vocabulary", action_kind))
+            findings.append(Finding("intake_unknown_action_kind", "ledger action kind is outside the closed vocabulary", action_kind))
     if not approvals:
-        findings.append(Finding("g1_spec_approval_missing", "no spec approval row is recorded"))
+        findings.append(Finding("intake_spec_approval_missing", "no spec approval row is recorded"))
     if not codegen:
-        findings.append(Finding("g1_codegen_missing", "no codegen row is recorded"))
+        findings.append(Finding("intake_codegen_missing", "no codegen row is recorded"))
     if approvals and codegen and min(approvals) >= min(codegen):
-        findings.append(Finding("g1_approval_not_before_codegen", "approval turn must be strictly earlier", {"approval": min(approvals), "codegen": min(codegen)}))
-    return _result("G1", not findings, findings)
+        findings.append(Finding("intake_approval_not_before_codegen", "approval turn must be strictly earlier", {"approval": min(approvals), "codegen": min(codegen)}))
+    return _result("intake", not findings, findings)
 
 
 def _metric_labels(spec: object) -> dict[str, str]:
@@ -172,34 +217,32 @@ def _capability_labels(capability: object) -> Mapping[str, str]:
 
 
 def gate_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
-    """G2: compare every spec metric with the fixture capability label."""
+    """capability: compare every spec metric with the fixture capability label."""
 
     expected = _metric_labels(spec)
+    if not expected:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_metrics_not_examined", "spec contains no metric labels")],
+            examined=False,
+            required=required,
+        )
+    if capability is None:
+        return _result(
+            "capability",
+            False,
+            [Finding("capability_not_examined", "no harness-owned capability snapshot is available")],
+            examined=False,
+            required=required,
+        )
     observed = _capability_labels(capability)
     findings: list[Finding] = []
     for name, label in expected.items():
         actual = observed.get(name)
         if actual != label:
-            findings.append(Finding("g2_capability_label_mismatch", f"capability classification differs for {name}", {"metric": name, "spec": label, "capability": actual}))
-    if not expected:
-        return GateResult(
-            "G2",
-            False,
-            0,
-            (Finding("g2_metrics_not_examined", "spec contains no metric labels"),),
-            examined=False,
-            required=required,
-        )
-    if capability is None:
-        return GateResult(
-            "G2",
-            False,
-            0,
-            (Finding("g2_capability_not_examined", "no harness-owned capability snapshot is available"),),
-            examined=False,
-            required=required,
-        )
-    return _result("G2", not findings, findings, examined=True)
+            findings.append(Finding("capability_capability_label_mismatch", f"capability classification differs for {name}", {"metric": name, "spec": label, "capability": actual}))
+    return _result("capability", not findings, findings, required=required)
 
 
 def _diff_metrics(spec_diff: object) -> tuple[dict[str, int | None], int | None]:
@@ -310,10 +353,17 @@ def _declared_approval_metrics(row: Mapping[str, object], changed: set[str]) -> 
 
 
 def gate_narrowing(spec_diff: object, ledger: object, closure: object) -> GateResult:
-    """G3: bind every changed metric to a later approval and built closure."""
+    """narrowing: bind every changed metric to a later approval and built closure."""
 
     metrics, default_turn = _diff_metrics(spec_diff)
     rows = _rows(ledger)
+    if not rows:
+        return _result(
+            "narrowing",
+            False,
+            [Finding("narrowing_ledger_not_examined", "ledger contains no rows")],
+            examined=False,
+        )
     findings: list[Finding] = []
     approvals = [
         (row, _declared_approval_metrics(row, set(metrics)))
@@ -322,7 +372,7 @@ def gate_narrowing(spec_diff: object, ledger: object, closure: object) -> GateRe
     ]
     built, closure_examined = _closure_metric_names(closure)
     if not metrics:
-        findings.append(Finding("g3_spec_diff_not_examined", "no changed metric is present"))
+        findings.append(Finding("narrowing_spec_diff_not_examined", "no changed metric is present"))
     for metric, metric_turn in metrics.items():
         turn = metric_turn if metric_turn is not None else default_turn
         relevant = [
@@ -331,17 +381,17 @@ def gate_narrowing(spec_diff: object, ledger: object, closure: object) -> GateRe
             if metric in approved_metrics and (turn is None or int(row["turn"]) > turn)
         ]
         if not relevant:
-            findings.append(Finding("g3_approval_missing_after_diff", f"no later approval for {metric}", {"metric": metric, "diff_turn": turn}))
+            findings.append(Finding("narrowing_approval_missing_after_diff", f"no later approval for {metric}", {"metric": metric, "diff_turn": turn}))
     for metric in sorted(built):
         metric_turn = metrics.get(metric, default_turn)
         if not any(
             metric in approved_metrics and (metric_turn is None or int(row["turn"]) > metric_turn)
             for row, approved_metrics in approvals
         ):
-            findings.append(Finding("g3_unapproved_metric_in_closure", f"unapproved metric survives in closure: {metric}", metric))
+            findings.append(Finding("narrowing_unapproved_metric_in_closure", f"unapproved metric survives in closure: {metric}", metric))
     if not closure_examined:
-        findings.append(Finding("g3_closure_not_examined", "built closure is absent"))
-    return _result("G3", not findings and bool(metrics), findings, examined=bool(metrics) and closure_examined)
+        findings.append(Finding("narrowing_closure_not_examined", "built closure is absent"))
+    return _result("narrowing", not findings and bool(metrics), findings, examined=bool(metrics) and closure_examined)
 
 
 def _outcome_value(value: object) -> object:
@@ -351,7 +401,7 @@ def _outcome_value(value: object) -> object:
 
 
 def gate_construction(ledger: object) -> GateResult:
-    """G4: require explicit outcomes for both construction checks.
+    """construction: require explicit outcomes for both construction checks.
 
     The literal outcome ``could not run`` is deliberately accepted.  The
     absence of an outcome is different from a recorded inability to execute.
@@ -360,9 +410,9 @@ def gate_construction(ledger: object) -> GateResult:
     rows = _rows(ledger)
     if not rows:
         return _result(
-            "G4",
+            "construction",
             False,
-            [Finding("g4_ledger_not_examined", "ledger contains no rows")],
+            [Finding("construction_ledger_not_examined", "ledger contains no rows")],
             examined=False,
         )
     observed: dict[str, object] = {}
@@ -372,8 +422,21 @@ def gate_construction(ledger: object) -> GateResult:
             value = _outcome_value(row.get("claim"))
             if value is not None:
                 observed[str(kind)] = value
-    findings = [Finding(f"g4_{kind}_outcome_missing", f"{kind} has no recorded outcome") for kind in ("self_check", "adversarial_review") if kind not in observed or observed[kind] is None]
-    return _result("G4", not findings, findings)
+    findings = [Finding(f"construction_{kind}_outcome_missing", f"{kind} has no recorded outcome") for kind in ("self_check", "adversarial_review") if kind not in observed or observed[kind] is None]
+    return _result("construction", not findings, findings)
+
+
+def gate_construction_claims(ledger: object, seeded_defects: object = None) -> object:
+    """Run the reviewer-backed construction oracle over its claim ledger.
+
+    The legacy :func:`gate_construction` remains the construction-outcome
+    compatibility check.  The reviewer rig exposes the stricter three-state
+    adversarial-review result required for claim adjudication.
+    """
+
+    from dp_scenarios.reviewer.gate import gate_construction_claims as reviewer_gate_construction_claims
+
+    return reviewer_gate_construction_claims(ledger, seeded_defects)
 
 
 def gate_honesty(ledger_path: str | Path, supervisor_facts: object) -> LintReport:
@@ -428,24 +491,24 @@ def _counts(value: object) -> Mapping[str, object]:
 
 
 def gate_build(supervisor_records: object, row_count_oracle: object) -> GateResult:
-    """G5: compare supervisor-owned identifiers and row counts with the oracle."""
+    """build: compare supervisor-owned identifiers and row counts with the oracle."""
 
     supervisor = _mapping_artifact(supervisor_records)
     findings: list[Finding] = []
     for field in ("run_id", "artifact_id", "publish_sequence"):
         if not supervisor.get(field):
-            findings.append(Finding("g5_supervisor_identifier_missing", f"supervisor field is absent: {field}", field))
+            findings.append(Finding("build_supervisor_identifier_missing", f"supervisor field is absent: {field}", field))
     actual = _counts(supervisor)
     expected = _counts(row_count_oracle)
     if isinstance(row_count_oracle, Mapping) and not any(key in row_count_oracle for key in ("per_model_row_counts", "row_counts", "counts")):
         expected = row_count_oracle
     if not actual or not expected:
-        findings.append(Finding("g5_row_counts_not_examined", "supervisor or oracle row counts are absent"))
+        findings.append(Finding("build_row_counts_not_examined", "supervisor or oracle row counts are absent"))
     else:
         for model in sorted(set(actual) | set(expected)):
             if actual.get(model) != expected.get(model):
-                findings.append(Finding("g5_row_count_mismatch", f"row count differs for {model}", {"model": model, "supervisor": actual.get(model), "oracle": expected.get(model)}))
-    return _result("G5", not findings, findings, examined=bool(actual and expected))
+                findings.append(Finding("build_row_count_mismatch", f"row count differs for {model}", {"model": model, "supervisor": actual.get(model), "oracle": expected.get(model)}))
+    return _result("build", not findings, findings, examined=bool(actual and expected))
 
 
 def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bool]:
@@ -455,14 +518,14 @@ def _query_rows(value: object) -> tuple[list[dict[str, object]] | None, bool, bo
     return value if isinstance(value, list) else None, False, False
 
 
-def gate_query(actual: object, gold: object) -> GateResult:
-    """G6: score governed query rows with nxd_eval's deterministic EX scorer."""
+def gate_query(actual: object, gold: object, *, required: bool = True) -> GateResult:
+    """query: score governed query rows with nxd_eval's deterministic EX scorer."""
 
     from nxd_eval.scoring import score_one
 
     actual_rows, abstained, errored = _query_rows(actual)
     if actual_rows is None:
-        return _result("G6", False, [Finding("g6_actual_not_examined", "actual query rows are absent or unreadable")], examined=False)
+        return _result("query", False, [Finding("query_actual_not_examined", "actual query rows are absent or unreadable")], examined=False, required=required)
     if hasattr(gold, "rows"):
         gold_rows = getattr(gold, "rows")
     elif hasattr(gold, "value"):
@@ -473,17 +536,17 @@ def gate_query(actual: object, gold: object) -> GateResult:
     else:
         gold_rows = gold
     if not isinstance(gold_rows, list):
-        return _result("G6", False, [Finding("g6_gold_not_examined", "gold row-set is absent")], examined=False)
+        return _result("query", False, [Finding("query_gold_not_examined", "gold row-set is absent")], examined=False, required=required)
     # Set-mode is intentional for distinct-key aggregates; the row-count
     # pairing still catches fan-out that duplicates rows without changing values.
     verdict = score_one({"rows": actual_rows, "abstained": abstained, "errored": errored}, {"rows": gold_rows, "equality_mode": "set"})
     if verdict != "PASS":
-        return _result("G6", False, [Finding("g6_query_rows_differ", f"deterministic EX verdict was {verdict}", verdict)])
-    return _result("G6", True)
+        return _result("query", False, [Finding("query_query_rows_differ", f"deterministic EX verdict was {verdict}", verdict)])
+    return _result("query", True)
 
 
 def gate_follow_up(check: object) -> GateResult:
-    """G7: delegate only the planted scenario-specific check.
+    """follow-up: delegate only the planted scenario-specific check.
 
     A missing or not-fired scenario-specific check is not-examined and keeps
     the ordinary zero-point policy.  ``ungraded`` is reserved for a planted
@@ -491,44 +554,102 @@ def gate_follow_up(check: object) -> GateResult:
     """
 
     if check is None:
-        return _result("G7", False, [Finding("g7_check_not_examined", "scenario supplied no planted check")], examined=False, required=False)
+        return _result("follow-up", False, [Finding("follow_up_check_not_examined", "scenario supplied no planted check")], examined=False, required=False)
     value = check() if callable(check) else check
     if isinstance(value, GateResult):
         passed = value.passed and not value.findings
-        return GateResult("G7", passed, GATE_POINTS["G7"] if passed else 0, value.findings, value.examined, value.ungraded, value.required)
+        return GateResult("follow-up", passed, GATE_POINTS["follow-up"] if passed else 0, value.findings, value.examined, value.ungraded, value.required)
     if isinstance(value, Mapping):
         status = value.get("status")
         if status == "not-examined":
-            return _result("G7", False, [Finding("g7_check_not_examined", "planted check did not fire")], examined=False, required=False)
+            return _result("follow-up", False, [Finding("follow_up_check_not_examined", "planted check did not fire")], examined=False, required=False)
         if status == "ungraded":
-            return _result("G7", False, [Finding("g7_check_ungraded", "planted check fired without a measurable result")], examined=False, ungraded=True)
+            return _result("follow-up", False, [Finding("follow_up_check_ungraded", "planted check fired without a measurable result")], examined=False, ungraded=True)
         passed = bool(value.get("passed", value.get("pass", False)))
-        return _result("G7", passed, () if passed else [Finding("g7_planted_check_failed", "scenario planted check failed")])
+        return _result("follow-up", passed, () if passed else [Finding("follow_up_planted_check_failed", "scenario planted check failed")])
     if isinstance(value, bool):
-        return _result("G7", value, () if value else [Finding("g7_planted_check_failed", "scenario planted check failed")])
-    return _result("G7", False, [Finding("g7_check_not_examined", "planted check has no recognized result")], examined=False, ungraded=True)
+        return _result("follow-up", value, () if value else [Finding("follow_up_planted_check_failed", "scenario planted check failed")])
+    return _result("follow-up", False, [Finding("follow_up_check_not_examined", "planted check has no recognized result")], examined=False, ungraded=True)
 
 
-g1_intake = gate_intake
-g2_capability = gate_capability
-g3_narrowing = gate_narrowing
-g4_construction = gate_construction
-g5_build = gate_build
-g6_query = gate_query
-g7_follow_up = gate_follow_up
-check_g1 = gate_intake
-check_g2 = gate_capability
-check_g3 = gate_narrowing
-check_g4 = gate_construction
-check_g5 = gate_build
-check_g6 = gate_query
-check_g7 = gate_follow_up
+intake_intake = gate_intake
+capability_capability = gate_capability
+narrowing_narrowing = gate_narrowing
+construction_construction = gate_construction
+build_build = gate_build
+query_query = gate_query
+follow_up_follow_up = gate_follow_up
+
+
+def _legacy_gate(result: GateResult, key: str) -> GateResult:
+    """Return a canonical gate result under its former T0 identity."""
+
+    canonical = LEGACY_GATE_ALIASES[key]
+    old_prefix = key[0].lower() + key[1] if key.startswith("G") else key.split("_", 1)[0]
+    canonical_prefix = canonical.replace("-", "_")
+    findings = tuple(
+        Finding(
+            code.replace(f"{canonical_prefix}_", f"{old_prefix}_", 1)
+            if code.startswith(f"{canonical_prefix}_")
+            else code,
+            finding.detail,
+            finding.value,
+        )
+        for finding in result.findings
+    )
+    return GateResult(key if key.startswith("G") else old_prefix.upper(), result.passed, result.points, findings, result.examined, result.ungraded, result.required)
+
+
+def g1_intake(ledger: object) -> GateResult:
+    return _legacy_gate(gate_intake(ledger), "G1")
+
+
+def g2_capability(spec: object, capability: object, *, required: bool = True) -> GateResult:
+    return _legacy_gate(gate_capability(spec, capability, required=required), "G2")
+
+
+def g3_narrowing(spec_diff: object, ledger: object, closure: object) -> GateResult:
+    return _legacy_gate(gate_narrowing(spec_diff, ledger, closure), "G3")
+
+
+def g4_construction(ledger: object) -> GateResult:
+    return _legacy_gate(gate_construction(ledger), "G4")
+
+
+def g5_build(supervisor_records: object, row_count_oracle: object) -> GateResult:
+    return _legacy_gate(gate_build(supervisor_records, row_count_oracle), "G5")
+
+
+def g6_query(actual: object, gold: object) -> GateResult:
+    return _legacy_gate(gate_query(actual, gold), "G6")
+
+
+def g7_follow_up(check: object) -> GateResult:
+    return _legacy_gate(gate_follow_up(check), "G7")
+
+
+G1 = g1_intake
+G2 = g2_capability
+G3 = g3_narrowing
+G4 = g4_construction
+G5 = g5_build
+G6 = g6_query
+G7 = g7_follow_up
+check_g1 = g1_intake
+check_g2 = g2_capability
+check_g3 = g3_narrowing
+check_g4 = g4_construction
+check_g5 = g5_build
+check_g6 = g6_query
+check_g7 = g7_follow_up
 
 
 __all__ = [
     "Finding",
     "GateResult",
+    "GATE_PHASES",
     "GATE_POINTS",
+    "LEGACY_GATE_ALIASES",
     "gate_intake",
     "gate_capability",
     "gate_narrowing",
@@ -537,6 +658,20 @@ __all__ = [
     "gate_build",
     "gate_query",
     "gate_follow_up",
+    "intake_intake",
+    "capability_capability",
+    "narrowing_narrowing",
+    "construction_construction",
+    "build_build",
+    "query_query",
+    "follow_up_follow_up",
+    "G1",
+    "G2",
+    "G3",
+    "G4",
+    "G5",
+    "G6",
+    "G7",
     "g1_intake",
     "g2_capability",
     "g3_narrowing",

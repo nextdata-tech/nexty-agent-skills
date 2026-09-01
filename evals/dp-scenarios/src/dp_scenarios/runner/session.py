@@ -18,6 +18,7 @@ import select
 import subprocess
 from typing import Any, Protocol
 
+from dp_scenarios.knobs import EndpointObservation, WorkflowSwitchEvidence, WorkflowSwitchPlan
 from dp_scenarios.operator.transport import (
     Attachment,
     OperatorMessage,
@@ -34,6 +35,19 @@ class SessionError(RuntimeError):
 
 class ReplayMismatch(SessionError):
     """Raised when a replay receives a different operator message."""
+
+
+# These names are written by the harness from supervisor/source observations.
+# An agent must not be able to manufacture an oracle by reporting a touched
+# file with the same name.
+_RESERVED_HARNESS_ARTIFACT_NAMES = frozenset(
+    {
+        "row-count-oracle.json",
+        "row_counts.json",
+        "route-fidelity.json",
+        "route_fidelity.json",
+    }
+)
 
 
 def _encode(value: object) -> object:
@@ -311,6 +325,10 @@ def _materialize_touched_files(
     root = artifact_root.resolve()
     for touched in result.files_touched:
         relative = _relative_touched_path(touched.path, None)
+        if relative.name in _RESERVED_HARNESS_ARTIFACT_NAMES:
+            raise SessionError(
+                f"touched-file path is reserved for harness-owned evidence: {relative}"
+            )
         target = (root / relative).resolve()
         if root not in target.parents and target != root:
             raise SessionError(f"touched-file path escapes artifact root: {relative}")
@@ -365,6 +383,10 @@ class ReplaySession:
             raw_path = Path(touched.path)
             if raw_path.is_absolute():
                 raise SessionError(f"replay touched-file path must be relative: {raw_path}")
+            if raw_path.name in _RESERVED_HARNESS_ARTIFACT_NAMES:
+                raise SessionError(
+                    f"touched-file path is reserved for harness-owned evidence: {raw_path}"
+                )
             target = (self.artifact_root / raw_path).resolve()
             if self.artifact_root not in target.parents and target != self.artifact_root:
                 raise SessionError(f"replay touched-file path escapes artifact root: {raw_path}")
@@ -393,6 +415,20 @@ class ReplaySession:
 
 ResponseHandler = Callable[[OperatorMessage], TurnResult]
 
+WorkflowRestart = Callable[[str], Transport]
+WorkflowObserver = Callable[[OperatorMessage, TurnResult, str], EndpointObservation]
+WorkflowEvidenceSink = Callable[[WorkflowSwitchEvidence, int], None]
+
+
+class DesktopSessionLifecycle(Protocol):
+    """The small lifecycle seam owned by the shared desktop substrate."""
+
+    def ensure_started(self) -> Any: ...
+
+    def attach_process(self, process: Any) -> None: ...
+
+    def cleanup(self) -> None: ...
+
 
 class LiveSession:
     """Drive a headless JSONL session without exposing harness state to it.
@@ -411,6 +447,7 @@ class LiveSession:
         cwd: str | Path | None = None,
         timeout: float = 300.0,
         handler: ResponseHandler | None = None,
+        desktop_session: DesktopSessionLifecycle | None = None,
     ) -> None:
         if command is None and handler is None:
             raise SessionError("live session requires a command or structured response handler")
@@ -423,12 +460,19 @@ class LiveSession:
         self.cwd = str(cwd) if cwd is not None else None
         self.timeout = timeout
         self.handler = handler
+        # The shared DesktopStdioSession is the owner of a live process group
+        # when this session was created by DesktopStdioTransport.  The
+        # protocol keeps replay and handler-backed sessions independent of the
+        # substrate while making the lifecycle contract explicit.
+        self.desktop_session = desktop_session
         self._process: subprocess.Popen[str] | None = None
         self._session_counter = 0
 
     def start_fresh_session(self) -> str:
         self._session_counter += 1
         if self.handler is None and self._process is None:
+            if self.desktop_session is not None:
+                self.desktop_session.ensure_started()
             assert self.command is not None
             self._process = subprocess.Popen(
                 list(self.command),
@@ -441,7 +485,10 @@ class LiveSession:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                start_new_session=True,
             )
+            if self.desktop_session is not None:
+                self.desktop_session.attach_process(self._process)
         return f"live-session-{self._session_counter}"
 
     start_fresh = start_fresh_session
@@ -487,14 +534,24 @@ class LiveSession:
 
     def close(self) -> None:
         if self._process is None:
+            if self.desktop_session is not None:
+                self.desktop_session.cleanup()
             return
-        self._process.terminate()
+        process = self._process
         try:
-            self._process.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait(timeout=5)
-        self._process = None
+            if self.desktop_session is not None:
+                # DesktopStdioSession owns the process group and its bounded
+                # reap path.  This also runs when turn parsing raised.
+                self.desktop_session.cleanup()
+            else:
+                process.terminate()
+                try:
+                    process.wait(timeout=self.timeout)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        finally:
+            self._process = None
 
     def __enter__(self) -> "LiveSession":
         return self
@@ -512,6 +569,10 @@ class RecordingSession:
         *,
         artifact_root: str | Path | None = None,
         sandbox_home: str | Path | None = None,
+        workflow_switch: WorkflowSwitchPlan | None = None,
+        workflow_restart: WorkflowRestart | None = None,
+        workflow_observer: WorkflowObserver | None = None,
+        workflow_evidence: WorkflowEvidenceSink | None = None,
     ) -> None:
         self.transport = transport
         self.artifact_root = Path(artifact_root).resolve() if artifact_root is not None else None
@@ -519,8 +580,30 @@ class RecordingSession:
         if self.artifact_root is not None:
             self.artifact_root.mkdir(parents=True, exist_ok=True)
         self.turns: list[RecordedTurn] = []
+        self.workflow_switch = workflow_switch
+        self.workflow_restart = workflow_restart
+        self.workflow_observer = workflow_observer
+        self.workflow_evidence = workflow_evidence
+        self._session_started = False
+        self._workflow_switched = False
+        self._workflow_observation_pending = False
+
+        if workflow_switch is not None and (workflow_restart is None or workflow_observer is None):
+            raise SessionError(
+                "workflow switching requires a restart factory and endpoint observer"
+            )
 
     def start_fresh_session(self) -> str | None:
+        if self.workflow_switch is not None and self._session_started and not self._workflow_switched:
+            current = self.transport
+            close = getattr(current, "close", None)
+            if callable(close):
+                close()
+            assert self.workflow_restart is not None
+            self.transport = self.workflow_restart(self.workflow_switch.to_workflow)
+            self._workflow_switched = True
+            self._workflow_observation_pending = True
+        self._session_started = True
         return self.transport.start_fresh_session()
 
     start_fresh = start_fresh_session
@@ -536,6 +619,29 @@ class RecordingSession:
         result = self.transport.send_message(message)
         if not isinstance(result, TurnResult):
             raise SessionError("recorded transport returned no TurnResult")
+        if self._workflow_observation_pending:
+            assert self.workflow_switch is not None
+            assert self.workflow_observer is not None
+            observation = self.workflow_observer(message, result, self.workflow_switch.to_workflow)
+            if not isinstance(observation, EndpointObservation):
+                raise SessionError("workflow observer returned no EndpointObservation")
+            if observation.requested_workflow != self.workflow_switch.to_workflow:
+                raise SessionError("post-switch call used the wrong requested workflow")
+            if observation.answered_workflow != self.workflow_switch.to_workflow:
+                raise SessionError(
+                    "post-switch call was served by a stale workflow: "
+                    f"{observation.answered_workflow!r}"
+                )
+            evidence = WorkflowSwitchEvidence(
+                from_workflow=self.workflow_switch.from_workflow,
+                to_workflow=self.workflow_switch.to_workflow,
+                answered_workflow=observation.answered_workflow,
+                answered_endpoint=observation.answered_endpoint,
+                stale_endpoint_rejected=True,
+            )
+            if self.workflow_evidence is not None:
+                self.workflow_evidence(evidence, len(self.turns) + 1)
+            self._workflow_observation_pending = False
         normalized = _normalized_turn_result(result, self.sandbox_home)
         if self.artifact_root is not None:
             _materialize_touched_files(normalized, self.artifact_root, source_root=self.sandbox_home)

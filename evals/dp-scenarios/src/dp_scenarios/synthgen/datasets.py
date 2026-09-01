@@ -1,4 +1,4 @@
-"""Seeded source definitions for the two T0 scenario datasets.
+"""Seeded source definitions for the two smoke-tier scenario datasets.
 
 The definitions own the fixed epoch-relative base instants, source schemas,
 and declarative defect plans.  Builders receive the one seeded RNG created by

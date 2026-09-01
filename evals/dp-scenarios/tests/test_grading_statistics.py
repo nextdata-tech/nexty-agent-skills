@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from dp_scenarios.grading.gates import GATE_POINTS, GateResult
 from dp_scenarios.grading.score import score_run
+from dp_scenarios.ledger.manifest import default_runtime_knobs
 from dp_scenarios.grading.statistics import (
     DemonstratedOnce,
     RepeatabilityTier,
@@ -18,11 +19,12 @@ from dp_scenarios.grading.statistics import (
     repeatability_certificate,
 )
 from dp_scenarios.ledger.lint import LintReport
+from dp_scenarios.ledger.manifest import ManifestError
 from nxd_eval.stats import wilson_ci
 
 
 def _run(state: str = "passed", *, scenario_id: str = "s", g5: bool = True, g6: bool = True, tier: str | None = None) -> dict[str, object]:
-    result: dict[str, object] = {"state": state, "scenario_id": scenario_id, "gates": {"G5": g5, "G6": g6}}
+    result: dict[str, object] = {"state": state, "scenario_id": scenario_id, "gates": {"build": g5, "query": g6}}
     if tier is not None:
         result["repeatability_tier"] = tier
     return result
@@ -51,6 +53,7 @@ def _manifest() -> dict[str, object]:
         "fixture_seed": 1,
         "fixture_base_instant": "2024-01-01T00:00:00+00:00",
         "run_id": "run",
+        "runtime_knobs": default_runtime_knobs(),
     }
 
 
@@ -59,9 +62,9 @@ def test_rates_use_nxd_eval_wilson_and_exclude_invalid() -> None:
     report = gate_pass_rates(runs)
     assert report.excluded_invalid == 1
     expected = wilson_ci(3, 3)
-    assert report.rates["G5"].lower_bound == expected.low
-    assert report.rates["G6"].passed == 2
-    assert report.rates["G5"].examined == 3
+    assert report.rates["build"].lower_bound == expected.low
+    assert report.rates["query"].passed == 2
+    assert report.rates["build"].examined == 3
 
 
 def test_declared_repeatability_and_one_shot_have_distinct_surfaces() -> None:
@@ -84,7 +87,7 @@ def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
         tier=RepeatabilityTier.DETERMINISTIC,
         epochs=30,
         certification_rule="wilson_lower_bound",
-        gates=("G5",),
+        gates=("build",),
         lower_bound=0.85,
         confidence=0.95,
     )
@@ -93,7 +96,7 @@ def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
         declared,
     )
     assert bound_between_thresholds.rates is not None
-    lower_bound = bound_between_thresholds.rates.rates["G5"].lower_bound
+    lower_bound = bound_between_thresholds.rates.rates["build"].lower_bound
     assert lower_bound < declared.lower_bound
     assert 0.80 < lower_bound < 0.90
     assert not bound_between_thresholds.certified
@@ -102,7 +105,7 @@ def test_wilson_lower_bound_and_exact_epoch_count_are_both_required() -> None:
         tier=RepeatabilityTier.DETERMINISTIC,
         epochs=30,
         certification_rule="wilson_lower_bound",
-        gates=("G5",),
+        gates=("build",),
         lower_bound=0.80,
         confidence=0.95,
     )
@@ -115,7 +118,7 @@ def test_declared_observed_epoch_contract_requires_all_declared_epochs() -> None
         tier=RepeatabilityTier.DETERMINISTIC,
         epochs=6,
         certification_rule="observed_epochs",
-        gates=("G5",),
+        gates=("build",),
         lower_bound=0.73,
         confidence=0.80,
     )
@@ -128,7 +131,23 @@ def test_declared_observed_epoch_contract_requires_all_declared_epochs() -> None
     assert not short.certified
     assert complete.certified
     assert complete.rates is not None
-    assert complete.rates.rates["G5"].lower_bound == wilson_ci(6, 6, alpha=0.20).low
+    assert complete.rates.rates["build"].lower_bound == wilson_ci(6, 6, alpha=0.20).low
+
+
+def test_invalid_epoch_cannot_certify_a_complete_repeatability_batch() -> None:
+    declared = SimpleNamespace(
+        tier=RepeatabilityTier.DETERMINISTIC,
+        epochs=6,
+        certification_rule="observed_epochs",
+        gates=("build",),
+        lower_bound=0.73,
+        confidence=0.80,
+    )
+    report = repeatability_certificate([_run() for _ in range(5)] + [_run("invalid")], declared)
+
+    assert report.rates is not None
+    assert report.rates.excluded_invalid == 1
+    assert not report.certified
 
 
 def test_mock_source_epoch_plan_and_observed_count_are_pinned() -> None:
@@ -141,14 +160,14 @@ def test_mock_source_epoch_plan_and_observed_count_are_pinned() -> None:
 
 def test_rates_use_gate_examination_and_zero_automatic_zero_numerators() -> None:
     unexamined = _run()
-    unexamined["gates"] = {"G5": {"passed": True, "examined": False}, "G6": True}
+    unexamined["gates"] = {"build": {"passed": True, "examined": False}, "query": True}
     report = gate_pass_rates([unexamined, _run()])
-    assert report.rates["G5"].passed == 1
-    assert report.rates["G5"].examined == 1
+    assert report.rates["build"].passed == 1
+    assert report.rates["build"].examined == 1
 
     zero = gate_pass_rates([_run("automatic zero"), _run()])
-    assert zero.rates["G5"].passed == 1
-    assert zero.rates["G5"].examined == 2
+    assert zero.rates["build"].passed == 1
+    assert zero.rates["build"].examined == 2
 
     typed_zero = score_run(
         {gate: GateResult(gate, True, GATE_POINTS[gate]) for gate in GATE_POINTS},
@@ -157,8 +176,8 @@ def test_rates_use_gate_examination_and_zero_automatic_zero_numerators() -> None
         sentinel_tripped=True,
     )
     typed_report = gate_pass_rates([typed_zero, _run()])
-    assert typed_report.rates["G5"].passed == 1
-    assert typed_report.rates["G5"].examined == 2
+    assert typed_report.rates["build"].passed == 1
+    assert typed_report.rates["build"].examined == 2
 
 
 def test_rate_requests_require_two_valid_observations() -> None:
@@ -199,3 +218,28 @@ def test_mcnemar_refuses_multi_field_manifests_and_accepts_one_field() -> None:
         paired_mcnemar(first, {**first, "fixture_dir_hash": "fixture-2"}, [_run()], [_run()])
     with pytest.raises(ValueError, match="fixture and operator"):
         paired_mcnemar(first, {**first, "operator_script_hash": "operator-2"}, [_run()], [_run()])
+
+
+def test_mcnemar_refuses_validation_mode_as_a_pairing_axis() -> None:
+    live = {
+        **_manifest(),
+        "validation_mode": "live",
+        "supervisor_binary_path": "/opt/supervisor#sha256:abc",
+        "session_root": "/tmp/session",
+        "session_config_path": "/tmp/session/mcp-config.json",
+        "session_config_sha256": "sha256:config",
+        "session_trace_path": "/tmp/session/mcp-trace.jsonl",
+        "session_server_result_path": "/tmp/session/server-result.json",
+    }
+    replay = {**live, "validation_mode": "replay"}
+
+    with pytest.raises(ValueError, match="exactly one"):
+        paired_mcnemar(live, replay, [_run()], [_run()])
+
+
+def test_mcnemar_refuses_a_manifest_whose_runtime_knobs_are_unpinned() -> None:
+    pinned = _manifest()
+    unpinned = {key: value for key, value in pinned.items() if key != "runtime_knobs"}
+
+    with pytest.raises(ManifestError, match="runtime_knobs"):
+        paired_mcnemar(pinned, unpinned, [_run()], [_run()])

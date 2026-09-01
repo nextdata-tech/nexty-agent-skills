@@ -248,7 +248,7 @@ def lint(
 
     manifest: Manifest | None = None
     try:
-        manifest = Manifest.from_record(records[0])
+        manifest = Manifest.from_record(records[0], replay=None)
     except ManifestError as exc:
         code = SENTINEL_NOT_PERMITTED_FOR_TIER if exc.code == SENTINEL_NOT_PERMITTED_FOR_TIER else INVALID_MANIFEST
         findings.append(Finding(code, 1, exc.value, field=exc.field))

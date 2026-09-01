@@ -59,7 +59,7 @@ def _stable_document(value: object) -> object:
 
 def _gate_text(run: ScenarioRun) -> str:
     parts: list[str] = []
-    for name in ("G1", "G2", "G3", "G4", "G5", "G6", "G7"):
+    for name in ("intake", "capability", "narrowing", "construction", "build", "query", "follow-up"):
         gate = run.score.gates[name]
         status = (
             "PASS"

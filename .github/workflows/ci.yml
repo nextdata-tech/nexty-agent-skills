@@ -69,12 +69,12 @@ jobs:
       # path dependency on nxd_eval). Its tests are deterministic by design and
       # need no model credentials, no supervisor binary and no network: the
       # fixtures are generated from pinned seeds and the agent sessions are
-      # replayed from recordings. A failure here is a real regression, not a
-      # flake, which is why it belongs in the always-on job rather than in the
-      # opt-in evals workflow.
+      # replayed from recordings. Dependency-backed integration tests run in the
+      # dedicated jobs below; excluding their markers here prevents an unavailable
+      # Docker image or NXD checkout from becoming a silent green skip.
       - name: dp-scenarios harness tests
         working-directory: evals/dp-scenarios
-        run: uv run --locked pytest -q
+        run: uv run --locked pytest -q -m "not integration and not field_mapper"
 
       # Benchmark evidence is source-controlled like the skills: validate the
       # stdlib recorder directly and fail if an entry or generated index drifts.
@@ -83,3 +83,76 @@ jobs:
           set -euo pipefail
           python3 -m unittest evals.tests.test_benchmark_record
           python3 evals/benchmark_record.py --check
+
+  dp-scenarios-postgres:
+    name: dp-scenarios Postgres integration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v5
+      - name: Pull the pinned Postgres fixture image
+        run: docker pull postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+      - name: Run Postgres-backed fixture tests
+        working-directory: evals/dp-scenarios
+        env:
+          EVAL_REQUIRE_LIVE_FIXTURE: "1"
+        run: uv run --locked pytest -q -m integration
+
+  dp-scenarios-field-mapper:
+    name: dp-scenarios field-mapper integration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      NXD_REPO_TOKEN: ${{ secrets.NXD_DISPATCH_PAT }}
+      EVAL_REQUIRE_LIVE_FIXTURE: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v5
+      - name: Check out the pinned NXD source
+        if: env.NXD_REPO_TOKEN != ''
+        uses: actions/checkout@v6
+        with:
+          repository: nextdata-tech/nxd
+          ref: bb5fa1e3ab4ca381edc8e309449e77639e9ff8af
+          path: nxd
+          token: ${{ env.NXD_REPO_TOKEN }}
+      - name: Verify pinned NXD source
+        if: env.NXD_REPO_TOKEN != ''
+        working-directory: nxd
+        run: |
+          test "$(git rev-parse HEAD)" = "bb5fa1e3ab4ca381edc8e309449e77639e9ff8af"
+          git rev-parse HEAD
+      - name: Build NXD Python bindings
+        if: env.NXD_REPO_TOKEN != ''
+        working-directory: nxd
+        env:
+          UV_DEFAULT_INDEX: https://pypi.org/simple/
+        run: |
+          make -C components/nxd_py/data_product copy-templates
+          uv sync --directory components/nxd_py/data_product --all-extras
+          uv sync --directory components/nxd_py/core
+          uv sync --directory components/nxd_py/drivers --all-extras
+      - name: Run field-mapper grant tests
+        if: env.NXD_REPO_TOKEN != ''
+        working-directory: evals/dp-scenarios
+        env:
+          EVAL_NXD_REPO_ROOT: ${{ github.workspace }}/nxd
+        run: uv run --locked pytest -q -m field_mapper
+      - name: Require NXD source for field-mapper integration
+        if: env.NXD_REPO_TOKEN == ''
+        run: |
+          echo "NXD_DISPATCH_PAT is unavailable; field-mapper integration cannot execute." >&2
+          exit 1

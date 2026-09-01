@@ -24,7 +24,7 @@ import os
 import stat
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PureWindowsPath
 from typing import ClassVar
@@ -56,32 +56,85 @@ MANIFEST_FIELDS = (
     "fixture_seed",
     "fixture_base_instant",
     "run_id",
+    "supervisor_binary_path",
+    "session_root",
+    "session_config_path",
+    "session_config_sha256",
+    "session_trace_path",
+    "session_server_result_path",
+    "runtime_knobs",
+    "validation_mode",
 )
 
 MANIFEST_RECORD_TYPE = "run_manifest"
 NOT_APPLICABLE = "not-applicable"
 
-# T0 is the package's smoke tier.  Keeping the descriptive spelling as an
-# alias lets callers use either name without weakening the waiver policy.
+
+def _default_runtime_knobs() -> dict[str, object]:
+    """Return the explicit all-off pin used by direct manifest constructors."""
+
+    return {
+        "schema_version": 1,
+        "transform_window": {"enabled": False},
+        "broker_fault": {"enabled": False, "active_attempt": 1, "active_fault": "none"},
+        "workflow_switch": {"enabled": False},
+    }
+
+
+def default_runtime_knobs() -> dict[str, object]:
+    """Return a fresh all-off pin for legacy report adapters."""
+
+    return _default_runtime_knobs()
+
+# These fields describe the live desktop substrate.  They are required for a
+# live manifest; replay has an explicit, tier-keyed waiver below because it
+# intentionally does not reacquire the substrate.
+DESKTOP_SESSION_FIELDS = frozenset(
+    {
+        "supervisor_binary_path",
+        "session_root",
+        "session_config_path",
+        "session_config_sha256",
+        "session_trace_path",
+        "session_server_result_path",
+    }
+)
+
+REPLAY_SESSION_PATH_FIELDS = frozenset(
+    {
+        "session_root",
+        "session_config_path",
+        "session_trace_path",
+        "session_server_result_path",
+    }
+)
+
+# Validation mode records how the run was established.  It is persisted for
+# later validation, but is metadata rather than a property under test and must
+# never create a statistical pairing axis.
+COMPARABILITY_EXCLUDED_FIELDS = REPLAY_SESSION_PATH_FIELDS | frozenset({"validation_mode"})
+
+# Tiers are named for what they are: the smoke tier runs on every change, the
+# core tier weekly, the full tier per release.  Only the smoke tier is
+# implemented here, and it waives the pins for surfaces it never exercises.
+# Keep T0 as an alias for persisted manifests produced by the original smoke
+# tier; both spellings use the same waiver policy.
+_SMOKE_TIER_WAIVERS = frozenset(
+    {
+        "judge_model_id",
+        "judge_prompt_hash",
+        "judge_calibration_set_hash",
+        "grant_fixture_hash",
+        "persona_paraphrase_prompt_hash",
+    }
+)
 TIER_WAIVERS: dict[str, frozenset[str]] = {
-    "smoke": frozenset(
-        {
-            "judge_model_id",
-            "judge_prompt_hash",
-            "judge_calibration_set_hash",
-            "grant_fixture_hash",
-            "persona_paraphrase_prompt_hash",
-        }
-    ),
-    "T0": frozenset(
-        {
-            "judge_model_id",
-            "judge_prompt_hash",
-            "judge_calibration_set_hash",
-            "grant_fixture_hash",
-            "persona_paraphrase_prompt_hash",
-        }
-    ),
+    "smoke": _SMOKE_TIER_WAIVERS,
+    "T0": _SMOKE_TIER_WAIVERS,
+}
+
+REPLAY_TIER_WAIVERS: dict[str, frozenset[str]] = {
+    tier: waivers | DESKTOP_SESSION_FIELDS for tier, waivers in TIER_WAIVERS.items()
 }
 
 
@@ -147,6 +200,21 @@ class Manifest:
     fixture_seed: int
     fixture_base_instant: str
     run_id: str
+    supervisor_binary_path: str = NOT_APPLICABLE
+    session_root: str = NOT_APPLICABLE
+    session_config_path: str = NOT_APPLICABLE
+    session_config_sha256: str = NOT_APPLICABLE
+    session_trace_path: str = NOT_APPLICABLE
+    session_server_result_path: str = NOT_APPLICABLE
+    # Every run carries an explicit off/on record for the supervisor knobs.
+    # The default is the canonical all-off pin for callers that construct a
+    # replay manifest directly; RunEnvironment always supplies its own value.
+    runtime_knobs: Mapping[str, object] = field(
+        default_factory=_default_runtime_knobs
+    )
+    # Persist this distinction.  A stored live manifest must still require
+    # desktop identity when a later validator reads it without the substrate.
+    validation_mode: str = "replay"
 
     fields: ClassVar[tuple[str, ...]] = MANIFEST_FIELDS
 
@@ -169,6 +237,12 @@ class Manifest:
             "judge_calibration_set_hash",
             "fixture_base_instant",
             "run_id",
+            "supervisor_binary_path",
+            "session_root",
+            "session_config_path",
+            "session_config_sha256",
+            "session_trace_path",
+            "session_server_result_path",
         )
         for field_name in string_fields:
             value = getattr(self, field_name)
@@ -185,6 +259,13 @@ class Manifest:
                 field="agent_sampling_params",
                 value=self.agent_sampling_params,
             )
+        if not isinstance(self.runtime_knobs, Mapping) or not self.runtime_knobs:
+            raise ManifestError(
+                "manifest field runtime_knobs must be a non-empty mapping",
+                field="runtime_knobs",
+                value=self.runtime_knobs,
+            )
+        object.__setattr__(self, "runtime_knobs", dict(self.runtime_knobs))
         if isinstance(self.turn_budget, bool) or not isinstance(self.turn_budget, int) or self.turn_budget < 1:
             raise ManifestError(
                 "manifest field turn_budget must be an integer of at least 1",
@@ -210,7 +291,14 @@ class Manifest:
                 field="tier",
                 value=self.tier,
             )
-        waivers = TIER_WAIVERS[self.tier]
+        if self.validation_mode not in {"live", "replay"}:
+            raise ManifestError(
+                f"unknown manifest validation mode {self.validation_mode!r}",
+                field="validation_mode",
+                value=self.validation_mode,
+            )
+        waivers_by_tier = TIER_WAIVERS if self.validation_mode == "live" else REPLAY_TIER_WAIVERS
+        waivers = waivers_by_tier[self.tier]
         for field_name in self.fields:
             if getattr(self, field_name) == NOT_APPLICABLE and field_name not in waivers:
                 raise ManifestError(
@@ -236,8 +324,14 @@ class Manifest:
         return {"record_type": MANIFEST_RECORD_TYPE, "manifest": self.to_dict()}
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, object]) -> "Manifest":
-        """Construct a manifest, rejecting absent and unknown fields."""
+    def from_mapping(cls, value: Mapping[str, object], *, replay: bool | None = False) -> "Manifest":
+        """Construct a manifest, preserving a persisted mode when requested.
+
+        ``replay=None`` is for stored artifacts: it uses the mode written into
+        the manifest and falls back to replay for pre-mode artifacts.  The
+        boolean forms retain the caller's explicit strict/live or tolerant/
+        replay parsing choice for in-memory values.
+        """
 
         if not isinstance(value, Mapping):
             raise ManifestError("manifest must be a JSON object", value=value)
@@ -245,18 +339,51 @@ class Manifest:
         if unknown:
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ManifestError(f"manifest has unknown field(s): {names}", field=names, value=unknown)
-        missing = [field_name for field_name in cls.fields if field_name not in value]
+        if replay is None:
+            if "validation_mode" in value:
+                persisted_mode = value["validation_mode"]
+            else:
+                has_live_identity = any(
+                    field_name in value and value[field_name] != NOT_APPLICABLE
+                    for field_name in DESKTOP_SESSION_FIELDS
+                )
+                persisted_mode = "live" if has_live_identity else "replay"
+            validation_mode = persisted_mode
+        else:
+            validation_mode = "replay" if replay else "live"
+        if not isinstance(validation_mode, str):
+            raise ManifestError(
+                "manifest field validation_mode must be a string",
+                field="validation_mode",
+                value=validation_mode,
+            )
+        # runtime_knobs is never defaulted on parse.  A run whose active knobs
+        # are unknown cannot be compared with any other run, so an omitted pin
+        # is a parse failure rather than an assumption that nothing was on.
+        missing = [
+            field_name
+            for field_name in cls.fields
+            if field_name not in value
+            and field_name != "validation_mode"
+            and (validation_mode == "live" or field_name not in DESKTOP_SESSION_FIELDS)
+        ]
         if missing:
             raise ManifestError(
                 "manifest is missing field(s): " + ", ".join(missing),
                 field=missing[0],
                 value=None,
             )
-        values = {field_name: value[field_name] for field_name in cls.fields}
-        return cls(**values)  # type: ignore[arg-type]
+        values = {
+            field_name: value.get(field_name, NOT_APPLICABLE)
+            for field_name in cls.fields
+        }
+        values["validation_mode"] = validation_mode
+        return cls(
+            **values,
+        )  # type: ignore[arg-type]
 
     @classmethod
-    def from_record(cls, value: object) -> "Manifest":
+    def from_record(cls, value: object, *, replay: bool | None = False) -> "Manifest":
         """Parse a canonical manifest record for validation."""
 
         if not isinstance(value, Mapping):
@@ -266,9 +393,12 @@ class Manifest:
         if marker in {MANIFEST_RECORD_TYPE, "manifest"}:
             if nested is not None and not isinstance(nested, Mapping):
                 raise ManifestError("manifest record's manifest value must be an object", field="manifest", value=nested)
-            return cls.from_mapping(nested if isinstance(nested, Mapping) else value)
+            return cls.from_mapping(
+                nested if isinstance(nested, Mapping) else value,
+                replay=replay,
+            )
         if isinstance(nested, Mapping):
-            return cls.from_mapping(nested)
+            return cls.from_mapping(nested, replay=replay)
         raise ManifestError("row zero is not a manifest record", field="record_type", value=marker)
 
     def comparable_to(self, other: "Manifest") -> ComparabilityResult:
@@ -279,7 +409,8 @@ class Manifest:
         differing = {
             field_name
             for field_name in self.fields
-            if getattr(self, field_name) != getattr(other, field_name)
+            if field_name not in COMPARABILITY_EXCLUDED_FIELDS
+            and getattr(self, field_name) != getattr(other, field_name)
         }
         if not differing:
             kind = Comparability.IDENTICAL

@@ -1,4 +1,4 @@
-"""Tests proving the SQL reference is the independent T0 oracle."""
+"""Tests proving the SQL reference is the independent smoke-tier oracle."""
 
 from __future__ import annotations
 

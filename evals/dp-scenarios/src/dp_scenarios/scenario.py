@@ -20,7 +20,7 @@ from typing import Any
 
 import yaml
 
-from .grading import GATE_POINTS, Finding, GoldRowSet, GateResult, gate_follow_up, gate_query, gold_rowset
+from .grading import GATE_PHASES, GATE_POINTS, Finding, GoldRowSet, GateResult, gate_follow_up, gate_query, gold_rowset
 from .grading.statistics import RepeatabilityTier, repeatability_plan
 from .operator import EventSchedule, OperatorScript, PersonaCard, load_event_cards, load_persona
 from .operator.answer_sheet import AnswerSheet, load_answer_sheet
@@ -149,6 +149,7 @@ class Scenario:
     package_dir: Path
     scenario_id: str
     tier: str
+    run_order: int
     fixture: FixtureSpec
     coverage: Mapping[str, str]
     turn_budget: int
@@ -234,7 +235,7 @@ class Scenario:
 
     @property
     def has_scoreable_answer_gold(self) -> bool:
-        """Whether this scenario declares the answer artifact needed by G6."""
+        """Whether this scenario declares the answer artifact needed by query grading."""
 
         return "answer" in self.gold
 
@@ -277,7 +278,7 @@ class Scenario:
 
     @property
     def control_total(self) -> float:
-        """Return S6's independent control total from its declared gold."""
+        """Return grain-trap's independent control total from its declared gold."""
 
         if "control_total" not in self.gold:
             raise ScenarioError(f"scenario {self.scenario_id} declares no control total")
@@ -324,7 +325,7 @@ class Scenario:
         actual = tuple(dict(row) for row in rows)
         gold = self.load_gold("answer", fixture_dir)
         gold_gate = gate_query(list(actual), gold)
-        naive_gate = GateResult("G6", False, 0, ())
+        naive_gate = GateResult("query", False, 0, ())
         verdict = "correct" if gold_gate.passed else "other_wrong"
         if not gold_gate.passed and "diagnostics" in self.gold:
             diagnostics = self.raw_gold("diagnostics", fixture_dir)
@@ -343,7 +344,7 @@ class Scenario:
         *,
         row_count_oracle: object = _MISSING,
     ) -> Mapping[str, object]:
-        """Run G7 against a closure, with gold resolved separately.
+        """Run follow-up against a closure, with gold resolved separately.
 
         ``fixture_dir`` is the package fixture by default and may explicitly
         point at a generated fixture containing its gold.  It is never
@@ -355,7 +356,7 @@ class Scenario:
             query_rows = fixture_dir
             fixture_dir = None
 
-        binding = self.gates["G7"]
+        binding = self.gates["follow-up"]
         target = closure
         if isinstance(closure, Mapping) and (
             "closure" in closure
@@ -418,13 +419,13 @@ class Scenario:
         fired_plants: object = _MISSING,
         row_count_oracle: object = _MISSING,
     ) -> GateResult:
-        """Adapt the declared follow-up check to the settled G7 gate type."""
+        """Adapt the declared follow-up check to the settled follow-up gate type."""
 
         plant_input = fired_plants
         if (
             fired_plants is not _MISSING
-            and isinstance(self.gates["G7"].settings.get("plant_evidence"), Mapping)
-            and self.gates["G7"].settings.get("plant_evidence")
+            and isinstance(self.gates["follow-up"].settings.get("plant_evidence"), Mapping)
+            and self.gates["follow-up"].settings.get("plant_evidence")
             and isinstance(fixture_dir, (str, Path))
             and not isinstance(fired_plants, Mapping)
         ):
@@ -434,7 +435,7 @@ class Scenario:
         prerequisite = self.check_fired_plants(plant_input)
         if not prerequisite.passed:
             return GateResult(
-                "G7",
+                "follow-up",
                 False,
                 0,
                 prerequisite.findings,
@@ -457,7 +458,7 @@ class Scenario:
         if not findings:
             return base
         return GateResult(
-            "G7",
+            "follow-up",
             False,
             0,
             findings,
@@ -485,7 +486,7 @@ class Scenario:
         )
 
     def check_fired_plants(self, run_or_ids: object) -> GateResult:
-        """Check the runner-owned plant evidence before G5 or G7 grading.
+        """Check the runner-owned plant evidence before build or follow-up grading.
 
         The runner must call this prerequisite with the completed run (or its
         ``fired_plant_ids``) before it grades build and follow-up criteria.
@@ -500,13 +501,13 @@ class Scenario:
         elif isinstance(run_or_ids, Mapping):
             candidate = run_or_ids.get("fired_plant_ids", run_or_ids.get("fired_plants", _MISSING))
             manifest = run_or_ids.get("fixture_manifest", run_or_ids.get("manifest", _MISSING))
-        plant_evidence = self.gates["G7"].settings.get("plant_evidence", {})
+        plant_evidence = self.gates["follow-up"].settings.get("plant_evidence", {})
         manifest_evidence_available = isinstance(plant_evidence, Mapping) and bool(plant_evidence) and manifest is not _MISSING
         if candidate is _MISSING and manifest_evidence_available:
             candidate = ()
         if candidate is _MISSING or isinstance(candidate, (str, bytes, bytearray)):
             return GateResult(
-                "G7",
+                "follow-up",
                 False,
                 0,
                 (Finding("plants_not_examined", "runner supplied no fired-plant evidence"),),
@@ -515,7 +516,7 @@ class Scenario:
             )
         if not isinstance(candidate, Iterable):
             return GateResult(
-                "G7",
+                "follow-up",
                 False,
                 0,
                 (Finding("plants_not_examined", "fired-plant evidence is not iterable"),),
@@ -526,7 +527,7 @@ class Scenario:
         if isinstance(plant_evidence, Mapping) and plant_evidence:
             if manifest is _MISSING:
                 return GateResult(
-                    "G7",
+                    "follow-up",
                     False,
                     0,
                     (Finding("plants_not_examined", "fixture-manifest plant evidence is absent"),),
@@ -536,7 +537,7 @@ class Scenario:
             observed_counts = _manifest_row_counts(manifest)
             if observed_counts is None:
                 return GateResult(
-                    "G7",
+                    "follow-up",
                     False,
                     0,
                     (Finding("plants_not_examined", "fixture-manifest row counts are absent or unreadable"),),
@@ -547,7 +548,7 @@ class Scenario:
                 evidence = plant_evidence.get(plant)
                 if not isinstance(evidence, Mapping):
                     return GateResult(
-                        "G7",
+                        "follow-up",
                         False,
                         0,
                         (Finding("plants_not_examined", f"plant evidence is not declared for {plant}"),),
@@ -558,7 +559,7 @@ class Scenario:
                 expected_count = evidence.get("row_count")
                 if not isinstance(resource, str) or isinstance(expected_count, bool) or not isinstance(expected_count, int):
                     return GateResult(
-                        "G7",
+                        "follow-up",
                         False,
                         0,
                         (Finding("plants_not_examined", f"plant evidence is malformed for {plant}"),),
@@ -567,25 +568,25 @@ class Scenario:
                     )
                 if observed_counts.get(resource, _MISSING) != expected_count:
                     return GateResult(
-                        "G7",
+                        "follow-up",
                         False,
                         0,
                         (Finding("required_plant_not_fired", "declared planted difficulty was not observed in the fixture manifest", plant),),
                         examined=True,
                         ungraded=True,
                     )
-            return GateResult("G7", True, 0, (), examined=True, ungraded=False)
+            return GateResult("follow-up", True, 0, (), examined=True, ungraded=False)
         missing = self.required_plants - fired
         if missing:
             return GateResult(
-                "G7",
+                "follow-up",
                 False,
                 0,
                 (Finding("required_plant_not_fired", "declared planted difficulty did not fire", sorted(missing)),),
                 examined=True,
                 ungraded=True,
             )
-        return GateResult("G7", True, 0, (), examined=True, ungraded=False)
+        return GateResult("follow-up", True, 0, (), examined=True, ungraded=False)
 
     fired_plants_check = check_fired_plants
 
@@ -597,9 +598,9 @@ class Scenario:
         fixture_dir: str | Path | None = None,
         row_count_oracle: object = _MISSING,
     ) -> Mapping[str, object]:
-        resources = _mapping(settings.get("resources"), "G7.resources")
+        resources = _mapping(settings.get("resources"), "follow-up.resources")
         declared_required = {
-            resource: _required_flag(value, f"G7.resources.{resource}")
+            resource: _required_flag(value, f"follow-up.resources.{resource}")
             for resource, value in resources.items()
         }
         findings: list[str] = []
@@ -612,11 +613,11 @@ class Scenario:
 
         requiredness_document = _read_document(
             closure_target,
-            _string(settings.get("document"), "G7.document"),
+            _string(settings.get("document"), "follow-up.document"),
         )
         observed_required = _requiredness_from_document(
             requiredness_document,
-            _string(settings.get("requiredness_path"), "G7.requiredness_path"),
+            _string(settings.get("requiredness_path"), "follow-up.requiredness_path"),
         )
         if observed_required is None:
             return {
@@ -714,6 +715,7 @@ _SCENARIO_KEYS = {
     "version",
     "id",
     "tier",
+    "run_order",
     "fixture",
     "coverage",
     "turn_budget",
@@ -742,8 +744,8 @@ _GOLD_KEYS_BY_FOLLOW_UP = {
     "optional_required_outputs": frozenset({"counts", "diagnostics"}),
 }
 _CERTIFICATION_GOLD_BY_FOLLOW_UP = {
-    "optional_required_outputs": {"G5": "counts", "G6": "answer"},
-    "grain_and_aggregation": {"G6": "answer"},
+    "optional_required_outputs": {"build": "counts", "query": "answer"},
+    "grain_and_aggregation": {"query": "answer"},
 }
 
 
@@ -804,16 +806,16 @@ def _validate_plants(
 
 
 def _validate_plant_evidence(required: frozenset[str], gates: Mapping[str, GateSpec]) -> None:
-    if gates["G7"].kind != "optional_required_outputs":
+    if gates["follow-up"].kind != "optional_required_outputs":
         return
-    raw = gates["G7"].settings.get("plant_evidence")
-    evidence = _mapping(raw, "G7.plant_evidence")
+    raw = gates["follow-up"].settings.get("plant_evidence")
+    evidence = _mapping(raw, "follow-up.plant_evidence")
     missing = sorted(required - set(evidence))
     if missing:
-        raise ScenarioError("G7.plant_evidence is missing required plant(s): " + ", ".join(missing))
+        raise ScenarioError("follow-up.plant_evidence is missing required plant(s): " + ", ".join(missing))
     unknown = sorted(set(evidence) - required)
     if unknown:
-        raise ScenarioError("G7.plant_evidence contains unknown plant(s): " + ", ".join(unknown))
+        raise ScenarioError("follow-up.plant_evidence contains unknown plant(s): " + ", ".join(unknown))
 
 
 def _parse_coverage(value: object, fixture_variant: str) -> Mapping[str, str]:
@@ -847,8 +849,8 @@ def _parse_repeatability(value: object) -> RepeatabilitySpec:
     if not required_certification.issubset(certification):
         raise ScenarioError("repeatability.certification requires rule and gates")
     gates = _strings(certification["gates"], "repeatability.certification.gates")
-    if any(gate not in {"G5", "G6"} for gate in gates):
-        raise ScenarioError("repeatability certification gates must be G5 or G6")
+    if any(gate not in {"build", "query"} for gate in gates):
+        raise ScenarioError("repeatability certification gates must be build or query")
     rule = _string(certification["rule"], "repeatability.certification.rule")
     lower = certification.get("lower_bound")
     confidence = certification.get("confidence")
@@ -886,7 +888,7 @@ def _parse_repeatability(value: object) -> RepeatabilitySpec:
 
 def _parse_gates(value: object) -> Mapping[str, GateSpec]:
     raw = _mapping(value, "gates")
-    expected = {f"G{index}" for index in range(1, 8)}
+    expected = set(GATE_PHASES)
     if set(raw) != expected:
         missing = sorted(expected - set(raw))
         extra = sorted(set(raw) - expected)
@@ -897,6 +899,12 @@ def _parse_gates(value: object) -> Mapping[str, GateSpec]:
     parsed: dict[str, GateSpec] = {}
     for name in sorted(expected):
         entry = raw[name]
+        if entry is None:
+            # An omitted value means the gate runs its standard check.  Naming
+            # the kind again would restate the gate's own name and could drift
+            # away from it.
+            parsed[name] = GateSpec(name, name, MappingProxyType({}))
+            continue
         if isinstance(entry, str):
             kind = _string(entry, f"gates.{name}")
             settings: Mapping[str, object] = MappingProxyType({})
@@ -905,26 +913,26 @@ def _parse_gates(value: object) -> Mapping[str, GateSpec]:
             kind = _string(mapping.pop("kind", None), f"gates.{name}.kind")
             settings = MappingProxyType(mapping)
         parsed[name] = GateSpec(name, kind, settings)
-    if parsed["G7"].kind not in {"grain_and_aggregation", "optional_required_outputs"}:
-        raise ScenarioError("gates.G7 must declare a supported scenario-specific follow-up")
-    if parsed["G7"].kind == "grain_and_aggregation":
-        _string(parsed["G7"].settings.get("document"), "gates.G7.document")
-    if parsed["G7"].kind == "optional_required_outputs":
-        settings = parsed["G7"].settings
+    if parsed["follow-up"].kind not in {"grain_and_aggregation", "optional_required_outputs"}:
+        raise ScenarioError("gates.follow-up must declare a supported scenario-specific follow-up")
+    if parsed["follow-up"].kind == "grain_and_aggregation":
+        _string(parsed["follow-up"].settings.get("document"), "gates.follow-up.document")
+    if parsed["follow-up"].kind == "optional_required_outputs":
+        settings = parsed["follow-up"].settings
         if settings.get("count_source") != "row_count_oracle":
-            raise ScenarioError("G7.count_source must be row_count_oracle")
-        _string(settings.get("document"), "G7.document")
-        _string(settings.get("requiredness_path"), "G7.requiredness_path")
-        resources = _mapping(settings.get("resources"), "G7.resources")
+            raise ScenarioError("follow-up.count_source must be row_count_oracle")
+        _string(settings.get("document"), "follow-up.document")
+        _string(settings.get("requiredness_path"), "follow-up.requiredness_path")
+        resources = _mapping(settings.get("resources"), "follow-up.resources")
         for resource, declaration in resources.items():
-            _required_flag(declaration, f"G7.resources.{resource}")
-        plant_evidence = _mapping(settings.get("plant_evidence"), "G7.plant_evidence")
+            _required_flag(declaration, f"follow-up.resources.{resource}")
+        plant_evidence = _mapping(settings.get("plant_evidence"), "follow-up.plant_evidence")
         for plant, declaration in plant_evidence.items():
-            evidence = _mapping(declaration, f"G7.plant_evidence.{plant}")
-            _string(evidence.get("resource"), f"G7.plant_evidence.{plant}.resource")
+            evidence = _mapping(declaration, f"follow-up.plant_evidence.{plant}")
+            _string(evidence.get("resource"), f"follow-up.plant_evidence.{plant}.resource")
             row_count = evidence.get("row_count")
             if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
-                raise ScenarioError(f"G7.plant_evidence.{plant}.row_count must be a non-negative integer")
+                raise ScenarioError(f"follow-up.plant_evidence.{plant}.row_count must be a non-negative integer")
     return MappingProxyType(parsed)
 
 
@@ -977,12 +985,10 @@ def _validate_certified_phase_reachability(
     phase_map: Mapping[int, int],
 ) -> None:
     reachable = set(phase_map.values())
-    required = {int(gate[1:]) for gate in repeatability.gates}
-    missing = sorted(required - reachable)
+    missing = sorted(gate for gate in repeatability.gates if GATE_PHASES[gate] not in reachable)
     if missing:
         raise ScenarioError(
-            "repeatability certification gate phase(s) are unreachable: "
-            + ", ".join(f"G{phase}" for phase in missing)
+            "repeatability certification gate phase(s) are unreachable: " + ", ".join(missing)
         )
 
 
@@ -1006,6 +1012,9 @@ def load_scenario(path: str | Path) -> Scenario:
         raise ScenarioError("scenario.version must be integer 1")
     scenario_id = _string(raw["id"], "scenario.id")
     tier = _string(raw["tier"], "scenario.tier")
+    run_order = raw["run_order"]
+    if isinstance(run_order, bool) or not isinstance(run_order, int) or run_order < 1:
+        raise ScenarioError("scenario.run_order must be a positive integer")
     if tier not in _SCENARIO_TIERS:
         raise ScenarioError(f"unknown scenario tier: {tier!r}")
     fixture_raw = _mapping(raw["fixture"], "fixture")
@@ -1055,9 +1064,9 @@ def load_scenario(path: str | Path) -> Scenario:
     obstacle_terms = _strings(operator_raw["obstacle_terms"], "operator.obstacle_terms", allow_empty=True)
     gates = _parse_gates(raw["gates"])
     _validate_plant_evidence(required_plants, gates)
-    gold, gold_refs = _parse_gold(root, raw["gold"], gates["G7"].kind)
-    _validate_fixture_gold(gates["G7"].kind, gates["G7"].settings, gold)
-    _validate_certification_gold(repeatability, gates["G7"].kind, gold)
+    gold, gold_refs = _parse_gold(root, raw["gold"], gates["follow-up"].kind)
+    _validate_fixture_gold(gates["follow-up"].kind, gates["follow-up"].settings, gold)
+    _validate_certification_gold(repeatability, gates["follow-up"].kind, gold)
     script = OperatorScript.from_components(
         persona,
         answer_sheet,
@@ -1072,6 +1081,7 @@ def load_scenario(path: str | Path) -> Scenario:
     return Scenario(
         package_dir=root.resolve(),
         scenario_id=scenario_id,
+        run_order=run_order,
         tier=tier,
         fixture=fixture,
         coverage=coverage,
@@ -1093,13 +1103,22 @@ def load_scenario(path: str | Path) -> Scenario:
 
 
 def load_scenarios(root: str | Path) -> tuple[Scenario, ...]:
-    """Load every direct scenario package under a directory in name order."""
+    """Load every scenario package under a directory in declared run order.
+
+    Run order is a declared field rather than a property of the directory name:
+    the tier runs its scenarios in a fixed sequence, and encoding that sequence
+    in a name prefix makes any rename silently reorder the tier.
+    """
 
     directory = Path(root)
     if not directory.is_dir():
         raise ScenarioError(f"scenario root is not a directory: {directory}")
     declarations = sorted(path for path in directory.iterdir() if path.is_dir() and (path / "scenario.yaml").is_file())
-    return tuple(load_scenario(path) for path in declarations)
+    loaded = [load_scenario(path) for path in declarations]
+    orders = [scenario.run_order for scenario in loaded]
+    if len(set(orders)) != len(orders):
+        raise ScenarioError("scenario run_order values must be unique within a root")
+    return tuple(sorted(loaded, key=lambda scenario: scenario.run_order))
 
 
 def _read_document(value: object, document_name: str | None = None) -> object:
@@ -1144,13 +1163,13 @@ def _lookup(value: object, dotted_path: str) -> object:
 
 
 def _grain_follow_up(closure: object, settings: Mapping[str, object]) -> Mapping[str, object]:
-    document = _read_document(closure, _string(settings.get("document"), "G7.document"))
+    document = _read_document(closure, _string(settings.get("document"), "follow-up.document"))
     if document is _MISSING:
         return {"status": "not-examined", "passed": False, "findings": ["closure_not_examined"]}
-    grain_path = _string(settings.get("grain_path"), "G7.grain_path")
-    aggregation_path = _string(settings.get("aggregation_path"), "G7.aggregation_path")
-    expected_grain = _string(settings.get("expected_grain"), "G7.expected_grain")
-    expected_aggregation = _string(settings.get("expected_aggregation"), "G7.expected_aggregation")
+    grain_path = _string(settings.get("grain_path"), "follow-up.grain_path")
+    aggregation_path = _string(settings.get("aggregation_path"), "follow-up.aggregation_path")
+    expected_grain = _string(settings.get("expected_grain"), "follow-up.expected_grain")
+    expected_aggregation = _string(settings.get("expected_aggregation"), "follow-up.expected_aggregation")
     observed_grain = _lookup(document, grain_path)
     observed_aggregation = _lookup(document, aggregation_path)
     findings: list[str] = []
@@ -1180,9 +1199,9 @@ def _required_flag(value: object, location: str) -> bool:
 
 
 def _declared_required(settings: Mapping[str, object]) -> dict[str, bool]:
-    resources = _mapping(settings.get("resources"), "G7.resources")
+    resources = _mapping(settings.get("resources"), "follow-up.resources")
     return {
-        str(resource): _required_flag(value, f"G7.resources.{resource}")
+        str(resource): _required_flag(value, f"follow-up.resources.{resource}")
         for resource, value in resources.items()
     }
 
@@ -1259,7 +1278,7 @@ def _validate_fixture_gold(
         row["resource"]: row["required"] for row in expected_diagnostics
     }
     if _declared_required(settings) != expected_required:
-        raise ScenarioError("optional-output diagnostics gold requiredness disagrees with G7.resources")
+        raise ScenarioError("optional-output diagnostics gold requiredness disagrees with follow-up.resources")
     if set(expected_counts) != set(expected_required):
         raise ScenarioError("optional-output count and diagnostics gold resource sets disagree")
 

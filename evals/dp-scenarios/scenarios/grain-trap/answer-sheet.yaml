@@ -1,5 +1,5 @@
 version: 1
-scenario_id: S6
+scenario_id: grain-trap
 opening_message: Which regions are actually bringing in the money?
 turns:
   - Which regions are actually bringing in the money?

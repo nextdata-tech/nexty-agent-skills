@@ -113,7 +113,10 @@ def _candidate_locations(explicit: Path | str | None) -> list[str]:
     candidates: list[str] = []
     environment_value = os.environ.get(SUPERVISOR_ENV)
     if environment_value:
-        candidates.append(str(Path(environment_value).expanduser()))
+        # An explicit environment override is authoritative.  Falling back to
+        # a different installed binary would make a broken configured path
+        # look healthy and could run a different supervisor than requested.
+        return [str(Path(environment_value).expanduser())]
     path_value = shutil.which("nxd-desktop-supervisor")
     if path_value:
         candidates.append(path_value)

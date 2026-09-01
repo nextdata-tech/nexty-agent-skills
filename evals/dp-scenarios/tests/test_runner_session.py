@@ -102,3 +102,21 @@ def test_replay_rejects_touched_file_escape(tmp_path: Path) -> None:
 
     with pytest.raises(Exception, match="escapes artifact root"):
         replay.send_message("expected")
+
+
+def test_replay_rejects_agent_owned_harness_oracle_names(tmp_path: Path) -> None:
+    recording = ReplayRecording(
+        (
+            RecordedTurn(
+                OperatorMessage("expected"),
+                TurnResult(
+                    files_touched=(TouchedFile("row_counts.json", b'{"model": 1}'),),
+                ),
+            ),
+        )
+    )
+    replay = ReplaySession(recording, artifact_root=tmp_path / "artifacts")
+    replay.start_fresh_session()
+
+    with pytest.raises(Exception, match="reserved for harness-owned evidence"):
+        replay.send_message("expected")
