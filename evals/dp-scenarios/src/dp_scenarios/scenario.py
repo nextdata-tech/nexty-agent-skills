@@ -672,10 +672,28 @@ class Scenario:
         # every other step uses the unprefixed names.
         for step, observations in sorted(records.items()):
             prefix = "new_credential_" if step == 2 else ""
-            catalog_visible = observations.get(f"{prefix}lookup_relations_catalog_visible")
+            # Both catalog probes are graded.  ``pg_class`` carries the table
+            # and ``pg_namespace`` carries the schema; the round-1 review
+            # finding this fixture exists to prevent was specifically that
+            # pg_namespace is PUBLIC-readable, so a record claiming the schema
+            # is invisible is wrong.  Grading only the relation probe would
+            # leave the namespace claim unchecked.
+            relations_visible = observations.get(f"{prefix}lookup_relations_catalog_visible")
+            namespace_visible = observations.get(f"{prefix}lookup_catalog_visible")
             info_schema_visible = observations.get(f"{prefix}lookup_information_schema_visible")
-            if catalog_visible is not True or info_schema_visible is not False:
+            if (
+                relations_visible is not True
+                or namespace_visible is not True
+                or info_schema_visible is not False
+            ):
                 findings.append(f"catalog_visibility_property_violated:{step}")
+            # Least privilege is the load-bearing property, not merely the
+            # visibility split: the lookup schema stays unreadable at every
+            # step, including after the rotation re-grants inventory access.
+            # A rotation that silently widened the role's grants would
+            # otherwise pass this gate clean.
+            if observations.get(f"{prefix}lookup_query_denied") is not True:
+                findings.append(f"lookup_schema_readable_at_step:{step}")
 
         step1 = records.get(1)
         if step1 is not None:
@@ -714,6 +732,25 @@ class Scenario:
                 findings.append("secret_hygiene_not_examined")
             elif not scan.passed:
                 findings.append("secret_marker_leaked")
+
+        # The declared diagnostics gold is graded, not merely shipped: B5's
+        # pass criterion is that orphans and negative quantities are reported
+        # as data rather than cleaned away, so the counts the run reports are
+        # compared against the committed gold.
+        expected_diagnostics = self.raw_gold("diagnostics")
+        reported = target.get("diagnostics")
+        if not isinstance(expected_diagnostics, Mapping):
+            findings.append("diagnostics_gold_unreadable")
+        elif not isinstance(reported, Mapping):
+            findings.append("diagnostics_not_examined")
+        else:
+            for key in ("orphan_line_item_count", "negative_quantity_count"):
+                expected = expected_diagnostics.get(key)
+                actual = reported.get(key)
+                if isinstance(actual, bool) or not isinstance(actual, int):
+                    findings.append(f"diagnostics_not_examined:{key}")
+                elif actual != expected:
+                    findings.append(f"diagnostics_disagree_with_gold:{key}")
 
         allowed_path = _string(settings.get("allowed_diff_path"), "follow-up.allowed_diff_path")
         allowed_attribute = _string(
@@ -1282,6 +1319,26 @@ def load_scenarios(root: str | Path) -> tuple[Scenario, ...]:
     return tuple(sorted(loaded, key=lambda scenario: scenario.run_order))
 
 
+def select_tier(scenarios: Sequence[Scenario], tier: str) -> tuple[Scenario, ...]:
+    """Return only the scenarios declaring ``tier``, preserving run order.
+
+    ``load_scenarios`` deliberately loads every package under a root, and the
+    tier a package declares was previously carried into the run manifest
+    without ever selecting anything.  While every package was smoke that was
+    invisible; the moment a core package shares the root it would ride along
+    into the smoke tier, which is the one tier that must stay cheap enough to
+    run on every change.  Selection is therefore explicit, and a tier that
+    matches no package is an error rather than an empty, clean-looking run.
+    """
+
+    if tier not in _SCENARIO_TIERS:
+        raise ScenarioError(f"unknown tier {tier!r}: expected one of {sorted(_SCENARIO_TIERS)}")
+    selected = tuple(scenario for scenario in scenarios if scenario.tier == tier)
+    if not selected:
+        raise ScenarioError(f"no scenario declares tier {tier!r}")
+    return selected
+
+
 def _read_document(value: object, document_name: str | None = None) -> object:
     if isinstance(value, Mapping):
         return value
@@ -1519,5 +1576,6 @@ __all__ = [
     "ScenarioError",
     "load_scenario",
     "load_scenarios",
+    "select_tier",
     "scenario_script_hash",
 ]

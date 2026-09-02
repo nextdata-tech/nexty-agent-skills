@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from dp_scenarios.grading import GATE_PHASES
-from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios
+from dp_scenarios.scenario import ScenarioError, load_scenario, load_scenarios, select_tier
 from dp_scenarios.synthgen import get_dataset
 
 
@@ -392,3 +392,53 @@ def test_legacy_t0_scenario_tier_remains_accepted(tmp_path: Path) -> None:
     declaration.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
     assert load_scenario(package).tier == "T0"
+
+
+def test_select_tier_returns_only_the_scenarios_declaring_that_tier() -> None:
+    """The smoke tier must not silently acquire a core scenario.
+
+    ``load_scenarios`` deliberately loads every package under a root, so the
+    tier boundary is only real if something selects on it. Before this,
+    ``scenario.tier`` was carried into the manifest and never used to choose
+    what ran.
+    """
+
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    assert {scenario.id for scenario in scenarios} == {
+        "parent-child-grain-trap",
+        "zero-row-optional-output",
+        "credential-rotation",
+    }
+    smoke = select_tier(scenarios, "smoke")
+    assert {scenario.id for scenario in smoke} == {
+        "parent-child-grain-trap",
+        "zero-row-optional-output",
+    }
+    core = select_tier(scenarios, "core")
+    assert {scenario.id for scenario in core} == {"credential-rotation"}
+
+
+def test_select_tier_preserves_declared_run_order() -> None:
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    smoke = select_tier(scenarios, "smoke")
+    assert [scenario.run_order for scenario in smoke] == sorted(
+        scenario.run_order for scenario in smoke
+    )
+
+
+def test_select_tier_rejects_an_unknown_tier() -> None:
+    scenarios = load_scenarios(SCENARIO_ROOT)
+    with pytest.raises(ScenarioError):
+        select_tier(scenarios, "full")
+
+
+def test_a_tier_that_matches_no_scenario_is_an_error_not_an_empty_clean_run() -> None:
+    """An empty selection would produce a tier result that examined nothing.
+
+    The harness already refuses to treat a tier that examined no scenario as
+    evidence of a clean run; selection fails closed for the same reason.
+    """
+
+    scenarios = select_tier(load_scenarios(SCENARIO_ROOT), "core")
+    with pytest.raises(ScenarioError):
+        select_tier(scenarios, "smoke")

@@ -24,7 +24,9 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
 
     supervisor = tmp_path / "supervisor"
     report = tmp_path / "report.json"
-    monkeypatch.setattr(cli, "load_scenarios", lambda _root: [SimpleNamespace(id="scenario-1")])
+    monkeypatch.setattr(
+        cli, "load_scenarios", lambda _root: [SimpleNamespace(id="scenario-1", tier="smoke")]
+    )
     monkeypatch.setattr(
         cli,
         "load_claims",
@@ -43,6 +45,8 @@ def test_live_cli_wires_session_and_supervisor_commands(monkeypatch, tmp_path: P
             "live",
             "--scenario-root",
             str(tmp_path / "scenarios"),
+            "--tier",
+            "smoke",
             "--canary-dir",
             str(tmp_path / "canary"),
             "--skills-root",

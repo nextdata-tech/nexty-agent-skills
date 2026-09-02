@@ -83,6 +83,22 @@ Workflow switching remains a programmatic control because its replacement
 transport and endpoint observation must be supplied by the caller. A CLI plan
 that declares one is rejected rather than silently running with the switch off.
 
+### Selecting a tier
+
+`load_scenarios` loads every package under a scenario root; the tier a package
+declares is what selects it. The runner CLI therefore requires `--tier`, and a
+tier matching no package is an error rather than an empty, clean-looking run:
+
+```bash
+uv run --project evals/dp-scenarios python -m dp_scenarios.runner.cli \
+  --tier smoke --scenario-root evals/dp-scenarios/scenarios ...
+```
+
+The smoke tier is `drift-canary` → `zero-row-optional-output` →
+`parent-child-grain-trap`. `credential-rotation` declares `tier: core` and is
+not pulled into a smoke run; it needs a Docker Postgres, which the smoke tier
+must not require.
+
 ### Local live qualification
 
 The local-only live entrypoint runs the selected scenario through Claude Code,

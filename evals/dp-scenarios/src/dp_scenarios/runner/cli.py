@@ -17,7 +17,7 @@ from typing import Any, Mapping, Sequence
 from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.verdict import Verdict
 from dp_scenarios.knobs import KnobError, SupervisorKnobs, load_knob_plan
-from dp_scenarios.scenario import load_scenarios
+from dp_scenarios.scenario import load_scenarios, select_tier
 
 from .environment import PinnedVersions
 from .report import write_report
@@ -121,6 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the canary-gated dp-scenarios tier")
     parser.add_argument("--mode", choices=("replay", "live"), default="replay")
     parser.add_argument("--scenario-root", type=Path, required=True)
+    parser.add_argument(
+        "--tier",
+        required=True,
+        help="Tier to run; only scenarios declaring it are selected from --scenario-root",
+    )
     parser.add_argument("--canary-dir", type=Path, required=True)
     parser.add_argument("--skills-root", type=Path, required=True)
     parser.add_argument("--canary-replay", type=Path)
@@ -149,7 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected tier and write both report surfaces."""
 
     args = build_parser().parse_args(argv)
-    scenarios = load_scenarios(args.scenario_root)
+    scenarios = select_tier(load_scenarios(args.scenario_root), args.tier)
     pins = PinnedVersions(
         skill_pack_version=args.skill_pack_version,
         supervisor_version=args.supervisor_version,
