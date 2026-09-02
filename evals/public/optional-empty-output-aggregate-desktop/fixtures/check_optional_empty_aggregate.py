@@ -89,33 +89,38 @@ def _kv(text: str) -> dict[str, str]:
 def _serve(supervisor: str, definition: Path, data_dir: Path) -> tuple[subprocess.Popen[str], str, str]:
     token = "desktop-check-" + secrets.token_urlsafe(18)
     env = {**os.environ, "NXD_DESKTOP_BEARER": token}
+    stdout = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    stderr = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     proc = subprocess.Popen(
         [supervisor, "serve", "--definition", str(definition), "--workflow", WORKFLOW,
          "--data-dir", str(data_dir)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout,
+        stderr=stderr,
         text=True,
         env=env,
         start_new_session=True,
     )
     deadline = time.monotonic() + 300
-    output = ""
     while time.monotonic() < deadline:
-        if proc.stdout is not None:
-            import select
-
-            ready, _, _ = select.select([proc.stdout], [], [], 0.2)
-            if ready:
-                line = proc.stdout.readline()
-                output += line
-        values = _kv(output)
+        stdout.flush()
+        stdout.seek(0)
+        values = _kv(stdout.read())
         if values.get("published") == "yes":
             endpoint = values.get("semantic_endpoint", "")
             if endpoint:
                 return proc, endpoint, token
         if proc.poll() is not None:
-            raise CheckFailure("supervisor exited before publishing")
-    raise CheckFailure("supervisor did not publish within the verifier budget")
+            stderr.flush()
+            stderr.seek(0)
+            raise CheckFailure(
+                "supervisor exited before publishing: " + stderr.read()[-1000:]
+            )
+        time.sleep(0.2)
+    stderr.flush()
+    stderr.seek(0)
+    raise CheckFailure(
+        "supervisor did not publish within the verifier budget: " + stderr.read()[-1000:]
+    )
 
 
 def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> None:
@@ -170,12 +175,12 @@ def _verify(definition: Path) -> dict[str, Any]:
                 raise CheckFailure("describe_models did not return a model catalog")
             if not any(_contains(model, "reviews") for model in models_payload):
                 raise CheckFailure("optional reviews model is absent from the catalog")
-            if not any(_contains(model, "order_count") for model in models_payload):
-                raise CheckFailure("order_count is absent from the catalog")
+            if not any(_contains(model, "ORDER_COUNT") for model in models_payload):
+                raise CheckFailure("ORDER_COUNT is absent from the catalog")
 
             selection = Path(tmp) / "selection.json"
             selection.write_text(json.dumps({
-                "measures": ["order_count"],
+                "measures": ["ORDER_COUNT"],
                 "dimensions": ["product_category"],
             }), encoding="utf-8")
             query = json.loads(_run([
@@ -186,11 +191,11 @@ def _verify(definition: Path) -> dict[str, Any]:
             rows = query.get("rows")
             if not isinstance(columns, list) or not isinstance(rows, list):
                 raise CheckFailure("governed query returned no tabular result")
-            if set(columns) != {"product_category", "order_count"}:
+            if set(columns) != {"product_category", "ORDER_COUNT"}:
                 raise CheckFailure("governed query exposed record-level columns")
             actual = {
                 str(row[columns.index("product_category")]): int(
-                    row[columns.index("order_count")]
+                    row[columns.index("ORDER_COUNT")]
                 )
                 for row in rows
             }
@@ -202,7 +207,7 @@ def _verify(definition: Path) -> dict[str, Any]:
                 "published": "yes",
                 "catalog_models": len(models_payload),
                 "optional_model_visible": True,
-                "count_metric": "order_count",
+                "count_metric": "ORDER_COUNT",
                 "query_columns": columns,
                 "aggregate_rows": actual,
                 "compiler_execution": "deferred follow-up",
