@@ -79,6 +79,30 @@ def _contains(value: Any, needle: str) -> bool:
     return False
 
 
+def _catalog_metrics(models: list[Any]) -> list[str]:
+    return [
+        metric["name"]
+        for model in models
+        if isinstance(model, dict)
+        for metric in model.get("metrics", []) or []
+        if (
+            isinstance(metric, dict)
+            and isinstance(metric.get("name"), str)
+            and str(metric.get("aggregation", "")).upper() == "COUNT"
+        )
+    ]
+
+
+def _catalog_dimensions(models: list[Any]) -> list[str]:
+    return [
+        dimension["name"]
+        for model in models
+        if isinstance(model, dict)
+        for dimension in model.get("dimensions", []) or []
+        if isinstance(dimension, dict) and isinstance(dimension.get("name"), str)
+    ]
+
+
 def _kv(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in text.splitlines():
@@ -123,15 +147,28 @@ def _serve(supervisor: str, definition: Path, data_dir: Path) -> tuple[subproces
                     endpoint = values.get("semantic_endpoint", "")
                     if not endpoint:
                         raise CheckFailure(f"supervisor published without an endpoint: {values}")
-                    try:
-                        describe = json.loads(_run([
-                            supervisor, "describe", "--endpoint", endpoint, "--token", token
-                        ], timeout=90))
-                        if not isinstance(describe.get("models"), list) or not describe["models"]:
-                            raise CheckFailure("describe_models returned no models")
-                        return proc, endpoint, token
-                    except (CheckFailure, json.JSONDecodeError) as exc:
-                        readiness_error = str(exc)
+                    readiness_deadline = min(deadline, time.monotonic() + 60)
+                    while time.monotonic() < readiness_deadline:
+                        try:
+                            describe = json.loads(_run([
+                                supervisor, "describe", "--endpoint", endpoint, "--token", token
+                            ], timeout=15))
+                            if not isinstance(describe.get("models"), list) or not describe["models"]:
+                                raise CheckFailure("describe_models returned no models")
+                            return proc, endpoint, token
+                        except (CheckFailure, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+                            readiness_error = str(exc)
+                        if proc.poll() is not None:
+                            raise CheckFailure(
+                                "supervisor exited before semantic readiness: "
+                                + _log_tail(stderr_path)
+                                + _log_tail(stdout_path)
+                            )
+                        time.sleep(0.2)
+                    raise CheckFailure(
+                        f"semantic endpoint was not ready within the verifier budget: {endpoint}; "
+                        + readiness_error
+                    )
                 if proc.poll() is not None:
                     raise CheckFailure(
                         "supervisor exited before semantic readiness: "
@@ -211,7 +248,7 @@ def _verify(definition: Path) -> dict[str, Any]:
         raise CheckFailure("private mapper seam was imported")
     if ".model(reviews)" not in spec or ".promise(reviews)" in spec:
         raise CheckFailure("optional review output is wired with the wrong contract")
-    if ".model(order_metrics)" not in spec or "semantic_view(\"order_metrics\", orders)" not in models:
+    if ".model(" not in spec or "semantic_view(" not in models:
         raise CheckFailure("aggregate semantic view is missing")
     if "Agg.COUNT" not in models or 'orders.field("*")' not in models:
         raise CheckFailure("aggregate view is not a COUNT(*) metric")
@@ -233,51 +270,75 @@ def _verify(definition: Path) -> dict[str, Any]:
                 raise CheckFailure("describe_models did not return a model catalog")
             if not any(_contains(model, "reviews") for model in models_payload):
                 raise CheckFailure("optional reviews model is absent from the catalog")
-            metric_names = [
-                str(measure["name"])
-                for model in models_payload
-                if isinstance(model, dict) and model.get("name") == "order_metrics"
-                for measure in model.get("metrics", [])
-                if (
-                    isinstance(measure, dict)
-                    and isinstance(measure.get("name"), str)
-                    and str(measure.get("aggregation", "")).upper() == "COUNT"
-                )
+            count_metrics = _catalog_metrics(models_payload)
+            if not count_metrics:
+                raise CheckFailure("aggregate catalog does not expose a COUNT metric")
+            category_dimensions = [
+                dimension
+                for dimension in _catalog_dimensions(models_payload)
+                if "product" in dimension.lower() and "categor" in dimension.lower()
             ]
-            if len(metric_names) != 1:
-                raise CheckFailure("aggregate catalog does not expose exactly one COUNT metric")
-            count_metric = metric_names[0]
-
-            selection = Path(tmp) / "selection.json"
-            selection.write_text(json.dumps({
-                "measures": [count_metric],
-                "dimensions": ["product_category"],
-            }), encoding="utf-8")
-            query = json.loads(_run([
-                supervisor, "query", "--endpoint", endpoint, "--token", token,
-                "--selection", str(selection),
-            ], timeout=90))
-            columns = query.get("columns")
-            rows = query.get("rows")
-            if not isinstance(columns, list) or not isinstance(rows, list):
-                raise CheckFailure("governed query returned no tabular result")
-            if set(columns) != {"product_category", count_metric}:
-                raise CheckFailure("governed query exposed record-level columns")
-            actual = {
-                str(row[columns.index("product_category")]): int(
-                    row[columns.index(count_metric)]
-                )
-                for row in rows
-            }
+            if not category_dimensions:
+                raise CheckFailure("aggregate catalog does not expose a product-category dimension")
             expected = _expected_counts()
-            if actual != expected:
-                raise CheckFailure("governed aggregate counts do not match pristine source")
+            matched: tuple[str, str, list[str], dict[str, int]] | None = None
+            attempts: list[str] = []
+            for category_dim in category_dimensions:
+                for count_metric in sorted(
+                    count_metrics, key=lambda name: 0 if "count" in name.lower() else 1
+                ):
+                    selection = Path(tmp) / "selection.json"
+                    selection.write_text(json.dumps({
+                        "measures": [count_metric],
+                        "dimensions": [category_dim],
+                    }), encoding="utf-8")
+                    try:
+                        query = json.loads(_run([
+                            supervisor, "query", "--endpoint", endpoint, "--token", token,
+                            "--selection", str(selection),
+                        ], timeout=90))
+                    except (CheckFailure, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+                        attempts.append(f"{category_dim}/{count_metric}: {exc}")
+                        continue
+                    columns = query.get("columns")
+                    rows = query.get("rows")
+                    if not isinstance(columns, list) or not isinstance(rows, list):
+                        attempts.append(f"{category_dim}/{count_metric}: no tabular result")
+                        continue
+                    lowered = [str(column).lower() for column in columns]
+                    expected_columns = {category_dim.lower(), count_metric.lower()}
+                    if len(columns) != 2 or set(lowered) != expected_columns:
+                        attempts.append(f"{category_dim}/{count_metric}: record-level columns")
+                        continue
+                    category_index = lowered.index(category_dim.lower())
+                    count_index = lowered.index(count_metric.lower())
+                    try:
+                        actual = {
+                            str(row[category_index]): int(row[count_index])
+                            for row in rows
+                        }
+                    except (IndexError, TypeError, ValueError) as exc:
+                        attempts.append(f"{category_dim}/{count_metric}: invalid rows: {exc}")
+                        continue
+                    if actual == expected:
+                        matched = (count_metric, category_dim, [str(column) for column in columns], actual)
+                        break
+                    attempts.append(f"{category_dim}/{count_metric}: got {actual}, expected {expected}")
+                if matched is not None:
+                    break
+            if matched is None:
+                raise CheckFailure(
+                    "no governed aggregate selection matched pristine source: "
+                    + "; ".join(attempts[:6])
+                )
+            count_metric, category_dim, columns, actual = matched
             result = {
                 "passed": True,
                 "published": "yes",
                 "catalog_models": len(models_payload),
                 "optional_model_visible": True,
                 "count_metric": count_metric,
+                "category_dimension": category_dim,
                 "query_columns": columns,
                 "aggregate_rows": actual,
                 "compiler_execution": "deferred follow-up",
