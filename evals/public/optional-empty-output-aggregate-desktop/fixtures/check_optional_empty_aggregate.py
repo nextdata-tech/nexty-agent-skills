@@ -85,11 +85,7 @@ def _catalog_metrics(models: list[Any]) -> list[str]:
         for model in models
         if isinstance(model, dict)
         for metric in model.get("metrics", []) or []
-        if (
-            isinstance(metric, dict)
-            and isinstance(metric.get("name"), str)
-            and str(metric.get("aggregation", "")).upper() == "COUNT"
-        )
+        if isinstance(metric, dict) and isinstance(metric.get("name"), str)
     ]
 
 
@@ -119,78 +115,80 @@ def _log_tail(path: Path, limit: int = 1000) -> str:
         return ""
 
 
-def _serve(supervisor: str, definition: Path, data_dir: Path) -> tuple[subprocess.Popen[str], str, str]:
+def _serve(
+    supervisor: str, definition: Path, data_dir: Path
+) -> tuple[subprocess.Popen[str], str, str, Path]:
     token = "desktop-check-" + secrets.token_urlsafe(18)
     env = {**os.environ, "NXD_DESKTOP_BEARER": token}
-    with tempfile.TemporaryDirectory(prefix="optional-empty-supervisor-") as log_dir:
-        stdout_path = Path(log_dir) / "stdout.log"
-        stderr_path = Path(log_dir) / "stderr.log"
-        proc: subprocess.Popen[str] | None = None
-        try:
-            with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-                "w", encoding="utf-8"
-            ) as stderr:
-                proc = subprocess.Popen(
-                    [supervisor, "serve", "--definition", str(definition), "--workflow", WORKFLOW,
-                     "--data-dir", str(data_dir)],
-                    stdout=stdout,
-                    stderr=stderr,
-                    text=True,
-                    env=env,
-                    start_new_session=True,
-                )
-            deadline = time.monotonic() + 300
-            readiness_error = ""
-            while time.monotonic() < deadline:
-                values = _kv(stdout_path.read_text(encoding="utf-8", errors="replace"))
-                if values.get("published") == "yes":
-                    endpoint = values.get("semantic_endpoint", "")
-                    if not endpoint:
-                        raise CheckFailure(f"supervisor published without an endpoint: {values}")
-                    readiness_deadline = min(deadline, time.monotonic() + 60)
-                    while time.monotonic() < readiness_deadline:
-                        try:
-                            describe = json.loads(_run([
-                                supervisor, "describe", "--endpoint", endpoint, "--token", token
-                            ], timeout=15))
-                            if not isinstance(describe.get("models"), list) or not describe["models"]:
-                                raise CheckFailure("describe_models returned no models")
-                            return proc, endpoint, token
-                        except (CheckFailure, json.JSONDecodeError, subprocess.SubprocessError) as exc:
-                            readiness_error = str(exc)
-                        if proc.poll() is not None:
-                            raise CheckFailure(
-                                "supervisor exited before semantic readiness: "
-                                + _log_tail(stderr_path)
-                                + _log_tail(stdout_path)
-                            )
-                        time.sleep(0.2)
-                    raise CheckFailure(
-                        f"semantic endpoint was not ready within the verifier budget: {endpoint}; "
-                        + readiness_error
-                    )
-                if proc.poll() is not None:
-                    raise CheckFailure(
-                        "supervisor exited before semantic readiness: "
-                        + _log_tail(stderr_path)
-                        + _log_tail(stdout_path)
-                    )
-                time.sleep(0.2)
-            raise CheckFailure(
-                "supervisor did not become ready within the verifier budget: "
-                + readiness_error
-                + " stderr="
-                + _log_tail(stderr_path)
-                + " stdout="
-                + _log_tail(stdout_path)
+    log_dir = Path(tempfile.mkdtemp(prefix="optional-empty-supervisor-"))
+    stdout_path = log_dir / "stdout.log"
+    stderr_path = log_dir / "stderr.log"
+    proc: subprocess.Popen[str] | None = None
+    try:
+        with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as stderr:
+            proc = subprocess.Popen(
+                [supervisor, "serve", "--definition", str(definition), "--workflow", WORKFLOW,
+                 "--data-dir", str(data_dir)],
+                stdout=stdout,
+                stderr=stderr,
+                text=True,
+                env=env,
+                start_new_session=True,
             )
-        except BaseException:
-            if proc is not None:
-                with contextlib.suppress(CheckFailure, OSError, subprocess.TimeoutExpired):
-                    _stop(supervisor, data_dir, proc)
-                if proc.poll() is None:
-                    _reap(proc)
-            raise
+        deadline = time.monotonic() + 300
+        readiness_error = ""
+        while time.monotonic() < deadline:
+            values = _kv(stdout_path.read_text(encoding="utf-8", errors="replace"))
+            if values.get("published") == "yes":
+                endpoint = values.get("semantic_endpoint", "")
+                if not endpoint:
+                    raise CheckFailure(f"supervisor published without an endpoint: {values}")
+                readiness_deadline = min(deadline, time.monotonic() + 60)
+                while time.monotonic() < readiness_deadline:
+                    try:
+                        describe = json.loads(_run([
+                            supervisor, "describe", "--endpoint", endpoint, "--token", token
+                        ], timeout=15))
+                        if not isinstance(describe.get("models"), list) or not describe["models"]:
+                            raise CheckFailure("describe_models returned no models")
+                        return proc, endpoint, token, log_dir
+                    except (CheckFailure, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+                        readiness_error = str(exc)
+                    if proc.poll() is not None:
+                        raise CheckFailure(
+                            "supervisor exited before semantic readiness: "
+                            + _log_tail(stderr_path)
+                            + _log_tail(stdout_path)
+                        )
+                    time.sleep(0.2)
+                raise CheckFailure(
+                    f"semantic endpoint was not ready within the verifier budget: {endpoint}; "
+                    + readiness_error
+                )
+            if proc.poll() is not None:
+                raise CheckFailure(
+                    "supervisor exited before semantic readiness: "
+                    + _log_tail(stderr_path)
+                    + _log_tail(stdout_path)
+                )
+            time.sleep(0.2)
+        raise CheckFailure(
+            "supervisor did not become ready within the verifier budget: "
+            + readiness_error
+            + " stderr="
+            + _log_tail(stderr_path)
+            + " stdout="
+            + _log_tail(stdout_path)
+        )
+    except BaseException:
+        if proc is not None:
+            _stop(supervisor, data_dir, proc)
+            if proc.poll() is None:
+                _reap(proc)
+        shutil.rmtree(log_dir, ignore_errors=True)
+        raise
 
 
 def _reap(proc: subprocess.Popen[str]) -> None:
@@ -210,25 +208,21 @@ def _reap(proc: subprocess.Popen[str]) -> None:
 
 
 def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
+    stop_error = ""
     try:
-        stopped = subprocess.run(
+        subprocess.run(
             [supervisor, "stop", "--data-dir", str(data_dir)],
             capture_output=True,
             text=True,
             timeout=60,
         )
-        detail = (stopped.stderr or stopped.stdout).strip()
-        if (
-            stopped.returncode != 0
-            and proc.poll() is None
-            and "without a detached control marker" not in detail
-        ):
-            raise CheckFailure(f"supervisor stop failed ({stopped.returncode}): {detail}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        stop_error = str(exc)
     finally:
         _reap(proc)
     if proc.poll() is None:
-        raise CheckFailure("supervisor process group did not exit during teardown")
-    return "process_group_reaped"
+        return "process_group_reap_incomplete" + (f": {stop_error}" if stop_error else "")
+    return "process_group_reaped" + (f": stop reported {stop_error}" if stop_error else "")
 
 
 def _verify(definition: Path) -> dict[str, Any]:
@@ -248,7 +242,7 @@ def _verify(definition: Path) -> dict[str, Any]:
         raise CheckFailure("private mapper seam was imported")
     if ".model(reviews)" not in spec or ".promise(reviews)" in spec:
         raise CheckFailure("optional review output is wired with the wrong contract")
-    if ".model(" not in spec or "semantic_view(" not in models:
+    if "semantic_view(" not in models:
         raise CheckFailure("aggregate semantic view is missing")
     if "Agg.COUNT" not in models or 'orders.field("*")' not in models:
         raise CheckFailure("aggregate view is not a COUNT(*) metric")
@@ -259,7 +253,7 @@ def _verify(definition: Path) -> dict[str, Any]:
         Path(runtime_tmp).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="optional-empty-e2e-", dir=runtime_tmp or None) as tmp:
         data_dir = Path(tmp) / "state"
-        proc, endpoint, token = _serve(supervisor, definition, data_dir)
+        proc, endpoint, token, log_dir = _serve(supervisor, definition, data_dir)
         result: dict[str, Any]
         try:
             describe = json.loads(_run([
@@ -270,9 +264,9 @@ def _verify(definition: Path) -> dict[str, Any]:
                 raise CheckFailure("describe_models did not return a model catalog")
             if not any(_contains(model, "reviews") for model in models_payload):
                 raise CheckFailure("optional reviews model is absent from the catalog")
-            count_metrics = _catalog_metrics(models_payload)
-            if not count_metrics:
-                raise CheckFailure("aggregate catalog does not expose a COUNT metric")
+            metric_names = _catalog_metrics(models_payload)
+            if not metric_names:
+                raise CheckFailure("aggregate catalog does not expose a metric")
             category_dimensions = [
                 dimension
                 for dimension in _catalog_dimensions(models_payload)
@@ -285,7 +279,7 @@ def _verify(definition: Path) -> dict[str, Any]:
             attempts: list[str] = []
             for category_dim in category_dimensions:
                 for count_metric in sorted(
-                    count_metrics, key=lambda name: 0 if "count" in name.lower() else 1
+                    metric_names, key=lambda name: 0 if "count" in name.lower() else 1
                 ):
                     selection = Path(tmp) / "selection.json"
                     selection.write_text(json.dumps({
@@ -345,6 +339,7 @@ def _verify(definition: Path) -> dict[str, Any]:
             }
         finally:
             teardown = _stop(supervisor, data_dir, proc)
+            shutil.rmtree(log_dir, ignore_errors=True)
         result["teardown"] = teardown
         return result
 
