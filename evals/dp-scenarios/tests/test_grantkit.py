@@ -14,6 +14,7 @@ from dp_scenarios.grantkit import (
     ScriptedGrantOperator,
     check_cumulative_budgets,
     grant_identity,
+    load_field_mapper,
     make_grant_fixture,
     write_synthetic_evaluation_profile,
 )
@@ -35,14 +36,28 @@ class _GrantLike:
 
 @pytest.fixture
 def nxd_repo_root(monkeypatch: pytest.MonkeyPatch) -> Path:
+    artifact_manifest = os.environ.get("EVAL_NXD_ARTIFACT_MANIFEST")
+    if artifact_manifest:
+        manifest = Path(artifact_manifest)
+        if not manifest.is_file():
+            if os.environ.get("EVAL_REQUIRE_LIVE_FIXTURE") == "1":
+                raise FieldMapperUnavailable(
+                    "field-mapper integration requires a readable EVAL_NXD_ARTIFACT_MANIFEST"
+                )
+            pytest.skip(
+                "SKIP_FIELD_MAPPER_DEPENDENCY: set EVAL_NXD_ARTIFACT_MANIFEST to an NXD artifact manifest",
+                allow_module_level=False,
+            )
+        return manifest
+
     configured = os.environ.get("EVAL_NXD_REPO_ROOT")
     if not configured:
         if os.environ.get("EVAL_REQUIRE_LIVE_FIXTURE") == "1":
             raise FieldMapperUnavailable(
-                "field-mapper integration requires EVAL_NXD_REPO_ROOT"
+                "field-mapper integration requires EVAL_NXD_ARTIFACT_MANIFEST or EVAL_NXD_REPO_ROOT"
             )
         pytest.skip(
-            "SKIP_FIELD_MAPPER_DEPENDENCY: set EVAL_NXD_REPO_ROOT to an NXD checkout",
+            "SKIP_FIELD_MAPPER_DEPENDENCY: set EVAL_NXD_ARTIFACT_MANIFEST or EVAL_NXD_REPO_ROOT",
             allow_module_level=False,
         )
     root = Path(configured)
@@ -62,8 +77,100 @@ def nxd_repo_root(monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.mark.field_mapper
 def test_absent_field_mapper_is_a_distinct_fail_closed_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("EVAL_NXD_REPO_ROOT", raising=False)
+    monkeypatch.delenv("EVAL_NXD_ARTIFACT_MANIFEST", raising=False)
     with pytest.raises(FieldMapperUnavailable, match="EVAL_NXD_REPO_ROOT"):
         make_grant_fixture(tmp_path / "missing-spec.json")
+
+
+@pytest.mark.field_mapper
+def test_inconsistent_nxd_artifact_manifest_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "nxd-py-artifact-v1",
+                "repository": "nextdata-tech/nxd",
+                "field_mapper_tree_sha": "tree-sha",
+                "package_version": "0.0.0",
+                "packages": {
+                    "nxd-core": "0.0.0",
+                    "nxd-data_product": "0.0.1",
+                    "nxd-drivers": "0.0.0",
+                },
+                "wheels": [{"name": "nxd_data_product.whl", "sha256": "0" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("EVAL_NXD_REPO_ROOT", raising=False)
+    monkeypatch.setenv("EVAL_NXD_ARTIFACT_MANIFEST", str(manifest))
+    with pytest.raises(FieldMapperUnavailable, match="inconsistent package versions"):
+        make_grant_fixture(SPEC_PATH)
+
+
+@pytest.mark.field_mapper
+def test_declared_nxd_artifact_loads_the_installed_mapper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    package_root = tmp_path / "site-packages/nxd"
+    mapper_file = package_root / "experimental/field_mapper/__init__.py"
+    mapper_file.parent.mkdir(parents=True)
+    mapper_file.write_text("", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    package_version = "0.0.0"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "nxd-py-artifact-v1",
+                "repository": "nextdata-tech/nxd",
+                "field_mapper_tree_sha": "tree-sha",
+                "package_version": package_version,
+                "packages": {
+                    "nxd-core": package_version,
+                    "nxd-data_product": package_version,
+                    "nxd-drivers": package_version,
+                },
+                "wheels": [{"name": "nxd_data_product.whl", "sha256": "0" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Distribution:
+        version = package_version
+
+        def locate_file(self, relative: str) -> Path:
+            return tmp_path / "site-packages" / relative
+
+    class _MapperSpec:
+        mapper_spec_id = "sha256:spec"
+
+        @classmethod
+        def load(cls, value: object) -> object:
+            return value
+
+    import types
+
+    module = types.ModuleType("nxd.experimental.field_mapper")
+    module.__file__ = str(mapper_file)
+    module.Grant = object
+    module.MapperSpec = _MapperSpec
+    module.EvaluationProfile = object
+    distributions = {name: _Distribution() for name in ("nxd-core", "nxd-data_product", "nxd-drivers")}
+    monkeypatch.setattr(
+        "dp_scenarios.grantkit.runtime.importlib.metadata.distribution",
+        distributions.__getitem__,
+    )
+    monkeypatch.setattr(
+        "dp_scenarios.grantkit.runtime.importlib.import_module",
+        lambda name: module,
+    )
+    monkeypatch.delenv("EVAL_NXD_REPO_ROOT", raising=False)
+    monkeypatch.setenv("EVAL_NXD_ARTIFACT_MANIFEST", str(manifest))
+
+    assert load_field_mapper() is module
 
 
 @pytest.mark.field_mapper
