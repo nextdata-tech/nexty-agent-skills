@@ -13,12 +13,12 @@ dependencies = [
 
 [project.optional-dependencies]
 # Provider SDKs are the responsibility of nxd_eval's own extras. The
-# deterministic harness has no provider SDK dependency; the local live runner
-# invokes the host's Claude Code executable separately. The source-bound mapper
-# is resolved at run time from EVAL_NXD_REPO_ROOT rather than declared here:
-# pinning it as a path
-# dependency would hardwire one machine's checkout layout into the lock file
-# and break every environment that does not reproduce it.
+# deterministic harness does not call a model directly; the local live runner
+# invokes the host's Claude Code executable separately. The NXD mapper is
+# resolved at run time from an explicitly declared artifact manifest or source
+# checkout rather than declared here: pinning it as a path dependency would
+# hardwire one machine's checkout layout into the lock file and break
+# artifact-based environments.
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-timeout>=2.3"]
@@ -42,5 +42,5 @@ pythonpath = ["src"]
 timeout = 300
 markers = [
     "integration: requires a local Docker runtime and the configured Postgres image",
-    "field_mapper: requires the source-bound NXD field_mapper dependency via EVAL_NXD_REPO_ROOT",
+    "field_mapper: requires a declared NXD field_mapper artifact or source checkout",
 ]

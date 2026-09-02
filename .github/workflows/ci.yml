@@ -129,30 +129,121 @@ jobs:
           ref: bb5fa1e3ab4ca381edc8e309449e77639e9ff8af
           path: nxd
           token: ${{ env.NXD_REPO_TOKEN }}
+          fetch-depth: 1
+          sparse-checkout: |
+            components/desktop/supervisor/py
+            components/nxd_py/data_product/nxd/experimental
+          sparse-checkout-cone-mode: true
       - name: Verify pinned NXD source
         if: env.NXD_REPO_TOKEN != ''
+        id: nxd-source
         working-directory: nxd
         run: |
           test "$(git rev-parse HEAD)" = "bb5fa1e3ab4ca381edc8e309449e77639e9ff8af"
           git rev-parse HEAD
-      - name: Build NXD Python bindings
+          field_mapper_tree_sha="$(git rev-parse HEAD:components/nxd_py/data_product/nxd/experimental/field_mapper)"
+          echo "field_mapper_tree_sha=$field_mapper_tree_sha" >> "$GITHUB_OUTPUT"
+      - name: Resolve NXD Python artifact
         if: env.NXD_REPO_TOKEN != ''
-        working-directory: nxd
+        id: nxd-artifact
         env:
-          UV_DEFAULT_INDEX: https://pypi.org/simple/
+          GH_TOKEN: ${{ env.NXD_REPO_TOKEN }}
+          FIELD_MAPPER_TREE_SHA: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
         run: |
-          make -C components/nxd_py/data_product copy-templates
-          uv sync --directory components/nxd_py/data_product --all-extras
-          uv sync --directory components/nxd_py/core
-          uv sync --directory components/nxd_py/drivers --all-extras
+          set -euo pipefail
+          artifact_name="nxd-py-linux-x86_64-$FIELD_MAPPER_TREE_SHA"
+          artifacts="$(gh api --repo nextdata-tech/nxd \
+            "actions/artifacts?name=$artifact_name&per_page=100")"
+          artifact="$(jq -c '
+            [.artifacts[]
+              | select(.expired == false)
+              | select(.workflow_run.head_branch == "main")]
+            | sort_by(.created_at)
+            | .[-1] // empty
+          ' <<< "$artifacts")"
+          if [ -z "$artifact" ]; then
+            echo "No unexpired main-branch NXD artifact found for $FIELD_MAPPER_TREE_SHA" >&2
+            exit 1
+          fi
+          run_id="$(jq -r '.workflow_run.id // empty' <<< "$artifact")"
+          resolved_name="$(jq -r '.name // empty' <<< "$artifact")"
+          if [ -z "$run_id" ] || [ "$resolved_name" != "$artifact_name" ]; then
+            echo "The resolved NXD artifact has no valid workflow run or name" >&2
+            exit 1
+          fi
+          echo "artifact_name=$resolved_name" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Resolved $resolved_name from NXD workflow run $run_id"
+      - name: Download NXD Python artifact
+        if: env.NXD_REPO_TOKEN != ''
+        uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ env.NXD_REPO_TOKEN }}
+          repository: nextdata-tech/nxd
+          run-id: ${{ steps.nxd-artifact.outputs.run_id }}
+          name: ${{ steps.nxd-artifact.outputs.artifact_name }}
+          path: nxd-artifact
+      - name: Verify NXD Python artifact
+        if: env.NXD_REPO_TOKEN != ''
+        id: artifact-manifest
+        env:
+          FIELD_MAPPER_TREE_SHA: ${{ steps.nxd-source.outputs.field_mapper_tree_sha }}
+        run: |
+          set -euo pipefail
+          manifest="nxd-artifact/manifest.json"
+          test -f "$manifest"
+          jq -e \
+            --arg field_mapper_tree_sha "$FIELD_MAPPER_TREE_SHA" \
+            '(.schema == "nxd-py-artifact-v1")
+             and (.repository == "nextdata-tech/nxd")
+             and (.field_mapper_tree_sha == $field_mapper_tree_sha)
+             and (.platform == "linux-x86_64")
+             and (.python == "3.11")
+             and (.package_version != null)
+             and (.packages["nxd-core"] != null)
+             and (.packages["nxd-data_product"] != null)
+             and (.packages["nxd-drivers"] != null)
+             and (.wheels | length > 0)' "$manifest" >/dev/null
+
+          while IFS=$'\t' read -r name expected_sha256; do
+            wheel="nxd-artifact/wheels/$name"
+            test -f "$wheel"
+            actual_sha256="$(sha256sum "$wheel" | awk '{print $1}')"
+            if [ "$actual_sha256" != "$expected_sha256" ]; then
+              echo "SHA-256 mismatch for $name" >&2
+              exit 1
+            fi
+          done < <(jq -r '.wheels[] | [.name, .sha256] | @tsv' "$manifest")
+
+          package_version="$(jq -r '.package_version' "$manifest")"
+          jq -e --arg package_version "$package_version" \
+            '(.packages | to_entries | all(.value == $package_version))' "$manifest" >/dev/null
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+          cat "$manifest"
+      - name: Install NXD Python artifact
+        if: env.NXD_REPO_TOKEN != ''
+        working-directory: evals/dp-scenarios
+        env:
+          PACKAGE_VERSION: ${{ steps.artifact-manifest.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          uv sync --locked
+          uv pip install \
+            --python .venv/bin/python \
+            --no-index \
+            --find-links "${{ github.workspace }}/nxd-artifact/wheels" \
+            "nxd-core==$PACKAGE_VERSION" \
+            "nxd-data_product==$PACKAGE_VERSION" \
+            "nxd-drivers==$PACKAGE_VERSION"
       - name: Run field-mapper grant tests
         if: env.NXD_REPO_TOKEN != ''
         working-directory: evals/dp-scenarios
         env:
+          EVAL_NXD_ARTIFACT_MANIFEST: ${{ github.workspace }}/nxd-artifact/manifest.json
           EVAL_NXD_REPO_ROOT: ${{ github.workspace }}/nxd
-        run: uv run --locked pytest -q -m field_mapper
-      - name: Require NXD source for field-mapper integration
+        run: uv run --locked --no-sync pytest -q -m field_mapper
+      - name: Require NXD artifact token
         if: env.NXD_REPO_TOKEN == ''
         run: |
-          echo "NXD_DISPATCH_PAT is unavailable; field-mapper integration cannot execute." >&2
+          echo "NXD_DISPATCH_PAT is unavailable; field-mapper integration cannot resolve the NXD artifact." >&2
           exit 1
