@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import contextlib
 import hashlib
 import json
 import os
 import secrets
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -86,55 +88,110 @@ def _kv(text: str) -> dict[str, str]:
     return values
 
 
+def _log_tail(path: Path, limit: int = 1000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
+
+
 def _serve(supervisor: str, definition: Path, data_dir: Path) -> tuple[subprocess.Popen[str], str, str]:
     token = "desktop-check-" + secrets.token_urlsafe(18)
     env = {**os.environ, "NXD_DESKTOP_BEARER": token}
-    stdout = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
-    stderr = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
-    proc = subprocess.Popen(
-        [supervisor, "serve", "--definition", str(definition), "--workflow", WORKFLOW,
-         "--data-dir", str(data_dir)],
-        stdout=stdout,
-        stderr=stderr,
-        text=True,
-        env=env,
-        start_new_session=True,
-    )
-    deadline = time.monotonic() + 300
-    while time.monotonic() < deadline:
-        stdout.flush()
-        stdout.seek(0)
-        values = _kv(stdout.read())
-        if values.get("published") == "yes":
-            endpoint = values.get("semantic_endpoint", "")
-            if endpoint:
-                return proc, endpoint, token
-        if proc.poll() is not None:
-            stderr.flush()
-            stderr.seek(0)
+    with tempfile.TemporaryDirectory(prefix="optional-empty-supervisor-") as log_dir:
+        stdout_path = Path(log_dir) / "stdout.log"
+        stderr_path = Path(log_dir) / "stderr.log"
+        proc: subprocess.Popen[str] | None = None
+        try:
+            with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
+                "w", encoding="utf-8"
+            ) as stderr:
+                proc = subprocess.Popen(
+                    [supervisor, "serve", "--definition", str(definition), "--workflow", WORKFLOW,
+                     "--data-dir", str(data_dir)],
+                    stdout=stdout,
+                    stderr=stderr,
+                    text=True,
+                    env=env,
+                    start_new_session=True,
+                )
+            deadline = time.monotonic() + 300
+            readiness_error = ""
+            while time.monotonic() < deadline:
+                values = _kv(stdout_path.read_text(encoding="utf-8", errors="replace"))
+                if values.get("published") == "yes":
+                    endpoint = values.get("semantic_endpoint", "")
+                    if not endpoint:
+                        raise CheckFailure(f"supervisor published without an endpoint: {values}")
+                    try:
+                        describe = json.loads(_run([
+                            supervisor, "describe", "--endpoint", endpoint, "--token", token
+                        ], timeout=90))
+                        if not isinstance(describe.get("models"), list) or not describe["models"]:
+                            raise CheckFailure("describe_models returned no models")
+                        return proc, endpoint, token
+                    except (CheckFailure, json.JSONDecodeError) as exc:
+                        readiness_error = str(exc)
+                if proc.poll() is not None:
+                    raise CheckFailure(
+                        "supervisor exited before semantic readiness: "
+                        + _log_tail(stderr_path)
+                        + _log_tail(stdout_path)
+                    )
+                time.sleep(0.2)
             raise CheckFailure(
-                "supervisor exited before publishing: " + stderr.read()[-1000:]
+                "supervisor did not become ready within the verifier budget: "
+                + readiness_error
+                + " stderr="
+                + _log_tail(stderr_path)
+                + " stdout="
+                + _log_tail(stdout_path)
             )
-        time.sleep(0.2)
-    stderr.flush()
-    stderr.seek(0)
-    raise CheckFailure(
-        "supervisor did not publish within the verifier budget: " + stderr.read()[-1000:]
-    )
+        except BaseException:
+            if proc is not None:
+                with contextlib.suppress(CheckFailure, OSError, subprocess.TimeoutExpired):
+                    _stop(supervisor, data_dir, proc)
+                if proc.poll() is None:
+                    _reap(proc)
+            raise
 
 
-def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> None:
+def _reap(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
     try:
-        subprocess.run([supervisor, "stop", "--data-dir", str(data_dir)],
-                       capture_output=True, text=True, timeout=60)
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        return
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError, ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)
+
+
+def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
+    try:
+        stopped = subprocess.run(
+            [supervisor, "stop", "--data-dir", str(data_dir)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        detail = (stopped.stderr or stopped.stdout).strip()
+        if (
+            stopped.returncode != 0
+            and proc.poll() is None
+            and "without a detached control marker" not in detail
+        ):
+            raise CheckFailure(f"supervisor stop failed ({stopped.returncode}): {detail}")
     finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+        _reap(proc)
+    if proc.poll() is None:
+        raise CheckFailure("supervisor process group did not exit during teardown")
+    return "process_group_reaped"
 
 
 def _verify(definition: Path) -> dict[str, Any]:
@@ -166,6 +223,7 @@ def _verify(definition: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="optional-empty-e2e-", dir=runtime_tmp or None) as tmp:
         data_dir = Path(tmp) / "state"
         proc, endpoint, token = _serve(supervisor, definition, data_dir)
+        result: dict[str, Any]
         try:
             describe = json.loads(_run([
                 supervisor, "describe", "--endpoint", endpoint, "--token", token
@@ -175,12 +233,24 @@ def _verify(definition: Path) -> dict[str, Any]:
                 raise CheckFailure("describe_models did not return a model catalog")
             if not any(_contains(model, "reviews") for model in models_payload):
                 raise CheckFailure("optional reviews model is absent from the catalog")
-            if not any(_contains(model, "ORDER_COUNT") for model in models_payload):
-                raise CheckFailure("ORDER_COUNT is absent from the catalog")
+            metric_names = [
+                str(measure["name"])
+                for model in models_payload
+                if isinstance(model, dict) and model.get("name") == "order_metrics"
+                for measure in model.get("metrics", [])
+                if (
+                    isinstance(measure, dict)
+                    and isinstance(measure.get("name"), str)
+                    and str(measure.get("aggregation", "")).upper() == "COUNT"
+                )
+            ]
+            if len(metric_names) != 1:
+                raise CheckFailure("aggregate catalog does not expose exactly one COUNT metric")
+            count_metric = metric_names[0]
 
             selection = Path(tmp) / "selection.json"
             selection.write_text(json.dumps({
-                "measures": ["ORDER_COUNT"],
+                "measures": [count_metric],
                 "dimensions": ["product_category"],
             }), encoding="utf-8")
             query = json.loads(_run([
@@ -191,29 +261,31 @@ def _verify(definition: Path) -> dict[str, Any]:
             rows = query.get("rows")
             if not isinstance(columns, list) or not isinstance(rows, list):
                 raise CheckFailure("governed query returned no tabular result")
-            if set(columns) != {"product_category", "ORDER_COUNT"}:
+            if set(columns) != {"product_category", count_metric}:
                 raise CheckFailure("governed query exposed record-level columns")
             actual = {
                 str(row[columns.index("product_category")]): int(
-                    row[columns.index("ORDER_COUNT")]
+                    row[columns.index(count_metric)]
                 )
                 for row in rows
             }
             expected = _expected_counts()
             if actual != expected:
                 raise CheckFailure("governed aggregate counts do not match pristine source")
-            return {
+            result = {
                 "passed": True,
                 "published": "yes",
                 "catalog_models": len(models_payload),
                 "optional_model_visible": True,
-                "count_metric": "ORDER_COUNT",
+                "count_metric": count_metric,
                 "query_columns": columns,
                 "aggregate_rows": actual,
                 "compiler_execution": "deferred follow-up",
             }
         finally:
-            _stop(supervisor, data_dir, proc)
+            teardown = _stop(supervisor, data_dir, proc)
+        result["teardown"] = teardown
+        return result
 
 
 def main() -> int:

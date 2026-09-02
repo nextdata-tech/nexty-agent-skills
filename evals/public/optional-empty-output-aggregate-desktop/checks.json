@@ -27,7 +27,7 @@
     },
     {
       "id": "aggregate-only-catalog",
-      "check": "The authoritative desktop verifier reports that describe_models exposes an ORDER_COUNT metric backed by COUNT(*) and that the optional reviews model remains visible in the catalog."
+      "check": "The authoritative desktop verifier reports that describe_models exposes the aggregate view's COUNT(*) metric and that the optional reviews model remains visible in the catalog."
     },
     {
       "id": "aggregate-only-query",
