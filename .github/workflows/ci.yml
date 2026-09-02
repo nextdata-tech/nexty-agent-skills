@@ -152,8 +152,8 @@ jobs:
         run: |
           set -euo pipefail
           artifact_name="nxd-py-linux-x86_64-$FIELD_MAPPER_TREE_SHA"
-          artifacts="$(gh api --repo nextdata-tech/nxd \
-            "actions/artifacts?name=$artifact_name&per_page=100")"
+          artifacts="$(gh api \
+            "repos/nextdata-tech/nxd/actions/artifacts?name=$artifact_name&per_page=100")"
           artifact="$(jq -c '
             [.artifacts[]
               | select(.expired == false)
