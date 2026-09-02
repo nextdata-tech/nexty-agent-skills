@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 import ast
-import csv
 import contextlib
+import csv
 import hashlib
 import json
 import os
@@ -110,10 +110,13 @@ def _semantic_view_names(source: str) -> set[str]:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         value = node.value
+        if value is None:
+            continue
         if not any(
             isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Name)
-            and call.func.id == "semantic_view"
+            and isinstance(call.func, (ast.Name, ast.Attribute))
+            and (call.func.id if isinstance(call.func, ast.Name) else call.func.attr)
+            == "semantic_view"
             for call in ast.walk(value)
         ):
             continue
@@ -134,10 +137,13 @@ def _output_model_names(source: str) -> set[str]:
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "model"
             and node.args
-            and isinstance(node.args[0], ast.Name)
         ):
             continue
-        names.add(node.args[0].id)
+        model = node.args[0]
+        if isinstance(model, ast.Name):
+            names.add(model.id)
+        elif isinstance(model, ast.Attribute):
+            names.add(model.attr)
     return names
 
 
@@ -208,6 +214,10 @@ def _serve(
                 raise CheckFailure(
                     f"semantic endpoint was not ready within the verifier budget: {endpoint}; "
                     + readiness_error
+                    + " stdout="
+                    + _log_tail(stdout_path)
+                    + " stderr="
+                    + _log_tail(stderr_path)
                 )
             if proc.poll() is not None:
                 raise CheckFailure(
@@ -249,8 +259,62 @@ def _reap(proc: subprocess.Popen[str]) -> None:
             proc.wait(timeout=10)
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _reap_process_group(pid: int) -> bool:
+    if not _pid_alive(pid):
+        return True
+    signal_sent = False
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        signal_sent = True
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+            signal_sent = True
+    deadline = time.monotonic() + 5
+    while _pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if _pid_alive(pid):
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            signal_sent = True
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+                signal_sent = True
+    # A successfully signalled pid cannot continue running.  It may remain as
+    # a zombie until its parent reaps it, but that is not a surviving service.
+    return signal_sent or not _pid_alive(pid)
+
+
+def _recorded_pids(data_dir: Path) -> set[int]:
+    pids: set[int] = set()
+    for name in ("semantic.pid", "supervisor.pid"):
+        try:
+            pid = int((data_dir / name).read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        if pid > 0:
+            pids.add(pid)
+    return pids
+
+
 def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
     stop_status = "ok"
+    recorded_pids = _recorded_pids(data_dir)
     try:
         stopped = subprocess.run(
             [supervisor, "stop", "--data-dir", str(data_dir)],
@@ -263,10 +327,12 @@ def _stop(supervisor: str, data_dir: Path, proc: subprocess.Popen[str]) -> str:
     except (OSError, subprocess.SubprocessError) as exc:
         stop_status = f"stop_error_{type(exc).__name__}"
     finally:
+        reaped = {pid: _reap_process_group(pid) for pid in recorded_pids}
         _reap(proc)
-    if proc.poll() is None:
-        return f"process_group_reap_incomplete ({stop_status})"
-    return f"process_group_reaped ({stop_status})"
+    survivors = [pid for pid, complete in reaped.items() if not complete]
+    if proc.poll() is None or survivors:
+        return f"teardown_incomplete ({stop_status}; survivors={survivors})"
+    return f"teardown_complete ({stop_status}; pid_groups={len(recorded_pids)})"
 
 
 def _verify(definition: Path) -> dict[str, Any]:
@@ -406,7 +472,7 @@ def main() -> int:
         if args.workflow != WORKFLOW:
             raise CheckFailure("unexpected workflow")
         facts = _verify(Path(args.workspace))
-    except (CheckFailure, OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+    except Exception as exc:
         facts = {"passed": False, "error": str(exc)}
     print(json.dumps(facts, sort_keys=True))
     return 0 if facts.get("passed") is True else 1
