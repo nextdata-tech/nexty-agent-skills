@@ -17,7 +17,7 @@ _output = (
     .promise(file_rows)
     .promise(db_rows)
     .promise(api_events)
-    .promise(optional_zero)
+    .model(optional_zero)
     .model(customers)
     .model(event_metrics)
     .port("duckdb", storage(_duckdb))

@@ -387,7 +387,22 @@ def test_negative_probe_requires_a_clean_variant_without_planted_line(
                         "checks": [
                             {"code": "structure/spec_compile_failed", "status": "fail"}
                         ],
-                    }
+                    },
+                    {
+                        "stage": "runtime",
+                        "status": "skip",
+                        "checks": [{"code": "runtime/not_reached", "status": "skip"}],
+                    },
+                    {
+                        "stage": "contract",
+                        "status": "skip",
+                        "checks": [{"code": "contract/not_reached", "status": "skip"}],
+                    },
+                    {
+                        "stage": "semantic",
+                        "status": "skip",
+                        "checks": [{"code": "semantic/not_reached", "status": "skip"}],
+                    },
                 ],
             },
             returncode=1,
