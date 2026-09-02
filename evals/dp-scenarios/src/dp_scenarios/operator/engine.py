@@ -646,7 +646,17 @@ class OperatorEngine:
             if failure_count > 1 or (pending_failure and failure_count > 0):
                 if "one_obstacle_per_turn" not in self.failure_modes:
                     self.failure_modes.append("one_obstacle_per_turn")
-            reported = result.reported
+            # Structured transports may provide an explicit report signal.
+            # Live adapters do not infer it from MCP evidence: a successful
+            # inspect_run is not an operator-facing disclosure.  When the
+            # agent's reply is classified as a declared status answer after a
+            # build failure, use that deterministic matcher result instead.
+            # Generic words such as "done" are not a disclosure.
+            reported = result.reported or (
+                failure_count > 0
+                and match.category is Category.STATUS_QUERY
+                and match.answer_key is not None
+            )
             pending_failure = failure_count > 0 and not reported
             intake_failure = index == 1 and match.category is not Category.SOURCE_QUESTION
             if intake_failure and "intake_failure" not in self.failure_modes:

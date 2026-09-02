@@ -22,7 +22,7 @@ class ReportError(ValueError):
 def machine_report(result: TierResult) -> dict[str, object]:
     """Return the stable JSON-ready tier document."""
 
-    document = _stable_document(result.as_dict())
+    document = _stable_document(result.as_dict(report_safe=True))
     document["report_format_version"] = 1
     document["efficiency_is_reported_only"] = True
     return document

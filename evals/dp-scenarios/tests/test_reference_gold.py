@@ -27,7 +27,7 @@ def _money(value: Decimal) -> str:
 def _score_rows(rows: list[dict], gold: list[dict]):
     state = TaskState(
         model=ModelName("mockllm/model"),
-        sample_id="grain-trap",
+        sample_id="parent-child-grain-trap",
         epoch=0,
         input="q",
         messages=[

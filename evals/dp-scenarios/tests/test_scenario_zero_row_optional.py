@@ -13,7 +13,7 @@ from dp_scenarios.operator.matcher import Category, MatcherBank
 
 
 ROOT = Path(__file__).parents[1]
-SCENARIO = load_scenario(ROOT / "scenarios/zero-row-output")
+SCENARIO = load_scenario(ROOT / "scenarios/zero-row-optional-output")
 
 
 def _hand_built_closure(generated: object, root: Path) -> Path:
@@ -225,7 +225,7 @@ def test_optional_resource_is_reachable_from_plausible_follow_up_questions() -> 
     assert "placeholder" not in unrelated.reply.casefold()
 
 
-def test_s5_certifies_only_the_examinable_build_gate() -> None:
+def test_zero_row_certifies_only_the_examinable_build_gate() -> None:
     assert SCENARIO.repeatability.gates == ("build",)
     assert "counts" in SCENARIO.gold_paths
 

@@ -48,7 +48,7 @@ def _timestamp(base: datetime, *, days: int, hours: int) -> str:
 
 
 def _build_grain_trap(seed: int, rng: random.Random) -> Mapping[str, Frame]:
-    """Build the grain-trap source with deliberately varying child counts.
+    """Build the parent-child-grain-trap source with deliberately varying child counts.
 
     Gold includes rows whose order status is ``active`` and whose line item
     joins to that order by exact ``order_id``.  It excludes tombstoned orders

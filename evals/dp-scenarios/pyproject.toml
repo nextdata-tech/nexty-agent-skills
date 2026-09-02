@@ -1,7 +1,7 @@
 [project]
 name = "dp-scenarios"
 version = "0.1.0"
-description = "Multi-turn data-product scenario suite for the NXD lean-desktop build path — harness, fixtures, evidence ledger, and mechanical grading for the T0 tier."
+description = "Multi-turn data-product scenario suite for the NXD lean-desktop build path — harness, fixtures, evidence ledger, local Claude Code runner, and mechanical grading."
 requires-python = ">=3.11"
 dependencies = [
     "nxd-eval",              # EX scorer, Wilson/McNemar statistics, report emitters
@@ -12,9 +12,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Provider SDKs are the responsibility of nxd_eval's own extras; nothing in the
-# T0 tier calls a model directly.  The source-bound mapper is resolved at run
-# time from EVAL_NXD_REPO_ROOT rather than declared here: pinning it as a path
+# Provider SDKs are the responsibility of nxd_eval's own extras. The
+# deterministic harness has no provider SDK dependency; the local live runner
+# invokes the host's Claude Code executable separately. The source-bound mapper
+# is resolved at run time from EVAL_NXD_REPO_ROOT rather than declared here:
+# pinning it as a path
 # dependency would hardwire one machine's checkout layout into the lock file
 # and break every environment that does not reproduce it.
 

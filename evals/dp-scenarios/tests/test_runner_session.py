@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -120,3 +121,39 @@ def test_replay_rejects_agent_owned_harness_oracle_names(tmp_path: Path) -> None
 
     with pytest.raises(Exception, match="reserved for harness-owned evidence"):
         replay.send_message("expected")
+
+
+def test_live_timeout_returns_a_recordable_environment_wedge() -> None:
+    session = LiveSession(
+        [sys.executable, "-c", "import sys; sys.stdin.readline()"],
+        timeout=0.01,
+    )
+    try:
+        session.start_fresh_session()
+        result = session.send_message("expected")
+    finally:
+        session.close()
+
+    assert result.environment_wedged
+    assert result.environment_detail == "live session exceeded the 0.010s turn timeout"
+    assert result.session_id == "live-session-1"
+
+
+def test_live_fresh_session_restarts_a_persistent_child() -> None:
+    session = LiveSession(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        timeout=1.0,
+    )
+    try:
+        first_session = session.start_fresh_session()
+        assert session._process is not None
+        first_pid = session._process.pid
+        second_session = session.start_fresh_session()
+        assert session._process is not None
+        second_pid = session._process.pid
+    finally:
+        session.close()
+
+    assert first_session == "live-session-1"
+    assert second_session == "live-session-2"
+    assert first_pid != second_pid

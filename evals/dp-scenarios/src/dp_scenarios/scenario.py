@@ -278,7 +278,7 @@ class Scenario:
 
     @property
     def control_total(self) -> float:
-        """Return grain-trap's independent control total from its declared gold."""
+        """Return the independent control total from the declared gold."""
 
         if "control_total" not in self.gold:
             raise ScenarioError(f"scenario {self.scenario_id} declares no control total")

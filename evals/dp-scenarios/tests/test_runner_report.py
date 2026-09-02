@@ -9,11 +9,11 @@ import pytest
 
 from dp_scenarios.canary import load_claims
 from dp_scenarios.canary.verdict import Verdict
-from dp_scenarios.operator import OperatorEngine
-from dp_scenarios.operator.transport import InMemoryTransport, TurnResult
-from dp_scenarios.runner import CanaryResult, PinnedVersions, RecordingSession, ReplayRecording, TierError, TierRunner
+from dp_scenarios.operator.transport import OperatorMessage, TouchedFile, TurnResult
+from dp_scenarios.runner import CanaryResult, ReplayRecording, TierError, TierRunner
 from dp_scenarios.runner.report import _stable_document, human_summary, machine_report, write_report
 from dp_scenarios.runner.cli import _canary_from_mapping
+from dp_scenarios.runner.session import RecordedTurn
 
 from test_runner_tier import clean_canary, make_scenario, pins, recording_for, responses_for
 
@@ -60,6 +60,30 @@ def test_efficiency_is_sibling_to_scored_fields_and_never_inside_score(tmp_path:
     machine_path, summary_path = write_report(result, json_path=tmp_path / "tier.json", summary_path=tmp_path / "tier.txt")
     assert json.loads(machine_path.read_text(encoding="utf-8"))["efficiency_is_reported_only"] is True
     assert summary_path is not None and summary_path.read_text(encoding="utf-8")
+
+
+def test_report_redacts_touched_file_contents_but_replay_stays_byte_faithful() -> None:
+    secret_content = b"source_url=https://user:password@example.test/data"
+    recording = ReplayRecording(
+        (
+            RecordedTurn(
+                OperatorMessage("go"),
+                TurnResult(files_touched=(TouchedFile("closure/spec.py", secret_content),)),
+            ),
+        )
+    )
+
+    report = recording.to_report_dict()
+    report_content = report["turns"][0]["result"]["files_touched"][0]["content"]
+    assert report_content == {
+        "redacted": True,
+        "sha256": "263a625f8a431698dd68458639a388143ee7106a8a93f4554af27a41c4b63cb7",
+        "size_bytes": len(secret_content),
+    }
+    assert "password" not in json.dumps(report)
+    assert recording.to_dict()["turns"][0]["result"]["files_touched"][0]["content"] == {
+        "__bytes__": "c291cmNlX3VybD1odHRwczovL3VzZXI6cGFzc3dvcmRAZXhhbXBsZS50ZXN0L2RhdGE="
+    }
 
 
 def test_canary_block_report_contains_claim_code_and_line(tmp_path: Path) -> None:

@@ -13,7 +13,7 @@ from dp_scenarios.scenario import load_scenario, scenario_script_hash
 
 
 ROOT = Path(__file__).parents[1]
-SCENARIO = load_scenario(ROOT / "scenarios/grain-trap")
+SCENARIO = load_scenario(ROOT / "scenarios/parent-child-grain-trap")
 
 
 def test_turn_one_is_one_analyst_sentence_without_source_driver_or_mechanism_nouns() -> None:
@@ -178,7 +178,7 @@ def test_follow_up_reconciles_against_generated_fixture_control_total(tmp_path: 
     ],
 )
 def test_operator_script_hash_is_stable_and_changes_for_persona_mutations(field: str, value: object) -> None:
-    loaded_again = load_scenario(ROOT / "scenarios/grain-trap")
+    loaded_again = load_scenario(ROOT / "scenarios/parent-child-grain-trap")
     assert SCENARIO.operator_script_hash == loaded_again.operator_script_hash
     assert SCENARIO.operator_script_hash == scenario_script_hash(SCENARIO.operator_script)
     changed_script = replace(

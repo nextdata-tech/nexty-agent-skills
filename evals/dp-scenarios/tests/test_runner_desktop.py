@@ -23,7 +23,6 @@ import pytest
 import desktop_stdio as shared_desktop_stdio
 from dp_scenarios.runner.desktop import DesktopStdioTransport, _resolved_supervisor_identity
 from dp_scenarios.runner.environment import EnvironmentError, RunEnvironment
-from dp_scenarios.runner.session import SessionError
 from test_runner_environment import make_scenario, pins
 
 
@@ -300,8 +299,9 @@ def test_live_session_cleanup_reaps_turn_child_after_protocol_error(tmp_path: Pa
         assert grandchild_pid_file.exists()
         child_pid = int(pid_file.read_text(encoding="utf-8"))
         grandchild_pid = int(grandchild_pid_file.read_text(encoding="utf-8"))
-        with pytest.raises(SessionError, match="turn timeout"):
-            live.send_message("mid-session failure")
+        result = live.send_message("mid-session failure")
+        assert result.environment_wedged
+        assert result.environment_detail == "live session exceeded the 0.100s turn timeout"
         live.close()
         _wait_gone(child_pid)
         assert os.getpgid(grandchild_pid) == grandchild_pid

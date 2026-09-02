@@ -155,11 +155,11 @@ def responses_for(scenario: FakeScenario, *, first: TurnResult | None = None) ->
     return responses
 
 
-def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
-    """Build populated replay artifacts from the real grain-trap package."""
+def populated_parent_child_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
+    """Build populated replay artifacts from the real parent-child-grain-trap package."""
 
-    scenario = load_scenario(ROOT / "scenarios/grain-trap")
-    generated = scenario.generate_fixture(tmp_path / "s6-fixture")
+    scenario = load_scenario(ROOT / "scenarios/parent-child-grain-trap")
+    generated = scenario.generate_fixture(tmp_path / "parent-child-fixture")
     row_counts = generated.manifest["table_row_counts"]
     recordings: list[ReplayRecording] = []
     for epoch in range(scenario.epochs):
@@ -243,11 +243,11 @@ def populated_s6_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecordin
     return scenario, recordings
 
 
-def populated_s5_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
+def populated_zero_row_recordings(tmp_path: Path) -> tuple[object, list[ReplayRecording]]:
     """Build a populated replay for the zero-row scenario, including follow-up evidence."""
 
-    scenario = load_scenario(ROOT / "scenarios/zero-row-output")
-    generated = scenario.generate_fixture(tmp_path / "s5-fixture")
+    scenario = load_scenario(ROOT / "scenarios/zero-row-optional-output")
+    generated = scenario.generate_fixture(tmp_path / "zero-row-fixture")
     row_counts = generated.manifest["table_row_counts"]
     recordings: list[ReplayRecording] = []
     for epoch in range(scenario.epochs):
@@ -780,7 +780,7 @@ def test_composed_runner_applies_epoch_knobs_and_switches_workflow(tmp_path: Pat
 
 
 def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Path) -> None:
-    scenario, recordings = populated_s6_recordings(tmp_path)
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
 
     result = TierRunner(
         [scenario],
@@ -807,7 +807,7 @@ def test_real_grain_trap_populated_replay_has_clean_examined_gates(tmp_path: Pat
 
 
 def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) -> None:
-    scenario, recordings = populated_s5_recordings(tmp_path)
+    scenario, recordings = populated_zero_row_recordings(tmp_path)
 
     result = TierRunner(
         [scenario],
@@ -824,7 +824,7 @@ def test_real_zero_row_populated_replay_reaches_a_clean_verdict(tmp_path: Path) 
 
 
 def test_tier_build_gate_failure_cannot_produce_a_clean_verdict(tmp_path: Path) -> None:
-    scenario, recordings = populated_s6_recordings(tmp_path)
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
     first_facts = dict(recordings[0].supervisor_facts or {})
     first_counts = dict(first_facts["per_model_row_counts"])
     model = next(iter(first_counts))
@@ -1043,7 +1043,7 @@ def test_sentinel_not_examined_inputs_can_never_pass(tmp_path: Path, case: str) 
 
 
 def test_query_artifact_absence_is_required_when_answer_gold_is_declared(tmp_path: Path) -> None:
-    scenario, recordings = populated_s6_recordings(tmp_path)
+    scenario, recordings = populated_parent_child_recordings(tmp_path)
     recording = recordings[0]
     turns = []
     for turn in recording.turns:
@@ -1065,7 +1065,7 @@ def test_query_artifact_absence_is_required_when_answer_gold_is_declared(tmp_pat
 
 
 def test_query_artifact_without_answer_gold_remains_unexamined_and_optional(tmp_path: Path) -> None:
-    scenario, recordings = populated_s5_recordings(tmp_path)
+    scenario, recordings = populated_zero_row_recordings(tmp_path)
     recording = recordings[0]
     turns = list(recording.turns)
     result_files = list(turns[4].result.files_touched)

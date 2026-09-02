@@ -17,27 +17,27 @@ ROOT = Path(__file__).parents[1]
 SCENARIO_ROOT = ROOT / "scenarios"
 
 
-def _copy_s6_package(tmp_path: Path) -> Path:
+def _copy_parent_child_package(tmp_path: Path) -> Path:
     root = tmp_path / "scenarios"
     root.mkdir()
-    shutil.copytree(SCENARIO_ROOT / "grain-trap", root / "grain-trap")
+    shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", root / "parent-child-grain-trap")
     (root / "_personas").mkdir()
     shutil.copy2(SCENARIO_ROOT / "_personas/smoke.yaml", root / "_personas/smoke.yaml")
-    return root / "grain-trap"
+    return root / "parent-child-grain-trap"
 
 
-def _copy_s5_package(tmp_path: Path) -> Path:
+def _copy_zero_row_package(tmp_path: Path) -> Path:
     root = tmp_path / "scenarios"
     root.mkdir()
-    shutil.copytree(SCENARIO_ROOT / "zero-row-output", root / "zero-row-output")
+    shutil.copytree(SCENARIO_ROOT / "zero-row-optional-output", root / "zero-row-optional-output")
     (root / "_personas").mkdir()
     shutil.copy2(SCENARIO_ROOT / "_personas/smoke.yaml", root / "_personas/smoke.yaml")
-    return root / "zero-row-output"
+    return root / "zero-row-optional-output"
 
 
 def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_path: Path) -> None:
     scenarios = load_scenarios(SCENARIO_ROOT)
-    assert {scenario.id for scenario in scenarios} == {"grain-trap", "zero-row-output"}
+    assert {scenario.id for scenario in scenarios} == {"parent-child-grain-trap", "zero-row-optional-output"}
     for scenario in scenarios:
         assert get_dataset(scenario.dataset).name == scenario.dataset
         assert scenario.seed == 29
@@ -64,7 +64,7 @@ def test_both_scenario_packages_load_and_resolve_their_declared_references(tmp_p
     "gates", "gold", "operator",
 }))
 def test_loader_rejects_each_missing_required_declaration_field(missing: str, tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     del source[missing]
@@ -74,7 +74,7 @@ def test_loader_rejects_each_missing_required_declaration_field(missing: str, tm
 
 
 def test_loader_requires_the_explicit_fixture_plant_declaration(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["fixture"].pop("plant")
@@ -85,7 +85,7 @@ def test_loader_requires_the_explicit_fixture_plant_declaration(tmp_path: Path) 
 
 
 def test_loader_rejects_a_scenario_that_declares_no_plants(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["required_plants"] = []
@@ -95,7 +95,7 @@ def test_loader_rejects_a_scenario_that_declares_no_plants(tmp_path: Path) -> No
 
 
 def test_loader_rejects_a_free_text_plant_identifier(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["required_plants"] = ["bogus_plant"]
@@ -106,7 +106,7 @@ def test_loader_rejects_a_free_text_plant_identifier(tmp_path: Path) -> None:
 
 
 def test_loader_rejects_each_unreachable_certified_phase(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["phase_map"][5] = 4
@@ -117,7 +117,7 @@ def test_loader_rejects_each_unreachable_certified_phase(tmp_path: Path) -> None
 
 
 def test_loader_rejects_a_phase_map_that_does_not_cover_every_turn(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["phase_map"].pop(7)
@@ -128,7 +128,7 @@ def test_loader_rejects_a_phase_map_that_does_not_cover_every_turn(tmp_path: Pat
 
 
 def test_loader_rejects_an_unknown_follow_up_kind(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gates"]["follow-up"]["kind"] = "bogus_follow_up"
@@ -139,7 +139,7 @@ def test_loader_rejects_an_unknown_follow_up_kind(tmp_path: Path) -> None:
 
 
 def test_loader_rejects_a_repeatability_epoch_count_that_does_not_match_tier(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["repeatability"]["epochs"] = 1
@@ -150,7 +150,7 @@ def test_loader_rejects_a_repeatability_epoch_count_that_does_not_match_tier(tmp
 
 
 def test_loader_rejects_a_certified_gate_without_scoreable_gold(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["repeatability"]["certification"]["gates"] = ["query"]
@@ -161,7 +161,7 @@ def test_loader_rejects_a_certified_gate_without_scoreable_gold(tmp_path: Path) 
 
 
 def test_loader_rejects_a_deterministic_certificate_with_a_lower_bound_below_contract(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["repeatability"]["certification"]["lower_bound"] = 0.5
@@ -172,7 +172,7 @@ def test_loader_rejects_a_deterministic_certificate_with_a_lower_bound_below_con
 
 
 def test_loader_rejects_a_scenario_tier_outside_the_manifest_vocabulary(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["tier"] = "bogus"
@@ -183,7 +183,7 @@ def test_loader_rejects_a_scenario_tier_outside_the_manifest_vocabulary(tmp_path
 
 
 def test_loader_rejects_a_budget_smaller_than_the_script(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["turn_budget"] = 1
@@ -195,7 +195,7 @@ def test_loader_rejects_a_budget_smaller_than_the_script(tmp_path: Path) -> None
 
 @pytest.mark.parametrize("reference", ["persona", "answer_sheet", "events"])
 def test_loader_rejects_a_missing_declared_runtime_reference(reference: str, tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source[reference] = "missing.yaml"
@@ -206,8 +206,8 @@ def test_loader_rejects_a_missing_declared_runtime_reference(reference: str, tmp
 
 
 @pytest.mark.parametrize("gold_key", ["answer", "control_total", "diagnostics"])
-def test_loader_rejects_a_missing_declared_s6_gold_reference(gold_key: str, tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+def test_loader_rejects_a_missing_declared_parent_child_gold_reference(gold_key: str, tmp_path: Path) -> None:
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gold"][gold_key] = "gold/missing.json"
@@ -218,7 +218,7 @@ def test_loader_rejects_a_missing_declared_s6_gold_reference(gold_key: str, tmp_
 
 
 def test_loader_rejects_an_empty_or_extra_gold_key_set(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gold"].pop("answer")
@@ -228,7 +228,7 @@ def test_loader_rejects_an_empty_or_extra_gold_key_set(tmp_path: Path) -> None:
 
     empty_root = tmp_path / "empty"
     empty_root.mkdir()
-    package = _copy_s6_package(empty_root)
+    package = _copy_parent_child_package(empty_root)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gold"] = {}
@@ -238,7 +238,7 @@ def test_loader_rejects_an_empty_or_extra_gold_key_set(tmp_path: Path) -> None:
 
     extra_root = tmp_path / "extra"
     extra_root.mkdir()
-    package = _copy_s6_package(extra_root)
+    package = _copy_parent_child_package(extra_root)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gold"]["extra"] = source["gold"]["answer"]
@@ -248,10 +248,10 @@ def test_loader_rejects_an_empty_or_extra_gold_key_set(tmp_path: Path) -> None:
 
 
 def test_loader_rejects_an_answer_sheet_identity_mismatch(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     answer = package / "answer-sheet.yaml"
     source = yaml.safe_load(answer.read_text(encoding="utf-8"))
-    source["scenario_id"] = "not-grain-trap"
+    source["scenario_id"] = "not-parent-child-grain-trap"
     answer.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ScenarioError, match="scenario_id"):
@@ -259,7 +259,7 @@ def test_loader_rejects_an_answer_sheet_identity_mismatch(tmp_path: Path) -> Non
 
 
 def test_follow_up_gate_propagates_scenario_finding_and_machine_readability_is_checked(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gates"]["follow-up"]["resources"]["optional_events"]["required"] = True
@@ -269,7 +269,7 @@ def test_follow_up_gate_propagates_scenario_finding_and_machine_readability_is_c
 
 
 def test_loader_rejects_a_required_plant_without_a_backing_event_card(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     events = package / "events.yaml"
     events.write_text("[]\n", encoding="utf-8")
 
@@ -278,7 +278,7 @@ def test_loader_rejects_a_required_plant_without_a_backing_event_card(tmp_path: 
 
 
 def test_loader_rejects_a_required_plant_without_manifest_evidence(tmp_path: Path) -> None:
-    package = _copy_s5_package(tmp_path)
+    package = _copy_zero_row_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["gates"]["follow-up"]["plant_evidence"] = {}
@@ -289,7 +289,7 @@ def test_loader_rejects_a_required_plant_without_manifest_evidence(tmp_path: Pat
 
 
 def test_loader_rejects_a_non_positive_turn_budget(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["turn_budget"] = 0
@@ -301,7 +301,7 @@ def test_loader_rejects_a_non_positive_turn_budget(tmp_path: Path) -> None:
 
 def test_discovery_does_not_need_a_python_registry() -> None:
     discovered = load_scenarios(SCENARIO_ROOT)
-    direct = tuple(load_scenario(SCENARIO_ROOT / name) for name in ("zero-row-output", "grain-trap"))
+    direct = tuple(load_scenario(SCENARIO_ROOT / name) for name in ("zero-row-optional-output", "parent-child-grain-trap"))
     assert tuple(item.id for item in discovered) == tuple(item.id for item in direct)
 
 
@@ -315,11 +315,11 @@ def _rename_answer_sheet(package: Path, reference: str, scenario_id: str) -> Non
 def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path) -> None:
     root = tmp_path / "scenarios"
     shutil.copytree(SCENARIO_ROOT, root)
-    shutil.rmtree(root / "zero-row-output")
-    shutil.rmtree(root / "grain-trap")
+    shutil.rmtree(root / "zero-row-optional-output")
+    shutil.rmtree(root / "parent-child-grain-trap")
     for name, run_order in (("aaa-first-by-name", 2), ("zzz-last-by-name", 1)):
         package = root / name
-        shutil.copytree(SCENARIO_ROOT / "grain-trap", package)
+        shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
         declaration = package / "scenario.yaml"
         source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
         source["id"] = name
@@ -336,11 +336,11 @@ def test_tier_order_follows_declared_run_order_not_directory_name(tmp_path: Path
 def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
     root = tmp_path / "scenarios"
     shutil.copytree(SCENARIO_ROOT, root)
-    shutil.rmtree(root / "zero-row-output")
-    shutil.rmtree(root / "grain-trap")
+    shutil.rmtree(root / "zero-row-optional-output")
+    shutil.rmtree(root / "parent-child-grain-trap")
     for name in ("one", "two"):
         package = root / name
-        shutil.copytree(SCENARIO_ROOT / "grain-trap", package)
+        shutil.copytree(SCENARIO_ROOT / "parent-child-grain-trap", package)
         declaration = package / "scenario.yaml"
         source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
         source["id"] = name
@@ -353,7 +353,7 @@ def test_two_scenarios_cannot_claim_the_same_run_order(tmp_path: Path) -> None:
 
 
 def test_an_omitted_gate_value_means_the_gate_runs_its_standard_check() -> None:
-    scenario = load_scenario(SCENARIO_ROOT / "grain-trap")
+    scenario = load_scenario(SCENARIO_ROOT / "parent-child-grain-trap")
 
     assert scenario.gates["intake"].kind == "intake"
     assert scenario.gates["query"].kind == "query"
@@ -361,7 +361,7 @@ def test_an_omitted_gate_value_means_the_gate_runs_its_standard_check() -> None:
 
 
 def test_legacy_t0_scenario_tier_remains_accepted(tmp_path: Path) -> None:
-    package = _copy_s6_package(tmp_path)
+    package = _copy_parent_child_package(tmp_path)
     declaration = package / "scenario.yaml"
     source = yaml.safe_load(declaration.read_text(encoding="utf-8"))
     source["tier"] = "T0"

@@ -1,5 +1,5 @@
 version: 1
-scenario_id: zero-row-output
+scenario_id: zero-row-optional-output
 opening_message: How did January go, and is there anything I should worry about?
 turns:
   - How did January go, and is there anything I should worry about?
