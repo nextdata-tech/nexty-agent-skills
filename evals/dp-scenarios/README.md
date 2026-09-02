@@ -7,7 +7,7 @@ The suite runs scenarios the way a BI analyst actually works — a vague first
 message, corrections mid-stream, disputes after the fact — and grades the runs
 mechanically, without trusting the agent's own narrative.
 
-## Scope of this checkout: the smoke tier
+## Scope of this checkout: the smoke tier, plus a first core-tier scenario
 
 The smoke tier runs on every skill, runtime, or generator change, takes minutes,
 and spends nearly nothing on models. The tiers above it are the core tier
@@ -28,6 +28,14 @@ The smoke tier contains three scenarios, run in the order each declares through
    seed, and reconciliation is against a fixture ground-truth control total —
    internal self-consistency is not enough, because self-consistent wrong numbers
    agree with each other.
+
+`scenarios/credential-rotation/` (`tier: core`) is the first core-tier
+scenario and the first real caller of `src/dp_scenarios/pgfixture/`: a
+disposable, owned Postgres container with a command-stepped credential
+rotation, graded against connection-level evidence rather than the fixture's
+own narrative. It runs through the deterministic/replay path only — see its
+own `README.md` for the naming decision, what it covers, and what it does
+not.
 
 The smoke tier runs the agent under test only: no judge model, no field-mapper
 provider calls, no export. It **does** serve and query, because on lean desktop a

@@ -1,0 +1,48 @@
+version: 1
+id: credential-rotation
+tier: core
+run_order: 3
+fixture:
+  dataset: grain_trap
+  seed: 29
+  variant: pg-inventory-credential-rotation
+  plant: grain_trap_fanout
+coverage:
+  variant: pg-inventory-credential-rotation
+  untested: This variant does not exercise the file-backed CSV closure path that parent-child-grain-trap covers; it substitutes a live, credential-rotating Postgres source over the same order/line-item shape, and does not run a live agent session (no authenticated Claude Desktop E2E was executed for this scenario).
+turn_budget: 9
+repeatability:
+  tier: mock-source
+  epochs: 3
+  certification:
+    rule: observed_epochs
+    gates: [build]
+persona: ../_personas/confidently-wrong.yaml
+answer_sheet: answer-sheet.yaml
+events: events.yaml
+phase_map:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7
+required_plants:
+  - grain_trap_fanout
+gates:
+  intake:
+  capability:
+  narrowing:
+  construction:
+  build:
+  query:
+  follow-up:
+    kind: credential_rotation
+    allowed_diff_path: infra-profile.yaml
+    allowed_diff_attribute: credential
+gold:
+  diagnostics: gold/credential_rotation_diagnostics.json
+operator:
+  sentinel: null
+  obstacle_terms: []

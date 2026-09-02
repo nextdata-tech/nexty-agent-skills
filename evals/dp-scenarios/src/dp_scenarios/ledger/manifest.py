@@ -115,8 +115,8 @@ REPLAY_SESSION_PATH_FIELDS = frozenset(
 COMPARABILITY_EXCLUDED_FIELDS = REPLAY_SESSION_PATH_FIELDS | frozenset({"validation_mode"})
 
 # Tiers are named for what they are: the smoke tier runs on every change, the
-# core tier weekly, the full tier per release.  Only the smoke tier is
-# implemented here, and it waives the pins for surfaces it never exercises.
+# core tier weekly, the full tier per release.  The smoke and core tiers are
+# implemented here, and each waives the pins for surfaces it never exercises.
 # Keep T0 as an alias for persisted manifests produced by the original smoke
 # tier; both spellings use the same waiver policy.
 _SMOKE_TIER_WAIVERS = frozenset(
@@ -128,9 +128,15 @@ _SMOKE_TIER_WAIVERS = frozenset(
         "persona_paraphrase_prompt_hash",
     }
 )
+# The core tier is documented as "all LLM-free except B1's fixture" (note 10),
+# so it waives the same judge/calibration/grant/paraphrase surfaces the smoke
+# tier does.  A scenario that does need those pins simply does not waive
+# itself out of supplying them; the waiver only permits ``not-applicable``.
+_CORE_TIER_WAIVERS = _SMOKE_TIER_WAIVERS
 TIER_WAIVERS: dict[str, frozenset[str]] = {
     "smoke": _SMOKE_TIER_WAIVERS,
     "T0": _SMOKE_TIER_WAIVERS,
+    "core": _CORE_TIER_WAIVERS,
 }
 
 REPLAY_TIER_WAIVERS: dict[str, frozenset[str]] = {
